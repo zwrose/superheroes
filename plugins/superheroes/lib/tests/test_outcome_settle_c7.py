@@ -255,20 +255,12 @@ def _assert_all_settled(state):
 
 
 def test_t5_a_loop_run_to_its_terminal_leaves_no_finding_undecided(sources_calls):
-    # The real-consequence Nit rides the Important's fix batch (the lift), so the scripted audit must
-    # leave it not-discharged for it to stay unfixed to the round cap.
-    def audit(targets, rnd):
-        return [{"id": t["id"], "ruling": "not-discharged" if t["title"] == "Docs lie" else "discharged",
-                 "reason": "still broken" if t["title"] == "Docs lie" else "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
-                for t in (targets or [])]
-
     result, state = _run_once([
         _finding("Null deref", 1, "Important", "real"),
         _finding("Naming", 2, "Minor", "code-quality"),
         _finding("Docs lie", 2, "Nit", "real"),
         _finding("Null deref", 1, "Important", "real"),  # the same place and title twice
-    ], TRD._cfg_cert(maxRounds=1), auditor=audit, io={"stall_menu": lambda payload: "hold"})
+    ])
     assert state["terminal"]
     _assert_all_settled(state)
     dispositions = {k: r["disposition"] for k, r in _ledger(state).items()}

@@ -626,17 +626,11 @@ Report it under "escalated" with the id and why.
 
 ### A ruling that arrives during a fix
 
-When the owner or advisor rules on a finding (`rule`, see `round-driver.md` § Owner and advisor
-rulings) while a fixer is already dispatched on a batch holding that finding and has not folded,
-the ruling would change that batch, and the driver refuses it with `ruling-attempt-pending`. Do this
-instead:
-
-Follow `skills/review-code/reference/round-driver.md` § Withdrawing a stopped fixer attempt
-(`withdraw`): stop the fixer, restore the head, then `withdraw`, `rule`, and `next`.
-
-A ruling whose findings are all outside the dispatched batch needs none of this: `rule` records it
-at once and it binds a later batch. A fixer that has already folded keeps its result; the ruling
-binds the next fix.
+A ruling (`rule`, see `round-driver.md` § Owner and advisor rulings) is accepted whenever it arrives.
+A fixer already dispatched is never stopped to take it and folds its result as usual; the ruling
+binds the next fix of its finding, and when that fix went against it the next round sends the finding
+back. No finding below blocking joins a fix batch unless a ruling names it; those settle when the loop
+converges.
 
 ---
 

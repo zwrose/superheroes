@@ -53,26 +53,3 @@ def test_compile_drops_list_valued_file_without_raising():
     compiled, drops = RD.mechanical_compile([bad, good], diff)
     assert [f["title"] for f in compiled] == ["ok"]
     assert len(drops) == 1
-
-
-def test_merge_of_already_linked_member_keeps_its_prior_lineage_component():
-    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
-    state["findingLineage"] = {"B": "A"}
-    RD._record_merged_into(state, "B", "C")
-    lineage = state["findingLineage"]
-    assert {RD._lineage_root(lineage, k) for k in ("A", "B", "C")} == {"C"}
-
-
-def test_merge_edge_does_not_revoke_an_earlier_guidance_carry():
-    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
-    state["round"] = 1
-    state["findingLineage"] = {"B": "A"}
-    state["findingLineageRound"] = {"B": 1}
-    RD._record_merged_into(state, "D", "B")
-    carry = RD._LineageCarry(state, [{"file": "f.py", "line": 1, "title": "B"},
-                                     {"file": "f.py", "line": 2, "title": "D"}], [])
-    carry.raised = {"B": {"file": "f.py", "line": 1}, "D": {"file": "f.py", "line": 2}}
-    carry.compiled_keys = {"B", "D"}
-    carry.at_location = {("f.py", 1): 1, ("f.py", 2): 1}
-    carry.revoke_ambiguous(state)
-    assert state["findingLineage"]["B"] == "A"
