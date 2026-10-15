@@ -369,7 +369,7 @@ def _decide(own, by_key, rulings):
         return None, STILL_OPEN, rep
     if disp == "fixed":
         receipt = rep.get("dispositionReceipt")
-        if isinstance(receipt, dict) and receipt.get("kind") == "full-panel-not-reraised":
+        if isinstance(receipt, dict) and receipt.get("kind") == sc.FULL_PANEL_NOT_RERAISED:
             return _FIXED, f"fixed; the full panel in round {receipt.get('panelRound')} did not raise it again", rep
         return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":

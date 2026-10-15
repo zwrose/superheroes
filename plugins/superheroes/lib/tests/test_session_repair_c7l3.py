@@ -140,12 +140,12 @@ def _all_state_writes_in(tree):
     return found
 
 
-def test_no_code_writes_the_state_file_but_through_the_one_writer_and_the_one_stager():
+def test_no_code_writes_the_state_file_but_through_the_one_stager():
     """axis: no write site of the state file can skip its mirror — the census names every function
     that writes it — see bite-proof record c7l3_wo3_driver"""
     with open(DRIVER_SOURCE, encoding="utf-8") as fh:
         writes = _all_state_writes_in(ast.parse(fh.read()))
-    assert set(writes) == {"_write_state_bytes", "_stage_state"}, writes
+    assert set(writes) == {"_stage_state"}, writes
 
 
 def test_the_census_sees_a_state_write_it_is_not_told_about():

@@ -244,3 +244,39 @@ def test_a_converged_loop_whose_fix_a_later_full_panel_confirmed_reports_it_fixe
     account = rs.account_from_session(session.save(), TRS.extras(), TRS.Fake().readers())
     outcomes = {f["findingKey"]: f["outcome"] for f in account["findings"]}
     assert outcomes == {_key(): "fixed"}
+
+
+def test_a_reraised_member_of_a_merged_group_withholds_the_representatives_credit():
+    state = _round_one_state(_finding(), _finding("Twin", 2))
+    RD._record_merged_into(state, _key(), _key("Twin", 2))
+    _fix(state, batch=[f for f in state["findings"] if f["title"] == "Twin"])
+    _panel(state, raised=[_finding()])
+    assert "disposition" not in _ledger(state)[_key("Twin", 2)]
+
+
+def test_a_reraise_the_compile_drops_gets_no_credit():
+    state = _round_one_state(_finding())
+    _fix(state)
+    no_consequence = {k: v for k, v in _finding().items() if k != "consequence"}
+    _panel(state, raised=[no_consequence])
+    assert not _credited(state, _key())
+
+
+def test_the_receipt_kind_has_one_home_read_by_writer_and_record():
+    assert RD.FULL_PANEL_NOT_RERAISED == SC.FULL_PANEL_NOT_RERAISED == RECEIPT["kind"]
+
+
+def test_state_and_mirror_land_in_one_commit(tmp_path, monkeypatch):
+    """A stop after the commit seals leaves neither file written; recovery replays both."""
+    d = str(tmp_path)
+    state = RD.new_state(TRD._cfg_cert())
+    real_begin = RD.round_commit.begin
+    monkeypatch.setattr(RD.round_commit, "begin",
+                        lambda *a, **k: real_begin(*a, stop_at="sealed", **k))
+    with pytest.raises(RD.round_commit.StopPoint):
+        RD.save_state(d, state)
+    assert not os.path.exists(os.path.join(d, RD.STATE_FILE))
+    assert not os.path.exists(os.path.join(d, RD.MIRROR_FILE))
+    RD.round_commit.recover(d)
+    assert os.path.exists(os.path.join(d, RD.STATE_FILE))
+    assert os.path.exists(os.path.join(d, RD.MIRROR_FILE))

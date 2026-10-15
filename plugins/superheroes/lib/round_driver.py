@@ -191,7 +191,7 @@ SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
 MIRROR_FILE = "loop-state.mirror.json"
 MIRROR_SCHEMA = "loop-state-mirror/1"
-FULL_PANEL_NOT_RERAISED = "full-panel-not-reraised"
+FULL_PANEL_NOT_RERAISED = session_contract.FULL_PANEL_NOT_RERAISED
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RULE_CMD = session_contract.RULE_CMD
@@ -2626,10 +2626,11 @@ def _stage_state(c, session_dir, state_bytes):
 
 
 def _write_state_bytes(session_dir, state_bytes):
-    """The one direct writer of the state file: the state, then its mirror, each atomically."""
-    round_commit.atomic_write_bytes(os.path.join(session_dir, STATE_FILE), state_bytes)
-    round_commit.atomic_write_bytes(os.path.join(session_dir, MIRROR_FILE),
-                                    _mirror_bytes(session_dir, state_bytes))
+    """The one direct writer of the state file: the state and its mirror land in one two-phase
+    commit, so a crash between them replays to both or leaves both as they were."""
+    c = round_commit.begin(session_dir, "state-write")
+    _stage_state(c, session_dir, state_bytes)
+    c.run()
 
 
 def save_state(session_dir, state):
@@ -3123,16 +3124,23 @@ def _rounds_with_fix_report(state):
     return reported
 
 
-def _credit_fixes_not_reraised(state, compiled):
+def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     """A finding a fixer reported fixed, that this complete full panel did not raise again, is
     `fixed` — provided the fix report came after the finding's latest raise. Called before the
     panel's findings are staged, so the end-of-loop settle never counts it a leftover. A finding
     that already has a current disposition, was merged into another, or holds an out-of-scope
-    ruling is left as it is."""
+    ruling is left as it is. A finding the panel raised but compilation dropped (`panel_raw`), and a
+    finding whose merged-in group has any member raised, count as raised: silence is the only credit."""
     ledger_by_key, fault = _disposition_ledger_by_key(state)
     if fault is not None:
         return
-    raised_now = _panel_raised_keys(compiled)
+    raised_now = _panel_raised_keys(compiled) | _panel_raised_keys(panel_raw)
+    reraised_groups = set()
+    for entry_key, entry in ledger_by_key.items():
+        if entry_key in raised_now:
+            rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
+            reraised_groups.add(_finding_identity_key(rep) if isinstance(rep, dict) else entry_key)
+    raised_now = raised_now | reraised_groups
     reported = _rounds_with_fix_report(state)
     if not reported:
         return
@@ -3353,7 +3361,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     _append_review_record(state, state["round"], kind, dim_map, compiled)
     # axis: only a complete panel can confirm a fix by silence — an incomplete one may simply not have looked — see bite-proof record c7l3_wo3_driver
     if state["round"] >= 2 and not incomplete:
-        _credit_fixes_not_reraised(state, compiled)
+        _credit_fixes_not_reraised(state, compiled, kept)
     _stage_findings(state, compiled)
     state["step"] = P_VERIFIERS
 
@@ -9074,7 +9082,7 @@ def _repair_state_if_damaged(session_dir, cmd):
         return _upgrade_refusal(session_dir, cmd)
     try:
         _write_state_bytes(session_dir, state_bytes)
-    except OSError:
+    except (OSError, round_commit.CommitRefused):
         if _state_damage(session_dir) is not None:
             return None  # the state could not be restored: the command meets its usual refusal
     _journal_event(session_dir, "repair", "session-repaired", damaged=damaged,
