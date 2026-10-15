@@ -92,7 +92,6 @@ _EXPECTED_CMD_NAMES = (
     "cmd_record_result",
     "cmd_rule",  # session state + journal; no durable seat records
     "cmd_submit",
-    "cmd_withdraw",  # session state + journal; no durable seat records
 )
 
 

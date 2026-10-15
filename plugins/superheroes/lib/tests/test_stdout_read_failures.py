@@ -106,6 +106,7 @@ def _native_review_branch(kind):
             "evidence": None,
             "auditorVendor": None,
             "unnamedChange": None,
+            "unnamedChangeAllowedBySeq": None,
             "investigated": investigated,
         }
     raise ValueError(kind)
