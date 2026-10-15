@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "url": "https://github.com/shop/app/pull/214#issuecomment-5001",
+  "earlierRecords": [],
+  "schema": "review-record/1",
+  "pr": 214,
+  "sessionId": "session-214",
+  "lane": {"value": "full", "reason": "The change touches how payments are charged.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "source": "GitHub checks"},
+  "reviewers": [
+    {"name": "code-reviewer", "family": "codex", "ran": "engine-record"},
+    {"name": "test-reviewer", "family": "cursor", "ran": "reported-by-session"},
+    {"name": "design-reviewer", "family": "claude", "ran": "engine-record", "notIndependent": true},
+    {"name": "security-reviewer", "family": "codex", "ran": "not-run"}
+  ],
+  "findings": [
+    {"id": "F1", "outcome": "fixed", "title": "A retry could charge the card twice", "reason": "Fixed: the retry now checks the first charge settled.", "consequence": null, "findingKey": "retry/charge-twice"},
+    {"id": "F2", "outcome": "craft", "title": "Retries wait longer after each failure", "reason": "A growing wait is the usual way to avoid hammering the bank.", "consequence": null, "findingKey": "retry/backoff"},
+    {"id": "F3", "outcome": "craft", "title": "The retry limit lives in the shop settings", "reason": "One place to change it without a release.", "consequence": null, "findingKey": "retry/limit-setting"},
+    {"id": "F4", "outcome": "craft", "title": "Log lines name the order, not the card", "reason": "Card details never reach the logs.", "consequence": null, "findingKey": "retry/log-lines"},
+    {"id": "F5", "outcome": "ruling", "title": "A failed payment keeps its original order number", "reason": "Ruled earlier: the order number is the customer's receipt.", "consequence": null, "findingKey": "retry/order-number"},
+    {"id": "F6", "outcome": "left-for-owner", "title": "Customers are not told a retry happened", "reason": "Only the owner can say how much customers should hear.", "consequence": "A customer may see a second charge attempt on their statement with no explanation.", "findingKey": "retry/no-notice"},
+    {"id": "F7", "outcome": "left-for-owner", "title": "A payment that fails three times ends with no email", "reason": "Only the owner can say who tells the customer.", "consequence": "A customer whose card keeps failing hears nothing and may think the order went through.", "findingKey": "retry/no-final-email"},
+    {"id": "F8", "outcome": "shown-wrong", "title": "The retry loop never stops", "reason": "It stops after three tries; the reviewer misread the counter.", "consequence": null, "findingKey": "retry/loop-forever"}
+  ],
+  "missingReviews": [{"name": "security-reviewer", "goAhead": null}],
+  "rounds": {"count": 3, "stoppedAtCap": false, "source": "reported by the session"}
+}

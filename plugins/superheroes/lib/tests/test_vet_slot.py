@@ -53,6 +53,21 @@ RECEIPT = """<!-- superheroes:vet-receipt -->
 
 SLOT = "**Verdict: READY** · abc\n\nNew owner half.\n"
 
+DOD_BLOCK = """<!-- superheroes:dod-table -->
+| DoD bullet | Disposition |
+|---|---|
+| the thing | done — test_x |
+"""
+
+REMINDER = """<!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference
+     (skills/showrunner/reference/vet-receipt.md inside the superheroes plugin, not this repo).
+     Post the receipt comment FIRST (vet-receipt marker, the spine from that reference,
+     every field filled or None, triggered fields incl. escalation lines), THEN replace this comment
+     with the owner-half register under the advisor-vet marker: the verdict; what was
+     checked, in owner terms; what accepting it means; what is theirs to decide — plus a
+     pointer to the receipt. -->
+"""
+
 
 def _fixture(name):
     with open(os.path.join(FIXTURES, name), encoding="utf-8", newline="") as handle:
@@ -174,19 +189,19 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-NINE_TOKENS = {
-    "bad-argument", "read-failed", "markers-invalid", "receipt-missing",
-    "followup-undispositioned", "disposition-unknown", "none-over-list", "write-failed",
-    "write-unconfirmed",
+TEN_TOKENS = {
+    "bad-argument", "read-failed", "markers-invalid", "slot-span-foreign-content",
+    "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
+    "write-failed", "write-unconfirmed",
 }
 
 
-def test_module_emits_exactly_nine_tokens():
+def test_module_emits_exactly_ten_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
-    assert emitted == NINE_TOKENS
+    assert emitted == TEN_TOKENS
     for retired in ("followups-malformed", "dispositions-malformed"):
         assert retired not in source, retired
 
@@ -243,6 +258,11 @@ BODY_CASES = [
      _body_marker("<!-- superheroes:followups  -->\n")),
     ("markers-invalid", "followups marker repeats FU1",
      _body_marker("<!-- superheroes:followups FU1 FU2 FU1 -->\n")),
+    # the slot span: any other superheroes marker line between the two slot markers
+    ("slot-span-foreign-content", "holds the superheroes:dod-table marker",
+     BODY.replace("old slot text\n", "old slot text\n\n" + DOD_BLOCK)),
+    ("slot-span-foreign-content", "holds the superheroes:degradations marker",
+     BODY.replace("old slot text\n", "  <!-- superheroes:degradations -->\nNone\n")),
 ]
 
 
@@ -257,6 +277,42 @@ def test_body_refusals_make_no_edit(token, detail, body, verb, slot_file):
     assert set(result) == {"ok", "reason", "detail"}
     assert fake.edit_calls() == []
     assert fake.calls == [list(VIEW)]  # a bad body never reaches the comments read
+
+
+def test_dod_table_in_the_slot_span_refuses_and_leaves_the_body_unchanged(slot_file):
+    body = BODY.replace("old slot text\n", "old slot text\n\n" + DOD_BLOCK)
+    fake = _ok_fake(body=body)
+    result = _write(fake, slot_file)
+    assert result == {"ok": False, "reason": "slot-span-foreign-content",
+                      "detail": "the slot span holds the superheroes:dod-table marker; nothing goes"
+                                " between the advisor-vet and build-record markers, so move it below"
+                                " the build-record marker"}
+    assert fake.edit_calls() == [] and fake.edited == []
+    assert fake.bodies == [body]
+
+
+@pytest.mark.parametrize("span", [
+    REMINDER,
+    "old slot text\n",
+    "**Verdict: READY** · old\n\n" + REMINDER,
+    "```\n" + DOD_BLOCK + "```\n",
+])
+def test_slot_span_holding_only_advisor_text_or_the_reminder_still_writes(span, slot_file):
+    body = BODY.replace("old slot text\n", span)
+    fake = _ok_fake(body=body)
+    result = _write(fake, slot_file)
+    assert result["ok"] is True
+    new = fake.edited[0]
+    a = body.index("<!-- superheroes:advisor-vet -->\n") + len("<!-- superheroes:advisor-vet -->\n")
+    assert new == body[:a] + "\n" + SLOT.strip("\n") + "\n\n" + body[body.index(
+        "<!-- superheroes:build-record -->"):]
+
+
+def test_dod_table_below_the_build_record_still_writes(slot_file):
+    body = BODY.replace("trailer\n", DOD_BLOCK + "\ntrailer\n")
+    fake = _ok_fake(body=body)
+    assert _write(fake, slot_file)["ok"] is True
+    assert DOD_BLOCK in fake.edited[0]
 
 
 def test_empty_read_refuses_read_failed(slot_file):
