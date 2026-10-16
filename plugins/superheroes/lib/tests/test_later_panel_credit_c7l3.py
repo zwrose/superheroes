@@ -441,6 +441,20 @@ def test_credit_supersedes_the_markers_of_the_keys_ruling_closure_and_no_others(
     assert set(state["restagedAfterDispositionSeq"]) == {"f.py::unrelated@L8"}
 
 
+def test_a_reopened_finding_with_no_fix_report_keeps_its_marker_when_another_is_credited():
+    """axis: RESTAGE — only a credited key's closure is superseded: a reopened `fixed` no fixer
+    reported again stays reopened, so the settle path never counts its stale disposition current."""
+    state = _round_one_state(_finding(), _finding("Other", 2))
+    _fix(state, batch=[f for f in state["findings"] if f["title"] == "Other"])
+    RD._record_disposition(state, _key(), "fixed", 1, dispositionReceipt={"headSha": "abc"})
+    marks = {_key(): state["dispositionSeqCounter"]}
+    state["restagedAfterDispositionSeq"] = dict(marks)
+    _panel(state)
+    assert _credited(state, _key("Other", 2))
+    assert not _credited(state, _key())
+    assert state["restagedAfterDispositionSeq"] == marks
+
+
 @pytest.mark.parametrize("marker_offset", [None, -1])
 def test_a_disposition_no_ruling_reopened_is_left_as_it_is_with_its_marker(marker_offset):
     """Control: no marker, or a marker older than the disposition, leaves the current `fixed` alone."""
