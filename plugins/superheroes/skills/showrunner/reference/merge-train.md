@@ -7,6 +7,7 @@
 - [Merging a spec PR](#merging-a-spec-pr)
 - [Selecting the run to watch](#selecting-the-run-to-watch)
 - [Cleaning up a finished cloud lane](#cleaning-up-a-finished-cloud-lane)
+- [When the repository refuses a cloud-built merge](#when-the-repository-refuses-a-cloud-built-merge)
 
 # The merge train
 
@@ -261,3 +262,18 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    gone, and a cloud launch made no checkout or worktree to remove.
 
 If the owner never answers the archive prompt, the session stays listed and the advisor carries on; nothing reminds the owner.
+
+## When the repository refuses a cloud-built merge
+
+A cloud builder's commits carry the cloud's own author, not the owner's. When the default branch's
+pull request rule has **`require_extra_approval_for_unattributed_changes`** on (read it with `gh api
+repos/<owner>/<name>/rules/branches/<default branch>`), such a pull request merges only after an
+approving review from an account other than its author. The advisor acts as the owner's account,
+and GitHub never lets an author approve their own pull request, so the advisor cannot give that
+approval. `gh pr merge` then refuses with "the base branch policy prohibits the merge" even though
+the vet is READY, CI is green and the owner's word is given.
+
+Tell the owner at once, with the choice that is theirs: turn that one option off in the
+repository's ruleset (their setting; the vet, the word and CI stay the gate), or approve each
+cloud-built pull request themselves. Never use `gh pr merge --admin`, and never add a commit only to
+change the pull request's attribution, without the owner's word for that act.
