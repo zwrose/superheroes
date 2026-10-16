@@ -12,8 +12,11 @@ import ctypes.util
 import json
 import os
 import platform
+import pty
 import re
 import secrets
+import select
+import signal
 import struct
 import subprocess
 import sys
@@ -104,6 +107,45 @@ _WORKTREE_COLLISION_REMEDY = (
 )
 
 _WORKHORSE_CMD = "/superheroes:workhorse"
+
+# A cloud launch runs the platform command once and reads the session's identity from what it
+# prints. The command needs a pseudo-terminal, so its output arrives wrapped in terminal control
+# sequences, which are stripped before anything is matched.
+PLACE_LOCAL = ll.PLACE_LOCAL
+PLACE_CLOUD = ll.PLACE_CLOUD
+_CLOUD_SPAWN_TIMEOUT_SECONDS = 120
+_CLOUD_APPEND_TRIES = 3
+_CLOUD_APPEND_PAUSE_SECONDS = 0.2
+_CLOUD_CREATED_PREFIX = "Created cloud session: "
+# The two line patterns capture the whole token where the id sits; the id's grammar is decided
+# once, by the ledger's own pattern (`ll._CLOUD_SESSION_ID_RE`), when the receipt is read.
+_CLOUD_VIEW_RE = re.compile(r"View: (https://claude\.ai/code/([^?\s]*))")
+_CLOUD_RESUME_RE = re.compile(r"Resume with: claude --teleport (\S+)")
+_TERMINAL_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_TERMINAL_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_TERMINAL_ESC_RE = re.compile(r"\x1b(?:[()][0-9A-Za-z]|[78]|[@-Z\\-_=>])")
+_TERMINAL_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f]")
+_CLOUD_UNCONFIRMED_REMEDY = (
+    "The launch command may have created a cloud session that this launcher could not read the "
+    "identity of. Look for a session with the name in `cloudSessionName` in the host's session "
+    "listing. The lane is left live. When there is no such session, record the lane's outcome "
+    "as `died`; when there is one, the lane is that session."
+)
+_CLOUD_UNCONFIRMED_APPEND_REMEDY = (
+    "The launch command may have created a cloud session that this launcher could not read the "
+    "identity of, and the `started` record could not be written (`startedAppend` holds why). The "
+    "lane is live on its `reserved` record alone. Look for a session with the name in "
+    "`cloudSessionName` in the host's session listing. `record-outcome` refuses a lane with no "
+    "`started` record, so it cannot end this lane. The result carries the record a later repair "
+    "needs in `pendingStarted`."
+)
+_CLOUD_STARTED_APPEND_REMEDY = (
+    "A cloud session exists and is working: its identity is in `cloudSessionId`. The `started` "
+    "record could not be written, and `startedAppend` holds why. The lane is left live on its "
+    "`reserved` record alone. `record-outcome` refuses a lane with no `started` record, so keep "
+    "the session's identity from this result and reach the session by it. The result carries the "
+    "record a later repair needs in `pendingStarted`."
+)
 
 # What a reader of a `started` record sees when its lane launched over a recorded surface
 # overlap (#1054): which lanes it overlaps, and where the cost lands. Both citations are
@@ -738,8 +780,13 @@ def _slot_reservation_gate(
     *,
     fail_on_unreadable=False,
     parallel_detail=None,
+    place=None,
 ):
-    """Refuse parallel unslotted launches on slot-calibrated projects. Never raises."""
+    """Refuse parallel unslotted launches on slot-calibrated projects. Never raises.
+
+    A cloud lane has no pilot slot to hold: a cloud launch is never missing one, and a live
+    cloud lane is never counted as an unslotted lane.
+    """
     # axis: parallel slot-calibrated launch with unslotted lane(s) — refuse, not presence
     # disclosure: preflight predicate + launch_build post-reserve re-check; not inside reserve's lock — undeclared-batch races may both pass preflight, re-check refuses at least one before spawn
     if not isinstance(batch_id, str) or not batch_id.strip():
@@ -776,7 +823,8 @@ def _slot_reservation_gate(
         return None
 
     missing = []
-    if slot is None or generation is None:
+    # axis: a cloud lane needs no slot — neither this launch nor a live lane of the batch is named when it is cloud.
+    if (slot is None or generation is None) and place != PLACE_CLOUD:
         missing.append("this-launch")
     for launch_id, info in detail.items():
         if exclude_launch_id and launch_id == exclude_launch_id:
@@ -839,6 +887,7 @@ def walk_preflight(
     batch_id=None,
     slot=None,
     generation=None,
+    place=None,
 ):
     """Walk preflight checks. Never raises."""
     loader = doctrine_loader or launch_doctrine.load
@@ -920,6 +969,7 @@ def walk_preflight(
                 slot,
                 generation,
                 ledger_state,
+                place=place,
             )
             if slot_refusal is not None:
                 return slot_refusal
@@ -1151,8 +1201,28 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     }
 
 
-def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, effort=None):
+def plugin_version():
+    """The `version` of the running plugin's manifest, or None. Never raises."""
+    manifest = os.path.join(os.path.dirname(_LIB_DIR), ".claude-plugin", "plugin.json")
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    version = data.get("version") if isinstance(data, dict) else None
+    if isinstance(version, str) and version.strip():
+        return version
+    return None
+
+
+def compose_launch(
+    repo_root, issue, premise, model=None, doctrine_loader=None, effort=None,
+    place=None, cloud_environment=None, session_name=None,
+):
     """Compose prompt and argv. Never raises."""
+    if place not in (None, PLACE_LOCAL, PLACE_CLOUD):
+        return _fail("launch-place-invalid")
+    cloud = place == PLACE_CLOUD
     loader = doctrine_loader or launch_doctrine.load
     doctrine = loader()
     if not doctrine.get("ok"):
@@ -1163,7 +1233,16 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     if not own_line:
         return _fail("compose-ruling-zero-absent")
 
-    prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
+    version = None
+    if cloud:
+        version = plugin_version()
+        if version is None:
+            return _fail("compose-plugin-version-unreadable")
+        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n\n%s" % (
+            _WORKHORSE_CMD, issue, version, rulings_block,
+        )
+    else:
+        prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
     if own_line not in prompt:
         return _fail("compose-ruling-zero-absent")
 
@@ -1176,18 +1255,25 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     effort_result = _resolve_effort(effort, token)
     if not effort_result["ok"]:
         return effort_result
-    session_id = str(uuid.uuid4())
-    # The same argv is reused if launch_build retries, so the session id is reused
-    # too. That is safe because the only retrying path is spawn-oserror, where
-    # Popen raised and no child ever started — every other failure is terminal
-    # with no re-spawn.
-    built = engine_adapter.claude_builder_argv(token, session_id, prompt)
+    if cloud:
+        # A cloud lane has no session id of its own to mint: the platform names the session.
+        session_id = None
+        built = engine_adapter.claude_cloud_builder_argv(
+            token, effort_result["effort"], prompt, cloud_environment, session_name,
+        )
+    else:
+        session_id = str(uuid.uuid4())
+        # The same argv is reused if launch_build retries, so the session id is reused
+        # too. That is safe because the only retrying path is spawn-oserror, where
+        # Popen raised and no child ever started — every other failure is terminal
+        # with no re-spawn.
+        built = engine_adapter.claude_builder_argv(token, session_id, prompt)
     if built.get("reason") is not None:
         if "detail" in built:
             return _fail(built["reason"], detail=built["detail"])
         return _fail(built["reason"])
     argv = built["argv"]
-    return {
+    composed = {
         "ok": True,
         "reason": None,
         "prompt": prompt,
@@ -1205,6 +1291,12 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
         "effortSource": effort_result["source"],
         "doctrine": doctrine,
     }
+    if cloud:
+        composed["place"] = PLACE_CLOUD
+        composed["pluginVersion"] = version
+        composed["cloudEnvironment"] = cloud_environment
+        composed["cloudSessionName"] = session_name
+    return composed
 
 
 # WORKAROUND: headless builders must survive parent session exit via detached spawn
@@ -1220,6 +1312,334 @@ def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
         start_new_session=True,
         close_fds=True,
         env=child_env,
+    )
+
+
+class _LauncherTerminated(Exception):
+    """The launcher was sent SIGTERM or SIGINT while a cloud launch command was running."""
+
+
+def _make_terminate_handler(state):
+    """A SIGTERM/SIGINT handler that records the signal in `state["pending"]` and never raises.
+
+    A raise from a handler lands wherever the launcher happens to be: before the child is in hand
+    it would lose the only handle on its process group, and inside the cleanup it would cut the
+    group kill short. So the handler only records, and the read loop is what acts on the record.
+    """
+    def handler(signum, frame):
+        state["pending"] = True
+    return handler
+
+
+def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
+    """Run the cloud launch command once under a pseudo-terminal and return what it printed.
+
+    The command refuses to run without a terminal, so its stdin, stdout and stderr are the slave
+    end of a pseudo-terminal and the output is read off the master end. The child is its own
+    session leader, so its process group is its pid: on every path out once it has started
+    (exit, timeout, a failed read, any exception) that whole group is sent SIGKILL and the command
+    is reaped, so no process the launch started outlives the call. Both descriptors are always
+    closed. Raises OSError when the command could not be started (the terminal could not be
+    opened, or the command could not be launched). Once it has run, nothing raises: a log that
+    cannot be written is not an error, and any other failure is returned as `readError` (the
+    exception's class name) beside the output captured so far.
+    """
+    master, slave = pty.openpty()
+    term_state = {"pending": False}
+    previous_term = None
+    previous_int = None
+    try:
+        # axis: a launcher cancelled at any point from child creation through cleanup still ends the
+        # group it started — the handler is installed before the child exists and only records the
+        # SIGTERM; the waits below check the record between short slices, and the cleanup, which no
+        # handler can interrupt, runs its group kill and reap to the end.
+        try:
+            previous_term = signal.signal(
+                signal.SIGTERM, _make_terminate_handler(term_state),
+            )
+        except (ValueError, OSError):
+            previous_term = None  # not the main thread: no handler can be installed here
+        # axis: Ctrl-C is a cancellation like SIGTERM — recorded, never raised, so the captured
+        # output is still logged and the caller still writes the started record.
+        try:
+            previous_int = signal.signal(
+                signal.SIGINT, _make_terminate_handler(term_state),
+            )
+        except (ValueError, OSError):
+            previous_int = None
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                start_new_session=True,
+                close_fds=True,
+                env=child_env,
+            )
+        finally:
+            try:
+                os.close(slave)
+            except OSError:
+                pass
+        # axis: the lane is not ended — once Popen has returned nothing below raises, because the
+        # caller reads a raise as "the command never started" and would end a lane whose session
+        # may exist; a failure comes back as `readError` beside the output captured so far.
+        chunks = []
+        timed_out = False
+        read_error = None
+        try:
+            try:
+                deadline = time.monotonic() + timeout
+                while True:
+                    if term_state["pending"]:
+                        raise _LauncherTerminated()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    ready, _, _ = select.select([master], [], [], min(remaining, 0.25))
+                    if ready:
+                        try:
+                            data = os.read(master, 65536)
+                        except OSError:
+                            break
+                        if not data:
+                            break
+                        chunks.append(data)
+                    elif proc.poll() is not None:
+                        break
+                if not timed_out:
+                    wait_until = max(deadline, time.monotonic() + 0.1)
+                    while True:
+                        if term_state["pending"]:
+                            raise _LauncherTerminated()
+                        remaining = wait_until - time.monotonic()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        try:
+                            proc.wait(timeout=min(remaining, 0.25))
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
+            except Exception as exc:
+                read_error = type(exc).__name__
+        finally:
+            # axis: no process the launch started outlives it — the signal goes to the process group
+            # the Popen this function holds leads (its pid), on every path out, never to a caller's.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            except Exception as exc:
+                read_error = read_error or type(exc).__name__
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception as exc:
+                read_error = read_error or type(exc).__name__
+        if term_state["pending"]:
+            # A SIGTERM that landed after the waits ended (during the cleanup) is still reported.
+            read_error = read_error or _LauncherTerminated.__name__
+        raw = b"".join(chunks)
+        try:
+            with open(log_path, "wb") as fh:
+                fh.write(raw)
+        except OSError:
+            pass
+        result = {
+            "pid": proc.pid,
+            "rc": proc.returncode,
+            "timedOut": timed_out,
+            "output": raw.decode("utf-8", errors="replace"),
+        }
+        if read_error is not None:
+            result["readError"] = read_error
+        return result
+    finally:
+        if previous_term is not None:
+            try:
+                signal.signal(signal.SIGTERM, previous_term)
+            except (ValueError, OSError):
+                pass
+        if previous_int is not None:
+            try:
+                signal.signal(signal.SIGINT, previous_int)
+            except (ValueError, OSError):
+                pass
+        try:
+            os.close(master)
+        except OSError:
+            pass
+
+
+def _strip_terminal_sequences(text):
+    """The text with terminal control sequences and control bytes other than the newline removed."""
+    text = _TERMINAL_OSC_RE.sub("", text)
+    text = _TERMINAL_CSI_RE.sub("", text)
+    text = _TERMINAL_ESC_RE.sub("", text)
+    return _TERMINAL_CONTROL_RE.sub("", text)
+
+
+def _read_cloud_receipt(text, session_name):
+    """The `(session_id, session_url)` of a coherent creation receipt in `text`, else None.
+
+    Coherent: a `Created cloud session: <name>` line whose name is `session_name`, then a `View:`
+    line or a `Resume with: claude --teleport` line (or both) that yields a session id the ledger
+    accepts, and equal ids when both do. The creation text may follow other text on its line. The
+    identity lines of a creation line are the complete lines between it and the next creation
+    line (or the end of the output); a trailing piece with no newline after it is not complete
+    and yields nothing. The id is read from those lines only; a `session_` token elsewhere is not
+    one.
+    """
+    # The last element is the piece after the final newline: a line the output was cut inside.
+    lines = [line.strip() for line in text.split("\n")[:-1]]
+    created = [i for i, line in enumerate(lines) if _CLOUD_CREATED_PREFIX in line]
+    for position, index in enumerate(created):
+        line = lines[index]
+        announced = line[line.find(_CLOUD_CREATED_PREFIX) + len(_CLOUD_CREATED_PREFIX):]
+        # axis: whose session it is — the announced name must equal the name this launch requested.
+        if announced.strip() != session_name:
+            continue
+        # axis: whose receipt it is — identity lines belong to the nearest creation line before them.
+        end = created[position + 1] if position + 1 < len(created) else len(lines)
+        block = lines[index + 1:end]
+        view = next((m for m in map(_CLOUD_VIEW_RE.match, block) if m), None)
+        resume = next((m for m in map(_CLOUD_RESUME_RE.match, block) if m), None)
+        if view is None and resume is None:
+            continue
+        view_id = view.group(2) if view is not None else None
+        resume_id = resume.group(1) if resume is not None else None
+        # axis: one grammar — the ledger's pattern alone decides what a session id is.
+        if any(
+            token is not None and not ll._CLOUD_SESSION_ID_RE.fullmatch(token)
+            for token in (view_id, resume_id)
+        ):
+            continue
+        if view_id is not None and resume_id is not None and view_id != resume_id:
+            continue
+        return (view_id or resume_id), (view.group(1) if view is not None else None)
+    return None
+
+
+def _pause_between_appends():
+    time.sleep(_CLOUD_APPEND_PAUSE_SECONDS)
+
+
+def _append_started(repo_root, record, env):
+    """Append a cloud lane's `started` record, trying up to three times; the last result.
+
+    The append takes a lock, and a brief contention for it is the ordinary cause of a failure, so
+    one failure must not strand a lane whose command has already run.
+    """
+    for attempt in range(_CLOUD_APPEND_TRIES):
+        result = _append_under_lock(repo_root, record, env=env)
+        if result["ok"]:
+            return result
+        if attempt + 1 < _CLOUD_APPEND_TRIES:
+            _pause_between_appends()
+    return result
+
+
+def _run_cloud_spawn(
+    repo_root, launch_id, argv, session_name, log_path, err_path, child_env, timeout,
+    spawn_fn, evidence, env, post_reserve_fail, success_base,
+):
+    """Run the cloud launch command once, record the lane's `started`, and shape the result.
+
+    Exactly one outcome applies, in this order: the command never ran (terminalized); a coherent
+    creation receipt was read (started, success); no coherent receipt (started with the
+    unconfirmed marker, lane left live). Once the command has run, no path ends the lane: a
+    session may exist, and only its owner's `record-outcome` ends the lane. Never raises for a
+    command that ran.
+    """
+    spawn = spawn_fn or _default_cloud_spawn
+    try:
+        with open(err_path, "ab"):
+            pass
+    except OSError:
+        term = _terminalize(repo_root, launch_id, False, "log-open-failed", stage="spawn", env=env)
+        return post_reserve_fail(_terminalization_reason(term, "log-open-failed"))
+
+    try:
+        spawned = spawn(argv, repo_root, log_path, child_env, timeout)
+    except OSError:
+        term = _terminalize(repo_root, launch_id, False, "spawn-oserror", stage="spawn", env=env)
+        return post_reserve_fail(_terminalization_reason(term, "spawn-oserror"))
+    if not isinstance(spawned, dict):
+        # The command may have run and made a session, so the lane is left live.
+        return post_reserve_fail(
+            "cloud-spawn-result-invalid", cloudSessionName=session_name, logPath=log_path,
+        )
+
+    pid = spawned.get("pid")
+    output = spawned.get("output")
+    text = _strip_terminal_sequences(output) if isinstance(output, str) else ""
+    # axis: where the id is read from — only a coherent creation receipt, never a token elsewhere.
+    receipt = _read_cloud_receipt(text, session_name)
+
+    started = {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": pid,
+        "logPath": log_path,
+        "errPath": err_path,
+        "cloudSessionName": session_name,
+    }
+    if isinstance(evidence, str) and evidence.strip():
+        started["evidence"] = evidence
+
+    if receipt is not None:
+        session_id, session_url = receipt
+        started["cloudSessionId"] = session_id
+        if session_url is not None:
+            started["cloudSessionUrl"] = session_url
+        append_result = _append_started(repo_root, started, env)
+        if not append_result["ok"]:
+            # axis: a session exists and is working — the lane stays live on its `reserved` record.
+            return post_reserve_fail(
+                "cloud-started-append-failed",
+                cloudSessionId=session_id,
+                cloudSessionName=session_name,
+                cloudSessionUrl=session_url,
+                logPath=log_path,
+                startedAppend=append_result["reason"],
+                pendingStarted=dict(started),
+                remedy=_CLOUD_STARTED_APPEND_REMEDY,
+            )
+        success = dict(success_base)
+        success.update({
+            "cloudSessionId": session_id,
+            "cloudSessionName": session_name,
+            "cloudSessionUrl": session_url,
+            "pid": pid,
+            "logPath": log_path,
+            "errPath": err_path,
+            "attempt": 1,
+        })
+        return success
+
+    # axis: an uncertain creation keeps the lane live — whatever the exit code or timeout, a session may exist, so nothing is terminalized.
+    started["cloudSessionUnconfirmed"] = True
+    append_result = _append_started(repo_root, started, env)
+    extra = {}
+    remedy = _CLOUD_UNCONFIRMED_REMEDY
+    if not append_result["ok"]:
+        extra["startedAppend"] = append_result["reason"]
+        extra["pendingStarted"] = dict(started)
+        remedy = _CLOUD_UNCONFIRMED_APPEND_REMEDY
+    return post_reserve_fail(
+        "cloud-session-unconfirmed",
+        cloudSessionName=session_name,
+        logPath=log_path,
+        remedy=remedy,
+        **extra,
     )
 
 
@@ -1807,6 +2227,61 @@ def _apply_dependency_gate(
     }
 
 
+def _place_refusal(
+    launch_id, place, slot, generation, boundary, premise, cloud_environment, issue,
+):
+    """The refusal a launch earns for its place before any reservation exists, or None.
+
+    Every refusal here is returned before the ledger is touched, so none of them carries an
+    overlap disclosure or leaves a lane behind. Never raises.
+    """
+    if place not in (None, PLACE_LOCAL, PLACE_CLOUD):
+        return _fail("launch-place-invalid", launchId=launch_id)
+    if place != PLACE_CLOUD:
+        return None
+    if slot is not None or generation is not None or boundary is not None:
+        return _fail("launch-cloud-with-slot", launchId=launch_id)
+    if isinstance(premise, dict) and premise.get("iphoneCheck") is True:
+        return _fail("launch-cloud-with-iphone-check", launchId=launch_id)
+    if plugin_version() is None:
+        return _fail("launch-cloud-plugin-version-unreadable", launchId=launch_id)
+    if not isinstance(cloud_environment, str) or not (
+        engine_adapter.CLOUD_ENVIRONMENT_ID_RE.fullmatch(cloud_environment)
+    ):
+        return _fail("launch-cloud-environment-invalid", launchId=launch_id)
+    # axis: refused before any write — a cloud lane is looked up by its issue, so it must be a number.
+    if not ll.valid_lane_issue(issue):
+        return _fail("launch-cloud-issue-invalid", launchId=launch_id)
+    return None
+
+
+def _cloud_base_refusal(repo_root, stamped, env):
+    """The refusal reason when the checkout is not a valid cloud base, else None.
+
+    Run before reservation and again right before the cloud command: reservation can wait on
+    the ledger lock, and the owner may move the checkout in that time.
+    """
+    # axis: no cloud spawn from a commit the remote lacks — HEAD must be contained by a remote branch.
+    on_remote = _git_scrubbed(
+        repo_root, "branch", "-r", "--contains", "HEAD",
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    # axis: the session starts from the checkout's HEAD, so HEAD must be the stamped base the
+    # gates ran against and the ledger records — never a different commit.
+    head = _git_scrubbed(
+        repo_root, "rev-parse", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    head_is_base = (
+        head is not None and head.returncode == 0
+        and head.stdout.strip() == stamped["baseCommit"]
+    )
+    if on_remote is None or on_remote.returncode != 0 or not on_remote.stdout.strip():
+        return "launch-cloud-head-not-on-remote"
+    if not head_is_base:
+        return "launch-cloud-head-not-base"
+    return None
+
+
 def launch_build(
     repo_root,
     issue,
@@ -1832,8 +2307,17 @@ def launch_build(
     pr_vet_reader=None,
     iphone_run=None,
     device_hub_poll_seconds=None,
+    place=None,
+    cloud_environment=None,
+    cloud_spawn_fn=None,
+    cloud_spawn_timeout=None,
 ):
-    """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
+    """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry.
+
+    With ``place="cloud"`` the builder is started in a cloud session instead: the platform command
+    runs once, the session's identity is read from its output, the lane is recorded and the call
+    returns. No worktree is made, no local child is left, and nothing is pushed.
+    """
     if membership_reader is None:
         membership_reader = stack_check.read_membership
     if pr_lookup is None:
@@ -1859,8 +2343,25 @@ def launch_build(
     if not isinstance(batch_id, str) or not batch_id.strip():
         batch_id = None
 
-    worktree_path = build_worktree_path(repo_root, issue, launch_id, env=env)
-    requested = spawn_config_dir(env=env, cwd=worktree_path)
+    # Pre-reservation refusals: nothing is written to the ledger for any of these.
+    place_refusal = _place_refusal(
+        launch_id, place, slot, generation, boundary, premise, cloud_environment, issue,
+    )
+    if place_refusal is not None:
+        return place_refusal
+    cloud = place == PLACE_CLOUD
+    plugin_ver = plugin_version() if cloud else None
+    cloud_session_name = (
+        "issue-%s-%s" % (issue, launch_id[len("launch-"):]) if cloud else None
+    )
+    # A cloud launch makes no worktree: the config root resolves against the launching checkout.
+    worktree_path = None if cloud else build_worktree_path(repo_root, issue, launch_id, env=env)
+    requested = spawn_config_dir(env=env, cwd=repo_root if cloud else worktree_path)
+    gate_place = PLACE_CLOUD if cloud else None
+    place_fields = (
+        {"place": PLACE_CLOUD, "cloud_environment": cloud_environment, "plugin_version": plugin_ver}
+        if cloud else {}
+    )
     foreign_override = False
     if _claude_seat_pin_gate_applies(env=env):
         seat = seat_config_dir(env=env)
@@ -1899,6 +2400,7 @@ def launch_build(
         batch_id=batch_id,
         slot=slot,
         generation=generation,
+        place=gate_place,
     )
     if not preflight_result["ok"]:
         stage = "preflight"
@@ -1908,6 +2410,7 @@ def launch_build(
             slot=slot, generation=generation, boundary=boundary,
             seat_instance=seat["instance"],
             foreign_instance_allowed=foreign_override,
+            **place_fields,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -1940,6 +2443,7 @@ def launch_build(
             slot=slot, generation=generation, boundary=boundary,
             seat_instance=seat["instance"],
             foreign_instance_allowed=foreign_override,
+            **place_fields,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -1973,6 +2477,7 @@ def launch_build(
                 slot=slot, generation=generation, boundary=boundary,
                 seat_instance=seat["instance"],
                 foreign_instance_allowed=foreign_override,
+                **place_fields,
             )
             if reserve_result.get("reserved"):
                 term = _terminalize(
@@ -2010,6 +2515,7 @@ def launch_build(
                 slot=slot, generation=generation, boundary=boundary,
                 seat_instance=seat["instance"],
                 foreign_instance_allowed=foreign_override,
+                **place_fields,
             )
             if reserve_result.get("reserved"):
                 term = _terminalize(
@@ -2025,9 +2531,17 @@ def launch_build(
             return _accounted_fail(reserve_result, reason, launch_id, **extra)
         stack_gate = gate_result["stackGate"]
 
+    compose_cloud = (
+        {
+            "place": PLACE_CLOUD,
+            "cloud_environment": cloud_environment,
+            "session_name": cloud_session_name,
+        }
+        if cloud else {}
+    )
     compose_result = compose_launch(
         repo_root, issue, stamped_premise, model=model, doctrine_loader=doctrine_loader,
-        effort=effort,
+        effort=effort, **compose_cloud,
     )
     if not compose_result["ok"]:
         stage = "compose" if compose_result["reason"] != "model-not-registry-known" else "model"
@@ -2042,6 +2556,7 @@ def launch_build(
             slot=slot, generation=generation, boundary=boundary,
             seat_instance=seat["instance"],
             foreign_instance_allowed=foreign_override,
+            **place_fields,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -2057,12 +2572,37 @@ def launch_build(
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
-    if not worktree_path:
+    if cloud:
+        # The cloud session starts from a commit the remote has, so the launching checkout's HEAD
+        # must be on a remote branch. The launcher pushes nothing to make it so.
+        refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
+        if refusal_reason is not None:
+            reserve_result = _try_reserve_for_refusal(
+                repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
+                slot=slot, generation=generation, boundary=boundary,
+                seat_instance=seat["instance"],
+                foreign_instance_allowed=foreign_override,
+                **place_fields,
+            )
+            if reserve_result.get("reserved"):
+                term = _terminalize(
+                    repo_root, launch_id, False, refusal_reason, stage="cloud-base", env=env,
+                )
+                if not term["ok"]:
+                    return _accounted_fail(
+                        reserve_result,
+                        _terminalization_reason(term, refusal_reason),
+                        launch_id,
+                    )
+            return _accounted_fail(reserve_result, refusal_reason, launch_id)
+
+    if not cloud and not worktree_path:
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
             slot=slot, generation=generation, boundary=boundary,
             seat_instance=seat["instance"],
             foreign_instance_allowed=foreign_override,
+            **place_fields,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(
@@ -2079,8 +2619,11 @@ def launch_build(
             reserve_result, "launch-worktree-path-unresolvable", launch_id,
         )
 
-    worktree_result = create_build_worktree(
-        repo_root, worktree_path, stamped["baseCommit"], env=env,
+    # A cloud lane has no worktree to make.
+    worktree_result = (
+        {"ok": True, "reason": None, "path": None}
+        if cloud
+        else create_build_worktree(repo_root, worktree_path, stamped["baseCommit"], env=env)
     )
     if not worktree_result["ok"]:
         refusal_reason = worktree_result["reason"]
@@ -2089,6 +2632,7 @@ def launch_build(
             slot=slot, generation=generation, boundary=boundary,
             seat_instance=seat["instance"],
             foreign_instance_allowed=foreign_override,
+            **place_fields,
         )
         extra = {"path": worktree_result["path"]}
         if "remedy" in worktree_result:
@@ -2133,10 +2677,15 @@ def launch_build(
         # what a reader needs to tell an unpinned lane from one pinned to the same value.
         "effort": compose_result["effort"] or "",
         "effortSource": compose_result["effortSource"],
-        "worktree": worktree_path,
-        "sessionId": compose_result["sessionId"],
     }
-    config_dir = spawn_config_dir(env=env, cwd=worktree_path)
+    if cloud:
+        reserved["place"] = PLACE_CLOUD
+        reserved["cloudEnvironment"] = cloud_environment
+        reserved["pluginVersion"] = plugin_ver
+    else:
+        reserved["worktree"] = worktree_path
+        reserved["sessionId"] = compose_result["sessionId"]
+    config_dir = spawn_config_dir(env=env, cwd=repo_root if cloud else worktree_path)
     if config_dir is not None:
         reserved["configDir"] = config_dir
     if seat["instance"] is not None:
@@ -2179,12 +2728,13 @@ def launch_build(
                     "recorded": False,
                     "deleted": _delete_own_iphone(made_iphone_id, run),
                 }
-        proc = _git_scrubbed(
-            repo_root, "worktree", "remove", worktree_path,
-            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        if proc is None or proc.returncode != 0:
-            extra["orphanedWorktree"] = worktree_path
+        if not cloud:
+            proc = _git_scrubbed(
+                repo_root, "worktree", "remove", worktree_path,
+                env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+            )
+            if proc is None or proc.returncode != 0:
+                extra["orphanedWorktree"] = worktree_path
         return _fail(reserve_result["reason"], launchId=launch_id, **extra)
 
     # The lanes this launch's surfaces overlapped are a recorded, disclosed warning rather
@@ -2218,6 +2768,7 @@ def launch_build(
         exclude_launch_id=launch_id,
         fail_on_unreadable=True,
         parallel_detail=_gate_parallel_detail(ledger_recheck),
+        place=gate_place,
     )
     if slot_refusal is not None:
         refusal_reason = slot_refusal["reason"]
@@ -2250,6 +2801,62 @@ def launch_build(
         return _post_reserve_fail(reason)
     log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
+
+    if cloud:
+        # The launch command carries none of the launch-id, slot, iPhone or heartbeat variables:
+        # the session it makes runs elsewhere and has no use for this machine's lane plumbing.
+        cloud_env = ll.scrub_env(env)
+        for name in (
+            hb.LAUNCH_ID_ENV, hb.HEARTBEAT_ROOT_ENV, SLOT_REF_ENV, IPHONE_ID_ENV, DEVICE_HUB_ENV,
+        ):
+            cloud_env.pop(name, None)
+        if config_dir is not None:
+            cloud_env[CONFIG_DIR_ENV] = config_dir
+        # The same rule as the local spawn: the variable outranks the `--effort` flag, so a
+        # resolved effort overwrites the ambient value and drops the stale reflection; a None
+        # effort touches neither.
+        resolved_effort = compose_result["effort"]
+        if resolved_effort is not None:
+            cloud_env[EFFORT_ENV] = resolved_effort
+            cloud_env.pop(EFFORT_REFLECTION_ENV, None)
+        success_base = {
+            "ok": True,
+            "reason": None,
+            "launchId": launch_id,
+            "place": PLACE_CLOUD,
+            "model": compose_result["model"],
+            "modelResolution": compose_result["modelResolution"],
+            "effort": compose_result["effort"],
+            "effortSource": compose_result["effortSource"],
+            "warnings": warnings,
+        }
+        # axis: reservation may have waited on the ledger lock, so the checkout is re-checked
+        # right before the command; a drifted checkout terminalizes the unstarted lane.
+        drift = _cloud_base_refusal(repo_root, stamped, env)
+        if drift is not None:
+            term = _terminalize(repo_root, launch_id, False, drift, stage="cloud-base", env=env)
+            return _post_reserve_fail(_terminalization_reason(term, drift))
+        cloud_result = _run_cloud_spawn(
+            repo_root,
+            launch_id,
+            argv,
+            cloud_session_name,
+            log_path,
+            err_path,
+            cloud_env,
+            _CLOUD_SPAWN_TIMEOUT_SECONDS if cloud_spawn_timeout is None else cloud_spawn_timeout,
+            cloud_spawn_fn,
+            overlap_evidence,
+            env,
+            _post_reserve_fail,
+            success_base,
+        )
+        if cloud_result.get("ok"):
+            if stack_gate is not None:
+                cloud_result["stackGate"] = stack_gate
+            if dependency_gate is not None:
+                cloud_result["dependencyGate"] = dependency_gate
+        return cloud_result
 
     # A phone or Device Hub that is not there never fails the launch: the builder is told what
     # is true and the lane spawns regardless.
@@ -2437,8 +3044,12 @@ def _try_reserve_for_refusal(
     repo_root, launch_id, issue, premise, preflight_result, compose_result, env,
     *, slot=None, generation=None, boundary=None,
     seat_instance=None, foreign_instance_allowed=False,
+    place=None, cloud_environment=None, plugin_version=None,
 ):
-    """Best-effort reserve so refusal is accounted. Returns {reserved: bool}."""
+    """Best-effort reserve so refusal is accounted. Returns {reserved: bool}.
+
+    A refused cloud launch is still a cloud lane, so its record carries the place fields.
+    """
     if not isinstance(premise, dict):
         return {"reserved": False}
     surfaces = premise.get("surfaces")
@@ -2495,6 +3106,11 @@ def _try_reserve_for_refusal(
         reserved["seatInstance"] = seat_instance
     if foreign_instance_allowed:
         reserved["foreignInstanceAllowed"] = True
+    # axis: a refused cloud launch is a cloud lane — the refusal's record carries the place fields.
+    if place == PLACE_CLOUD:
+        reserved["place"] = PLACE_CLOUD
+        reserved["cloudEnvironment"] = cloud_environment
+        reserved["pluginVersion"] = plugin_version
     result = ll.reserve(repo_root, reserved, env=env)
     # This accounting reservation can itself land on a live lane's surfaces, so it carries
     # the same disclosure a normal reservation does (#1054). Dropping it here is how the
@@ -2536,6 +3152,9 @@ def canary(repo_root, launch_id, env=None):
     lane = folded["launches"].get(launch_id)
     if lane is None:
         return _fail("canary-lane-unknown")
+    # axis: a cloud lane is not read as a lane with a missing transcript — it has no local transcript at all.
+    if lane.get("place") == PLACE_CLOUD:
+        return _fail("canary-cloud-lane")
     session_id = lane.get("sessionId")
     if not isinstance(session_id, str) or not session_id:
         return _fail("canary-session-id-absent")
@@ -2579,6 +3198,7 @@ def _cli_preflight(args):
         batch_id=args.batch,
         slot=args.slot,
         generation=args.generation,
+        place=getattr(args, "place", None),
     )
 
 
@@ -2591,9 +3211,16 @@ def _cli_compose(args):
     premise_result = validate_premise(premise, args.repo_root, issue=args.issue)
     if not premise_result["ok"]:
         return premise_result
+    cloud_kwargs = {}
+    if getattr(args, "place", None) == PLACE_CLOUD:
+        cloud_kwargs = {
+            "place": PLACE_CLOUD,
+            "cloud_environment": getattr(args, "cloud_environment", None),
+            "session_name": "issue-%s-preview" % args.issue,
+        }
     return compose_launch(
         args.repo_root, args.issue, premise_result["premise"], model=args.model,
-        effort=args.effort,
+        effort=args.effort, **cloud_kwargs,
     )
 
 
@@ -2622,6 +3249,12 @@ def _cli_launch(args):
             return _fail("launch-boundary-unreadable")
         boundary = boundary_data
 
+    cloud_kwargs = {}
+    if getattr(args, "place", None) is not None:
+        cloud_kwargs = {
+            "place": args.place,
+            "cloud_environment": getattr(args, "cloud_environment", None),
+        }
     return launch_build(
         args.repo_root,
         args.issue,
@@ -2634,6 +3267,7 @@ def _cli_launch(args):
         boundary=boundary,
         effort=args.effort,
         allow_foreign_instance=args.allow_foreign_instance,
+        **cloud_kwargs,
     )
 
 
@@ -2676,6 +3310,7 @@ def main(argv=None):
     pf.add_argument("--batch", required=False)
     pf.add_argument("--slot", default=None)
     pf.add_argument("--generation", type=int, default=None)
+    pf.add_argument("--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None)
     pf.set_defaults(func=_cli_preflight)
 
     comp = sub.add_parser("compose")
@@ -2684,6 +3319,8 @@ def main(argv=None):
     comp.add_argument("--premise", required=True)
     comp.add_argument("--model", default=None)
     comp.add_argument("--effort", default=None)
+    comp.add_argument("--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None)
+    comp.add_argument("--cloud-environment", default=None)
     comp.set_defaults(func=_cli_compose)
 
     la = sub.add_parser("launch")
@@ -2697,6 +3334,8 @@ def main(argv=None):
     la.add_argument("--slot", default=None)
     la.add_argument("--generation", type=int, default=None)
     la.add_argument("--boundary", default=None)
+    la.add_argument("--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None)
+    la.add_argument("--cloud-environment", default=None)
     la.add_argument(
         "--allow-foreign-instance",
         action="store_true",

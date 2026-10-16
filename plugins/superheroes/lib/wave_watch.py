@@ -949,7 +949,7 @@ def _poll_open_pr_numbers(
 
 
 def _valid_issue_number(value):
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    return ll.valid_lane_issue(value)
 
 
 def _parse_activity_time(value):
@@ -1118,6 +1118,12 @@ def _evaluate_cloud_activity(
     stale = []
     for lid in sorted(started):
         info = started[lid]
+        # bite-axis: NO RAISE — a lane whose issue is not a usable number was never
+        # requested, so it reads as unavailable; looking it up (a list or dict is an
+        # unhashable key) must not raise.
+        if not _valid_issue_number(info.get("issue")):
+            degraded.add(DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE)
+            continue
         activity_time = activity.get(info.get("issue"))
         # bite-axis: DISCLOSURE — a read that could not be made is neither stale nor clean.
         if activity_time is None:
