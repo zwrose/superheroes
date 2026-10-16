@@ -613,10 +613,12 @@ Two postures are held strictly separate, mirroring `model_tier`:
   tier ("a wrong/absent tier is a cost concern, never a safety one"). No run hangs or
   hard-fails on engine choice.
 - **A completed external *result* fails closed.** A build or fix that fails or can't run
-  verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
-  on another live reviewer outside every maker's family, never accepted as green and never on the
-  host model when the host's family is a maker's (with none live, the seat counts as not run). A
-  review seat that returns a well-formed empty result
+  verify stops; an unauditable run stops; an unreadable or incomplete review is never accepted as
+  green. A full-lane panel seat is re-run on another live reviewer outside every maker's family, never
+  on the host model when the host's family is a maker's (with none live, the seat counts as not run).
+  On a single-reviewer lane (light, micro) nothing stands in: without the owner's word for that
+  change, the review did not happen, and the change goes up to the full lane or parks
+  (`rubric/review-discipline.md`). A review seat that returns a well-formed empty result
   **without a verifiable investigation record** is incomplete, not clean — a named **vacuous**
   forfeit on the same fall-open path (`review-code` reference: `auto-fix-loop.md`, `round-driver.md`).
   Engine telemetry corroborates engagement but never substitutes for that record. This reuses the
@@ -1414,7 +1416,10 @@ only** (the existing identity rule) — was written within `LIVENESS_QUIET_WINDO
 `lib/wave_watch.py`). A lane whose transcript file does not exist yet gets the same window from its
 recorded start. No per-lane promise exists. A Codex-hosted builder has no Claude session
 transcript, so it would alert `lane-stale` (fail toward alert) where a stamp used to vouch for it;
-today's launcher spawns only `claude -p` builders.
+today's launcher spawns only `claude -p` builders. A **cloud lane** is the exception to the rule:
+it has no local leader pid, transcript or heartbeat to read, so the wave watch judges it by its
+GitHub activity instead, and the sweep classes it `nonterminal` with `cloud-lane-no-heartbeat`
+without reading a heartbeat file (`lib/wave_watch.py`, `lib/heartbeat.py`).
 
 **Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or
 **future-dated** heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger
