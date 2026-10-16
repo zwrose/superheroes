@@ -184,6 +184,45 @@ def test_parse_judge_rejects_malformed():
     assert ab.parse_judge(first + "\n" + line({"1A": True}), reps)["note"] == "first"  # a later invalid one is skipped
 
 
+def test_parse_judge_is_order_and_brace_independent():
+    reps, labs = 1, ab.labels(1)
+
+    def obj(correct, note="n", diff="same", first_diff=False):
+        c = {l: correct for l in labs}
+        parts = [("sources_differ", diff), ("correct", c), ("note", note)] if first_diff else \
+            [("correct", c), ("sources_differ", diff), ("note", note)]
+        return json.dumps(dict(parts))
+    assert ab.parse_judge(obj(True, first_diff=True), reps)["sources_differ"] == "same"  # reordered keys
+    assert ab.parse_judge(obj(True, note="see {head_sha} and {}"), reps)["note"] == "see {head_sha} and {}"
+    draft, fix = obj(True, note="draft"), obj(False, note="fix", first_diff=True)
+    assert ab.parse_judge("draft:\n" + draft + "\nfinal:\n" + fix, reps)["note"] == "fix"  # correction wins
+    for junk in ("{{{{", "}{ not json {", '{"correct": {', "[]", "null {}"):
+        assert ab.parse_judge(junk, reps) is None
+
+
+def test_worktree_paths_never_reach_the_judge_prompt(tmp_path):
+    run_dir, scenarios, ident, mapping = build_run(tmp_path, judged=False)
+    roots = ["/tmp/charter-ab-wt-Q1/base", "/private/tmp/charter-ab-wt-Q1/candidate"]
+    Path(run_dir, "worktrees.json").write_text(json.dumps(roots))
+    Path(ab.ans_path(run_dir, "s1", "base", 1)).write_text(f"see {roots[0]}/plugins/x.md and {roots[1]}/y.md\n")
+    prompt = ab.render_judge(run_dir, scenarios[0], mapping["s1"], 1)
+    assert "<worktree>/plugins/x.md" in prompt and "<worktree>/y.md" in prompt
+    assert "charter-ab-wt" not in prompt and "/base" not in prompt and "/candidate" not in prompt
+
+
+def test_forced_rerun_removes_saved_reports_first(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, _ = build_run(tmp_path)
+    assert ab.stage_report(run_dir, scenarios, ident) == 0
+    assert Path(run_dir, "verdict.json").exists()
+    monkeypatch.setattr(ab, "exec_seat", lambda c, w, e: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            ab.stage_seats(run_dir, SIDE_DIRS, scenarios, ident, True, 1, "/cfg")
+    finally:
+        ab._STOPPING.clear()
+    assert not Path(run_dir, "verdict.json").exists() and not Path(run_dir, "results.md").exists()
+
+
 # ---------------------------------------------------------------- 6 report never PASSes on a bad judge
 
 def test_malformed_judge_output_makes_report_incomplete(tmp_path):
@@ -362,7 +401,7 @@ def test_identity_mismatch_names_guarded_keys():
     stored = make_ident(3)
     assert ab.identity_mismatch(stored, dict(stored)) == []
     for key, new in (("model", "sonnet"), ("judge_model", "other"), ("candidate_sha", "c" * 40),
-                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1), ("plugin_dir", "plugins/x")):
+                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1), ("plugin_dir", "plugins/x"), ("claude_config_dir", "/other")):
         assert ab.identity_mismatch(stored, dict(stored, **{key: new})) == [key]
     assert ab.identity_mismatch(dict(stored, plugin_dir="plugins/x"), stored) == ["plugin_dir"]
     moved = dict(stored, base_ref="x", candidate_ref="y", scenarios_file="/elsewhere.json")
@@ -438,6 +477,10 @@ def test_run_end_to_end_with_fakes(tmp_path, monkeypatch, git_env):
     assert json.loads((run_dir / "verdict.json").read_text())["verdict"] == "PASS"
     assert (run_dir / "walltime.txt").exists() and worktree_count(repo) == 1
     assert ab.main(["report", "--repo", str(repo), "--run-dir", str(run_dir)]) == 0
+    assert json.loads((run_dir / "worktrees.json").read_text())  # roots recorded for the judge's redaction
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "other-cfg"))  # resumed seats under another config
+    assert ab.main(["seats", "--candidate", "HEAD", "--base", "HEAD"] + common) == 3
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
     assert ab.main(["judge", "--repo", str(repo), "--run-dir", str(run_dir)]) == 0
     # a later stage under a different identity is refused, not mixed in
     assert ab.main(["report", "--repo", str(repo), "--run-dir", str(run_dir), "--model", "sonnet"]) == 3

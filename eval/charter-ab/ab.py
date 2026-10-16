@@ -23,7 +23,7 @@ SIDES = ("base", "candidate")
 DIFF = ("same", "minor-difference", "material-difference")
 REQUIRED_FIELDS = ("id", "situation", "question", "expected_rule", "targeted_block")
 IDENTITY_KEYS = ("base_ref", "base_sha", "candidate_ref", "candidate_sha", "charter", "scenarios_file",
-                 "scenarios_sha256", "role", "model", "judge_model", "replicates", "seed", "plugin_dir")
+                 "scenarios_sha256", "role", "model", "judge_model", "replicates", "seed", "plugin_dir", "claude_config_dir")
 UNGUARDED_KEYS = ("base_ref", "candidate_ref", "scenarios_file")  # names/paths only; the SHAs and hashes guard
 EXIT_BY_VERDICT = {"PASS": 0, "FAIL": 1, "INCOMPLETE": 2}
 EXIT_REFUSED = 3
@@ -85,18 +85,21 @@ def labels(reps):
 
 
 def parse_judge(text, reps):
-    want = set(labels(reps))
-    for m in reversed(list(re.finditer(r"\{\s*\"correct\"\s*:\s*\{[^{}]*\}[^{}]*\}", text))):
-        try:
-            d = json.loads(m.group(0))
-        except json.JSONDecodeError:
+    """The last well-shaped judgment object anywhere in text, whatever its key order or the braces in its note."""
+    want, dec, found = set(labels(reps)), json.JSONDecoder(), None
+    for i, ch in enumerate(text):
+        if ch != "{":
             continue
-        c = d.get("correct")
+        try:
+            d = dec.raw_decode(text, i)[0]
+        except ValueError:
+            continue
+        c = d.get("correct") if isinstance(d, dict) else None
         # bites on: judge output with a missing/extra label or non-bool value must not count as a result
         if isinstance(c, dict) and set(c) == want and all(isinstance(v, bool) for v in c.values()) \
                 and d.get("sources_differ") in DIFF:
-            return d
-    return None
+            found = d
+    return found
 
 
 def make_mapping(scenario_ids, reps, seed):
@@ -410,7 +413,15 @@ def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
     return dict(res, attempts=attempt, ok=ok, skipped=False)
 
 
+def invalidate_reports(run_dir, force):
+    """bites on: a forced rerun interrupted mid-way must not leave a saved PASS over answers that are now gone"""
+    for name in ("results.md", "verdict.json") if force else ():
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(os.path.join(run_dir, name))
+
+
 def stage_seats(run_dir, side_dirs, scenarios, ident, force, jobs, config_dir):
+    invalidate_reports(run_dir, force)
     os.makedirs(os.path.join(run_dir, "answers"), exist_ok=True)
     # replicate-major order so a partial run still leaves whole replicates
     tasks = [(sc, side, rep) for rep in range(1, ident["replicates"] + 1) for sc in scenarios for side in SIDES]
@@ -423,16 +434,25 @@ def stage_seats(run_dir, side_dirs, scenarios, ident, force, jobs, config_dir):
     atomic_write(path, json.dumps(sorted(prior.values(), key=lambda r: (r["id"], r["side"], r["rep"])), indent=1))
 
 
+def redact_roots(text, roots):
+    """bites on: a worktree path in an answer names its side (base/candidate), which would unblind the judge"""
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root, "<worktree>")
+    return text
+
+
 def render_judge(run_dir, sc, m, reps):
-    """The judge prompt for one scenario from the current answers and mapping; None if an answer is missing."""
+    """The judge prompt for one scenario from the current answers and mapping; None if an answer is missing.
+    Both stages render through here, so the redacted text is what the prompt hash binds."""
     blocks, xs, ys = [], [], []
+    roots = load_json(os.path.join(run_dir, "worktrees.json"), []) or []
     for k in range(1, reps + 1):
         for lab in "AB":
             side = m["replicates"][str(k)][lab]
             p = ans_path(run_dir, sc["id"], side, k)
             if not nonempty(p):
                 return None
-            blocks.append(f"## Answer {k}{lab}\n{read_text(p).strip()}\n")
+            blocks.append(f"## Answer {k}{lab}\n{redact_roots(read_text(p).strip(), roots)}\n")
             (xs if side == m["X"] else ys).append(f"{k}{lab}")
     return JUDGE.format(
         n=reps, situation=sc["situation"], question=sc["question"],
@@ -463,6 +483,7 @@ def exec_judge(cmd, prompt):
 def stage_judge(run_dir, scenarios, ident, force, jobs):
     reps, jd = ident["replicates"], os.path.join(run_dir, "judge")
     os.makedirs(jd, exist_ok=True)
+    invalidate_reports(run_dir, force)
     mapping = make_mapping([sc["id"] for sc in scenarios], reps, ident["seed"])
     old = {} if force else load_json(os.path.join(jd, "mapping.json"), {}) or {}
     if all(sid in old and len(old[sid]["replicates"]) == reps for sid in mapping):
@@ -693,6 +714,7 @@ def dispatch(a, stack):
         raise Refusal(f"{run_dir} holds prior run artifacts but no readable sides.json; "
                       "use a fresh --run-dir (identity cannot be validated)")
     ident, scenarios = build_identity(a, stage, repo, stored)
+    ident["claude_config_dir"] = os.path.realpath(config_dir) if config_dir else (stored or {}).get("claude_config_dir")
     if stored is not None:
         # bites on: a stage under a different commit/model/scenarios/replicates than the run dir's must not mix in (E3)
         if diff := identity_mismatch(stored, ident):
@@ -712,6 +734,9 @@ def dispatch(a, stack):
                         os.path.join(path, ident["plugin_dir"], ".claude-plugin", "plugin.json")):
                     raise Refusal(f"{side} ({ident[side + '_sha']}) has no plugin manifest at "
                                   f"{ident['plugin_dir']}/.claude-plugin/plugin.json")
+            wtf = os.path.join(run_dir, "worktrees.json")  # every root any seat of this run dir has run under
+            roots = set(load_json(wtf, []) or []) | {r for q in wts.values() for r in (q, os.path.realpath(q))}
+            atomic_write(wtf, json.dumps(sorted(roots)))
             if stored is None:
                 atomic_write(os.path.join(run_dir, "sides.json"), json.dumps(ident, indent=1) + "\n")
             stage_seats(run_dir, wts, scenarios, ident, a.force, a.jobs, config_dir)
