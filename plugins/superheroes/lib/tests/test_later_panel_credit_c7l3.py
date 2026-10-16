@@ -78,7 +78,8 @@ def _panel(state, raised=(), missing=()):
 
 def _credited(state, key):
     row = _ledger(state)[key]
-    return row.get("disposition") == "fixed" and row.get("dispositionReceipt") == RECEIPT
+    return (row.get("disposition") == "fixed"
+            and row.get("dispositionReceipt") == dict(RECEIPT, panelRound=state["round"]))
 
 
 def test_a_fix_a_later_complete_panel_did_not_raise_again_is_fixed():
@@ -406,10 +407,11 @@ def test_the_raised_closure_withholds_credit_from_every_key_the_panel_raised_aga
 
 
 def _reopened_after_fixed(marker_offset=0, extra_marks=()):
-    """A round-2 state whose finding was fixed and audited (a `fixed` disposition newer than its
-    raise), then reopened by an owner ruling: its marker sits `marker_offset` from that disposition's
-    seq, or is absent when `marker_offset` is None. The round-1 fix report is on record, so only a
-    silent complete panel is missing."""
+    """A round-3 state whose finding was fixed and audited (a `fixed` disposition newer than its
+    raise), then reopened by an owner ruling in round 2: its marker sits `marker_offset` from that
+    disposition's seq, or is absent when `marker_offset` is None, and `restagedInRound` records
+    round 2 beside each marker. The retry's fixer step in round 2 reported the fix, so only a silent
+    complete panel is missing."""
     state = _round_one_state(_finding())
     _fix(state)
     RD._record_disposition(state, _key(), "fixed", 1, dispositionReceipt={"headSha": "abc"})
@@ -417,6 +419,10 @@ def _reopened_after_fixed(marker_offset=0, extra_marks=()):
     marks = {} if marker_offset is None else {_key(): seq + marker_offset}
     marks.update({k: seq for k in extra_marks})
     state["restagedAfterDispositionSeq"] = marks
+    state["restagedInRound"] = {k: state["round"] for k in marks}
+    assert state["round"] == 2
+    _fix(state, batch=[f for f in state["findings"] if f["title"] == "Bug"])
+    assert state["round"] == 3
     return state
 
 
@@ -429,6 +435,7 @@ def test_a_fixed_disposition_a_ruling_reopened_is_credited_by_a_later_silent_pan
     _panel(state)
     assert _credited(state, _key())
     assert _key() not in state["restagedAfterDispositionSeq"]
+    assert _key() not in state["restagedInRound"]
 
 
 def test_credit_supersedes_the_markers_of_the_keys_ruling_closure_and_no_others():
@@ -439,6 +446,7 @@ def test_credit_supersedes_the_markers_of_the_keys_ruling_closure_and_no_others(
     _panel(state)
     assert _credited(state, _key())
     assert set(state["restagedAfterDispositionSeq"]) == {"f.py::unrelated@L8"}
+    assert set(state["restagedInRound"]) == {"f.py::unrelated@L8"}
 
 
 def test_a_reopened_finding_with_no_fix_report_keeps_its_marker_when_another_is_credited():
@@ -453,6 +461,61 @@ def test_a_reopened_finding_with_no_fix_report_keeps_its_marker_when_another_is_
     assert _credited(state, _key("Other", 2))
     assert not _credited(state, _key())
     assert state["restagedAfterDispositionSeq"] == marks
+
+
+def test_a_reopened_finding_whose_retry_reported_no_fix_is_not_credited_from_the_report_before_the_ruling():
+    """axis: RESTAGE — vet 506: round 1 fixes A and B; a ruling reopens A; A's retry reports no fix;
+    the round-3 silent panel must not credit A from round 1's report, which the ruling reopened, and
+    A's reopening marker stays."""
+    state = _round_one_state(_finding(), _finding("Other", 2))
+    _fix(state)
+    RD._record_disposition(state, _key(), "fixed", 1, dispositionReceipt={"headSha": "abc"})
+    marks = {_key(): state["dispositionSeqCounter"]}
+    state["restagedAfterDispositionSeq"] = dict(marks)
+    _fix(state, fixes=False, batch=[f for f in state["findings"] if f["title"] == "Bug"])
+    assert state["round"] == 3
+    before = dict(_ledger(state)[_key()])
+    _panel(state)
+    assert _ledger(state)[_key()] == before
+    assert state["restagedAfterDispositionSeq"] == marks
+
+
+def test_a_reopened_finding_whose_marker_has_no_reopening_round_is_not_credited_and_keeps_its_marker():
+    """axis: RESTAGE — a session from before the round was recorded fails closed: a marker with no
+    `restagedInRound` entry is credited from no report, and stays."""
+    state = _reopened_after_fixed()
+    state["restagedInRound"] = {}
+    marks = dict(state["restagedAfterDispositionSeq"])
+    before = dict(_ledger(state)[_key()])
+    _panel(state)
+    assert _ledger(state)[_key()] == before
+    assert state["restagedAfterDispositionSeq"] == marks
+
+
+def test_a_reopened_finding_whose_retry_reported_no_fix_in_the_recorded_round_is_not_credited():
+    """axis: RESTAGE — with the reopening round recorded, the report before it (round 1) is still
+    not the retry's: a retry that reports no fix leaves the finding reopened, its marker and round."""
+    state = _round_one_state(_finding(), _finding("Other", 2))
+    _fix(state)
+    RD._record_disposition(state, _key(), "fixed", 1, dispositionReceipt={"headSha": "abc"})
+    marks = {_key(): state["dispositionSeqCounter"]}
+    state["restagedAfterDispositionSeq"] = dict(marks)
+    state["restagedInRound"] = {_key(): state["round"]}
+    _fix(state, fixes=False, batch=[f for f in state["findings"] if f["title"] == "Bug"])
+    before = dict(_ledger(state)[_key()])
+    _panel(state)
+    assert _ledger(state)[_key()] == before
+    assert state["restagedAfterDispositionSeq"] == marks
+    assert state["restagedInRound"] == {_key(): 2}
+
+
+def test_a_retry_report_at_the_reopening_round_itself_counts():
+    """axis: RESTAGE — the lower bound is inclusive: the fixer step of the round the reopening was
+    recorded in carries the retry, so its report credits the finding."""
+    state = _reopened_after_fixed()
+    assert state["restagedInRound"][_key()] == 2 and 2 in RD._rounds_with_fix_report(state)
+    _panel(state)
+    assert _credited(state, _key())
 
 
 @pytest.mark.parametrize("marker_offset", [None, -1])

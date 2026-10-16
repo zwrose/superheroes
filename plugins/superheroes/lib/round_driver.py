@@ -3189,8 +3189,14 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
         raised_round = entry.get(session_contract.RAISED_ROUND_FIELD)
         if isinstance(raised_round, bool) or not isinstance(raised_round, int):
             continue
+        floor = raised_round
+        if _restaged_after(state, key, entry):
+            # a reopened finding is credited only on a report from its retry (the reopening round or later); none recorded fails closed
+            floor = (state.get("restagedInRound") or {}).get(key)
+            if not _is_plain_int(floor):
+                continue
         # axis: a fix report made before the finding's latest raise says nothing about the raise after it — see bite-proof record c7l3_wo3_driver
-        if any(raised_round <= fix_round < state["round"] and key in keys
+        if any(floor <= fix_round < state["round"] and key in keys
                for fix_round, keys in reported.items()):
             _record_disposition(state, key, "fixed", state["round"], dispositionReceipt=receipt)
             superseded |= _ruling_closure(state, ledger_by_key, key) - raised_now
@@ -3199,6 +3205,7 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     reopened = state.get("restagedAfterDispositionSeq")
     for member in superseded if reopened else ():
         reopened.pop(member, None)
+        (state.get("restagedInRound") or {}).pop(member, None)
 
 
 def _fold_panel(state, config, artifact, session_dir=None):
@@ -4809,6 +4816,7 @@ def _resolve_ruled_batch(state, rows):
         if from_ledger and not queued:  # the ledger keeps its disposition; mark it as the one this ruling reopened
             state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
                 state.get("dispositionSeqCounter", 0))
+            state.setdefault("restagedInRound", {})[_finding_identity_key(row)] = state["round"]
             own = {key, _finding_identity_key(row)}
         elif not queued:
             own = {key}
@@ -4819,6 +4827,7 @@ def _resolve_ruled_batch(state, rows):
                     and _disposition_is_current(entry)):
                 state.setdefault("restagedAfterDispositionSeq", {})[member] = (
                     state.get("dispositionSeqCounter", 0))
+                state.setdefault("restagedInRound", {})[member] = state["round"]
         if not queued:
             added.append(row)
     added.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
@@ -6116,6 +6125,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
             ledger_now, _lf = _disposition_ledger_by_key(state)
             for member in _ruling_closure(state, ledger_now or {}, tid) - {tid} - still_open:
                 reopened.pop(member, None)
+                (state.get("restagedInRound") or {}).pop(member, None)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
