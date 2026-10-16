@@ -273,7 +273,11 @@ and GitHub never lets an author approve their own pull request, so the advisor c
 approval. `gh pr merge` then refuses with "the base branch policy prohibits the merge" even though
 the vet is READY, CI is green and the owner's word is given.
 
-Tell the owner at once, with the choice that is theirs: turn that one option off in the
-repository's ruleset (their setting; the vet, the word and CI stay the gate), or approve each
-cloud-built pull request themselves. Never use `gh pr merge --admin`, and never add a commit only to
-change the pull request's attribution, without the owner's word for that act.
+A cloud-built pull request is opened under the owner's name too, so the owner cannot approve it
+either. Tell the owner at once, with the choice that is theirs:
+- turn that one option off in the repository's ruleset (their setting; the vet, the word and CI stay the gate);
+- merge it themselves through the ruleset's admin bypass;
+- or have an eligible second account approve it.
+
+Never use `gh pr merge --admin`, and never add a commit only to change the pull request's
+attribution, without the owner's word for that act.
