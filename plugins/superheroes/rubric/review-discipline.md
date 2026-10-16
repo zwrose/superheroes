@@ -27,6 +27,18 @@ not listed in the table below is the same as the **full** lane.
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
 | Typical cost | 33–108 min | ~5 min | ~5 min |
 
+### The lane floor
+
+This section is the one home of the lane floor. Every other page points here and says only what its own reader does.
+
+One rule sets the lowest lane a change may take. The advisor runs it as `python3 -B <plugin root>/lib/lane_call.py call --cwd <repo> --path <each changed or planned path> [--proposed <lane>]`, and the lane-call line records the floor the rule returned and one line of reasoning in the advisor's own words. It never pastes the rule's generated reasons or any changed-file path; paths stay in the record's Risk floor line, the one line the record's claim check leaves out.
+
+A change that touches a [risk area](glossary.md#risk-area) gets the full lane, whatever its size. So does a change whose risk is unclear. Risk is unclear when the project's risk areas are not set: missing, empty, or the [Risk and trust](glossary.md#risk-and-trust) item cannot be read. It is also unclear when any changed path cannot be matched against them, or when the changed paths cannot be read or none are given. While a project has set no risk areas, that means every change.
+
+A session or model may raise a change's lane above the floor and never lower it below. No waiver lowers a change below its floor, the micro lane's per-change owner waiver included. That waiver covers the quiet-failure default, not the floor.
+
+The review record checks the lane against the floor, recomputed over the PR's changed files (`laneBasis`). A lane below the floor makes the record read not reviewed.
+
 ### Size
 
 This section is the one home of the size rule. The charters, the issue contract and the vet receipt
@@ -142,8 +154,7 @@ and if the record still does not show a reading, **resolve upward to the full la
 record that does not show a reading is **never** a pass, and exiting zero is not evidence of a
 reading. The **investigation-record floor** (an empty external review seat must prove it actually
 investigated, or forfeit as vacuous) applies automatically to **every external review seat**,
-single-seat lanes included; it is a standing safeguard, not something these lanes add. This is
-doctrine in prose only; lane assignment has no mechanical check.
+single-seat lanes included; it is a standing safeguard, not something these lanes add. This reading rule is doctrine in prose; the lane itself is checked against [the lane floor](#the-lane-floor).
 
 ### The spine
 
@@ -152,7 +163,8 @@ doctrine in prose only; lane assignment has no mechanical check.
 If this were wrong, what would break, who would notice, and how soon? **Quiet** failure
 means **the full lane at any size**. The **one** exception is an explicit **per-change
 owner waiver** in **micro** (see Micro — owner authorization below) — owner-only, risk
-stated, never a standing grant.
+stated, never a standing grant. That exception covers the quiet-failure default only; it never
+lowers a change below [the lane floor](#the-lane-floor).
 
 **Lanes change up on their own; moving down a lane is never the builder's or advisor's
 call — it requires the owner, per change.** Disclosure alone never authorizes a downgrade.

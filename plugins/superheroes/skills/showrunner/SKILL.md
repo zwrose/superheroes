@@ -314,6 +314,8 @@ above).
    dispatcher** — amend the order when the world moves under it. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you write a consequence line or amend a live order.**
 
    **Call the lane when you mark the issue build-ready, with the owner present at kickoff.**
+   Run the lane rule first, over the paths the issue will change; its floor binds the call
+   (`rubric/review-discipline.md` § The lane floor, which runs it through `lib/lane_call.py`).
    **Default to the full lane; anything unclear resolves
    upward** (as bounded in `review-discipline.md`). A build may **escalate up on its own**; moving
    **down** a lane is **never** your call — it requires the owner, per change. Disclosure alone

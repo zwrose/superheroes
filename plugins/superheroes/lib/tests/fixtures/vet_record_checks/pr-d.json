@@ -53,6 +53,23 @@
       "source": "reported by the session",
       "value": "full"
     },
+    "laneBasis": {
+      "floor": "full",
+      "lane": "full",
+      "proposalTaken": true,
+      "proposed": "full",
+      "riskAreas": {
+        "detail": "not-read",
+        "reason": "unreadable",
+        "state": "not-set"
+      },
+      "source": "unavailable",
+      "touched": [],
+      "unmatchable": [],
+      "why": [
+        "risk-unclear-not-set: the account names no repository, so its risk areas were not read"
+      ]
+    },
     "leftForOwner": [],
     "makers": [],
     "missingReviews": [

@@ -90,6 +90,7 @@ the escalation triggers below do that job together. Keep the kickoff conversatio
   `review-discipline.md` § Size counts them: a flat measured line, not an estimate.
 - The change spreads into surfaces the lane call did not anticipate.
 - The change touches a quiet-failure path.
+- The lane rule's floor reads full for the change (`rubric/review-discipline.md` § The lane floor).
 - The change needs something irreversible or expensive: a migration, a new dependency, an auth or
   data-model change, or a new external contract. These go to the owner before they are built, in
   any lane.

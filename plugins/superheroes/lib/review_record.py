@@ -33,6 +33,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import build_lane  # noqa: E402
+import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
@@ -55,10 +56,14 @@ RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
-# The review lane vocabulary, its one home: the lane matcher below is built from it and the sheet builder
-# validates against it; the sheet schema holds no copy of it (a test pins that).
-LANES = ("full", "light", "micro")
-_LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(LANES) + r")\b[.:]?[ \t]*(.*)$")
+# GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
+_FILES_CEILING = 3000
+# The review lane vocabulary: its one home is lane_call.LANES. The lane matcher below is built from it and the
+# sheet builder validates against this alias of it; the sheet schema holds no copy of it (a test pins that).
+LANES = lane_call.LANES
+_LANE_RE = re.compile(
+    r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
+)
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -168,6 +173,33 @@ def _list_comments(pr, repo):
         return None
 
 
+def changed_paths(pr, repo):
+    """Every path the PR changes, as a list, or None when the list cannot be trusted to be complete:
+    a failed call or parse, an entry with no string filename, or GitHub's file ceiling reached.
+    Removed files are kept (a deletion inside a risk area touches it), and so is each renamed
+    file's previous name (a rename out of a risk area still touches it)."""
+    out = _run(["gh", "api", _api(repo, f"pulls/{pr}/files"), "--paginate"])
+    try:
+        files = None if out is None else pr_comment._parse_paginated_arrays(out)
+    except ValueError:
+        return None
+    # axis: a file list that may be cut short is unavailable, never read as the whole change — see bite-proof record wo_a_1795_lane-call
+    if files is None or len(files) >= _FILES_CEILING:
+        return None
+    paths = []
+    for f in files:
+        if not isinstance(f, dict) or not isinstance(f.get("filename"), str):
+            return None
+        paths.append(f["filename"])
+        previous = f.get("previous_filename")
+        if previous is not None and not isinstance(previous, str):
+            return None
+        # axis: a renamed file's previous path counts as changed, so a rename out of an area touches it — see bite-proof record wo_a_1795_lane-call
+        if previous is not None:
+            paths.append(previous)
+    return paths
+
+
 def _send(method, path, body):
     fd, tmp = tempfile.mkstemp(suffix=".md")
     try:
@@ -187,7 +219,7 @@ def _readers(overrides):
     return {"pr_meta": _pr_meta, "issue_body": _issue_body, "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name, "read_text": _read_text,
-            **(overrides or {})}
+            "changed_paths": changed_paths, **(overrides or {})}
 
 
 # --- the account ---
@@ -297,6 +329,91 @@ def _lane(a, rd, meta):
     if hit:
         return {"value": hit.group(1), "source": source, "reason": hit.group(2).strip() or None}
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
+
+
+BASIS_EVIDENCE_MAX = 10      # matched or unmatchable paths kept per list
+BASIS_AREAS_MAX = 20         # touched areas kept on the record
+BASIS_PATHS_MAX = 40         # matched paths kept across all touched areas together
+BASIS_WHY_MAX = 12           # reason lines kept; the touches ones are the cut ones
+BASIS_TEXT_MAX = 300         # characters kept of any one path, area name or reason line
+
+
+def _clip(text):
+    text = str(text)
+    return text if len(text) <= BASIS_TEXT_MAX else text[:BASIS_TEXT_MAX - 1] + "\u2026"
+
+
+def _bound_basis(basis):
+    """The basis as it goes on the record, bounded in total: at most BASIS_AREAS_MAX touched areas,
+    BASIS_PATHS_MAX matched paths across all of them (BASIS_EVIDENCE_MAX each), BASIS_EVIDENCE_MAX unmatchable
+    paths, BASIS_WHY_MAX reason lines, and BASIS_TEXT_MAX characters of any one string. The counts of
+    everything cut sit beside it (matchedCount, touchedCount, unmatchableCount, whyCount). The floor, the
+    first reason and the lane-defining reasons are unchanged."""
+    cap, budget, touched = BASIS_EVIDENCE_MAX, BASIS_PATHS_MAX, []
+    for hit in basis["touched"][:BASIS_AREAS_MAX]:
+        keep = max(0, min(cap, budget, len(hit["matched"])))
+        budget -= keep
+        item = dict(hit, name=_clip(hit["name"]), matched=[_clip(m) for m in hit["matched"][:keep]])
+        if keep < len(hit["matched"]):
+            item["matchedCount"] = len(hit["matched"])
+        touched.append(item)
+    out = dict(basis, touched=touched)
+    if len(basis["touched"]) > BASIS_AREAS_MAX:
+        out["touchedCount"] = len(basis["touched"])
+        out["matchedTotal"] = sum(len(t["matched"]) for t in basis["touched"])
+    if len(basis["unmatchable"]) > cap:
+        out.update(unmatchable=[_clip(u) for u in basis["unmatchable"][:cap]],
+                   unmatchableCount=len(basis["unmatchable"]))
+    else:
+        out["unmatchable"] = [_clip(u) for u in basis["unmatchable"]]
+    why = list(basis["why"])
+    if len(why) > BASIS_WHY_MAX:
+        # Drop only the touches lines, from the end, so the verdict lines stay; say how many went.
+        drop = len(why) - BASIS_WHY_MAX + 1
+        idx = [i for i, w in enumerate(why) if i and lane_call.is_touches_line(w)][::-1][:drop]
+        if idx:
+            gone = set(sorted(idx)[-drop:])
+            at = min(gone)
+            why = [w for i, w in enumerate(why) if i not in gone]
+            why.insert(at, lane_call.touches_omitted_line(len(gone)))
+            out["whyCount"] = len(basis["why"])
+    out["why"] = [_clip(w) for w in why]
+    return out
+
+
+def _lane_basis(a, rd, lane_value, final_sha):
+    """The risk floor for the PR's changed files, from lane_call.call, with the record's own lane as the
+    proposal. An account that names no repository, files that cannot be read, or a PR head that moved
+    from the recorded final commit while they were read, give the floor full,
+    marked unavailable, never a basis from the ambient project or from a partial list."""
+    repo_root = a.get("repoRoot")
+    # axis: an account that names no repository reads nothing, so no other project's store is read — see bite-proof record wo_c_1795_lane-basis
+    if not repo_root:
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NOT_SET + " the account names no repository, so its risk areas were not read",
+            proposed=lane_value), source="unavailable")
+    paths = rd["changed_paths"](a["pr"], a["repo"])
+    # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
+    after = rd["pr_meta"](a["pr"], a["repo"])
+    head = after.get("head") if isinstance(after, dict) else None
+    moved = isinstance(head, str) and head != final_sha
+    if isinstance(paths, list) and not head:
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read",
+            proposed=lane_value), source="unavailable")
+    if isinstance(paths, list) and moved:
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read",
+            proposed=lane_value), source="unavailable", headMoved=True)
+    if isinstance(paths, list):
+        return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
+                    source="lane rule over the PR's changed files")
+    out = dict(lane_call.unavailable(
+        lane_call.WHY_NO_PATHS + " the PR's changed files could not be read", proposed=lane_value),
+        source="unavailable")
+    if moved:
+        out["headMoved"] = True
+    return out
 
 
 def _family(vendor, model):
@@ -417,6 +534,21 @@ def _finding_lines(findings):
     return lines
 
 
+def _lane_lines(rec):
+    lane, basis = rec["lane"]["value"], rec["laneBasis"]
+    # axis: a lane below the risk floor is not-reviewed; an unknown lane counts as below — see bite-proof record wo_a_1795_lane-call
+    if basis["floor"] is not None and lane_call.rank(lane) < lane_call.rank(basis["floor"]):
+        # fixed prose: only the lane and floor tokens enter, never the basis's free-text reasons (the Risk floor line holds those)
+        lines = [f"the lane ({lane}) is below the risk floor ({basis['floor']}); the Risk floor line gives why"]
+    else:
+        lines = []
+    # axis: a head read and found moved from the recorded final commit is not-reviewed, whatever the lane — see bite-proof record wo_g_1795_head-moved
+    if basis.get("headMoved"):
+        # fixed prose: no data enters
+        lines.append("the PR head moved while the record was written; this record does not cover the new head")
+    return lines
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -429,6 +561,7 @@ def _status(rec, unread=(), finding_lines=()):
     elif ci["sha"] != fc["sha"]:
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
     lines += finding_lines
+    lines += _lane_lines(rec)
     lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
               for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
@@ -473,7 +606,7 @@ def build_record(account, readers):
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
-        "finalCommit": fc,
+        "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
@@ -634,6 +767,79 @@ def _scrubbed(value):
     return value
 
 
+def _shed_why_paths(basis):
+    """Step 1: the sampled paths leave the reason lines (``name (a, b, c)`` becomes ``name``)."""
+    names = [t["name"] for t in basis["touched"]]
+    why = [lane_call.why_line_paths_stripped(w, names) for w in basis["why"]]
+    return dict(basis, why=why, whyCount=basis.get("whyCount", len(basis["why"])), basisShed="why-paths")
+
+
+def _shed_matched(basis):
+    """Step 2: the matched path lists go; each area keeps its name and its matchedCount."""
+    touched = [dict(t, matched=[], matchedCount=t.get("matchedCount", len(t["matched"])))
+               for t in basis["touched"]]
+    return dict(basis, touched=touched, basisShed="matched")
+
+
+def _shed_unmatchable(basis):
+    """Step 3: the unmatchable list goes; unmatchableCount stays."""
+    return dict(basis, unmatchable=[],
+                unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
+                basisShed="unmatchable")
+
+
+def _shed_to_floor(basis):
+    """Last resort: the floor, the lane, the first reason line and the counts."""
+    out = {k: basis[k] for k in ("floor", "lane", "proposalTaken", "source") if k in basis}
+    out.update(why=basis["why"][:1], whyCount=basis.get("whyCount", len(basis["why"])),
+               touchedCount=basis.get("touchedCount", len(basis["touched"])),
+               matchedCount=basis["matchedTotal"] if "matchedTotal" in basis
+               else sum(t.get("matchedCount", len(t["matched"])) for t in basis["touched"]),
+               unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
+               basisShed="floor-only")
+    return out
+
+
+_SHED_STEPS = (_shed_why_paths, _shed_matched, _shed_unmatchable, _shed_to_floor)
+
+_KEPT_OBSERVATION = ("read", "toolCalls")
+
+
+def _shed_observation(record):
+    """Reviewer step 1: each observation keeps only read and toolCalls; a row with no dict observation is left as it is."""
+    rows = [dict(v, observation={k: v["observation"][k] for k in _KEPT_OBSERVATION if k in v["observation"]})
+            if isinstance(v.get("observation"), dict) else v for v in record["reviewers"]]
+    return dict(record, reviewers=rows)
+
+
+def _shed_run_dir(record):
+    """Reviewer step 2: each row's non-None runDir becomes None; a row with none is left as it is."""
+    return dict(record, reviewers=[dict(v, runDir=None) if v.get("runDir") is not None else v
+                                   for v in record["reviewers"]])
+
+
+# Only reviewer evidence detail is shed; the status, whatIsMissing, findings' outcome and reason, go-aheads and each
+# row's name, ran, planned, vendor, model, family, commit and coversFinalCommit are never touched.
+_REVIEWER_STEPS = (("observation", _shed_observation), ("runDir", _shed_run_dir))
+_REVIEWER_SHED_WHAT = {"observation": "engine telemetry", "runDir": "run directories"}
+
+
+def _links_raw_output(record):
+    """True when the record links at least one raw-output comment that was posted (not withheld)."""
+    raws = record.get("rawOutputs")
+    return isinstance(raws, list) and any(isinstance(x, dict) and x.get("withheld") is not True for x in raws)
+
+
+def _reviewer_shed_line(record):
+    """The shed line for a record whose reviewerShed lists the applied steps: it names only those steps, and points
+    only at output the record links."""
+    what = " and ".join(_REVIEWER_SHED_WHAT[n] for n in record["reviewerShed"])
+    where = ("the reviewers' findings are in the raw-output comments linked under rawOutputs, and the trimmed "
+             "engine detail is in the engines' own run records"
+             if _links_raw_output(record) else "the engines' own run records hold the full output")
+    return f"Reviewer detail trimmed to fit this comment ({what}); {where}."
+
+
 def render(record):
     record = _scrubbed(record)
     r, lane, ci = record, record["lane"], record["ci"]
@@ -654,18 +860,50 @@ def render(record):
         waits.append("findings left for the owner (" + ", ".join(r["leftForOwner"]) + ") wait for the owner's decision")
     if r["parked"]:
         waits.append("a review with no go-ahead is parked until the owner decides")
-    summary = "\n".join([
-        f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
-        + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
-        ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner.",
-        f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
-        + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
-        *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
-        f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
-        "Reviewers:", *who])
-    _assert_no_bug_free_claim(summary)
-    body = (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
-            f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
+    waits_text = ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner."
+
+    def compose(r):
+        floor_line = (f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".")
+        lines = [
+            f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
+            + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
+            waits_text,
+            f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
+            + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
+            floor_line,
+            *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
+            f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
+            "Reviewers:", *who,
+            # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
+            *([_reviewer_shed_line(r)] if r.get("reviewerShed") else [])]
+        summary = "\n".join(lines)
+        # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
+        # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
+        # block is. Every other line is still checked.
+        _assert_no_bug_free_claim("\n".join(l for l in lines if l is not floor_line))
+        return (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
+                f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
+
+    # The size bound is on what is posted (the JSON-escaped body), so it is measured here: shed the lane
+    # basis's path evidence in a fixed order until the body fits. The floor, lane and proposalTaken never change.
+    body = compose(r)
+    for step in _SHED_STEPS:
+        if len(body) <= MAX_BODY_CHARS:
+            break
+        r = dict(r, laneBasis=step(r["laneBasis"]))
+        body = compose(r)
+    # Then, still over the cap, the reviewers' evidence detail, one step at a time, each said on the record.
+    # axis: the reviewer steps run while the body is over the cap — see bite-proof record wo_d_1795_reviewer-shed
+    # A step counts as applied, and is named, only when it changed a row; one that changed nothing is not listed.
+    for name, step in _REVIEWER_STEPS:
+        if len(body) <= MAX_BODY_CHARS:
+            break
+        shed = step(r)
+        if shed["reviewers"] == r["reviewers"]:
+            continue
+        r = dict(shed, reviewerShed=[*r.get("reviewerShed", []), name])
+        body = compose(r)
+    # axis: a body still over the cap after every step is refused, never truncated — see bite-proof record wo_d_1795_reviewer-shed
     if len(body) > MAX_BODY_CHARS:
         raise Refusal("review-record-too-large", f"{len(body)} characters")
     return body
