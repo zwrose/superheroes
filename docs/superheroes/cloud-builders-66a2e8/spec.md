@@ -10,7 +10,7 @@ approved: "2026-10-10"
 gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-10"
-updated: "2026-10-15"
+updated: "2026-10-16"
 ---
 # Cloud builders
 
@@ -406,6 +406,15 @@ reviewer sign-in being once per machine (FR-1) on "1 Setup". (source: owner's ru
   still outstanding and is owed by the owner at the cloud closure sitting. Sections touched:
   frontmatter, Part A · Setting a project up for the cloud (FR-1), Part C (FR-21), Part E (FR-34),
   UFR-12, UI / UX, Amendments.
+- **2026-10-16 (owner re-stamp):** the owner re-stamped the consolidated body after the
+  consolidation re-read and its amendment (owner's ruling "132 a", collector item 132), so the
+  re-stamp the 2026-10-15 entries left outstanding is given. At the same sitting the owner accepted
+  full delivery on the closure receipt, with two live checks deferred to their first occurrence: a
+  builder archiving itself after a real merge, and a review resuming after the reviewer pass lapses.
+  The validation run's self-archive showed no prompt where FR-28, FR-29 and the assumptions
+  promise one; the owner ruled to confirm that at the first real archive before amending (owner's
+  ruling "131 b", collector item 131). No requirement text changes in this entry. Sections touched:
+  frontmatter, Amendments.
 
 ## Coverage
 
