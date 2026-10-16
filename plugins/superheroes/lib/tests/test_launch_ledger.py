@@ -4627,6 +4627,10 @@ _DECLARATION_DOOR_ADJUDICATION = {
     "declare_batch": {"kind": "the-door"},
     "terminalize": {"kind": "constructs-own-event"},
     "amend": {"kind": "constructs-own-event"},
+    "repair_never_started": {
+        "kind": "guarded-caller-record",
+        "refusalTest": "test_repair_never_started_refuses_batch_declared_pending_record",
+    },
 }
 
 _BATCH_REFUSAL_TOKEN_ADJUDICATION = {
@@ -4660,6 +4664,7 @@ _BATCH_REFUSAL_TOKEN_ADJUDICATION = {
 _GUARDED_DOOR_REFUSAL_TOKENS = {
     "append_under_lock": "append-batch-declared-must-use-declare-batch",
     "reserve": "reserve-batch-declared-must-use-declare-batch",
+    "repair_never_started": ll.REPAIR_PENDING_STARTED_INVALID,
 }
 
 
@@ -4996,6 +5001,21 @@ def test_append_under_lock_refuses_batch_declared_record(tmp_path, monkeypatch):
         "reason": "append-batch-declared-must-use-declare-batch",
         "path": None,
     }
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_repair_never_started_refuses_batch_declared_pending_record(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    env = os.environ
+    assert ll.reserve(repo, _reserved("l-repair", "b-repair-guard", ["a"], repo), env=env)["ok"]
+    before = _ledger_bytes(repo, env)
+    rec = _batch_declared("b-repair-guard", 1)
+    rec["launchId"] = "l-repair"
+    result = ll.repair_never_started(repo, "l-repair", pending_started=rec, env=env)
+    # The literal stays so the census finds the token in this test; the comparison reads the one home.
+    assert ll.REPAIR_PENDING_STARTED_INVALID == "pending-started-invalid"
+    assert result == {"ok": False, "reason": ll.REPAIR_PENDING_STARTED_INVALID}
     assert _ledger_bytes(repo, env) == before
 
 

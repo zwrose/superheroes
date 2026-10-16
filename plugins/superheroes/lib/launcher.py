@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import functools
 import json
 import os
 import platform
@@ -63,7 +64,7 @@ _IPHONE_CREATE_TIMEOUT = 20
 _DEVICE_HUB_CMD_TIMEOUT = 30
 _DEVICE_HUB_POLL_SECONDS = 10
 # The iPhone steps together never run longer than this; the launch deadline is extended by exactly the time they took.
-_IPHONE_CEILING_SECONDS = 90
+_IPHONE_CEILING_SECONDS = ll.IPHONE_CEILING_SECONDS
 # The shortest timeout the poll's last lookup gets once the poll deadline has passed.
 _DEVICE_HUB_FINAL_LOOKUP_SECONDS = 1
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
@@ -93,12 +94,13 @@ STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (5, 15, 45)
-_TOTAL_DEADLINE_SECONDS = 300
+_TOTAL_DEADLINE_SECONDS = ll.LAUNCH_DEADLINE_SECONDS
 
 _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 
-_WORKTREE_GIT_TIMEOUT = 180
+# Also bounds each step of the cloud base re-check, so the repair window reads the same number.
+_WORKTREE_GIT_TIMEOUT = ll.REMOTE_BASE_STEP_TIMEOUT_SECONDS
 _WORKTREE_TAG_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 _WORKTREE_COLLISION_REMEDY = (
@@ -116,9 +118,9 @@ _WORKHORSE_CMD = "/superheroes:workhorse"
 # sequences, which are stripped before anything is matched.
 PLACE_LOCAL = ll.PLACE_LOCAL
 PLACE_CLOUD = ll.PLACE_CLOUD
-_CLOUD_SPAWN_TIMEOUT_SECONDS = 120
-_CLOUD_APPEND_TRIES = 3
-_CLOUD_APPEND_PAUSE_SECONDS = 0.2
+_CLOUD_SPAWN_TIMEOUT_SECONDS = ll.CLOUD_SPAWN_TIMEOUT_SECONDS
+_CLOUD_APPEND_TRIES = ll.STARTED_APPEND_TRIES
+_CLOUD_APPEND_PAUSE_SECONDS = ll.STARTED_APPEND_PAUSE_SECONDS
 _CLOUD_CREATED_PREFIX = "Created cloud session: "
 # The two line patterns capture the whole token where the id sits; the id's grammar is decided
 # once, by the ledger's own pattern (`ll._CLOUD_SESSION_ID_RE`), when the receipt is read.
@@ -138,16 +140,21 @@ _CLOUD_UNCONFIRMED_APPEND_REMEDY = (
     "The launch command may have created a cloud session that this launcher could not read the "
     "identity of, and the `started` record could not be written (`startedAppend` holds why). The "
     "lane is live on its `reserved` record alone. Look for a session with the name in "
-    "`cloudSessionName` in the host's session listing. `record-outcome` refuses a lane with no "
-    "`started` record, so it cannot end this lane. The result carries the record a later repair "
-    "needs in `pendingStarted`."
+    "`cloudSessionName` in the host's session listing. A reported write failure does not prove the "
+    "record is absent. Read the ledger first: when the lane already has its `started` record, end "
+    "it normally with `record-outcome`; when it does not, restore it with `launcher.py "
+    "repair-lane --pending-file <a file holding pendingStarted>`. The result carries the record "
+    "a later repair needs in `pendingStarted`."
 )
 _CLOUD_STARTED_APPEND_REMEDY = (
     "A cloud session exists and is working: its identity is in `cloudSessionId`. The `started` "
     "record could not be written, and `startedAppend` holds why. The lane is left live on its "
-    "`reserved` record alone. `record-outcome` refuses a lane with no `started` record, so keep "
-    "the session's identity from this result and reach the session by it. The result carries the "
-    "record a later repair needs in `pendingStarted`."
+    "`reserved` record alone. A reported write failure does not prove the record is absent. Read "
+    "the ledger first: when the lane already has its `started` record, end it normally with "
+    "`record-outcome`; when it does not, restore it with `launcher.py repair-lane "
+    "--pending-file <a file holding pendingStarted>`. Keep the session's identity from this "
+    "result and reach the session by it. The result carries the record a later repair needs in "
+    "`pendingStarted`."
 )
 
 # What a reader of a `started` record sees when its lane launched over a recorded surface
@@ -165,8 +172,8 @@ _SLOT_REMEDY = (
     "self-provisions), then give every lane named in `missing` its own reservation. "
     "The literal `this-launch` in `missing` names the launch being attempted — relaunch "
     "it with `--slot` and `--generation` on the command below. Any other id in `missing` "
-    "is a live unslotted lane that must reach a terminal outcome before relaunch — there "
-    "is no CLI transition today for a reserved-but-never-started lane. "
+    "is a live unslotted lane that must reach a terminal outcome before relaunch — "
+    "a reserved-but-never-started lane reaches one with `launcher.py repair-lane`. "
     "Relaunch each lane with: "
     "`launcher.py launch --repo-root <repo-root> --issue <n> --premise <FILE PATH> "
     "--checks <FILE PATH> --log-dir <dir> --slot <slot-id> --generation <int> "
@@ -1552,15 +1559,38 @@ def _pause_between_appends():
     time.sleep(_CLOUD_APPEND_PAUSE_SECONDS)
 
 
+def _started_already_landed(repo_root, launch_id, env):
+    """True when the ledger, read afresh, already holds the lane's `started` record.
+
+    A reported write failure does not prove the record is absent (the line can land and its sync
+    fail). A read that fails, or a ledger that does not fold, proves nothing, so it answers False.
+    """
+    read_result = ll.read(repo_root, env=env)
+    if read_result["state"] not in ("ok", "missing"):
+        return False
+    folded = ll.fold(read_result["records"])
+    if not folded["ok"]:
+        return False
+    lane = folded["launches"].get(launch_id)
+    return bool(lane and lane.get("started"))
+
+
 def _append_started(repo_root, record, env):
     """Append a cloud lane's `started` record, trying up to three times; the last result.
 
     The append takes a lock, and a brief contention for it is the ordinary cause of a failure, so
-    one failure must not strand a lane whose command has already run.
+    one failure must not strand a lane whose command has already run. After each failure the
+    ledger is read again: a lane whose `started` record is already visible is never appended a
+    second time, and its failure stands (a visible record is not proof it is durable, and a retried
+    sync cannot prove it either), so the pending record is kept for the repair verb.
     """
     for attempt in range(_CLOUD_APPEND_TRIES):
         result = _append_under_lock(repo_root, record, env=env)
         if result["ok"]:
+            return result
+        # axis: a failed append is not taken as proof the record is absent — the ledger is re-read.
+        if _started_already_landed(repo_root, record.get("launchId"), env):
+            # axis: a reported storage error stands — a record seen again, or a second sync, does not prove it reached storage (a failed writeback can leave a clean cached page), so the failure and the pending repair stay, and no second append is made.
             return result
         if attempt + 1 < _CLOUD_APPEND_TRIES:
             _pause_between_appends()
@@ -2360,6 +2390,32 @@ def _cloud_base_refusal(repo_root, stamped, env):
     return None
 
 
+def _holds_launch_ownership(func):
+    """Run `func` (a launch) holding its per-launch ownership lock from before it reserves.
+
+    The lock (`ll.acquire_launch_ownership`) is taken before any `reserved` record is written and
+    released only when the launch returns, on every path (success, refusal, exception), so a live
+    holder is positive evidence the launch is still running: the never-started repair refuses on
+    it. The decorator mints the launch id and hands it to `func` as `_launch_id`.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        launch_id = "launch-%s" % secrets.token_hex(8)
+        # repo_root and env are the first and seventh parameters of `launch_build`.
+        repo_root = args[0] if args else kwargs.get("repo_root")
+        env = args[6] if len(args) > 6 else kwargs.get("env")
+        ownership = ll.acquire_launch_ownership(repo_root, launch_id, env=env)
+        if not ownership["ok"]:
+            return _fail("launch-ownership-unavailable:%s" % ownership["reason"],
+                         launchId=launch_id)
+        try:
+            return func(*args, _launch_id=launch_id, **kwargs)
+        finally:
+            ll.release_launch_ownership(ownership["path"])
+    return wrapper
+
+
+@_holds_launch_ownership
 def launch_build(
     repo_root,
     issue,
@@ -2389,6 +2445,7 @@ def launch_build(
     cloud_environment=None,
     cloud_spawn_fn=None,
     cloud_spawn_timeout=None,
+    _launch_id=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry.
 
@@ -2414,7 +2471,7 @@ def launch_build(
         _DEVICE_HUB_POLL_SECONDS if device_hub_poll_seconds is None else device_hub_poll_seconds
     )
 
-    launch_id = "launch-%s" % secrets.token_hex(8)
+    launch_id = _launch_id or "launch-%s" % secrets.token_hex(8)
     deadline = time.monotonic() + total_deadline_seconds
 
     batch_id = premise.get("batchId") if isinstance(premise, dict) else None
@@ -2429,9 +2486,7 @@ def launch_build(
         return place_refusal
     cloud = place == PLACE_CLOUD
     plugin_ver = plugin_version() if cloud else None
-    cloud_session_name = (
-        "issue-%s-%s" % (issue, launch_id[len("launch-"):]) if cloud else None
-    )
+    cloud_session_name = ll.cloud_session_name(issue, launch_id) if cloud else None
     # A cloud launch makes no worktree: the config root resolves against the launching checkout.
     worktree_path = None if cloud else build_worktree_path(repo_root, issue, launch_id, env=env)
     requested = spawn_config_dir(env=env, cwd=repo_root if cloud else worktree_path)
@@ -3490,6 +3545,24 @@ def _cli_record_outcome(args):
     )
 
 
+def _cli_repair_lane(args):
+    pending = None
+    if args.pending_file is not None:
+        try:
+            with open(args.pending_file, encoding="utf-8") as fh:
+                pending = json.load(fh)
+        except (OSError, ValueError):
+            return _fail("pending-file-unreadable")
+        if pending is None:
+            # A file holding JSON `null` decodes to the same None as an omitted file; an
+            # explicit file that carries no record must refuse, not fall to terminalization.
+            return _fail(ll.REPAIR_PENDING_STARTED_INVALID)
+    return ll.repair_never_started(
+        args.repo_root, args.launch_id, pending_started=pending, evidence=args.evidence,
+        no_builder_evidence=args.no_builder,
+    )
+
+
 def _cli_amend(args):
     if args.kind not in ll.CALLER_WRITABLE_AMENDMENT_KINDS:
         return _fail("amend-kind-not-caller-writable:%s" % args.kind)
@@ -3589,6 +3662,22 @@ def main(argv=None):
              "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
     )
     ro.set_defaults(func=_cli_record_outcome)
+
+    rl = sub.add_parser("repair-lane")
+    rl.add_argument("--repo-root", required=True)
+    rl.add_argument("--launch-id", required=True)
+    rl.add_argument(
+        "--pending-file", default=None,
+        help="a file holding the `pendingStarted` record of a lane whose `started` was not written; "
+             "without it the lane's terminal event is recorded from --evidence",
+    )
+    rl.add_argument("--evidence", default=None)
+    rl.add_argument(
+        "--no-builder", default=None,
+        help="one line naming what was checked to show no builder exists (the cloud session "
+             "listing, or the worktree); required to record the lane's terminal event",
+    )
+    rl.set_defaults(func=_cli_repair_lane)
 
     am = sub.add_parser("amend")
     am.add_argument("--repo-root", required=True)

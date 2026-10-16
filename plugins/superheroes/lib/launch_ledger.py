@@ -53,6 +53,16 @@ AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
 # What a caller may write by hand. `reoutcome` is a recorded consequence of a real second
 # record_outcome call, never a hand-written claim.
 CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
+REPAIR_PENDING_STARTED_INVALID = "pending-started-invalid"
+REPAIR_LANE_MAY_BE_LAUNCHING = "lane-may-be-launching"
+REPAIR_BUILDER_MAY_EXIST = "builder-may-exist"
+# The launcher's own timeouts, kept here as one home (the launcher aliases these).
+CLOUD_SPAWN_TIMEOUT_SECONDS = 120
+LAUNCH_DEADLINE_SECONDS = 300
+IPHONE_CEILING_SECONDS = 90
+REMOTE_BASE_STEP_TIMEOUT_SECONDS = 180
+STARTED_APPEND_TRIES = 3
+STARTED_APPEND_PAUSE_SECONDS = 0.2
 VET_RULINGS = ("ready", "not-ready", "parked-blocker")
 _AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
@@ -1857,8 +1867,11 @@ def _validate_started_repair(started_repair):
 
 def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, evidence=None,
                 stage=None, outcome=None, proc=None, started_repair=None, require_started=False,
-                env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """The ONLY writer of a terminal ledger event. Never raises."""
+                env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT, _lock_held=False):
+    """The ONLY writer of a terminal ledger event. Never raises.
+
+    `_lock_held` is module-private: only a caller that already holds the ledger lock passes it.
+    """
     reaped = False
     lock_path = None
     locked = False
@@ -1890,20 +1903,21 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
-        lock_result = _ensure_lock_file(repo_root, env=env)
-        if not lock_result["ok"]:
-            return {
-                "ok": False, "reason": lock_result["reason"],
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
+        if not _lock_held:
+            lock_result = _ensure_lock_file(repo_root, env=env)
+            if not lock_result["ok"]:
+                return {
+                    "ok": False, "reason": lock_result["reason"],
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
 
-        lock_path = lock_result["path"]
-        if not _acquire_lock(lock_path, lock_timeout):
-            return {
-                "ok": False, "reason": "lock-unavailable",
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-        locked = True
+            lock_path = lock_result["path"]
+            if not _acquire_lock(lock_path, lock_timeout):
+                return {
+                    "ok": False, "reason": "lock-unavailable",
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            locked = True
 
         read_result = read(repo_root, env=env)
         state = read_result["state"]
@@ -2044,6 +2058,8 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "stage": park_stage,
                 "reason": park_reason,
             }
+            if isinstance(evidence, str) and evidence.strip():
+                record["evidence"] = evidence
 
         if reaped:
             record["reaped"] = True
@@ -2070,6 +2086,224 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             "kind": None, "outcome": None, "reaped": reaped,
         }
     finally:
+        if locked:
+            _release_lock(lock_path)
+
+
+def _repair_refusal(reason, **extra):
+    result = {"ok": False, "reason": reason}
+    result.update(extra)
+    return result
+
+
+def cloud_session_name(issue, launch_id):
+    """The name the launcher gives a cloud lane's session. The one home of the naming rule.
+
+    The launcher names the session with it, and a terminal repair names it to the operator so they
+    can look for that session in the host's listing. Never raises.
+    """
+    return "issue-%s-%s" % (issue, str(launch_id)[len("launch-"):])
+
+
+# Unresolved ownership-lock reclaim classes: the holder's death was never confirmed.
+_REPAIR_UNCONFIRMED_RECLAIMS = (
+    file_lock.REASON_MALFORMED_HOLDER, file_lock.REASON_FOREIGN_HOST_TTL_EXPIRED,
+)
+
+
+def _builder_check_for(launch_id, info):
+    """What the operator must check before asserting no builder exists, as one line."""
+    if info.get("place") == PLACE_CLOUD:
+        return (
+            "look for the cloud session named %s in the host's session listing"
+            % cloud_session_name(info.get("issue"), launch_id)
+        )
+    return (
+        "look in the worktree %s for a builder (recorded session id %s)"
+        % (info.get("worktree"), info.get("sessionId"))
+    )
+
+
+def _local_transcript_exists(info):
+    """True unless the lane's recorded session transcript is positively absent.
+
+    Resolved by the wave watch's own locator; an ambiguous or unreadable lookup counts as present
+    (fail closed), because the transcript appears only once a builder started.
+    """
+    import wave_watch  # lazy: wave_watch imports this module
+
+    mtime, ambiguous, unresolved = wave_watch._session_transcript_mtime(
+        info.get("sessionId"), os.environ, info.get("configDir"),
+    )
+    return mtime is not None or ambiguous or unresolved
+
+
+_OWNERSHIP_LOCK_PREFIX = "ownership-"
+_LAUNCH_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+
+
+def launch_ownership_lock_path(repo_root, launch_id, env=None):
+    """The per-launch ownership lock's path, beside the ledger. The one home of the derivation.
+
+    A launcher holds this lock from before it writes its `reserved` record until `launch_build`
+    returns, so a live holder is positive evidence that the launch is still running. Never raises.
+    """
+    if not isinstance(launch_id, str) or _LAUNCH_ID_RE.fullmatch(launch_id) is None:
+        return {"ok": False, "path": None, "reason": "launch-id-invalid"}
+    located = ledger_path(repo_root, env=env)
+    if not located["ok"]:
+        return {"ok": False, "path": None, "reason": located["reason"]}
+    path = os.path.join(
+        os.path.dirname(located["path"]), _OWNERSHIP_LOCK_PREFIX + launch_id + _LOCK_SUFFIX,
+    )
+    return {"ok": True, "path": path, "reason": None}
+
+
+def acquire_launch_ownership(repo_root, launch_id, env=None):
+    """Take the launch's ownership lock (no waiting). Never raises.
+
+    Returns `{"ok", "path", "reason"}`; the caller releases `path` with
+    `release_launch_ownership` once its launch has returned, on every path.
+    """
+    located = launch_ownership_lock_path(repo_root, launch_id, env=env)
+    if not located["ok"]:
+        return located
+    try:
+        # The ledger directory is made (and checked private) here, so the lock never creates it loose.
+        opened = _open_ledger_dirs(repo_root, env=env)
+        if not opened["ok"]:
+            return {"ok": False, "path": None, "reason": opened["reason"]}
+        _close_fd(opened["repo_fd"])
+        _close_fd(opened["root_fd"])
+        file_lock.acquire(located["path"])
+    except file_lock.LockHeld:
+        return {"ok": False, "path": None, "reason": "launch-ownership-held"}
+    except Exception:
+        return {"ok": False, "path": None, "reason": "launch-ownership-lock-unavailable"}
+    return {"ok": True, "path": located["path"], "reason": None}
+
+
+def release_launch_ownership(lock_path):
+    """Release a lock `acquire_launch_ownership` took. Never raises."""
+    if lock_path is not None:
+        _release_lock(lock_path)
+
+
+def _launch_ownership_lock_path_or_none(repo_root, launch_id, env):
+    located = launch_ownership_lock_path(repo_root, launch_id, env=env)
+    return located["path"] if located["ok"] else None
+
+
+def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None,
+                         no_builder_evidence=None, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """Bring a never-started lane (reserved, no `started`, not terminal) to a readable state.
+
+    One locked operation, and it refuses every lane that is not never-started: with
+    `pending_started` it appends that `started` record; without it, it records the lane's terminal
+    event, which is an evidenced operator assertion that no builder exists. A dead or absent
+    launcher does not prove that (a builder may have spawned, and nothing local sees a cloud
+    session), so terminal repair needs `no_builder_evidence`, one line naming what was checked;
+    without it the repair refuses `builder-may-exist` and names what to check. It also takes the
+    launch's ownership lock (`acquire_launch_ownership`'s lock) with dead-holder reclaim and holds
+    it across its terminal write: a live holder refuses `lane-may-be-launching` whatever the
+    evidence says, and a holder whose death was not confirmed (malformed, or on a foreign host)
+    refuses too. An absent lock or a confirmed-dead holder only lets the assertion proceed. A local
+    lane whose recorded session transcript exists refuses `builder-may-exist` even with the
+    evidence. The pending-record restore never ends a lane and needs no ownership. A lane that
+    already has its `started` record is ended with `record_outcome`, never repaired here. Never
+    raises.
+    """
+    lock_path = None
+    locked = False
+    owned = None
+    try:
+        lock_result = _ensure_lock_file(repo_root, env=env)
+        if not lock_result["ok"]:
+            return _repair_refusal(lock_result["reason"])
+        lock_path = lock_result["path"]
+        if not _acquire_lock(lock_path, lock_timeout):
+            return _repair_refusal("lock-unavailable")
+        locked = True
+
+        read_result = read(repo_root, env=env)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return _repair_refusal("ledger-unreadable:%s" % state)
+        records = list(read_result["records"])
+        folded = fold(records)
+        if not folded["ok"]:
+            return _repair_refusal(folded["reason"])
+
+        if not isinstance(launch_id, str) or launch_id not in folded["launches"]:
+            return _repair_refusal("terminal-unknown-launch")
+        info = folded["launches"][launch_id]
+        if info.get("terminal"):
+            return _repair_refusal("outcome-already-terminal")
+        # axis: a lane with its `started` record is never repaired — it is ended with `record_outcome`.
+        if info.get("started"):
+            return _repair_refusal("lane-already-started")
+
+        if pending_started is not None:
+            if (
+                not isinstance(pending_started, dict)
+                or pending_started.get("event") != "started"
+                # axis: the pending record belongs to the lane being repaired, not another launch.
+                or pending_started.get("launchId") != launch_id
+                or not _validate_started_repair(pending_started)
+                or _validate_started_cloud_fields(pending_started)
+            ):
+                return _repair_refusal(REPAIR_PENDING_STARTED_INVALID)
+            folded_repair = fold(records + [pending_started])
+            if not folded_repair["ok"]:
+                return _repair_refusal(folded_repair["reason"])
+            if not append(repo_root, pending_started, env=env):
+                return _repair_refusal("ledger-append-failed")
+            return {"ok": True, "repaired": "started", "launchId": launch_id}
+
+        if not isinstance(evidence, str) or not evidence.strip():
+            return _repair_refusal("outcome-evidence-empty")
+        # axis: a missing `started` does not prove the launcher stopped — only its ownership lock
+        # does: a live holder may still spawn and append, and a terminal event written now would
+        # orphan its session. An absent or dead owner still does not prove no builder exists.
+        owner = _launch_ownership_lock_path_or_none(repo_root, launch_id, env)
+        if owner is None:
+            return _repair_refusal("launch-ownership-lock-unavailable")
+        # The unconfirmed classes are refused inside the guarded reclaim, before the original lock
+        # is unlinked or replaced, so uncertain ownership evidence is never destroyed.
+        try:
+            file_lock.acquire_with_reason(
+                owner, reclaim_dead_holder=True, refuse_reasons=_REPAIR_UNCONFIRMED_RECLAIMS,
+            )
+        except file_lock.LockHeld:
+            return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
+        owned = owner
+        # axis: the terminal repair is an operator assertion that no builder exists; nothing here
+        # can see a cloud session, so it is required and recorded rather than inferred.
+        if not isinstance(no_builder_evidence, str) or not no_builder_evidence.strip():
+            return _repair_refusal(
+                REPAIR_BUILDER_MAY_EXIST, check=_builder_check_for(launch_id, info),
+            )
+        if info.get("place") != PLACE_CLOUD and _local_transcript_exists(info):
+            return _repair_refusal(
+                REPAIR_BUILDER_MAY_EXIST,
+                check="the lane's session transcript exists, so a builder started: %s"
+                % _builder_check_for(launch_id, info),
+            )
+        evidence = "%s [no builder: %s]" % (evidence.strip(), no_builder_evidence.strip())
+        terminal = terminalize(
+            repo_root, launch_id, child_ever_spawned=False, reason="never-started",
+            stage="never-started", evidence=evidence, env=env, _lock_held=True,
+        )
+        if not terminal["ok"]:
+            return _repair_refusal(terminal["reason"])
+        return {
+            "ok": True, "repaired": "terminal", "launchId": launch_id, "kind": terminal["kind"],
+        }
+    except Exception:
+        return _repair_refusal("repair-never-started-failed")
+    finally:
+        if owned is not None:
+            _release_lock(owned)
         if locked and lock_path is not None:
             _release_lock(lock_path)
 

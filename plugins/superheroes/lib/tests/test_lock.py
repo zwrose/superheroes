@@ -1018,3 +1018,14 @@ def test_acquire_with_reason_returns_guarded_stale_class(tmp_path, monkeypatch):
     assert reclaimed is True
     assert reason == "boot-id-mismatch"
     lock.release(p)
+
+
+def test_acquire_with_reason_refused_class_leaves_the_lock_untouched(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    open(p, "w").close()
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    with pytest.raises(lock.LockHeld):
+        lock.acquire_with_reason(p, refuse_reasons=(lock.REASON_MALFORMED_HOLDER,))
+    st = os.lstat(p)
+    assert st.st_size == 0 and st.st_mtime == pytest.approx(old, abs=1)

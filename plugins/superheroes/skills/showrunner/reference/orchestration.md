@@ -56,8 +56,16 @@ lane never refuses `terminal-child-live`, and `--await-exit` adds nothing.
 and a parked blocker inside a delivered PR, are friction the terminal tallies cannot see.
 
 **A second `record-outcome` on a lane that started and then ended with an outcome is recorded, not
-refused.** A never-started lane is still refused with `outcome-without-started`. The second call
-lands as a `reoutcome` amendment and leaves the original terminal outcome untouched. The CLI exits
+refused.** A never-started lane is still refused with `outcome-without-started`. End one with
+`launcher.py repair-lane --repo-root <root> --launch-id <id>`: with `--pending-file <file>` holding a
+`started` record that fits the lane (a launch result's `pendingStarted`) it restores that record, and
+without it, with `--evidence "<one line>"` and `--no-builder "<one line naming what you checked>"`, it
+records the lane's terminal event from its `reserved` record. Terminal repair needs `--no-builder`
+after you check the host's session listing (cloud) or the worktree (local): a dead launcher does not
+prove no builder spawned, and without it the repair refuses `builder-may-exist` and names what to
+check. It refuses a lane that already started (end that one with `record-outcome`) or already
+ended. The second call lands as a `reoutcome` amendment and leaves the original terminal outcome
+untouched. The CLI exits
 **non-zero** with `recorded: 'amendment'` (or `'amendment-existing'` on an identical retry), because
 the requested terminal write did not become the lane's outcome. So a lane handed back twice stops
 reading as one clean handback.
@@ -136,7 +144,8 @@ lane's `started` record, and returns once the session exists. It does not wait f
     When the record is really absent, the lane is live on its `reserved` record alone and
     `record-outcome` refuses it (`outcome-without-started`). The advisor still looks in the host's
     session listing for a session of the name in `cloudSessionName`, which the result carries.
-    Recording the lane's outcome waits until the `started` record is restored.
+    Restore it with `launcher.py repair-lane --pending-file <a file holding pendingStarted>`, then
+    record the outcome.
   - `cloud-started-append-failed`. A session exists and is working, and its `started` record could
     not be written. The result names the session (`cloudSessionId`, `cloudSessionName`) and why the
     write failed (`startedAppend`). The launcher tried the write three times. The result also carries
@@ -144,7 +153,9 @@ lane's `started` record, and returns once the session exists. It does not wait f
     not prove the record is absent. Read the ledger before restoring `pendingStarted`. When the lane
     already has its `started` record, `record-outcome` works and nothing is restored. When the record
     is really absent, the lane stays live on its `reserved` record alone, and `record-outcome` refuses
-    it (`outcome-without-started`). Keep the session's identity from the result and reach the session
+    it (`outcome-without-started`). Restore it with
+    `launcher.py repair-lane --pending-file <a file holding pendingStarted>`. Keep the session's
+    identity from the result and reach the session
     by it.
 
 **Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
