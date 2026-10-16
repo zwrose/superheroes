@@ -118,7 +118,8 @@ def test_e12_same_finding_duplicate_no_collision():
 
 def test_driver_receipt_finding_key_matches_state_row():
     """axis: build_receipt findings row carries findingKey equal to the state row's."""
-    finding = {"file": "r.py", "line": 3, "title": "leak", "severity": "Important", "id": "v0"}
+    finding = {"file": "r.py", "line": 3, "title": "leak", "severity": "Important", "id": "v0",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._set_findings(state, compiled)
@@ -131,7 +132,8 @@ def test_driver_receipt_finding_key_matches_state_row():
 
 def test_legacy_receipt_omits_finding_key_even_when_state_has_it():
     """axis: v2 receipt shape stays byte-for-byte on finding rows — no findingKey key."""
-    finding = {"file": "a.py", "line": 1, "title": "Issue", "severity": "Important", "id": "F1"}
+    finding = {"file": "a.py", "line": 1, "title": "Issue", "severity": "Important", "id": "F1",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     state["schemaVersion"] = 2
@@ -146,7 +148,8 @@ def test_legacy_receipt_omits_finding_key_even_when_state_has_it():
 
 def test_receipt_with_absent_schema_version_does_not_raise():
     """axis: absent schemaVersion must not raise on findingKey projection gate."""
-    finding = {"file": "a.py", "line": 1, "title": "Issue", "severity": "Important", "id": "F1"}
+    finding = {"file": "a.py", "line": 1, "title": "Issue", "severity": "Important", "id": "F1",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     del state["schemaVersion"]

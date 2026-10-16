@@ -1149,8 +1149,10 @@ def _path_from_minus_plus_rest(rest):
         return None
 
 
-def _path_from_diff_git_line(line):
-    """Decode the path from a ``diff --git a/… b/…`` line (``--no-renames`` output)."""
+def sides_from_diff_git_line(line):
+    """Decode ``(old_path, new_path)`` from a ``diff --git a/… b/…`` line, or None when the header is
+    malformed or ambiguous. Public: ``round_driver`` reads changed paths through it, so git's C-quote
+    rules live in this one home. Callers own their rename policy (the two sides may differ)."""
     prefix = b"diff --git "
     if not line.startswith(prefix):
         return None
@@ -1166,12 +1168,15 @@ def _path_from_diff_git_line(line):
         side_two = remainder[1:]
         old_path = _path_from_minus_plus_rest(side_one)
         new_path = _path_from_minus_plus_rest(side_two)
-        if old_path is not None and new_path is not None and old_path == new_path:
-            return old_path
+        if old_path is not None and new_path is not None:
+            return old_path, new_path
         return None
     candidates = []
     for i in range(len(rest) - 2):
         if rest[i : i + 3] == b" b/":
+            candidates.append((rest[:i], rest[i + 1 :]))
+        elif rest[i : i + 4] == b' "b/':
+            # git may quote only the b side (a non-ASCII or control byte appears on that side only).
             candidates.append((rest[:i], rest[i + 1 :]))
     if not candidates:
         return None
@@ -1182,7 +1187,7 @@ def _path_from_diff_git_line(line):
         if old_path is not None and new_path is not None and old_path == new_path:
             equal_paths.append(old_path)
     if len(equal_paths) == 1:
-        return equal_paths[0]
+        return equal_paths[0], equal_paths[0]
     if len(equal_paths) > 1:
         return None
     if len(candidates) == 1:
@@ -1190,8 +1195,17 @@ def _path_from_diff_git_line(line):
         old_path = _path_from_minus_plus_rest(side_one)
         new_path = _path_from_minus_plus_rest(side_two)
         if old_path is not None and new_path is not None:
-            return old_path if old_path == new_path else None
+            return old_path, new_path
     return None
+
+
+def _path_from_diff_git_line(line):
+    """Decode the path from a ``diff --git a/… b/…`` line (``--no-renames`` output): the one path
+    both sides agree on, else None."""
+    sides = sides_from_diff_git_line(line)
+    if sides is None or sides[0] != sides[1]:
+        return None
+    return sides[0]
 
 
 def _paths_from_diff_section(section):
