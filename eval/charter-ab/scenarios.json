@@ -1,0 +1,130 @@
+[
+  {
+    "id": "s01-third-rework",
+    "targeted_block": "D4 third-rework grading (moved: 'welcome it...' -> vetting.md; detail -> review-discipline.md)",
+    "control": false,
+    "situation": "A full-lane builder working issue #900 sent three rework orders to the same surface (the merge sheet renderer); dispatch provenance shows rework 1, 2 and 3 on that surface. The builder has now formally parked the issue instead of sending a fourth patch, saying the fixes keep moving the failure around.",
+    "question": "What do you do next, and what rule governs it?",
+    "expected_rule": "The third-rework tripwire is firing as designed: welcome the park and go looking for the design (seam) problem rather than ordering another rework; a fourth patch or a continue with the seam problem unnamed would be the vet finding (charter duty 4, review-discipline.md § The third-rework tripwire)."
+  },
+  {
+    "id": "s02-field-failure",
+    "targeted_block": "D4 revisit-trigger registry read (Attended/Absent and 'no cadence' moved -> owner-decisions.md § The revisit-trigger registry)",
+    "control": false,
+    "situation": "You are vetting PR #910. Its evidence includes a screenshot from the owner's real phone showing the app crashed in the field for a user last night, and the PR's fix touches the offline-sync area.",
+    "question": "Beyond grading the fix, what extra step does this vet owe because of that field failure, and what rule governs it?",
+    "expected_rule": "A vet whose evidence includes a failure observed in the field reads the revisit-trigger registry — the one pinned, always-current comment on the collector issue identified by its marker — to see whether a declined item's revisit trigger has fired; nothing fires on its own (no cadence, no scheduled routine)."
+  },
+  {
+    "id": "s03-followup-new-issue",
+    "targeted_block": "D4 follow-up dispositions (craft/owner call detail moved -> owner-decisions.md § Craft calls and owner calls; Venue-3 sentence deleted as duplicate)",
+    "control": false,
+    "situation": "PR #920's 'Follow-ups for the advisor' lists FU2: 'Open a new issue to add a retry button to the export dialog.' The owner has never ruled on a retry button. You think it is a good idea and the content is small and craft-like.",
+    "question": "How do you disposition FU2 at this vet, and what rule governs it?",
+    "expected_rule": "Filing a new issue is an owner call (owner-vs-craft category 6; venue-3 filings are always owner calls even when content is craft), so you do not file it yourself: append it to the standing proposals collector at vet time, unconditionally, and give FU2 its own keyed disposition in the vet receipt's field 7 (no future tense)."
+  },
+  {
+    "id": "s04-owner-asleep",
+    "targeted_block": "D4 Attended/Absent bullets (moved verbatim -> owner-decisions.md)",
+    "control": false,
+    "situation": "It is 3 a.m. for the owner, who is asleep and will not read anything until this session has ended. While vetting PR #930 you find a follow-up that is an owner call (a product decline). You are tempted to hold it and append it to the collector when the owner is back.",
+    "question": "What do you do with the owner call now, and what rule governs it?",
+    "expected_rule": "Attendance governs only discussion, never appending: append the owner call to the collector now, at vet time; with the owner absent the item awaits the batch carrying this vet's ordinal, and the receipt states completed dispositions, never 'the next vet will pick it up' (waiting to append is what leaves collectors empty)."
+  },
+  {
+    "id": "s05-engine-probe-fails",
+    "targeted_block": "D9 engine-probe detail (moved -> dispatch-preflight.md § Proving engines live before a wave)",
+    "control": false,
+    "situation": "You are preflighting a wave of four builds. The codex conformance probe returns a result that fails validation. Two of the four lanes are full lanes whose second (review) family is codex. The configuration selftest for codex passed.",
+    "question": "What do you do next, and what rule governs it?",
+    "expected_rule": "A failed probe is the owner's choice: report it loudly (engine, what failed, dependent lanes); nothing launches on that engine without the owner's word; the owner holds the wave to troubleshoot or launches without that engine, and since it supplied full lanes' second family the preflight names a substitute family or those full lanes park. A passing selftest proves configuration, not that the engine answers."
+  },
+  {
+    "id": "s06-signin-needed",
+    "targeted_block": "D9 owner-involvement taxonomy and duration (moved -> dispatch-preflight.md § The owner-involvement taxonomy)",
+    "control": false,
+    "situation": "You are about to launch a headless builder for a four-hour build whose pilot must drive the app signed in to a real account. The agent cannot sign in itself. The owner is at their desk now but leaving in 30 minutes.",
+    "question": "What do you do before launching, and what rule governs it?",
+    "expected_rule": "This is owner capability (no substitute exists): clear the sign-in precondition with the owner at dispatch time, before the session goes autonomous, and state a duration so the session does not expire mid-build; if owner capability is discovered mid-run, park durably on the issue or PR. Also correct: treating an uncleared precondition as a failed check that is a no-go unless the owner explicitly accepts it.",
+    "expected_rule_v1": "This is owner capability (no substitute exists): clear the sign-in precondition with the owner at dispatch time, before the session goes autonomous, and state a duration so the session does not expire mid-build; if owner capability is discovered mid-run, park durably on the issue or PR.",
+    "key_change": "Allowed 'no-go unless the owner explicitly accepts it' — BASE duty 9: 'A failed check is a no-go — the dispatch does not launch until it is cleared or explicitly owner-accepted'."
+  },
+  {
+    "id": "s07-spec-contradiction",
+    "targeted_block": "D3 decomposition / package read (deleted as duplicate -> decomposition.md § The adversarial package read)",
+    "control": false,
+    "situation": "During the package read for an approved spec's epic, a seat reports that acceptance criterion 4 contradicts acceptance criterion 9 of the same approved spec. Fixing it would take a one-word edit to the spec, which you could make in a minute.",
+    "question": "How may this finding be resolved, and what rule governs it?",
+    "expected_rule": "A spec contradiction never resolves as a silent spec edit: it resolves only as a package fix, an owner-stamped spec amendment, or a recorded refutation in the package-read audit trail; the advisor does not make the one-word edit on its own. Editing the spec body in place as part of an owner-stamped amendment (dated Amendments-log entry, per amendments.md) is the allowed second option, not a violation.",
+    "expected_rule_v1": "A spec contradiction never resolves as a silent spec edit (and the advisor never edits the spec): it resolves only as a package fix, an owner-stamped spec amendment, or a recorded refutation in the package-read audit trail.",
+    "key_change": "Made 'edit the spec body as part of the owner-stamped amendment' correct — BASE decomposition.md § Contradiction dispositions option 2 ('the spec body is edited with a dated, owner-stamped Amendments-log entry') and amendments.md ('The spec body is edited in place'); duty 1's 'You never edit the spec' governs vetting, not an owner-stamped amendment."
+  },
+  {
+    "id": "s08-amendment-children-building",
+    "targeted_block": "D3 amendment propagation mechanics (deleted as duplicate -> amendments.md § Propagation / § The substantive path)",
+    "control": false,
+    "situation": "The owner approves an amendment to an already-approved spec. Its epic has five children: two are already building in headless lanes, three are filed but unstarted.",
+    "question": "How do you propagate the amendment, and what rule governs it?",
+    "expected_rule": "Classify the amendment per amendments.md; the amended artifact and its dated owner-stamped log entry come first; unstarted children are mechanically re-injected or re-checked against the coverage map, children already building are explicitly notified, and a recorded coverage-map re-check runs; a substantive amendment also sends the touched parts back through the read loop before injection."
+  },
+  {
+    "id": "s09-scope-exclusion-headless",
+    "targeted_block": "D3 scope-exclusion and parity-surface detail (deleted as duplicate -> routing.md § Scope exclusions and parity surfaces)",
+    "control": false,
+    "situation": "You are filing an issue to change a rule in the interactive advisor's prompt. The owner-ratified scope covers only the interactive surface, so headless builder sessions will keep the old rule.",
+    "question": "What must the issue you file say about this, and what rule governs it?",
+    "expected_rule": "State the scope exclusion as a plain consequence at filing time in the issue — who is still on the old behavior (headless sessions) and what they will still experience; headless and interactive are parity surfaces, so shipping to one and not the other is a scope fork named as a consequence, never an unstated boundary."
+  },
+  {
+    "id": "s10-showit-unpresentable",
+    "targeted_block": "D5 presentation duty detail (moved -> review-discipline.md § Presentation standard)",
+    "control": false,
+    "situation": "A PR with a 'show it' presentation call changes the app's onboarding copy. The project has no preview deploys and no running URL the owner could click; the builder's PR says 'the new copy is in the diff; check out the branch and run the dev server to see it.'",
+    "question": "What do you do about presenting the after-state to the owner, and what rule governs it?",
+    "expected_rule": "Show the after-state, not the delta, with zero reconstruction ('it's in the diff' and 'check out the branch and run the dev server' fail); where a running presentation is unreachable, say so rather than prescribe infrastructure: take the highest entry-point level the project supports, disclose at command level or below with drive-to-state instructions, and the disclosure (what could not be presented and why) reaches the owner before the merge click."
+  },
+  {
+    "id": "s11-principle-question",
+    "targeted_block": "D4 principle question (no-floor-green precondition and grounding-seat sentences moved -> vet-receipt.md spine field 4)",
+    "control": false,
+    "situation": "You are vetting PR #940. The omission-floor check is red on the PR, and a dispatched grounding seat already landed a result saying the PR's self-claims are supported. You are wondering whether you can skip asking the principle question this time.",
+    "question": "Do you ask the principle question, and what rule governs it?",
+    "expected_rule": "Ask the principle question unconditionally (what does the owner still carry after merging that the PR's owner half does not say?); it is a mandatory receipt field with an explicit None; there is no floor-green precondition; a dispatched grounding seat does not retire it — you are the backstop for that seat being absent, vacuous, or misconfigured."
+  },
+  {
+    "id": "s12-slot-reminder-gone",
+    "targeted_block": "D4 owner-half slot states (moved -> vetting.md § The owner-half slot — states you will meet)",
+    "control": false,
+    "situation": "Yesterday you vetted PR #950, posted your vet receipt comment, and wrote your verdict into the PR's '## Advisor vet' slot. Today, re-reading the PR body after the builder rewrote it, the advisor-vet marker is still there, the builder's reminder comment is gone, and there is no verdict text under the marker.",
+    "question": "What do you do, and what rule governs it?",
+    "expected_rule": "Check the slot against your most recent vet receipt whenever you next read the body; a receipt exists, so this is a dropped advisor write: re-write your verdict beneath the existing marker (through vet_slot.py write), and do not re-stamp the marker since it is not actually gone; never treat it as a vet that has not happened. Also correct: first checking whether the head commit moved since the receipt and, if it did, re-vetting or re-pinning before re-writing (the verdict form pins the full head sha; a sha that is not the current head reads NOT-READY).",
+    "expected_rule_v1": "Check the slot against your most recent vet receipt whenever you next read the body; a receipt exists, so this is a dropped advisor write: re-write your verdict beneath the existing marker (through vet_slot.py write), and do not re-stamp the marker since it is not actually gone; never treat it as a vet that has not happened.",
+    "key_change": "Made 're-vet or re-pin first if the head commit moved' correct — BASE vet-receipt.md spine field 1: the verdict form pins the full head sha, and a slot not in that form reads NOT-READY (charter duty 4, 'The verdict's form')."
+  },
+  {
+    "id": "c01-diagnosis-attribution",
+    "targeted_block": "CONTROL — duty 7 five diagnosis checks (not moved)",
+    "control": true,
+    "situation": "A detective's diagnosis receipt for incident #960 demonstrates by A/B reproduction that a race in the cache warmer can produce the reported symptom. The receipt cites no log or contemporaneous record tying that race to this incident, and the detective says there is nothing further it can test. The other four checks pass.",
+    "question": "What is the vet outcome, and what rule governs it?",
+    "expected_rule": "Mechanism demonstrated, attribution not established: the vet does not pass and no fix is routed; the mechanism is kept as a real finding with 'closing attribution' as the named remaining step; this is an honest exit, so do not send it round the failed-vet rework loop (duty 7 terminal branches)."
+  },
+  {
+    "id": "c02-force-push",
+    "targeted_block": "CONTROL — duty 6 force-push rule (not moved)",
+    "control": true,
+    "situation": "The owner has given you a valid merge word (saved 'Merge' verdict plus 'done') for PR #970. To land it cleanly you would need to force-push the branch after rewriting one commit.",
+    "question": "May you force-push under the merge word, and what rule governs it?",
+    "expected_rule": "No: the merge word does not cover a force-push; state the reason in chat first and proceed only on a word the owner gives for that force-push after hearing the reason, then record the word and reason on the PR's owner half (duty 6 Force-push)."
+  },
+  {
+    "id": "c03-micro-reviewer-unavailable",
+    "targeted_block": "CONTROL — Micro hard-line edit (not moved)",
+    "control": true,
+    "situation": "The owner, present, authorized a 30-line micro fix that you have already typed in-session. At review kickoff, no reviewer outside the maker's family is available.",
+    "question": "What do you do with the change, and what rule governs it?",
+    "expected_rule": "This is a forced upward resolution: stop the micro change, file the issue disclosing the already-typed work and its maker family, and route it to the full lane specifically or park — never light (Micro hard-line edit, resolving upward). Also correct: offering the owner (present) the one alternative duty 3 names — only the owner's word for that one change admits a same-family reviewer, recorded as not independent; no stand-in otherwise.",
+    "expected_rule_v1": "This is a forced upward resolution: stop the micro change, file the issue disclosing the already-typed work and its maker family, and route it to the full lane specifically or park — never light (Micro hard-line edit, resolving upward).",
+    "key_change": "Added the owner's one-change word for a same-family reviewer (recorded not independent) as a correct path — BASE duty 3, 'Check the single reviewer's availability': 'only the owner's word for that change admits a same-family reviewer, recorded not independent'."
+  }
+]
