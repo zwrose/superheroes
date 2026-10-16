@@ -91,7 +91,8 @@ def _unknown_surface_state(config):
     return state
 
 
-_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+               "consequence": "a reviewer-found defect stays in the change"}]
 
 
 def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):

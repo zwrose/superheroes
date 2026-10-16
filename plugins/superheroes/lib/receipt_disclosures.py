@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
+import liveness_cache
 import model_registry
+import seat_map
 import seat_map_receipts
 import session_contract
+from seat_map import is_unfilled as seat_is_unfilled
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -84,6 +87,8 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
     "priorCommentsUnavailable": bool_value,
     "verifyPasses": dict_list,
+    "verifierProvenance": dict_list,
+    "synthesisUnseatable": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -164,23 +169,235 @@ def live_vendors(config):
     return out
 
 
-def independent_auditor(config, fixer_vendor, runner_only=False):
+def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=frozenset(),
+                        pinned_vendors=None):
+    """The first live vendor whose auditor family is neither the fixer's nor any maker's.
+
+    ``maker_families`` are the families the seat map lists as makers; ``pinned_vendors``, when a
+    non-empty set, narrows the pool to those vendors (a pinned roster names who may audit)."""
     fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
     if fixer_fam is None:
         return None, None
+    barred = set(maker_families or ())
+    barred.add(fixer_fam)
     for v in live_vendors(config):
         if runner_only and not session_contract.runner_channel_vendor(v):
             continue
+        if pinned_vendors and v not in pinned_vendors:
+            continue
         if v != fixer_vendor:
             cand_fam = model_registry.family_for("auditor", v)
-            if cand_fam is not None and cand_fam != fixer_fam:
+            if cand_fam is not None and cand_fam not in barred:
                 return v, fixer_fam
     return None, fixer_fam
 
 
-def independent_auditor_available(config):
+# Sentinel for `reviewer_ineligible(host_family=...)`: judge every vendor by its registry family.
+HOST_FAMILY_REGISTRY = object()
+
+# The dispatched-cell roles of the non-panel phases (`model_registry.matrix_config` rows).
+# One home: `seat_map.NONPANEL_CELL_ROLES` (verifier, finder, synthesis, in that order) — composition
+# probes those cells and selection consumes them; this unpacking fails loudly if the arity drifts.
+NONPANEL_ROLES = seat_map.NONPANEL_CELL_ROLES
+NONPANEL_ROLE_VERIFIER, NONPANEL_ROLE_FINDER, NONPANEL_ROLE_SYNTHESIS = NONPANEL_ROLES
+
+_SEAT_MAP_HOST_KEY = "hostFamily"
+_SEAT_MAP_CELLS_KEY = "nonPanelLiveCells"
+_SEAT_MAP_CELLS_SOURCE_KEY = "nonPanelLiveCellsSource"
+
+
+def host_family(seat_map_):
+    """The seat map's `hostFamily` when it is a non-empty string, else None (host model unknown)."""
+    fam = seat_map_.get(_SEAT_MAP_HOST_KEY) if isinstance(seat_map_, dict) else None
+    return fam if isinstance(fam, str) and fam else None
+
+
+def reviewer_ineligible(maker_families=frozenset(), fixer_vendor=None,
+                        host_family=HOST_FAMILY_REGISTRY):
+    """Predicate ``(vendor) -> bool``: True when ``vendor`` may not review. The one home of the
+    reviewer-independence bar: barred families are the makers' plus the fixer's (a fixer is a maker
+    by definition); the fixer's own vendor never reviews its fix whatever its family resolves to; a
+    family ``family_for`` cannot resolve is never independent.
+
+    ``host_family`` (default: the registry family for every vendor): when passed, a registered vendor
+    that is not a runner-channel vendor runs as a native host seat, so it takes ``host_family`` as
+    its family and is ineligible when that is None or not a non-empty string (host model unknown)."""
+    barred = set(maker_families or ())
+    if fixer_vendor:
+        fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+        if fixer_fam is not None:
+            barred.add(fixer_fam)
+
+    def is_ineligible(vendor):
+        if fixer_vendor and vendor == fixer_vendor:
+            return True
+        if (host_family is not HOST_FAMILY_REGISTRY
+                and vendor in model_registry.vendors()
+                and not session_contract.runner_channel_vendor(vendor)):
+            fam = host_family if isinstance(host_family, str) and host_family else None
+        else:
+            fam = model_registry.family_for("reviewer", vendor)
+        return fam is None or fam in barred
+    return is_ineligible
+
+
+def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None,
+                         host_family=HOST_FAMILY_REGISTRY):
+    """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
+
+    The preferred vendor wins when it is live and eligible (`reviewer_ineligible`); otherwise the
+    first live vendor that qualifies. ``host_family`` is passed to `reviewer_ineligible`; when passed,
+    a native host seat's returned family is the host family."""
+    ineligible = reviewer_ineligible(maker_families, fixer_vendor, host_family=host_family)
+    live = list(live_vendors(config))
+    candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
+                  and preferred_vendor in live else [])
+    candidates += [v for v in live if v not in candidates]
+    for v in candidates:
+        if not ineligible(v):
+            native = (host_family is not HOST_FAMILY_REGISTRY and v in model_registry.vendors()
+                      and not session_contract.runner_channel_vendor(v))
+            return v, (host_family if native else model_registry.family_for("reviewer", v))
+    return None, None
+
+
+def _nonpanel_cell_evidence(seat_map_):
+    """The set of normalized ``(vendor, model, effort)`` triples the map proves live — empty unless
+    the source is `probed` or `synthesized` and `nonPanelLiveCells` is a list (malformed entries are
+    skipped). A map with none of the three cell-proof keys, or no map at all, proves no cell."""
+    sm = seat_map_ if isinstance(seat_map_, dict) else {}
+    source = sm.get(_SEAT_MAP_CELLS_SOURCE_KEY)
+    raw = sm.get(_SEAT_MAP_CELLS_KEY)
+    if (source not in (liveness_cache.LIVE_CELLS_SOURCE_PROBED,
+                       liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED)
+            or not isinstance(raw, list)):
+        return frozenset()
+    cells = set()
+    for entry in raw:
+        normalized = seat_map._normalize_live_cell(entry)
+        if normalized is not None:
+            cells.add(normalized)
+    return frozenset(cells)
+
+
+def _dispatched_cell(role, vendor):
+    """The ``(vendor, model, effort)`` triple a non-panel ``role`` dispatches on ``vendor``, else None."""
+    if role not in NONPANEL_ROLES:
+        return None
+    cell = model_registry.matrix_config(role, vendor)
+    if cell is None:
+        return None
+    return (vendor, cell[0], cell[1])
+
+
+def nonpanel_cell_proven(config, seat_map_, vendor, role):
+    """True when ``vendor``'s dispatched cell for the non-panel ``role`` (`verifier` for verifiers,
+    `reviewer-deep` for gap sweep and scoped) is proven live: `claude` always (a host seat, never
+    probed — the panel's rule); for any other vendor only when the map's `nonPanelLiveCells` lists the
+    cell under a `probed` / `synthesized` source. Any other shape proves nothing, including a map with
+    none of the cell-proof keys and no map at all."""
+    if not isinstance(vendor, str) or not vendor:
+        return False
+    if vendor == "claude":
+        return True
+    cell = _dispatched_cell(role, vendor)
+    return cell is not None and cell in _nonpanel_cell_evidence(seat_map_)
+
+
+def nonpanel_candidates(config, seat_map_, role):
+    """The non-panel candidate pool for ``role``: `live_vendors(config)` followed by every registry
+    vendor (registry order) the map's `nonPanelLiveCells` proves for ``role`` and that is not
+    already listed. Candidates are not yet filtered by `nonpanel_cell_proven` or independence."""
+    out = list(live_vendors(config))
+    cells = _nonpanel_cell_evidence(seat_map_)
+    for v in model_registry.VENDORS:
+        if v not in out and _dispatched_cell(role, v) in cells:
+            out.append(v)
+    return out
+
+
+def nonpanel_reviewer(config, seat_map_, role, preferred_vendor, maker_families=frozenset(),
+                      fixer_vendor=None):
+    """``(vendor, family)`` of the non-panel reviewer for ``role``, else ``(None, None)``: the first
+    candidate (the preferred vendor first when it is one) whose dispatched cell is proven live
+    (`nonpanel_cell_proven`) and that is outside every maker family (`reviewer_ineligible`, with
+    the seat map's host family standing for a native seat)."""
+    host = host_family(seat_map_)
+    ineligible = reviewer_ineligible(maker_families, fixer_vendor, host_family=host)
+    pool = nonpanel_candidates(config, seat_map_, role)
+    candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
+                  and preferred_vendor in pool else [])
+    candidates += [v for v in pool if v not in candidates]
+    for v in candidates:
+        if not nonpanel_cell_proven(config, seat_map_, v, role) or ineligible(v):
+            continue
+        native = v in model_registry.vendors() and not session_contract.runner_channel_vendor(v)
+        return v, (host if native else model_registry.family_for("reviewer", v))
+    return None, None
+
+
+def unfilled_seats(seat_map):
+    """Names of the seats the map marks `source == "unfilled"` (no candidate outside the makers)."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return frozenset()
+    return frozenset(name for name, entry in seats.items()
+                     if seat_is_unfilled(entry))
+
+
+def maker_families(seat_map):
+    """The map's `makerFamilies` as a set of family strings; an old map without the key names its maker through `authorFamily`."""
+    raw = seat_map.get("makerFamilies") if isinstance(seat_map, dict) else None
+    if not isinstance(raw, list):
+        legacy = seat_map.get("authorFamily") if isinstance(seat_map, dict) else None
+        return frozenset([legacy]) if isinstance(legacy, str) and legacy else frozenset()
+    return frozenset(f for f in raw if isinstance(f, str) and f)
+
+
+def pinned_auditor_vendors(seat_map):
+    """Vendors of the pinned seats, only when every filled seat of the map is pinned; else None."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return None
+    filled = [e for e in seats.values()
+              if isinstance(e, dict) and not seat_is_unfilled(e)]
+    if not filled or any(e.get("source") != "pinned" for e in filled):
+        return None
+    vendors = {e.get("vendor") for e in filled if isinstance(e.get("vendor"), str) and e.get("vendor")}
+    return vendors or None
+
+
+def accumulated_maker_families(state):
+    """Every maker family any submitted seat map named, plus the effective map's: a later, recomposed
+    map that omits an earlier maker does not release it — the receipt writer unions them, so the
+    decisions that read makers do too. Seat identities still come from the latest map alone."""
+    if not isinstance(state, dict):
+        return frozenset()
+    return (maker_families(seat_map_receipts.effective_seat_map(state))
+            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
+
+
+def nonpanel_barred(state, config):
+    """Predicate ``(vendor) -> bool``: True when a vendor may not review a non-panel round — the one
+    home of the non-panel eligibility bar, so the driver and the adapters judge a vendor identically:
+    the accumulated makers, the configured fixer's vendor, and the host family a native seat takes
+    from the effective seat map. A ``config`` that is not a dict reads as empty."""
+    cfg = config if isinstance(config, dict) else {}
+    return reviewer_ineligible(accumulated_maker_families(state), cfg.get("fixerVendor"),
+                               host_family=host_family(seat_map_receipts.effective_seat_map(state)))
+
+
+def auditor_constraints(state):
+    """(maker_families, pinned_vendors) for `independent_auditor`: makers accumulate over every
+    seat-map receipt; the pinned vendors come off the effective seat map."""
+    seat_map = seat_map_receipts.effective_seat_map(state) if isinstance(state, dict) else {}
+    return accumulated_maker_families(state), pinned_auditor_vendors(seat_map)
+
+
+def independent_auditor_available(config, maker_families=frozenset(), pinned_vendors=None):
     fixer = config.get("fixerVendor") if isinstance(config, dict) else None
-    vendor, fam = independent_auditor(config, fixer)
+    vendor, fam = independent_auditor(config, fixer, maker_families=maker_families,
+                                      pinned_vendors=pinned_vendors)
     return (vendor is not None, fam)
 
 
@@ -342,8 +559,9 @@ def build_degraded_prose(state, form, journal=None):
     cfg = state.get("config") or {}
     degraded_out = []
     if degraded(state):
-        degraded_out.append("independence: a single live vendor — the fix's auditor is the fixer's "
-                            "vendor; independence degraded and named in the certification shape")
+        degraded_out.append("independence: no live vendor outside the fixer's and the makers' "
+                            "families — the fix's audit did not run; independence degraded and "
+                            "named in the certification shape")
     if base_degraded(state):
         degraded_out.append(
             "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
@@ -455,6 +673,22 @@ def build_degraded_prose(state, form, journal=None):
                     "— the finding was kept without a recorded failing run"
                     % (rkey, len(not_run),
                        ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
+        vprov = declared.get("verifierProvenance")
+        if vprov:
+            ignored = [r for r in vprov if isinstance(r, dict) and r.get("outcome") == "verdicts-ignored"]
+            if ignored:
+                degraded_out.append(
+                    "verifier-verdicts-ignored (round %s): verdicts not folded — %s"
+                    % (rkey, "; ".join(
+                        "expected %s, ran %s%s" % (
+                            r.get("expected"), r.get("ran"),
+                            " (%s)" % r.get("reason") if r.get("reason") else "")
+                        for r in ignored)))
+        syn = declared.get("synthesisUnseatable")
+        if syn:
+            degraded_out.append(
+                "synthesis-unseatable (round %s): no grouping seat outside the makers' families on a "
+                "proven cell — findings were not grouped (nothing dropped)" % rkey)
         bik = declared.get("breakItKept")
         if bik:
             not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]
@@ -536,6 +770,15 @@ __all__ = (
     "live_vendors",
     "independent_auditor",
     "independent_auditor_available",
+    "independent_reviewer",
+    "nonpanel_reviewer",
+    "nonpanel_cell_proven",
+    "nonpanel_candidates",
+    "host_family",
+    "unfilled_seats",
+    "maker_families",
+    "pinned_auditor_vendors",
+    "auditor_constraints",
     "degraded",
     "base_degraded",
     "author_family",

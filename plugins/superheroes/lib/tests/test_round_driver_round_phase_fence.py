@@ -30,12 +30,16 @@ _bootstrap = _TDI._bootstrap
 _land = _TDI._land
 _write_dispatch_manifest = _TDI._write_dispatch_manifest
 _slots_of = _TDI._slots_of
-_blocking_finding = _TDI._blocking_finding
 _state = _TDI._state
 _fake_git = _TDI._fake_git
 _drive_to_phase = _TDI._drive_to_phase
 _drive_one_phase = _TDI._drive_one_phase
 _auditor_vendor_for = _TDI._auditor_vendor_for
+
+
+def _blocking_finding(title, line):
+    return dict(_TDI._blocking_finding(title, line),
+                consequence="a reviewer-found defect stays in the change")
 
 REASON = round_driver.ROUND_PHASE_NOT_PENDING_REFUSAL
 P_AUDITS = round_driver.P_AUDITS
