@@ -1,0 +1,18 @@
+{
+  "schema": "review-record/1",
+  "pr": 6,
+  "sessionId": "session-6",
+  "lane": {"value": "full", "reason": "Checkout takes money from a gift card.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "2222222bbbbbbb2222222bbbbbbb2222222bbbbb", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "2222222bbbbbbb2222222bbbbbbb2222222bbbbb", "source": "GitHub checks"},
+  "reviewers": [
+    {"name": "code-reviewer", "family": "codex", "ran": "engine-record"},
+    {"name": "design-reviewer", "family": "claude", "ran": "reported-by-session", "notIndependent": true}
+  ],
+  "findings": [
+    {"id": "H1", "outcome": "left-for-owner", "title": "A gift card that covers part of an order leaves the rest unpaid", "reason": "Only the owner can say how a split payment should look.", "consequence": "A customer with a small gift card may reach the end of checkout and be asked for a second payment they did not expect.", "findingKey": "giftcard/split-payment"}
+  ],
+  "missingReviews": [{"name": "security-reviewer", "goAhead": {"kind": "owner-words", "words": "Merge without the security read", "where": "the chat on 2026-03-02"}}],
+  "rounds": {"count": 4, "stoppedAtCap": true, "source": "reported by the session"}
+}

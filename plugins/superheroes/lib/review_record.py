@@ -48,12 +48,21 @@ FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
 MAX_BODY_CHARS = 65000
 GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
+# The reviewer ran-state vocabulary, its one home: the sheet builder validates against RAN_STATES; the sheet
+# schema holds no copy of it (a test pins that).
+RAN_ENGINE_RECORD = "engine-record"
+RAN_REPORTED_BY_SESSION = "reported-by-session"
+RAN_NOT_RUN = "not-run"
+RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
+# The review lane vocabulary: its one home is lane_call.LANES. The lane matcher below is built from it and the
+# sheet builder validates against this alias of it; the sheet schema holds no copy of it (a test pins that).
+LANES = lane_call.LANES
 _LANE_RE = re.compile(
-    r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in lane_call.LANES) + r")\b[.:]?[ \t]*(.*)$"
+    r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,

@@ -575,33 +575,33 @@ above).
    **Never merge, release, or
    publish on your own authority:** approval never delegates. **When you cannot tell, ask — park
    rather than presume.**
-   **The word.** The owner approves merges with a scoped word in chat, given after the PRs have
-   been talked through. When the word names PRs, the scope is exactly those PRs. When the word is a
-   batch phrase that names no numbers ("these five", "this wave"), resolve it to the PRs the owner
-   talked through before it and enumerate them by number beside the word before any merge. A spec PR
-   carries its breakdown, and one word covers both (duty 1);
+   **The word.** The owner's word to merge a PR is a saved "Merge" verdict on that PR's current
+   sheet together with the owner saying "done" in the chat (the sheets are batch 3 of
+   [owner-decisions.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md)
+   § Delivery mechanics). Neither alone is the word: a saved "Merge" with no "done" is not, and
+   "done" alone is not. A saved "Not yet", or no saved verdict, together with "done" is not the word.
+   Where no "Merge" verdict can be saved on the PR's current sheet (the host cannot show the sheet,
+   or the template does not offer a merge verdict), there is no word: the merge waits, and you tell
+   the owner why. A stack that
+   merges whole has one sheet and one verdict, which covers exactly the PRs the sheet lists. A spec
+   PR's sheet carries its breakdown, and one verdict covers both (duty 1);
    [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § Merging a
-   spec PR executes it. "This
-   wave" never means every open PR. A PR the owner talked through but did not name is outside a
-   word that names PRs. When any PR's membership in a batch phrase is in doubt, the enumeration
-   is a question to the owner, not a record, and nothing merges until the owner answers it.
+   spec PR executes it.
    **Inside the word, you and only you execute each merge.**
-   **Where the word is recorded.** In two places, both required: by PR number beside the word in
-   the thread that carries it, and on each named PR's owner half.
-   **How long it lasts.** The word covers the PRs it names until they merge. It is not tied to
-   walks and does not lapse at one. No head is recorded at the word. The owner may withdraw or
-   supersede the word at any time, in the same thread, and a withdrawn word covers nothing from
-   that moment.
-   **What puts a PR back outside the word.** A PR opened after the word (a fix PR, a later stack
-   layer, a fold) asks again. The one exception is the disclosed follow-up PR on a red train once
-   the last lane has merged, which rides the scope only while the fix is craft with no material
-   consequence. A PR whose behavior, scope, or disclosed tradeoffs changed materially after the
-   word asks again, judged against the
-   [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md) (a
-   [material consequence](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#material-consequence) asks again). A routine base update
-   or a craft fix with no material consequence keeps the word. That is your judgment, and you say
-   it on the owner half. When you cannot place a post-word change on that line with confidence,
-   treat it as an [owner call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#owner-call) and ask.
+   **Where the word is recorded.** The saved verdict sits in the sheet's answer store, and "done" in
+   the chat. After the merge, the PR's receipt (each answer and the verdict, written back to the PR
+   per `owner-decisions.md`) records it on the PR.
+   **How long it lasts, and what puts a PR back outside the word.** The word covers the PR at the
+   commit its sheet describes. When the PR's head commit moves after its sheet was published, you
+   judge the move by the material-consequence line, and doubt counts as material. A move with no
+   material consequence (a base update with no conflict, a mechanical bring-current, a craft fix)
+   keeps the word: you republish the sheet for the new commit carrying the answers and the verdict
+   forward, with a dated note saying what moved and why it is not material. A move that is material,
+   or in doubt, is republished unsigned: the sheet shows "This PR changed", keeps the answers to
+   unchanged items, and starts the verdict over, and a verdict saved on the old sheet never counts.
+   How you judge and publish it is in `owner-decisions.md`. A PR opened after the word gets its own
+   sheet. The owner may withdraw the word at any time, by changing the verdict or saying so in
+   the chat, and a withdrawn word covers nothing from that moment.
    **The stack is the unit of merge** — whole stacks only, never a vetted prefix; see
    [native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack
    merges and
@@ -618,10 +618,10 @@ above).
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
    as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
    within minutes, and the word and the act sit in one thread. There is no separate list of
-   executed merges. The chat reports and the owner halves are the record.
-   **The red train.** When a lane goes red on the union or on `main`'s post-merge run, fix it
-   under the word already given if the fix is craft with no material consequence. A fix with a
-   material consequence asks. Recipe:
+   executed merges. The chat reports and each PR's receipt are the record.
+   **The red train.** When a lane goes red on the union or on `main`'s post-merge run, you may
+   prepare and push a craft fix without asking. A fix that moves a head keeps the word when the move
+   is not material; a fix that opens a new PR asks through that PR's own sheet. Recipe:
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md`.
    **Force-push.** State the reason in chat first, then proceed only on a word the owner gives for
    that force-push after hearing the reason. The merge word does not cover it. Record the word and
@@ -642,9 +642,9 @@ above).
    hands back — never improvises**. (3) **Recipes assume gated steps bounce** — permission-gated
    commands bubble to the root session; each recipe **names the steps it expects to hand back**.
 
-   **Done when:** every merge you executed sat inside a word recorded by PR number in the thread and
-   on the owner half, met the three preconditions, and was reported at once as one line; every
-   force-push and every release you executed rode its own word.
+   **Done when:** every merge you executed sat inside a saved "Merge" verdict plus "done" on the
+   PR's current sheet, met the three preconditions, was reported at once as one line, and has its
+   receipt on the PR; every force-push and every release you executed rode its own word.
 7. **Diagnose anomalies from artifacts.** When a run, regression, or suspicious claim needs
    explaining, investigate from the durable record (PRs, issues, transcripts) with a repeatable,
    methodical pass — tool calls and outcomes, not narratives.
