@@ -78,6 +78,7 @@ Status vocabulary: *cut* (the *first-run-clean* stamp on the older rows is histo
 | **0.40.0** | The size tripwire reports itself, lockfiles stop counting, and the Claude sandbox stops tripping on everyday commands | — | `size_count` counts the uncommitted working tree read-only, and `dispatch-write` reports the size tripwire at every implementer fold (#1584, #1585, merged whole as stack #1594). The size count leaves package-manager lockfiles out for every project and honours a per-project `sizeExclude` list set through configure (#1589, #1590, merged whole as stack #1597). A stack-layer PR closes its own layer sub-issue, and the advisor's post-merge close becomes a read-back (#1592). Configure advises that the verify command be the fast iteration check, with the full gate once at the final head (#1602). The sandboxed Claude implementer runs the node toolchains and `ps` without a prompt, and writes under `/tmp` and binds localhost by default, with the runner's own state still denied (#1600). | (cut on receipts — every PR advisor-vetted, vets 374–387) | **cut 2026-10-03** (superheroes-v0.40.0) — **The reset lands** stays open. |
 | **0.41.0** | The alignment specs land: Canon, the three spec checks, discovery through review sheets, and two skills retired | #1615 | Canon, the record of the owner's decisions, ships with its contract, lookup and this repo's seed (#1643); configure item 13 moves into Canon by a one-time migration (#1653), and configure gains item 14, who it's for, and the spec-reviewer seat (#1647). The owner-vs-craft line has one rubric home (#1660). Every spec gets the three spec checks — gap review, source check, grounding (#1661) — and `review-spec` retires (#1662, breaking). `audit-debt` retires in favour of the guardian sweep (#1666, breaking). The advisor's spec vet hands its findings back to discovery, and one merge word covers spec and breakdown (#1668). Discovery grounds itself, draws journeys, choices and a build board before it writes, writes the spec from the approved board, and reaches the owner through review sheets (#1667, #1669, #1671, #1675, merged whole with #1676 as stack #1670). The review sheet: the Comic panel theme and template shell, answers saved to the sheet's own store, counted and folded, the final sheet, a chat-prose fallback, large phone-zoomable pictures, and answers that match the card (#1639, #1641, #1648, #1649, #1652, #1655, #1656, #1659, #1676). Guardian dead-code ids are repo-relative (#1640). | (cut on receipts — every PR advisor-vetted, vets 388–419) | **cut 2026-10-08** (superheroes-v0.41.0) — **The alignment specs land** closed with this cut; **The reset lands** stays open. |
 | **0.42.0** | Headless builders check their work on an iPhone, and owner guidance is never cut short | #1681 | Canon's contract says what stays out and how an entry stays honest (#1686). The iPhone check: the launcher gives an iPhone-check lane its own simulated phone and keeps Device Hub up (#1688); the advisor launches iPhone lanes, vets their iPhone evidence and reaps their phones (#1689); the pilot checks the change on the lane's phone and posts labelled evidence, with guidance for a project's development-only reporting script (#1694, #1696, merged whole as stack #1697). Review-code refuses over-long owner guidance, for one finding or a whole fix batch, instead of cutting it off or leaving it out (#1695). One home for the external-identifier literal-pin exception, CONVENTIONS §11.3 (#1699). | (cut on receipts — every PR advisor-vetted, vets 420–431) | **cuts at the merge of release PR #1687** (superheroes-v0.42.0). Epic #1681 stays open until weekly-eats' first lane with the iPhone check reports (owner ruling 65); **The reset lands** and **Test-pilot evidence you can act on** stay open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
+| **0.43.0** | Review that scales with risk and learns from its escapes, and builds that run in the cloud | #1708, #1741 | Two epics deliver whole. **The review redesign** (#1708): every review on every lane writes one review record on the PR, in place of the certificate, and the advisor's vet reads it; every finding states its consequence and ends with an outcome, and a leftover with a real consequence comes to the owner. Configure gains Risk and trust, and the lane floor follows it: a change touching a risk area, or any change before the project's risk sitting, gets the full lane. The full-lane panel follows the lane call, every reviewer sits outside every maker's family, and the test role replaces the test reviewer and writes break-it tests on risk areas. The owner's decisions come in three batches, ending in one PR sheet per PR with a saved Merge verdict. Review escapes are logged, and seats are judged from the adoption day. The certificate gate, the planted-bug control, session moves and the exact-head evidence chain retire. **Cloud builders** (#1741): a project can opt in to running its builds in cloud sessions under the same review, vet and merge rules, through a one-time setup sitting and a reviewer pass; the launcher routes each build to the cloud or the owner's machine, stack layers build there too, and the advisor answers, recovers and cleans up cloud builders. Field fixes ride along: the iPhone check's first-run gaps, the plugin's dependence on Claude Design removed, an automatic checkpoint before compaction, and the showrunner charter loading in one Read again. | (cut on receipts — every PR advisor-vetted, vets 432–508; closure receipts: #1708 at vet 508 on #1882, comment 6209781421; #1741 on #1880, comment 6205923097) | **cuts at the merge of release PR #1735** (superheroes-v0.43.0) — **Cloud builders** closes with this cut; **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 
 
 
@@ -108,7 +109,10 @@ and both delta-round items, closed as superseded; its slot went to The alignment
 owner-ruled at the 2026-10-05 walk.) (**The alignment specs land** — priority 2 of the
 2026-10-05 order — closed 2026-10-08 with the 0.41.0 cut: exit met, both alignment specs landed
 across the epic's children (#1615) and the owner accepted delivery in full on 2026-10-08, with
-the disclosed paths recorded on the epic's closure receipt.)
+the disclosed paths recorded on the epic's closure receipt.) (**Cloud builders** — priority 2 of the
+2026-10-10 order — closes with the 0.43.0 cut: exit met, every issue in it is closed, the stack of
+children landed whole, and the owner accepted delivery in full on 2026-10-16, with two live checks
+deferred to their first occurrence on the epic's closure receipt.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
@@ -124,36 +128,33 @@ the owner is the direct consumer of.
    day the dial starts counting. Outside the dial by rule; graded once on the per-role
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
-   logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)*
-2. **Cloud builders** — a project's builds run in cloud sessions, under the same review, vet and
-   merge rules as a build on the owner's machine, so the owner's own machine stops bounding how
-   many builds run at once. One stack of children that merges and ships whole. *(Opened
-   2026-10-10 at the spec's merge, owner-ruled its own milestone to close once this work ships;
-   placed second, behind the reset, because its children are building now. The owner re-ranks at will.)*
-3. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+   logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)* It stays
+   open after the 0.43.0 cut: the review epic it carried is delivered, but the deferred layers of
+   one child and the owner-attended board sweep, the reset's closing act, remain.
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+3. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
    what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
    under Review-spec keeps pace by the same word.)*
-5. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
-6. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
    hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
    garbage collection, the owner-authority gate's remaining side doors.
-7. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
    two largest charters finally under one; the activation record bound to what it certifies;
    the harness tripwire leaving a durable result.
-8. **Cross-session messaging** — a discovery starter: where the host's cross-session
+7. **Cross-session messaging** — a discovery starter: where the host's cross-session
    messaging primitive replaces the deaf-session workarounds, per surface.
-9. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
    actually is, for the owner first. Low priority.
-10. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-11. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen

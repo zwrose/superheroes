@@ -105,7 +105,7 @@ still produced by The Architect.
   review, and the spec checks discovery runs on a spec
   (`skills/architect-discovery/reference/spec-checks.md`). The **spec checks' reviewer labels
   its findings with six doc-native lenses** (Clarity, Verifiability, Failure-Mode, Coherence,
-  Safety & access, Grounding) while `review-code` runs its five code reviewers — the honest doc-native identities that
+  Safety & access, Grounding) while `review-code` composes its panel from its five code reviewers by the lane call — the honest doc-native identities that
   replaced the "five code costumes" (#514 D1). (#34 proposed merging the code and test seats
   as the weakest, on ~70% zero-finding early small-N data; at N=37 those are the two
   strongest seats — Verifiability has the most blocking findings of any seat — and the
@@ -608,12 +608,15 @@ selected *below* the host, at the dispatch leaf.
 
 Two postures are held strictly separate, mirroring `model_tier`:
 - **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled
-  engine silently degrades to **the host model** — the same posture `model_tier` documents for a bad
+  engine silently degrades to **the host model** (a review seat excepted: no host model stands in
+  for a reviewer when the host's family is a maker's, below) — the same posture `model_tier` documents for a bad
   tier ("a wrong/absent tier is a cost concern, never a safety one"). No run hangs or
   hard-fails on engine choice.
 - **A completed external *result* fails closed.** A build or fix that fails or can't run
   verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
-  on the host model, never accepted as green. A review seat that returns a well-formed empty result
+  on another live reviewer outside every maker's family, never accepted as green and never on the
+  host model when the host's family is a maker's (with none live, the seat counts as not run). A
+  review seat that returns a well-formed empty result
   **without a verifiable investigation record** is incomplete, not clean — a named **vacuous**
   forfeit on the same fall-open path (`review-code` reference: `auto-fix-loop.md`, `round-driver.md`).
   Engine telemetry corroborates engagement but never substitutes for that record. This reuses the
@@ -703,15 +706,16 @@ per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The s
 **bars the maker's model family from rotation onto every panel seat** — all five lens seats and the
 `grounding-seat` (#670, owner-ratified 2026-07-26), including seats that are neither
 strong-tier nor critical (closing the `test-reviewer` hole after #651 unified cursor's
-first-party models under one `xai` family). An owner pin can still seat the maker family on a
-panel seat; `verify()` then flags a `maker-family` violation and records a
-`pin-breaks-constraint` degradation naming the seat. Where an alternative family is live, the maker
-family simply never seats through rotation. Where **no** alternative family is live, the seat still fills
-with the maker family and the map records a disclosed `same-family` degradation, which
-rides the certification shape (`-degraded`) alongside `independenceDegraded` and
-`baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
-`verify()` treats a maker-family seat as a **violation** when an alternative family was
-reachable, and as **not** a violation when unavoidable (the degradation path); unusable
+first-party models under one `xai` family). A pin cannot seat the maker family on a panel
+seat: the seat is recorded unfilled, with a `pin-breaks-constraint` degradation naming it. Where an
+alternative family is live, the maker family never seats through rotation. Where **no** reviewer
+outside the makers' families is live for a seat, the seat is recorded **`unfilled`** (a
+`seat-unfilled` degradation) and counts as not run; nothing stands in for it. Only the owner's
+word, for that one change, lets a reviewer from a maker's family run, and the review record then
+says the review was not independent (`rubric/review-discipline.md`). For a hand-built or replayed
+map that does seat the maker, `verify()` treats a maker-family seat as a **violation** when an
+alternative family was reachable, and as **not** a violation when unavoidable (a disclosed
+`same-family` degradation); unusable
 liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
 degradations list, or malformed vendor names on **any** receipt; a `liveCellsSource`
 that is present but not a member of the closed vocabulary (`probed`, `synthesized`,
@@ -1344,7 +1348,8 @@ zero reconstruction, show the after-state — live in the **Showrunner charter**
 (`skills/showrunner/SKILL.md`); the default perceivability list lives in
 `skills/showrunner/reference/perceivability.md` — cite those homes, do not restate them here.
 The shape in which open owner decisions are delivered — the owner-needed filter with stated
-grounds, the per-item spine, follow-up economics, and the two-batch delivery mechanics — lives in
+grounds, the per-item spine, follow-up economics, and the three-batch delivery mechanics (what
+blocks work, then decisions not tied to one PR, then one sheet per PR) — lives in
 `skills/showrunner/reference/owner-decisions.md`; this section cites that home rather than
 restating it.
 

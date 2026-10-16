@@ -39,7 +39,9 @@ the release train delivering those promises.
 Run it **first** in any project. It senses what the project needs and either sets it up,
 repairs it, or lets you see the whole project's calibration on one screen and tune a
 setting — models per role, review engines, test-pilot, storage (in-repo vs. out-of-repo),
-and boundary rules — once, so every session that follows inherits it.
+boundary rules, Risk and trust (the project's threat model and the risk areas that decide how
+much review each change gets), and cloud builds (off until the owner opts in through a one-time
+setup sitting) — once, so every session that follows inherits it.
 
 configure also carries the **preflight**: the checkout a builder session runs, with the
 owner still present, before it goes autonomous — live-exercising the browser tool,
@@ -81,7 +83,9 @@ every PR from its artifacts — the diff, the issue/spec, the build brief — ag
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
 keeps **merge approval** with the owner; the merge policy is stated once, in duty 6 of
 [`plugins/superheroes/skills/showrunner/SKILL.md`](plugins/superheroes/skills/showrunner/SKILL.md). A wave preflight runs the
-conformance probe once per dispatchable engine before any builder launches.
+conformance probe once per dispatchable engine before any builder launches. Once a project
+switches cloud builds on, the advisor launches each build in a cloud session or on the owner's
+machine, under the same review, vet and merge rules either way.
 
 | Command | Use it to… |
 | --- | --- |
@@ -90,7 +94,7 @@ conformance probe once per dispatchable engine before any builder launches.
 | `/superheroes:showrunner-resume` | Pick the advisor seat back up from durable state in a new or restarted session. |
 | `/superheroes:checkpoint` | Works in any session, charter or not: freshen live state, save the checkpoint notes, and emit a ready-to-paste `/compact` command. Where mods are present the superheroes mod steers every compaction automatically from those notes; on hosts without mods the PreCompact fallback steers it and the manual paste is the floor. With the mod in an interactive session, or a session in the desktop app's Code tab, it also checkpoints and compacts by itself once the context passes a threshold: a heads-up band above the prompt offers **Now** or **Snooze**, and the threshold, the allowance before the harness's own auto-compaction, and auto / click-only / off are the plugin's settings (`/config`). |
 | `/superheroes:adopt-version` | Take up a newly installed superheroes version in this live seat — diff, re-read what changed, run the upgrade checklist, and brief the owner — with no handoff. Works in any charter seat. |
-| `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in two batches with the blocking ones first. |
+| `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in three batches: what blocks work first, then decisions not tied to one PR, then one sheet per PR whose saved Merge verdict is the owner's merge word. |
 
 ## Workhorse — the builder session
 
@@ -99,7 +103,11 @@ it writes a short **build brief** (shape, contracts & state, reuse plan, hard se
 alternatives, consequential flags), gets it checked pre-code by a fresh reviewer at
 comparable tier and from another vendor, then builds test-first with tiered subagents in small
 diffs, verifies UI work in a real browser via test-pilot, runs multi-model review with every
-finding dispositioned in the PR body, and hands back a **ready PR**. It **never merges**.
+finding dispositioned in the PR body, and hands back a **ready PR**. That is the full lane; a
+small, low-risk change the advisor calls light gets the builder's own typing and one independent
+reviewer, and a change touching one of the project's risk areas always gets the full lane. It
+runs on the owner's machine or, for a project with cloud builds on, headless in a cloud session.
+It **never merges**.
 
 | Command | Use it to… |
 | --- | --- |
@@ -138,7 +146,12 @@ specifying; or a park note, when it stops before reaching an answer — never si
 is written and reviews code with an auto-fix loop (`review-code`). A spec is reviewed by the three spec checks Discovery
 runs — gap review, the source check both ways, and grounding (see the-architect, above).
 Panels are composed to be vendor-complementary — models that didn't write the code (or the
-brief, or the spec) are the ones reviewing it.
+brief, or the spec) are the ones reviewing it, and no reviewer from a maker's family runs without
+the owner's word for that change. The full-lane panel follows the lane call: a code reviewer, the
+test role (which writes break-it tests on the project's risk areas) and a grounding seat on every
+change, plus security and premortem reviewers when a risk area is touched. Every review, on every
+lane, writes one **review record** on the PR, which the advisor's vet reads; every finding states
+its consequence, and a leftover with a real consequence comes to the owner.
 
 | Command | Use it to… |
 | --- | --- |
