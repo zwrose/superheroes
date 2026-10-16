@@ -292,6 +292,8 @@ def load_scenarios(path):
         rule = sc["expected_rule"]
         if not (isinstance(rule, str) and rule.strip()):
             raise Refusal(f"{path}: scenario #{i} needs a non-empty string expected_rule")
+        if not (isinstance(sc["id"], str) and sc["id"].strip()):
+            raise Refusal(f"{path}: scenario #{i} needs a non-empty string id")
         if sc["id"] in seen:
             raise Refusal(f"{path}: duplicate scenario id {sc['id']!r}")
         seen.add(sc["id"])
@@ -757,12 +759,21 @@ def dispatch(a, stack):
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
+    def _term(signum, frame):
+        raise KeyboardInterrupt  # SIGTERM takes the Ctrl-C path: group kill, then worktree cleanup
+    try:
+        prev = signal.signal(signal.SIGTERM, _term)
+    except ValueError:  # not the main thread
+        prev = None
     try:
         with contextlib.ExitStack() as stack:
             return dispatch(a, stack)
     except Refusal as e:
         print(f"ab.py: refused: {e}", file=sys.stderr)
         return EXIT_REFUSED
+    finally:
+        if prev is not None:
+            signal.signal(signal.SIGTERM, prev)
 
 
 if __name__ == "__main__":

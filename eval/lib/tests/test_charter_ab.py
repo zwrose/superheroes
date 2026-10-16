@@ -4,6 +4,7 @@ import json
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -582,10 +583,26 @@ def test_scenario_file_guards(tmp_path):
     for bad_rule in ("", "   ", None, 7):
         with pytest.raises(ab.Refusal):
             load([dict(scen("a"), expected_rule=bad_rule)])
+    for bad_id in (1, "", "  ", None, ["a"]):
+        with pytest.raises(ab.Refusal):
+            load([dict(scen("a"), id=bad_id)])
     for bad in ([scen("a"), scen("a")], [{k: v for k, v in scen("a").items() if k != "targeted_block"}],
                 {"scenarios": [scen("a")]}, {"role": "r", "scenarios": "no"}):
         with pytest.raises(ab.Refusal):
             load(bad)
+
+
+def test_sigterm_takes_the_interrupt_path_and_handler_is_restored(monkeypatch):
+    seen = {}
+
+    def fake_dispatch(a, stack):
+        stack.callback(seen.setdefault, "cleaned", True)
+        os.kill(os.getpid(), signal.SIGTERM)
+    monkeypatch.setattr(ab, "dispatch", fake_dispatch)
+    before = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(KeyboardInterrupt):
+        ab.main(["run"])
+    assert seen == {"cleaned": True} and signal.getsignal(signal.SIGTERM) is before
 
 
 # ---------------------------------------------------------------- round-1 fixes: replicates, judge rc, forced reruns
