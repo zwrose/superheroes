@@ -1,0 +1,15 @@
+{
+  "schema": "review-record/1",
+  "pr": 5,
+  "sessionId": "session-5",
+  "lane": {"value": "full", "reason": "A new table holds money.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "1111111aaaaaaa1111111aaaaaaa1111111aaaaa", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "1111111aaaaaaa1111111aaaaaaa1111111aaaaa", "source": "GitHub checks"},
+  "reviewers": [{"name": "code-reviewer", "family": "codex", "ran": "engine-record"}],
+  "findings": [
+    {"id": "G1", "outcome": "fixed", "title": "A gift card could be created with a negative balance", "reason": "Fixed: the table now refuses it.", "consequence": null, "findingKey": "giftcard/negative-balance"}
+  ],
+  "missingReviews": [],
+  "rounds": {"count": 2, "stoppedAtCap": false, "source": "reported by the session"}
+}
