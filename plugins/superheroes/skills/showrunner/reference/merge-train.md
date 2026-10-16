@@ -6,6 +6,7 @@
 - [Merging a stack](#merging-a-stack)
 - [Merging a spec PR](#merging-a-spec-pr)
 - [Selecting the run to watch](#selecting-the-run-to-watch)
+- [Cleaning up a finished cloud lane](#cleaning-up-a-finished-cloud-lane)
 
 # The merge train
 
@@ -165,6 +166,9 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    sub-issue and closing the feature issue follow [Each layer is a
    sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue), item 6.
 
+   A merged pull request that a cloud lane built is then cleaned up as [Cleaning up a finished cloud
+   lane](#cleaning-up-a-finished-cloud-lane) says.
+
 7. **What a vet checks per layer, and what it checks once per stack.** **Per layer:** its own DoD
    rows (the layer's DoD and order live in its own sub-issue — [Each layer is a
    sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)), its own review
@@ -213,3 +217,48 @@ Both rules above turn on watching the right run, so select it by **workflow name
 never `gh run list --limit 1`, which returns whichever workflow ran latest on that branch, so it can
 report another workflow's green as the one you are watching. The canonical statement is field 1 of the vet receipt's spine, in
 `skills/showrunner/reference/vet-receipt.md`.
+
+## Cleaning up a finished cloud lane
+
+A cloud lane leaves a session on the owner's account and a pushed branch, and no checkout or worktree
+on the owner's machine. This section is the one home of how they are cleaned up.
+
+1. **When.** Once the lane's pull request has merged, or has closed unmerged; the steps are the same
+   for both. Never while the pull request is open, whether the builder handed back or parked: the
+   pushed branch stays for the vet, a renewed review or a recovery.
+2. **Plan, then ask.** Run `python3 -B <plugin root>/lib/cloud_cleanup.py plan --repo-root <root>
+   --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup` with `alreadyDelivered`, send
+   nothing and go to the branch step. On any other `cleanup`, first persist the attempt under the
+   message id the send will carry. For another account, run the relay's `ensure` and `compose` first
+   (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
+   the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
+   id, so make one unique to this attempt, `same-account-<pr number>-<UTC timestamp>`, and keep it for
+   this attempt's `pending` and final writes (a settlement carrying an older attempt's id then never matches a newer reservation). Then run `cloud_cleanup.py record --repo-root <root> --repo
+   <owner/name> --pr <number> --msg-id <id> --outcome pending --launch-id <the plan's launchId>`. That write is the
+   reservation to send: when it is refused (`request-in-progress`, `request-uncertain` or
+   `request-delivered`), another caller holds or has settled the request, so send nothing and go on. Only when it succeeds, send the plan's
+   `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
+   by the relay's send and `check`, as that section says. Then run `record` with the same message id and
+   the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
+   when nothing can have reached the builder. Pass the plan's `launchId` as `--launch-id` to every `record`
+   and to `branch`, so each settles the lane that was planned. A plan whose `request` is already `pending` or
+   `uncertain` is a resume after an unconfirmed send: send nothing. When that message id came from the relay (another
+   account), first run `cloud_relay.py check --repo-root <root> --msg-id <id>` (as `wave-watch.md` § Answering a
+   builder note describes) and record `delivered` when it reads `delivered: true`, `failed` when its `reason` is `relay-send-failed` (nothing reached the
+   builder, so a later run of this procedure may send again), otherwise `uncertain`. A
+   same-account id has no check, so record `uncertain`. Then go on. A `pending` or `uncertain` request is never sent a second time.
+3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other
+   outcome, tell the owner that the archive request to that build's session could not be confirmed
+   and that its session stays listed. Ask nothing of the owner: the only step the owner is ever asked
+   for is the one tap on the archive prompt.
+4. **The branch.** Run `cloud_cleanup.py branch --repo-root <root> --repo <owner/name> --pr <number>
+   --launch-id <the plan's launchId>`.
+   GitHub deletes the pull request's branch when the repository deletes merged branches; otherwise
+   this step deletes it through GitHub, only while it still points at the pull request's head. It reports `deleted: false` with
+   `already: "absent"` when the branch was already gone. The step reports what a re-read of the branch shows, never
+   what the delete call returned. A refusal (`branch-moved`, `branch-in-use`, `default-branch`,
+   `head-repo-foreign`, `delete-unconfirmed`, `delete-outcome-unknown`) is reported to the owner, never worked around.
+5. **What is left.** The session, until the owner taps Allow, and the lane's record. The branch is
+   gone, and a cloud launch made no checkout or worktree to remove.
+
+If the owner never answers the archive prompt, the session stays listed and the advisor carries on; nothing reminds the owner.
