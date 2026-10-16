@@ -258,7 +258,7 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     parked_on = _park_day(parks[-1].get("created_at"))
     park_id = parks[-1].get("id")
     park_id = park_id if isinstance(park_id, (str, int)) and not isinstance(park_id, bool) else None
-    if known and known[0]["outcome"] in ("sent-back", UNCERTAIN, "owner-let-through"):
+    if known and known[0]["outcome"] in (None, "sent-back", UNCERTAIN, "owner-let-through"):
         seen = known[0].get(_PARK_KEY)
         newer = park_id != seen if (park_id is not None and seen is not None) else (
             bool(parked_on) and parked_on > known[0]["parkedOn"])
@@ -271,8 +271,17 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         if pull is None:
             return _refusal("pr-read-failed")
         issues = _linked_issues(pull.get("body"), repo)
+        old = known[0].get(_LAUNCH_KEY) if known else None
+        superseded, recover_readable = _sib("cloud_recover").superseded_ids(repo_root, env)
+        # axis: an unreadable recovery record refuses before the park id is saved, so a retry can still rebind to the replacement
+        if old and not recover_readable:
+            return _refusal("recover-state-unreadable")
+        rebind = bool(old) and old in superseded
+        if rebind:
+            _, was, why = _lane(repo_root, issues, env, old)
+            issues = [was["issue"]] if was else issues
         launch_id, _, ledger_reason = (
-            _lane(repo_root, issues, env, known[0].get(_LAUNCH_KEY) if known else None,
+            _lane(repo_root, issues, env, None if rebind else old,
                   reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
@@ -297,7 +306,8 @@ def send_back(repo_root, today=None, *, env=None, run=None):
     if entries is None:
         return path
     out = {"ok": True, "sendBack": [], "skipped": [], "unread": [], "notRenewed": [], "noLane": [],
-           "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY)}
+           "superseded": [],
+           "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY), _PARK_KEY: e.get(_PARK_KEY)}
                          for e in entries if e["outcome"] == UNCERTAIN]}
     changed = False
     for e in (e for e in entries if e["outcome"] is None):
@@ -331,16 +341,32 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         if not lane.get("cloudSessionName"):
             out["noLane"].append({"pr": e["pr"], "issue": issue})
             continue
+        # axis: a lane a successor was composed for is never sent to, and an unreadable record of that is read as "may be superseded"; read last, after this entry's GitHub reads
+        superseded, recover_readable = _sib("cloud_recover").superseded_ids(repo_root, env)
+        if not recover_readable:
+            out["unread"].append({"pr": e["pr"], "reason": "recover-state-unreadable"})
+            continue
+        if launch_id in superseded:
+            out["superseded"].append({"pr": e["pr"], "launchId": launch_id})
+            continue
         out["sendBack"].append({"pr": e["pr"], "repo": e["repo"], "issue": issue, "launchId": launch_id,
+                                _PARK_KEY: e.get(_PARK_KEY),
                                 "cloudSessionName": lane["cloudSessionName"],
                                 "configDir": lane.get("configDir"), "message": SEND_BACK_MESSAGE})
     if changed and not _save(path, entries):
         return _refusal("parked-state-unwritable")
+    # axis: a lane superseded while a later entry's GitHub reads ran is not sent to; the last read decides
+    late, late_readable = _sib("cloud_recover").superseded_ids(repo_root, env) if out["sendBack"] else (set(), True)
+    if not late_readable:
+        out["unread"] += [{"pr": c["pr"], "reason": "recover-state-unreadable"} for c in out["sendBack"]]
+        out["sendBack"] = []
+    out["superseded"] += [{"pr": c["pr"], "launchId": c["launchId"]} for c in out["sendBack"] if c["launchId"] in late]
+    out["sendBack"] = [c for c in out["sendBack"] if c["launchId"] not in late]
     return out
 
 
 @_locked
-def sent(repo_root, repo, pr, *, uncertain=False, env=None):
+def sent(repo_root, repo, pr, *, uncertain=False, park_id=None, env=None):
     """Record one parked PR as sent back, once its message was delivered; with `uncertain`, as sent with
     delivery unconfirmed. Saying it twice changes nothing, and `uncertain` never downgrades a confirmed send."""
     env = os.environ if env is None else env
@@ -354,6 +380,8 @@ def sent(repo_root, repo, pr, *, uncertain=False, env=None):
     if not found:
         return _refusal("not-parked")
     entry = found[0]
+    if str(entry.get(_PARK_KEY)) != str(park_id):
+        return _refusal("park-changed")
     if entry["outcome"] in ("closed", "owner-let-through"):
         return _refusal("already-decided")
     outcome = UNCERTAIN if uncertain else "sent-back"
@@ -376,6 +404,7 @@ def main(argv=None):
             sub.add_argument("--pr", required=True)
         if name == "sent":
             sub.add_argument("--uncertain", action="store_true")
+            sub.add_argument("--park-id")
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     except SystemExit as exc:
@@ -384,7 +413,7 @@ def main(argv=None):
     if args.verb == "notice":
         result = notice(args.repo_root, args.repo, args.pr)
     elif args.verb == "sent":
-        result = sent(args.repo_root, args.repo, args.pr, uncertain=args.uncertain)
+        result = sent(args.repo_root, args.repo, args.pr, uncertain=args.uncertain, park_id=args.park_id)
     else:
         result = send_back(args.repo_root)
     sys.stdout.write(json.dumps(result) + "\n")

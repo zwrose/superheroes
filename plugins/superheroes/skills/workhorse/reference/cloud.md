@@ -40,7 +40,8 @@ notice, a review receipt.
    issue and end the lane. Build nothing; the advisor relaunches on the owner's machine. At intake,
    before the preflight, post with `gh api` or the session's GitHub tools, whichever works.
 4. On `ok: true` for a launch with no `Adopts branch:` line, the clone is checked out detached at
-   the launch's base commit. Create the build branch there, and post the result's `comment` as the
+   the launch's base commit. Create the build branch there, its name carrying the issue number as a whole
+   number (for example `<prefix>-<issue>-<suffix>`), because recovery finds pushed work by that number, and post the result's `comment` as the
    first comment on the issue. It states three facts: a cloud build, the plugin version, and that
    commits carry the cloud's author name while the PR is under the owner's name. Never re-word it.
 5. When the launch carries `Adopts branch: <name> at <sha>`, the result's `branch` names it and the

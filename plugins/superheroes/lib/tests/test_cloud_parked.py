@@ -19,6 +19,7 @@ import cloud_builder  # noqa: E402
 import cloud_check  # noqa: E402
 import cloud_parked as CP  # noqa: E402
 import cloud_pass  # noqa: E402
+import cloud_recover  # noqa: E402
 import cloud_ready as CR  # noqa: E402
 import cloud_setup as CS  # noqa: E402
 import control_plane  # noqa: E402
@@ -141,8 +142,12 @@ def _send(w, today=TODAY):
     return CP.send_back(w.repo, today, env=w.env, run=w.gh)
 
 
+def _park_id(w, pr):
+    return next((e.get("parkId") for e in _entries(w) if e["pr"] == pr), None)
+
+
 def _sent(w, pr, repo=REPO):
-    return CP.sent(w.repo, repo, pr, env=w.env)
+    return CP.sent(w.repo, repo, pr, park_id=_park_id(w, pr), env=w.env)
 
 
 def _park(w, pr, issue=None, **pull):
@@ -240,9 +245,9 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     _park(w, 10, issue=101)
     _renew(w)
     out = _send(w)
-    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "uncertain": [], "sendBack": [{
+    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
-        "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
+        "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
     assert _entries(w)[0]["outcome"] is None
 
 
@@ -625,7 +630,7 @@ def test_an_unreadable_state_file_refuses_every_verb_and_is_never_overwritten(w)
         w.gh.comments[11] = [_lapsed_comment(11)]
         assert _notice(w, 11) == {"ok": False, "reason": "parked-state-unreadable"}
         assert _send(w) == {"ok": False, "reason": "parked-state-unreadable"}
-        assert _sent(w, 10) == {"ok": False, "reason": "parked-state-unreadable"}
+        assert CP.sent(w.repo, REPO, 10, env=w.env) == {"ok": False, "reason": "parked-state-unreadable"}
         assert open(_state_file(w), encoding="utf-8").read() == bad
 
 
@@ -766,7 +771,7 @@ def test_an_unreadable_launch_ledger_leaves_a_renewed_pr_unread_not_without_a_la
 
 
 def _uncertain(w, pr):
-    return CP.sent(w.repo, REPO, pr, uncertain=True, env=w.env)
+    return CP.sent(w.repo, REPO, pr, uncertain=True, park_id=_park_id(w, pr), env=w.env)
 
 
 def test_an_unconfirmed_send_is_never_resent_but_is_listed_every_time_until_a_newer_park_rearms_it(w):
@@ -779,7 +784,7 @@ def test_an_unconfirmed_send_is_never_resent_but_is_listed_every_time_until_a_ne
     for _ in range(2):
         out = _send(w)
         assert out["sendBack"] == []
-        assert out["uncertain"] == [{"pr": 10, "repo": REPO, "launchId": "l-a"}]
+        assert out["uncertain"] == [{"pr": 10, "repo": REPO, "launchId": "l-a", "parkId": _park_id(w, 10)}]
     w.gh.comments[10] = [_lapsed_comment(10, created_at="2026-10-08T10:00:00Z", cid=999)]
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     assert _entries(w)[0]["outcome"] is None
@@ -790,7 +795,7 @@ def test_the_cli_sent_uncertain_records_an_unconfirmed_delivery(w, capsys):
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
     _renew(w)
-    argv = ["sent", "--repo-root", w.repo, "--repo", REPO, "--pr", "10", "--uncertain"]
+    argv = ["sent", "--repo-root", w.repo, "--repo", REPO, "--pr", "10", "--uncertain", "--park-id", str(_park_id(w, 10))]
     assert CP.main(argv) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "action": "written"}
     assert _entries(w)[0]["outcome"] == "send-uncertain"
@@ -802,7 +807,9 @@ def test_a_plain_sent_confirms_an_unconfirmed_send_and_an_unconfirmed_one_never_
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
     assert _uncertain(w, 10)["action"] == "written"
-    assert _sent(w, 10) == {"ok": True, "action": "written"}
+    item = _send(w)["uncertain"][0]
+    assert item["parkId"] is not None
+    assert CP.sent(w.repo, REPO, 10, park_id=item["parkId"], env=w.env) == {"ok": True, "action": "written"}
     assert _entries(w)[0]["outcome"] == "sent-back"
     assert _uncertain(w, 10) == {"ok": True, "action": "unchanged"}
     assert _entries(w)[0]["outcome"] == "sent-back"
@@ -872,3 +879,168 @@ def test_a_sent_overlapping_a_state_writing_send_back_keeps_the_sent_back_outcom
     second.join(10)
     assert second_box["out"] == {"ok": True, "action": "written"}
     assert {e["pr"]: e["outcome"] for e in _entries(w)} == {10: "sent-back", 12: "closed"}
+
+
+# ---------------------------------------------------------------- a lane a successor replaced
+
+
+def _recover_file(w):
+    return os.path.join(os.path.dirname(ll.ledger_path(w.repo, w.env)["path"]), cloud_recover.STATE_NAME)
+
+
+def _supersede(w, launch_id):
+    mark = {"at": "2026-10-12T10:00:00Z", "branch": "issue-101-work", "sha": "a" * 40}
+    with open(_recover_file(w), "w", encoding="utf-8") as fh:
+        json.dump({"superseded": {launch_id: mark}}, fh)
+
+
+def test_t9_a_lane_a_successor_replaced_is_listed_apart_and_never_sent_back(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _renew(w)
+    _supersede(w, "l-old")
+    out = _send(w)
+    assert out["sendBack"] == []
+    assert out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
+    assert out["unread"] == [] and out["noLane"] == []
+    assert _entries(w)[0]["outcome"] is None
+
+
+def test_a_supersession_recorded_during_the_github_reads_still_fences_the_send_back(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _renew(w)
+    class Racing(Gh):
+        def __call__(self, argv, **kw):
+            if argv[-1] == _pull_path(10):
+                _supersede(w, "l-old")
+            return Gh.__call__(self, argv, **kw)
+    racing = Racing()
+    racing.comments, racing.pulls = w.gh.comments, w.gh.pulls
+    out = CP.send_back(w.repo, TODAY, env=w.env, run=racing)
+    assert out["sendBack"] == [] and out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
+
+
+def test_a_first_lane_superseded_during_the_second_prs_read_is_not_sent_back(w):
+    _lane(w, "l-a", 101, "session-a", "a", finished=True)
+    _lane(w, "l-b", 102, "session-b", "b", finished=True)
+    _park(w, 10, issue=101)
+    _park(w, 11, issue=102)
+    _renew(w)
+    class Racing(Gh):
+        def __call__(self, argv, **kw):
+            if argv[-1] == _pull_path(11):
+                _supersede(w, "l-a")
+            return Gh.__call__(self, argv, **kw)
+    racing = Racing()
+    racing.comments, racing.pulls = w.gh.comments, w.gh.pulls
+    out = CP.send_back(w.repo, TODAY, env=w.env, run=racing)
+    assert [c["pr"] for c in out["sendBack"]] == [11]
+    assert out["superseded"] == [{"pr": 10, "launchId": "l-a"}]
+
+
+def test_a_supersession_recorded_during_the_parked_state_save_still_fences_the_send_back(w, monkeypatch):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _park(w, 11)
+    _renew(w)
+    w.gh.pulls[11] = _pull(state="closed")
+    real_save = CP._save
+    def save_then_supersede(path, entries):
+        done = real_save(path, entries)
+        _supersede(w, "l-old")
+        return done
+    monkeypatch.setattr(CP, "_save", save_then_supersede)
+    out = _send(w)
+    assert out["sendBack"] == [] and out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
+    assert {e["pr"]: e["outcome"] for e in _entries(w)} == {10: None, 11: "closed"}
+
+
+def test_a_park_after_the_original_lane_was_superseded_binds_to_the_replacement(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _supersede(w, "l-old")
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-new"
+
+
+def test_a_new_park_while_the_recover_state_is_unreadable_is_refused_and_binds_on_retry(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _supersede(w, "l-old")
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    with open(_recover_file(w), "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    assert _notice(w, 10) == {"ok": False, "reason": "recover-state-unreadable"}
+    assert _entries(w)[0]["launchId"] == "l-old"
+    os.remove(_recover_file(w))
+    _supersede(w, "l-old")
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-new"
+
+
+def test_a_lane_another_lane_replaced_is_still_sent_back(w):
+    _lane(w, "l-keep", 101, "keep-session", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    _supersede(w, "l-other")
+    out = _send(w)
+    assert out["superseded"] == []
+    assert [s["launchId"] for s in out["sendBack"]] == ["l-keep"]
+
+
+def test_a_recover_state_that_cannot_be_read_sends_nothing_back(w):
+    _lane(w, "l-1", 101, "session-1", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    with open(_recover_file(w), "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    out = _send(w)
+    assert out["sendBack"] == [] and out["superseded"] == []
+    assert out["unread"] == [{"pr": 10, "reason": "recover-state-unreadable"}]
+    with open(_recover_file(w), encoding="utf-8") as fh:
+        assert fh.read() == "{not json"
+
+
+def test_a_rebind_stays_on_the_superseded_lanes_own_issue(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    w.gh.comments[10] = [_lapsed_comment(10)]
+    w.gh.pulls[10] = {"state": "open", "merged": False, "body": "Closes #101, closes #102", "head": {"sha": "h1"}}
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    _supersede(w, "l-old")
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    _lane(w, "l-other", 102, "other-session", "b", ts=RELAUNCHED)
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-new"
+
+
+def test_an_acknowledgement_for_a_replaced_park_records_nothing(w):
+    _lane(w, "l-1", 101, "session-1", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    item = _send(w)["sendBack"][0]
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert CP.sent(w.repo, REPO, 10, park_id=item["parkId"], env=w.env) == {"ok": False, "reason": "park-changed"}
+    assert _entries(w)[0]["outcome"] is None
+    assert CP.sent(w.repo, REPO, 10, park_id="1010", env=w.env)["action"] == "written"
+
+
+def test_a_legacy_acknowledgement_for_a_replaced_park_records_nothing(w):
+    _lane(w, "l-1", 101, "session-1", "a")
+    _park(w, 10, issue=101)
+    entries = _entries(w)
+    del entries[0]["parkId"]
+    with open(_state_file(w), "w", encoding="utf-8") as fh:
+        json.dump(entries, fh)
+    _renew(w)
+    item = _send(w)["sendBack"][0]
+    assert item["parkId"] is None
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert CP.sent(w.repo, REPO, 10, env=w.env) == {"ok": False, "reason": "park-changed"}
+    assert _entries(w)[0]["outcome"] is None

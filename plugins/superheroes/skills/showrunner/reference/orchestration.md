@@ -280,11 +280,12 @@ account that is `SendMessage`. On another account (`configDir`) it is the relay'
 
 - After a direct `SendMessage` returns `success: true`, or the relay's `check` returns
   `delivered: true`, run `python3 -B <plugin root>/lib/cloud_parked.py sent --repo-root <root>
-  --repo <owner/name> --pr <n>`. A second call is `unchanged`.
+  --repo <owner/name> --pr <n> --park-id <the item's parkId>` (omit it when null). A second call is
+  `unchanged`; `park-changed` means a newer park replaced it, so record nothing.
 - After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed`, run `sent --uncertain`
-  (not plain `sent`) with the same `--repo-root`, `--repo` and `--pr`, and tell the owner. The builder
+  (not plain `sent`) with the same `--repo-root`, `--repo`, `--pr` and `--park-id`, and tell the owner. The builder
   may already hold the text, so never resend it automatically. `send-back` never lists the PR for
-  sending again, but lists it under `uncertain` every time. A later plain `sent` records it as sent.
+  sending again, but lists it under `uncertain` every time. A later plain `sent` with its `--park-id` records it.
 - After an `ensure` refusal or `relay-send-failed`, do not run `sent`. Nothing reached the builder,
   and the PR stays listed for the next `send-back`.
 
@@ -305,8 +306,29 @@ has the builder's side).
 ## Adoption mechanics
 
 The recovery rules live in `rubric/launch-doctrine.md` § Recovery, and the charter keeps the
-advisor's calls. Two of those calls have mechanics beyond the charter:
+advisor's calls. Three of those calls have mechanics beyond the charter:
 
 - **Pin** each builder's transcript by its issue token instead of re-discovering it newest-first.
 - **Read liveness** from a double-confirmed process check plus pinned-transcript freshness — never
   from a `-p` session's buffered stdout, and never from a global process match.
+- **Recover a cloud lane** in exactly these steps, each naming a verb or record that exists. The
+  verbs are `python3 -B <plugin root>/lib/cloud_recover.py <verb> --repo-root <root> …`.
+  1. Read the session's state in the host's session listing, and the lane's activity age from the
+     wave watch.
+  2. Run `assess`. Its answer is `working`, `unresolved`, `awaiting-handover`, `ask-to-push` or
+     `stopped`. `working`, `unresolved` and `awaiting-handover` never recover. An alive session that
+     never hands over is resolved by the owner archiving it, which then reads `archived`.
+  3. On `ask-to-push`, send `ask`'s text to the lane's session: on the same account with
+     `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
+     Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at
+     all after a definite failure.
+  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, run `successor`, then
+     launch that premise with `launcher.py launch`. The routing step places it: cloud when cloud is
+     ready, the owner's machine otherwise. Until that launch starts, `assess` keeps answering `stopped`, so an
+     interrupted recovery is rerun, never lost.
+  5. Tell the owner with `message`'s text.
+
+  The state is `cloud-recover.json`, beside the launch ledger. Recovery never leaves two builders on
+  one issue: it recovers only on positive stop evidence or a confirmed handover; `successor` refuses
+  a lane the ledger has not ended or that has no `stopped` assessment; `send-back` never messages a
+  superseded lane; and the successor's intake refuses a branch that moved.
