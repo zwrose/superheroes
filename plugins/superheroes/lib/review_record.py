@@ -167,6 +167,9 @@ def _closing_issues(body, repo):
     return found
 
 
+closing_issues = _closing_issues
+
+
 def _pr_meta_rest(pr, repo):
     d = _gh_json("api", _api(repo, f"pulls/{pr}"))
     try:

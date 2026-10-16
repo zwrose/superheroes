@@ -167,6 +167,13 @@ These retirements ship in the same release as the review record, and never apart
 - A message counts as delivered only when the text the relay sent matches the answer exactly, read from the relay's own session record; the relay's own report of what it sent is not the receipt.
 - The advisor runs `note-answered` only after a confirmed delivery, so an undelivered answer leaves the note firing on every arm.
 
+### Showrunner: lapsed-pass parks and the send-back
+
+- `lib/cloud_parked.py` is new, with three verbs: `notice` tells the owner when a cloud build's PR is parked because the reviewer pass lapsed, `send-back` lists the parked PRs that can go back for their review, and `sent` records one sent.
+- Its state is `cloud-parked.json`, beside the launch ledger.
+- A parked PR goes back only after a cloud session confirms the renewed pass; the pass command alone does not count. It never goes back when it closed first or the owner already let it through.
+- The advisor records a PR sent only after the message is delivered. When delivery could not be confirmed it runs `sent --uncertain`: the PR is never resent on its own and is listed under `uncertain` until the owner decides. A send-back that was not delivered keeps being listed.
+
 ### Vet slot: builder content in the slot span refuses
 
 - `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.
