@@ -617,10 +617,11 @@ A stacked premise (see [Launcher stacked premise](#launcher-stacked-premise)) ma
 `adopts`: the pull request number of the existing member an adoption takes over at its own
 `layerPosition`. `validate_premise` copies it into the stamped premise like every other key.
 
-`launcher.py launch` narrows one refusal and adds four tokens: `layer-position-occupied` when the
+`launcher.py launch` narrows one refusal and adds five tokens: `layer-position-occupied` when the
 claimed `layerPosition` is already held by an existing member (`layerPosition >= 2` only) and the
 premise's `adopts` does not name that member on the layer below's branch; `adopts-occupant-missing`
-when `adopts` names a pull request but the claimed position is empty;
+when `adopts` names a pull request but the claimed position is empty; `adopts-branch-mismatch`
+when the premise's adoption pair differs from that member's own branch or head;
 `premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer` when
 `adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer.
 
