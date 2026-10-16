@@ -922,8 +922,8 @@ PR-body markers from the retired execution spine survive independently of it:
 
   **Lifecycle — and why nothing flags their absence.** `advisor-vet` **is** a builder obligation
   (the §11 skeleton stamps it); the other two are not, and **none of the three is a review-seat
-  check**: a build's pre-handback `review-code` runs in
-  **branch mode**, before any PR body or vet exists, so a missing vet-receipt marker at review time is
+  check**: a build's pre-handback `review-code` runs before any vet exists (in PR mode on the
+  draft PR a full-lane build opens first), so a missing vet-receipt marker at review time is
   the **normal** state and must never be emitted as a finding. (The §11 drift test enumerates this
   section's marker inventory and holds this family **out** of the copy-holders for exactly that reason —
   a docs-consistency check, not a consumer of these markers at review time.) Their absence becomes meaningful only
@@ -978,10 +978,11 @@ No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step
 existing *PR-body honesty check (PR mode only)* — already PR-gated, already reads the
 `superheroes:dod-table` marker, already emits an **Important** / `tradeoff` /
 author-resolved finding. The floor is the **same check emitting the same finding shape**.
-Step 8 catches the floor on any review of an **existing** PR; a build's pre-handback
-`review-code` run happens **before** the PR is opened, so it runs in **branch mode** and
-skips step 8 — the **advisor's vet** is the ratified independent checker for the
-principle in every case (do not re-order the build or add a new body-aware pass here).
+Step 8 catches the floor on any review of an **existing** PR, and a full-lane build's
+pre-handback `review-code` run now is one: the builder opens the PR as a draft before the
+review, so the review runs in PR mode and writes its review record against the PR (workhorse
+charter §10). Even so, the **advisor's vet** is the ratified independent checker for the
+principle in every case (do not add a new body-aware pass here).
 
 The principle-level checker is the **advisor's vet**, not step 8 — step 8 runs in the same
 session that wrote the body, so it is the author checking whether the author forgot: fine
