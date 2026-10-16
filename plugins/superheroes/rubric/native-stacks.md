@@ -175,12 +175,12 @@ caller must handle, never "probably fine."
 
 **Paginate `entries` to exhaustion** — follow `pageInfo.hasNextPage` with `after` until every page
 is collected. The collected node count **must equal `size`**; any missing page or count mismatch
-**refuses** before owner enumeration or merge. Each entry carries its position and its pull
+**refuses** before the stack's sheet is built or the stack is merged. Each entry carries its position and its pull
 request's number, state, draft status, head branch, head sha, and base branch. Together with the
 queried pull request's own `position`, `headRefOid`, and the stack's `number`, `size`, and
 `baseRefName`, these fields are the whole membership claim, read from GitHub.
 
-Verify membership with **both** reads before any click list: the GraphQL query above, and the
+Verify membership with **both** reads before any PR sheet is built: the GraphQL query above, and the
 shipped tool `lib/stack_check.py`, which runs it and applies the pagination and count rules. A lane
 working from a checkout that predates that module names the GraphQL read alone.
 
@@ -235,8 +235,8 @@ the issue's plan names, vetted. A vetted prefix is never a click. The ruling thi
 owner's standing rule, "keep stacks stacks". New scope that a tripwire or a
 vet discovers **on that feature** joins the stack as a layer rather than becoming a follow-on. A
 finding outside the feature's owner-ratified scope stays a **follow-up** under the existing scope
-rule, which this leaves alone. The click list names whole stacks with their remaining layers, and
-an incomplete stack is never listed.
+rule, which this leaves alone. A stack's sheet names the whole stack with its remaining layers, and
+an incomplete stack gets no sheet.
 
 Merging up to a middle pull request merges everything below it and leaves the pull requests above
 **open**. GitHub documents that the next unmerged pull request is then **automatically rebased to
