@@ -40,6 +40,11 @@ def _base_context(**over):
         "ratified_residuals": "- Flaky integration test in CI lane B is accepted",
         "residuals_provenance": "Residuals below are read from the review base commit (base-pinned).",
         "residuals_read_failure": None,
+        "threat_model": "Attackers can forge session cookies.",
+        "threat_model_read_failure": None,
+        "standing_rulings": [{"findingKey": "src/auth.py:Weak nonce",
+                              "reason": "owner deferred it to the hardening milestone"}],
+        "standing_rulings_read_failure": None,
         "payload": {},
         "host_seat": False,
         "placeholders": {},
@@ -677,7 +682,8 @@ def test_seat_transport_classifies_vendors_from_compose_output():
     composed = SM.build(
         roster=("code-reviewer", "security-reviewer", "architecture-reviewer"),
         live_vendors=["codex", "cursor", "claude"],
-        author_family="anthropic",
+        # transport classification, not maker exclusion: with a maker named, a pin to its family leaves the seat unfilled (test_seat_map.py)
+        author_family=None,
         narrative_family="openai",
         seed=723,
         pins={
@@ -1358,9 +1364,12 @@ def test_synthesis_transport_derives_from_synth_not_reviewer_engine(reviewer_eng
     import round_driver as RD
 
     monkeypatch.setattr(EP, "load_engine_prefs", lambda _root: {"reviewer": reviewer_engine})
+    # The synthesis seat stands on the native `claude` cell only outside the fixer's vendor and with a
+    # known, non-maker host family: a `codex` fixer and an anthropic host seat it.
+    seated = {"repoRoot": _REPO, "fixerVendor": "codex", "seatMap": {"hostFamily": "anthropic"}}
     row = RD._seat_transport_row(
-        {"config": {"repoRoot": _REPO}}, RP.P_SYNTHESIS, "synthesis", 0,
-        {"repoRoot": _REPO}, {}, _REPO,
+        {"config": dict(seated)}, RP.P_SYNTHESIS, "synthesis", 0,
+        dict(seated), {}, _REPO,
     )
     assert row["vendor"] == "claude"
     assert not RD._seat_is_engine(row)
@@ -1376,7 +1385,8 @@ def test_synthesis_order_channel_file_when_reviewer_engine_is_codex(tmp_path, mo
     session_dir = os.path.join(str(tmp_path), "session")
     os.makedirs(session_dir)
     state = {
-        "config": {"repoRoot": repo},
+        # a `codex` fixer and an anthropic host family seat the synthesis seat on the native `claude` cell
+        "config": {"repoRoot": repo, "fixerVendor": "codex", "seatMap": {"hostFamily": "anthropic"}},
         "reviewedDiff": "diff --git a/f b/f\n",
     }
     paths = {

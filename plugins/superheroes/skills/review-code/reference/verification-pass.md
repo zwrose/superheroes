@@ -43,8 +43,17 @@ glob, so it no-ops cleanly, exit 0, on an empty dir.) A stale per-cluster file f
 attempt must never be globbed and honored.
 
 2. **Dispatch one fresh verifier per cluster** — `model: $VERIFIER_MODEL` (the **verifier**
-   tier, resolved via `--role verifier`; never the session model). Dispatch on the **reviewer
-   engine** (`$REVIEWER_ENGINE`). Each verifier reads the cluster's findings (with their staged
+   tier, resolved via `--role verifier`; never the session model). Dispatch on the **vendor the
+   driver selected** — on the auto-fix loop the `vendor` of this seat in the orders manifest
+   (`seats.<skey>.vendor`), which replaces the reviewer engine (`$REVIEWER_ENGINE`) whenever that
+   engine sits in a maker family; `$REVIEWER_ENGINE` only stands when no manifest vendor is named.
+   Submit that vendor as `verifierVendor` beside `verdicts`: verdicts from any other vendor are
+   ignored by the fold. `$VERIFIER_MODEL` is a Claude tier alias and stands only for a native
+   Claude dispatch: when the vendor was switched to `codex` or `cursor` for independence, resolve
+   that vendor's own verifier model (and effort) from the registry cell
+   `model_registry.matrix_config("verifier", <vendor>)` and dispatch that pair instead — the
+   manifest carries the vendor, not its model, and `dispatch_guard check` with role `verifier`
+   validates the vendor/model pair, so a Claude alias on another vendor is refused. The driver seats a non-panel reviewer only on a vendor whose dispatched cell for the phase (the verifier cell here, the reviewer-deep cell for gap sweep and scoped) the seat map proves live, and a native host seat takes the host's family. Each verifier reads the cluster's findings (with their staged
    `id`s), the round diff, and the repo — the working tree on branch/auto-fix paths, or
    `$SESSION_DIR/repo` on `--review-only`. It must **never** read the PR's own
    description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,
@@ -127,6 +136,8 @@ After verification, dispatch **one** synthesis judge at `model: $SYNTH_MODEL` (`
 synthesis`) over the survivors only. Its job is to group findings that share the same root
 cause, not keep/drop. It emits a JSON array of `{group_id, member_ids}` echoing the staged
 ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
+
+The synthesis seat sits outside every maker family on a proven synthesis cell; when no vendor qualifies, no synthesis order is emitted and the findings are not grouped (each stays separate, nothing is dropped), which the receipt discloses.
 
 **On the auto-fix loop**, dispatch the driver-emitted order at
 `$SESSION_DIR/round-<N>/orders/dispatch-synthesis/<skey>.a<K>.md` (template body:

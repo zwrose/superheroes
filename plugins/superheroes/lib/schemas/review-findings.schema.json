@@ -26,7 +26,8 @@
           "evidence",
           "confidence",
           "tradeoff",
-          "consequence"
+          "consequence",
+          "consequenceKind"
         ],
         "properties": {
           "id": {
@@ -94,6 +95,11 @@
           "consequence": {
             "type": ["string", "null"],
             "description": "What goes wrong for the owner or the user if this finding is left unfixed, in plain words; null only where no consequence was stated."
+          },
+          "consequenceKind": {
+            "type": ["string", "null"],
+            "enum": ["code-quality", "real", null],
+            "description": "code-quality when the consequence is code quality only; real for any other consequence; null only when no consequence was stated."
           }
         }
       }

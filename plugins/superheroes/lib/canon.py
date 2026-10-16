@@ -167,10 +167,15 @@ def build_line(a, entry_id):
 
 
 def entry_fields(line):
-    """The one decoder of an entry line's positions: scope, ruling and the final provenance field,
-    or None when the line has fewer than the four fields every reader needs."""
+    """The one decoder of an entry line's positions: scope, ruling, the final provenance field and
+    the id named in the supersedes field (None when absent), or None when the line has fewer than
+    the four fields every reader needs."""
     f = line.split(SEP)
-    return {"scope": f[2], "ruling": f[3], "where": f[-1]} if len(f) >= 4 else None
+    if len(f) < 4:
+        return None
+    prefix = "supersedes: "
+    target = next((x[len(prefix):].strip() for x in f[4:-2] if x.startswith(prefix)), None)
+    return {"scope": f[2], "ruling": f[3], "where": f[-1], "supersedes": target}
 
 
 _MID_RE = re.compile(r"(?:cedes: [^\x00\s][^\x00]*)?(?:\x00?supersedes: [^\x00\s][^\x00]*)?")

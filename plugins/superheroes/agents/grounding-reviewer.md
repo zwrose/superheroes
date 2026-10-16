@@ -93,4 +93,4 @@ Emit findings per the base rubric's "Findings output format" section (schema and
   rather than dropping a possibly-real ungrounded claim.
 - Include a non-null `suggestion` for every Critical/Important finding — cite the fact, or
   reframe the mirror-claim as an owner-defined requirement.
-- Severity caps from the base rubric apply (Nits capped at 5).
+- Severity caps from the base rubric apply (the Nit cap counts code-quality-only Nits; real-consequence Nits are uncapped).
