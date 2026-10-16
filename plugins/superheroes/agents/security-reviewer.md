@@ -165,7 +165,7 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - Label every finding with its taxonomy term — the OWASP-2025 API class where one applies (**BOLA**, **BFLA**, **BOPLA**, **SSRF**) or the category name otherwise (Injection, Session/identity trust, Sharing flow, Secrets & supply chain) — per the base rubric's Chain-of-Verification taxonomy step.
 - Include a non-null `suggestion` field for every Critical or Important finding — propose the concrete fix (the dual-filter shape, the explicit field allowlist, the id-validation guard, the right error constant).
 - `suggestion` may be `null` for Minor/Nit when no clean fix is obvious.
-- Severity caps from the base rubric apply: Nits capped at 5 per review; Important/Critical uncapped (auth/IDOR findings are load-bearing).
+- Severity caps from the base rubric apply: the Nit cap counts code-quality-only Nits, 5 per review, real-consequence Nits uncapped; Important/Critical uncapped (auth/IDOR findings are load-bearing).
 - Critical/Important findings should reference the canonical pattern in an existing handler when proposing the fix — point the author at a working example, not a description.
 - **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Omit the field otherwise (treated as `false`).
 

@@ -10,6 +10,7 @@ import re
 
 import break_it
 import circuit_breaker
+import finding_outcomes
 import panel_tally
 import round_phases
 
@@ -155,6 +156,12 @@ def apply_verdicts(findings, verdicts):
         else:
             kept["verdict"] = "PLAUSIBLE"
         kept["severity"] = _kept_severity(f, v, honored)
+        if circuit_breaker.severity_rank(kept["severity"]) > circuit_breaker.severity_rank(f.get("severity")):
+            kept["severityChange"] = {
+                "from": f.get("severity"),
+                "to": kept["severity"],
+                "reason": reason.strip() if isinstance(reason, str) and reason.strip() else "no reason given",
+            }
         survivors.append(kept)
         from_severity = f.get("severity")
         if circuit_breaker.is_blocking(from_severity) and not circuit_breaker.is_blocking(kept["severity"]):
@@ -232,6 +239,7 @@ def _merge_group(members):
         return {}
     rep = max(members, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
     merged = dict(rep)
+    merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(members)
     bodies = []
     for m in members:
         body = m.get("body")
