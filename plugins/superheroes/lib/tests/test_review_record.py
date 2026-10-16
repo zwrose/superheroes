@@ -7,9 +7,12 @@ import sys
 
 import pytest
 
+import canon
+import core_md
 import model_registry
 import pr_comment
 import review_record as rr
+import seat_map as seat_map_module
 
 HEAD = "b" * 40
 EARLIER = "a" * 40
@@ -20,15 +23,20 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
 RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
-            "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
+            "observation": {"tokens": 100, "wallSeconds": 120, "read": "engaged"}, "graded": True, "runKind": "review"}
 PHRASES = ("no bugs", "bug-free", "bug free")
+CANON_ID = "2026-01-02-abcd1234-1"
+CANON_SOURCES = {"canonText": canon.entry_line(CANON_ID, "2026-01-02", "standing", "a ruling",
+                                               'owner\'s words: "go"', "issue thread")}
 
 
 class Fake:
     """Injectable readers with an in-memory comment list; records create calls."""
 
-    def __init__(self, ci=GREEN, meta=None, marker=None, runs=None, issue_bodies=None):
+    def __init__(self, ci=GREEN, meta=None, marker=None, runs=None, issue_bodies=None, sources=None):
         self.comments, self.writes = [], []
+        self.sources = sources or {}
+        self.changed = ["README.md"]
         self.ci = ci
         self.meta = {"head": HEAD, "body": "", "issues": []} if meta is None else meta
         self.marker, self.runs, self.issue_bodies = marker, runs or {}, issue_bodies or {}
@@ -43,7 +51,13 @@ class Fake:
             "repo_name": lambda root: "o/r",
             "list_comments": lambda pr, repo: list(self.comments),
             "create_comment": self._create,
+            "changed_paths": lambda pr, repo: self.changed,
+            "decision_sources": self._sources,
         }
+
+    def _sources(self, root, base_ref, sheet_answers, pr):
+        extra = {"sheetAnswers": sheet_answers, "pr": pr} if isinstance(sheet_answers, dict) else {}
+        return {**self.sources, **extra}
 
     def _create(self, pr, repo, body):
         c = {"id": len(self.comments) + 1, "author": "bot", "body": body, "url": f"http://c/{len(self.comments) + 1}"}
@@ -71,7 +85,8 @@ def finding(fid="code-001", **over):
 def account(**over):
     base = {"schema": "review-account/1", "pr": 7, "sessionId": "s1", "lane": "full", "laneReason": "big",
             "finalCommit": HEAD, "ci": "green", "reviewers": [reviewer()], "findings": [], "rawFindingsFiles": [],
-            "rounds": {"count": 1, "cap": 3, "stoppedAtCap": False}, "goAheads": [], "checked": ["read the diff"]}
+            "rounds": {"count": 1, "cap": 3, "stoppedAtCap": False}, "goAheads": [], "checked": ["read the diff"],
+            "makers": [{"family": "anthropic"}]}
     return {**base, **over}
 
 
@@ -234,11 +249,11 @@ def test_missing_security_review_parks_unless_the_owner_went_ahead():
     rec = build(base)
     assert (rec["status"], rec["parked"]) == ("not-reviewed", True)
     assert "security-reviewer did not run" in rec["whatIsMissing"]
-    ruling = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
-    rec = build(account(reviewers=[reviewer(), sec], goAheads=[ruling]))
+    ruling = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": CANON_ID}
+    rec = build(account(reviewers=[reviewer(), sec], goAheads=[ruling]), Fake(sources=CANON_SOURCES))
     assert (rec["status"], rec["parked"]) == ("not-reviewed", False)
     assert rec["missingReviews"] == [{"name": "security-reviewer", "goAhead": ruling}]
-    assert "standing ruling canon-7" in " ".join(rec["whatIsMissing"])
+    assert f"standing ruling {CANON_ID}" in " ".join(rec["whatIsMissing"])
     words = {"reviewer": "security-reviewer", "kind": "owner-words", "words": "skip it", "where": "PR comment"}
     rec = build(account(reviewers=[reviewer(), sec], goAheads=[words]))
     assert (rec["status"], rec["parked"]) == ("not-reviewed", False)
@@ -272,9 +287,9 @@ def test_malformed_go_ahead_does_not_lift_the_park():
         rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", **bad}]))
         assert rec["parked"] is True and rec["missingReviews"][0]["goAhead"] is None
         assert "the go-ahead for security-reviewer is incomplete" in rec["whatIsMissing"]
-    good = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
+    good = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": CANON_ID}
     rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", "kind": "standing-ruling",
-                                                    "canonId": True}, good]))
+                                                    "canonId": True}, good]), Fake(sources=CANON_SOURCES))
     assert rec["parked"] is False and rec["missingReviews"][0]["goAhead"] == good
 
 
@@ -341,7 +356,7 @@ def test_a_secret_named_field_is_redacted_whole_in_the_record(secret):
     f = finding("a-1", outcome="fixed", reason="r")
     f["evidence"] = {secret: "hunter2", "Nested": {"API_KEY": "abc", "note": "ok"}}
     body = rr.render(build(account(findings=[f])))
-    assert "hunter2" not in body and "abc" not in body and '"note": "ok"' in body
+    assert "hunter2" not in body and "abc" not in body and '"note":"ok"' in body
 
 
 def test_unknown_model_takes_the_one_family_of_its_vendor(monkeypatch):
@@ -415,13 +430,14 @@ def test_missing_required_key_is_refused_naming_the_key(tmp_path, key):
     assert (out["ok"], out["reason"], out["detail"]) == (False, "review-account-invalid", key)
 
 
-def test_too_large_body_is_refused(tmp_path):
-    # axis: body size; an oversized record posted or trimmed
+def test_a_large_body_posts_whole_in_parts_instead_of_being_refused(tmp_path):
+    # axis: body size; an oversized record refused, trimmed or posted over the comment limit
     fake = Fake()
     big = [finding(f"f{i}", body="x" * 5000) for i in range(20)]
     out = rr.write(put(tmp_path, account(findings=big)), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-too-large")
-    assert fake.comments == []
+    assert out["ok"] and out["parts"] >= 1
+    assert all(len(c["body"]) <= rr.MAX_BODY_CHARS for c in fake.comments)
+    assert [f["body"] for f in rr.read(7, readers=fake.readers())["findings"]] == ["x" * 5000] * 20
 
 
 def test_gh_failures_refuse(tmp_path):
@@ -524,8 +540,8 @@ def test_a_roster_with_no_planned_reviewer_that_ran_is_not_reviewed():
 def test_a_single_account_too_large_refuses_before_any_comment_is_posted(tmp_path):
     # axis: refusal ordering; a comment created before the record is known to fit
     fake = Fake()
-    huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
-    out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
+    huge = [{"family": "f" * 40000}, {"family": "g" * 40000}]  # a summary line no part can hold
+    out = rr.write(put(tmp_path, account(makers=huge)), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-too-large") and fake.comments == []
 
 
@@ -534,8 +550,8 @@ def test_a_record_too_large_to_post_leaves_the_earlier_comments_untouched(tmp_pa
     fake = Fake()
     send(tmp_path, fake)
     before, writes = [dict(c) for c in fake.comments], list(fake.writes)
-    huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
-    out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
+    huge = [{"family": "f" * 40000}, {"family": "g" * 40000}]  # a summary line no part can hold
+    out = rr.write(put(tmp_path, account(makers=huge)), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-too-large")
     assert fake.writes == writes and fake.comments == before
 
@@ -824,10 +840,18 @@ MAKERS = [{"family": "anthropic", "source": "builder"}]
 OWNER_WORD = {"words": "go ahead", "where": "http://c/9"}
 
 
-def test_x1_maker_and_independence_fields_pass_through_and_show(tmp_path):
-    # axis: pass-through fields; makers, notIndependent or ownerWord dropped, altered or left out of the summary
-    fake = Fake()
-    send(tmp_path, fake, makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)])
+CLAUDE = model_registry.claude_models()[0]
+CLAUDE_RUN = dict(GOOD_RUN, source="claude", engineModel=CLAUDE)
+
+
+def maker_family_reviewer(name="code-reviewer", **over):
+    return reviewer(name, vendor="claude", model=CLAUDE, **over)
+
+
+def test_x1_makers_and_owner_word_pass_through_and_independence_shows(tmp_path):
+    # axis: makers and ownerWord dropped or altered; notIndependent shown only for a computed same-family row
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    send(tmp_path, fake, makers=MAKERS, reviewers=[maker_family_reviewer(ownerWord=OWNER_WORD)])
     rec = rr.read(7, readers=fake.readers())
     assert rec["makers"] == MAKERS
     assert rec["reviewers"][0]["notIndependent"] is True and rec["reviewers"][0]["ownerWord"] == OWNER_WORD
@@ -836,13 +860,16 @@ def test_x1_maker_and_independence_fields_pass_through_and_show(tmp_path):
     assert "owner's word: http://c/9" in body
 
 
-def test_x2_the_pass_through_fields_change_no_status():
-    # axis: no logic on the pass-through fields; status, parked or whatIsMissing depending on them
-    with_fields = build(account(makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)]))
+def test_x2_the_account_cannot_claim_independence_or_its_absence():
+    # axis: notIndependent taken from the account; an independent reviewer shown as not independent, or the reverse
+    claimed = build(account(makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)]))
     without = build(account())
-    assert [with_fields[k] for k in ("status", "parked", "whatIsMissing")] == \
+    assert [claimed[k] for k in ("status", "parked", "whatIsMissing")] == \
         [without[k] for k in ("status", "parked", "whatIsMissing")]
-    assert without["makers"] == [] and not {"notIndependent", "ownerWord"} & set(without["reviewers"][0])
+    assert "notIndependent" not in claimed["reviewers"][0] and claimed["reviewers"][0]["ownerWord"] == OWNER_WORD
+    denied = build(account(reviewers=[maker_family_reviewer(notIndependent=False, ownerWord=OWNER_WORD)]),
+                   Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)}))
+    assert denied["reviewers"][0]["notIndependent"] is True
 
 
 @pytest.mark.parametrize("over, key", [
@@ -861,10 +888,10 @@ def test_x3_malformed_pass_through_fields_refuse(tmp_path, over, key):
     assert fake.writes == []
 
 
-def test_x3_none_and_false_are_accepted_as_given():
+def test_x3_none_and_false_are_accepted_and_ignored():
     # axis: optional fields; None refused, or False dropped instead of carried as given
     rec = build(account(makers=None, reviewers=[reviewer(notIndependent=False, ownerWord=None)]))
-    assert rec["makers"] == [] and rec["reviewers"][0]["notIndependent"] is False
+    assert rec["makers"] == [] and "notIndependent" not in rec["reviewers"][0]
     assert "ownerWord" not in rec["reviewers"][0]
 
 
@@ -1487,3 +1514,1015 @@ def test_the_marker_decided_lane_keeps_its_reason():
     rec = build(account(laneReason=None), fake)
     assert rec["lane"]["reason"] is None and rec["lane"]["reasonSource"] is None
     assert "Lane: full (build lane marker)." in rr.render(rec)
+
+
+# --- the risk floor: the record's laneBasis and its below-floor line ---
+
+PAYMENTS = {"name": "Payments", "covers": ["src/payments/*"], "why": "Charges customers.",
+            "undo": "Hard: a charge needs a refund."}
+LIGHT_PR = {"head": HEAD, "body": "**Lane call:** light. small and safe\n", "issues": []}
+BASIS_KEYS = {"floor", "lane", "why", "riskAreas", "touched", "unmatchable", "proposed", "proposalTaken", "source"}
+FILES_SOURCE = "lane rule over the PR's changed files"
+UNREAD = rr.lane_call.WHY_NO_PATHS + " the PR's changed files could not be read"
+PAY_FLOOR = rr.lane_call.WHY_TOUCHES + " Payments (src/payments/charge.py)"
+
+
+def risk_repo(tmp_path, areas=(PAYMENTS,)):
+    """A repo whose core.md holds the given risk areas, in the test's isolated store."""
+    repo = str(tmp_path)
+    core_md.write(repo, {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+                         "patterns": "- x: a.ts:1"}, "confirmed", now="2026-06-26")
+    assert core_md.write_project_config_item(repo, core_md.RISK_AREAS_KEY, list(areas))["action"] == "written"
+    return repo
+
+
+def gh_files(*entries):
+    """What gh api --paginate prints for the PR files endpoint: one JSON array per page."""
+    return "".join(json.dumps(list(entries[i:i + 100])) for i in range(0, len(entries), 100))
+
+
+def canned_gh(monkeypatch, out):
+    calls = []
+    monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or out)
+    return calls
+
+
+def real_reader_record(repo, monkeypatch, out):
+    """A light-lane record built with the real changed_paths reader over canned gh output."""
+    canned_gh(monkeypatch, out)
+    readers = {**Fake(meta=LIGHT_PR).readers(), "changed_paths": rr.changed_paths}
+    return rr.build_record(account(repoRoot=repo), readers)
+
+
+def test_the_record_carries_the_lane_basis_with_one_shape(tmp_path):
+    # axis: the record's laneBasis key; a record without it, or with a basis not carrying every lane_call key
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    assert set(rec["laneBasis"]) == BASIS_KEYS and rec["laneBasis"]["source"] == FILES_SOURCE
+    assert rec["laneBasis"]["floor"] == "full" and rec["laneBasis"]["why"][0] == PAY_FLOOR
+    assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
+    fake.changed = None
+    assert set(build(account(repoRoot=repo), fake)["laneBasis"]) == BASIS_KEYS
+    out = rr.write(put(tmp_path, account()), repo, fake.readers())
+    assert out["ok"]
+    stored = rr.read(7, readers=fake.readers())
+    assert set(stored["laneBasis"]) == BASIS_KEYS and stored["laneBasis"]["source"] == "unavailable"
+
+
+def test_render_shows_the_risk_floor_after_the_lane_line(tmp_path):
+    # axis: the Risk floor line; a floor, or its absence, missing from the posted summary
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    lines = rr.render(build(account(repoRoot=repo), fake)).split("\n")
+    at = next(i for i, line in enumerate(lines) if line.startswith("Lane: "))
+    assert lines[at + 1].startswith(f"Risk floor: full — {PAY_FLOOR}; ") and lines[at + 1].endswith(".")
+    fake.changed = ["README.md"]
+    assert "Risk floor: none — " + rr.lane_call.WHY_NO_FLOOR + " " in rr.render(build(account(repoRoot=repo), fake))
+    fake.changed = None
+    assert f"Risk floor: full — {UNREAD}" in rr.render(build(account(repoRoot=repo), fake))
+
+
+def test_e9_a_lane_below_the_floor_is_not_reviewed_with_that_line(tmp_path):
+    # axis: the below-floor line; a light lane over a risk-area change leaving the record reviewed
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    assert rec["lane"]["value"] == "light" and rec["laneBasis"]["floor"] == "full"
+    line = f"the lane (light) is below the risk floor (full); the Risk floor line gives why"
+    assert rec["status"] == "not-reviewed" and line in rec["whatIsMissing"]
+    assert line in rr.render(rec)
+
+
+def test_a_full_lane_over_a_risk_area_change_is_unaffected(tmp_path):
+    # axis: the below-floor line; a lane at the floor refused as below it
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    assert rec["lane"]["value"] == "full" and rec["laneBasis"]["floor"] == "full"
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
+
+
+def test_a_light_lane_over_a_change_outside_every_area_stays_reviewed(tmp_path):
+    # axis: the no-floor path; a change with no floor refused for its lane
+    repo = risk_repo(tmp_path)
+    rec = build(account(repoRoot=repo), Fake(meta=LIGHT_PR))
+    assert rec["laneBasis"]["floor"] is None and rec["lane"]["value"] == "light"
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
+
+
+@pytest.mark.parametrize("value", ["medium", None])
+def test_a_lane_value_the_rule_does_not_know_counts_as_below_a_full_floor(tmp_path, value):
+    # axis: the unknown-lane rank; a lane the rule does not know passing a full floor
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(lane=value, repoRoot=repo), fake)
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane ({value}) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+
+
+def test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavailable(tmp_path):
+    # axis: the unavailable basis; unreadable changed files leaving no floor for a light lane
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = None
+    rec = build(account(repoRoot=repo), fake)
+    basis = rec["laneBasis"]
+    assert set(basis) == BASIS_KEYS and basis["source"] == "unavailable"
+    assert basis["floor"] == "full" and basis["why"][0] == UNREAD
+    assert [w.split(": ")[0] for w in basis["why"]].count(rr.lane_call.WHY_NO_PATHS.rstrip(":")) == 1
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+
+
+def _refuse_any_read(monkeypatch):
+    """Make the store reader and the changed-files reader raise, and return readers wired to the latter."""
+    def boom(*args, **kwargs):
+        raise AssertionError("the basis read a store or the PR's changed files")
+    monkeypatch.setattr(rr.lane_call.risk_areas, "touched", boom)
+    return {**Fake().readers(), "changed_paths": boom}
+
+
+@pytest.mark.parametrize("over", [{}, {"repoRoot": None}, {"repoRoot": ""}])
+def test_f1_f2_an_account_naming_no_repository_reads_no_store_and_no_changed_files(monkeypatch, over):
+    # axis: the no-repoRoot leg of the basis; an account naming no repository falling back to the ambient project
+    readers = _refuse_any_read(monkeypatch)
+    rec = rr.build_record(account(**over), readers)
+    basis = rec["laneBasis"]
+    assert set(basis) == BASIS_KEYS and basis["source"] == "unavailable"
+    assert basis["floor"] == "full" and basis["lane"] == "full"
+    assert basis["why"][0].startswith(rr.lane_call.WHY_NOT_SET + " the account names no repository")
+    assert basis["riskAreas"]["state"] == "not-set" and basis["touched"] == [] and basis["unmatchable"] == []
+    assert basis["proposed"] == "full" and basis["proposalTaken"] is True
+    assert rec["lane"]["value"] == "full" and rec["status"] == "reviewed"
+
+
+def test_f4_an_unknown_lane_value_is_invalid_and_leaves_the_record_not_reviewed(monkeypatch):
+    # axis: the invalid proposal; an unknown lane value read as a proposal that lowers the lane
+    rec = rr.build_record(account(lane="medium"), _refuse_any_read(monkeypatch))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and basis["floor"] == "full" and basis["lane"] == "full"
+    assert basis["proposed"] == "medium" and basis["proposalTaken"] is False
+    assert [w.split(": ")[0] for w in basis["why"]] == [rr.lane_call.WHY_NOT_SET.rstrip(":"), rr.lane_call.WHY_PROPOSAL_INVALID.rstrip(":")]
+    why0 = basis["why"][0]
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (medium) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+
+
+def test_f4_an_unknown_lane_value_over_a_read_basis_is_invalid_and_not_reviewed(tmp_path):
+    # axis: the invalid proposal on the read path; an unknown lane value read as a proposal that lowers the lane
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(lane="medium", repoRoot=repo), fake)
+    assert rec["laneBasis"]["floor"] == "full" and rec["laneBasis"]["source"] == FILES_SOURCE
+    assert rr.lane_call.WHY_PROPOSAL_INVALID.rstrip(":") in [w.split(": ")[0] for w in rec["laneBasis"]["why"]]
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (medium) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+
+
+def test_the_basis_says_how_the_records_own_lane_compares_with_the_floor(tmp_path):
+    # axis: the lane threaded in as the proposal; the basis reading no proposal whatever lane the record holds
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["src/payments/charge.py"]
+    below = build(account(repoRoot=repo), fake)["laneBasis"]
+    assert below["proposed"] == "light" and below["proposalTaken"] is False and below["lane"] == "full"
+    assert rr.lane_call.WHY_PROPOSAL_BELOW.rstrip(":") in [w.split(": ")[0] for w in below["why"]]
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    taken = build(account(repoRoot=repo), fake)["laneBasis"]
+    assert taken["proposed"] == "full" and taken["proposalTaken"] is True
+    assert rr.lane_call.WHY_PROPOSAL_TAKEN.rstrip(":") in [w.split(": ")[0] for w in taken["why"]]
+    assert rr.lane_call.WHY_NO_PROPOSAL.rstrip(":") not in [w.split(": ")[0] for w in taken["why"]]
+    fake.changed = None
+    gone = build(account(repoRoot=repo), fake)["laneBasis"]
+    assert gone["source"] == "unavailable" and gone["proposed"] == "full" and gone["proposalTaken"] is True
+
+
+def test_e10_an_entry_with_no_string_filename_makes_the_files_unavailable(monkeypatch):
+    # axis: the complete-or-absent list; a file entry with no filename read as a complete list
+    for bad in ({"status": "added"}, {"filename": 7}, {"filename": None}, "src/a.py", 5):
+        canned_gh(monkeypatch, gh_files({"filename": "src/payments/a.py"}, bad))
+        assert rr.changed_paths(7, "o/r") is None
+    canned_gh(monkeypatch, gh_files({"filename": "a.py", "previous_filename": 7}))
+    assert rr.changed_paths(7, "o/r") is None
+    for out in (None, "not json", "[{"):
+        canned_gh(monkeypatch, out)
+        assert rr.changed_paths(7, "o/r") is None
+    calls = canned_gh(monkeypatch, gh_files({"filename": "a.py"}))
+    assert rr.changed_paths(7, "o/r") == ["a.py"]
+    assert calls == [["gh", "api", "repos/o/r/pulls/7/files", "--paginate"]]
+
+
+def test_e10_3000_entries_is_the_ceiling_and_makes_the_files_unavailable(tmp_path, monkeypatch):
+    # axis: the 3000-file ceiling; a list GitHub may have cut short read as the whole change
+    repo = risk_repo(tmp_path)
+
+    def entry(i):
+        return {"filename": f"docs/f{i}.md", "status": "added"}
+    canned_gh(monkeypatch, gh_files(*[entry(i) for i in range(2999)]))
+    assert len(rr.changed_paths(7, "o/r")) == 2999
+    out = gh_files(*[entry(i) for i in range(3000)])
+    canned_gh(monkeypatch, out)
+    assert rr.changed_paths(7, "o/r") is None
+    rec = real_reader_record(repo, monkeypatch, out)
+    assert rec["laneBasis"]["source"] == "unavailable" and rec["laneBasis"]["floor"] == "full"
+    assert rec["status"] == "not-reviewed"
+
+
+def test_e11_a_removed_file_inside_a_risk_area_touches_it(tmp_path, monkeypatch):
+    # axis: removed files kept in the list; a deletion inside a risk area dropped so the area looks untouched
+    repo = risk_repo(tmp_path)
+    out = gh_files({"filename": "docs/readme.md", "status": "modified"},
+                   {"filename": "src/payments/old.py", "status": "removed"})
+    canned_gh(monkeypatch, out)
+    assert rr.changed_paths(7, "o/r") == ["docs/readme.md", "src/payments/old.py"]
+    rec = real_reader_record(repo, monkeypatch, out)
+    assert rec["laneBasis"]["source"] == FILES_SOURCE and rec["laneBasis"]["floor"] == "full"
+    assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/old.py"]}]
+    assert rec["status"] == "not-reviewed"
+
+
+def test_e11_a_rename_out_of_a_risk_area_touches_it_through_the_previous_name(tmp_path, monkeypatch):
+    # axis: previous_filename kept in the list; a rename out of a risk area looking like a change outside it
+    repo = risk_repo(tmp_path)
+    out = gh_files({"filename": "docs/moved.py", "previous_filename": "src/payments/charge.py", "status": "renamed"})
+    canned_gh(monkeypatch, out)
+    assert rr.changed_paths(7, "o/r") == ["docs/moved.py", "src/payments/charge.py"]
+    rec = real_reader_record(repo, monkeypatch, out)
+    assert rec["laneBasis"]["floor"] == "full"
+    assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+
+
+def test_a_broad_change_renders_under_the_cap_with_the_floor_full(tmp_path):
+    # axis: the record's laneBasis evidence is bounded; a change touching thousands of paths still publishes
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    matched = ["src/payments/%s%04d.py" % ("x" * 50, i) for i in range(3100)]
+    unmatched = ["/abs/%s%04d.py" % ("y" * 55, i) for i in range(3100)]
+    fake.changed = matched + unmatched
+    rec = build(account(repoRoot=repo), fake)
+    basis = rec["laneBasis"]
+    assert basis["floor"] == "full" and basis["source"] == FILES_SOURCE
+    assert basis["touched"] == [{"name": "Payments", "matched": matched[:10], "matchedCount": 3100}]
+    assert basis["unmatchable"] == unmatched[:10] and basis["unmatchableCount"] == 3100
+    assert len(rr.render(rec)) < rr.MAX_BODY_CHARS
+
+
+def test_many_risk_areas_with_long_paths_render_under_the_cap_with_the_floor_full(tmp_path):
+    # axis: the total lane-basis evidence (kept paths and reason lines across all areas) is bounded; many areas still publish
+    areas = [dict(PAYMENTS, name="Area%02d%s" % (n, "n" * 60), covers=["src/area%02d/*" % n]) for n in range(60)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake()
+    fake.changed = ["src/area%02d/%s%02d.py" % (n, "z" * 200, i) for n in range(60) for i in range(10)]
+    rec = build(account(repoRoot=repo), fake)
+    basis = rec["laneBasis"]
+    assert basis["floor"] == "full" and basis["source"] == FILES_SOURCE
+    assert len(basis["touched"]) == rr.BASIS_AREAS_MAX and basis["touchedCount"] == 60
+    assert sum(len(t["matched"]) for t in basis["touched"]) == rr.BASIS_PATHS_MAX
+    assert all(t["matchedCount"] == 10 for t in basis["touched"] if len(t["matched"]) < 10)
+    assert len(basis["why"]) <= rr.BASIS_WHY_MAX and basis["whyCount"] > rr.BASIS_WHY_MAX
+    assert any("more %s lines omitted" % rr.lane_call.WHY_TOUCHES.rstrip(":") in w for w in basis["why"])
+    assert basis["why"][0].startswith(rr.lane_call.WHY_TOUCHES)
+    assert len(rr.render(rec)) < rr.MAX_BODY_CHARS
+
+
+def _astral_record(tmp_path, per_area, area_chars=60, path_chars=290):
+    glyph = "\U0001F600"
+    areas = [dict(PAYMENTS, name="Area%02d%s" % (n, glyph * area_chars), covers=["src/area%02d/*" % n])
+             for n in range(20)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake()
+    fake.changed = ["src/area%02d/%s%04d.py" % (n, glyph * path_chars, i) for n in range(20) for i in range(per_area)]
+    return build(account(repoRoot=repo), fake)
+
+
+def test_four_byte_paths_across_many_areas_render_under_the_cap_with_the_floor_full(tmp_path):
+    # axis: the size bound is on the posted (JSON-escaped) body, so non-ASCII paths shed evidence rather than refuse
+    rec = _astral_record(tmp_path, per_area=150)
+    assert sum(t.get("matchedCount", len(t["matched"])) for t in rec["laneBasis"]["touched"]) == 3000
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+    shed = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["laneBasis"]
+    assert shed["basisShed"] in ("why-paths", "matched", "unmatchable")
+    assert shed["floor"] == "full" and shed["lane"] == rec["laneBasis"]["lane"]
+    assert shed["proposalTaken"] == rec["laneBasis"]["proposalTaken"]
+    assert [t["name"] for t in shed["touched"]] == [t["name"] for t in rec["laneBasis"]["touched"]]
+    assert "basisShed" not in rec["laneBasis"]
+
+
+def test_a_shed_that_reaches_the_last_resort_still_fits(tmp_path, monkeypatch):
+    # axis: the shed terminates by construction: the last resort holds the floor, lane, first reason and counts
+    rec = _astral_record(tmp_path, per_area=2, area_chars=290)
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+    shed = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["laneBasis"]
+    assert shed["basisShed"] == "floor-only" and shed["floor"] == "full"
+    assert set(shed) == {"floor", "lane", "proposalTaken", "source", "why", "whyCount", "touchedCount",
+                         "matchedCount", "unmatchableCount", "basisShed"}
+    assert shed["touchedCount"] == 20 and shed["matchedCount"] == 40 and len(shed["why"]) == 1
+
+
+def test_a_floor_only_basis_counts_the_matched_paths_of_the_areas_the_area_cap_cut(tmp_path):
+    # axis: the floor-only basis's matchedCount counts every matched path in every touched area, cut areas included
+    glyph = "\U0001F600"
+    areas = [dict(PAYMENTS, name="Area%02d%s" % (n, glyph * 290), covers=["src/area%02d/*" % n])
+             for n in range(60)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake()
+    fake.changed = ["src/area%02d/f%d.py" % (n, i) for n in range(60) for i in range(2)]
+    body = rr.render(build(account(repoRoot=repo), fake))
+    assert len(body) <= rr.MAX_BODY_CHARS
+    shed = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["laneBasis"]
+    assert shed["basisShed"] == "floor-only" and shed["touchedCount"] == 60 and shed["matchedCount"] == 120
+
+
+def _head_moving_readers(heads):
+    """Readers whose pr_meta returns the given heads in turn (the last one repeats)."""
+    fake, seen = Fake(), []
+
+    def meta(pr, repo):
+        seen.append(1)
+        return {"head": heads[min(len(seen), len(heads)) - 1], "body": "", "issues": []}
+    return {**fake.readers(), "pr_meta": meta}
+
+
+def test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_unavailable_basis(tmp_path):
+    # axis: the changed-file evidence bound to the recorded commit; files of a newer head judged against the earlier one
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD, "f" * 40]))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and basis["floor"] == "full"
+    assert basis["why"][0] == rr.lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read"
+    assert rec["finalCommit"]["sha"] == HEAD
+    assert basis["headMoved"] is True
+    assert rec["status"] == "not-reviewed"
+    assert "the PR head moved while the record was written; this record does not cover the new head" in rec["whatIsMissing"]
+
+
+def test_a_head_that_cannot_be_re_read_gives_the_could_not_be_re_read_reason_and_no_moved_head(tmp_path):
+    # axis: the unreadable-head reason kept apart from the moved-head one; a head never read called a moved head
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    count = []
+
+    def meta(pr, repo_name):
+        count.append(1)
+        return fake.readers()["pr_meta"](pr, repo_name) if len(count) == 1 else None
+    rec = rr.build_record(account(repoRoot=repo), {**fake.readers(), "pr_meta": meta})
+    basis = rec["laneBasis"]
+    assert len(count) >= 2
+    assert basis["source"] == "unavailable" and basis["floor"] == "full"
+    assert basis["why"][0] == rr.lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read"
+    assert "headMoved" not in basis
+    assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
+
+
+def _unavailable_files_readers(heads):
+    readers = _head_moving_readers(heads)
+    return {**readers, "changed_paths": lambda pr, repo: None}
+
+
+def test_files_unavailable_and_head_moved_reads_not_reviewed_with_the_moved_head_line(tmp_path):
+    # axis: the head re-read on the unavailable-files path; a head that moved during a failed file read left unflagged
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _unavailable_files_readers([HEAD, "f" * 40]))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and basis["headMoved"] is True
+    assert rec["status"] == "not-reviewed"
+    assert "the PR head moved while the record was written; this record does not cover the new head" in rec["whatIsMissing"]
+
+
+def test_files_unavailable_and_head_stable_has_no_moved_head_line(tmp_path):
+    # axis: the moved-head line absent when the head is stable on the unavailable-files path
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _unavailable_files_readers([HEAD]))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and "headMoved" not in basis
+    assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
+
+
+def test_a_stable_head_gives_the_normal_basis(tmp_path):
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD]))
+    assert rec["laneBasis"]["source"] == FILES_SOURCE
+
+
+DOCS_AREA = {"name": "Docs", "covers": ["docs/*"], "why": "Owner-facing docs.", "undo": "Easy: revert the page."}
+
+
+def test_a_changed_file_named_bug_free_still_publishes(tmp_path, monkeypatch):
+    # axis: the claim guard at the render boundary; a path in the lane basis's reason lines blocking the record
+    repo = risk_repo(tmp_path, areas=(DOCS_AREA,))
+    rec = real_reader_record(repo, monkeypatch, gh_files({"filename": "docs/bug-free.md"}))
+    assert "docs/bug-free.md" in "; ".join(rec["laneBasis"]["why"])
+    body = rr.render(rec)
+    assert "docs/bug-free.md" in body
+
+
+def test_composed_prose_claiming_no_bugs_is_still_refused_with_a_path_in_the_basis(tmp_path, monkeypatch):
+    # axis: the claim guard still reading writer-composed summary text; the path exemption widening to prose
+    repo = risk_repo(tmp_path, areas=(DOCS_AREA,))
+    rec = real_reader_record(repo, monkeypatch, gh_files({"filename": "docs/bug-free.md"}))
+    rec["whatIsMissing"] = ["the change has no bugs"]
+    with pytest.raises(rr.Refusal) as e:
+        rr.render(rec)
+    assert e.value.reason == "review-record-forbidden-claim"
+
+
+def test_a_below_floor_oversized_record_with_a_bug_free_path_publishes_not_reviewed(tmp_path):
+    # axis: the below-floor warning carrying no basis free text; an oversized record's shed leaving a path in a claim-checked line
+    glyph = "\U0001F600"
+    areas = [dict(PAYMENTS, name="Area%d%s" % (n, glyph * 60), covers=["docs/area%d/*" % n]) for n in range(20)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["docs/area0/bug-free.md"] + [
+        "docs/area%d/%s%04d.md" % (n, glyph * 290, i) for n in range(20) for i in range(150)]
+    rec = build(account(repoRoot=repo), fake)
+    assert rec["lane"]["value"] == "light" and rec["laneBasis"]["floor"] == "full"
+    assert rec["status"] == "not-reviewed"
+    assert "docs/area0/bug-free.md" in "; ".join(rec["laneBasis"]["why"])
+    assert "the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+    assert not any("bug-free" in line for line in rec["whatIsMissing"])
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+
+
+def test_composed_prose_claiming_no_bugs_is_refused_on_a_below_floor_record(tmp_path):
+    # axis: the claim guard excluding only the Risk floor line; every other summary line still checked
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    rec["whatIsMissing"] = rec["whatIsMissing"] + ["the change is bug-free"]
+    with pytest.raises(rr.Refusal) as e:
+        rr.render(rec)
+    assert e.value.reason == "review-record-forbidden-claim"
+
+
+SHED_LINE = ("Reviewer detail trimmed to fit this comment (%s); the reviewers' findings are in the raw-output "
+             "comments linked under rawOutputs, and the trimmed engine detail is in the engines' own run records.")
+SHED_LINE_RUN_RECORDS = ("Reviewer detail trimmed to fit this comment (%s); the engines' own run records hold the "
+                         "full output.")
+PROTECTED_ROW_KEYS = ("name", "ran", "planned", "vendor", "model", "family", "commit", "coversFinalCommit")
+RULING = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": CANON_ID}
+
+
+def _long_session(reviewers=45, body_chars=1400):
+    """A long session's record: many engine-run reviewer rows, each with a long runDir and a full observation, a
+    planned reviewer that did not run but has a go-ahead, and findings with long bodies."""
+    runs, rows = {}, []
+    for i in range(reviewers):
+        run_dir = f"/run/r{i:02d}/".ljust(140, "d")
+        observation = {"tokens": 1000 + i, "toolCalls": 40 + i, "stdoutBytes": 90000 + i, "wallSeconds": 120 + i,
+                       "source": "codex", "read": f"read the diff and {'the files it touches, ' * 8}round {i}",
+                       "telemetry": {"model": CODEX, "turns": i, "cached": 3 * i, "notes": "n" * 120, "tail": "t" * 60}}
+        runs[run_dir] = (dict(GOOD_RUN, observation=observation), None)
+        rows.append(reviewer(f"reviewer-{i:02d}", runDir=run_dir))
+    rows.append(reviewer("security-reviewer", ran=False, runDir=None))
+    found = [finding(f"code-{i:03d}", title=f"title {i}", body="b" * body_chars, reason=f"fixed in 1a2b3c{i:x}",
+                     reviewer="reviewer-00") for i in range(15)]
+    return build(account(reviewers=rows, findings=found, goAheads=[RULING]), Fake(runs=runs, sources=CANON_SOURCES))
+
+
+def _protected(rec):
+    return {"status": rec["status"], "whatIsMissing": rec["whatIsMissing"],
+            "findings": [{k: f[k] for k in ("outcome", "reason")} for f in rec["findings"]],
+            "missingReviews": rec["missingReviews"],
+            "reviewers": [{k: v[k] for k in PROTECTED_ROW_KEYS} for v in rec["reviewers"]]}
+
+
+def _unshed_size(rec, monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(rr, "MAX_BODY_CHARS", 10 ** 9)
+        return len(rr.render(rec))
+
+
+def test_a_long_session_sheds_reviewer_detail_to_fit_and_says_so(monkeypatch):
+    # axis: the reviewer shed steps and the shed line; a long session refused for size, or trimmed without saying so
+    rec = _long_session()
+    assert _unshed_size(rec, monkeypatch) > rr.MAX_BODY_CHARS
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+    lines = body.split("\n")
+    shed = SHED_LINE_RUN_RECORDS % "engine telemetry"
+    assert lines.count(shed) == 1 and sum(l.startswith("Reviewer detail trimmed") for l in lines) == 1
+    assert lines[lines.index(shed) - 1].startswith("- security-reviewer: did not run")
+    posted = rr._parse_body(body)
+    assert posted["reviewerShed"] == ["observation"]
+    assert _protected(posted) == _protected(rec)
+    assert all(set(v["observation"]) == {"read", "toolCalls"} for v in posted["reviewers"][:-1])
+    assert "reviewerShed" not in rec and all(v["runDir"] for v in rec["reviewers"][:-1])
+
+
+def test_a_never_shed_census_of_the_decision_content_over_a_shed_record():
+    # axis: the never-shed set; a shed step emptying the status, a missing line, an outcome or reason, a go-ahead or a row's identity
+    rec = _long_session()
+    posted = rr._parse_body(rr.render(rec))
+    assert "reviewerShed" in posted
+    assert rec["whatIsMissing"] and rec["missingReviews"] == [{"name": "security-reviewer", "goAhead": RULING}]
+    assert posted["status"] == rec["status"] == "not-reviewed"
+    assert posted["whatIsMissing"] == rec["whatIsMissing"]
+    assert [(f["outcome"], f["reason"]) for f in posted["findings"]] == [
+        ("fixed", f"fixed in 1a2b3c{i:x}") for i in range(15)]
+    assert posted["missingReviews"] == rec["missingReviews"]
+    assert [{k: v[k] for k in PROTECTED_ROW_KEYS} for v in posted["reviewers"]] == [
+        {k: v[k] for k in PROTECTED_ROW_KEYS} for v in rec["reviewers"]]
+    assert len(posted["reviewers"]) == 46 and posted["reviewers"][0]["ran"] == "engine-record"
+
+
+def test_the_shed_line_names_exactly_what_was_shed(monkeypatch):
+    # axis: the shed line's wording; the line naming run directories when only telemetry went, or the reverse
+    rec = _long_session()
+    # pinned: the lane-basis steps are off so the caps below are exact; in production they shave a few characters
+    # first, so the reviewer steps start a little later than this test shows
+    with monkeypatch.context() as m:
+        m.setattr(rr, "_SHED_STEPS", ())
+        after_observation = _unshed_size(dict(rr._shed_observation(rec), reviewerShed=["observation"]), m)
+    with monkeypatch.context() as m:
+        m.setattr(rr, "_SHED_STEPS", ())
+        m.setattr(rr, "MAX_BODY_CHARS", after_observation)
+        only = rr.render(rec)
+        m.setattr(rr, "MAX_BODY_CHARS", after_observation - 1)
+        both = rr.render(rec)
+    assert rr._parse_body(only)["reviewerShed"] == ["observation"]
+    assert SHED_LINE_RUN_RECORDS % "engine telemetry" in only.split("\n")
+    assert rr._parse_body(both)["reviewerShed"] == ["observation", "runDir"]
+    assert SHED_LINE_RUN_RECORDS % "engine telemetry and run directories" in both.split("\n")
+    assert SHED_LINE_RUN_RECORDS % "engine telemetry" not in both.split("\n")
+    kept = rr._parse_body(only)["reviewers"][0]
+    assert set(kept["observation"]) == {"read", "toolCalls"} and kept["runDir"] == rec["reviewers"][0]["runDir"]
+
+
+def test_rows_with_no_observation_that_fit_after_run_dirs_say_run_directories_only(monkeypatch):
+    # axis: a step that changed nothing being named; the line claiming engine telemetry went when no row had any
+    rec = _long_session()
+    for v in rec["reviewers"]:
+        v.pop("observation", None)
+    with monkeypatch.context() as m:
+        m.setattr(rr, "_SHED_STEPS", ())
+        after_run_dir = _unshed_size(dict(rr._shed_run_dir(rec), reviewerShed=["runDir"]), m)
+        assert _unshed_size(rec, m) > after_run_dir
+        m.setattr(rr, "MAX_BODY_CHARS", after_run_dir)
+        body = rr.render(rec)
+    lines = body.split("\n")
+    posted = rr._parse_body(body)
+    assert posted["reviewerShed"] == ["runDir"]
+    assert SHED_LINE_RUN_RECORDS % "run directories" in lines
+    assert sum(l.startswith("Reviewer detail trimmed") for l in lines) == 1
+    assert "engine telemetry" not in "\n".join(lines)
+    assert all(v["runDir"] is None for v in posted["reviewers"])
+
+
+def _shed_line_of(rec):
+    body = rr.render(rec)
+    assert "reviewerShed" in rr._parse_body(body)
+    (line,) = [l for l in body.split("\n") if l.startswith("Reviewer detail trimmed")]
+    return line
+
+
+def test_a_record_with_empty_raw_outputs_points_at_the_engines_run_records():
+    # axis: the shed line's pointer; naming a raw-output comment the record does not link
+    rec = _long_session()
+    assert rec["rawOutputs"] == []
+    assert _shed_line_of(rec) == SHED_LINE_RUN_RECORDS % "engine telemetry"
+
+
+def test_a_record_with_only_withheld_raw_outputs_points_at_the_engines_run_records():
+    # axis: the shed line's pointer; a withheld raw output counted as a linked one
+    rec = _long_session()
+    rec["rawOutputs"] = [{"file": "a.txt", "id": 1, "url": "u", "withheld": True},
+                         {"file": "b.txt", "id": 2, "url": "u", "withheld": True}]
+    assert _shed_line_of(rec) == SHED_LINE_RUN_RECORDS % "engine telemetry"
+
+
+def test_a_record_with_one_linked_raw_output_points_at_the_raw_output_comment():
+    # axis: the shed line's pointer; a linked raw output not pointed at
+    rec = _long_session()
+    rec["rawOutputs"] = [{"file": "a.txt", "id": 1, "url": "u", "withheld": True},
+                         {"file": "b.txt", "id": 2, "url": "u", "withheld": False}]
+    assert _shed_line_of(rec) == SHED_LINE % "engine telemetry"
+
+
+def test_a_raw_outputs_value_that_is_not_a_list_of_dicts_counts_as_no_linked_output():
+    # axis: the pointer on malformed rawOutputs; a crash, or a pointer at output that is not linked
+    for bad in ("linked", None, {"file": "a.txt", "withheld": False}, ["a.txt", 3]):
+        rec = _long_session()
+        rec["rawOutputs"] = bad
+        assert _shed_line_of(rec) == SHED_LINE_RUN_RECORDS % "engine telemetry", bad
+
+
+def test_a_reviewer_row_without_a_dict_observation_is_left_as_it_is():
+    # axis: the observation step on a row with no dict observation; a crash, or an observation made up for the row
+    rec = _long_session()
+    rec["reviewers"][1].pop("observation")
+    rec["reviewers"][2]["observation"] = None
+    rec["reviewers"][3]["observation"] = "read it all"
+    rec["reviewers"][4]["observation"] = ["tokens", 5]
+    posted = rr._parse_body(rr.render(rec))
+    assert "reviewerShed" in posted
+    assert "observation" not in posted["reviewers"][1]
+    assert [posted["reviewers"][i]["observation"] for i in (2, 3, 4)] == [None, "read it all", ["tokens", 5]]
+    assert set(posted["reviewers"][0]["observation"]) == {"read", "toolCalls"}
+
+
+def test_a_record_that_cannot_fit_after_every_step_goes_to_parts_not_cut():
+    # axis: the spill after the last shed step; a body still over the cap posted, cut to fit, or refused
+    for field in ("whatIsMissing", "reason"):
+        rec = _long_session()
+        if field == "whatIsMissing":
+            rec["whatIsMissing"] = rec["whatIsMissing"] + ["w" * rr.MAX_BODY_CHARS]
+        else:
+            rec["findings"][0]["reason"] = "r" * rr.MAX_BODY_CHARS
+        plan = rr.render_plan(rec)
+        assert plan.parts
+        assert all(len(b) <= rr.MAX_BODY_CHARS for b in [*plan.parts, plan.head([1] * len(plan.parts))])
+        text = "".join(rr._part_slice(b) for b in plan.parts)
+        assert ("w" if field == "whatIsMissing" else "r") * rr.MAX_BODY_CHARS in text
+
+
+def test_a_record_under_the_cap_renders_with_no_shed_line_and_no_reviewer_shed(monkeypatch):
+    # axis: the reviewer steps run only while over the cap; a record that fits trimmed or marked as shed
+    rec = _long_session(reviewers=3, body_chars=20)
+    body = rr.render(rec)
+    assert _unshed_size(rec, monkeypatch) == len(body) < rr.MAX_BODY_CHARS
+    assert "Reviewer detail trimmed" not in body and "reviewerShed" not in rr._parse_body(body)
+    posted = rr._parse_body(body)
+    assert all(v["runDir"] and set(v["observation"]) >= {"tokens", "telemetry"} for v in posted["reviewers"][:-1])
+
+
+def test_a_record_that_needed_only_the_lane_basis_steps_carries_no_shed_line(tmp_path):
+    # axis: the reviewer steps start only after the lane-basis steps; a lane-basis shed also trimming reviewers
+    body = rr.render(_astral_record(tmp_path, per_area=150))
+    posted = rr._parse_body(body)
+    assert posted["laneBasis"]["basisShed"] in ("why-paths", "matched", "unmatchable")
+    assert "Reviewer detail trimmed" not in body and "reviewerShed" not in posted
+    assert posted["reviewers"][0]["runDir"]
+
+
+def test_lane_call_pattern_alternatives_equal_the_lane_vocabulary():
+    # axis: one lane vocabulary; the parser's alternatives must equal lane_call.LANES, whatever either home holds
+    import lane_call
+
+    probe = rr._LANE_RE.pattern.split(r"\s*(", 1)[1].split(")", 1)[0]
+    assert sorted(probe.split("|")) == sorted(lane_call.LANES)
+    for lane in lane_call.LANES:
+        assert rr._LANE_RE.search("**Lane call:** " + lane + ". why").group(1) == lane
+
+
+# --- the reading rule, run identity and maker independence ---
+
+LIGHT = {"lane": "light"}
+
+
+def _run_with(observation):
+    return dict(GOOD_RUN, observation=observation)
+
+
+def test_an_engaged_light_lane_reviewer_counts_and_carries_its_reading():
+    # axis: a light-lane reviewer whose engine record reads engaged being credited, and carrying reading "engaged"
+    v = build(account(**LIGHT))["reviewers"][0]
+    assert v["ran"] == "engine-record" and v["reading"] == "engaged" and "runNote" not in v
+
+
+@pytest.mark.parametrize("lane", [None, "micro", "something-new"])
+def test_a_lane_that_is_not_full_applies_the_reading_rule(lane):
+    # axis: lane None, micro or unrecognised being treated as full, so a no-reading run is credited
+    fake = Fake(runs={"/run/code-reviewer": (_run_with({"read": "unknown"}), None)})
+    v = build(account(lane=lane), fake)["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown"
+
+
+@pytest.mark.parametrize("observation", [
+    {"tokens": 1, "read": "unknown"}, {"tokens": 1}, None, "engaged", ["engaged"]])
+def test_a_light_lane_reading_that_is_not_engaged_is_not_run(observation):
+    # axis: the engine-record branch of the reading rule; an unknown, absent or malformed reading being credited
+    fake = Fake(runs={"/run/code-reviewer": (_run_with(observation), None)})
+    rec = build(account(**LIGHT), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown" and "observation" not in v
+    assert v["runNote"] == "the engine's record of the run does not show that the reviewer read the change"
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+    assert rec["missingReviews"][0]["name"] == "code-reviewer" and rec["status"] == "not-reviewed"
+    assert "code-reviewer did not run" in rec["whatIsMissing"]
+
+
+def test_a_session_only_light_lane_reviewer_is_not_run():
+    # axis: the session-reported branch of the reading rule; a reviewer with no run directory credited on a light lane
+    rec = build(account(**LIGHT, reviewers=[reviewer(runDir="")]))
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown"
+    assert v["runNote"] == "no engine record of the run shows that the reviewer read the change"
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+
+
+def test_a_full_lane_reading_that_is_unknown_still_counts_and_carries_no_reading():
+    # axis: the full lane staying unchanged; the reading rule leaking into it
+    fake = Fake(runs={"/run/code-reviewer": (_run_with({"read": "unknown"}), None)})
+    full = build(account(), fake)["reviewers"][0]
+    assert full["ran"] == "engine-record" and "reading" not in full
+    session_only = build(account(reviewers=[reviewer(runDir="")]))["reviewers"][0]
+    assert session_only["ran"] == "reported-by-session" and "reading" not in session_only
+
+
+def test_a_reviewer_that_never_ran_on_a_light_lane_is_not_shown_as_reading():
+    # axis: reading "engaged" on a row that did not run
+    v = build(account(**LIGHT, reviewers=[reviewer(ran=False, runDir="")]))["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown"
+
+
+def test_a_mislabelled_engine_run_is_not_run():
+    # axis: the run-identity check; a codex run record credited to a row that names a claude reviewer
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(GOOD_RUN), None)})
+    rec = build(account(makers=[{"family": "someone-else"}], reviewers=[maker_family_reviewer()]), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["runNote"] == "the run record names a different reviewer than the account row"
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+
+
+@pytest.mark.parametrize("record", [
+    {k: v for k, v in GOOD_RUN.items() if k != "source"},
+    {k: v for k, v in GOOD_RUN.items() if k != "engineModel"},
+    dict(GOOD_RUN, engineModel=model_registry.codex_models()[1]),
+])
+def test_an_engine_record_that_does_not_name_the_row_reviewer_is_not_run(record):
+    # axis: the run-identity check; a missing or disagreeing source or model credited
+    v = build(account(), Fake(runs={"/run/code-reviewer": (record, None)}))["reviewers"][0]
+    assert v["ran"] == "not-run" and v["runNote"] == "the run record names a different reviewer than the account row"
+
+
+@pytest.mark.parametrize("vendor,alias,model_id", [
+    ("claude", model_registry.dispatch_token("claude", "sonnet-5.5"), "sonnet-5.5"),
+    ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6"),
+])
+def test_a_supported_dispatch_spelling_of_the_model_names_the_same_reviewer(vendor, alias, model_id):
+    # axis: the run-identity check; a dispatch spelling (tier alias, effort suffix) of the engine record's model demoted
+    run = dict(GOOD_RUN, source=vendor, engineModel=model_id)
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    v = build(account(makers=[{"family": "someone-else"}], reviewers=[reviewer(vendor=vendor, model=alias)]), fake)["reviewers"][0]
+    # bites on: the raw string comparison rejecting a completed review for naming the model by its dispatch token
+    assert v["ran"] == "engine-record" and "runNote" not in v
+    other = model_registry.codex_models()[1]
+    run = dict(GOOD_RUN, source="codex", engineModel=other)
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    assert build(account(), fake)["reviewers"][0]["ran"] == "not-run"
+
+
+def test_the_family_comes_from_the_credited_run_record(monkeypatch):
+    # axis: the family read from the row rather than from the engine record that was credited
+    seen = []
+    real = rr._family
+    monkeypatch.setattr(rr, "_family", lambda vendor, model: seen.append((vendor, model)) or real(vendor, model))
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(GOOD_RUN), None)})
+    v = build(account(), fake)["reviewers"][0]
+    assert v["family"] == "openai" and seen[-1] == (GOOD_RUN["source"], GOOD_RUN["engineModel"])
+
+
+def test_empty_or_omitted_makers_is_not_reviewed_with_the_fixed_line():
+    # axis: the no-maker line; a record with no named maker reading reviewed
+    line = "no maker is named, so independence cannot be shown"
+    omitted = {k: v for k, v in account().items() if k != "makers"}
+    for acct in (omitted, account(makers=[]), account(makers=None)):
+        rec = build(acct)
+        assert rec["status"] == "not-reviewed" and line in rec["whatIsMissing"]
+        assert rec["reviewers"][0]["ran"] == "engine-record"
+    assert line not in build(account())["whatIsMissing"]
+
+
+def test_a_reviewer_whose_family_cannot_be_read_is_not_run_while_makers_are_named():
+    # axis: a row with no readable family credited when makers are named
+    run = dict(GOOD_RUN, source="elsewhere", engineModel="x")
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    rec = build(account(reviewers=[reviewer(vendor="elsewhere", model="x")]), fake)
+    v = rec["reviewers"][0]
+    assert v["family"] is None and v["ran"] == "not-run"
+    assert v["runNote"] == "the reviewer's model family could not be read, so independence cannot be shown"
+    unnamed = build(account(makers=[], reviewers=[reviewer(vendor="elsewhere", model="x")]), fake)
+    assert unnamed["reviewers"][0]["ran"] == "engine-record"
+
+
+def test_a_same_family_reviewer_without_the_owners_word_is_not_run():
+    # axis: the maker-family branch; a reviewer from a maker's family credited with no owner's word
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    rec = build(account(reviewers=[maker_family_reviewer(notIndependent=False)]), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and "notIndependent" not in v
+    assert v["runNote"] == "the reviewer is from a maker's family and no owner's word for this change lets it run"
+    assert rec["status"] == "not-reviewed" and "code-reviewer did not run" in rec["whatIsMissing"]
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+
+
+def test_a_same_family_reviewer_with_a_complete_owners_word_counts_and_shows_not_independent():
+    # axis: the owner's word admitting a same-family reviewer, and the render naming it not independent
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    rec = build(account(reviewers=[maker_family_reviewer(ownerWord=OWNER_WORD)]), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "engine-record" and v["notIndependent"] is True
+    body = rr.render(rec)
+    assert "- code-reviewer: ran (engine record); not independent of the makers (owner's word: http://c/9)" in body
+
+
+@pytest.mark.parametrize("word", [
+    None, {}, {"words": "go ahead"}, {"where": "http://c/9"}, {"words": "", "where": "http://c/9"},
+    {"words": "go ahead", "where": "  "}, {"words": 3, "where": "http://c/9"}])
+def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
+    # axis: the owner's-word completeness check; a missing, blank or non-text words or where admitting the reviewer
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    rec = build(account(reviewers=[maker_family_reviewer(ownerWord=word)]), fake)
+    assert rec["reviewers"][0]["ran"] == "not-run" and "notIndependent" not in rec["reviewers"][0]
+
+
+# --- reading-next ---
+
+PANEL = list(seat_map_module.PANEL_ROSTER)
+SEAT_MAP = seat_map_module.to_receipt(
+    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
+NO_READING = dict(ENGAGED_RUN, observation={"read": "unknown"})
+
+
+def _seats(**over):
+    return dict(SEAT_MAP, **over)
+
+
+def test_reading_next_with_one_run_and_no_reading_reruns():
+    assert rr.reading_next([NO_READING], SEAT_MAP, ["anthropic"])["next"] == "rerun"
+    assert rr.reading_next([None], SEAT_MAP, ["anthropic"])["next"] == "rerun"
+
+
+def test_reading_next_accepts_when_any_run_shows_a_reading():
+    assert rr.reading_next([NO_READING, ENGAGED_RUN], None, [])["next"] == "accept"
+    assert rr.reading_next([ENGAGED_RUN], None, [])["next"] == "accept"
+
+
+def test_reading_next_does_not_accept_an_engaged_run_the_record_writer_would_not_credit():
+    forfeited = dict(ENGAGED_RUN, graded=False)
+    wrote = dict(ENGAGED_RUN, runKind="write")
+    # bites on: a forfeited or non-review run that merely engaged ending the retry
+    assert rr.reading_next([forfeited], None, ["anthropic"])["next"] == "rerun"
+    assert rr.reading_next([wrote], None, ["anthropic"])["next"] == "rerun"
+
+
+def test_reading_next_counts_only_the_first_two_runs():
+    assert rr.reading_next([NO_READING, NO_READING, ENGAGED_RUN], SEAT_MAP, ["anthropic"])["next"] == "move-up"
+
+
+def test_reading_next_moves_up_over_a_valid_independent_map():
+    out = rr.reading_next([NO_READING, None], SEAT_MAP, ["anthropic"])
+    assert out["next"] == "move-up" and out["reason"]
+
+
+def test_reading_next_parks_when_no_run_is_given():
+    assert rr.reading_next([], SEAT_MAP, ["anthropic"])["next"] == "park"
+
+
+def test_reading_next_parks_when_a_roster_seat_is_unfilled():
+    # axis: the unfilled-seat park; a map with an unfilled roster seat letting the lane move up
+    seats = dict(SEAT_MAP["seats"], **{PANEL[0]: {"source": "unfilled", "family": "openai"}})
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map is unfilled"}
+
+
+def test_reading_next_parks_when_a_roster_seat_is_a_makers_family():
+    # axis: the maker-family-seat park; a map with a seat from a maker's family letting the lane move up
+    seats = dict(SEAT_MAP["seats"], **{PANEL[-1]: {"source": "live", "family": "anthropic"}})
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map is from a maker's family"}
+
+
+def test_a_reviewer_before_the_only_makers_joined_is_not_reviewed():
+    # axis: a panel reviewer at a step no maker faced counted as independent because a later fixer named a maker
+    fake = Fake(runs={"/run/code-reviewer": (dict(CLAUDE_RUN, viewHeadSha=EARLIER), None)})
+    rev = [maker_family_reviewer(commit=EARLIER, step=2), reviewer("audit", step=3)]
+    rec = build(account(makers=[{"family": "anthropic", "fromStep": 3}], reviewers=rev), fake)
+    assert rec["status"] == "not-reviewed" and rec["reviewers"][0]["ran"] == "not-run"
+
+
+def test_reading_next_parks_when_a_roster_seat_names_no_vendor_or_model():
+    # axis: the dispatchable-seat park; a family-only seat letting the lane move up with no reviewer to dispatch
+    seats = {n: {k: v for k, v in e.items() if k not in ("vendor", "model")} for n, e in SEAT_MAP["seats"].items()}
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map names no vendor or model"}
+
+
+def _without(name):
+    return {"roster": [n for n in PANEL if n != name],
+            "seats": {n: v for n, v in SEAT_MAP["seats"].items() if n != name}}
+
+
+@pytest.mark.parametrize("seat_map", [
+    None, "text", [], {}, _seats(roster=[]), _seats(roster="ab"), {"roster": PANEL},
+    _seats(seats="x"), _seats(seats={PANEL[0]: SEAT_MAP["seats"][PANEL[0]]}),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: "x"})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live"}})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": ""}})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": 3}})),
+    {"roster": ["code-reviewer"], "seats": {"code-reviewer": {"source": "live", "family": "openai"}}},
+    _without("test-role"), _without("grounding-seat"),
+])
+def test_reading_next_parks_on_a_map_that_cannot_show_independence(seat_map):
+    out = rr.reading_next([NO_READING, NO_READING], seat_map, ["anthropic"])
+    assert out["next"] == "park" and out["reason"]
+
+
+def test_reading_next_parks_with_no_maker_family():
+    assert rr.reading_next([NO_READING, NO_READING], SEAT_MAP, [])["next"] == "park"
+
+
+def test_reading_next_cli_prints_one_object_and_exits_zero(tmp_path, monkeypatch, capsys):
+    maps = tmp_path / "map.json"
+    maps.write_text(json.dumps(SEAT_MAP))
+    monkeypatch.setattr(rr, "_engine_run", lambda d: ({"a": NO_READING, "b": NO_READING}.get(d), None))
+    base = ["reading-next", "--run-dir", "a", "--run-dir", "b", "--maker-family", "anthropic"]
+    assert rr.main(base + ["--seat-map", str(maps)]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "move-up"
+    assert rr.main(base + ["--seat-map", str(tmp_path / "missing.json")]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "park"
+    assert rr.main(base) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "park"
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json")
+    assert rr.main(base + ["--seat-map", str(bad)]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "park"
+    assert rr.main(["reading-next", "--run-dir", "a", "--maker-family", "anthropic"]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "rerun"
+
+
+def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
+    # axis: the CLI entry point; reading-next composed with the real persisted run record, no stand-in for _engine_run
+    import test_engine_dispatch as ted
+
+    def run(name, outputs):
+        run_dir = str(tmp_path / name)
+        ted.ED.dispatch_review(
+            seat=ted._codex_seat(), prompt_path=ted._valid_prompt(tmp_path), repo_root=ted._repo(tmp_path),
+            run_engine=ted.FakeRunner(outputs), build_view=ted._fake_build_view(tmp_path), run_dir=run_dir)
+        return run_dir
+
+    engaged = run("engaged", [(ted._VALID_FINDINGS_STDOUT, False, 0, "")])
+    forfeited = run("forfeited", [("not json", False, 0, ""), ("not json", False, 0, "")])
+    second = run("second", [("not json", False, 0, ""), ("not json", False, 0, "")])
+    maps = tmp_path / "map.json"
+    maps.write_text(json.dumps(SEAT_MAP))
+    tail = ["--maker-family", "anthropic", "--seat-map", str(maps)]
+
+    def nxt(*dirs):
+        assert rr.main(["reading-next"] + [a for d in dirs for a in ("--run-dir", d)] + tail) == 0
+        return json.loads(capsys.readouterr().out)["next"]
+
+    assert nxt(engaged) == "accept"
+    assert nxt(forfeited) == "rerun"
+    assert nxt(forfeited, forfeited) == "rerun"  # one persisted run counted twice is still one run
+    assert nxt(forfeited, second) == "move-up"
+
+
+# --- the move-up check follows the composed panel ---
+
+NO_FLOOR_BASIS = {"floor": None}
+RISKY_BASIS = {"floor": "full"}
+THREE_SEAT_MAP = seat_map_module.to_receipt(
+    seat_map_module.build(list(seat_map_module.roster_for(NO_FLOOR_BASIS)),
+                          ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+
+
+def test_move_up_holds_a_no_floor_basis_to_the_three_seat_roster():
+    # axis: the move-up check requires the roster the lane basis calls for, not the full panel — see bite-proof record wo_a_1797_roster
+    assert len(THREE_SEAT_MAP["roster"]) == 3
+    assert rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), NO_FLOOR_BASIS) is None
+    out = rr.reading_next([NO_READING, NO_READING], THREE_SEAT_MAP, ["anthropic"], NO_FLOOR_BASIS)
+    assert out["next"] == "move-up"
+
+
+def test_move_up_blocks_a_three_seat_roster_under_a_risky_basis_and_names_the_missing_seats():
+    blocker = rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), RISKY_BASIS)
+    assert blocker.startswith("the seat map's roster omits a panel seat")
+    assert "security-reviewer" in blocker and "premortem-reviewer" in blocker
+    assert "code-reviewer" not in blocker and "test-role" not in blocker
+
+
+def test_move_up_with_no_lane_basis_requires_the_full_risky_roster():
+    for basis in (None, "full", {}, {"lane": "full"}):
+        blocker = rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), basis)
+        assert blocker and "omits a panel seat" in blocker, basis
+    out = rr.reading_next([NO_READING, NO_READING], THREE_SEAT_MAP, ["anthropic"])
+    assert out["next"] == "park" and "omits a panel seat" in out["reason"]
+
+
+def test_reading_next_reads_the_lane_basis_the_seat_map_carries_unless_one_is_given():
+    carried = dict(THREE_SEAT_MAP, laneBasis=NO_FLOOR_BASIS)
+    assert rr.reading_next([NO_READING, NO_READING], carried, ["anthropic"])["next"] == "move-up"
+    given = rr.reading_next([NO_READING, NO_READING], carried, ["anthropic"], RISKY_BASIS)
+    assert given["next"] == "park" and "security-reviewer" in given["reason"]
+
+
+def test_a_full_roster_still_moves_up_under_either_basis():
+    for basis in (None, NO_FLOOR_BASIS, RISKY_BASIS):
+        assert rr._move_up_blocker(SEAT_MAP, frozenset(["anthropic"]), basis) is None, basis

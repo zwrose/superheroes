@@ -36,8 +36,10 @@ from test_round_driver_no_records_seed_1721 import _recording  # noqa: E402
 TOKEN = RD.SESSION_FROM_EARLIER_VERSION
 MARKER = RD.UPGRADE_RESTART_MARKER_FILE
 _FINDINGS = [
-    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1},
-    {"title": "nit", "severity": "Minor", "file": "f.py", "line": 2},
+    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+     "consequence": "a reviewer-found defect stays in the change"},
+    {"title": "nit", "severity": "Minor", "file": "f.py", "line": 2,
+     "consequence": "a reviewer-found defect stays in the change"},
 ]
 _CERT_FILES = {
     "certification-receipt.json": b'{"fixture": "earlier-version receipt", "bytes": 4711}\n',
@@ -459,12 +461,27 @@ def test_e3_an_unfinished_state_without_the_key_is_refused(tmp_path, capsys):
     _assert_refusal(out, already_restarted=False)
 
 
-# E4 — axis: only the integer 2 is the current generation; any other value, including the ones
-# that compare equal to a number, is refused.
-@pytest.mark.parametrize("generation", [1, "2", None, True, 3, 2.0],
-                         ids=["one", "string-two", "null", "true", "three", "float-two"])
-def test_e4_a_generation_that_is_not_the_integer_two_is_refused(generation, tmp_path, capsys):
+# E4 — axis: only the driver's current integer generation is current; any other value, including
+# the ones that compare equal to a number, is refused.
+@pytest.mark.parametrize("generation", [1, 2, "3", None, True, 6, float(RD.SESSION_GENERATION)],
+                         ids=["one", "two", "string-three", "null", "true", "six", "float-current"])
+def test_e4_a_generation_that_is_not_the_current_integer_is_refused(generation, tmp_path, capsys):
     session_dir = _light_folder(tmp_path, generation=generation)
+    rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
+    _assert_refusal(out, already_restarted=False)
+
+
+# E4 — axis: a generation-2 unfinished session holding a degraded same-family auditor target (the
+# previous auditor policy) is refused at the upgrade gate, not resumed and credited.
+def test_e4_a_generation_two_session_with_a_degraded_same_family_auditor_is_refused(tmp_path, capsys):
+    session_dir = _light_folder(tmp_path, generation=2)
+    state = _read_state_file(session_dir)
+    state["config"]["fixerVendor"] = "codex"
+    state["_auditTargets"] = [dict(id="f.py::bug@L1", findingKey="f.py::bug@L1", file="f.py", line=1,
+                                   title="bug", severity="Important", auditorVendor="codex",
+                                   independence="degraded")]
+    _write_state_file(session_dir, state)
     rc, out = _main(capsys, ["next", "--session-dir", session_dir])
     assert rc != 0
     _assert_refusal(out, already_restarted=False)
@@ -506,8 +523,8 @@ def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_
 # session: no marker is written, and `next` gives the refusal `load_state` gives for it.
 @pytest.mark.parametrize(
     "version", [1, FUTURE_VERSION, None, str(RD.STATE_SCHEMA_VERSION),
-                float(RD.STATE_SCHEMA_VERSION), True],
-    ids=["one", "future", "null", "string-current", "float-current", "true"])
+                float(RD.STATE_SCHEMA_VERSION), float(EARLIER_VERSIONS[0]), True],
+    ids=["one", "future", "null", "string-current", "float-current", "float-earlier", "true"])
 def test_e4b_an_unsupported_schema_version_gets_the_loader_refusal_and_no_marker(version, tmp_path):
     session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
     state = _read_state_file(session_dir)

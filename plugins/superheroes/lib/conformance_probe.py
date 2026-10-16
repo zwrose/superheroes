@@ -775,9 +775,26 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                             live_cells=live_cells, live_cells_source="probed")
     except Exception as exc:
         return {"ok": False, "reason": "seat-map-failed:%s" % type(exc).__name__}, 1
+    # a `seat-unfilled` record that names a seat parks the lane, unless that seat was backfilled by a
+    # reviewer outside the maker family (its record then names a vendor)
+    seated = sm.get("seats") or {}
+    unfilled = [d for d in (sm.get("degradations") or [])
+                if isinstance(d, dict) and d.get("constraint") == "seat-unfilled" and d.get("seat")
+                and not (isinstance(seated.get(d.get("seat")), dict)
+                         and seated[d.get("seat")].get("vendor"))]
     same_family = [d for d in (sm.get("degradations") or [])
                    if isinstance(d, dict) and d.get("constraint") == "same-family"]
     impl_on = next((r.get("engine") for r in cal_rows if r.get("role") == "implementer"), None)
+    if unfilled:
+        seats = ", ".join(sorted({d.get("seat", "?") for d in unfilled}))
+        return _entry_result({
+            "state": "fail",
+            "reason": "conformance probe failed: %s; launched without it on the owner's word — "
+                      "full lanes PARK: %s would have no reviewer outside the maker family %s"
+                      % (",".join(failed), seats, author_family),
+            "evidence": ev_join,
+        }, required, failed, sm, wave=wave)
+    # legacy maps seated the maker family and disclosed it as `same-family`
     if same_family:
         seats = ", ".join(sorted({d.get("seat", "?") for d in same_family}))
         return _entry_result({
