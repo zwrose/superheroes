@@ -41,6 +41,7 @@ not re-implemented.
 import argparse
 import binascii
 import copy
+import difflib
 import errno
 import hashlib
 import json
@@ -1962,7 +1963,7 @@ def _gate_decision_candidates(state):
                     row["ruling"] = "fix"
             if ruling == "out-of-scope" and _follow_up_of(item) is not None:
                 session_contract.copy_follow_up_field(item, row)
-            for field in ("file", "line", "title"):
+            for field in ("file", "line", "title", "severity"):
                 if item.get(field) is not None:
                     row[field] = item.get(field)
             out.append(row)
@@ -2326,7 +2327,10 @@ def _settle_open_findings(state, cap=False):
         if pending is not None:
             reason = "owner ruling %s (%s) was recorded but never sent to a fixer; %s" % (
                 pending["seq"], pending["ruling"], why_open)
-        if row.get("disposition") == "out-of-scope" and pending is None:
+        # a newer guidance decision on a merged member binds the finding over the older skip;
+        # with no bound decision at all the out-of-scope reason stands
+        if (row.get("disposition") == "out-of-scope" and pending is None
+                and (not bound[key] or bound[key].get("ruling") == "out-of-scope")):
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
             content, ruling=bound[key], sources=sources, open_reason=reason)
@@ -4242,6 +4246,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
                           "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                          "severity": f.get("severity"),
                           "disposition": "skip", "reason": reason.strip()}
             if follow_up is not None:
                 # The skip is a standing decision: its follow-up travels with it, so a later round
@@ -4417,6 +4422,86 @@ def _filter_excluded_discharged_fixes(state, rows):
                 continue  # a newer fix ruling given to a merged-in finding outranks the skip
         filtered.append(row)
     return filtered, None
+
+
+def _out_of_scope_episode(decision):
+    """The episode id of an out-of-scope decision: its ``seq``, or ``round:<n>`` for an unsequenced
+    legacy gate decision."""
+    seq = decision.get("seq")
+    if _is_plain_int(seq):
+        return seq
+    return "round:%s" % decision.get("round")
+
+
+def _escalated_since_out_of_scope(decision, row):
+    """True when ``row`` is Critical now but the out-of-scope decision recorded a lower severity at
+    ruling time (the decision's own snapshot: the ledger entry is replaced on every restage)."""
+    if not isinstance(decision, dict) or not circuit_breaker.is_critical(row.get("severity")):
+        return False
+    recorded = decision.get("severity")
+    if isinstance(recorded, str) and recorded.strip().lower() in circuit_breaker._TIER_BY_LOWER:
+        return not circuit_breaker.is_critical(recorded)
+    # A missing or unrecognized snapshot (the older decision shape) is unknown: not spent, so a
+    # Critical stays in the batch (fail toward fixing).
+    return True
+
+
+def _drop_spent_out_of_scope_rows(state, rows):
+    """``(kept, spent)``: ``rows`` less those whose finding is out of scope and was already offered to
+    a fixer in an earlier round of the same episode. A row that passes while out of scope is recorded
+    in ``state["outOfScopeFixerRounds"]`` (keyed by the finding's own key). A spent row's out-of-scope
+    disposition is recorded again with the round it was offered in, keeping its ``followUp``."""
+    effective = _live_ruling_by_key(state)
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    this_round = state["round"]
+    spent_log = state.get("outOfScopeFixerRounds")
+    if not isinstance(spent_log, dict):
+        spent_log = {}
+    kept, spent = [], []
+    for row in rows:
+        key = _fix_batch_row_key(row)
+        decision = _row_decision(state, effective, ledger_by_key, key) if key else None
+        if not isinstance(decision, dict) or decision.get("ruling") != "out-of-scope":
+            kept.append(row)
+            continue
+        if _escalated_since_out_of_scope(decision, row):
+            # Ruled out of scope while below Critical, now a Critical blocker: the ruling never
+            # covered it. Dropping it would empty the batch and let the review certify with the
+            # Critical still open, so it stays in the batch; the round caps bound repeat offers.
+            kept.append(row)
+            continue
+        episode = _out_of_scope_episode(decision)
+        # The record is keyed by the finding's own identity: two findings that share a lineage root
+        # but carry separate decisions each keep their own episode, so neither overwrites the other.
+        held = spent_log.get(key)
+        offered = (held.get("rounds") if isinstance(held, dict) and held.get("episode") == episode
+                   and isinstance(held.get("rounds"), list) else [])
+        earlier = [rnd for rnd in offered if rnd != this_round]
+        if earlier:
+            spent.append((key, row, earlier[0]))
+            continue
+        spent_log[key] = {"episode": episode, "rounds": [this_round]}
+        kept.append(row)
+    if spent_log:
+        state["outOfScopeFixerRounds"] = spent_log
+    for key, row, offered_round in spent:
+        held_row = ledger_by_key.get(key)
+        if not isinstance(held_row, dict):
+            held_row = row
+        # Re-record the disposition whole (it replaces the family), keeping what it carried — its
+        # followUp included — and naming the round the finding was already offered in.
+        fields = {name: value for name, value
+                  in session_contract.disposition_family_snapshot(held_row).items()
+                  if name not in ("disposition", "dispositionRound")}
+        reason = (
+            "out of scope; already offered to a fixer in round %s and not offered again while it "
+            "stays out of scope" % offered_round)
+        _record_disposition(state, key, "out-of-scope", this_round,
+                            **dict(fields, outOfScopeReason=reason))
+        _decision(state, "out-of-scope-fix-spent",
+                  "%s is out of scope and was already offered to a fixer in round %s — not offered "
+                  "again" % (key, offered_round))
+    return kept, [key for key, _row, _rnd in spent]
 
 
 def _resolve_empty_fix_batch_convergence(state, config):
@@ -4664,24 +4749,34 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
+    discharge_survivors = len(filtered)
+    spent_keys = []
+    if filtered:
+        filtered, spent_keys = _drop_spent_out_of_scope_rows(state, filtered)
     filtered = _resolve_ruled_batch(state, filtered)
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
         state["fixBatch"] = []
     if not filtered:
-        rec = state["rounds"].setdefault(str(state["round"]), {})
-        prior = rec.get("fixBatchExcludedByDischarge") or 0
-        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
+        # Only rows the discharge filter dropped count as excluded by discharge; rows the
+        # once-per-episode rule dropped do not.
+        excluded_by_discharge = len(rows) - discharge_survivors
+        if excluded_by_discharge:
+            rec = state["rounds"].setdefault(str(state["round"]), {})
+            prior = rec.get("fixBatchExcludedByDischarge") or 0
+            _record_round(state, "fixBatchExcludedByDischarge", prior + excluded_by_discharge)
+        why = ("discharged-finding exclusion" if not spent_keys else
+               "the once-per-episode out-of-scope rule (%d finding(s) already offered to a fixer)"
+               % len(spent_keys))
         if batch_index == 0:
             _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by discharged-finding exclusion — "
-                      "without fixer dispatch")
+                      "fix batch emptied by %s — without fixer dispatch" % why)
             _resolve_empty_fix_batch_convergence(state, config)
         else:
             _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by discharged-finding exclusion — "
-                      "remaining queue exhausted, the round proceeds to post-fix")
+                      "fix batch emptied by %s — remaining queue exhausted, the round proceeds "
+                      "to post-fix" % why)
         return "excluded"
     _note_sent_under_decision(state, filtered[:cap])
     state["_fixBatch"] = filtered[:cap]
@@ -4987,6 +5082,16 @@ def _audit_result_entry_fault(entry, index, target_ids):
     # The grounds test is `audits.has_usable_reason`, the fold's OWN predicate — one function, not a
     # second copy of the rule, so the guard can never accept a reason the fold rejects (or refuse one
     # it would honor). Same shared-home discipline as `has_usable_new_issues` below.
+    named_seq = entry.get("unnamedChangeAllowedBySeq")
+    if named_seq is not None and not audits.is_decision_seq(named_seq):
+        return ("%s `unnamedChangeAllowedBySeq` is %r, not an integer; expected the sequence number "
+                "of the one carried owner decision that permits the change, or leave the field out"
+                % (where, named_seq))
+    unnamed = entry.get("unnamedChange")
+    if unnamed is not None and not isinstance(unnamed, str):
+        return ("%s `unnamedChange` is %s, not a string; expected a plain-words string, or leave the "
+                "field out when the fix changes nothing beyond what the finding names"
+                % (where, type(unnamed).__name__))
     if ruling == "discharged" and not audits.has_usable_reason(entry.get("reason")):
         return ("%s rules `discharged` with no `reason` — a bare discharge is the unproven claim "
                 "the audit fold exists to reject; expected a non-empty `reason` string" % where)
@@ -5364,6 +5469,7 @@ def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_s
     _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
+    _record_round(state, "focus", {"on": "wider", "why": detail})
     state["fullPanelRan"] = False
     state["step"] = P_PANEL
     return True
@@ -5378,6 +5484,17 @@ def _after_unknown_surface_panel(
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_PANEL
         state["step"] = P_VERIFY
+
+
+def _fix_batch_keys(state):
+    """The finding keys of the previous round's fix batch, in batch order, each once."""
+    keys = []
+    for f in state.get("fixBatch") or []:
+        if isinstance(f, dict):
+            key = _finding_key_of(f)
+            if key not in keys:
+                keys.append(key)
+    return keys
 
 
 def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
@@ -5432,15 +5549,126 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
     state["fullPanelRan"] = False
-    state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
+    state["_auditTargets"] = _audit_targets(
+        state, config, split.get("auditTargets") or {},
+        reviewed_diff=reviewed)
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
+    _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_POST_AUDITS
     state["step"] = P_AUDITS
 
 
-def _audit_targets(state, config, audit_targets_map):
+def _fix_hunks_over_line(audit_targets_map, file, line):
+    """The hunks of the fix surface in ``file`` over the finding's location — the same location
+    (the line and its margin) and the same overlap test ``delta_surface.split_fix_surface`` used to
+    attribute them; empty when the file or line is unusable."""
+    if not isinstance(audit_targets_map, dict) or not isinstance(file, str) or not file:
+        return []
+    ranges = delta_surface.fixed_locations([{"file": file, "line": line}]).get(file)
+    if not ranges:
+        return []
+    return [hunk for hunk in audit_targets_map.get(file) or []
+            if isinstance(hunk, dict) and delta_surface._overlaps(hunk, ranges)]
+
+
+def _diff_section(diff_text, file):
+    """The lines of ``file``'s section of a unified diff — header, hunk headers, context and all."""
+    out, inside = [], False
+    for ln in (diff_text or "").splitlines():
+        if ln.startswith("diff --git "):
+            inside = ln == "diff --git a/%s b/%s" % (file, file)
+        if inside:
+            out.append(ln)
+    return out
+
+
+def _line_spans(section):
+    """Per section line, the new-file (start, end) of the hunk it sits in (None before the first hunk)."""
+    spans, cur = [], None
+    for ln in section:
+        m = delta_surface._HUNK.match(ln)
+        if m:
+            start = int(m.group(1))
+            cur = (start, start + max(int(m.group(2) or 1) - 1, 0))
+        spans.append(cur)
+    return spans
+
+
+def _fixer_delta_lines(reviewed_diff, head_diff, file, line, *, whole_file=False):
+    """The fix's own diff at a finding's location (every hunk of the file when ``whole_file``): the unified diff between the file's section of the
+    reviewed (pre-fix) diff and of the post-fix head diff, hunk headers and context kept, only the hunks
+    that sit over the finding's line (and margin). Each line keeps the PR diff's own prefix after the
+    diff mark, so ``-+x`` is a PR addition the fixer removed and ``++x`` one it made. A file the fix
+    left alone has identical sections and yields nothing."""
+    ranges = delta_surface.fixed_locations([{"file": file, "line": line}]).get(file)
+    before, after = _diff_section(reviewed_diff, file), _diff_section(head_diff, file)
+    if (not ranges and not whole_file) or before == after:
+        return []
+    spans_b, spans_a = _line_spans(before), _line_spans(after)
+
+    def over(spans, lo, hi):
+        if whole_file:
+            return True
+        near = spans[lo:hi] if hi > lo else spans[max(lo - 1, 0):lo + 1]
+        return any(sp and delta_surface._overlaps({"start": sp[0], "end": sp[1]}, ranges)
+                   for sp in near)
+
+    delta = []
+    matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    for group in matcher.get_grouped_opcodes(3):
+        if not any(op != "equal" and (over(spans_b, i1, i2) or over(spans_a, j1, j2))
+                   for op, i1, i2, j1, j2 in group):
+            continue
+        first, last = group[0], group[-1]
+        delta.append("@@ -%d,%d +%d,%d @@" % (
+            first[1] + 1, last[2] - first[1], first[3] + 1, last[4] - first[3]))
+        for op, i1, i2, j1, j2 in group:
+            if op == "equal":
+                delta.extend(" " + ln for ln in before[i1:i2])
+                continue
+            delta.extend("-" + ln for ln in before[i1:i2])
+            delta.extend("+" + ln for ln in after[j1:j2])
+    return delta
+
+
+def _diff_files(diff_text):
+    """The files a unified diff names, in order of first appearance."""
+    files = []
+    for ln in (diff_text or "").splitlines():
+        m = re.match(r"diff --git a/(.+) b/(.+)$", ln)
+        if m and m.group(2) not in files:
+            files.append(m.group(2))
+    return files
+
+
+def _attempt_fixer_delta(reviewed_diff, head_diff):
+    """The whole fixer attempt's delta: the fix's own diff (reviewed head -> fixed head) over every
+    file the attempt changed, not only a finding's location."""
+    delta = []
+    for file in _diff_files(reviewed_diff) + [f for f in _diff_files(head_diff)
+                                              if f not in _diff_files(reviewed_diff)]:
+        lines = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
+        if lines:
+            delta.append("diff --git a/%s b/%s" % (file, file))
+            delta.extend(lines)
+    return delta
+
+
+def _carried_owner_ruling(decision):
+    """The owner-fix decision an audit target (or a sibling record) carries: ``(ownerRuling, seq)``,
+    or ``(None, None)`` when the decision is not an owner fix ruling."""
+    if not (isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS):
+        return None, None
+    owner_ruling = {"ruling": decision["ruling"], "reason": decision.get("reason")}
+    for carried in ("guidance", "allowsChange"):
+        if decision.get(carried) is not None:
+            owner_ruling[carried] = decision[carried]
+    return owner_ruling, _decision_seq(decision)
+
+
+def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
@@ -5455,6 +5683,29 @@ def _audit_targets(state, config, audit_targets_map):
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
+    effective = _live_ruling_by_key(state)
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    history = _finding_history(state)
+    # The attempt's whole delta and the batch's findings in compact form ride every target, so the
+    # auditor attributes a change to any finding of the batch before calling it unnamed.
+    attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"))
+                     if reviewed_diff is not None else None)
+    batch_findings = []
+    for bf in state.get("fixBatch") or []:
+        if isinstance(bf, dict) and _finding_key_of(bf) not in [b["id"] for b in batch_findings]:
+            sibling = {"id": _finding_key_of(bf), "file": bf.get("file"),
+                       "line": bf.get("line"), "title": bf.get("title")}
+            # A sibling carries its scope: body, suggestion and its effective owner ruling, so the
+            # auditor attributes a change to the finding whose scope names it.
+            for carried in ("body", "suggestion"):
+                if bf.get(carried) is not None:
+                    sibling[carried] = bf[carried]
+            sib_ruling, sib_seq = _carried_owner_ruling(
+                _row_decision(state, effective, ledger_by_key, sibling["id"]))
+            if sib_ruling is not None:
+                sibling["ownerRuling"] = sib_ruling
+                sibling["ownerRulingSeq"] = sib_seq
+            batch_findings.append(sibling)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5479,6 +5730,32 @@ def _audit_targets(state, config, audit_targets_map):
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
         }
+        # The auditor compares the fix with what the finding names: its body, suggestion and
+        # consequence ride every target, beside the hunks of the fix over the finding's line.
+        for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY):
+            if f.get(carried) is not None:
+                row[carried] = f[carried]
+        row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
+        # `fixerDelta` is the attempt's own diff (reviewed head -> fixed head) over every file it
+        # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
+        if attempt_delta is not None:
+            row["fixerDelta"] = list(attempt_delta)
+        row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
+        # The finding's effective ruling rides the target, so an auditor weighing a change the finding
+        # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
+        # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
+        # ordinary not-discharged loop, with no state of its own.
+        # The finding's last audit rides the target too (derived from the audit history, as the fixer
+        # order's does), so the auditor sees why the last audit refused.
+        slot = history.get(tid)
+        prior = slot.get("priorAudit") if isinstance(slot, dict) else None
+        if isinstance(prior, dict):
+            row["priorAudit"] = {k: prior[k] for k in ("round", "ruling", "reason") if k in prior}
+        decision = _row_decision(state, effective, ledger_by_key, tid)
+        owner_ruling, owner_seq = _carried_owner_ruling(decision)
+        if owner_ruling is not None:
+            row["ownerRulingSeq"] = owner_seq
+            row["ownerRuling"] = owner_ruling
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
             for carried in ("suggestion", "body", break_it.RUN_FIELD):
@@ -5572,9 +5849,54 @@ def _fold_audits(state, config, artifact, session_dir=None):
     if no_auditor_ids:
         results = [r for r in results
                    if not (isinstance(r, dict) and r.get("id") in no_auditor_ids)]
+    # A fix may change behaviour its finding does not name only where the finding's one effective
+    # decision is a guidance ruling that says so (`allowsChange`); the owner gate never carries it.
+    # The binding decision is the one fixer dispatch resolves (`_row_decision`, merged members
+    # included), and it authorizes only when it is the decision the auditor's target carried: a
+    # ruling recorded after the audit order went out was never weighed, so it stays pending.
+    effective = _live_ruling_by_key(state)
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    # The auditor names the one carried decision whose guidance permits the reported change
+    # (`unnamedChangeAllowedBySeq`); the fold verifies it. The named seq must be carried on this target
+    # (its own or a batch sibling's), still be that finding's current effective decision, and allow
+    # the change; a sibling's decision never overrides the target's own `allowsChange: false`. Any
+    # other case credits nothing, and the change stays an unnamed-change refusal.
+    named_by_id = {}
+    for r in results:
+        if isinstance(r, dict) and isinstance(r.get("id"), str):
+            named_by_id.setdefault(r["id"], r.get("unnamedChangeAllowedBySeq"))
+    bound_by_id = {}
+    for t in targets:
+        if not (isinstance(t, dict) and isinstance(t.get("id"), str)):
+            continue
+        named = named_by_id.get(t["id"])
+        if not audits.is_decision_seq(named):
+            continue
+        candidates = [(t["id"], t.get("ownerRulingSeq"))]
+        for b in t.get("batchFindings") or []:
+            if isinstance(b, dict) and isinstance(b.get("id"), str):
+                candidates.append((b["id"], b.get("ownerRulingSeq")))
+        own_now = _row_decision(state, effective, ledger_by_key, t["id"])
+        credited = []
+        for cid, carried_seq in candidates:
+            if carried_seq != named:
+                continue
+            bound = _row_decision(state, effective, ledger_by_key, cid)
+            if (isinstance(bound, dict)
+                    and bound.get("ruling") == "guidance"
+                    and bound.get("allowsChange") is True
+                    and carried_seq == _decision_seq(bound)):
+                if (cid != t["id"] and isinstance(own_now, dict)
+                        and own_now.get("allowsChange") is False):
+                    continue
+                credited.append(bound)
+        if credited:
+            bound_by_id[t["id"]] = credited[:1]
+    change_allowed_ids = list(bound_by_id)
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
                                          collection_manifest=collection_manifest,
-                                         carry_fields=(session_contract.FINDING_KEY_FIELD,))
+                                         carry_fields=(session_contract.FINDING_KEY_FIELD,),
+                                         change_allowed_ids=change_allowed_ids)
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -5616,6 +5938,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
                       "found: %s — not-discharged"
                       % (pid, pid, found_keys))
         _decision(state, "audit-provenance-fail", detail)
+    unnamed_ids = list(outcome.get("unnamedChange") or [])
+    if unnamed_ids:
+        _record_round(state, "auditUnnamedChange", unnamed_ids)
+        _decision(state, "audit-unnamed-change",
+                  "the fix changes behaviour its finding does not name, so it is not accepted "
+                  "without a ruling: %s" % ", ".join(unnamed_ids))
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
                   "audit result for %s echoed a vendor other than the recorded dispatch provenance "
@@ -5627,6 +5955,26 @@ def _fold_audits(state, config, artifact, session_dir=None):
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
+    # A decision the audit credited a fix under has been delivered: the resolver must not send it again.
+    lineage = _lineage_map(state)
+    for audit in outcome["audits"]:
+        marked = []
+        if audit.get("allowedChange") and audit.get("id") in change_allowed_ids:
+            marked.extend(bound_by_id[audit["id"]])
+        if audit.get("ruling") == "discharged" and audit.get("id") in targets_by_id:
+            # The allowing ruling reached the audit and the audit cleared the fix: delivered, with or without
+            # an unnamed change, so the resolver does not reopen it.
+            own = _row_decision(state, effective, ledger_by_key, audit["id"])
+            carried_seq = targets_by_id[audit["id"]].get("ownerRulingSeq")
+            if (isinstance(own, dict) and own.get("ruling") == "guidance"
+                    and own.get("allowsChange") is True and carried_seq is not None
+                    and carried_seq == _decision_seq(own)):
+                marked.append(own)
+        sent = state.setdefault("sentUnderDecision", {})
+        for decision in marked:
+            for at in (audit["id"], decision.get("findingKey")):
+                root = _lineage_root(lineage, at)
+                sent[root] = max(sent.get(root, 0), _decision_seq(decision))
     still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
@@ -5802,6 +6150,7 @@ def _settle_delta_converged(state, config):
             return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
+        _record_round(state, "focus", {"on": "wider", "why": followup.get("reason")})
         state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
         state["step"] = P_PANEL
         return
@@ -7553,6 +7902,12 @@ def _validate_ruling_entries(doc):
             if _guidance_oversize(guidance):
                 return None, None, RULING_GUIDANCE_OVERSIZE
             entry["guidance"] = guidance.strip()
+            if "allowsChange" in spec:
+                if not isinstance(spec.get("allowsChange"), bool):
+                    return None, None, RULING_FILE_SHAPE
+                entry["allowsChange"] = spec["allowsChange"]
+        elif "allowsChange" in spec:
+            return None, None, RULING_FILE_SHAPE
         parsed.append(entry)
     return parsed, provenance, None
 
@@ -7660,8 +8015,14 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                     log_row[field] = candidate.get(field)
         session_contract.copy_follow_up_field(entry, log_row)
         session_contract.copy_decided_by_field(entry, log_row)
+        if entry["ruling"] == "out-of-scope":
+            # the severity at ruling time, kept with the decision: a restage replaces the ledger's
+            log_row["severity"] = _severity_for_finding_key(
+                state, key, candidate.get("severity") if isinstance(candidate, dict) else None)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
+        if "allowsChange" in entry:
+            log_row["allowsChange"] = entry["allowsChange"]
         _writable_rulings_log(state).append(log_row)
         round_rulings.append(dict(log_row))
         if entry["ruling"] == "out-of-scope":

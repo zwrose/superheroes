@@ -21,6 +21,8 @@ Guarded-element set (declared by this record; the order named elements i-vi):
 5. v — it restages a finding fixed against a later ruling (`_reopened_ledger_row`)
 6. vi — no autonomous lift (`_queue_fix_batch` offers only blockers and owner-named rows)
 7. vii — a ruling never reshapes a fixer attempt whose orders are out (`if not emitted:` in `rule`)
+8. x — an unresolvable not-discharged list leaves every restage mark in place (`_fold_audits`, `still_open is not None`)
+9. xi — an audit that credits a fix under an allowing ruling marks that decision as sent (`_fold_audits`, `sentUnderDecision`)
 
 Unproven (no neutralization run; the order's budget allowed 14 bite-proof runs = 7 elements):
 the "ruling names no live finding" line and dispatch-nothing edge (`_ruled_row` returning
@@ -562,7 +564,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_restaged_r
 
 ## Element ix. a session from the generation before dispatch history is refused at `next`
 
-**Test.** `test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next`. **Axis:** a fixture session one generation older than `SESSION_GENERATION` is refused with `session-from-earlier-version` (no backfill of `sentUnderDecision`).
+**Test.** `test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next`. **Axis:** a fixture session at the fixed generation 4 (`PRE_DISPATCH_HISTORY_GENERATION`, the release before dispatch history; never derived from `SESSION_GENERATION`) is refused with `session-from-earlier-version` (no backfill of `sentUnderDecision`).
 
 **Neutralization.** `round_driver._generation_is_current` made to return `True` for the run (the upgrade gate waved through), so the refusal assertion is the one that bites; the test no longer restates the generation value.
 
@@ -592,4 +594,68 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_session_fr
 ```
 ..                                                                       [100%]
 2 passed, 33 deselected in 3.21s
+```
+
+---
+
+## Element x. an unresolvable not-discharged list leaves every restage mark in place
+
+- **Guarded element:** `round_driver.py` `_fold_audits`, the `if reopened and still_open is not None:` guard. Axis: FAIL CLOSED.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_audit_discharge_keeps_every_restage_mark_when_the_open_list_cannot_be_resolved` (drives `_fold_audits`; `_open_audit_ids_from_not_discharged` is patched to return `None`).
+
+**Neutralization.** `if reopened and still_open is not None:` made `if reopened:`.
+
+**Raw red** (exit 1; the last lines of the run):
+
+```
+>               for member in _ruling_closure(state, ledger_now or {}, tid) - {tid} - still_open:
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: unsupported operand type(s) for -: 'set' and 'NoneType'
+
+/home/user/wt-l2c/plugins/superheroes/lib/round_driver.py:5872: TypeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_audit_discharge_keeps_every_restage_mark_when_the_open_list_cannot_be_resolved
+1 failed in 0.76s
+```
+
+**Restore.** Inverse edit; the restored line, quoted back from the file: `        if reopened and still_open is not None:` (`round_driver.py:5870`).
+
+**Raw green** (exit 0, last lines):
+
+```
+.                                                                        [100%]
+1 passed in 0.10s
+```
+
+---
+
+## Element xi. an audit that credits a fix under an allowing ruling marks the decision as sent
+
+- **Guarded element:** `round_driver.py` `_fold_audits`, the `sent[root] = max(sent.get(root, 0), _decision_seq(decision))` line. Axis: DELIVERED DECISION.
+- **Detector (run alone):** `test_fix_scope_c7.py::test_t3_a_guidance_ruling_that_allows_the_change_keeps_the_fix_credited`.
+
+**Neutralization.** The line `sent[root] = max(sent.get(root, 0), _decision_seq(decision))` replaced by `pass`.
+
+**Raw red** (exit 1; the last lines of the run):
+
+```
+>       assert offers == [(1, [key])]
+E       AssertionError: assert [(1, ['f.py::...l deref@L1'])] == [(1, ['f.py::null deref@L1'])]
+E         
+E         Left contains one more item: (2, ['f.py::null deref@L1'])
+E         Use -v to get more diff
+
+/home/user/wt-l2c/plugins/superheroes/lib/tests/test_fix_scope_c7.py:403: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_scope_c7.py::test_t3_a_guidance_ruling_that_allows_the_change_keeps_the_fix_credited
+1 failed in 1.10s
+```
+
+**Restore.** Inverse edit; the restored line, quoted back from the file: `                sent[root] = max(sent.get(root, 0), _decision_seq(decision))` (`round_driver.py:5862`).
+
+**Raw green** (exit 0, last lines):
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
 ```

@@ -34,6 +34,11 @@ artifact. **Prose-driven review** on the read-only path (`--review-only`) is a d
 lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
 is not governed by this loop contract.
 
+Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
+keys of the previous round's fix batch>]}` for a delta round, or `{"on": "wider", "why": "<the
+reason>"}` for a full panel (an unknown fix surface, or a confirmation re-arm). Round 1 records no
+`focus`. The review record lists every wider round with its reason.
+
 Single-vendor environments stay **on** the mandated path: the same driver, the same journal, and,
 when no live vendor sits outside the fixer's and the makers' families, a fix whose audit does not
 run (it is never counted as audited) with `independence: "degraded"` on the terminal certification
@@ -551,9 +556,13 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" rule --session-dir "$SESSION_DIR" \
 The ruling file is JSON: `_provenance` (same shape as owner gate artifacts) plus a non-empty
 `rulings` list. Each entry has `id` (finding id or key), `ruling` (`out-of-scope` or `guidance`),
 `reason`, and for out-of-scope a shaped `followUp`; for guidance a non-empty `guidance` string
-within the gate row byte cap. **Never append a ruling to a seat prompt** — the driver carries
-live guidance in the fixer order's gate block and excludes out-of-scope keys from the fix batch;
-the fix batch sha256 in the order commits to the batch file bytes.
+within the gate row byte cap. A guidance entry may also carry `allowsChange`, a JSON boolean
+(`true` lets the fix change behaviour its finding does not name; anything but a boolean is refused
+with `ruling-file-shape`, and so is `allowsChange` on an `out-of-scope` entry). `rule` copies it onto
+the `rulingsLog` row; owner-gate guidance never carries it. **Never append a ruling to a seat
+prompt** — the driver carries live guidance in the fixer order's gate block and excludes
+out-of-scope keys from the fix batch; the fix batch sha256 in the order commits to the batch file
+bytes.
 
 An entry may also carry `decidedBy`, the decision the ruling rests on:
 `{"kind": "canon" | "residual" | "sheet-answer", "ref": ...}` and nothing else. For `canon` and
@@ -723,10 +732,23 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   `missing-follow-up-item`, `missing-revisit-trigger` or `missing-class-closure`
   (`follow_up_shape_fault`, `lib/session_contract.py`).
 - Where each is recorded: `fixed` at the audits fold for every target the independent auditor
-  discharged; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
+  discharged — and only for a target whose auditor named no unnamed behaviour change (`unnamedChange`,
+  the behaviour the fix changes that its finding does not name), or whose auditor named, by
+  `unnamedChangeAllowedBySeq`, a carried decision (the target's own or a batch sibling's) that is
+  still current, is a `guidance` ruling with `allowsChange: true` and is not overridden by the
+  target's own `allowsChange: false`; any other target is `not-discharged`
+  with the auditor's reason, recorded as `auditUnnamedChange` on the round with an
+  `audit-unnamed-change` decision, and returns to the fix list; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an
   owner-judgment `skip` and an audit-stall `accept-the-disclosed-risk`, both of which now accept an
   **optional `followUp` object**.
+- An out-of-scope finding is offered to a fixer in at most one round while it stays out of scope
+  (one episode: the decision's sequence number, or its round for a legacy gate decision). The first
+  offer is recorded in `state.outOfScopeFixerRounds`; in a later round of the same episode the
+  finding is left out of the fix batch, its out-of-scope disposition is recorded again naming the
+  round it was offered in, and an `out-of-scope-fix-spent` decision says so. A later `guidance`
+  decision ends the episode. A batch emptied only this way settles through empty-batch convergence
+  and is not counted in `fixBatchExcludedByDischarge`.
 - Without a `followUp` the disposition is still recorded. A **malformed** `followUp`
   is refused at submit with `follow-up-malformed`, so the owner corrects it while still present.
 - A verifier drop, author-justified drop, or synthesis merge whose staged id is missing, maps to

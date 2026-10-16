@@ -19,6 +19,18 @@ the diff, the repo, and the target record.
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
 finding and whether any new issues were introduced. Cite quoted support for every conclusion.
 Each new issue you report is a finding in the base rubric's findings shape, `consequence` and `consequenceKind` included; a new issue with no stated consequence is not taken into the review.
+Compare the fix (`fixHunks` in the audit target; `fixerDelta` is the whole attempt's own diff, reviewed head to fixed head, over every file the attempt changed, each file under its `diff --git` line, hunk headers and context kept; `batchFindings` are the attempt's other findings, each with its file, line, title, body, suggestion and owner decision; a line the PR diff carried shows after the diff mark, so `-+x` is a PR addition the fix removed and `++x` one it made. A target's `priorAudit` is the last audit of the finding: when it refused, say why, check whether that cause still stands in the fix. A target's `ownerRuling` is the owner's decision on the finding, its guidance and whether it allows a change the finding does not name (`allowsChange`): a fix that makes such a change is cleared only when an owner decision allows it, and you report it either way) with what the finding names: its title, body,
+suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does
+not name, say so in plain words in the result's field for an unnamed behaviour change, but only for
+behaviour that neither this finding nor another finding in `batchFindings` names, by their text (a
+sibling's body and suggestion ride its entry): a change that belongs to a sibling finding's fix is
+not unnamed. Report every other change there even when an attached `ownerRuling` (this finding's or a
+sibling's) allows it. Then, in the field for the allowing decision, give the sequence number
+(`ownerRulingSeq`, an integer) of the one carried decision (this finding's own, or a sibling's from
+`batchFindings`) whose guidance text explicitly names the behaviour you reported. Leave that field
+out when no carried decision's guidance names it, and when this finding's own decision forbids it; a
+decision about some other behaviour does not permit this one. The fold verifies the named decision and
+makes the call. Leave both fields out when every change in `fixerDelta` is named by a finding of the batch.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.

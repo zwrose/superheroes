@@ -29,6 +29,8 @@ _SPEC.loader.exec_module(_RC)
 _TRI = _RC._TRI
 
 P_FIXER = RD.P_FIXER
+# the literal integer the release before dispatch history stamped, not derived from the current constant
+PRE_DISPATCH_HISTORY_GENERATION = 4
 _state = _RC._state
 _state_bytes = _RC._state_bytes
 _bootstrap = _RC._bootstrap
@@ -330,13 +332,13 @@ def test_a_restaged_row_keeps_the_guidance_link_to_its_ruling(tmp_path, keep_sev
 
 
 def test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next(tmp_path):
-    """axis: GENERATION GATE — a session saved one generation before the current one (before `sentUnderDecision` and
+    """axis: GENERATION GATE — a generation-4 session (the release before `sentUnderDecision` and
     `restagedAfterDispositionSeq`) is refused at `next` with `session-from-earlier-version`.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element ix)
     """
     from test_session_pickup_and_upgrade_1721 import _assert_refusal, _light_folder
-    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION - 1)
+    session_dir = _light_folder(tmp_path, generation=PRE_DISPATCH_HISTORY_GENERATION)
     out = RD.cmd_next(session_dir)
     _assert_refusal(out, already_restarted=False)
     assert out["reason"] == "session-from-earlier-version"
@@ -837,6 +839,24 @@ def test_a_capped_pending_newer_ruling_on_a_merged_member_is_not_hidden_by_an_ol
     assert "owner ruling %s" % seq in str(ledger["A"].get("settledReason")), ledger["A"]
 
 
+def test_a_dispatched_newer_guidance_on_a_merged_member_is_not_settled_as_out_of_scope():
+    """axis: TERMINAL + MERGE — the same pair, but the guidance on B went to a fixer and the loop caps
+    before a discharge: the record gives the open reason, not the representative's obsolete skip."""
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    RD._record_disposition(state, "A", "out-of-scope", 1, outOfScopeReason="leave it as it is")
+    state["findings"].append(_unit_finding("B", 2, "Important"))
+    state["findings"][-1][session_contract.MERGED_INTO_FIELD] = "A"
+    _log_ruling(state, "A", ruling="out-of-scope")
+    _log_ruling(state, "B", guidance="DO-IT")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["A"]
+    RD._note_sent_under_decision(state, batch)
+    RD._set_terminal(state, "capped-with-open-blocker", cap=True)
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    reason = str(ledger["A"].get("settledReason"))
+    assert "out of scope" not in reason and "still open when the loop reached its round cap" in reason, ledger["A"]
+
+
 def _rendered_guidance(state):
     """The owner-guidance text the fixer order carries for the queued batch (the real render path)."""
     assert RD._queue_fix_batch(state, state["config"], [dict(r) for r in state["findings"]
@@ -1016,6 +1036,35 @@ def test_audit_discharge_of_the_ruled_rewording_supersedes_the_reopened_ancestor
         "results": [{"id": zid, "ruling": "discharged", "reason": "gone"}],
         "collectionManifest": {zid: auditor}})
     assert "A" not in (state.get("restagedAfterDispositionSeq") or {})
+
+
+def test_audit_discharge_keeps_every_restage_mark_when_the_open_list_cannot_be_resolved(monkeypatch):
+    """axis: FAIL CLOSED — the same discharge, but the not-discharged list cannot be turned into open
+    ids: the ancestor's reopening is not superseded, so a failed settle cannot read it as fixed.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element x)
+    """
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "codex", "seatMap": {"hostFamily": "anthropic"}})
+    state["round"] = 2
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = "b" * 40
+    state["rounds"] = {"2": {"verifyResult": "pass"}}
+    z = {"title": "Z", "severity": "Important", "file": "f.py", "line": 1}
+    state["fixBatch"] = [z]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    zid = RD._finding_key_of(z)
+    RD._set_findings(state, [z])
+    RD._record_disposition(state, "A", "fixed", 1)
+    state["findingLineage"] = {zid: "A"}
+    mark = state["dispositionSeqCounter"]
+    state["restagedAfterDispositionSeq"] = {"A": mark}
+    state["_newSurface"] = True
+    monkeypatch.setattr(RD, "_open_audit_ids_from_not_discharged", lambda _not_discharged: None)
+    auditor = state["_auditTargets"][0]["auditorVendor"]
+    RD._fold_audits(state, state["config"], {
+        "results": [{"id": zid, "ruling": "discharged", "reason": "gone"}],
+        "collectionManifest": {zid: auditor}})
+    assert state["restagedAfterDispositionSeq"] == {"A": mark}
 
 
 def test_standing_rulings_omit_a_skip_a_merged_members_newer_guidance_supersedes():
