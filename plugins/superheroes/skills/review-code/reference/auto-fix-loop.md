@@ -624,6 +624,14 @@ Report it under "escalated" with the id and why.
 - checkOutput: <tail of the verify command, only if CHECK_FAILED>
 ```
 
+### A ruling that arrives during a fix
+
+A ruling (`rule`, see `round-driver.md` § Owner and advisor rulings) is accepted whenever it arrives.
+A fixer already dispatched is never stopped to take it and folds its result as usual; the ruling
+binds the next fix of its finding, and when that fix went against it the next round sends the finding
+back. No finding below blocking joins a fix batch unless a ruling names it; those settle when the loop
+converges.
+
 ---
 
 ## Verification Rules (for subagents)

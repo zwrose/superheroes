@@ -204,9 +204,7 @@ RULING_FOLLOW_UP_MALFORMED = "ruling-follow-up-malformed"
 RULING_DECIDED_BY_MALFORMED = "ruling-decided-by-malformed"
 RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
 RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
-RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
 RULINGS_LOG_MALFORMED = "rulings-log-malformed"
-RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
@@ -247,7 +245,7 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
 # version; while it is unfinished, `_upgrade_gate` refuses every command on it.
-SESSION_GENERATION = 4
+SESSION_GENERATION = 5
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
@@ -1557,7 +1555,10 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
         entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
-    if isinstance(existing, dict) and not _disposition_is_current(existing):
+    if isinstance(existing, dict) and (
+            not _disposition_is_current(existing) or _restaged_after(state, key, existing)
+            or _undispatched_ruling(state, _live_ruling_by_key(state),
+                                    {k: ledger[i] for k, i in seen.items()}, key) is not None):
         # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
         # never turns a real one into a craft decision.
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
@@ -2251,6 +2252,14 @@ def _disposition_is_current(row):
             and disp_seq > raised_seq)
 
 
+def _restaged_after(state, key, row):
+    """True when an owner ruling sent the finding back to a fixer after ``row``'s disposition: that
+    disposition is the one the ruling reopened, so it no longer settles the finding."""
+    mark = (state.get("restagedAfterDispositionSeq") or {}).get(key)
+    seq = row.get(session_contract.DISPOSITION_SEQ_FIELD)
+    return _is_plain_int(mark) and _is_plain_int(seq) and seq <= mark
+
+
 def _skip_settle(state, fault):
     token = getattr(fault, "token", None) or "ledger-fault"
     detail = getattr(fault, "detail", None) or str(fault)
@@ -2295,13 +2304,16 @@ def _settle_open_findings(state, cap=False):
         row = ledger_by_key.get(key) or live_by_key[key]
         if not isinstance(row, dict) or row.get("summaryEntry") or row.get(session_contract.MERGED_INTO_FIELD):
             continue
-        if _disposition_is_current(row):
+        pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
+        if _disposition_is_current(row) and not _restaged_after(state, key, row) and pending is None:
             continue
         todo.append((key, row, _newest_content(row, live_by_key.get(key))))
     if not todo:
         return
     sources = {}
-    if any(session_contract.decided_by_of(rulings.get(key)) for key, _, _ in todo):
+    bound = {key: _row_decision(state, rulings, ledger_by_key, key) or rulings.get(key)
+             for key, _, _ in todo}
+    if any(session_contract.decided_by_of(bound[key]) for key, _, _ in todo):
         try:
             sources = _decision_sources(state)
         except Exception:  # noqa: BLE001 — fail closed: no sources, nothing on record
@@ -2310,10 +2322,14 @@ def _settle_open_findings(state, cap=False):
             sources = {}
     for key, row, content in todo:
         reason = why_open
-        if row.get("disposition") == "out-of-scope":
+        pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
+        if pending is not None:
+            reason = "owner ruling %s (%s) was recorded but never sent to a fixer; %s" % (
+                pending["seq"], pending["ruling"], why_open)
+        if row.get("disposition") == "out-of-scope" and pending is None:
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
-            content, ruling=rulings.get(key), sources=sources, open_reason=reason)
+            content, ruling=bound[key], sources=sources, open_reason=reason)
         live = live_by_key.get(key)
         if content is row and live is not None and live is not row:
             # The newer staged report outranks the live copy: the owner record reads live content first.
@@ -3925,9 +3941,22 @@ def _gate_guidance_entries(state, rnd):
         # owner-gate decisions stay readable on their own, as they were before the shared reader.
         effective = _effective_decisions(state, with_rules=False)
 
+    # The decision the resolution point selected for a row is rendered as selected: the row names
+    # it by finding key and sequence, and no lookup by the key alone can pick a different one.
+    selected = {}
+    for row in batch:
+        if isinstance(row, dict) and row.get("ruledBy"):
+            for decision in effective.values():
+                if (decision.get("findingKey") == row["ruledBy"]
+                        and decision.get("seq") == row.get("ruledBySeq")
+                        and decision.get("ruling") in _OWNER_FIX_RULINGS):
+                    selected[_fix_batch_row_key(row)] = decision
+
     def guided(key):
-        """The effective decision for ``key`` when it is a usable ``guidance``, else None."""
-        live = effective.get(key)
+        """The effective decision for ``key`` (the one the resolution point attached to its batch
+        row, when a ruling was given to a finding merged into it) when it is a usable ``guidance``,
+        else None."""
+        live = selected.get(key, effective.get(key))
         if not isinstance(live, dict) or live.get("ruling") != "guidance":
             return None
         guidance = live.get("guidance")
@@ -3964,6 +3993,7 @@ def _gate_guidance_entries(state, rnd):
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
     ruling_channel = []
+    batch_rows = {_fix_batch_row_key(row): row for row in batch if isinstance(row, dict)}
     for key in sorted(batch_keys):
         if key in covered_keys:
             continue
@@ -3971,7 +4001,7 @@ def _gate_guidance_entries(state, rnd):
         if live is None:
             continue
         carried_from = live.get("findingKey") if live.get("findingKey") != key else None
-        live_row = _live_finding_by_key(state, key)
+        live_row = _live_finding_by_key(state, key) or batch_rows.get(key)  # restaged: only the batch row
         if live.get("source") == "gate":
             entry = {"id": key, "title": live.get("title"), "file": live.get("file"),
                      "line": live.get("line"), "guidance": live["guidance"].strip(),
@@ -4282,8 +4312,9 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
                 and _live_out_of_scope_ruling_for_key(state, member) is None):
             fix_batch.append(dict(live))
             queued.add(member)
-    if fix_batch:
-        _queue_fix_batch(state, config, fix_batch)
+    # The one resolution point also serves the everything-skipped case (no rows): an owner-named
+    # finding still reaches a fixer, and only a batch that is empty after that settles here.
+    if _queue_fix_batch(state, config, fix_batch) != "empty":
         return
     # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
     # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
@@ -4313,7 +4344,7 @@ def _after_findings_settled(state, config):
         if _route_judgment_blockers(state, blocking):
             return
         _queue_fix_batch(state, config, [dict(f) for f in blocking])
-    else:
+    elif _queue_fix_batch(state, config, []) == "empty":
         _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
@@ -4340,8 +4371,12 @@ def _disposition_ledger_by_key(state):
     return by_key, None
 
 
-def _excluded_discharged_fix_row(ledger_by_key, row):
-    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate)."""
+def _excluded_discharged_fix_row(ledger_by_key, row, restaged=None):
+    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate).
+
+    ``restaged`` maps a finding key to the disposition counter when an owner ruling sent its finding
+    back to a fixer: a disposition at or before that mark is the one the ruling reopened, not a
+    discharge."""
     key = _finding_identity_key(row)
     if not key:
         return False
@@ -4355,6 +4390,9 @@ def _excluded_discharged_fix_row(ledger_by_key, row):
     disp_is_int = isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
     raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
     if disp_is_int and raised_is_int:
+        mark = (restaged or {}).get(key)
+        if _is_plain_int(mark) and disp_seq <= mark:
+            return False
         return disp_seq > raised_seq
     return False
 
@@ -4366,13 +4404,17 @@ def _filter_excluded_discharged_fixes(state, rows):
     if fault is not None:
         return rows, fault
     oos_keys = _live_out_of_scope_ruling_keys(state)
+    restaged = state.get("restagedAfterDispositionSeq") or {}
+    effective = _live_ruling_by_key(state)
     filtered = []
     for row in rows:
-        if _excluded_discharged_fix_row(ledger_by_key, row):
+        if _excluded_discharged_fix_row(ledger_by_key, row, restaged):
             continue
         key = _fix_batch_row_key(row)
         if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
-            continue
+            bound = _row_decision(state, effective, ledger_by_key, key)
+            if bound is None or bound.get("ruling") not in _OWNER_FIX_RULINGS:
+                continue  # a newer fix ruling given to a merged-in finding outranks the skip
         filtered.append(row)
     return filtered, None
 
@@ -4386,24 +4428,248 @@ def _resolve_empty_fix_batch_convergence(state, config):
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
+def _fix_row_roots(state, rows, ledger_by_key=None):
+    """The ruling roots of the finding keys the ``rows`` hold — a reworded finding, the one it
+    rewords and the findings merged into either are one finding."""
+    roots = set()
+    for row in rows or []:
+        key = _fix_batch_row_key(row)
+        if key:
+            roots.add(_ruling_root(state, ledger_by_key or {}, key))
+    return roots
+
+
+# The effective decisions that are the owner's word to fix a finding: a fix choice at the owner gate
+# and guidance (from the gate or the `rule` verb).
+_OWNER_FIX_RULINGS = ("fix", "guidance")
+
+
+def _decision_seq(decision):
+    seq = decision.get("seq") if isinstance(decision, dict) else None
+    return seq if _is_plain_int(seq) else 0
+
+
+def _merge_representative(state, ledger_by_key, key):
+    """The finding that stands for ``key`` once its merges are followed: ``key`` itself unless its
+    live row (with no live row, its ledger row) is merged into another."""
+    seen = {key}
+    while True:
+        row = _live_finding_by_key(state, key)
+        if not isinstance(row, dict):
+            row = ledger_by_key.get(key)
+        into = row.get(session_contract.MERGED_INTO_FIELD) if isinstance(row, dict) else None
+        if not isinstance(into, str) or not into or into in seen:
+            return key
+        seen.add(into)
+        key = into
+
+
+def _ruling_root(state, ledger_by_key, key):
+    """The one identity a ruling is matched on: the smallest key of ``key``'s ``_ruling_closure`` —
+    the same closure ``_ruled_row`` locates a row by, so every member of the group shares one root."""
+    return min(_ruling_closure(state, ledger_by_key, key))
+
+
+def _row_decision(state, effective, ledger_by_key, key):
+    """The decision that binds the fix-batch row ``key``: its own effective decision, or a later
+    ``guidance``/``fix`` decision given to a finding that was merged into it."""
+    best = effective.get(key)
+    root = _ruling_root(state, ledger_by_key, key)
+    for member, decision in effective.items():
+        if (member != key and decision.get("ruling") in _OWNER_FIX_RULINGS
+                and _ruling_root(state, ledger_by_key, member) == root
+                and (best is None or _decision_order((0, decision)) > _decision_order((0, best)))):
+            best = decision
+    return best
+
+
+def _reopened_ledger_row(ledger_by_key, key):
+    """The finding's own ledger row as an open finding again (its disposition dropped), or None."""
+    row = ledger_by_key.get(key)
+    if not isinstance(row, dict):
+        return None
+    reopened = _strip_disposition_family(dict(row))
+    reopened.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+    return reopened
+
+
+def _ruling_closure(state, ledger_by_key, key):
+    """Every key ``key`` reaches by alternating lineage-group membership and ``mergedInto`` (a key
+    merged into another, or another merged into it), until no new key appears. Cycle-safe."""
+    merged_into = {}
+    for finding in list(state.get("findings") or []) + list(ledger_by_key.values()):
+        at = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        into = finding.get(session_contract.MERGED_INTO_FIELD) if at else None
+        if isinstance(into, str) and into:
+            merged_into.setdefault(at, into)
+    seen, todo = set(), [key]
+    while todo:
+        at = todo.pop()
+        if at in seen:
+            continue
+        seen.add(at)
+        todo += _lineage_group(state, at)
+        todo += [merged_into[at]] if at in merged_into else []
+        todo += [k for k, into in merged_into.items() if into == at]
+    return seen
+
+
+def _ruled_row(state, ledger_by_key, decision, sent, effective=None):
+    """``(row, from_ledger)`` for the row an owner decision sends to a fixer, ``(None, False)`` when
+    it names no live finding: the one live, unmerged finding in the ruling's closure, else the
+    restage candidate from the ledger (a finding a fixer order carried before the ruling, or one that
+    left the live list with no disposition)."""
+    lineage = _lineage_map(state)
+    closure = sorted(_ruling_closure(state, ledger_by_key, decision["findingKey"]))
+    if effective is None:
+        effective = _live_ruling_by_key(state)
+    for at in closure:
+        row = _live_finding_by_key(state, at)
+        if (isinstance(row, dict) and not row.get(session_contract.MERGED_INTO_FIELD)
+                and not (row.get("disposition") in ("fixed", "refuted")
+                         and _disposition_is_current(row))
+                and _row_decision(state, effective, ledger_by_key, at) is decision):
+            return dict(row), False
+    sent_before = any(_lineage_root(lineage, k) in sent for k in closure)
+    latest = None  # the most recently raised eligible version, not the first lexical one
+    for at in closure:
+        ledger_row = ledger_by_key.get(at)
+        if ((sent_before or not session_contract.disposition_value(ledger_row))
+                and not (isinstance(ledger_row, dict) and ledger_row.get(session_contract.MERGED_INTO_FIELD))
+                and _row_decision(state, effective, ledger_by_key, at) is decision):
+            row = _reopened_ledger_row(ledger_by_key, at)
+            if row is None:
+                continue
+            raised = (ledger_row.get(session_contract.RAISED_ROUND_FIELD),
+                      ledger_row.get(session_contract.RAISED_SEQ_FIELD))
+            order = tuple(v if _is_plain_int(v) else -1 for v in raised)
+            if latest is None or order > latest[0]:
+                latest = (order, row)
+    return (latest[1], True) if latest else (None, False)
+
+
+def _undispatched_ruling(state, effective, ledger_by_key, key):
+    """The owner ``fix``/``guidance`` decision binding ``key`` that no fixer was ever sent, or None."""
+    decision = _row_decision(state, effective, ledger_by_key, key)
+    if (not isinstance(decision, dict) or decision.get("ruling") not in _OWNER_FIX_RULINGS
+            or not _is_plain_int(decision.get("seq"))):
+        return None
+    lineage = _lineage_map(state)
+    sent = state.get("sentUnderDecision") or {}
+    ats = (key, decision["findingKey"])
+    if any(sent.get(_lineage_root(lineage, at), -1) >= decision["seq"] for at in ats):
+        return None
+    return decision
+
+
+def _resolve_ruled_batch(state, rows):
+    """THE one place a ruling reaches a fixer's batch — worked out once, as the batch is finalized.
+
+    ``rows`` are the findings already offered (after the out-of-scope and discharge exclusions). Each
+    effective ``guidance``/``fix`` decision is attached to the row it binds (``ruledBy``), and each
+    finding such a decision names that no fixer has been sent under that decision joins the batch,
+    whatever its severity (``sentUnderDecision``: the decision's ``seq`` it was last sent under, by
+    lineage root). A decision that names no live finding is recorded and left to the settle."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return list(rows)
+    effective = _live_ruling_by_key(state)
+    lineage = _lineage_map(state)
+    sent = state.get("sentUnderDecision") or {}
+    batch = [dict(row) for row in rows]
+    held = _fix_row_roots(state, batch, ledger_by_key)
+    added = []
+    decisions = {id(d): d for d in effective.values()}.values()
+    for decision in sorted(decisions, key=_decision_seq):
+        if (decision.get("ruling") not in _OWNER_FIX_RULINGS or not _is_plain_int(decision.get("seq"))
+                or sent.get(_lineage_root(lineage, decision["findingKey"]), -1) >= decision["seq"]):
+            continue
+        row, from_ledger = _ruled_row(state, ledger_by_key, decision, sent, effective)
+        key = _fix_batch_row_key(row) if row else None
+        if key is None:
+            note = "ruling %s on %s names no live finding" % (decision["seq"], decision["findingKey"])
+            if not any(d["kind"] == "ruling-no-live-finding" and d["detail"] == note
+                       for d in state["decisions"]):
+                _decision(state, "ruling-no-live-finding", note)
+            continue
+        root = _ruling_root(state, ledger_by_key, key)
+        if _row_decision(state, effective, ledger_by_key, key) is not decision:
+            continue
+        queued = root in held  # already offered: the ruling is satisfied by that row, not restaged
+        held.add(root)
+        own = set()
+        if from_ledger and not queued:  # the ledger keeps its disposition; mark it as the one this ruling reopened
+            state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
+                state.get("dispositionSeqCounter", 0))
+            own = {key, _finding_identity_key(row)}
+        elif not queued:
+            own = {key}
+        # the closure's discharged members are reopened too, whichever way the ruled row was reached
+        for member in _ruling_closure(state, ledger_by_key, key) - own:
+            entry = ledger_by_key.get(member)
+            if (isinstance(entry, dict) and entry.get("disposition") in ("fixed", "refuted")
+                    and _disposition_is_current(entry)):
+                state.setdefault("restagedAfterDispositionSeq", {})[member] = (
+                    state.get("dispositionSeqCounter", 0))
+        if not queued:
+            added.append(row)
+    added.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
+    if added:
+        _decision(state, "fix-batch-ruled",
+                  "%d finding(s) named by an owner ruling join this fix batch: %s"
+                  % (len(added), ", ".join(_fix_batch_row_key(row) for row in added)))
+    batch += added
+    for row in batch:
+        row.pop("ruledBy", None)
+        row.pop("ruledBySeq", None)
+        key = _fix_batch_row_key(row)
+        decision = _row_decision(state, effective, ledger_by_key, key) if key else None
+        if decision is not None and decision is not effective.get(key):
+            row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding
+            row["ruledBySeq"] = decision.get("seq")
+    return batch
+
+
+def _note_sent_under_decision(state, rows):
+    """Remember, by lineage root, the decision each row of an emitted slice goes to a fixer under
+    (0 when none): a decision is sent once, and a finding sent before a ruling can be sent back."""
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    effective = _live_ruling_by_key(state)
+    lineage = _lineage_map(state)
+    sent = state.setdefault("sentUnderDecision", {})
+    for row in rows:
+        key = _fix_batch_row_key(row)
+        decision = _row_decision(state, effective, ledger_by_key, key) if key else None
+        for at in {key, decision.get("findingKey") if decision else None} - {None}:
+            root = _lineage_root(lineage, at)
+            sent[root] = max(sent.get(root, 0), _decision_seq(decision))
+
+
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    Every batch passes ``_resolve_ruled_batch``, which adds the findings an owner ruling names. With
+    no offered row and none named, nothing is recorded and the caller settles.
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
     setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
     the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
-    is 0; on a continuation the caller enters post-fix), or ``"faulted"`` when a disposition-
+    is 0; on a continuation the caller enters post-fix), ``"empty"`` when no row was offered and
+    none is named by a ruling (the caller settles), or ``"faulted"`` when a disposition-
     ledger read fault parked the session.
     """
     cap = _fix_batch_cap(config)
-    if reset_accumulator:
-        state["fixBatch"] = []
     offered_nonempty = bool(rows)
     filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
-    if offered_nonempty and not filtered:
+    filtered = _resolve_ruled_batch(state, filtered)
+    if not filtered and not offered_nonempty:
+        return "empty"
+    if reset_accumulator:
+        state["fixBatch"] = []
+    if not filtered:
         rec = state["rounds"].setdefault(str(state["round"]), {})
         prior = rec.get("fixBatchExcludedByDischarge") or 0
         _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
@@ -4417,6 +4683,7 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "fix batch emptied by discharged-finding exclusion — "
                       "remaining queue exhausted, the round proceeds to post-fix")
         return "excluded"
+    _note_sent_under_decision(state, filtered[:cap])
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
@@ -5360,9 +5627,17 @@ def _fold_audits(state, config, artifact, session_dir=None):
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
+    still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
+        # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
+        # An unresolvable notDischarged list leaves every restage mark in place (fail closed).
+        reopened = state.get("restagedAfterDispositionSeq")
+        if reopened and still_open is not None:
+            ledger_now, _lf = _disposition_ledger_by_key(state)
+            for member in _ruling_closure(state, ledger_now or {}, tid) - {tid} - still_open:
+                reopened.pop(member, None)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
@@ -5503,6 +5778,8 @@ def _settle_delta(state, config):
         _queue_fix_batch(state, config, batch)
         return
 
+    if _queue_fix_batch(state, config, []) != "empty":
+        return
     _settle_delta_converged(state, config)
 
 
@@ -7346,18 +7623,11 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             if circuit_breaker.is_critical(sev):
                 return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
                                    id=entry["id"])
-    if (isinstance(pending, dict) and pending.get("phase") == P_FIXER
-            and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
-                                            pending.get("attempt"))):
-        return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
-                           phase=pending.get("phase"), rnd=pending.get("round"),
-                           attempt=pending.get("attempt"))
-    if state.get("step") != P_FIXER:
-        for entry in parsed:
-            if entry["ruling"] == "guidance":
-                return _refuse_cmd(
-                    session_dir, RULE_CMD, RULING_GUIDANCE_NOT_FIXER,
-                    phase=phase, rnd=rnd, attempt=attempt)
+    # Timing never refuses a ruling: it is recorded whenever it arrives and binds the next fix of its
+    # finding. A fixer attempt whose orders are out is left alone (its batch is not re-sliced).
+    emitted = (isinstance(pending, dict) and pending.get("phase") == P_FIXER
+               and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                               pending.get("attempt")))
     cfg = state.get("config") or {}
     round_rulings = []
     restored_rows = []
@@ -7425,9 +7695,10 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
-    _reconcile_fixer_queue_after_rulings(
-        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
-    if state.get("step") == P_FIXER:
+    if not emitted:
+        _reconcile_fixer_queue_after_rulings(
+            state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+    if not emitted and state.get("step") == P_FIXER:
         pending_render_check = state.get("pending")
         rnd_render = None
         if isinstance(pending_render_check, dict):
@@ -9626,9 +9897,15 @@ def _standing_rulings_for_orders(state):
     _rows, fault = _read_rulings_log(state)
     if fault is not None:
         return [], "%s: %s" % fault
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    effective = _live_ruling_by_key(state)
+    # One resolution point: a skip a later owner fix/guidance on a merged-in member supersedes (the
+    # same ``_row_decision`` the fix batch binds by) is not a standing ruling.
     return ([{"findingKey": key, "reason": entry.get("reason")}
-             for key, entry in _live_ruling_by_key(state).items()
-             if entry.get("ruling") == "out-of-scope" and entry.get("source") == "rule"], None)
+             for key, entry in effective.items()
+             if entry.get("ruling") == "out-of-scope" and entry.get("source") == "rule"
+             and (ledger_fault is not None
+                  or _row_decision(state, effective, ledger_by_key, key) is entry)], None)
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,

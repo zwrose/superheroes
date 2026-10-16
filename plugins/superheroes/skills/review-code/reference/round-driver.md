@@ -568,14 +568,41 @@ A guidance ruling that supersedes a live out-of-scope ruling clears that disposi
 the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
 fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
-A ruling while a pending fixer attempt already has emitted orders is refused — a ruling waits until
-that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes unchanged):
+
+A ruling is accepted whenever it arrives, at any step that is not terminal, and binds the next fix of
+its finding. `rule` only records: a fixer attempt whose orders are already out is never stopped and
+its batch never reshaped, so its result folds normally. Refusal tokens (each leaves state bytes unchanged;
+none is about timing):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
 `ruling-critical-out-of-scope`, `ruling-decided-by-malformed`,
-`ruling-session-terminal`, `ruling-attempt-pending`,
+`ruling-session-terminal`,
 `disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
+
+### Where a ruling reaches the fixer (the one resolution point)
+
+Which finding a ruling names is worked out once, as a fixer batch is finalized: every batch passes
+`_resolve_ruled_batch` (called by `_queue_fix_batch`, the one writer of the batch). Out-of-scope
+decisions drop their findings first. Each effective `guidance` or `fix` decision is then attached to
+the row it binds (a decision given to a finding merged into another rides the representative, as
+`ruledBy`), and each finding such a decision names that has not been sent under it joins the batch,
+whatever its severity. A finding is found by following the lineage and `mergedInto` to the one live
+row. One that is no longer live comes back from the ledger as an open finding when a fixer order
+carried it before the ruling (the fix went against the ruling, so the next round sends it back) or
+when it left the live list with no disposition. For any other the ruling names no live finding: a
+`ruling-no-live-finding` decision records it and the end-of-loop settle takes the finding.
+`state.sentUnderDecision` keeps, by lineage root, the decision `seq` each finding was last sent under,
+so a decision is sent once; a round with no blocker still starts a fixer leg for an owner-named row.
+`state.restagedAfterDispositionSeq` marks a finding restaged from the ledger: the disposition the ruling
+reopened does not exclude it as discharged.
+
+### Below-blocking findings settle at convergence
+
+No below-blocking finding joins a fix batch on its own. When the loop converges, every finding with
+no outcome gets one (§ Dispositions): left for the owner with its consequence when it states a real
+one, otherwise craft. The only below-blocking finding a fixer receives is one an owner `guidance` or
+`fix` decision names.
 
 Owner-gate guidance is held to the same measure. A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at submit with `gate-guidance-oversize`, nothing folds, and the owner resubmits shorter guidance; on the library `run_loop` path the fold parks `cannot-certify` with the same token. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a submit whose fix batch would carry more guidance than one order holds refuses with `gate-guidance-aggregate-oversize` (the library fold parks with it), and the render refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
 

@@ -40,6 +40,7 @@ These retirements ship in the same release as the review record, and never apart
 - **The exact-head evidence chain.** The head-content blobs and their recomputation check are gone. The review record is judged against the PR's final commit instead.
 - A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
 - A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
+- A review session open across this upgrade starts again. Sessions from before dispatch history was kept for owner rulings answer `session-from-earlier-version` on the first driver command; run Setup again into a fresh session folder.
 
 ### Review: the lane follows Risk and trust
 
