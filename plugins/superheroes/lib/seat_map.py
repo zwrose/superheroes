@@ -1390,6 +1390,9 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         out["codexRolePins"] = seat_map["codexRolePins"]
     if "laneBasis" in seat_map:
         out["laneBasis"] = seat_map["laneBasis"]
+    # compose stamps the host family; a map that never went through compose carries none
+    if "hostFamily" in seat_map:
+        out["hostFamily"] = seat_map["hostFamily"]
     return out
 
 
@@ -1604,12 +1607,14 @@ def main(argv):
 
         author_family = args.author_family
         narrative_family = args.narrative_family
+        receipt_host_family = None
         if args.implementation_engine is not None:
             if args.author_family is not None or args.narrative_family is not None:
                 print("family-flags-conflict", file=sys.stderr)
                 return 1
             host_model = args.host_model if args.host_model is not None else ""
             host_fam = model_registry.host_family(host_model)
+            receipt_host_family = host_fam
             impl_engine = args.implementation_engine
             claude_host_fam = model_registry.family_for("code-fixer", "claude")
             author_family = model_registry.family_for("code-fixer", impl_engine)
@@ -1706,6 +1711,7 @@ def main(argv):
             **build_kwargs,
         )
         sm["laneBasis"] = _lane_basis_receipt(lane_basis)
+        sm["hostFamily"] = receipt_host_family
         if family_degradations:
             sm["degradations"] = list(sm.get("degradations", [])) + family_degradations
         extra_degradations: list[dict[str, str]] = []

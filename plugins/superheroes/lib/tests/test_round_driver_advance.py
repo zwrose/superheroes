@@ -120,7 +120,7 @@ class FakeAdapters(object):
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
-                 session_dir=None):
+                 session_dir=None, orders_manifest=None):
         self.assembled.append({"phase": phase, "envelopes": envelopes,
                                "dispatch_manifest": dispatch_manifest,
                                "session_dir": session_dir})
@@ -144,6 +144,7 @@ class FakeAdapters(object):
             return {"seats": seats}, None
         if phase == RD.P_VERIFIERS:
             verdicts = []
+            seat_vendors = {}
             for env in (envelopes or []):
                 if not isinstance(env, dict):
                     continue
@@ -152,10 +153,20 @@ class FakeAdapters(object):
                 payload = env.get("payload")
                 if not isinstance(payload, dict):
                     continue
+                source = (env.get("executionEvidence") or {}).get("source")
                 for verdict in payload.get("verdicts") or []:
                     if isinstance(verdict, dict):
                         verdicts.append(dict(verdict))
-            return {"verdicts": verdicts}, None
+                        if isinstance(verdict.get("id"), str):
+                            seat_vendors[verdict["id"]] = (
+                                source if source in ("claude", "codex", "cursor") else "")
+            artifact = {"verdicts": verdicts, "verifierSeatVendors": seat_vendors}
+            # like the real adapter (per seat): the executed vendor is the envelope's execution evidence
+            sources = {(env.get("executionEvidence") or {}).get("source") for env in (envelopes or [])
+                       if isinstance(env, dict) and env.get("schema") != RR.SEAT_MISSING_SCHEMA}
+            if len(sources) == 1 and next(iter(sources)) in ("claude", "codex", "cursor"):
+                artifact["verifierVendor"] = next(iter(sources))
+            return artifact, None
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}, None
         if phase == RD.P_VERIFY:
@@ -792,7 +803,7 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 session_dir=None):
+                                 session_dir=None, orders_manifest=None):
         seats = {}
         for env in (envelopes or []):
             seat = env.get("seat")
@@ -826,7 +837,7 @@ def test_adapter_provenance_accumulates_per_phase_in_one_round(tmp_path, adapter
     verifier_omitted = [{"seat": "src/f.py:3", "occurrence": 0, "reason": "timeout"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 session_dir=None):
+                                 session_dir=None, orders_manifest=None):
         if phase == RD.P_PANEL:
             seats = {}
             for env in (envelopes or []):
@@ -1496,7 +1507,9 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     verdict_payload = {"verdicts": [{"id": "v0", "verdict": "CONFIRMED",
                                      "reason": "confirmed by sweep-silence fixture",
                                      "evidence": "reproduced the cited line"}]}
-    _land(d, verifier_seat, payload=verdict_payload)
+    # the seat ran on the driver's selected non-maker vendor (codex; fixer is claude)
+    _land(d, verifier_seat, payload=verdict_payload,
+          executionEvidence=_execution_evidence(source="codex"))
 
     sweep_out = RD.cmd_record_result(d, sweep=True, supersede=True,
                                      expect_sha256=RR.MISSING_CAS_TOKEN)
@@ -2432,7 +2445,7 @@ def test_advance_refuses_a_fold_the_submit_chokepoint_rejects(tmp_path, adapters
     _record_all_panel_seats(d)
 
     def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None,
-                     session_dir=None):
+                     session_dir=None, orders_manifest=None):
         return {"seats": {"architecture": {"findings": []}}}, None
 
     adapters.assemble = bad_assemble
@@ -2450,7 +2463,7 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     _record_all_panel_seats(d)
 
     def boom(phase, envelopes, state, config, dispatch_manifest=None,
-             session_dir=None):
+             session_dir=None, orders_manifest=None):
         raise RuntimeError("adapter exploded")
 
     adapters.assemble = boom

@@ -101,8 +101,11 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         return []
 
     def default_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                for c in (clusters or []) for i in (c.get("ids") or [])]
+        # Report the vendor it ran on: with the default fixer `claude` the independent selection is
+        # `codex`, and an unreported verdict does not count once the selection replaced the engine.
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
 
     def default_synthesis(findings, rnd):
         return None
@@ -123,8 +126,24 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     if vendors is not None:
         io_out.setdefault("seatMap", _assertable_seat_map(vendors, fixer_vendor))
 
+    base_reviewer = reviewer or default_reviewer
+
+    def finder_reporting_reviewer(dim, tier, rnd, ctx):
+        # Like the verifier above: the gap-sweep / scoped-finder callbacks report the vendor they ran
+        # on ({"findings": [...], "vendor": v}); with the default fixer `claude` the independent
+        # selection is `codex`, and an unreported finder result does not count once it replaced the
+        # reviewer engine (#1851 L4 K).
+        result = base_reviewer(dim, tier, rnd, ctx)
+        if dim not in ("gap-sweep", "scoped-finder"):
+            return result
+        if isinstance(result, list):
+            return {"findings": result, "vendor": "codex"}
+        if isinstance(result, dict):
+            return dict(result, vendor=result.get("vendor", "codex"))
+        return result
+
     return {
-        "reviewer": reviewer or default_reviewer,
+        "reviewer": finder_reporting_reviewer,
         "verifier": verifier or default_verifier,
         "synthesis": synthesis or default_synthesis,
         "auditor": auditor or default_auditor,
@@ -423,6 +442,17 @@ def _seed_repo_root_if_missing(session_dir, checkout_path):
     seed_session_meta(session_dir, checkout_path)
 
 
+def _claim_reviewer(session_dir, phase, art):
+    """A hand-submitting orchestrator names the vendor it dispatched the single-seat reviewer on
+    (`reviewerVendor`), which the driver requires when independence replaced the reviewer engine."""
+    if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) and isinstance(art, dict) and "reviewerVendor" not in art:
+        ok, state = RD.load_state(session_dir)
+        vendor = RD._nonpanel_selection(state, session_dir)[0] if ok else None
+        if vendor:
+            return dict(art, reviewerVendor=vendor)
+    return art
+
+
 def _drive_cli(session_dir, cfg, respond, max_steps=80):
     """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`.
 
@@ -438,7 +468,7 @@ def _drive_cli(session_dir, cfg, respond, max_steps=80):
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
             return n["payload"]
-        art = respond(n["phase"], n["payload"], n["round"])
+        art = _claim_reviewer(session_dir, n["phase"], respond(n["phase"], n["payload"], n["round"]))
         s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
     raise AssertionError("driver did not reach a terminal within %d steps" % max_steps)
@@ -523,7 +553,8 @@ def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
             return n
         assert n["action"] != RD.P_TERMINAL, "reached terminal before %s" % target_phase
         s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
-                          respond(n["phase"], n["payload"], n["round"]))
+                          _claim_reviewer(session_dir, n["phase"],
+                                          respond(n["phase"], n["payload"], n["round"])))
         assert s["ok"], s
     raise AssertionError("never reached %s within %d steps" % (target_phase, max_steps))
 
@@ -1554,8 +1585,9 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
 
 def test_run_loop_verifier_valid_reason_control():
     def good_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
-                for c in (clusters or []) for i in (c.get("ids") or [])]
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
 
     result, state = _run_loop_capturing_state(
         _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
@@ -3225,6 +3257,7 @@ _ALL_CHANNELS = {
     "priorCommentsUnavailable": True,
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
+    "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",

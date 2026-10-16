@@ -316,6 +316,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     fix_results = []
     # Live coverage decisions accumulated during the run.
     live_coverage = []
+    # The vendor the gap-sweep / scoped-finder callbacks simulate: the non-panel selection for the
+    # run's config, set before `run_loop` (empty when unseatable, so the guard's park stays honest).
+    finder_vendor = {}
 
     # Track last panel dim→findings for round-record persistence.
     last_panel = {"dims": {}, "round": None, "kind": "baseline"}
@@ -362,7 +365,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
                 usage.setdefault("scoped-finder:r%d" % rnd, {"total": 1})
                 return {"findings": [], "confidence": "high",
                         "verificationReceipt": _receipt(name, rnd, live_coverage),
-                        "usage": {"total": 1}}
+                        "usage": {"total": 1}, **finder_vendor}
             evs = [e for e in events if e.get("round") == target]
             for e in list(evs):
                 events.remove(e)
@@ -388,7 +391,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             last_panel["kind"] = "intermediate"
             return {"findings": merged, "confidence": "high",
                     "verificationReceipt": _receipt(name, rnd, live_coverage),
-                    "usage": {"total": usage_total or 1}}
+                    "usage": {"total": usage_total or 1}, **finder_vendor}
 
         # Named-dimension seat: a round-1 baseline panel, a resumed round, or a re-armed
         # confirmation panel. Match this round's event first (baseline / resume / seeded), else — on
@@ -621,6 +624,12 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             "verifyCommand": "none",
             "baseGuard": RD.BASE_GUARD_CHECKED,
         }
+        try:
+            selected = RD._nonpanel_selection(RD.new_state(config))[0]
+        except (RD.RoundCeilingRefusal, RD.FixBatchCapRefusal):
+            selected = None  # run_loop parks the same refusal itself
+        if selected is not None:
+            finder_vendor["vendor"] = selected
         receipt = RD.run_loop(seams, config)
     finally:
         RD._fold_panel = _orig_fold_panel

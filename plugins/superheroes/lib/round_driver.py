@@ -357,6 +357,7 @@ normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 live_vendors = receipt_disclosures.live_vendors
 independent_auditor = receipt_disclosures.independent_auditor
 independent_reviewer = receipt_disclosures.independent_reviewer
+host_family = receipt_disclosures.host_family
 independent_auditor_available = receipt_disclosures.independent_auditor_available
 unfilled_seats = receipt_disclosures.unfilled_seats
 maker_families = receipt_disclosures.maker_families
@@ -488,7 +489,7 @@ ORDER_EMISSION_DISCLOSURE_CHANNELS = (
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
-VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
+VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
@@ -2794,6 +2795,100 @@ def synthesis_staged_id_fault(state, artifact):
     return None
 
 
+def _anchored_orders_manifest(state, session_dir, rnd, phase, attempt):
+    """The orders manifest the dispatch of ``(rnd, phase, attempt)`` emitted, only when its canonical
+    hash equals the state-mirrored emission anchor (the file alone is mutable); else None. One home
+    for every reader of the driver's own record of who each seat was dispatched on. Never raises."""
+    try:
+        anchor = _orders_anchor(state, session_dir, rnd, phase, attempt)
+        manifest, err = round_records.read_json(
+            _orders_manifest_path(session_dir, rnd, phase, attempt))
+    except Exception:  # noqa: BLE001 — a missing record falls back to the live selection
+        return None
+    if err is not None or not isinstance(manifest, dict) or not isinstance(anchor, dict):
+        return None
+    if round_records.sha256_text(round_records.canonical(manifest)) != anchor.get("manifestSha256"):
+        return None
+    return manifest
+
+
+def _latest_emission_attempt(state, session_dir, phase):
+    """The latest attempt number of this round's ``phase`` dispatch that was emitted, found through
+    the state-mirrored emission anchors AND the journalled ``orders-emitted`` events (the same two
+    homes `_orders_anchor` resolves an emission from, so a session that lost its state mirror still
+    names its emission), or None when none was emitted. Never raises."""
+    if not session_dir:
+        return None
+    rnd = state.get("round")
+    best = None
+    anchors = state.get("_ordersAnchors")
+    for key in (anchors if isinstance(anchors, dict) else ()):
+        parts = key.split(":") if isinstance(key, str) else []
+        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase \
+                and parts[2].isdigit() and (best is None or int(parts[2]) > best):
+            best = int(parts[2])
+    try:
+        events = read_journal(session_dir)
+    except Exception:  # noqa: BLE001 — an unreadable journal contributes no emission
+        events = []
+    for event in events if isinstance(events, list) else ():
+        if not isinstance(event, dict) or event.get("outcome") != "orders-emitted":
+            continue
+        attempt = event.get("attempt")
+        if event.get("round") == rnd and event.get("phase") == phase \
+                and isinstance(attempt, int) and not isinstance(attempt, bool) \
+                and (best is None or attempt > best):
+            best = attempt
+    return best
+
+
+def _emission_unverifiable(state, session_dir, phase):
+    """The reason (truthy) when this round's ``phase`` dispatch recorded an emission anchor but its orders
+    manifest is unreadable, unverified, or names several vendors: nothing it ordered can be
+    authenticated (fail closed — never a fallback to the live selection)."""
+    best = _latest_emission_attempt(state, session_dir, phase)
+    if best is None:
+        return None
+    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best)
+    seats = manifest.get("seats") if isinstance(manifest, dict) else None
+    if len({e.get("vendor") for e in seats.values() if isinstance(e, dict)} if isinstance(seats, dict) else ()) > 1:
+        return "emission-manifest-mixed-vendors"  # one phase, several vendors: no single vendor to bind
+    return "emission-manifest-unverifiable" if manifest is None else None
+
+
+def _recorded_phase_vendor(state, session_dir, phase):
+    """The vendor the dispatch of ``phase`` in the current round recorded at emission (its orders
+    manifest's per-seat ``vendor``), or None when nothing was emitted, the manifest does not verify
+    against the state-mirrored anchor, or the seats do not name exactly one vendor. The fold runs
+    after ``pending`` is cleared, so the dispatch is found through the mirrored emission anchors
+    (latest attempt of this round's phase). Never raises."""
+    best = _latest_emission_attempt(state, session_dir, phase)
+    if best is None:
+        return None
+    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best)
+    seats = manifest.get("seats") if isinstance(manifest, dict) else None
+    vendors = {entry.get("vendor") for entry in seats.values() if isinstance(entry, dict)} \
+        if isinstance(seats, dict) else set()
+    if len(vendors) == 1:
+        only = next(iter(vendors))
+        if isinstance(only, str) and only:
+            return only
+    return None
+
+
+def _recorded_claim_required(state, session_dir, phase):
+    """True when the ``phase`` dispatch recorded that its result must claim the vendor that ran."""
+    best = _latest_emission_attempt(state, session_dir, phase)
+    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best) \
+        if best is not None else None
+    return isinstance(manifest, dict) and manifest.get("claimRequired") is True
+
+
+def _recorded_verifier_vendor(state, session_dir):
+    """`_recorded_phase_vendor` for the verifier dispatch."""
+    return _recorded_phase_vendor(state, session_dir, P_VERIFIERS)
+
+
 def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
@@ -2802,6 +2897,74 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # folds exactly like silence (every staged finding stays unverified), as an unseatable
         # audit target does.
         verdicts = []
+    # axis: the verdicts count only when the vendor that ran them is the driver's selected non-maker
+    # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
+    # unproven family and folds like silence.
+    selected, source = _nonpanel_selection(state, session_dir)
+    barred = receipt_disclosures.nonpanel_barred(state, config)
+    unverifiable = _emission_unverifiable(state, session_dir, P_VERIFIERS)
+    if selected is not None and verdicts and unverifiable:
+        # The dispatch anchored an emission but its manifest is unreadable, tampered or mixed: the
+        # vendor it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
+        _record_round_append(state, "verifierProvenance", {
+            "expected": selected, "ran": None, "outcome": "verdicts-ignored", "reason": unverifiable})
+        verdicts = []
+    # The dispatch recorded its vendor at emission; a preference edited while the verifiers ran must
+    # not re-judge them against a selection nobody dispatched.
+    recorded = _recorded_verifier_vendor(state, session_dir)
+    rebound = recorded is not None and recorded != selected
+    if recorded is not None:
+        selected = recorded
+    seat_vendors = artifact.get("verifierSeatVendors")
+    if isinstance(seat_vendors, dict):
+        # Durable path: each seat's executed vendor authenticates only the verdicts that seat
+        # supplied; an unproven seat's verdicts fold as silence while a proven seat's still fold.
+        if selected is not None:
+            outcomes = {}
+            kept = []
+            seat_provenance = artifact.get("verifierSeatProvenance")
+            seat_provenance = seat_provenance if isinstance(seat_provenance, dict) else {}
+            via_manifest = set()
+            for verdict in verdicts:
+                vid = verdict.get("id") if isinstance(verdict, dict) else None
+                ran_vendor = seat_vendors.get(vid) if isinstance(vid, str) else None
+                ran_vendor = ran_vendor.strip() if isinstance(ran_vendor, str) and ran_vendor.strip() \
+                    else None
+                proven = ran_vendor == selected and not barred(ran_vendor)
+                outcomes.setdefault(ran_vendor, proven)
+                if seat_provenance.get(vid) == round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST:
+                    via_manifest.add(ran_vendor)
+                if proven:
+                    kept.append(verdict)
+            for ran_vendor, proven in outcomes.items():
+                row = {"expected": selected, "ran": ran_vendor,
+                       "outcome": "verdicts-folded" if proven else "verdicts-ignored"}
+                if ran_vendor == selected and not proven:
+                    row["reason"] = "vendor-ineligible"
+                if ran_vendor in via_manifest:
+                    row["provenance"] = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
+                _record_round_append(state, "verifierProvenance", row)
+            verdicts = kept
+    else:
+        ran = artifact.get("verifierVendor")
+        claimed = ran.strip() if isinstance(ran, str) and ran.strip() else None
+        # A claim is required when the selection replaced the reviewer engine (whatever the
+        # preference read's provenance) and on the durable path, which always carries the key.
+        claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
+                          or rebound or _nonpanel_replaced(state, selected, session_dir)
+                          or _recorded_claim_required(state, session_dir, P_VERIFIERS))
+        mismatch = (claimed is not None and claimed != selected) or (claim_required and claimed is None)
+        ineligible = not mismatch and selected is not None and barred(selected)
+        if verdicts and selected is not None and (mismatch or ineligible):
+            row = {"expected": selected, "ran": claimed, "outcome": "verdicts-ignored"}
+            if ineligible:
+                row["reason"] = "vendor-ineligible"
+            _record_round_append(state, "verifierProvenance", row)
+            verdicts = []
+        elif verdicts:
+            _record_round_append(state, "verifierProvenance", {
+                "expected": selected, "ran": claimed if claimed is not None else selected,
+                "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
@@ -5694,16 +5857,35 @@ def _run_seam(seams, action, payload, state, config):
                 out["seatMap"] = sm
         return out
     if action == P_VERIFIERS:
-        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        result = seams["verifier"](payload.get("clusters"), state["round"])
+        # The callback may report the vendor it actually ran on: `{"verdicts": [...], "vendor": v}`.
+        # A bare list reports nothing. Never the driver's selection: that is an assertion of who ran
+        # with no execution record.
+        reported = None
+        if isinstance(result, dict) and "verdicts" in result:
+            vendor = result.get("vendor")
+            reported = vendor.strip() if isinstance(vendor, str) and vendor.strip() else None
+            result = result["verdicts"]
+        artifact = {"verdicts": result}
         fault = verifier_results_fault(artifact)
         if fault is not None:
             return {"verdicts": [], "_verifierArtifactFault": fault}
+        # No report leaves the key absent, so `_fold_verifiers` applies its own rule (an unclaimed
+        # verdict is ignored when the selection replaced the reviewer engine).
+        if reported is not None:
+            artifact["verifierVendor"] = reported
         return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
-    if action == P_GAPSWEEP:
-        return {"findings": _reviewer_findings(
-            seams["reviewer"]("gap-sweep", DEEP, state["round"], payload))}
+    if action in (P_GAPSWEEP, P_SCOPED):
+        result = seams["reviewer"]("gap-sweep" if action == P_GAPSWEEP else "scoped-finder",
+                                   DEEP, state["round"], payload)
+        artifact = {"findings": _reviewer_findings(result)}
+        # The callback may report who ran: `{"findings": [...], "vendor": v}`; a bare list reports none.
+        vendor = result.get("vendor") if isinstance(result, dict) else None
+        if isinstance(vendor, str) and vendor.strip():
+            artifact["reviewerVendor"] = vendor.strip()
+        return artifact
     if action == P_AUDITS:
         # This library layer IS the orchestrator here: it records its OWN dispatch manifest
         # out-of-band from the auditor's results — {target-id: the vendor it seated}, read straight
@@ -5715,9 +5897,6 @@ def _run_seam(seams, action, payload, state, config):
                     for t in targets if isinstance(t, dict) and t.get("id") is not None}
         return {"results": seams["auditor"](payload.get("targets"), state["round"]),
                 "collectionManifest": manifest}
-    if action == P_SCOPED:
-        return {"findings": _reviewer_findings(
-            seams["reviewer"]("scoped-finder", DEEP, state["round"], payload))}
     if action == P_VERIFY:
         return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
     if action == P_FIXER:
@@ -5869,6 +6048,21 @@ def _fix_batch_paths(state, artifact=None):
     return paths
 
 
+def _retain_unauthenticated_finder_findings(state, artifact):
+    """Carry the candidates of a finder result that failed vendor authentication onto the state as
+    explicitly UNVERIFIED rows, so the fail-closed park withholds certification without discarding
+    the review work already obtained. Rows never enter the fold (no verification, no ledger)."""
+    found = artifact.get("findings") if isinstance(artifact, dict) else None
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    for f in found if isinstance(found, list) else ():
+        if isinstance(f, dict):
+            row = dict(f)
+            row["unverified"] = True
+            rows.append(row)
+    _set_findings(state, rows)
+
+
 def _driver_receipt(state):
     """The terminal receipt of a run_loop state — the driver's own, built from the state alone."""
     return build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
@@ -5900,6 +6094,14 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
+            if action in (P_GAPSWEEP, P_SCOPED):
+                reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
+                if _library_finder_unauthenticated(state, reported):
+                    _retain_unauthenticated_finder_findings(state, artifact)
+                    _park_cannot_certify(
+                        state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
+                            action, _nonpanel_selection(state)[0], reported))
+                    return _driver_receipt(state)
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
                       verified_head_resolution=_verified_head_at_fold(None, state),
@@ -6577,6 +6779,18 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = (None, "verified head: %s" % exc)
             else:
                 resolution = None
+            if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):
+                # Durable path: the executed vendor is the runner's execution evidence, carried by the
+                # assembled artifact. Never the driver's selection; absent evidence stays an empty
+                # claim, which `_fold_verifiers` treats as a missing vendor claim.
+                artifact = dict(artifact)
+                artifact.setdefault("verifierSeatVendors", {})
+            elif phase == P_VERIFIERS and isinstance(artifact, dict):
+                # A hand artifact never carries durable execution evidence: its own per-seat
+                # provenance map is a courier claim, so it is dropped and the `verifierVendor`
+                # claim check decides.
+                artifact = {k: v for k, v in artifact.items()
+                            if k not in ("verifierSeatVendors", "verifierSeatProvenance")}
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)
@@ -6959,6 +7173,20 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         return {"ok": False, "reason": "nonpanel-reviewer-unseatable",
                 "detail": "no reviewer outside the makers' families can be seated for %s; no order "
                           "was emitted and a submitted artifact is not a review that ran" % phase}
+    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED) and not isinstance(artifact, dict):
+        return {"ok": False, "reason": "nonpanel-reviewer-unauthenticated",
+                "detail": "%s artifact must be a JSON object carrying `reviewerVendor`" % phase}
+    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED):
+        # A hand artifact for a finder phase is a review by the vendor it claims. When the selection
+        # replaced the reviewer engine, the claim (`reviewerVendor`) is required and must equal the
+        # vendor the dispatch recorded at emission — the verifier hand-submit rule, one helper.
+        claim_fault = _finder_hand_claim_fault(state, session_dir, phase, artifact)
+        if claim_fault is not None:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "nonpanel-reviewer-unauthenticated"})
+            return {"ok": False, "reason": "nonpanel-reviewer-unauthenticated",
+                    "detail": claim_fault}
     if phase == P_VERIFIERS:
         fault = verifier_results_fault(artifact)
         if fault:
@@ -7818,18 +8046,19 @@ _NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
 
 
 def _nonpanel_reviewer_vendor(state, config, repo_root):
-    """`(vendor, source)` for verifiers / gap-sweep / scoped, outside every maker family; `(None,
-    None)` when no live vendor qualifies (the seat is unseatable).
+    """`(vendor, source)` for verifiers / gap-sweep / scoped, outside every maker family (a native
+    host seat takes the seat map's host family); `(None, None)` when no live vendor qualifies (the
+    seat is unseatable).
 
-    With no maker family known and no fixer declared there is nothing to be independent of, so the
-    reviewer engine stands exactly as before (same vendor, same `vendorSource`)."""
+    The reviewer engine is the preferred candidate, so when it qualifies the result is the engine
+    with its own `vendorSource`."""
     vendor, source = _reviewer_engine_vendor(repo_root)
     cfg = config if isinstance(config, dict) else {}
     makers = receipt_disclosures.accumulated_maker_families(state)
     fixer = cfg.get("fixerVendor")
-    if not makers and not fixer:
-        return vendor, source
-    chosen, _family = receipt_disclosures.independent_reviewer(cfg, vendor, makers, fixer)
+    chosen, _family = receipt_disclosures.independent_reviewer(
+        cfg, vendor, makers, fixer,
+        host_family=receipt_disclosures.host_family(effective_seat_map(state)))
     if chosen is None:
         return None, None
     if chosen == vendor or source == VENDOR_SOURCE_DEFAULTED:
@@ -7852,6 +8081,59 @@ def _nonpanel_selection(state, session_dir=None):
     meta = _session_meta(session_dir) if session_dir else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     return _nonpanel_reviewer_vendor(state, cfg, repo_root)
+
+
+def _library_finder_unauthenticated(state, reported):
+    """True when a library gap-sweep / scoped result does not count: no selectable reviewer, a
+    reported vendor that is not the selection or fails the eligibility bar, or no report when the
+    selection replaced the reviewer engine."""
+    selected, _source = _nonpanel_selection(state)
+    if selected is None:
+        return True
+    if reported is None:
+        return _nonpanel_replaced(state, selected)
+    return reported != selected or receipt_disclosures.nonpanel_barred(state, state.get("config"))(reported)
+
+
+def _finder_hand_claim_fault(state, session_dir, phase, artifact):
+    """Reason string when a hand-submitted gap-sweep / scoped artifact does not authenticate its
+    reviewer, else None: the vendor claim (`reviewerVendor`) must equal the vendor the dispatch
+    recorded at emission (the live selection when none was recorded), is required when the
+    selection replaced the reviewer engine, and must pass the shared eligibility bar. An emission
+    whose manifest no longer verifies authenticates nothing."""
+    unverifiable = _emission_unverifiable(state, session_dir, phase)
+    if unverifiable:
+        return "%s dispatch recorded an emission whose orders manifest does not verify (%s); the " \
+               "vendor it ordered is unknown, so no submitted artifact can be authenticated" \
+               % (phase, unverifiable)
+    selected, source = _nonpanel_selection(state, session_dir)
+    expected = _recorded_phase_vendor(state, session_dir, phase) or selected
+    if expected is None:
+        return None
+    raw = artifact.get("reviewerVendor")
+    claimed = raw.strip() if isinstance(raw, str) and raw.strip() else None
+    required = (source == VENDOR_SOURCE_INDEPENDENT or _nonpanel_replaced(state, expected, session_dir)
+                or _recorded_claim_required(state, session_dir, phase))
+    if claimed is not None and claimed != expected:
+        return ("%s artifact claims reviewerVendor %r but the dispatch recorded %r; a result from "
+                "another vendor is not the independent review that was ordered"
+                % (phase, claimed, expected))
+    if required and claimed is None:
+        return ("%s artifact carries no `reviewerVendor`; the selection replaced the reviewer "
+                "engine, so the vendor that ran must be claimed (expected %r)" % (phase, expected))
+    if receipt_disclosures.nonpanel_barred(state, state.get("config"))(expected):
+        return ("%s reviewer %r is ineligible (a maker family, the fixer's vendor, or an unresolvable "
+                "host family); its result is not the independent review that was ordered"
+                % (phase, expected))
+    return None
+
+
+def _nonpanel_replaced(state, selected, session_dir=None):
+    """True when the non-panel selection is not the reviewer engine itself (independence replaced it)."""
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir) if session_dir else {}
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    return _reviewer_engine_vendor(repo_root)[0] != selected
 
 
 def effective_seat_map(state):
@@ -8782,6 +9064,13 @@ def _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt, sea
         envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
 
 
+def _cluster_finding_ids(pending, seat_key):
+    """The staged finding ids of the cluster a verifier seat (`verifier:<cluster key>`) was ordered."""
+    key = seat_key[len("verifier:"):]
+    return [f["id"] for c in pending.get("clusters") or [] if isinstance(c, dict) and c.get("key") == key
+            for f in c.get("findings") or [] if isinstance(f, dict) and isinstance(f.get("id"), str)]
+
+
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
                           pending_payload=None, seat_map=None, extra_journal_entries=()):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
@@ -8929,6 +9218,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "orderPath": paths["order_path"],
             "envelopeStubPath": paths["envelope_stub_path"],
         }
+        if phase == P_VERIFIERS:
+            # The verdict ids this seat's order assigned: `_assemble_verifiers` counts a verdict only from
+            # the seat that was ordered it (the manifest is hashed into the emission anchor).
+            seats[skey]["ids"] = _cluster_finding_ids(pending, seat_key)
         rendered.append((paths["order_path"], order_text.encode("utf-8"),
                          paths["envelope_stub_path"], order_sha, row, occurrence, seat_key))
 
@@ -8941,6 +9234,11 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                 "orders": round_records.NOT_EMITTED, "seats": seats}
     if certified_head:
         manifest["headSha"] = certified_head
+    if phase in _NONPANEL_REVIEWER_PHASES:
+        vendor, source = _nonpanel_selection(state, session_dir)
+        if vendor is not None and (source == VENDOR_SOURCE_INDEPENDENT
+                                   or _nonpanel_replaced(state, vendor, session_dir)):
+            manifest["claimRequired"] = True
     path = _orders_manifest_path(session_dir, rnd, phase, attempt)
     manifest_sha = round_records.sha256_text(round_records.canonical(manifest))
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
@@ -10757,9 +11055,12 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     manifest, _merr = _read_dispatch_manifest(manifest_path)
     manifest_disc = _dispatch_manifest_disclosure(manifest_path, _merr)
     _journal_dispatch_manifest_disclosure(session_dir, rnd, phase, attempt, manifest_disc)
+    # The driver's OWN emission record (verified against the state anchor; `{}` when unverifiable):
+    # the verifier and finder seats read it for the vendor each seat was dispatched on.
+    orders_manifest = _anchored_orders_manifest(state, session_dir, rnd, phase, attempt) or {}
     artifact, why = _adapters().assemble(phase, records, state, config,
                                          dispatch_manifest=manifest if _merr is None else None,
-                                         session_dir=session_dir)
+                                         session_dir=session_dir, orders_manifest=orders_manifest)
     if why is not None or not isinstance(artifact, dict):
         return _attach_dispatch_manifest_disclosure(
             session_dir,

@@ -440,7 +440,9 @@ def test_reviewer_phase_transport_row_carries_the_vendor_source(monkeypatch, pha
     """The marker reaches the transport row — the seam `_seat_channel` and the gap collector read."""
     monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
                         lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
-    state = {"config": {}, "seatMap": {}, "pending": {}, "round": 1, "rounds": {}}
+    # a native `claude` seat takes the host's family from the seat map: the session carries an honest one
+    state = {"config": {"seatMap": {"hostFamily": "anthropic"}}, "seatMap": {}, "pending": {},
+             "round": 1, "rounds": {}}
     row = RD._seat_transport_row(state, phase, "verifier", 0, {}, {}, str(tmp_path))
     assert row["vendor"] == "claude"
     assert row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED

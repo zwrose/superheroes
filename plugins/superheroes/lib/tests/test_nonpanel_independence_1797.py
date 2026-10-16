@@ -100,8 +100,9 @@ def test_an_earlier_nonfixer_maker_family_is_barred_from_the_transport_row(monke
 @pytest.mark.parametrize("phase", NONPANEL)
 def test_no_makers_and_no_fixer_keeps_the_reviewer_engine_exactly(monkeypatch, phase):
     monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("claude", RD.VENDOR_SOURCE_DEFAULTED))
-    row = RD._seat_transport_row(_state(vendors=["claude"]), phase, "seat", 0,
-                                 {"vendors": ["claude"]}, {}, "/repo")
+    # a native `claude` seat takes the host's family from the seat map: the session carries an honest one
+    cfg = {"vendors": ["claude"], "seatMap": {"hostFamily": "anthropic"}}
+    row = RD._seat_transport_row(_state(**cfg), phase, "seat", 0, cfg, {}, "/repo")
     assert row["vendor"] == "claude" and row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED
 
 
@@ -235,3 +236,48 @@ def test_hand_submit_guard_reads_the_shared_missing_policy(tmp_path, monkeypatch
     out = RD.cmd_submit(session_dir, RD.P_GAPSWEEP, state["pending"]["attempt"],
                         RD.state_hash(state), {"findings": []})
     assert out.get("reason") != "nonpanel-reviewer-unseatable"
+
+
+# --- the library path reports the vendor the verifier callback ran on, never the selection ------
+
+def _library_verifier_fold(monkeypatch, verifier):
+    """Run the in-process verifier seam and fold its artifact; the selection replaces `claude`."""
+    monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("claude", RD.VENDOR_SOURCE_CONFIGURED))
+    cfg = {"vendors": ["claude", "codex"], "fixerVendor": "claude"}
+    state = RD.new_state(cfg)
+    assert RD._nonpanel_selection(state)[0] == "codex"
+    state["_toVerify"] = [{"severity": "Important", "file": "a.py", "line": 1, "body": "b"}]
+    artifact = RD._run_seam({"verifier": verifier}, RD.P_VERIFIERS, {"clusters": [{"ids": ["v0"]}]},
+                            state, state["config"])
+    RD._fold_verifiers(state, state["config"], artifact)
+    prov = state["rounds"][str(state["round"])]["verifierProvenance"]
+    return artifact, prov, state["rounds"][str(state["round"])]["verify"]
+
+
+def _refute(vendor=None):
+    def verifier(clusters, rnd):
+        verdicts = [{"id": "v0", "verdict": "REFUTED", "reason": "r", "evidence": "e"}]
+        return verdicts if vendor is None else {"verdicts": verdicts, "vendor": vendor}
+    return verifier
+
+
+def test_library_verifier_reporting_the_selected_vendor_applies(monkeypatch):
+    # axis: verifierVendor comes from the callback's report, not the driver's selection
+    artifact, prov, verify = _library_verifier_fold(monkeypatch, _refute("codex"))
+    assert artifact["verifierVendor"] == "codex"
+    assert prov[-1]["outcome"] == "verdicts-folded"
+    assert verify["drops"]
+
+
+def test_library_verifier_reporting_the_makers_vendor_is_ignored(monkeypatch):
+    artifact, prov, verify = _library_verifier_fold(monkeypatch, _refute("claude"))
+    assert artifact["verifierVendor"] == "claude"
+    assert prov[-1]["outcome"] == "verdicts-ignored" and prov[-1]["ran"] == "claude"
+    assert not verify["drops"]
+
+
+def test_library_verifier_reporting_nothing_is_ignored_when_selection_replaced_the_engine(monkeypatch):
+    artifact, prov, verify = _library_verifier_fold(monkeypatch, _refute())
+    assert "verifierVendor" not in artifact
+    assert prov[-1]["outcome"] == "verdicts-ignored" and prov[-1]["ran"] is None
+    assert not verify["drops"]

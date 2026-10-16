@@ -17,6 +17,7 @@ _EVIDENCE_MAP_KEYS = frozenset({
     "livenessPinScoped",
     "authorFamily",
     "makerFamilies",
+    "hostFamily",
 })
 _LIST_EVIDENCE_MAP_KEYS = frozenset({
     "violations",
@@ -306,6 +307,19 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["liveCellsSource"] = _merge_live_cells_source(live_cells_sources)
     else:
         base.pop("liveCellsSource", None)
+    host_families: list = []
+    for entry in receipt_list:
+        if "hostFamily" in entry["map"]:
+            host_families.append(entry["map"]["hostFamily"])
+    if host_families:
+        # receipts that disagree on the host (or any that cannot name it) leave the host unknown
+        agreed = (
+            all(isinstance(fam, str) and fam for fam in host_families)
+            and len(set(host_families)) == 1
+        )
+        base["hostFamily"] = host_families[0] if agreed else None
+    else:
+        base.pop("hostFamily", None)
     pin_values: list = []
     for entry in receipt_list:
         if "livenessPinScoped" in entry["map"]:

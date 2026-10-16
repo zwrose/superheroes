@@ -24,7 +24,10 @@ V = _load("verification")
 
 
 def _cfg():
-    return {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
+    # A native `claude` seat takes the seat map's hostFamily; without one the host is unknown and
+    # the seat is ineligible to verify a `codex` fixer's findings (#1851).
+    return {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex",
+            "seatMap": {"hostFamily": "anthropic"}}
 
 
 def _ledger_by_key(state):

@@ -85,6 +85,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
     "priorCommentsUnavailable": bool_value,
     "verifyPasses": dict_list,
+    "verifierProvenance": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -188,28 +189,64 @@ def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=
     return None, fixer_fam
 
 
-def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None):
-    """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
+# Sentinel for `reviewer_ineligible(host_family=...)`: judge every vendor by its registry family.
+HOST_FAMILY_REGISTRY = object()
 
-    Barred families are the makers' plus the fixer's (a fixer is a maker by definition). The
-    preferred vendor wins when its reviewer family is known and not barred; otherwise the first live
-    vendor that qualifies. A family ``family_for`` cannot resolve is never independent, and the
-    fixer's own vendor never reviews its fix, whatever its family resolves to."""
+_SEAT_MAP_HOST_KEY = "hostFamily"
+
+
+def host_family(seat_map_):
+    """The seat map's `hostFamily` when it is a non-empty string, else None (host model unknown)."""
+    fam = seat_map_.get(_SEAT_MAP_HOST_KEY) if isinstance(seat_map_, dict) else None
+    return fam if isinstance(fam, str) and fam else None
+
+
+def reviewer_ineligible(maker_families=frozenset(), fixer_vendor=None,
+                        host_family=HOST_FAMILY_REGISTRY):
+    """Predicate ``(vendor) -> bool``: True when ``vendor`` may not review. The one home of the
+    reviewer-independence bar: barred families are the makers' plus the fixer's (a fixer is a maker
+    by definition); the fixer's own vendor never reviews its fix whatever its family resolves to; a
+    family ``family_for`` cannot resolve is never independent.
+
+    ``host_family`` (default: the registry family for every vendor): when passed, a registered vendor
+    that is not a runner-channel vendor runs as a native host seat, so it takes ``host_family`` as
+    its family and is ineligible when that is None or not a non-empty string (host model unknown)."""
     barred = set(maker_families or ())
     if fixer_vendor:
         fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
         if fixer_fam is not None:
             barred.add(fixer_fam)
+
+    def is_ineligible(vendor):
+        if fixer_vendor and vendor == fixer_vendor:
+            return True
+        if (host_family is not HOST_FAMILY_REGISTRY
+                and vendor in model_registry.vendors()
+                and not session_contract.runner_channel_vendor(vendor)):
+            fam = host_family if isinstance(host_family, str) and host_family else None
+        else:
+            fam = model_registry.family_for("reviewer", vendor)
+        return fam is None or fam in barred
+    return is_ineligible
+
+
+def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None,
+                         host_family=HOST_FAMILY_REGISTRY):
+    """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
+
+    The preferred vendor wins when it is live and eligible (`reviewer_ineligible`); otherwise the
+    first live vendor that qualifies. ``host_family`` is passed to `reviewer_ineligible`; when passed,
+    a native host seat's returned family is the host family."""
+    ineligible = reviewer_ineligible(maker_families, fixer_vendor, host_family=host_family)
     live = list(live_vendors(config))
     candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
                   and preferred_vendor in live else [])
     candidates += [v for v in live if v not in candidates]
     for v in candidates:
-        if fixer_vendor and v == fixer_vendor:
-            continue
-        cand_fam = model_registry.family_for("reviewer", v)
-        if cand_fam is not None and cand_fam not in barred:
-            return v, cand_fam
+        if not ineligible(v):
+            native = (host_family is not HOST_FAMILY_REGISTRY and v in model_registry.vendors()
+                      and not session_contract.runner_channel_vendor(v))
+            return v, (host_family if native else model_registry.family_for("reviewer", v))
     return None, None
 
 
@@ -252,6 +289,16 @@ def accumulated_maker_families(state):
         return frozenset()
     return (maker_families(seat_map_receipts.effective_seat_map(state))
             | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
+
+
+def nonpanel_barred(state, config):
+    """Predicate ``(vendor) -> bool``: True when a vendor may not review a non-panel round — the one
+    home of the non-panel eligibility bar, so the driver and the adapters judge a vendor identically:
+    the accumulated makers, the configured fixer's vendor, and the host family a native seat takes
+    from the effective seat map. A ``config`` that is not a dict reads as empty."""
+    cfg = config if isinstance(config, dict) else {}
+    return reviewer_ineligible(accumulated_maker_families(state), cfg.get("fixerVendor"),
+                               host_family=host_family(seat_map_receipts.effective_seat_map(state)))
 
 
 def auditor_constraints(state):
@@ -540,6 +587,17 @@ def build_degraded_prose(state, form, journal=None):
                     "— the finding was kept without a recorded failing run"
                     % (rkey, len(not_run),
                        ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
+        vprov = declared.get("verifierProvenance")
+        if vprov:
+            ignored = [r for r in vprov if isinstance(r, dict) and r.get("outcome") == "verdicts-ignored"]
+            if ignored:
+                degraded_out.append(
+                    "verifier-verdicts-ignored (round %s): verdicts not folded — %s"
+                    % (rkey, "; ".join(
+                        "expected %s, ran %s%s" % (
+                            r.get("expected"), r.get("ran"),
+                            " (%s)" % r.get("reason") if r.get("reason") else "")
+                        for r in ignored)))
         bik = declared.get("breakItKept")
         if bik:
             not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]
@@ -622,6 +680,7 @@ __all__ = (
     "independent_auditor",
     "independent_auditor_available",
     "independent_reviewer",
+    "host_family",
     "unfilled_seats",
     "maker_families",
     "pinned_auditor_vendors",
