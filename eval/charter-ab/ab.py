@@ -679,6 +679,7 @@ def dispatch(a, stack):
         config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
         if not config_dir.strip():
             raise Refusal("CLAUDE_CONFIG_DIR is unset or empty; export it before running seats")
+        config_dir = os.path.realpath(config_dir)  # one absolute value: recorded in the identity and handed to every seat
     start = os.path.abspath(a.repo) if a.repo else HERE
     p = git(start, "rev-parse", "--show-toplevel")
     if p.returncode != 0 or not p.stdout.strip():
@@ -714,7 +715,7 @@ def dispatch(a, stack):
         raise Refusal(f"{run_dir} holds prior run artifacts but no readable sides.json; "
                       "use a fresh --run-dir (identity cannot be validated)")
     ident, scenarios = build_identity(a, stage, repo, stored)
-    ident["claude_config_dir"] = os.path.realpath(config_dir) if config_dir else (stored or {}).get("claude_config_dir")
+    ident["claude_config_dir"] = config_dir if config_dir else (stored or {}).get("claude_config_dir")
     if stored is not None:
         # bites on: a stage under a different commit/model/scenarios/replicates than the run dir's must not mix in (E3)
         if diff := identity_mismatch(stored, ident):

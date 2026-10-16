@@ -455,6 +455,23 @@ def test_seat_prompt_matches_seed_byte_for_byte():
 
 # ---------------------------------------------------------------- extras: plumbing, E8/E9, scenario guards
 
+def test_relative_config_dir_reaches_seats_as_the_recorded_absolute_path(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "rel/cfg")
+    seen = []
+
+    def seat(cmd, cwd, env):
+        seen.append(env["CLAUDE_CONFIG_DIR"])
+        return 0, "answer", ""
+    monkeypatch.setattr(ab, "exec_seat", seat)
+    run_dir = tmp_path / "run"
+    assert ab.main(["seats", "--repo", str(repo), "--charter", "CHARTER.md", "--scenarios", write_scenarios(tmp_path),
+                    "--run-dir", str(run_dir), "--candidate", "HEAD", "--base", "HEAD"]) == 0
+    recorded = json.loads((run_dir / "sides.json").read_text())["claude_config_dir"]
+    assert seen and set(seen) == {recorded} and os.path.isabs(recorded) and recorded.endswith("rel/cfg")
+
+
 def test_run_end_to_end_with_fakes(tmp_path, monkeypatch, git_env):
     repo, _ = make_repo(tmp_path)
     cfg = str(tmp_path / "cfg")
