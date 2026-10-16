@@ -176,7 +176,7 @@ shape is wrong and the thinking wins.
    lane it moved from and the lane it moved to. It exists so the gardening pass can read misses by
    lane.
 10. **Misses-log appends.** Each misses-log append this vet made — what it was, and its class:
-    declined-then-escaped, launched-then-regretted, or mis-tiered — or `None`. The misses log's home and classes are
+    declined-then-escaped, launched-then-regretted, mis-tiered, or review escape — or `None`. The misses log's home and classes are
     `skills/showrunner/reference/owner-decisions.md` § Every grading keeps its scoring, and the
     misses log.
 
@@ -251,7 +251,9 @@ record whose finding with a real consequence was decided as craft reads `reviewe
 the fields the rows name. Any line of `whatIsMissing` that the three rows do not account for is a vet
 finding. The line saying no planned reviewer ran is accounted for when every planned review that did
 not run carries a go-ahead. The line saying CI was pending or none on the final commit is accounted
-for once CI is green on that commit now.
+for once CI is green on that commit now. The line saying a finding waits for the owner's decision is
+accounted for when the third row finds that finding shown to the owner. Any other line of
+`whatIsMissing` holds the PR, and the receipt names the line.
 
 **A go-ahead is followed, not trusted.** The record proves only that the go-ahead's citation is a
 non-blank string. Resolve it yourself: open the standing ruling's canon entry, or the place the owner's
@@ -447,7 +449,7 @@ inspection <what you did>; window: <…>
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
 **Open owner calls at merge.** <…> | `None`
 **Lane.** <full | light | micro> <escalated: from → to, if it did>
-**Misses-log appends.** <each append this vet made — what it was, and its class: declined-then-escaped, launched-then-regretted, or mis-tiered> | `None`
+**Misses-log appends.** <each append this vet made — what it was, and its class: declined-then-escaped, launched-then-regretted, mis-tiered, or review escape> | `None`
 
 <triggered fields, each only when its trigger is present in the artifacts>
 ```
