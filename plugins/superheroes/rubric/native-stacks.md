@@ -235,6 +235,11 @@ to break the requirement is a layer whose branch no longer descends from the tip
 
 **One command merges the stack; never one PR at a time.**
 
+**A test never pins a layer's commit.** A squash merge leaves every layer's head unreachable from
+the trunk, so a test that reads a pinned layer commit (for example `git show <layer sha>:<path>`)
+fails on the trunk's first run after the stack merges, though it passed on every layer. Pin a
+commit the trunk keeps, such as the stack's base, or work the base out when the test runs.
+
 **The stack is the unit of merge.** A stack merges when its **feature** is complete: every layer
 the issue's plan names, vetted. A vetted prefix is never a click. The ruling this records is the
 owner's standing rule, "keep stacks stacks". New scope that a tripwire or a
