@@ -428,6 +428,7 @@ above).
    disclosure line** in the issue — never a park, never a silent skip.
    **Presentation duty (show it only) — show the after-state, not the delta.** Disclosure names
    what could not be presented and why, and **reaches the owner before the merge click**.
+   **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Presentation standard when the call is show it** — zero reconstruction, the entry-point levels and when to disclose at `command` or below, and the drive-to-state instructions.
    **Delivery acceptance is an owner gate in this duty's sense** — it reaches the owner before the
    merge click, presented with the final child's handback — or with the no-PR close — in **one
    sitting**, never a separate process. The verdict is **advisory** and the acceptance is the **owner's**.
