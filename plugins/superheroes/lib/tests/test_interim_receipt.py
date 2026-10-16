@@ -24,6 +24,7 @@ def _load(name):
 
 RD = _load("round_driver")
 verification = _load("verification")
+model_registry = _load("model_registry")
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
@@ -55,10 +56,26 @@ def _finding(fid="v0", **over):
     return base
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`, `reviewer-deep`)
+    live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _fold_verifiers(state, findings, verdicts):
     staged = verification.stage_ids(findings)
     state["_toVerify"] = staged
-    RD._fold_verifiers(state, state["config"], {"verdicts": verdicts})
+    # the verifier seat is a non-claude vendor, seated only on a cell the seat map proves live
+    if not state["config"].get("seatMap"):
+        state["config"]["seatMap"] = _nonpanel_cell_proof(state["config"].get("vendors") or [])
+    RD._fold_verifiers(state, state["config"], {"verdicts": verdicts,
+                                                "verifierVendor": RD._nonpanel_selection(state, None, RD.P_VERIFIERS)[0]})
 
 
 # --- per-pass append --------------------------------------------------------------------------
