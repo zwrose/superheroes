@@ -19,7 +19,7 @@ decomposition doctrine's worked example splits one:
 
 - **FR-43** (a batch-1 question both in the chat and on the index) is split at its bullets. The
   statement (the question goes in the chat and at the top of the index, the chat linking to the
-  index) and bullet 1 (the first answer given, in either place, is the answer) are **C8**'s: they are
+  index) and bullet 1 (the first answer the advisor reads, in either place, is the answer) are **C8**'s: they are
   the advisor's acts of asking and reading. Bullet 2 (where pictures bear on the question, the index
   shows them with it) is **C9**'s, because the index draws it. Register entries R7 and R10 bind both.
 - **FR-58** (the advisor walks a sheet's stops before sending it) is split at its bullets. The
