@@ -23,7 +23,7 @@ SIDES = ("base", "candidate")
 DIFF = ("same", "minor-difference", "material-difference")
 REQUIRED_FIELDS = ("id", "situation", "question", "expected_rule", "targeted_block")
 IDENTITY_KEYS = ("base_ref", "base_sha", "candidate_ref", "candidate_sha", "charter", "scenarios_file",
-                 "scenarios_sha256", "role", "model", "judge_model", "replicates", "seed", "plugin_dir", "claude_config_dir")
+                 "scenarios_sha256", "role", "model", "judge_model", "replicates", "seed", "plugin_dir", "claude_config_dir", "prompt_sha256")
 UNGUARDED_KEYS = ("base_ref", "candidate_ref", "scenarios_file")  # names/paths only; the SHAs and hashes guard
 EXIT_BY_VERDICT = {"PASS": 0, "FAIL": 1, "INCOMPLETE": 2}
 EXIT_REFUSED = 3
@@ -160,13 +160,11 @@ def identity_mismatch(stored, current):
 
 
 def plugin_dir_for(root, charter):
-    """Repo-relative nearest ancestor dir of charter, below root, that holds .claude-plugin/plugin.json; else None."""
+    """Repo-relative nearest ancestor dir of charter (the root itself as ".") holding .claude-plugin/plugin.json; else None."""
     rel = os.path.normpath(os.path.relpath(charter, root) if os.path.isabs(charter) else charter)
     if rel == ".." or rel.startswith(".." + os.sep):
         return None
     for parent in Path(rel).parents:
-        if parent == Path("."):
-            break
         if os.path.isfile(os.path.join(root, parent, ".claude-plugin", "plugin.json")):
             return parent.as_posix()
     return None
@@ -334,7 +332,7 @@ def build_identity(a, stage, repo, stored):
              "charter": charter, "scenarios_file": scen_file,
              "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),
              "judge_model": pick(a.judge_model, "judge_model", "gpt-6.1-sol"),
-             "replicates": n_reps, "seed": pick(a.seed, "seed", 1882),
+             "replicates": n_reps, "seed": pick(a.seed, "seed", 1882), "prompt_sha256": sha256_text(PROMPT),
              "plugin_dir": plugin_dir_for(repo, charter) if strict else src.get("plugin_dir")}
     return ident, scenarios
 
@@ -394,7 +392,7 @@ def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
     cmd = ["claude", "-p", "--model", ident["model"]]
     if ident["plugin_dir"] is not None:
         # bites on: each seat loads the plugin from its own side's worktree, not the installed one (v0)
-        cmd += ["--plugin-dir", os.path.join(side_dirs[side], ident["plugin_dir"])]
+        cmd += ["--plugin-dir", os.path.normpath(os.path.join(side_dirs[side], ident["plugin_dir"]))]
     cmd += ["--allowedTools", "Read,Grep,Glob", "--output-format", "text", prompt]
     ok = False
     for attempt in (1, 2):

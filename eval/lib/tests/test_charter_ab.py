@@ -19,13 +19,6 @@ _spec.loader.exec_module(ab)
 
 _REAL_EXEC_JUDGE = ab.exec_judge
 
-SEED_PROMPT = (
-    "You are the superheroes showrunner advisor for this repository. First read "
-    "plugins/superheroes/skills/showrunner/SKILL.md in full, and read any reference file it "
-    "tells you to read for this situation. Then answer in at most 150 words: what you do next, "
-    "step by step, and which rule (file and section) governs it. Do not edit anything. "
-    "Situation: {situation} Question: {question}"
-)
 SIDE_DIRS = {"base": "/wt/base", "candidate": "/wt/candidate"}
 
 
@@ -53,7 +46,7 @@ def make_ident(reps=1, **over):
     d = {"base_ref": "b", "base_sha": "a" * 40, "candidate_ref": "c", "candidate_sha": "b" * 40,
          "charter": "CHARTER.md", "scenarios_file": "/x/s.json", "scenarios_sha256": "0" * 64,
          "role": "the tester", "model": "opus", "judge_model": "gpt-6.1-sol", "replicates": reps, "seed": 7,
-         "plugin_dir": None}
+         "plugin_dir": None, "prompt_sha256": ab.sha256_text(ab.PROMPT)}
     d.update(over)
     return d
 
@@ -402,7 +395,8 @@ def test_identity_mismatch_names_guarded_keys():
     stored = make_ident(3)
     assert ab.identity_mismatch(stored, dict(stored)) == []
     for key, new in (("model", "sonnet"), ("judge_model", "other"), ("candidate_sha", "c" * 40),
-                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1), ("plugin_dir", "plugins/x"), ("claude_config_dir", "/other")):
+                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1), ("plugin_dir", "plugins/x"), ("claude_config_dir", "/other"),
+                     ("prompt_sha256", "2" * 64)):
         assert ab.identity_mismatch(stored, dict(stored, **{key: new})) == [key]
     assert ab.identity_mismatch(dict(stored, plugin_dir="plugins/x"), stored) == ["plugin_dir"]
     moved = dict(stored, base_ref="x", candidate_ref="y", scenarios_file="/elsewhere.json")
@@ -444,14 +438,15 @@ def test_run_dir_inside_repo_refused(tmp_path, monkeypatch, git_env, capsys):
 
 # ---------------------------------------------------------------- 14 prompt identity
 
-def test_seat_prompt_matches_seed_byte_for_byte():
-    role, scenarios, _ = ab.load_scenarios(str(_AB_PATH.parent / "scenarios" / "showrunner.json"))
-    assert role == "the superheroes showrunner advisor"
-    assert ab.DEFAULT_CHARTER == "plugins/superheroes/skills/showrunner/SKILL.md"
-    assert len(scenarios) == 15
-    for sc in scenarios:
-        assert ab.render_prompt(role, ab.DEFAULT_CHARTER, sc["situation"], sc["question"]) == \
-            SEED_PROMPT.format(situation=sc["situation"], question=sc["question"])
+def test_seat_prompt_has_one_home_and_is_identity_guarded():
+    assert ab.render_prompt("R", "C.md", "SIT", "QUE") == ab.PROMPT.format(
+        role="R", charter="C.md", situation="SIT", question="QUE")
+    for needle in ("R", "C.md", "SIT", "QUE"):
+        assert needle in ab.render_prompt("R", "C.md", "SIT", "QUE")
+    assert "prompt_sha256" in ab.IDENTITY_KEYS and "prompt_sha256" not in ab.UNGUARDED_KEYS
+    stored = make_ident(3)
+    assert stored["prompt_sha256"] == ab.sha256_text(ab.PROMPT)
+    assert ab.identity_mismatch(stored, dict(stored, prompt_sha256="0" * 64)) == ["prompt_sha256"]
 
 
 # ---------------------------------------------------------------- extras: plumbing, E8/E9, scenario guards
@@ -536,16 +531,25 @@ def test_plugin_dir_for_finds_nearest_manifest(tmp_path):
         p.write_text("{}")
     manifest("plugins/x")
     manifest("plugins/x/skills/z")
-    manifest("")  # the root's own manifest is not below the root, so it never counts
     charter = "plugins/x/skills/y/SKILL.md"
     (tmp_path / charter).parent.mkdir(parents=True)
     (tmp_path / charter).write_text("c")
     assert ab.plugin_dir_for(str(tmp_path), charter) == "plugins/x"
     assert ab.plugin_dir_for(str(tmp_path), str(tmp_path / charter)) == "plugins/x"
     assert ab.plugin_dir_for(str(tmp_path), "plugins/x/skills/z/SKILL.md") == "plugins/x/skills/z"  # nearest wins
-    assert ab.plugin_dir_for(str(tmp_path), "docs/CHARTER.md") is None
+    assert ab.plugin_dir_for(str(tmp_path), "docs/CHARTER.md") is None  # no manifest anywhere yet
     assert ab.plugin_dir_for(str(tmp_path), "../outside/CHARTER.md") is None
     assert ab.plugin_dir_for(str(_AB_PATH.parents[2]), ab.DEFAULT_CHARTER) == "plugins/superheroes"
+
+
+def test_plugin_dir_for_binds_a_repo_root_manifest(tmp_path):
+    (tmp_path / ".claude-plugin").mkdir()
+    (tmp_path / ".claude-plugin" / "plugin.json").write_text("{}")
+    assert ab.plugin_dir_for(str(tmp_path), "skills/s/SKILL.md") == "."
+    assert ab.plugin_dir_for(str(tmp_path), "../outside/SKILL.md") is None
+    (tmp_path / "sub" / ".claude-plugin").mkdir(parents=True)
+    (tmp_path / "sub" / ".claude-plugin" / "plugin.json").write_text("{}")
+    assert ab.plugin_dir_for(str(tmp_path), "sub/SKILL.md") == "sub"  # nearest still wins
 
 
 def test_missing_plugin_manifest_on_a_side_refused(tmp_path, monkeypatch, git_env, capsys):
