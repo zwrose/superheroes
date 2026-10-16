@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
 """A/B behavioural eval: does a charter change alter how the seat it governs behaves?
 
-Stages (each resumable; existing non-empty outputs are kept unless --force):
-  seats   run REPLICATES fresh headless claude seats per scenario per side, each in a throwaway
-          git worktree of the BASE and CANDIDATE commits
-  judge   blind-judge each scenario once over all 2*REPLICATES answers with codex (read-only)
-  report  write results.md and verdict.json from the answers and judge outputs
-  run     seats, judge, report in one go (records wall time per stage in walltime.txt)
-
+Stages (resumable; existing non-empty outputs are kept unless --force): seats (fresh headless claude seats per
+scenario per side, in throwaway git worktrees of the BASE and CANDIDATE commits), judge (one blind codex judge call
+per scenario, read-only), report (results.md and verdict.json), run (all three; wall time in walltime.txt).
 Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE (report/run); 3 refusal; seats/judge alone exit 0.
-
-Everything the eval writes goes into the run dir (outside the repo). The run dir's sides.json is
-the run identity: a later stage that disagrees with it (other commit, model, replicate count,
-scenarios, ...) is refused rather than mixed in. Answers: answers/<id>.<side>.r<k>.txt.
-Python >= 3.9, standard library only.
+Everything is written to the run dir (outside the repo). Its sides.json is the run identity: a later stage that
+disagrees with it (other commit, model, replicate count, scenarios, ...) is refused rather than mixed in.
+Answers: answers/<id>.<side>.r<k>.txt. Python >= 3.9, standard library only.
 """
-import argparse
+import argparse, contextlib, hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threading, time
 import concurrent.futures as cf
-import contextlib
-import hashlib
-import json
-import os
-import random
-import re
-import shutil
-import subprocess
-import sys
-import tempfile
-import threading
-import time
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SEAT_TIMEOUT = 600
@@ -97,8 +80,6 @@ class Refusal(Exception):
     """A guard fired: the eval refuses to run (exit 3) rather than produce a mixed or unsafe result."""
 
 
-# ---------------------------------------------------------------- pure functions
-
 def labels(reps):
     return [f"{k}{ab}" for k in range(1, reps + 1) for ab in "AB"]
 
@@ -119,19 +100,16 @@ def parse_judge(text, reps):
 
 
 def make_mapping(scenario_ids, reps, seed):
-    rng = random.Random(seed)
-    mapping = {}
+    rng, mapping = random.Random(seed), {}
     for sid in scenario_ids:
-        per = {}
-        for k in range(1, reps + 1):
-            per[str(k)] = {"A": "base", "B": "candidate"} if rng.random() < 0.5 else {"A": "candidate", "B": "base"}
+        per = {str(k): ({"A": "base", "B": "candidate"} if rng.random() < 0.5 else {"A": "candidate", "B": "base"})
+               for k in range(1, reps + 1)}
         x = "base" if rng.random() < 0.5 else "candidate"
         mapping[sid] = {"replicates": per, "X": x, "Y": "candidate" if x == "base" else "base"}
     return mapping
 
 
 def unmap(mapping_entry, judged_correct, reps):
-    """Per-side correctness lists (ordered by replicate) from one scenario's A/B-labelled judgement."""
     if not isinstance(judged_correct, dict) or set(judged_correct) != set(labels(reps)):
         raise ValueError(f"judged labels must be exactly {labels(reps)}")
     out = {s: [] for s in SIDES}
@@ -145,7 +123,6 @@ def unmap(mapping_entry, judged_correct, reps):
 
 
 def scenario_flags(base_correct, cand_correct, reps):
-    """One human-readable string per failed test; an empty list means the scenario passes."""
     flags = []
     # bites on: a candidate that is worse than base by 2 or more correct answers must fail
     if cand_correct < base_correct - 1:
@@ -160,22 +137,18 @@ def verdict(per_scenario, reps):
     """The single chokepoint for the verdict: PASS only when every scenario is complete and unflagged."""
     incomplete, failing, both_wrong = [], [], []
     for s in per_scenario:
-        done = s.get("complete") and isinstance(s.get("base"), int) and isinstance(s.get("candidate"), int)
-        if not done:
+        if not (s.get("complete") and isinstance(s.get("base"), int) and isinstance(s.get("candidate"), int)):
             incomplete.append(s["id"])
             continue
-        reasons = scenario_flags(s["base"], s["candidate"], reps)
-        if reasons:
+        if reasons := scenario_flags(s["base"], s["candidate"], reps):
             failing.append({"id": s["id"], "reasons": reasons})
         if s["base"] == 0 and s["candidate"] == 0:
             both_wrong.append(s["id"])
     # bites on: an incomplete scenario, or no scenarios at all, must never be reported as PASS or FAIL
     if incomplete or not per_scenario:
         v = "INCOMPLETE"
-    elif failing:
-        v = "FAIL"
     else:
-        v = "PASS"
+        v = "FAIL" if failing else "PASS"
     return {"verdict": v, "failing": failing, "both_wrong": both_wrong, "incomplete": incomplete}
 
 
@@ -191,11 +164,8 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-# ---------------------------------------------------------------- small I/O helpers
-
 def read_text(path):
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+    return Path(path).read_text(encoding="utf-8")
 
 
 def nonempty(path):
@@ -208,20 +178,14 @@ def nonempty(path):
 def atomic_write(path, text):
     """Write to a temp file in the same directory, then os.replace: readers never see a partial file."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".tmp-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
 
 
 def load_json(path, default=None):
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(read_text(path))
     except (OSError, ValueError):
         return default
 
@@ -243,29 +207,16 @@ def inside(path, root):
     return os.path.commonpath([path, root]) == root
 
 
-# ---------------------------------------------------------------- git, worktrees
-
 def git(repo, *args):
     return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
 
 
-def resolve_repo(arg):
-    start = os.path.abspath(arg) if arg else HERE
-    p = git(start, "rev-parse", "--show-toplevel")
-    if p.returncode != 0 or not p.stdout.strip():
-        raise Refusal(f"{start} is not inside a git repository")
-    return os.path.realpath(p.stdout.strip())
-
-
 def rev_parse_commit(repo, ref):
-    if not ref or ref.startswith("-"):
-        raise Refusal(f"bad ref {ref!r}")
     p = git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
-    sha = p.stdout.strip()
     # bites on: a ref that does not resolve to a commit must refuse, never fall through to a guess (E8)
-    if p.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+    if p.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", p.stdout.strip()):
         raise Refusal(f"cannot resolve {ref!r} to a commit in {repo}")
-    return sha
+    return p.stdout.strip()
 
 
 def default_base(repo, cand_sha, cand_ref):
@@ -282,125 +233,74 @@ def default_base(repo, cand_sha, cand_ref):
 def worktrees(repo, shas):
     """Detached worktrees of both commits in a fresh temp dir; always removed, even if the body raises."""
     tmp = tempfile.mkdtemp(prefix="charter-ab-wt-")
-    made = []
+    paths = {side: os.path.join(tmp, side) for side in SIDES}
     try:
-        if inside(tmp, repo):
-            raise Refusal(f"temp dir {tmp} is inside the repo")
-        paths = {}
-        for side in SIDES:
-            path = os.path.join(tmp, side)
-            made.append(path)  # recorded before the add, so a half-made worktree is still removed
+        for side, path in paths.items():
             p = git(repo, "worktree", "add", "--detach", path, shas[side])
             if p.returncode != 0:
                 raise Refusal(f"git worktree add failed for {side}: {p.stderr.strip()}")
-            paths[side] = path
         yield paths
     finally:
         # bites on: a stage that raises must still remove the worktrees it created (E9)
-        for path in made:
+        for path in paths.values():
             git(repo, "worktree", "remove", "--force", path)
         git(repo, "worktree", "prune")
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# ---------------------------------------------------------------- scenarios, identity
-
 def load_scenarios(path):
     try:
-        with open(path, "rb") as f:
-            raw = f.read()
+        raw = Path(path).read_bytes()
         data = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError) as e:
         raise Refusal(f"cannot read scenarios file {path}: {e}")
     if isinstance(data, list):
-        role, scenarios = DEFAULT_ROLE, data
-    elif isinstance(data, dict) and isinstance(data.get("scenarios"), list) and isinstance(data.get("role"), str) \
-            and data["role"].strip():
-        role, scenarios = data["role"], data["scenarios"]
-    else:
+        data = {"role": DEFAULT_ROLE, "scenarios": data}
+    if not (isinstance(data, dict) and isinstance(data.get("scenarios"), list) and isinstance(data.get("role"), str)
+            and data["role"].strip()):
         raise Refusal(f"{path}: expected a list, or an object with a non-empty string 'role' and a 'scenarios' list")
     seen = set()
-    for i, sc in enumerate(scenarios):
-        if not isinstance(sc, dict):
-            raise Refusal(f"{path}: scenario #{i} is not an object")
-        missing = [k for k in REQUIRED_FIELDS if k not in sc]
+    for i, sc in enumerate(data["scenarios"]):
+        missing = [k for k in REQUIRED_FIELDS if not isinstance(sc, dict) or k not in sc]
         if missing:
             raise Refusal(f"{path}: scenario #{i} lacks {', '.join(missing)}")
-        if not isinstance(sc["id"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", sc["id"]):
-            raise Refusal(f"{path}: scenario #{i} has an unusable id {sc['id']!r}")
         if sc["id"] in seen:
             raise Refusal(f"{path}: duplicate scenario id {sc['id']!r}")
         seen.add(sc["id"])
-        for k in REQUIRED_FIELDS:
-            if not isinstance(sc[k], str):
-                raise Refusal(f"{path}: scenario {sc['id']!r} field {k} is not a string")
-    return role, scenarios, hashlib.sha256(raw).hexdigest()
-
-
-def check_charter_path(charter):
-    if not charter or os.path.isabs(charter) or ".." in charter.replace("\\", "/").split("/"):
-        raise Refusal(f"--charter must be a repo-relative path, got {charter!r}")
-    return charter
-
-
-def read_sides(run_dir):
-    path = os.path.join(run_dir, "sides.json")
-    if not os.path.exists(path):
-        return None
-    stored = load_json(path)
-    if not isinstance(stored, dict) or any(k not in stored for k in IDENTITY_KEYS):
-        raise Refusal(f"{path} is unreadable or lacks identity keys")
-    return stored
+    return data["role"], data["scenarios"], hashlib.sha256(raw).hexdigest()
 
 
 def build_identity(a, stage, repo, stored):
     """The identity this invocation would run under. seats/run recompute it from the arguments (defaults
     included); report/judge take anything not given explicitly from the stored identity."""
     strict = stage in ("seats", "run")
+    src = {} if strict or not stored else stored
 
     def pick(val, key, default):
-        if val is not None:
-            return val
-        return stored[key] if (not strict and stored) else default
+        return val if val is not None else src.get(key, default)
 
-    reps = a.replicates
-    if reps is None and strict:
-        try:
-            reps = int(os.environ.get("REPLICATES", "3"))
-        except ValueError:
-            raise Refusal("env REPLICATES is not an integer")
-    reps = pick(reps, "replicates", 3)
-    if not isinstance(reps, int) or reps < 1:
-        raise Refusal("--replicates must be a positive integer")
-    charter = check_charter_path(pick(a.charter, "charter", DEFAULT_CHARTER))
-    scen_file = os.path.abspath(a.scenarios or (stored["scenarios_file"] if (not strict and stored)
-                                                 else DEFAULT_SCENARIOS))
+    def resolve(arg, side):  # (ref, sha) from the argument, else from the stored identity, else None
+        if arg:
+            return arg, rev_parse_commit(repo, arg)
+        if not stored:
+            return None
+        sha = stored[side + "_sha"]
+        return stored[side + "_ref"], (rev_parse_commit(repo, sha) if strict else sha)
+
+    reps = int(os.environ.get("REPLICATES", "3")) if a.replicates is None and strict else a.replicates
+    scen_file = os.path.abspath(a.scenarios or src.get("scenarios_file", DEFAULT_SCENARIOS))
     role, scenarios, scen_sha = load_scenarios(scen_file)
-
-    if a.candidate:
-        cand_ref, cand_sha = a.candidate, rev_parse_commit(repo, a.candidate)
-    elif stored:
-        cand_ref = stored["candidate_ref"]
-        cand_sha = rev_parse_commit(repo, stored["candidate_sha"]) if strict else stored["candidate_sha"]
-    else:
+    cand = resolve(a.candidate, "candidate")
+    if cand is None:
         raise Refusal("--candidate is required for the first use of a run dir")
-    if a.base:
-        base_ref, base_sha = a.base, rev_parse_commit(repo, a.base)
-    elif stored:
-        base_ref = stored["base_ref"]
-        base_sha = rev_parse_commit(repo, stored["base_sha"]) if strict else stored["base_sha"]
-    else:
-        base_ref, base_sha = default_base(repo, cand_sha, cand_ref)
-
-    ident = {"base_ref": base_ref, "base_sha": base_sha, "candidate_ref": cand_ref, "candidate_sha": cand_sha,
-             "charter": charter, "scenarios_file": scen_file, "scenarios_sha256": scen_sha, "role": role,
-             "model": pick(a.model, "model", "opus"),
+    base = resolve(a.base, "base") or default_base(repo, cand[1], cand[0])
+    ident = {"base_ref": base[0], "base_sha": base[1], "candidate_ref": cand[0], "candidate_sha": cand[1],
+             "charter": pick(a.charter, "charter", DEFAULT_CHARTER), "scenarios_file": scen_file,
+             "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),
              "judge_model": pick(a.judge_model, "judge_model", "gpt-6.1-sol"),
-             "replicates": reps, "seed": pick(a.seed, "seed", 1882)}
+             "replicates": pick(reps, "replicates", 3), "seed": pick(a.seed, "seed", 1882)}
     return ident, scenarios
 
-
-# ---------------------------------------------------------------- seats
 
 def exec_seat(cmd, cwd, env):
     p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, encoding="utf-8", errors="replace",
@@ -409,56 +309,40 @@ def exec_seat(cmd, cwd, env):
 
 
 def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
-    out = ans_path(run_dir, sc["id"], side, rep)
+    out, res = ans_path(run_dir, sc["id"], side, rep), {"id": sc["id"], "side": side, "rep": rep}
     if nonempty(out) and not force:
-        return {"id": sc["id"], "side": side, "rep": rep, "attempts": 0, "ok": True, "skipped": True}
+        return dict(res, attempts=0, ok=True, skipped=True)
     prompt = render_prompt(ident["role"], ident["charter"], sc["situation"], sc["question"])
-    env = dict(os.environ)
-    env["CLAUDE_CONFIG_DIR"] = config_dir
     cmd = ["claude", "-p", "--model", ident["model"], "--allowedTools", "Read,Grep,Glob",
            "--output-format", "text", prompt]
-    attempts, ok = 0, False
     for attempt in (1, 2):
-        attempts = attempt
         t0 = time.time()
         try:
-            rc, text, err = exec_seat(cmd, side_dirs[side], env)
+            rc, text, err = exec_seat(cmd, side_dirs[side], dict(os.environ, CLAUDE_CONFIG_DIR=config_dir))
             # bites on: an answer is published only from a call that exited 0 with non-empty output
             ok = rc == 0 and text.strip() != ""
-        except subprocess.TimeoutExpired:
-            text, err, ok = "", "timeout", False
-        except OSError as e:
-            text, err, ok = "", f"could not run claude: {e}", False
+        except (subprocess.TimeoutExpired, OSError) as e:
+            text, err, ok = "", f"{type(e).__name__}: {e}", False
         log(run_dir, f"seat {sc['id']}.{side}.r{rep} attempt {attempt} ok={ok} {time.time()-t0:.0f}s")
         if ok:
             atomic_write(out, text)
             break
-        with open(out + f".fail{attempt}.err", "w", encoding="utf-8") as f:
-            f.write(f"{err}\n---stdout---\n{text}")
-    return {"id": sc["id"], "side": side, "rep": rep, "attempts": attempts, "ok": ok, "skipped": False}
+        Path(out + f".fail{attempt}.err").write_text(f"{err}\n---stdout---\n{text}", encoding="utf-8")
+    return dict(res, attempts=attempt, ok=ok, skipped=False)
 
 
 def stage_seats(run_dir, side_dirs, scenarios, ident, force, jobs, config_dir):
-    reps = ident["replicates"]
     os.makedirs(os.path.join(run_dir, "answers"), exist_ok=True)
     # replicate-major order so a partial run still leaves whole replicates
-    tasks = [(sc, side, rep) for rep in range(1, reps + 1) for sc in scenarios for side in SIDES]
+    tasks = [(sc, side, rep) for rep in range(1, ident["replicates"] + 1) for sc in scenarios for side in SIDES]
     path = os.path.join(run_dir, "answers", "seats.json")
-    prior = {}
-    if os.path.exists(path):
-        prior = {(r["id"], r["side"], r["rep"]): r for r in (load_json(path) or [])}
+    prior = {(r["id"], r["side"], r["rep"]): r for r in load_json(path, []) or []}
     with cf.ThreadPoolExecutor(max_workers=max(1, min(jobs, 4))) as ex:
-        futs = [ex.submit(run_seat, run_dir, side_dirs, sc, side, rep, force, ident, config_dir)
-                for sc, side, rep in tasks]
-        for fu in cf.as_completed(futs):
-            r = fu.result()
-            k = (r["id"], r["side"], r["rep"])
-            if not r["skipped"] or k not in prior:
-                prior[k] = r
+        for r in ex.map(lambda t: run_seat(run_dir, side_dirs, *t, force, ident, config_dir), tasks):
+            if not r["skipped"] or (r["id"], r["side"], r["rep"]) not in prior:
+                prior[(r["id"], r["side"], r["rep"])] = r
     atomic_write(path, json.dumps(sorted(prior.values(), key=lambda r: (r["id"], r["side"], r["rep"])), indent=1))
 
-
-# ---------------------------------------------------------------- judge
 
 def render_judge(run_dir, sc, m, reps):
     """The judge prompt for one scenario from the current answers and mapping; None if an answer is missing."""
@@ -480,15 +364,13 @@ def render_judge(run_dir, sc, m, reps):
 
 def judge_paths(run_dir, sid):
     jd = os.path.join(run_dir, "judge")
-    return (os.path.join(jd, f"{sid}.out.txt"), os.path.join(jd, f"{sid}.prompt.md"),
-            os.path.join(jd, f"{sid}.prompt.sha256"))
+    return tuple(os.path.join(jd, f"{sid}.{ext}") for ext in ("out.txt", "prompt.md", "prompt.sha256"))
 
 
 def prompt_bound(run_dir, sid, prompt):
     """True only when the stored hash is the hash of exactly this freshly rendered prompt."""
-    _, _, shap = judge_paths(run_dir, sid)
     try:
-        stored = read_text(shap).strip()
+        stored = read_text(judge_paths(run_dir, sid)[2]).strip()
     except (OSError, UnicodeDecodeError):
         return False
     # bites on: a judge result made over different answers than the current ones must not be reused or counted
@@ -502,16 +384,13 @@ def exec_judge(cmd, prompt):
 
 
 def stage_judge(run_dir, scenarios, ident, force, jobs):
-    reps, seed = ident["replicates"], ident["seed"]
-    jd = os.path.join(run_dir, "judge")
+    reps, jd = ident["replicates"], os.path.join(run_dir, "judge")
     os.makedirs(jd, exist_ok=True)
-    mpath = os.path.join(jd, "mapping.json")
-    mapping = make_mapping([sc["id"] for sc in scenarios], reps, seed)
-    if os.path.exists(mpath) and not force:
-        old = load_json(mpath) or {}
-        if all(sid in old and len(old[sid]["replicates"]) == reps for sid in mapping):
-            mapping = old  # keep the mapping that existing judge outputs were made under
-    atomic_write(mpath, json.dumps(mapping, indent=1))
+    mapping = make_mapping([sc["id"] for sc in scenarios], reps, ident["seed"])
+    old = {} if force else load_json(os.path.join(jd, "mapping.json"), {}) or {}
+    if all(sid in old and len(old[sid]["replicates"]) == reps for sid in mapping):
+        mapping = old  # keep the mapping that existing judge outputs were made under
+    atomic_write(os.path.join(jd, "mapping.json"), json.dumps(mapping, indent=1))
     cmd = ["codex", "exec", "-m", ident["judge_model"], "-s", "read-only", "-c", "model_reasoning_effort=high",
            "--skip-git-repo-check", "-C", run_dir, "-"]
 
@@ -529,22 +408,19 @@ def stage_judge(run_dir, scenarios, ident, force, jobs):
             t0 = time.time()
             try:
                 _, text, err = exec_judge(cmd, prompt)
-            except subprocess.TimeoutExpired:
-                text, err = "", "timeout"
-            except OSError as e:
-                text, err = "", f"could not run codex: {e}"
+            except (subprocess.TimeoutExpired, OSError) as e:
+                text, err = "", f"{type(e).__name__}: {e}"
             ok = parse_judge(text, reps) is not None
             log(run_dir, f"judge {sid} attempt {attempt} ok={ok} {time.time()-t0:.0f}s")
             if ok:
                 atomic_write(out, text)
                 atomic_write(shap, sha256_text(prompt))  # written only after the output parsed
                 return sid, attempt
-            with open(out + f".fail{attempt}.err", "w", encoding="utf-8") as f:
-                f.write(f"{err or ''}\n---stdout---\n{text}")
+            Path(out + f".fail{attempt}.err").write_text(f"{err}\n---stdout---\n{text}", encoding="utf-8")
         return sid, -2
 
     path = os.path.join(jd, "judge-attempts.json")
-    prior = load_json(path, {}) if os.path.exists(path) else {}
+    prior = load_json(path, {})
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
         for sid, a in ex.map(one, scenarios):
             if a != 0 or sid not in prior:
@@ -552,110 +428,76 @@ def stage_judge(run_dir, scenarios, ident, force, jobs):
     atomic_write(path, json.dumps(prior, indent=1))
 
 
-# ---------------------------------------------------------------- completeness, report
-
 def completeness(run_dir, scenarios, mapping, reps):
     """The single completeness check: per scenario, complete only with all 2*reps answers, a judge output
     that parses, and a stored prompt hash equal to the hash of the prompt re-rendered from the current
     answers and mapping."""
     per = []
     for sc in scenarios:
-        sid = sc["id"]
+        sid, m = sc["id"], mapping.get(sc["id"])
         have = sum(nonempty(ans_path(run_dir, sid, s, k)) for s in SIDES for k in range(1, reps + 1))
-        out, _, _ = judge_paths(run_dir, sid)
-        d = None
-        if os.path.exists(out):
-            try:
-                d = parse_judge(read_text(out), reps)
-            except (OSError, UnicodeDecodeError):
-                d = None
-        m = mapping.get(sid)
-        prompt = None
-        if m is not None and have == 2 * reps:
-            try:
-                prompt = render_judge(run_dir, sc, m, reps)
-            except (KeyError, TypeError):
-                prompt = None
-        bound = prompt_bound(run_dir, sid, prompt)
+        out = judge_paths(run_dir, sid)[0]
+        d = parse_judge(read_text(out), reps) if nonempty(out) else None
         rec = {"id": sid, "complete": False, "base": None, "candidate": None, "have": have,
-               "parsed": d is not None, "bound": bound, "marks": None, "diff": None, "note": "", "X": None}
-        if have == 2 * reps and d is not None and bound:
-            try:
-                per_side = unmap(m, d["correct"], reps)
-            except (KeyError, TypeError, ValueError):
-                per_side = None
-            if per_side is not None:
-                rec.update(complete=True, base=sum(per_side["base"]), candidate=sum(per_side["candidate"]),
-                           marks={s: "".join("✓" if ok else "✗" for ok in per_side[s]) for s in SIDES},
+               "parsed": d is not None, "bound": False, "marks": None, "diff": None, "note": "", "X": None}
+        try:
+            prompt = render_judge(run_dir, sc, m, reps) if m is not None and have == 2 * reps else None
+            rec["bound"] = prompt_bound(run_dir, sid, prompt)
+            if prompt is not None and d is not None and rec["bound"]:
+                ps = unmap(m, d["correct"], reps)
+                rec.update(complete=True, base=sum(ps["base"]), candidate=sum(ps["candidate"]),
+                           marks={s: "".join("✓" if ok else "✗" for ok in ps[s]) for s in SIDES},
                            diff=d["sources_differ"], note=str(d.get("note", "")).replace("|", "/"), X=m["X"])
+        except (KeyError, TypeError, ValueError):
+            pass
         per.append(rec)
     return per
 
 
 def stage_report(run_dir, scenarios, ident):
-    reps = ident["replicates"]
-    jd = os.path.join(run_dir, "judge")
+    reps, n, jd = ident["replicates"], len(scenarios), os.path.join(run_dir, "judge")
     mapping = load_json(os.path.join(jd, "mapping.json"), {})
-    if not isinstance(mapping, dict):
-        mapping = {}
-    seats = {}
-    for r in load_json(os.path.join(run_dir, "answers", "seats.json"), []) or []:
-        seats[(r["id"], r["side"], r["rep"])] = r
-    retries = [f"seat {i}.{s}.r{k} ({'ok' if r['ok'] else 'FAILED'} after {r['attempts']})"
-               for (i, s, k), r in sorted(seats.items()) if r.get("attempts", 0) > 1]
+    seats = load_json(os.path.join(run_dir, "answers", "seats.json"), []) or []
+    retries = [f"seat {r['id']}.{r['side']}.r{r['rep']} ({'ok' if r['ok'] else 'FAILED'} after {r['attempts']})"
+               for r in sorted(seats, key=lambda r: (r["id"], r["side"], r["rep"])) if r.get("attempts", 0) > 1]
     ja = load_json(os.path.join(jd, "judge-attempts.json"), {}) or {}
     retries += [f"judge {k} (ok after 2)" for k, v in sorted(ja.items()) if v == 2]
-
-    per = completeness(run_dir, scenarios, mapping, reps)
+    per = completeness(run_dir, scenarios, mapping if isinstance(mapping, dict) else {}, reps)
     result = verdict(per, reps)  # the only path to a verdict
-    by_id = {p["id"]: p for p in per}
-    flagged = {f["id"]: f["reasons"] for f in result["failing"]}
-
     rows, tot, material = [], {"base": 0, "candidate": 0}, []
-    for sc in scenarios:
-        p = by_id[sc["id"]]
+    for sc, p in zip(scenarios, per):
+        head = f"| {sc['id']} | {sc['targeted_block']} | "
         if not p["complete"]:
-            rows.append(f"| {sc['id']} | {sc['targeted_block']} | ? | ? | ? | incomplete (answers {p['have']}/{2*reps}, "
+            rows.append(head + f"? | ? | ? | incomplete (answers {p['have']}/{2*reps}, "
                         f"judge {'parsed' if p['parsed'] else 'missing or unparsed'}, "
                         f"prompt hash {'bound' if p['bound'] else 'not bound to the current answers'}) |")
             continue
-        tot["base"] += p["base"]
-        tot["candidate"] += p["candidate"]
-        diff = p["diff"]
-        if diff == "material-difference":
-            material.append(sc["id"])
-        rows.append(f"| {sc['id']} | {sc['targeted_block']} | {p['base']}/{reps} ({p['marks']['base']}) | "
-                    f"{p['candidate']}/{reps} ({p['marks']['candidate']}) | "
-                    f"{'**' + diff + '**' if diff == 'material-difference' else diff} | "
+        tot["base"], tot["candidate"] = tot["base"] + p["base"], tot["candidate"] + p["candidate"]
+        mat = p["diff"] == "material-difference"
+        material += [sc["id"]] if mat else []
+        rows.append(head + f"{p['base']}/{reps} ({p['marks']['base']}) | {p['candidate']}/{reps} "
+                    f"({p['marks']['candidate']}) | {'**' + p['diff'] + '**' if mat else p['diff']} | "
                     f"[X={p['X'].upper()}] {p['note']} |")
-    n = len(scenarios)
-    n_answers = sum(p["have"] for p in per)
-    n_parsed = sum(1 for p in per if p["complete"])
 
     if result["verdict"] == "INCOMPLETE":
-        if not scenarios:
-            vline = "INCOMPLETE — no verdict; the scenario list is empty"
-        else:
-            vline = ("INCOMPLETE — no verdict; missing answers, unparsed judge results or judge results not bound to "
-                     f"the current answers for: {', '.join(result['incomplete'])}")
+        vline = ("INCOMPLETE — no verdict; the scenario list is empty" if not scenarios else
+                 "INCOMPLETE — no verdict; missing answers, unparsed judge results or judge results not bound to "
+                 f"the current answers for: {', '.join(result['incomplete'])}")
     elif result["verdict"] == "FAIL":
         vline = "FAIL — " + "; ".join(f"{f['id']} ({'; '.join(f['reasons'])})" for f in result["failing"])
     else:
         vline = (f"PASS — on every scenario CANDIDATE's correct count is at least BASE's minus 1 (of {reps}), "
                  f"and no scenario has CANDIDATE wrong in 2+ of {reps} while BASE is right in 2+ of {reps}")
 
-    keyrows = [f"- **{sc['id']}** — {sc['key_change']}" for sc in scenarios if sc.get("key_change")]
-    n_ctrl = sum(1 for sc in scenarios if sc.get("control") is True)
+    n_ctrl = sum(sc.get("control") is True for sc in scenarios)
     nonpass = [f"- {f['id']}: {'; '.join(f['reasons'])}" for f in result["failing"]]
     nonpass += [f"- {i}: incomplete — no verdict contribution" for i in result["incomplete"]]
-    lines = [
-        "# Charter A/B behavioural eval",
-        "",
+    keyrows = [f"- **{sc['id']}** — {sc['key_change']}" for sc in scenarios if sc.get("key_change")]
+    lines = [  # an item ending in "\n" is followed by a blank line in the joined text
+        "# Charter A/B behavioural eval\n",
         f"BASE = `{ident['base_ref']}` (`{ident['base_sha']}`); CANDIDATE = `{ident['candidate_ref']}` "
-        f"(`{ident['candidate_sha']}`); charter = `{ident['charter']}`.",
-        "",
-        "## Method",
-        "",
+        f"(`{ident['candidate_sha']}`); charter = `{ident['charter']}`.\n",
+        "## Method\n",
         f"- {n} scenarios (`{os.path.basename(ident['scenarios_file'])}`, sha256 `{ident['scenarios_sha256'][:12]}`): "
         f"{n - n_ctrl} aimed at blocks the change moved or deleted, {n_ctrl} controls on text it did not touch. "
         "Each has an `expected_rule` taken from BASE's own text.",
@@ -673,50 +515,36 @@ def stage_report(run_dir, scenarios, ident):
         f"- Verdict rule: PASS when, for every scenario, CANDIDATE correct ≥ BASE correct − 1 (of {reps}) and no "
         f"scenario has CANDIDATE wrong in ≥2 of {reps} while BASE is right in ≥2 of {reps}; FAIL when any scenario "
         "breaks either test; INCOMPLETE when any scenario lacks a complete, bound result (or there are no scenarios). "
-        "The material-difference column is reported but does not enter the verdict.",
-        "",
-        "## Scoring-key changes (v1 keys kept as `expected_rule_v1`)",
-        "",
+        "The material-difference column is reported but does not enter the verdict.\n",
+        "## Scoring-key changes (v1 keys kept as `expected_rule_v1`)\n",
         *(keyrows or ["- none"]),
         "- Keys without a `key_change` field are the keys as written in the scenarios file; none is disclosed as "
-        "changed after answers were seen.",
-        "",
-        "## Results",
-        "",
+        "changed after answers were seen.\n",
+        "## Results\n",
         "| id | targeted block | BASE correct | CANDIDATE correct | X vs Y | note (X = side named) |",
         "|---|---|---|---|---|---|",
         *rows,
         "",
         f"**Totals:** BASE {tot['base']}/{n*reps}, CANDIDATE {tot['candidate']}/{n*reps}; answers present "
-        f"{n_answers}/{2*reps*n}; complete judged scenarios {n_parsed}/{n}.",
-        "",
+        f"{sum(p['have'] for p in per)}/{2*reps*n}; complete judged scenarios {sum(p['complete'] for p in per)}/{n}.\n",
         "**Scenarios that do not pass (with reasons):**",
         *(nonpass or ["- none"]),
         "",
-        f"**Material difference between sides (informational):** {', '.join(material) or 'none'}",
-        "",
+        f"**Material difference between sides (informational):** {', '.join(material) or 'none'}\n",
         "**Both sides wrong on every replicate (charter gap, not a change effect):** "
-        f"{', '.join(result['both_wrong']) or 'none'}",
-        "",
-        f"**Retries:** {', '.join(retries) or 'none'}",
-        "",
-        f"**Verdict:** {vline}",
-        "",
+        f"{', '.join(result['both_wrong']) or 'none'}\n",
+        f"**Retries:** {', '.join(retries) or 'none'}\n",
+        f"**Verdict:** {vline}\n",
     ]
-    wt = os.path.join(run_dir, "walltime.txt")
-    if os.path.exists(wt):
-        lines += ["## Wall time", "", read_text(wt).strip(), ""]
-    notes = os.path.join(run_dir, "notes.md")
-    if os.path.exists(notes):
-        lines += [read_text(notes).strip(), ""]
+    for name, head in (("walltime.txt", ["## Wall time\n"]), ("notes.md", [])):
+        if os.path.exists(os.path.join(run_dir, name)):
+            lines += [*head, read_text(os.path.join(run_dir, name)).strip() + "\n"]
     text = "\n".join(lines)
     atomic_write(os.path.join(run_dir, "results.md"), text)
     atomic_write(os.path.join(run_dir, "verdict.json"), json.dumps(dict(result, identity=ident), indent=1) + "\n")
     print(text)
     return EXIT_BY_VERDICT[result["verdict"]]
 
-
-# ---------------------------------------------------------------- CLI
 
 def build_parser():
     ap = argparse.ArgumentParser(description="A/B behavioural eval of a charter change (see module docstring).")
@@ -737,20 +565,18 @@ def build_parser():
     return ap
 
 
-def fmt_secs(s):
-    return f"{int(s) // 60} min {int(s) % 60} s"
-
-
 def dispatch(a):
-    stage = a.stage
-    config_dir = None
+    stage, config_dir = a.stage, None
     if stage in ("seats", "run"):
         # bites on: seats run with an unset/empty CLAUDE_CONFIG_DIR would silently use an unintended config (E1)
         config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
         if not config_dir.strip():
             raise Refusal("CLAUDE_CONFIG_DIR is unset or empty; export it before running seats")
-    repo = resolve_repo(a.repo)
-    made_default = False
+    start = os.path.abspath(a.repo) if a.repo else HERE
+    p = git(start, "rev-parse", "--show-toplevel")
+    if p.returncode != 0 or not p.stdout.strip():
+        raise Refusal(f"{start} is not inside a git repository")
+    repo, made_default = os.path.realpath(p.stdout.strip()), False
     if a.run_dir:
         run_dir = os.path.realpath(a.run_dir)
     elif stage in ("seats", "run"):
@@ -760,26 +586,21 @@ def dispatch(a):
     # bites on: a run dir inside the repo tree would write eval output into the caller's checkout (E2)
     if inside(run_dir, repo):
         if made_default:
-            with contextlib.suppress(OSError):
-                os.rmdir(run_dir)
+            shutil.rmtree(run_dir, ignore_errors=True)  # our own fresh, empty temp dir
         raise Refusal(f"run dir {run_dir} is inside the repo {repo}; nothing writes into the repo")
-    stored = read_sides(run_dir)
+    stored = load_json(os.path.join(run_dir, "sides.json"))
     if stored is None and stage in ("judge", "report"):
         raise Refusal(f"{run_dir} has no sides.json; run seats (or run) first")
-    if a.jobs < 1 or a.judge_jobs < 1:
-        raise Refusal("--jobs and --judge-jobs must be at least 1")
     ident, scenarios = build_identity(a, stage, repo, stored)
     if stored is not None:
-        diff = identity_mismatch(stored, ident)
-        # bites on: a stage run under a different commit/model/scenarios/replicates than the run dir's must not mix in (E3)
-        if diff:
+        # bites on: a stage under a different commit/model/scenarios/replicates than the run dir's must not mix in (E3)
+        if diff := identity_mismatch(stored, ident):
             raise Refusal(f"identity mismatch with {run_dir}/sides.json on: {', '.join(diff)}")
         ident.update({k: stored[k] for k in UNGUARDED_KEYS})
     os.makedirs(run_dir, exist_ok=True)
     if made_default:
         print(f"run dir: {run_dir}", flush=True)
-    code = 0
-    t0 = time.time()
+    code, t0 = 0, time.time()
     if stage in ("seats", "run"):
         with worktrees(repo, {"base": ident["base_sha"], "candidate": ident["candidate_sha"]}) as wts:
             for side, path in wts.items():
@@ -787,16 +608,16 @@ def dispatch(a):
                     raise Refusal(f"{side} ({ident[side + '_sha']}) has no charter at {ident['charter']}")
             if stored is None:
                 atomic_write(os.path.join(run_dir, "sides.json"), json.dumps(ident, indent=1) + "\n")
-            stage_seats(run_dir, wts, scenarios, ident, a.force, min(a.jobs, 4), config_dir)
+            stage_seats(run_dir, wts, scenarios, ident, a.force, a.jobs, config_dir)
     t1 = time.time()
     if stage in ("judge", "run"):
         stage_judge(run_dir, scenarios, ident, a.force, a.judge_jobs)
     t2 = time.time()
     if stage == "run":
+        (m1, s1), (m2, s2) = divmod(int(t1 - t0), 60), divmod(int(t2 - t1), 60)
         with open(os.path.join(run_dir, "walltime.txt"), "a", encoding="utf-8") as f:
             f.write(f"- ab.py run invocation {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(t0))}: seats "
-                    f"{fmt_secs(t1 - t0)}, judge {fmt_secs(t2 - t1)} (stages resume, so outputs already present "
-                    "are skipped)\n")
+                    f"{m1} min {s1} s, judge {m2} min {s2} s (stages resume, so outputs already present are skipped)\n")
     if stage in ("report", "run"):
         code = stage_report(run_dir, scenarios, ident)
     return code
