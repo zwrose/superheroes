@@ -86,8 +86,10 @@ def test_unrelated_v3_findings_distinct_ledger_and_certification():
 
 def test_mechanical_compile_mints_finding_key_equal_to_location_id():
     findings = [
-        {"file": "f.py", "line": 5, "title": "leak", "severity": "Important"},
-        {"file": "g.py", "line": 2, "title": "race", "severity": "Minor"},
+        {"file": "f.py", "line": 5, "title": "leak", "severity": "Important",
+         "consequence": "a reviewer-found defect stays in the change"},
+        {"file": "g.py", "line": 2, "title": "race", "severity": "Minor",
+         "consequence": "a reviewer-found defect stays in the change"},
     ]
     compiled, _ = RD.mechanical_compile(findings, None)
     for f in compiled:
@@ -97,9 +99,9 @@ def test_mechanical_compile_mints_finding_key_equal_to_location_id():
 def test_mechanical_compile_discards_inbound_finding_key():
     findings = [
         {"file": "f.py", "line": 5, "title": "leak", "severity": "Important",
-         SC.FINDING_KEY_FIELD: "caller-controlled"},
+         SC.FINDING_KEY_FIELD: "caller-controlled", "consequence": "a reviewer-found defect stays in the change"},
         {"file": "g.py", "line": 2, "title": "race", "severity": "Minor",
-         SC.FINDING_KEY_FIELD: "caller-controlled"},
+         SC.FINDING_KEY_FIELD: "caller-controlled", "consequence": "a reviewer-found defect stays in the change"},
     ]
     compiled, _ = RD.mechanical_compile(findings, None)
     keys = [f[SC.FINDING_KEY_FIELD] for f in compiled]
@@ -122,8 +124,10 @@ def _hex12_suffix(key, base):
 def test_mechanical_compile_mints_distinct_keys_when_location_collides():
     prefix = "x" * 165
     findings = [
-        {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"},
-        {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"},
+        {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
+         "consequence": "a reviewer-found defect stays in the change"},
+        {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important",
+         "consequence": "a reviewer-found defect stays in the change"},
     ]
     compiled, _ = RD.mechanical_compile(findings, None)
     keys = [f[SC.FINDING_KEY_FIELD] for f in compiled]
@@ -142,10 +146,12 @@ def test_seat_supplied_duplicate_finding_keys_do_not_collide_in_ledger():
     finding1 = {
         "file": "b.py", "line": 10, "title": "first defect", "severity": "Important",
         "disposition": "refuted", SC.FINDING_KEY_FIELD: "caller-controlled",
+        "consequence": "a reviewer-found defect stays in the change",
     }
     finding2 = {
         "file": "c.py", "line": 20, "title": "second defect", "severity": "Important",
         SC.FINDING_KEY_FIELD: "caller-controlled",
+        "consequence": "a reviewer-found defect stays in the change",
     }
     compiled1, _ = RD.mechanical_compile([finding1], None)
     compiled2, _ = RD.mechanical_compile([finding2], None)
@@ -163,7 +169,8 @@ def test_seat_supplied_duplicate_finding_keys_do_not_collide_in_ledger():
 
 
 def test_stage_ids_preserves_finding_key_while_rewriting_id():
-    raw = {"file": "h.py", "line": 7, "title": "x", "severity": "Minor"}
+    raw = {"file": "h.py", "line": 7, "title": "x", "severity": "Minor",
+           "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([raw], None)
     minted_key = compiled[0][SC.FINDING_KEY_FIELD]
     staged = V.stage_ids(compiled)
@@ -172,7 +179,8 @@ def test_stage_ids_preserves_finding_key_while_rewriting_id():
 
 
 def test_apply_verdicts_merge_and_rank_author_filter_preserve_finding_key():
-    raw = {"file": "i.py", "line": 3, "title": "y", "severity": "Important"}
+    raw = {"file": "i.py", "line": 3, "title": "y", "severity": "Important",
+           "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([raw], None)
     minted_key = compiled[0][SC.FINDING_KEY_FIELD]
     staged = V.stage_ids(compiled)
@@ -232,8 +240,10 @@ def test_edge_e4_non_dict_skipped_by_mint_and_identity_key_returns_none():
 def test_separate_batches_clamped_title_collision_merged_distinct_keys_and_certified():
     """v0: independently compiled batches merged via _set_findings stay certification-distinct."""
     prefix = "x" * 165
-    finding1 = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
-    finding2 = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"}
+    finding1 = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
+                "consequence": "a reviewer-found defect stays in the change"}
+    finding2 = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important",
+                "consequence": "a reviewer-found defect stays in the change"}
     compiled1, _ = RD.mechanical_compile([finding1], None)
     compiled2, _ = RD.mechanical_compile([finding2], None)
     state = RD.new_state(_cfg())
@@ -255,8 +265,10 @@ def test_clamped_collision_departing_disposition_archived_to_ledger():
     finding1 = {
         "file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
         "disposition": "refuted",
+        "consequence": "a reviewer-found defect stays in the change",
     }
-    finding2 = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"}
+    finding2 = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important",
+                "consequence": "a reviewer-found defect stays in the change"}
     compiled1, _ = RD.mechanical_compile([finding1], None)
     compiled2, _ = RD.mechanical_compile([finding2], None)
     state = RD.new_state(_cfg())
@@ -295,7 +307,8 @@ def test_duplicate_keys_in_one_set_findings_list_rekeyed_both_live():
 
 def test_set_findings_idempotent_on_same_list():
     """E2: unchanged re-assignment of the same list keeps every key stable."""
-    finding = {"file": "a.py", "line": 1, "title": "t", "severity": "Minor"}
+    finding = {"file": "a.py", "line": 1, "title": "t", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._set_findings(state, compiled)

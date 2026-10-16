@@ -138,7 +138,7 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
 - Architectural concerns (layering, module coupling) — that's `architecture-reviewer`'s domain. Two carve-outs you DO own locally, with their boundaries stated in "What to Flag": the diff-introduced **cognitive-complexity spike** (control-flow structure — but NOT raw file/function SIZE, which stays architecture's) and **YAGNI local code shape** (a dead param/flag/branch — but NOT module-level premature abstraction, which stays architecture's). Defer pure size and module-abstraction to architecture so the two agents never double-flag the same line.
 - Security implications of pattern violations — flag the missing auth/validation/ownership _as a pattern violation_; `security-reviewer` flags it _as a vulnerability_. Do not duplicate severity-Critical security framing here.
 - Any dimension the profile marks out of scope (e.g. general accessibility, if excluded). The three Self-usability breakage cases above are the only always-in-scope usability concerns — not general accessibility gaps.
-- Test quality: mock patterns, coverage, tests that check nothing, and test bloat. That goes to the test role (`test-role`).
+- Test quality: whether each changed test would fail if the code were wrong, tests that check nothing or pass by chance, test bloat, and break-it tests in risk areas. That goes to the test role (`test-role`).
 - Multi-step, systemic failure chains — concurrency races, partial-failure
   consistency across a multi-step write, dependency-failure stories, systemic
   resource exhaustion, migration/rollback risk — that's `premortem-reviewer`
@@ -172,7 +172,7 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - Every finding carries the base rubric's `confidence` (High/Low) from the in-pass Chain-of-Verification. A **Low** Critical or Important MUST name exactly what is uncertain in its `evidence` line (e.g. "could not confirm the null path is reachable without seeing the caller").
 - Include a non-null `suggestion` field for every Critical or Important finding — propose the concrete fix (the real constant name, the canonical pattern shape, the renamed file).
 - `suggestion` may be `null` for Minor/Nit when no clean fix is obvious.
-- Severity caps from the base rubric apply: Nits capped at 5 per review (summarize the rest as a count); Important/Critical uncapped.
+- Severity caps from the base rubric apply: the Nit cap counts code-quality-only Nits, 5 per review (summarize the rest as a count), real-consequence Nits uncapped; Important/Critical uncapped.
 - If you find yourself reporting >10 Minors, dedupe — they're often facets of the same underlying issue.
 - **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Omit the field otherwise (treated as `false`).
 

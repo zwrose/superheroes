@@ -71,8 +71,12 @@ def _panel_head(config):
     ).strip()
 
 
+_CONSEQUENCE = "a reviewer-found defect stays in the change"
+
+
 def _finding():
-    return {"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}
+    return {"file": "f.py", "line": 1, "title": "bug", "severity": "Important",
+            "consequence": _CONSEQUENCE}
 
 
 def _compile_one(finding=None):
@@ -115,7 +119,8 @@ def test_l3_a1_mixed_batch_keeps_the_open_row():
     state = RD.new_state(_cfg())
     discharged, _ = _stage_and_discharge(state)
     open_compiled, _ = _compile_one(
-        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [open_compiled])
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(discharged), _fix_row(open_compiled)])
@@ -128,7 +133,8 @@ def test_l3_a1_mixed_batch_continuation_keeps_the_open_row():
     state = RD.new_state(_cfg())
     discharged, _ = _stage_and_discharge(state)
     open_compiled, _ = _compile_one(
-        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [open_compiled])
     state["fixBatch"] = [{"title": "prior slice"}]
     config = _cfg()
@@ -187,7 +193,8 @@ def test_l3_a1_backfill_strips_record_sequence_stamps():
     poisoned = {"file": "o", "line": 1, "title": "old", "severity": "Important",
                 "raisedSeq": 888, "dispositionSeq": 999,
                 SC.FINDING_KEY_FIELD: "o::old@L1"}
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": _CONSEQUENCE}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -208,13 +215,14 @@ def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
     state["confirmations"] = 0
     state["surfacedSinceLastPanel"] = ["Critical"]
     discharged, discharged_key = _compile_one(
-        {"file": "f.py", "line": 1, "title": "mechanical", "severity": "Important"})
+        {"file": "f.py", "line": 1, "title": "mechanical", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [discharged])
     RD._record_disposition(state, discharged_key, "fixed", 2,
                            dispositionReceipt={"headSha": "f" * 40})
     tradeoff, tradeoff_key = _compile_one(
         {"file": "g.py", "line": 2, "title": "widen API", "severity": "Critical",
-         "tradeoff": True})
+         "tradeoff": True, "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [tradeoff])
     batch = [_fix_row(discharged), _fix_row(tradeoff)]
     config = _cfg()
@@ -375,7 +383,8 @@ def test_l3_a2_excluded_continuation_enters_post_fix_verify_and_audits():
     state = RD.new_state(_cfg())
     discharged, _ = _stage_and_discharge(state)
     open_compiled, _ = _compile_one(
-        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [open_compiled])
     state["round"] = 1
     state["rounds"] = {"1": {}}
@@ -403,12 +412,14 @@ def test_l3_a2_excluded_count_accumulates_across_slices():
     state = RD.new_state(_cfg(fixBatchCap=1))
     discharged_a, _ = _stage_and_discharge(state)
     discharged_b, key_b = _compile_one(
-        {"file": "h.py", "line": 3, "title": "gone", "severity": "Important"})
+        {"file": "h.py", "line": 3, "title": "gone", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [discharged_b])
     RD._record_disposition(state, key_b, "fixed", 1,
                            dispositionReceipt={"headSha": "d" * 40})
     open_compiled, _ = _compile_one(
-        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [open_compiled])
     state["round"] = 1
     state["rounds"] = {"1": {}}
@@ -430,7 +441,8 @@ def test_l3_a2_continuation_ledger_fault_parks():
     state = RD.new_state(_cfg())
     discharged, _ = _stage_and_discharge(state)
     open_compiled, _ = _compile_one(
-        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     RD._stage_findings(state, [open_compiled])
     state["round"] = 1
     state["rounds"] = {"1": {}}
@@ -449,9 +461,11 @@ def test_l3_a2_continuation_ledger_fault_parks():
 
 def test_l3_a2_fold_fixer_queued_continuation_records_one_split():
     open_a, _ = _compile_one(
-        {"file": "a.py", "line": 1, "title": "a", "severity": "Important"})
+        {"file": "a.py", "line": 1, "title": "a", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     open_b, _ = _compile_one(
-        {"file": "b.py", "line": 2, "title": "b", "severity": "Important"})
+        {"file": "b.py", "line": 2, "title": "b", "severity": "Important",
+         "consequence": _CONSEQUENCE})
     state = RD.new_state(_cfg(fixBatchCap=1))
     state["round"] = 1
     state["rounds"] = {"1": {}}
@@ -483,7 +497,8 @@ def _mk_diff(sections):
 
 
 def _fix_batch():
-    return [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
+    return [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important",
+             "consequence": _CONSEQUENCE}]
 
 
 def _assert_delta_baseline_refusal(state):
@@ -667,7 +682,8 @@ def test_l3_a3_second_fix_scoped_surface_excludes_first_fix_unchanged_hunk():
     state["deltaBaseline"] = {"round": 2, "diff": after_first_fix}
     state["reviewedDiff"] = after_first_fix
     state["headDiff"] = after_second_fix
-    state["fixBatch"] = [{"file": "b.py", "line": 1, "title": "bug-b", "severity": "Important"}]
+    state["fixBatch"] = [{"file": "b.py", "line": 1, "title": "bug-b", "severity": "Important",
+                          "consequence": _CONSEQUENCE}]
     RD._enter_delta_round(state, _cfg(diff=base))
     new_surface = state.get("_newSurface") or {}
     audit_targets = state.get("_auditTargets") or []
