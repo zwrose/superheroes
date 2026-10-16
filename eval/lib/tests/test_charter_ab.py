@@ -1,0 +1,428 @@
+"""Deterministic tests for eval/charter-ab/ab.py. No test calls a model: exec_seat/exec_judge are replaced."""
+import importlib.util
+import json
+import os
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+_AB_PATH = Path(__file__).resolve().parents[2] / "charter-ab" / "ab.py"
+_spec = importlib.util.spec_from_file_location("charter_ab", _AB_PATH)
+ab = importlib.util.module_from_spec(_spec)
+sys.modules["charter_ab"] = ab
+_spec.loader.exec_module(ab)
+
+SEED_PROMPT = (
+    "You are the superheroes showrunner advisor for this repository. First read "
+    "plugins/superheroes/skills/showrunner/SKILL.md in full, and read any reference file it "
+    "tells you to read for this situation. Then answer in at most 150 words: what you do next, "
+    "step by step, and which rule (file and section) governs it. Do not edit anything. "
+    "Situation: {situation} Question: {question}"
+)
+SIDE_DIRS = {"base": "/wt/base", "candidate": "/wt/candidate"}
+
+
+@pytest.fixture(autouse=True)
+def no_models(monkeypatch):
+    def boom(*args, **kwargs):
+        pytest.fail("a model CLI (claude/codex) would have been called")
+    monkeypatch.setattr(ab, "exec_seat", boom)
+    monkeypatch.setattr(ab, "exec_judge", boom)
+
+
+@pytest.fixture
+def git_env(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+# ---------------------------------------------------------------- helpers
+
+def per(sid, base, cand, complete=True):
+    return {"id": sid, "complete": complete, "base": base, "candidate": cand}
+
+
+def make_ident(reps=1, **over):
+    d = {"base_ref": "b", "base_sha": "a" * 40, "candidate_ref": "c", "candidate_sha": "b" * 40,
+         "charter": "CHARTER.md", "scenarios_file": "/x/s.json", "scenarios_sha256": "0" * 64,
+         "role": "the tester", "model": "opus", "judge_model": "gpt-6.1-sol", "replicates": reps, "seed": 7}
+    d.update(over)
+    return d
+
+
+def scen(sid):
+    return {"id": sid, "situation": f"situation of {sid}", "question": f"question of {sid}",
+            "expected_rule": f"rule of {sid}", "targeted_block": f"block of {sid}"}
+
+
+def judge_line(reps, correct=True, diff="same", note="n"):
+    return json.dumps({"correct": {l: correct for l in ab.labels(reps)}, "sources_differ": diff, "note": note})
+
+
+def write_judged(run_dir, sc, m, reps, text=None):
+    prompt = ab.render_judge(str(run_dir), sc, m, reps)
+    out, _, shap = ab.judge_paths(str(run_dir), sc["id"])
+    Path(out).write_text(text if text is not None else judge_line(reps))
+    Path(shap).write_text(ab.sha256_text(prompt))
+
+
+def build_run(tmp_path, reps=1, ids=("s1", "s2"), judged=True):
+    """A tiny run dir: sides.json, answers for both sides, mapping, and (optionally) bound judge outputs."""
+    run_dir = tmp_path / "run"
+    (run_dir / "answers").mkdir(parents=True)
+    (run_dir / "judge").mkdir()
+    ident = make_ident(reps)
+    (run_dir / "sides.json").write_text(json.dumps(ident))
+    scenarios = [scen(i) for i in ids]
+    for sc in scenarios:
+        for side in ab.SIDES:
+            for k in range(1, reps + 1):
+                Path(ab.ans_path(str(run_dir), sc["id"], side, k)).write_text(f"answer {sc['id']} {side} {k}\n")
+    mapping = ab.make_mapping(list(ids), reps, ident["seed"])
+    (run_dir / "judge" / "mapping.json").write_text(json.dumps(mapping))
+    if judged:
+        for sc in scenarios:
+            write_judged(run_dir, sc, mapping[sc["id"]], reps)
+    return str(run_dir), scenarios, ident, mapping
+
+
+def fake_judge_all_correct(calls):
+    def fake(cmd, prompt):
+        calls.append(prompt)
+        found = re.findall(r"^## Answer (\d+[AB])$", prompt, re.M)
+        return 0, json.dumps({"correct": {l: True for l in found}, "sources_differ": "same", "note": "ok"}), ""
+    return fake
+
+
+def make_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def g(*args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+    g("init", "-q")
+    (repo / "CHARTER.md").write_text("the charter\n")
+    g("add", ".")
+    g("commit", "-q", "-m", "c1")
+    return repo, g("rev-parse", "HEAD")
+
+
+def write_scenarios(tmp_path, ids=("e1", "e2")):
+    p = tmp_path / "scen.json"
+    p.write_text(json.dumps({"role": "the tester", "scenarios": [scen(i) for i in ids]}))
+    return str(p)
+
+
+def worktree_count(repo):
+    out = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"], capture_output=True,
+                         text=True, check=True).stdout
+    return out.count("worktree ")
+
+
+# ---------------------------------------------------------------- 1-4 verdict rule
+
+def test_verdict_minus_one_bound():
+    assert ab.verdict([per("a", 3, 1)], 3)["verdict"] == "FAIL"
+    assert ab.verdict([per("a", 3, 2)], 3)["verdict"] == "PASS"
+    assert ab.verdict([per("a", 1, 0)], 3)["verdict"] == "PASS"
+    assert ab.scenario_flags(3, 1, 3) and not ab.scenario_flags(3, 2, 3)
+    assert ab.verdict([per("a", 3, 1)], 3)["failing"][0]["id"] == "a"
+
+
+def test_two_of_three_rule():
+    # base 2 / cand 1 is inside the minus-1 bound but candidate is wrong 2 of 3 while base is right 2 of 3
+    assert ab.verdict([per("a", 2, 1)], 3)["verdict"] == "FAIL"
+    reasons = ab.verdict([per("a", 2, 1)], 3)["failing"][0]["reasons"]
+    assert len(reasons) == 1 and "wrong 2/3" in reasons[0]
+    assert ab.verdict([per("a", 1, 1)], 3)["verdict"] == "PASS"
+
+
+def test_both_wrong_reported_not_failing():
+    v = ab.verdict([per("a", 0, 0), per("b", 3, 3)], 3)
+    assert v["both_wrong"] == ["a"]
+    assert v["verdict"] == "PASS" and v["failing"] == []
+
+
+def test_incomplete_dominates_and_empty_is_incomplete():
+    assert ab.verdict([per("a", None, None, complete=False), per("b", 3, 3)], 3)["verdict"] == "INCOMPLETE"
+    v = ab.verdict([per("a", None, None, complete=False), per("b", 3, 0)], 3)
+    assert v["verdict"] == "INCOMPLETE" and v["incomplete"] == ["a"]
+    assert ab.verdict([], 3)["verdict"] == "INCOMPLETE"
+    # claimed complete but no counts: still not a PASS
+    assert ab.verdict([per("a", None, None, complete=True)], 3)["verdict"] == "INCOMPLETE"
+
+
+# ---------------------------------------------------------------- 5 parse_judge
+
+def test_parse_judge_rejects_malformed():
+    reps = 2
+    good = judge_line(reps, diff="minor-difference")
+    d = ab.parse_judge("preamble\n" + good + "\n", reps)
+    assert d["sources_differ"] == "minor-difference" and set(d["correct"]) == set(ab.labels(reps))
+    labs = ab.labels(reps)
+    all_true = {l: True for l in labs}
+
+    def line(correct, diff="same"):
+        return json.dumps({"correct": correct, "sources_differ": diff, "note": "x"})
+    assert ab.parse_judge('{"correct": {"1A": tru}, "sources_differ": "same"}', reps) is None  # malformed JSON
+    assert ab.parse_judge(line({l: True for l in labs[:-1]}), reps) is None  # missing label
+    assert ab.parse_judge(line(dict(all_true, **{"3A": True})), reps) is None  # extra label
+    assert ab.parse_judge(line(dict(all_true, **{"1A": "yes"})), reps) is None  # non-bool value
+    assert ab.parse_judge(line(all_true, diff="whatever"), reps) is None  # unknown sources_differ
+    assert ab.parse_judge("", reps) is None
+    first, last = judge_line(reps, correct=True, note="first"), judge_line(reps, correct=False, note="last")
+    assert ab.parse_judge(first + "\n" + last, reps)["note"] == "last"
+    assert ab.parse_judge(first + "\n" + line({"1A": True}), reps)["note"] == "first"  # a later invalid one is skipped
+
+
+# ---------------------------------------------------------------- 6 report never PASSes on a bad judge
+
+def test_malformed_judge_output_makes_report_incomplete(tmp_path):
+    run_dir, scenarios, ident, mapping = build_run(tmp_path, judged=False)
+    for sc in scenarios:  # a hash that matches the prompt, so only the unparseable output can block
+        out, _, shap = ab.judge_paths(run_dir, sc["id"])
+        Path(out).write_text("garbage, not a judgement")
+        Path(shap).write_text(ab.sha256_text(ab.render_judge(run_dir, sc, mapping[sc["id"]], 1)))
+    code = ab.stage_report(run_dir, scenarios, ident)
+    assert code == ab.EXIT_BY_VERDICT["INCOMPLETE"] == 2
+    v = json.loads(Path(run_dir, "verdict.json").read_text())
+    assert v["verdict"] == "INCOMPLETE" and v["incomplete"] == ["s1", "s2"]
+    assert "INCOMPLETE" in Path(run_dir, "results.md").read_text()
+
+
+def test_fully_bound_run_reports_pass(tmp_path):
+    run_dir, scenarios, ident, _ = build_run(tmp_path)
+    assert ab.stage_report(run_dir, scenarios, ident) == 0
+    v = json.loads(Path(run_dir, "verdict.json").read_text())
+    assert v["verdict"] == "PASS" and v["identity"]["model"] == "opus"
+    assert "| s1 |" in Path(run_dir, "results.md").read_text()
+
+
+# ---------------------------------------------------------------- 7 unmap, make_mapping
+
+def test_unmap_inverts_labels():
+    entry = {"replicates": {"1": {"A": "base", "B": "candidate"}, "2": {"A": "candidate", "B": "base"}},
+             "X": "base", "Y": "candidate"}
+    judged = {"1A": True, "1B": False, "2A": False, "2B": True}
+    assert ab.unmap(entry, judged, 2) == {"base": [True, True], "candidate": [False, False]}
+    judged = {"1A": True, "1B": False, "2A": True, "2B": False}
+    assert ab.unmap(entry, judged, 2) == {"base": [True, False], "candidate": [False, True]}
+    with pytest.raises(ValueError):
+        ab.unmap(entry, {"1A": True, "1B": True, "2A": True}, 2)
+    with pytest.raises(ValueError):
+        ab.unmap(entry, dict(judged, **{"3A": True}), 2)
+
+
+def test_make_mapping_deterministic_and_balanced():
+    ids, reps = ["s1", "s2", "s3"], 3
+    m = ab.make_mapping(ids, reps, 1882)
+    assert m == ab.make_mapping(ids, reps, 1882)
+    for e in m.values():
+        assert set(e["replicates"]) == {"1", "2", "3"} and {e["X"], e["Y"]} == set(ab.SIDES)
+        for ab_map in e["replicates"].values():
+            assert {ab_map["A"], ab_map["B"]} == set(ab.SIDES)
+    rng = random.Random(1882)  # the seed's draw order, with its "trim" side now called "candidate"
+    expect = {}
+    for sid in ids:
+        per_rep = {}
+        for k in range(1, reps + 1):
+            per_rep[str(k)] = ({"A": "base", "B": "candidate"} if rng.random() < 0.5
+                               else {"A": "candidate", "B": "base"})
+        x = "base" if rng.random() < 0.5 else "candidate"
+        expect[sid] = {"replicates": per_rep, "X": x, "Y": "candidate" if x == "base" else "base"}
+    assert m == expect
+
+
+# ---------------------------------------------------------------- 8-9 seats: resume and admission
+
+def test_resume_keeps_existing_answer_unless_force(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, _ = build_run(tmp_path, judged=False)
+    sc, path = scenarios[0], ab.ans_path(run_dir, "s1", "base", 1)
+    before = Path(path).read_text()
+    calls = []
+
+    def fake(cmd, cwd, env):
+        calls.append((cmd, cwd, env))
+        return 0, "fresh answer", ""
+    monkeypatch.setattr(ab, "exec_seat", fake)
+    r = ab.run_seat(run_dir, SIDE_DIRS, sc, "base", 1, False, ident, "/cfg")
+    assert calls == [] and r["skipped"] and Path(path).read_text() == before
+    r = ab.run_seat(run_dir, SIDE_DIRS, sc, "base", 1, True, ident, "/cfg")
+    assert len(calls) == 1 and not r["skipped"] and Path(path).read_text() == "fresh answer"
+    cmd, cwd, env = calls[0]
+    assert cmd[:8] == ["claude", "-p", "--model", "opus", "--allowedTools", "Read,Grep,Glob", "--output-format",
+                       "text"]
+    assert cmd[8] == ab.render_prompt("the tester", "CHARTER.md", sc["situation"], sc["question"])
+    assert cwd == "/wt/base" and env["CLAUDE_CONFIG_DIR"] == "/cfg"
+
+
+def test_failed_call_publishes_no_answer(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, _ = build_run(tmp_path, judged=False)
+    sc, path = scenarios[0], ab.ans_path(run_dir, "s1", "base", 1)
+
+    def timeout(cmd, cwd, env):
+        raise subprocess.TimeoutExpired(cmd, 1)
+    behaviours = {"nonzero exit with output": lambda c, w, e: (1, "partial answer", "boom"),
+                  "exit 0 but blank": lambda c, w, e: (0, "  \n", ""),
+                  "timeout": timeout}
+    for name, fake in behaviours.items():
+        os.unlink(path)
+        monkeypatch.setattr(ab, "exec_seat", fake)
+        r = ab.run_seat(run_dir, SIDE_DIRS, sc, "base", 1, False, ident, "/cfg")
+        assert not os.path.exists(path), name
+        assert r["ok"] is False and r["attempts"] == 2, name
+        assert os.path.exists(path + ".fail1.err") and os.path.exists(path + ".fail2.err"), name
+        if name == "nonzero exit with output":
+            assert "partial answer" in Path(path + ".fail2.err").read_text()  # kept for diagnosis only
+
+
+# ---------------------------------------------------------------- 10 judge binding
+
+def test_judge_binding_follows_answer_content(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, mapping = build_run(tmp_path)
+    calls = []
+    monkeypatch.setattr(ab, "exec_judge", fake_judge_all_correct(calls))
+    ab.stage_judge(run_dir, scenarios, ident, False, 1)
+    assert calls == []  # bound outputs are reused
+    assert ab.stage_report(run_dir, scenarios, ident) == 0
+
+    side = mapping["s1"]["replicates"]["1"]["A"]
+    Path(ab.ans_path(run_dir, "s1", side, 1)).write_text("a different answer now\n")
+    done = {p["id"]: p["complete"] for p in ab.completeness(run_dir, scenarios, mapping, 1)}
+    assert done == {"s1": False, "s2": True}
+    assert ab.stage_report(run_dir, scenarios, ident) == 2
+
+    ab.stage_judge(run_dir, scenarios, ident, False, 1)
+    assert len(calls) == 1 and "a different answer now" in calls[0]  # only the changed scenario re-judged
+    assert ab.stage_report(run_dir, scenarios, ident) == 0
+
+
+# ---------------------------------------------------------------- 11 identity
+
+def test_identity_mismatch_names_guarded_keys():
+    stored = make_ident(3)
+    assert ab.identity_mismatch(stored, dict(stored)) == []
+    for key, new in (("model", "sonnet"), ("judge_model", "other"), ("candidate_sha", "c" * 40),
+                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1)):
+        assert ab.identity_mismatch(stored, dict(stored, **{key: new})) == [key]
+    moved = dict(stored, base_ref="x", candidate_ref="y", scenarios_file="/elsewhere.json")
+    assert ab.identity_mismatch(stored, moved) == []
+
+
+# ---------------------------------------------------------------- 12-13 refusals
+
+def test_config_dir_refusal_precedes_any_worktree(tmp_path, monkeypatch, git_env, capsys):
+    repo, _ = make_repo(tmp_path)
+    real_run = subprocess.run
+
+    def guarded(cmd, *args, **kwargs):
+        if "worktree" in cmd:
+            pytest.fail(f"git worktree was called before the CLAUDE_CONFIG_DIR refusal: {cmd}")
+        return real_run(cmd, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "run", guarded)
+    argv = ["seats", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter", "CHARTER.md",
+            "--scenarios", write_scenarios(tmp_path), "--run-dir", str(tmp_path / "run")]
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert ab.main(argv) == 3
+    assert "CLAUDE_CONFIG_DIR" in capsys.readouterr().err
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
+    assert ab.main(["run"] + argv[1:]) == 3
+    assert not (tmp_path / "run").exists()
+
+
+def test_run_dir_inside_repo_refused(tmp_path, monkeypatch, git_env, capsys):
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    inside_dir = repo / "out" / "run"
+    argv = ["seats", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter", "CHARTER.md",
+            "--scenarios", write_scenarios(tmp_path), "--run-dir", str(inside_dir)]
+    assert ab.main(argv) == 3
+    assert "inside the repo" in capsys.readouterr().err
+    assert not inside_dir.exists()
+    assert worktree_count(repo) == 1
+
+
+# ---------------------------------------------------------------- 14 prompt identity
+
+def test_seat_prompt_matches_seed_byte_for_byte():
+    role, scenarios, _ = ab.load_scenarios(str(_AB_PATH.parent / "scenarios" / "showrunner.json"))
+    assert role == "the superheroes showrunner advisor"
+    assert ab.DEFAULT_CHARTER == "plugins/superheroes/skills/showrunner/SKILL.md"
+    assert len(scenarios) == 15
+    for sc in scenarios:
+        assert ab.render_prompt(role, ab.DEFAULT_CHARTER, sc["situation"], sc["question"]) == \
+            SEED_PROMPT.format(situation=sc["situation"], question=sc["question"])
+
+
+# ---------------------------------------------------------------- extras: plumbing, E8/E9, scenario guards
+
+def test_run_end_to_end_with_fakes(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    cfg = str(tmp_path / "cfg")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
+    seen = []
+
+    def seat(cmd, cwd, env):
+        seen.append((cwd, env["CLAUDE_CONFIG_DIR"]))
+        return 0, f"answer from {os.path.basename(cwd)}", ""
+    monkeypatch.setattr(ab, "exec_seat", seat)
+    monkeypatch.setattr(ab, "exec_judge", fake_judge_all_correct([]))
+    run_dir = tmp_path / "run"
+    common = ["--repo", str(repo), "--charter", "CHARTER.md", "--scenarios", write_scenarios(tmp_path),
+              "--run-dir", str(run_dir), "--replicates", "2"]
+    assert ab.main(["run", "--candidate", "HEAD", "--base", "HEAD"] + common) == 0
+    assert len(seen) == 8 and {c for _, c in seen} == {cfg}
+    assert {os.path.basename(w) for w, _ in seen} == {"base", "candidate"}
+    sides = json.loads((run_dir / "sides.json").read_text())
+    assert sides["candidate_sha"] == sides["base_sha"] and len(sides["base_sha"]) == 40
+    assert json.loads((run_dir / "verdict.json").read_text())["verdict"] == "PASS"
+    assert (run_dir / "walltime.txt").exists() and worktree_count(repo) == 1
+    assert ab.main(["report", "--repo", str(repo), "--run-dir", str(run_dir)]) == 0
+    assert ab.main(["judge", "--repo", str(repo), "--run-dir", str(run_dir)]) == 0
+    # a later stage under a different identity is refused, not mixed in
+    assert ab.main(["report", "--repo", str(repo), "--run-dir", str(run_dir), "--model", "sonnet"]) == 3
+    assert ab.main(["seats", "--candidate", "HEAD", "--base", "HEAD", "--model", "sonnet"] + common) == 3
+    assert ab.main(["seats", "--candidate", "HEAD", "--base", "HEAD", "--replicates", "3"] + common[:-2]) == 3
+
+
+def test_missing_charter_or_ref_refused_and_worktrees_removed(tmp_path, monkeypatch, git_env):
+    repo, sha = make_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    base = ["seats", "--repo", str(repo), "--scenarios", write_scenarios(tmp_path), "--run-dir",
+            str(tmp_path / "run")]
+    assert ab.main(base + ["--candidate", "HEAD", "--base", "HEAD", "--charter", "NOPE.md"]) == 3
+    assert ab.main(base + ["--candidate", "no-such-ref", "--base", "HEAD", "--charter", "CHARTER.md"]) == 3
+    assert worktree_count(repo) == 1
+    assert not (tmp_path / "run" / "sides.json").exists()
+
+
+def test_worktrees_removed_when_the_body_raises(tmp_path, git_env):
+    repo, sha = make_repo(tmp_path)
+    seen = []
+    with pytest.raises(RuntimeError):
+        with ab.worktrees(str(repo), {"base": sha, "candidate": sha}) as wts:
+            seen.extend(wts.values())
+            assert all(os.path.isfile(os.path.join(p, "CHARTER.md")) for p in seen)
+            raise RuntimeError("stage blew up")
+    assert len(seen) == 2 and not any(os.path.exists(p) for p in seen)
+    assert worktree_count(repo) == 1
+
+
+def test_scenario_file_guards(tmp_path):
+    def load(data):
+        p = tmp_path / "s.json"
+        p.write_text(json.dumps(data))
+        return ab.load_scenarios(str(p))
+    role, scs, sha = load([scen("a")])
+    assert role == ab.DEFAULT_ROLE and len(sha) == 64 and scs[0]["id"] == "a"
+    assert load({"role": "r", "scenarios": [scen("a")]})[0] == "r"
+    assert load({"role": "r", "scenarios": []})[1] == []
+    for bad in ([scen("a"), scen("a")], [{k: v for k, v in scen("a").items() if k != "targeted_block"}],
+                {"scenarios": [scen("a")]}, [scen("../x")], {"role": "r", "scenarios": "no"}):
+        with pytest.raises(ab.Refusal):
+            load(bad)
