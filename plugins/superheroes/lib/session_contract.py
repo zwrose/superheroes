@@ -252,6 +252,7 @@ DISPOSITION_LEDGER_OWNER_ABSENT = "absent"
 DISPOSITION_LEDGER_OWNER_RECOGNIZED = "recognized"
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED = "unrecognized"
 MERGED_INTO_FIELD = "mergedInto"
+FULL_PANEL_NOT_RERAISED = "full-panel-not-reraised"   # dispositionReceipt kind: a complete later panel did not raise a reported fix again
 
 
 @dataclass(frozen=True)

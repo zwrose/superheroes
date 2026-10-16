@@ -67,6 +67,16 @@ These retirements ship in the same release as the review record, and never apart
 - A full-lane builder opens its PR as a draft before the review, and marks it ready at handback.
 - The seat-map receipt gains `makerFamilies` and `roster`, `seat_map.py compose` gains `--maker-family`, and `review_record.py` gains `reading-next`.
 
+### Review: damaged sessions, long records and the loop's tooling
+
+- A damaged review session repairs itself from its mirror and continues.
+- A long review record posts as several comments and reads back whole.
+- A session submitted by hand gets a review record too.
+- A fix that a later full panel did not raise again reads as fixed.
+- The review record re-checks the decisions it cites when it is written, and names the sheet part of each finding.
+- A run directory reused with a different prompt now refuses `run-dir-prompt-mismatch` instead of replaying the earlier result.
+- A Claude-built PR's grouping pass can sit on codex when the seat map proves that cell live.
+
 ### Review: the PR sheet builder
 
 - `pr_sheet.py build` makes a PR sheet's data file from the PR's review record and the advisor's input, `pr-sheet-input/1`, whose shape its module docstring defines. A stack that merges whole gets one sheet from all its records.

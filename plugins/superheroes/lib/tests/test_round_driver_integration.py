@@ -313,10 +313,11 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
 def _auditor_vendor_for(state):
     targets = state.get("_auditTargets") or []
     by_id = {t.get("id"): t.get("auditorVendor") for t in targets if isinstance(t, dict)}
-    # A verifier / gap-sweep / scoped seat runs on the driver's selected non-maker vendor; its result
-    # counts only when the runner's execution evidence names that vendor.
+    # A verifier / gap-sweep / scoped / grouping seat runs on the driver's selected non-maker vendor;
+    # its result counts only when the runner's execution evidence names that vendor. The grouping
+    # pass is seated the same way but is not a `_NONPANEL_REVIEWER_PHASES` member, so it is added here.
     selected = {phase: round_driver._nonpanel_selection(state, None, phase)[0] or "claude"
-                for phase in round_driver._NONPANEL_REVIEWER_PHASES}
+                for phase in round_driver._NONPANEL_REVIEWER_PHASES + (round_driver.P_SYNTHESIS,)}
 
     def vendor_for(seat):
         if seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX):
@@ -325,6 +326,8 @@ def _auditor_vendor_for(state):
             return selected[round_driver.P_GAPSWEEP]
         if seat == round_adapters.SEAT_SCOPED:
             return selected[round_driver.P_SCOPED]
+        if seat == round_adapters.SEAT_SYNTHESIS:
+            return selected[round_driver.P_SYNTHESIS]
         return by_id.get(seat, "claude")
     return vendor_for
 

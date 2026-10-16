@@ -334,7 +334,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     fix_results = []
     # Live coverage decisions accumulated during the run.
     live_coverage = []
-    # The vendor each non-panel callback (verifier, gap sweep, scoped finder) simulates, keyed by
+    # The vendor each non-panel callback (verifier, gap sweep, scoped finder, grouping) simulates, keyed by
     # phase: the non-panel selection for that phase under the run's config, set before `run_loop`
     # (a phase with no entry is unseatable, so the guard's park stays honest).
     finder_vendor = {}
@@ -468,7 +468,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     def synthesis(findings, rnd):
         synthesis_rounds.add(rnd)
         usage["synthesis:r%d" % rnd] = {"total": 1}
-        return None  # empty grouping — round_driver merge_and_rank keeps findings
+        # empty grouping — round_driver merge_and_rank keeps findings; the callback reports the
+        # vendor the grouping seat was ordered on (none when no grouping seat is seatable).
+        grouping_vendor = finder_vendor.get(RD.P_SYNTHESIS)
+        return {"grouping": None, **grouping_vendor} if grouping_vendor else None
 
     def verifier(clusters, rnd):
         # Confirm every staged finding so blocking findings survive to the fix leg
@@ -650,7 +653,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             selection_state = RD.new_state(
                 dict(config, seatMap=seat_map_obj) if seat_map_obj is not None else config)
             selected = {phase: RD._nonpanel_selection(selection_state, None, phase)[0]
-                        for phase in (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)}
+                        for phase in (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_SYNTHESIS)}
         except (RD.RoundCeilingRefusal, RD.FixBatchCapRefusal):
             selected = {}  # run_loop parks the same refusal itself
         for phase, vendor in selected.items():

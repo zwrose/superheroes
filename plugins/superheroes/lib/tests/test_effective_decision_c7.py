@@ -4,6 +4,7 @@ A finding has exactly one effective decision: the latest of a ``rule`` ruling an
 decision by one sequence, read through ``_live_ruling_by_key``. It binds the finding under any
 wording a later round gives it at the same file and line, and the fixer order renders only it.
 """
+import ast
 import copy
 import os
 import sys
@@ -240,6 +241,8 @@ def test_t4_gate_skip_binds_its_finding_but_never_a_reword(tmp_path):
 
 
 def test_t5_edge1_two_compiled_findings_at_the_location_do_not_carry():
+    """axis: two compiled findings at the decided location are ambiguous — neither inherits the
+    decision and the fixer order renders no guidance."""
     state = _mem_state()
     _add_rule(state, _key("original"), "guidance", guidance="G1", rnd=1)
     RD._stage_findings(state, [_finding("first rewording"), _finding("second rewording")])
@@ -249,6 +252,8 @@ def test_t5_edge1_two_compiled_findings_at_the_location_do_not_carry():
 
 
 def test_t6_edge2_decided_finding_reraised_in_the_same_compile_does_not_carry():
+    """axis: the decided finding re-raised under its own key in the same compile makes the reword
+    ambiguous — it does not carry (control: without the re-raise it does)."""
     state = _mem_state()
     key_f = _key("original")
     _add_rule(state, key_f, "guidance", guidance="G1", rnd=1)
@@ -266,6 +271,8 @@ def test_t6_edge2_decided_finding_reraised_in_the_same_compile_does_not_carry():
 
 
 def test_t7_edge3_two_decided_roots_at_the_location_do_not_carry():
+    """axis: two decided roots (a rule ruling and a gate decision) at the location are ambiguous — a
+    reword carries neither."""
     state = _mem_state()
     _add_rule(state, _key("original one"), "guidance", guidance="G1", rnd=1)
     _add_gate(state, 1, _key("original two"), "fix-with-guidance", guidance="G2", seq=None)
@@ -282,6 +289,8 @@ def test_t7_edge3_two_decided_roots_at_the_location_do_not_carry():
     ([10], LINE),
 ])
 def test_t8_edge4_decision_row_without_an_integer_line_never_carries(decided_line, compiled_line):
+    """axis: a rule or gate decision row whose line is absent or not a plain integer never carries to
+    a finding at the location."""
     for source in ("rule", "gate"):
         state = _mem_state()
         key_f = _key("original", line=compiled_line)
@@ -302,6 +311,7 @@ def test_t8_edge4_decision_row_without_an_integer_line_never_carries(decided_lin
 
 
 def test_t8_edge4_decision_row_without_a_file_never_carries():
+    """axis: a rule decision row with no file never carries to a finding at the location."""
     state = _mem_state()
     _add_rule(state, _key("original"), "guidance", guidance="G1", file=None, rnd=1)
     RD._stage_findings(state, [_finding("reworded")])
@@ -309,6 +319,7 @@ def test_t8_edge4_decision_row_without_a_file_never_carries():
 
 
 def test_t9_edge5_unsequenced_gate_guidance_loses_to_a_later_rule_guidance():
+    """axis: an unsequenced gate guidance loses to a later rule guidance — only the rule's renders."""
     state = _mem_state(2)
     key = _key("subject")
     _add_gate(state, 1, key, "fix-with-guidance", guidance="LEGACY GATE", seq=None)
@@ -320,6 +331,8 @@ def test_t9_edge5_unsequenced_gate_guidance_loses_to_a_later_rule_guidance():
 
 
 def test_t10_edge6_sequenced_gate_guidance_after_a_rule_guidance_renders_alone():
+    """axis: a sequenced gate guidance recorded after a rule guidance is the one that renders, alone
+    and not through the rulings channel."""
     state = _mem_state(2)
     key = _key("subject")
     _add_rule(state, key, "guidance", guidance="RULE", rnd=1)
@@ -332,6 +345,8 @@ def test_t10_edge6_sequenced_gate_guidance_after_a_rule_guidance_renders_alone()
 
 @pytest.mark.parametrize("bad_log", ["not-a-list", [None], [{"ruling": "guidance"}]])
 def test_t11_edge7_unreadable_rulings_log_reads_as_empty(bad_log):
+    """axis: an unreadable rulings log reads as empty — nothing carries and no rule guidance renders,
+    while owner-gate guidance still does."""
     state = _mem_state()
     key_f = _key("original")
     _add_rule(state, key_f, "guidance", guidance="RULE", rnd=1)
@@ -347,6 +362,8 @@ def test_t11_edge7_unreadable_rulings_log_reads_as_empty(bad_log):
 
 
 def test_unsequenced_gate_decisions_later_round_wins():
+    """axis: of unsequenced gate decisions on one key, the later round's guidance is the effective
+    one."""
     state = _mem_state(3)
     key = _key("subject")
     _add_gate(state, 1, key, "fix-with-guidance", guidance="OLD", seq=None)
@@ -357,6 +374,8 @@ def test_unsequenced_gate_decisions_later_round_wins():
 
 
 def test_gate_skip_after_rule_guidance_renders_nothing():
+    """axis: a gate skip recorded after a rule guidance is the effective decision (out-of-scope) — no
+    guidance renders."""
     state = _mem_state(2)
     key = _key("subject")
     _add_rule(state, key, "guidance", guidance="RULE", rnd=1)
@@ -475,33 +494,62 @@ def test_blank_gate_guidance_is_a_fix_decision_that_supersedes_earlier_guidance(
     assert "OLD OWNER INSTRUCTION" not in RD._gate_guidance_block(_entries(state))
 
 
-def test_a_newer_skip_without_a_follow_up_never_inherits_an_older_one():
-    """axis: follow-up recovery from the ledger is for legacy (unsequenced) gate skips only, and only
-    from an entry recorded for that same decision."""
+def _restaged_after_skip(ledger_reason, skip_reason, follow_up, *, sequenced):
+    """Round 1 records ``follow_up`` on the ledger under ``ledger_reason``; the gate skip on the same
+    finding carries ``skip_reason`` (sequenced or legacy); round 2 restages the finding. Returns the
+    restaged ledger entry."""
     state = _mem_state(1)
     original = _finding("original")
-    key_o = RD._finding_identity_key(original)
+    key = RD._finding_identity_key(original)
     RD._stage_findings(state, [original])
-    RD._record_disposition(state, key_o, "out-of-scope", 1, outOfScopeReason="old skip",
-                           followUp=dict(L2E._WELL_FORMED))
-    _add_gate(state, 1, key_o, "skip", reason="old skip", seq=RD._next_ruling_seq(state))
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason=ledger_reason,
+                           followUp=dict(follow_up))
+    _add_gate(state, 1, key, "skip", reason=skip_reason,
+              seq=RD._next_ruling_seq(state) if sequenced else None)
     state["round"] = 2
-    _add_gate(state, 2, key_o, "skip", reason="new skip without commitment",
-              seq=RD._next_ruling_seq(state))
-    state["round"] = 3
     RD._stage_findings(state, [original])
-    restaged = L2E._ledger_by_key(state)[key_o]
-    assert restaged["outOfScopeReason"] == "new skip without commitment"
+    return L2E._ledger_by_key(state)[key]
+
+
+def test_a_sequenced_skip_without_a_follow_up_keeps_none_though_the_reason_matches():
+    """axis: follow-up recovery is for legacy (unsequenced) gate skips only — a sequenced skip whose
+    reason equals the ledger entry's still gets no follow-up."""
+    restaged = _restaged_after_skip("same skip", "same skip", L2E._WELL_FORMED, sequenced=True)
+    assert restaged["outOfScopeReason"] == "same skip"
     assert restaged.get("followUp") is None
-    # a legacy (unsequenced) skip still recovers the follow-up recorded for that same decision
-    state = _mem_state(1)
-    RD._stage_findings(state, [original])
-    RD._record_disposition(state, key_o, "out-of-scope", 1, outOfScopeReason="old skip",
-                           followUp=dict(L2E._WELL_FORMED))
-    _add_gate(state, 1, key_o, "skip", reason="old skip", seq=None)
-    state["round"] = 2
-    RD._stage_findings(state, [original])
-    assert L2E._ledger_by_key(state)[key_o]["followUp"] == L2E._WELL_FORMED
+
+
+def test_a_legacy_skip_recovers_the_follow_up_recorded_for_its_own_decision():
+    """axis: a legacy (unsequenced) gate skip recovers the follow-up of the ledger entry recorded
+    for that same decision — that entry's value, not any other."""
+    recorded = dict(L2E._WELL_FORMED, item="split the legacy recovery out",
+                    revisitTrigger="when #1301 lands")
+    assert session_contract.follow_up_shape_fault(recorded) is None
+    assert recorded != L2E._WELL_FORMED
+    restaged = _restaged_after_skip("old skip", "old skip", recorded, sequenced=False)
+    assert restaged["outOfScopeReason"] == "old skip"
+    assert restaged["followUp"] == recorded
+
+
+def test_a_legacy_skip_never_recovers_a_follow_up_recorded_for_a_different_reason():
+    """axis: a legacy (unsequenced) gate skip recovers a follow-up only from a ledger entry recorded
+    for the same decision — one recorded for a different reason is not inherited."""
+    restaged = _restaged_after_skip("old skip", "a different skip", L2E._WELL_FORMED,
+                                    sequenced=False)
+    assert restaged["outOfScopeReason"] == "a different skip"
+    assert restaged.get("followUp") is None
+
+
+def test_every_test_in_this_file_names_its_axis():
+    """axis: every test function in this file carries a docstring whose first line starts ``axis:``."""
+    with open(__file__, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    tests = [n for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_")]
+    assert tests
+    unnamed = [n.name for n in tests
+               if not (ast.get_docstring(n) or "").startswith("axis:")]
+    assert unnamed == []
 
 
 def test_a_collapsed_nit_at_the_location_blocks_the_carry():

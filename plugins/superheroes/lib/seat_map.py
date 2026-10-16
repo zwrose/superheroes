@@ -210,6 +210,9 @@ def _seat_tier(seat: str, cfg: dict) -> str:
 def _normalize_live_cell(entry) -> tuple[str, str, str | None] | None:
     if isinstance(entry, (list, tuple)) and len(entry) == 3:
         vendor, model, effort = entry[0], entry[1], entry[2]
+        # axis: a malformed effort never reaches a set as an unhashable triple — see bite-proof record c7l3_wo4_tooling
+        if effort is not None and not isinstance(effort, str):
+            return None
         if isinstance(vendor, str) and vendor and isinstance(model, str) and model:
             return (vendor, model, effort)
     return None

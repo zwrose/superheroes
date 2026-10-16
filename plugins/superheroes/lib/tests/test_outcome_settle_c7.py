@@ -10,6 +10,7 @@ import copy
 import json
 import os
 import re
+import subprocess
 import sys
 
 import pytest
@@ -21,7 +22,11 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import canon  # noqa: E402
+import definition_doc  # noqa: E402
+import finding_outcomes as FO  # noqa: E402
+import round_orders  # noqa: E402
 import session_contract as SC  # noqa: E402
+import test_risk_areas as TRA  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 import verification  # noqa: E402
 
@@ -89,9 +94,23 @@ def _staged_state(findings, cfg=None):
 
 # --- T1: code quality only is craft, wherever it sits ------------------------------------------
 
-@pytest.mark.parametrize("extra", [{}, {"riskAreas": ["f.py"]}], ids=["no-risk-area", "risk-area-covers-file"])
-def test_t1_code_quality_minor_left_at_convergence_is_craft(extra, sources_calls):
-    result, state = _run_once([_finding("Naming")], TRD._cfg_cert(**extra))
+@pytest.mark.parametrize("risk_area", [False, True], ids=["no-risk-area", "risk-area-covers-file"])
+def test_t1_code_quality_minor_left_at_convergence_is_craft(risk_area, tmp_path, sources_calls, monkeypatch):
+    cfg = TRD._cfg_cert()
+    if risk_area:
+        area = dict(TRA.PAYMENTS, name="The reviewed file", covers=["f.py"])
+        repo, store = TRA._repo(tmp_path, [area])
+        # The loop's readers pass no store root, so the fixture's store must be the default one.
+        monkeypatch.setenv("WORKHORSE_STORE_ROOT", store)
+        cfg = TRD._cfg_cert(repoRoot=repo)  # the loop runs on the repo whose risk area covers f.py
+    result, state = _run_once([_finding("Naming")], cfg)
+    if risk_area:
+        read = TRA.R.touched(state["config"]["repoRoot"], ["f.py"])  # as the loop's own readers see it
+        assert read["riskAreas"] == "set"
+        assert [hit["area"]["name"] for hit in read["touched"]] == ["The reviewed file"]
+        assert read["touched"][0]["matched"] == ["f.py"]
+    else:
+        assert "repoRoot" not in state["config"]
     assert state["terminal"] == "converged"
     row = _row(state, "Naming")
     assert row["disposition"] == "craft"
@@ -510,14 +529,23 @@ def test_t11_a_terminal_with_pending_new_issues_settles_them_and_records_the_dro
 def test_t12_settling_twice_changes_nothing(tmp_path, sources_calls):
     state = _staged_state([_finding("Real", 1, "Important", "real"),
                            _finding("Tidy", 2, "Minor", "code-quality")])
-    state["_newIssues"] = [{"file": "f.py", "line": 1, "title": "Vague worry", "severity": "Important"},
-                           _finding("Late find", 2, "Minor", "real")]
+    nits = [_finding("Nit %d" % i, 3 + i, "Nit", "code-quality") for i in range(RD._NIT_CAP + 2)]
+    state["reviewedDiff"] = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                             "@@ -1 +1,12 @@\n-old\n" + "+new\n" * 12)  # every pending Nit sits in scope
+    state["_newIssues"] = ([{"file": "f.py", "line": 1, "title": "Vague worry", "severity": "Important"},
+                            _finding("Late find", 2, "Minor", "real")] + nits)
     RD._record_disposition(state, "f.py::real@L1", "out-of-scope", 1, outOfScopeReason="later")
     RD._set_terminal(state, "converged")
+    collapsed = ["f.py::nit %d@L%d" % (i, 3 + i) for i in range(RD._NIT_CAP, RD._NIT_CAP + 2)]
+    collapsed_rows = {k: copy.deepcopy(_ledger(state)[k]) for k in collapsed}
+    assert [r["disposition"] for r in collapsed_rows.values()] == ["craft", "craft"]  # the cap really collapsed two
     first = json.dumps(state, sort_keys=True)
+    first_keys = sorted(_ledger(state))
     RD._settle_open_findings(state)
     RD._settle_open_findings(state, cap=True)
     assert json.dumps(state, sort_keys=True) == first
+    assert sorted(_ledger(state)) == first_keys
+    assert {k: _ledger(state)[k] for k in collapsed} == collapsed_rows
 
 
 def test_stale_fixed_disposition_is_settled_as_open(sources_calls):
@@ -632,3 +660,46 @@ def test_a_later_code_quality_reraise_keeps_the_held_real_consequence():
     assert "lost work" in row["consequence"]
     import review_record_session as RRS
     assert RRS._findings(state)[0]["outcome"] == "left-for-owner"
+
+
+# --- the driver reads its decision sources from the one home the record writer uses -------------
+
+def _canon_project(tmp_path, monkeypatch):
+    """A throwaway git repo holding a Canon file; the Canon lookup and the residual read are pinned to
+    it, so a read that names no repository root would find them anyway (the ambient project's)."""
+    root = str(tmp_path / "project")
+    subprocess.run(["git", "init", "-q", "-b", "main", root], check=True)
+    path = os.path.join(root, "docs", "superheroes", "canon.md")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(canon.HEADER + CANON_TEXT + "\n")
+    loc = {"path": path, "home": "repo", "gitRoot": root, "exists": True, "defaultRef": None}
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
+    seen = []
+
+    def residuals(repo_root, base_ref):
+        seen.append((repo_root, base_ref))
+        return RESIDUAL_TEXT, "Residuals below are read from the review base commit (base-pinned).", None
+
+    monkeypatch.setattr(round_orders, "resolve_order_residuals", residuals)
+    return root, seen
+
+
+def test_the_drivers_decision_sources_are_the_record_writers(tmp_path, monkeypatch):
+    # axis: the driver's sources are `finding_outcomes.decision_sources` for the session's repo root and base
+    root, seen = _canon_project(tmp_path, monkeypatch)
+    state = RD.new_state(TRD._cfg(repoRoot=root, baseRef="base-oid"))
+    sources = RD._decision_sources(state)
+    assert sources == FO.decision_sources(root, "base-oid")
+    assert CANON_ID in sources["canonText"]
+    assert (sources["residualText"], sources["residualSource"]) == (RESIDUAL_TEXT, "base")
+    assert seen == [(root, "base-oid"), (root, "base-oid")]
+
+
+def test_a_session_with_no_repo_root_has_no_decision_sources(tmp_path, monkeypatch):
+    # axis: no repository named reads nothing, so a cited decision is not on record (never the ambient project's)
+    _canon_project(tmp_path, monkeypatch)
+    state = RD.new_state(TRD._cfg())
+    assert "repoRoot" not in state["config"]
+    assert RD._decision_sources(state) == {}
+    assert RD._decision_sources({"config": {"repoRoot": "  ", "baseRef": "base-oid"}}) == {}

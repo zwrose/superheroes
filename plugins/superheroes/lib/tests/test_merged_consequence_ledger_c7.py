@@ -21,7 +21,8 @@ def _finding(title, severity, kind, consequence):
             "verdict": "PLAUSIBLE", "consequence": consequence, "consequenceKind": kind}
 
 
-def test_synthesis_syncs_merged_consequence_to_ledger_row_and_survives_reseed():
+def _synthesised_state():
+    """A state whose code-quality representative and real member were folded into one group."""
     state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
     rep = _finding("Quality rep", "Important", "code-quality", "harder to maintain")
     member = _finding("Real member", "Minor", "real", "users lose saved work")
@@ -31,6 +32,11 @@ def test_synthesis_syncs_merged_consequence_to_ledger_row_and_survives_reseed():
     state["_verified"] = staged
     ids = [f["id"] for f in staged]
     RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g", "member_ids": ids}]})
+    return state, rep
+
+
+def test_synthesis_syncs_merged_consequence_to_ledger_row_and_survives_reseed():
+    state, rep = _synthesised_state()
     live = state["findings"][0]
     key = RD._finding_identity_key(live)
     ledger = state["dispositionLedger"]
@@ -42,6 +48,19 @@ def test_synthesis_syncs_merged_consequence_to_ledger_row_and_survives_reseed():
     reraised = dict(rep)
     entry = RD._seed_ledger_entry(state, ledger, seen, reraised, key, 2)
     assert entry["consequenceKind"] == "real"
+
+
+def test_merged_group_with_a_real_member_settles_as_a_leftover_not_craft():
+    state, _ = _synthesised_state()
+    live = state["findings"][0]
+    key = RD._finding_identity_key(live)
+    assert live["consequenceKind"] == "real"
+    RD._set_terminal(state, "converged")
+    ledger = state["dispositionLedger"]
+    row = ledger[RD._ledger_index_by_key(ledger)[key]]
+    assert row["consequenceKind"] == "real"
+    assert row["disposition"] == "left-for-owner"
+    assert "users lose saved work" in row["consequence"]
 
 
 def test_compile_drops_list_valued_file_without_raising():

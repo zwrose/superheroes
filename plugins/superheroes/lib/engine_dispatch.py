@@ -167,6 +167,7 @@ PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
 SEAT_REFUSAL_RUN_DIR_MISMATCH = "run-dir-seat-mismatch"
+PROMPT_REFUSAL_RUN_DIR_MISMATCH = "run-dir-prompt-mismatch"
 ALLOWLIST_GUARD_DETAIL = "allowlist-guard"
 SEAT_UNVERIFIABLE_DETAIL = "run-seat-unverifiable"
 
@@ -1276,6 +1277,20 @@ def _continuation_seat_mismatch(opened, seat):
         return None
     if _continuation_seat_tuple(snapshot) != _incoming_seat_tuple(seat):
         return SEAT_REFUSAL_RUN_DIR_MISMATCH
+    return None
+
+
+def _continuation_prompt_mismatch(opened, base_prompt):
+    """Refusal detail when the caller's prompt is not the one this run dir was opened with.
+
+    A run opened by an older plugin journals no prompt hash and is never refused; an
+    unreadable prompt (``base_prompt`` is ``None``) is left to the caller's own handling.
+    """
+    journaled = opened.get("basePromptSha256")
+    if not isinstance(journaled, str) or not journaled or base_prompt is None:
+        return None
+    if hashlib.sha256(base_prompt.encode("utf-8")).hexdigest() != journaled:
+        return PROMPT_REFUSAL_RUN_DIR_MISMATCH
     return None
 
 
@@ -6002,6 +6017,16 @@ def _dispatch_review_impl(seat, *, prompt_path,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
+                # axis: dispatch-review continuation under a different prompt — see bite-proof record c7l3_wo4_tooling
+                prompt_detail = _continuation_prompt_mismatch(opened, base_prompt)
+                if prompt_detail is not None:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": prompt_detail,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
+                    )
                 continuation = True
                 argv = list(opened.get("argv") or [])
                 view = opened.get("viewMeta")
@@ -6654,6 +6679,20 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": seat_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
+            try:
+                with open(prompt_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    caller_prompt = fh.read()
+            except Exception:
+                caller_prompt = None
+            # axis: dispatch-write continuation under a different prompt — see bite-proof record c7l3_wo4_tooling
+            prompt_detail = _continuation_prompt_mismatch(opened, caller_prompt)
+            if prompt_detail is not None:
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": prompt_detail,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
