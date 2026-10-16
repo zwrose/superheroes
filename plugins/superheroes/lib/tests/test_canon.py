@@ -78,7 +78,7 @@ def test_homes_read_from_the_contract_cover_every_kind():
     homes = _contract_homes()
     assert set(homes) == {"act", "merge", "disposition", "board"}
     assert "collector" in homes["disposition"].lower()
-    assert "owner half" in homes["merge"]
+    assert '"Merge" verdict' in homes["merge"] and "receipt" in homes["merge"]
     assert "STATE block" in homes["act"]
     assert homes["board"] == "the board"
 
