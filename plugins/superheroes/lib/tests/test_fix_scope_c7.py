@@ -11,6 +11,7 @@ strict-mode schema directly for the rest.
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo2_c7_fix_scope.md
 """
 import copy
+import difflib
 import json
 import os
 import sys
@@ -30,6 +31,7 @@ import engine_result_channel as ERC  # noqa: E402
 import payload_contracts as PC  # noqa: E402
 import session_contract as SC  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
+from test_layer2e_follow_up_1272 import _WELL_FORMED  # noqa: E402
 
 RD = TRD.RD  # run_loop runs on test_round_driver's own load of the module
 
@@ -778,15 +780,27 @@ def test_findings_sharing_a_hunk_each_list_the_sibling_and_the_template_clears_i
 
 
 def test_fixer_delta_does_not_invent_changes_where_hunks_merge():
-    def big(guard):
-        return ["diff --git a/f.py b/f.py", "--- a/f.py", "+++ b/f.py",
-                "@@ -7,7 +7,7 @@", " c", "+pr_a()", " c",
-                "@@ -27,7 +27,7 @@", " c", "+pr_b()", guard, " c"]
+    base = ["line %d" % n for n in range(1, 31)]
+
+    def diff_of(changes):
+        new = list(base)
+        for n, text in changes.items():
+            new[n - 1] = text
+        body = list(difflib.unified_diff(base, new, "a/f.py", "b/f.py", n=3, lineterm=""))
+        return "\n".join(["diff --git a/f.py b/f.py"] + body) + "\n"
+
+    pr_changes = {10: "pr_a()", 20: "pr_b()"}
+    reviewed = diff_of(pr_changes)
+    fixed = diff_of({**pr_changes, 15: "guard()"})
+    # the precondition: the fix's extra change joins the two reviewed hunks into one fixed hunk
+    assert len([ln for ln in reviewed.splitlines() if ln.startswith("@@")]) == 2
+    assert len([ln for ln in fixed.splitlines() if ln.startswith("@@")]) == 1
     state = RD.new_state(TRD._cfg(fixerVendor="claude"))
-    state["fixBatch"] = [_finding("Near b", 30, file="f.py")]
-    state["headDiff"] = "\n".join(big("+guard()")) + "\n"
-    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff="\n".join(big(" c")) + "\n")
-    assert "++guard()" in row["fixerDelta"] and not any("pr_b" in d and d[0] in "+-" for d in row["fixerDelta"])
+    state["fixBatch"] = [_finding("Near guard", 15, file="f.py")]
+    state["headDiff"] = fixed
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert "++guard()" in row["fixerDelta"]
+    assert not any(("pr_a" in d or "pr_b" in d) and d[0] in "+-" for d in row["fixerDelta"])
 
 
 def test_a_scope_refused_fix_stays_not_discharged_until_the_fix_drops_the_change(captured_state):
@@ -1041,3 +1055,50 @@ def test_a_non_integer_named_seq_is_malformed(value):
     state, target_a, key_a, key_b = _sibling_pair()
     outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED, unnamedChangeAllowedBySeq=value)
     assert outcome["discharged"] == [] and outcome["malformed"] == [key_a]
+
+
+def test_a_spent_findings_re_recorded_disposition_keeps_its_decisions_follow_up(empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Critical")])
+    key = _key("Gate bypass")
+    # an owner-gate skip carrying a well-formed followUp (the decision, not the ledger, holds it)
+    state.setdefault("rounds", {})["1"] = {"judgmentDispositions": [
+        {"findingKey": key, "disposition": "skip", "reason": "owner deferred it",
+         "severity": "Critical", "rulingSeq": 1, "followUp": dict(_WELL_FORMED)}]}
+    state["rulingSeqCounter"] = 1
+    # restaged as a blocker: the new ledger entry holds no followUp for the snapshot to carry
+    state["round"] = 2
+    compiled, _ = RD.mechanical_compile([dict(_finding("Gate bypass", severity="Critical"))], None)
+    RD._stage_findings(state, compiled)
+    RD._set_findings(state, state["_toVerify"])
+    assert "followUp" not in _ledger(state)[key]
+    assert _offer(state, 2) == ("queued", [key])
+    status, keys = _offer(state, 3)  # its one permitted attempt is spent
+    assert status == "excluded" and keys == []
+    row = _ledger(state)[key]
+    assert row["disposition"] == "out-of-scope" and "round 2" in row["outOfScopeReason"]
+    assert row["followUp"] == _WELL_FORMED
+
+
+def test_a_discharged_but_new_issue_result_marks_its_allowing_ruling_delivered():
+    state = _staged_state([_finding("Rep finding", 1)])
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    key = _key("Rep finding", 1)
+    state["fixBatch"] = list(state["findings"])
+    seq = _decide(state, key, "guidance", 1, allowsChange=True, guidance="Changing the log format is fine.")
+    (target,) = RD._audit_targets(state, state["config"], {})
+    assert target["ownerRulingSeq"] == seq
+    outcome = _fold_one(state, target, key, ruling="discharged-but-new-issue",
+                        newIssues=[{"file": "f.py", "line": 9, "title": "Fresh defect",
+                                    "severity": "Important", "consequence": "users lose their saved work"}])
+    assert outcome["discharged"] == [key] and outcome["unnamedChange"] == []
+    assert state["rounds"]["1"]["audits"][0]["ruling"] == "discharged-but-new-issue"
+    assert state["sentUnderDecision"][RD._lineage_root(RD._lineage_map(state), key)] == seq
+
+
+@pytest.mark.parametrize("value", ["3", 3.0, True, [3]])
+def test_the_submit_guard_refuses_a_non_integer_named_seq(value):
+    entry = {"id": "a", "ruling": "discharged", "reason": "fixed", "unnamedChangeAllowedBySeq": 3}
+    assert RD._audit_result_entry_fault(entry, 0, {"a"}) is None
+    entry["unnamedChangeAllowedBySeq"] = value
+    fault = RD._audit_result_entry_fault(entry, 0, {"a"})
+    assert fault is not None and "unnamedChangeAllowedBySeq" in fault
