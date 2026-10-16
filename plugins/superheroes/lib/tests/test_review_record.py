@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+import canon
 import core_md
 import model_registry
 import pr_comment
@@ -24,13 +25,17 @@ RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion":
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
             "observation": {"tokens": 100, "wallSeconds": 120, "read": "engaged"}, "graded": True, "runKind": "review"}
 PHRASES = ("no bugs", "bug-free", "bug free")
+CANON_ID = "2026-01-02-abcd1234-1"
+CANON_SOURCES = {"canonText": canon.entry_line(CANON_ID, "2026-01-02", "standing", "a ruling",
+                                               'owner\'s words: "go"', "issue thread")}
 
 
 class Fake:
     """Injectable readers with an in-memory comment list; records create calls."""
 
-    def __init__(self, ci=GREEN, meta=None, marker=None, runs=None, issue_bodies=None):
+    def __init__(self, ci=GREEN, meta=None, marker=None, runs=None, issue_bodies=None, sources=None):
         self.comments, self.writes = [], []
+        self.sources = sources or {}
         self.changed = ["README.md"]
         self.ci = ci
         self.meta = {"head": HEAD, "body": "", "issues": []} if meta is None else meta
@@ -47,7 +52,12 @@ class Fake:
             "list_comments": lambda pr, repo: list(self.comments),
             "create_comment": self._create,
             "changed_paths": lambda pr, repo: self.changed,
+            "decision_sources": self._sources,
         }
+
+    def _sources(self, root, base_ref, sheet_answers, pr):
+        extra = {"sheetAnswers": sheet_answers, "pr": pr} if isinstance(sheet_answers, dict) else {}
+        return {**self.sources, **extra}
 
     def _create(self, pr, repo, body):
         c = {"id": len(self.comments) + 1, "author": "bot", "body": body, "url": f"http://c/{len(self.comments) + 1}"}
@@ -239,11 +249,11 @@ def test_missing_security_review_parks_unless_the_owner_went_ahead():
     rec = build(base)
     assert (rec["status"], rec["parked"]) == ("not-reviewed", True)
     assert "security-reviewer did not run" in rec["whatIsMissing"]
-    ruling = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
-    rec = build(account(reviewers=[reviewer(), sec], goAheads=[ruling]))
+    ruling = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": CANON_ID}
+    rec = build(account(reviewers=[reviewer(), sec], goAheads=[ruling]), Fake(sources=CANON_SOURCES))
     assert (rec["status"], rec["parked"]) == ("not-reviewed", False)
     assert rec["missingReviews"] == [{"name": "security-reviewer", "goAhead": ruling}]
-    assert "standing ruling canon-7" in " ".join(rec["whatIsMissing"])
+    assert f"standing ruling {CANON_ID}" in " ".join(rec["whatIsMissing"])
     words = {"reviewer": "security-reviewer", "kind": "owner-words", "words": "skip it", "where": "PR comment"}
     rec = build(account(reviewers=[reviewer(), sec], goAheads=[words]))
     assert (rec["status"], rec["parked"]) == ("not-reviewed", False)
@@ -277,9 +287,9 @@ def test_malformed_go_ahead_does_not_lift_the_park():
         rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", **bad}]))
         assert rec["parked"] is True and rec["missingReviews"][0]["goAhead"] is None
         assert "the go-ahead for security-reviewer is incomplete" in rec["whatIsMissing"]
-    good = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
+    good = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": CANON_ID}
     rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", "kind": "standing-ruling",
-                                                    "canonId": True}, good]))
+                                                    "canonId": True}, good]), Fake(sources=CANON_SOURCES))
     assert rec["parked"] is False and rec["missingReviews"][0]["goAhead"] == good
 
 
@@ -346,7 +356,7 @@ def test_a_secret_named_field_is_redacted_whole_in_the_record(secret):
     f = finding("a-1", outcome="fixed", reason="r")
     f["evidence"] = {secret: "hunter2", "Nested": {"API_KEY": "abc", "note": "ok"}}
     body = rr.render(build(account(findings=[f])))
-    assert "hunter2" not in body and "abc" not in body and '"note": "ok"' in body
+    assert "hunter2" not in body and "abc" not in body and '"note":"ok"' in body
 
 
 def test_unknown_model_takes_the_one_family_of_its_vendor(monkeypatch):
@@ -420,13 +430,14 @@ def test_missing_required_key_is_refused_naming_the_key(tmp_path, key):
     assert (out["ok"], out["reason"], out["detail"]) == (False, "review-account-invalid", key)
 
 
-def test_too_large_body_is_refused(tmp_path):
-    # axis: body size; an oversized record posted or trimmed
+def test_a_large_body_posts_whole_in_parts_instead_of_being_refused(tmp_path):
+    # axis: body size; an oversized record refused, trimmed or posted over the comment limit
     fake = Fake()
     big = [finding(f"f{i}", body="x" * 5000) for i in range(20)]
     out = rr.write(put(tmp_path, account(findings=big)), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-too-large")
-    assert fake.comments == []
+    assert out["ok"] and out["parts"] >= 1
+    assert all(len(c["body"]) <= rr.MAX_BODY_CHARS for c in fake.comments)
+    assert [f["body"] for f in rr.read(7, readers=fake.readers())["findings"]] == ["x" * 5000] * 20
 
 
 def test_gh_failures_refuse(tmp_path):
@@ -529,8 +540,8 @@ def test_a_roster_with_no_planned_reviewer_that_ran_is_not_reviewed():
 def test_a_single_account_too_large_refuses_before_any_comment_is_posted(tmp_path):
     # axis: refusal ordering; a comment created before the record is known to fit
     fake = Fake()
-    huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
-    out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
+    huge = [{"family": "f" * 40000}, {"family": "g" * 40000}]  # a summary line no part can hold
+    out = rr.write(put(tmp_path, account(makers=huge)), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-too-large") and fake.comments == []
 
 
@@ -539,8 +550,8 @@ def test_a_record_too_large_to_post_leaves_the_earlier_comments_untouched(tmp_pa
     fake = Fake()
     send(tmp_path, fake)
     before, writes = [dict(c) for c in fake.comments], list(fake.writes)
-    huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
-    out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
+    huge = [{"family": "f" * 40000}, {"family": "g" * 40000}]  # a summary line no part can hold
+    out = rr.write(put(tmp_path, account(makers=huge)), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-too-large")
     assert fake.writes == writes and fake.comments == before
 
@@ -1844,10 +1855,10 @@ SHED_LINE = ("Reviewer detail trimmed to fit this comment (%s); the reviewers' f
 SHED_LINE_RUN_RECORDS = ("Reviewer detail trimmed to fit this comment (%s); the engines' own run records hold the "
                          "full output.")
 PROTECTED_ROW_KEYS = ("name", "ran", "planned", "vendor", "model", "family", "commit", "coversFinalCommit")
-RULING = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
+RULING = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": CANON_ID}
 
 
-def _long_session(reviewers=45, body_chars=600):
+def _long_session(reviewers=45, body_chars=1400):
     """A long session's record: many engine-run reviewer rows, each with a long runDir and a full observation, a
     planned reviewer that did not run but has a go-ahead, and findings with long bodies."""
     runs, rows = {}, []
@@ -1861,7 +1872,7 @@ def _long_session(reviewers=45, body_chars=600):
     rows.append(reviewer("security-reviewer", ran=False, runDir=None))
     found = [finding(f"code-{i:03d}", title=f"title {i}", body="b" * body_chars, reason=f"fixed in 1a2b3c{i:x}",
                      reviewer="reviewer-00") for i in range(15)]
-    return build(account(reviewers=rows, findings=found, goAheads=[RULING]), Fake(runs=runs))
+    return build(account(reviewers=rows, findings=found, goAheads=[RULING]), Fake(runs=runs, sources=CANON_SOURCES))
 
 
 def _protected(rec):
@@ -2005,17 +2016,19 @@ def test_a_reviewer_row_without_a_dict_observation_is_left_as_it_is():
     assert set(posted["reviewers"][0]["observation"]) == {"read", "toolCalls"}
 
 
-def test_a_record_that_cannot_fit_after_every_step_is_refused_not_truncated():
-    # axis: the refusal after the last shed step; a body still over the cap posted, or cut to fit
+def test_a_record_that_cannot_fit_after_every_step_goes_to_parts_not_cut():
+    # axis: the spill after the last shed step; a body still over the cap posted, cut to fit, or refused
     for field in ("whatIsMissing", "reason"):
         rec = _long_session()
         if field == "whatIsMissing":
             rec["whatIsMissing"] = rec["whatIsMissing"] + ["w" * rr.MAX_BODY_CHARS]
         else:
             rec["findings"][0]["reason"] = "r" * rr.MAX_BODY_CHARS
-        with pytest.raises(rr.Refusal) as e:
-            rr.render(rec)
-        assert e.value.reason == "review-record-too-large"
+        plan = rr.render_plan(rec)
+        assert plan.parts
+        assert all(len(b) <= rr.MAX_BODY_CHARS for b in [*plan.parts, plan.head([1] * len(plan.parts))])
+        text = "".join(rr._part_slice(b) for b in plan.parts)
+        assert ("w" if field == "whatIsMissing" else "r") * rr.MAX_BODY_CHARS in text
 
 
 def test_a_record_under_the_cap_renders_with_no_shed_line_and_no_reviewer_shed(monkeypatch):

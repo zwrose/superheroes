@@ -2166,27 +2166,8 @@ def _set_terminal(state, verdict, *, cap=False):
 def _decision_sources(state):
     """The `sources` dict `finding_outcomes.on_record` reads: the Canon text and the ratified
     residuals. A source that cannot be read is left out — an unresolvable decision is not on record."""
-    sources = {}
     config = state.get("config") if isinstance(state.get("config"), dict) else {}
-    root = config.get("repoRoot")
-    try:
-        import canon
-        # Both copies, so a supersession on the default branch retires an entry the working copy
-        # still holds; a copy that cannot be read refuses and leaves Canon out.
-        _, working, default_text = canon._locate(root)
-        sources["canonText"] = working + "\n" + default_text
-    except Exception:  # noqa: BLE001 — fail closed: no Canon text means no Canon decision
-        sources.pop("canonText", None)
-    try:
-        text, provenance, failure = round_orders.resolve_order_residuals(root, config.get("baseRef"))
-        if not failure and isinstance(text, str) and text.strip():
-            sources["residualText"] = text
-            based = isinstance(provenance, str) and "(base-pinned)" in provenance
-            sources["residualSource"] = "base" if based else "calibration store"
-    except Exception:  # noqa: BLE001 — fail closed: no residual text means no residual decision
-        sources.pop("residualText", None)
-        sources.pop("residualSource", None)
-    return sources
+    return finding_outcomes.decision_sources(config.get("repoRoot"), config.get("baseRef"))
 
 
 def _compile_drop_recorded(state, drop):
@@ -4489,10 +4470,13 @@ def _drop_spent_out_of_scope_rows(state, rows):
         if not isinstance(held_row, dict):
             held_row = row
         # Re-record the disposition whole (it replaces the family), keeping what it carried — its
-        # followUp included — and naming the round the finding was already offered in.
+        # followUp included, from the effective decision when a restage dropped it from the snapshot.
         fields = {name: value for name, value
                   in session_contract.disposition_family_snapshot(held_row).items()
                   if name not in ("disposition", "dispositionRound")}
+        recovered = _follow_up_of(_live_out_of_scope_ruling_for_key(state, key))
+        if recovered and not _follow_up_of(fields):
+            session_contract.copy_follow_up_field({"followUp": recovered}, fields)
         reason = (
             "out of scope; already offered to a fixer in round %s and not offered again while it "
             "stays out of scope" % offered_round)
@@ -5957,11 +5941,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
     # A decision the audit credited a fix under has been delivered: the resolver must not send it again.
     lineage = _lineage_map(state)
+    discharged_ids = set(outcome.get("discharged") or [])
     for audit in outcome["audits"]:
         marked = []
         if audit.get("allowedChange") and audit.get("id") in change_allowed_ids:
             marked.extend(bound_by_id[audit["id"]])
-        if audit.get("ruling") == "discharged" and audit.get("id") in targets_by_id:
+        if audit.get("id") in discharged_ids and audit.get("id") in targets_by_id:
             # The allowing ruling reached the audit and the audit cleared the fix: delivered, with or without
             # an unnamed change, so the resolver does not reopen it.
             own = _row_decision(state, effective, ledger_by_key, audit["id"])
@@ -10646,6 +10631,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
     if certified_head:
         anchor["headSha"] = certified_head
+    if len(ran := {e.get("vendor") for e in seats.values() if isinstance(e, dict)}) == 1 and isinstance(v := next(iter(ran)), str):
+        anchor["vendor"] = v  # the one vendor the emission dispatched on: the record writer's hand-submit finder provenance
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
         anchors = {}

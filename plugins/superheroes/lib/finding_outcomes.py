@@ -12,8 +12,9 @@ case it is decided by a named ruling. A decision is on record only when it is an
 entry, a recorded residual, or a settled saved sheet answer for the pull request. Severity
 never decides an outcome.
 
-The module is pure: it reads no file, runs no git or subprocess and touches no network.
-Callers pass text and dicts in. Anything missing or malformed fails closed, toward the owner.
+The rules are pure: they read no file, run no git or subprocess and touch no network. Callers
+pass text and dicts in. The one reader is decision_sources, which gathers the Canon and residual
+text the rules are given. Anything missing or malformed fails closed, toward the owner.
 """
 import canon
 import review_findings_schema
@@ -85,8 +86,22 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _answer_fits_sheet_schema(doc):
+    """True only when doc fits the sheet schema's own answer definition (theme/sheet.schema.json $defs.answer),
+    checked by sheet_prose's reader of that schema; any failure to read or check it is a misfit."""
+    try:
+        import json
+        import sheet_prose
+        with open(sheet_prose.SCHEMA, encoding="utf-8") as handle:
+            defs = json.load(handle)["$defs"]
+        return not sheet_prose._validate(defs["answer"], doc, "", defs)
+    except Exception:
+        return False
+
+
 def sheet_answer_decides(answers, ref, pr):
-    """True only when the cited card of this pull request holds a settled accept or option answer."""
+    """True only when the cited card of this pull request holds a settled aligned or option answer. An aligned
+    answer counts only while the published card (answers["cards"][card]["options"]) is known to offer no options."""
     if not isinstance(answers, dict) or not isinstance(ref, dict):
         return False
     if not (_is_int(pr) and _is_int(ref.get("pr")) and ref["pr"] == pr):
@@ -98,11 +113,18 @@ def sheet_answer_decides(answers, ref, pr):
     doc = cards.get(card)
     if not isinstance(doc, dict):
         return False
+    if not _answer_fits_sheet_schema(doc):
+        return False
     answer = doc.get("answer")
-    if answer == "accept":
-        return True
+    published = answers.get("cards")
+    published = published.get(card) if isinstance(published, dict) else None
+    offered = published.get("options") if isinstance(published, dict) else None
+    if answer == "aligned":
+        return offered == []
     option_id = doc.get("optionId")
-    return answer == "option" and isinstance(option_id, str) and option_id.strip() != ""
+    # an option answer counts only while the published card still offers that option
+    return answer == "option" and isinstance(option_id, str) and option_id.strip() != "" and isinstance(offered, list) \
+        and any((o.get("id") if isinstance(o, dict) else o) == option_id for o in offered)
 
 
 def _sheet_ref_text(ref):
@@ -170,7 +192,8 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
 
     Craft when the only consequence is code quality (it wins over any ruling); a named ruling
     when the latest rulings-log row cites a decision that is on record; otherwise left for the
-    owner, with open_reason and, when a cited decision did not resolve, why. Never reads severity.
+    owner, with open_reason and, when a cited decision did not resolve, why; that leftover keeps the citation,
+    so the record writer can promote it if the decision is on record by write time. Never reads severity.
     """
     outcomes = review_findings_schema.OUTCOMES
     craft, left_for_owner, ruled = outcomes[2], outcomes[3], outcomes[4]
@@ -186,4 +209,39 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
         why = "; the cited decision is not on record: " + text
-    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": None}
+    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
+
+
+def decision_sources(repo_root, base_ref, sheet_answers=None, pr=None):
+    """The `sources` dict on_record reads: the Canon text, the ratified residuals and, when given, the sheet answers.
+
+    A source that cannot be read is left out, so a decision that cites it is not on record. Canon is
+    both copies (the working copy and the default branch's), so a supersession on the default branch
+    retires an entry the working copy still holds. Residuals come from the review base when it pins
+    them, else from the calibration store. Never raises."""
+    sources = {}
+    # With no repository named nothing is read: the ambient project's Canon is never taken for this one's.
+    named = isinstance(repo_root, str) and repo_root.strip() != ""
+    try:
+        if not named:
+            raise ValueError("no repository root")
+        _, working, default_text = canon._locate(repo_root)
+        sources["canonText"] = working + "\n" + default_text
+    except Exception:  # noqa: BLE001 — fail closed: no Canon text means no Canon decision
+        sources.pop("canonText", None)
+    try:
+        if not named:
+            raise ValueError("no repository root")
+        import round_orders
+        text, provenance, failure = round_orders.resolve_order_residuals(repo_root, base_ref)
+        if not failure and isinstance(text, str) and text.strip():
+            sources["residualText"] = text
+            based = isinstance(provenance, str) and "(base-pinned)" in provenance
+            sources["residualSource"] = "base" if based else "calibration store"
+    except Exception:  # noqa: BLE001 — fail closed: no residual text means no residual decision
+        sources.pop("residualText", None)
+        sources.pop("residualSource", None)
+    if isinstance(sheet_answers, dict):
+        sources["sheetAnswers"] = sheet_answers
+        sources["pr"] = pr
+    return sources

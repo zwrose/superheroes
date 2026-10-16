@@ -29,6 +29,7 @@
       "tokens": 100,
       "unit": "reviewer-minutes"
     },
+    "decisionRechecks": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
       "source": "GitHub PR"
@@ -45,6 +46,7 @@
         "reason": "fixed in 1a2b3c4",
         "reviewer": "code-reviewer",
         "severity": "Minor",
+        "sheetPart": "how-the-review-went",
         "title": "A null guard was missing"
       },
       {
@@ -58,6 +60,7 @@
         "reason": "needs the owner's call on the retry window",
         "reviewer": "code-reviewer",
         "severity": "Minor",
+        "sheetPart": "what-youre-accepting",
         "title": "The retry window is too long"
       }
     ],
@@ -96,6 +99,7 @@
     "pr": 7,
     "previousRecord": null,
     "rawOutputs": [],
+    "refused": [],
     "reviewers": [
       {
         "commit": null,
@@ -117,6 +121,7 @@
     ],
     "rounds": {
       "cap": 3,
+      "capKind": "rounds",
       "count": 1,
       "source": "reported by the session",
       "stoppedAtCap": false

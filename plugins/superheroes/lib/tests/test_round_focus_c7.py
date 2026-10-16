@@ -178,7 +178,7 @@ def test_edge4_a_record_with_no_wider_round_renders_exactly_as_before():
 
 
 def test_edge4_a_wider_round_adds_one_line_per_wider_round_and_nothing_else_moves():
-    plain = trr.build(trr.account())
+    plain = trr.build(trr.account(rounds={"count": 3, "cap": 3, "stoppedAtCap": False}))
     wider = trr.build(trr.account(rounds={"count": 3, "cap": 3, "stoppedAtCap": False, "wider": [
         {"round": 2, "why": "delta surface unknown"}, {"round": 3, "why": "Critical surfaced by confirmation"}]}))
     wider["writtenAt"] = plain["writtenAt"]

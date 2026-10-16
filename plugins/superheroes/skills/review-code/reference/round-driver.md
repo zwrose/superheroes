@@ -777,10 +777,10 @@ other docs link here.
 - **Severity never decides the outcome.** `settle` is never given it.
 - **On record.** A decision is on record only when it is an active Canon entry (complete, and not
   superseded), a recorded residual (its text appears in the residuals the review read), or a settled
-  saved sheet answer for this PR (`accept`, or a picked option). A decision that cannot be read is not
+  saved sheet answer for this PR (`aligned` on a card the published sheet gives no options, or a picked option). A decision that cannot be read is not
   on record.
 - **Where it is written.** The disposition ledger, as disposition `craft`, `left-for-owner` or
-  `ruling`, with `settledReason`, and for a `ruling` also `decidedBy`. An out-of-scope finding keeps its
+  `ruling`, with `settledReason`, and for a `ruling` (or a `left-for-owner` whose cited decision was not on record) also `decidedBy`. An out-of-scope finding keeps its
   `outOfScopeReason` and `followUp`. The session record adapter reads these as the outcomes of the same
   name ([review-record.md](review-record.md) § The full lane writes it from the session).
 - **Once.** A second settle finds nothing left to settle. If the disposition ledger cannot be read,
