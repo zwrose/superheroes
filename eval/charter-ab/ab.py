@@ -286,6 +286,9 @@ def load_scenarios(path):
         missing = [k for k in REQUIRED_FIELDS if not isinstance(sc, dict) or k not in sc]
         if missing:
             raise Refusal(f"{path}: scenario #{i} lacks {', '.join(missing)}")
+        rule = sc["expected_rule"]
+        if not (isinstance(rule, str) and rule.strip()):
+            raise Refusal(f"{path}: scenario #{i} needs a non-empty string expected_rule")
         if sc["id"] in seen:
             raise Refusal(f"{path}: duplicate scenario id {sc['id']!r}")
         seen.add(sc["id"])
@@ -633,6 +636,11 @@ def dispatch(a):
     stored = load_json(os.path.join(run_dir, "sides.json"))
     if stored is None and stage in ("judge", "report"):
         raise Refusal(f"{run_dir} has no sides.json; run seats (or run) first")
+    if stored is None and stage in ("seats", "run") and os.path.isdir(run_dir) and os.listdir(run_dir):
+        # bites on: a populated run dir whose sides.json is missing or unreadable must not take a new identity and
+        # reuse the old answers and judgments under it
+        raise Refusal(f"{run_dir} holds prior run artifacts but no readable sides.json; "
+                      "use a fresh --run-dir (identity cannot be validated)")
     ident, scenarios = build_identity(a, stage, repo, stored)
     if stored is not None:
         # bites on: a stage under a different commit/model/scenarios/replicates than the run dir's must not mix in (E3)

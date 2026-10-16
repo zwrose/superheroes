@@ -205,6 +205,33 @@ def test_fully_bound_run_reports_pass(tmp_path):
     assert "| s1 |" in Path(run_dir, "results.md").read_text()
 
 
+def test_asymmetric_scores_reach_totals_and_fail_verdict(tmp_path):
+    reps = 3
+    run_dir, scenarios, ident, mapping = build_run(tmp_path, reps=reps, ids=("s1",), judged=False)
+    sc, m = scenarios[0], mapping["s1"]
+    correct = {f"{k}{lab}": m["replicates"][str(k)][lab] == "base" for k in range(1, reps + 1) for lab in "AB"}
+    write_judged(run_dir, sc, m, reps, text=json.dumps({"correct": correct, "sources_differ": "same", "note": "n"}))
+    rec = ab.completeness(run_dir, scenarios, mapping, reps)[0]
+    assert rec["complete"] and rec["base"] == 3 and rec["candidate"] == 0
+    assert ab.stage_report(run_dir, scenarios, ident) == 1
+    v = json.loads(Path(run_dir, "verdict.json").read_text())
+    assert v["verdict"] == "FAIL" and [f["id"] for f in v["failing"]] == ["s1"]
+
+
+def test_populated_run_dir_without_sides_json_refused(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    run_dir = tmp_path / "run"
+    (run_dir / "answers").mkdir(parents=True)
+    (run_dir / "answers" / "e1.base.r1.txt").write_text("old answer\n")
+    for sides in (None, "{not json"):
+        if sides is not None:
+            (run_dir / "sides.json").write_text(sides)
+        assert ab.main(["seats", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter",
+                        "CHARTER.md", "--scenarios", write_scenarios(tmp_path), "--run-dir", str(run_dir)]) == 3
+    assert (run_dir / "sides.json").read_text() == "{not json"
+
+
 # ---------------------------------------------------------------- 7 unmap, make_mapping
 
 def test_unmap_inverts_labels():
@@ -488,6 +515,9 @@ def test_scenario_file_guards(tmp_path):
     assert role == ab.DEFAULT_ROLE and len(sha) == 64 and scs[0]["id"] == "a"
     assert load({"role": "r", "scenarios": [scen("a")]})[0] == "r"
     assert load({"role": "r", "scenarios": []})[1] == []
+    for bad_rule in ("", "   ", None, 7):
+        with pytest.raises(ab.Refusal):
+            load([dict(scen("a"), expected_rule=bad_rule)])
     for bad in ([scen("a"), scen("a")], [{k: v for k, v in scen("a").items() if k != "targeted_block"}],
                 {"scenarios": [scen("a")]}, {"role": "r", "scenarios": "no"}):
         with pytest.raises(ab.Refusal):
