@@ -21,7 +21,15 @@ belongs to and lists every change with its replacement.
 
 - Every review on the full, light and micro lanes and review-code's review-only exit now writes one review record, kept as a new marker-tagged comment on the PR for each review session (earlier ones are never edited, and each reviewer's raw output sits in its own linked comment), and read back with the record writer's `read --pr <n>` verb. The full lane builds its account from the review session.
 - The findings contract gains a required, nullable `consequence` member, and the record spells the five outcomes as `fixed`, `shown-wrong`, `craft`, `left-for-owner`, `ruling`. Callers that build findings by hand must now emit `consequence` (null is allowed).
+- The findings contract gains a required, nullable `consequenceKind` (`code-quality` or `real`). Callers that build findings by hand must now emit it (null is allowed); a finding whose kind is not `code-quality` counts as a real consequence.
+- A finding that states no consequence is refused at compile: it is recorded as a compile drop with the reason `no stated consequence` and never enters the review. A caller that sends findings without a `consequence` will see them dropped.
+- When a review loop ends, every finding it took in has an outcome. A finding with only a code-quality consequence is decided as `craft`, recorded for the owner's veto. A finding with a real consequence that is left unfixed comes to the owner as `left-for-owner`, unless an on-record decision settles it as `ruling` (an active Canon entry, a recorded residual, or a settled sheet answer). Severity never decides this: a Minor finding with a real consequence comes to the owner, and a code-quality-only Important one is decided as craft.
+- The Nit readout cap now collapses only Nits whose kind is `code-quality`, and records each collapsed one as `craft`. A Nit with a real consequence stays in the readout however many there are.
+- An out-of-scope ruling no longer settles a finding on its own. With no on-record decision it now comes to the owner as `left-for-owner`; a caller that counted such findings as `ruling` will see them as `left-for-owner`.
+- `rule` accepts an optional `decidedBy` (`{kind: canon|residual|sheet-answer, ref}`) to name the decision a ruling rests on, and refuses a malformed one with `ruling-decided-by-malformed`. A caller that wants a ruling to settle a finding as `ruling` must now supply it.
 - The advisor's vet now reads the review record. In place of the certified-loop check and the seat-provenance parity check, it checks that the record exists, that the checks ran on the PR's final commit, and that no leftover skipped the owner's review. After a project adopts this release, a full or light PR with no review record is not returned as ready.
+
+A consuming project sees these review-loop changes with the record. A ruling binds the next fix across rewording and replaces earlier guidance. A ruling is always accepted and binds the next fix for its finding: a fix already under way is not stopped, and the next round sends the finding back if the fix went against the ruling. Below-blocking findings are settled when the loop converges, and a finding a guidance or fix ruling names goes to the next fixer. An out-of-scope finding is offered to a fixer at most once. A fix the auditor says changes behaviour its finding does not name is not credited without a ruling that allows it. Each round from 2 on records its focus, either the last round's fixes or wider with the reason, and the review record lists every wider round. An engine review run opened before the upgrade reads its result schema as changed, so re-dispatch it.
 
 ### Review: what retires
 
@@ -34,6 +42,40 @@ These retirements ship in the same release as the review record, and never apart
 - **The exact-head evidence chain.** The head-content blobs and their recomputation check are gone. The review record is judged against the PR's final commit instead.
 - A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
 - A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
+- A review session open across this upgrade starts again. Sessions from before dispatch history was kept for owner rulings answer `session-from-earlier-version` on the first driver command; run Setup again into a fresh session folder.
+
+### Review: the lane follows Risk and trust
+
+- A change that touches a risk area always gets the full lane. So does any change while a project has set no risk areas, so the micro lane is unavailable for it until the project sets them. The rule's home is `rubric/review-discipline.md` § The lane floor.
+- A session or model may raise a change's lane. It may never lower it below that floor.
+- A review record whose lane sits below the floor reads not reviewed.
+
+### Review: the full-lane panel follows the lane call
+
+- The full lane's panel is composed from the lane call: the code reviewer, the test role and the grounding seat on every change, plus the security and premortem reviewers when a risk area is touched or risk is unclear. The architecture reviewer leaves the default panel; a seat map can still name it. The seat-map receipt's `roster` is the composed roster, and gains `laneBasis`.
+- `seat_map.py compose` gains `--base-ref`. With `--head-sha` it names the change the lane call reads; without them the roster is the full set of five seats.
+- Compose reads `enginePreferences.seatPins` from core.md itself. `--pins` overlays them per seat, and a pin that cannot apply is disclosed in the receipt.
+- The seat-map compose now runs right after review-code pins the base commit, not in the setup file.
+
+### Review: every reviewer independent of every maker
+
+- A reviewer from a maker's family no longer runs without the owner's word for that change. When the owner gives it, the review record names that reviewer and says "not independent". The light lane's host-model stand-in after a forfeit is gone, and nothing stands in on either single-reviewer lane.
+- A panel seat that no reviewer outside the makers' families can fill is recorded `unfilled` and counts as not run. Nothing stands in for it.
+- The review loop never seats a fix auditor from a maker's family on its own. With none available, the audit counts as not run. The owner's word for a change admits a same-family reviewer through the review record, not through the loop's auditor seating.
+- A light or micro review counts only when the engine's record of the run shows `observation.read == "engaged"`. Otherwise the reviewer runs once more, and a second miss moves the change up to the full lane when an independent full panel can be composed, or parks it.
+- A review record that names no maker reads not reviewed.
+- A full-lane builder opens its PR as a draft before the review, and marks it ready at handback.
+- The seat-map receipt gains `makerFamilies` and `roster`, `seat_map.py compose` gains `--maker-family`, and `review_record.py` gains `reading-next`.
+
+### Review: damaged sessions, long records and the loop's tooling
+
+- A damaged review session repairs itself from its mirror and continues.
+- A long review record posts as several comments and reads back whole.
+- A session submitted by hand gets a review record too.
+- A fix that a later full panel did not raise again reads as fixed.
+- The review record re-checks the decisions it cites when it is written, and names the sheet part of each finding.
+- A run directory reused with a different prompt now refuses `run-dir-prompt-mismatch` instead of replaying the earlier result.
+- A Claude-built PR's grouping pass can sit on codex when the seat map proves that cell live.
 
 ### Launch ledger: cloud lanes
 

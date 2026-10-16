@@ -598,6 +598,7 @@ _FALLBACK_ENUM_LITERALS_BY_PROPERTY = {
     "severity": "_FALLBACK_SEVERITY_ENUM",
     "dimension": "_FALLBACK_DIMENSION_ENUM",
     "confidence": "_FALLBACK_CONFIDENCE_ENUM",
+    "consequenceKind": "_FALLBACK_CONSEQUENCE_KIND_ENUM",
 }
 
 

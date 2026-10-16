@@ -3,15 +3,15 @@
   "reviewerSet": ["test-reviewer"],
   "fixEvents": [{"afterRound": 1, "changedSubjects": ["Test"], "coverageDecisions": [{"id": "RCD-wrong", "classKey": "Test::coverage::missing acceptance test", "text": "Only happy-path acceptance tests are required."}]}],
   "reviewerEvents": [
-    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}], "usageTotal": 1000},
-    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing acceptance test"}], "usageTotal": 1000},
-    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing acceptance test"}], "usageTotal": 1000},
-    {"round": 4, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing acceptance test"}], "usageTotal": 1000}
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing acceptance test", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing acceptance test", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
+    {"round": 4, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing acceptance test", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000}
   ],
   "rounds": [
-    {"findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}]},
+    {"findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important", "consequence": "a reviewer-found defect stays in the change"}]},
     {"coverageDecision": {"id": "RCD-wrong", "classKey": "Test::coverage::missing acceptance test", "text": "Only happy-path acceptance tests are required."}},
-    {"findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important"}]}
+    {"findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Coverage decision is false", "severity": "Important", "consequence": "a reviewer-found defect stays in the change"}]}
   ],
   "expectedTerminal": "continue",
   "mustNotPass": true,

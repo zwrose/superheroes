@@ -18,7 +18,7 @@ not listed in the table below is the same as the **full** lane.
 | Starts from | a routed issue | a routed issue | a diagnosis; no issue |
 | Brief + pre-code check | yes | no | no |
 | Implementation | delegated work orders | typed by the orchestrator | typed by the advisor |
-| Review before handback | full panel, fix loop | one independent cross-vendor reviewer | one independent cross-vendor reviewer, in-session |
+| Review before handback | full panel, fix loop | one independent reviewer outside every maker's family | one independent reviewer outside every maker's family, in-session |
 | Test-pilot | where there is an app | where there is an app | no — *if you think you need it, it isn't micro* |
 | Preflight | yes | yes | no |
 | Order lint before dispatch | every implementer and review-fix order: the deterministic half always, the semantic half (the read-only `order-linter` seat) where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed); the driver lints each fixer order | — (no orders) | — |
@@ -26,6 +26,18 @@ not listed in the table below is the same as the **full** lane.
 | Authorized by | the route | the route | the owner, per change |
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
 | Typical cost | 33–108 min | ~5 min | ~5 min |
+
+### The lane floor
+
+This section is the one home of the lane floor. Every other page points here and says only what its own reader does.
+
+One rule sets the lowest lane a change may take. The advisor runs it as `python3 -B <plugin root>/lib/lane_call.py call --cwd <repo> --path <each changed or planned path> [--proposed <lane>]`, and the lane-call line records the floor the rule returned and one line of reasoning in the advisor's own words. It never pastes the rule's generated reasons or any changed-file path; paths stay in the record's Risk floor line, the one line the record's claim check leaves out.
+
+A change that touches a [risk area](glossary.md#risk-area) gets the full lane, whatever its size. So does a change whose risk is unclear. Risk is unclear when the project's risk areas are not set: missing, empty, or the [Risk and trust](glossary.md#risk-and-trust) item cannot be read. It is also unclear when any changed path cannot be matched against them, or when the changed paths cannot be read or none are given. While a project has set no risk areas, that means every change.
+
+A session or model may raise a change's lane above the floor and never lower it below. No waiver lowers a change below its floor, the micro lane's per-change owner waiver included. That waiver covers the quiet-failure default, not the floor.
+
+The review record checks the lane against the floor, recomputed over the PR's changed files (`laneBasis`). A lane below the floor makes the record read not reviewed.
 
 ### Size
 
@@ -106,44 +118,28 @@ and the failure then surfaces *after all the work is done*.
   existence does not.
 - **Receipts before claims**, **disclosed degradations**, **CI**, **owner-only merges**.
 
-**Single-reviewer lanes (light and micro).** The one reviewer must **cross vendors**:
-once the orchestrator (light) or the advisor (micro) types the change, that session is
-the *author*, so a same-family reviewer is not independent. **Three distinct reviewer-loss
-events — do not collapse them:**
+**Single-reviewer lanes (light and micro).** The one reviewer comes from a different model family than every [maker](glossary.md#maker) of the change. Once the orchestrator (light) or the advisor (micro) types the change, that session is a maker, so a reviewer from its family is not independent. A review record that names no maker cannot show independence, so it reads not reviewed.
 
-1. **Cross-vendor reviewer unavailable at kickoff (light only).** The **owner** chooses on
-   the spot between a **disclosed** same-family reviewer (a named degradation of
-   independence) and taking the **full lane**. Never the builder's or advisor's own call.
-2. **The reviewer forfeits mid-run** (the dispatch returns a **terminal forfeit** — its
-   structural timeout firing, a nonzero exit, unreadable or unparseable output, or a vacuous
-   forfeit — *silence is not forfeit; a terminal forfeit result is*). **Light:** **The host
-   model** may stand in with the **independence loss disclosed** — a disclosed degradation, not an
-   owner decision, acceptable because the advisor's vet still runs afterward. **Micro:** no
-   host-model stand-in (no advisor vet behind it) — **resolve upward to the full lane or park**.
-3. **Micro at kickoff.** The reviewer must be **outside the maker's family** (the advisor *is*
-   the maker). No same-family fallback at kickoff and no host-model stand-in mid-run —
-   unavailable
-   or forfeited reviewers **resolve upward to the full lane or park** in both cases.
+Only the owner's word, for that one change, lets a reviewer from a maker's family run. The review record then names that reviewer and says the review was not independent. The word is per change and recorded, never a standing default. It covers the change's reviewers as the review record lists them. The review loop's automatic fix-auditor seating has no owner's-word channel and never seats a maker's family. No session picks a same-family reviewer on its own, and no host model stands in for a reviewer.
+
+**Two reviewer-loss events end in the same place.**
+
+1. **No reviewer outside the makers' families at kickoff.** The owner's word comes first: when given, it admits the same-family reviewer for that change instead. Without it, that review did not happen.
+2. **The reviewer forfeits mid-run** (the dispatch returns a **terminal forfeit**: its structural timeout firing, a nonzero exit, unreadable or unparseable output, or a vacuous forfeit; *silence is not forfeit; a terminal forfeit result is*). The owner's word comes first here too. Without it, that review did not happen. The light lane allows no host-model stand-in after a forfeit.
+
+When that review did not happen, the change resolves upward to the full lane if an independent full panel can be composed, meaning every panel seat is filled from outside the makers' families. Otherwise the change parks.
 
 **Salvage valve (`forfeit-with-engaged-artifact`).** A `forfeit-with-engaged-artifact` is a
-**forfeit** — the three-case rule above runs exactly as written; this outcome does not add a fourth
-case and does not license a stand-in that the existing rules do not already license. **Findings only,
-never the seat** — the seat is not credited toward panel composition; each claim taken from the
+**forfeit**. The rules above run exactly as written, and this outcome adds no case and licenses no
+stand-in. **Findings only, never the seat** — the seat is not credited toward panel composition; each claim taken from the
 salvaged artifact is **independently verified** by the session that accepts it, and the degradation
 is disclosed in the PR body, because a timeout can truncate stdout so you can verify what an artifact
 contains but never what it never reached. **Salvage usage trending to zero is the success metric** — a
 high salvage rate **indicts our caps and our transport; it does not vindicate salvage.**
 
-On every light or micro review, **the review record shows that the one reviewer read the
-change**, taken from the engine's own record of the run — the control that makes single-seat
-review trustworthy. A record that is missing, or that cannot tell whether the reviewer read the
-change, does not show it, and then **that review did not happen:** **run the reviewer once more**,
-and if the record still does not show a reading, **resolve upward to the full lane or park.** A
-record that does not show a reading is **never** a pass, and exiting zero is not evidence of a
-reading. The **investigation-record floor** (an empty external review seat must prove it actually
-investigated, or forfeit as vacuous) applies automatically to **every external review seat**,
-single-seat lanes included; it is a standing safeguard, not something these lanes add. This is
-doctrine in prose only; lane assignment has no mechanical check.
+On every light or micro review, the review record must show that the one reviewer read the change. That control makes single-seat review trustworthy. The record shows it when the engine's own record of the run reads `observation.read == "engaged"`. Anything else does not show it: `unknown`, a missing observation, a missing record, or a session's report alone. Exiting zero is not evidence of a reading. When the record does not show a reading, that review did not happen, and the reviewer runs once more. If the second record still shows no reading, the change moves up to the full lane when an independent full panel can be composed, and parks otherwise. `lib/review_record.py reading-next` decides each step, and [the review-record reference](../skills/review-code/reference/review-record.md) gives its answers. A record that does not show a reading is never a pass.
+
+The **investigation-record floor** (an empty external review seat must prove it actually investigated, or forfeit as vacuous) applies automatically to **every external review seat**, single-seat lanes included. It is a standing safeguard, not something these lanes add. This reading rule is doctrine in prose; the lane itself is checked against [the lane floor](#the-lane-floor).
 
 ### The spine
 
@@ -152,7 +148,8 @@ doctrine in prose only; lane assignment has no mechanical check.
 If this were wrong, what would break, who would notice, and how soon? **Quiet** failure
 means **the full lane at any size**. The **one** exception is an explicit **per-change
 owner waiver** in **micro** (see Micro — owner authorization below) — owner-only, risk
-stated, never a standing grant.
+stated, never a standing grant. That exception covers the quiet-failure default only; it never
+lowers a change below [the lane floor](#the-lane-floor).
 
 **Lanes change up on their own; moving down a lane is never the builder's or advisor's
 call — it requires the owner, per change.** Disclosure alone never authorizes a downgrade.
@@ -170,12 +167,12 @@ alignment with practice is **in-sample** — fitted to the same changes it valid
 ### Micro — owner authorization
 
 In micro the advisor is the maker, so the advisor's independent vet-from-artifacts does
-not exist for that PR; the whole independent check is the one reviewer **outside the maker's
+not exist for that PR; the whole independent check is the one reviewer **outside every [maker's](glossary.md#maker)
 family** plus the owner's per-change authorization.
 
 **Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
 itself** is the one named home for both halves of the independent check. The **reviewer
-receipt** — the cross-vendor reviewer's result, with the review record showing that
+receipt** — the result of the reviewer outside every maker's family, with the review record showing that
 reviewer's reading — is posted as a **comment on the micro PR**,
 durably, not left in the advisor's session. Every receipt **names the reviewed head
 commit sha** it covers — the same pin the vet receipt's spine requires — and each
@@ -219,7 +216,7 @@ fast-follow):
   ending, and it is **recorded as a cited skip of the driver loop with the owner's
   direction as the citation** — the skip accounting stays whole and the owner's hands stay
   free. The driver mandate below names this citation class. **The light and micro lanes**
-  run **one** independent cross-vendor reviewer instead, whose reading the review record
+  run **one** independent reviewer outside every [maker's](glossary.md#maker) family instead, whose reading the review record
   shows (see above). The loop is cheap on small diffs —
   scoped rounds, capped confirmations — so "too small to review" is never a reason to
   skip. The evidence behind this rule: the worst defects in the plugin's own history
@@ -241,7 +238,7 @@ table above and *Micro — owner authorization*.
 conflicts and authors nothing — carries **no** review expectation; re-panelling it is a race the
 branch cannot win. A post-handback commit that **authors content** — a conflict resolution, an
 advisor integration fold — keeps the union-fix **micro floor** in
-`skills/showrunner/reference/merge-train.md`: one cross-vendor reviewer on the final head, whose reading the
+`skills/showrunner/reference/merge-train.md`: one reviewer outside every maker's family on the final head, whose reading the
 review record shows.
 
 ## The driver mandate — the review record

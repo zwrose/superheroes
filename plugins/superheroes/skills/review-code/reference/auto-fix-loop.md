@@ -69,7 +69,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **corroborating evidence only** and can never satisfy that investigation floor. The parser also
 > **tolerates a bare top-level array** `[...]` of finding objects, but anything else
 > (prose with no parseable JSON object/array, an empty stream, an array of non-objects) parses as
-> `unreadable`, which forfeits the slot to a re-run on the host model and silently doubles the
+> `unreadable`, which forfeits the slot to a re-run on a vendor outside every maker family (the
+> driver's choice; with none, the seat is recorded missing and counts as not run) and silently doubles the
 > round's cost.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER — reviewer role ONLY.**
@@ -88,7 +89,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
 > `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
 > stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
-> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a re-run on the host model and the
+> toward the panel, and the loop's behaviour is unchanged). A forfeit → the orchestrator re-runs the seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, only when that vendor takes the same delivery channel as the emitted order (never hand-compose a replacement order), recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat; for the non-panel phases the driver re-emits the order to the same selected vendor, with no switch to another vendor in this layer, and a non-panel result whose recorded vendor is not the one its order named is ignored and disclosed); with no such vendor live on that channel, the seat is recorded missing (`record-missing`) and counts as not run, and it is never re-run on the host model when the host's family is a maker and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); the driver also records
 > the fall-open on the receipt from the orchestrator's `ranManifest` (`round-driver.md`,
 > `dispatch-panel`).
@@ -199,7 +200,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `run-dir-claude-mode-unknown` | a continuation of a run whose journal records a claude mode that is neither declared nor retired; refused with `attempts: 0`, nothing re-opened or spawned |
 >
 > **Investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
-> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
+> the investigation floor and forfeits vacuously — fail-safe (the seat is re-run on a vendor outside every maker family, or recorded missing and counted as not run when there is none; never on the host model when the host's family is a maker), never a
 > false clean.
 >
 > **CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
@@ -623,6 +624,16 @@ Report it under "escalated" with the id and why.
 - checkOutput: <tail of the verify command, only if CHECK_FAILED>
 ```
 
+The loop's fixers commit without the builder's size count, so the builder recounts the non-test lines after each fixer round (the size rule's count, `lib/size_count.py count --base <build base>`) and reports a crossing of the size rule's lines as it would for its own commit. The rule is in [review-discipline § Size](../../../rubric/review-discipline.md#size).
+
+### A ruling that arrives during a fix
+
+A ruling (`rule`, see `round-driver.md` § Owner and advisor rulings) is accepted whenever it arrives.
+A fixer already dispatched is never stopped to take it and folds its result as usual; the ruling
+binds the next fix of its finding, and when that fix went against it the next round sends the finding
+back. No finding below blocking joins a fix batch unless a ruling names it; those settle when the loop
+converges.
+
 ---
 
 ## Verification Rules (for subagents)
@@ -705,14 +716,14 @@ carries `{vendor, model, effort, tier, family, source}`:
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-role`,
   `premortem-reviewer`) **and** the `grounding-seat`, not
-  merely from strong-tier, critical, and grounding. An owner pin can still seat the maker family;
-  `verify()` flags a `maker-family` violation and records `pin-breaks-constraint` for that seat.
-  Where an alternative family is live, the maker family never seats through rotation and such a
-  panel buys its independence from anthropic/openai instead; where
-  none is live, the seat still fills with the maker family and the map records a disclosed
-  `same-family` degradation, which rides the certification shape (`-degraded`) alongside
-  `independenceDegraded` and `baseDegraded`. The `verify()` result (the
-  maker-family-vs-seat check) separates a **violation** (maker family seated when an
-  alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
-  fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the
+  merely from strong-tier, critical, and grounding. The makers are the author family plus every
+  extra maker family passed to compose with `--maker-family`. A seat with no live candidate outside
+  the makers' families is recorded **`unfilled`** (`vendor`, `model`, `effort` and `family` all null,
+  `source: "unfilled"`) with a `seat-unfilled` degradation naming the seat: it is never filled with a
+  maker family and never backfilled, so no panel is ever composed from the maker's own family. An
+  owner pin to a maker's family does not seat it either; that seat is left `unfilled` and recorded
+  as `pin-breaks-constraint`. An `unfilled` seat is a planned reviewer that did not run: it is
+  never dispatched and stays in the record. `verify()` treats it as a known not-run seat, not as a
+  missing, malformed or maker-family seat, and unusable liveness evidence still fails closed to a
+  violation for any seat that does name a maker family. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
