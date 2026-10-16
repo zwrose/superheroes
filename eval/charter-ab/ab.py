@@ -169,6 +169,15 @@ def plugin_dir_for(root, charter):
     return None
 
 
+def normalize_charter(root, charter):
+    """Repo-relative, normalized charter path; an absolute path inside root is made relative, and any path
+    that would leave root is refused, so each side's worktree (not the live checkout) supplies the file."""
+    rel = os.path.normpath(os.path.relpath(charter, root) if os.path.isabs(charter) else charter)
+    if rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+        raise Refusal(f"--charter must be a path inside the repository, got {charter}")
+    return Path(rel).as_posix()
+
+
 def render_prompt(role, charter, situation, question):
     return PROMPT.format(role=role, charter=charter, situation=situation, question=question)
 
@@ -308,10 +317,11 @@ def build_identity(a, stage, repo, stored):
         raise Refusal("--candidate is required for the first use of a run dir")
     base = resolve(a.base, "base") or default_base(repo, cand[1], cand[0])
     n_reps = pick(reps, "replicates", 3)
-    # bites on: zero or negative replicates run no seats, and the vacuous counts would report PASS
-    if n_reps < 1:
-        raise Refusal(f"replicates must be a positive integer, got {n_reps}")
-    charter = pick(a.charter, "charter", DEFAULT_CHARTER)
+    # bites on: zero or negative replicates run no seats, and one replicate cannot trip either failure condition,
+    # so both would report a vacuous PASS
+    if n_reps < (2 if strict else 1):
+        raise Refusal(f"replicates must be at least 2 to detect a regression, got {n_reps}")
+    charter = normalize_charter(repo, pick(a.charter, "charter", DEFAULT_CHARTER))
     ident = {"base_ref": base[0], "base_sha": base[1], "candidate_ref": cand[0], "candidate_sha": cand[1],
              "charter": charter, "scenarios_file": scen_file,
              "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),

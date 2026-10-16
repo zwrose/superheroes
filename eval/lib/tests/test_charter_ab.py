@@ -533,3 +533,19 @@ def test_failed_forced_rerun_stays_incomplete(tmp_path, monkeypatch):
     monkeypatch.setattr(ab, "exec_judge", lambda cmd, prompt: (1, "", "outage"))
     ab.stage_judge(run_dir, scenarios, ident, True, 1)
     assert ab.stage_report(run_dir, scenarios, ident) == 2
+
+
+def test_one_replicate_and_escaping_charter_refused_absolute_charter_normalized(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    argv = ["run", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter", "CHARTER.md",
+            "--scenarios", write_scenarios(tmp_path), "--run-dir", str(tmp_path / "run")]
+    assert ab.main(argv + ["--replicates", "1"]) == 3
+    monkeypatch.setenv("REPLICATES", "1")
+    assert ab.main(argv) == 3
+    monkeypatch.delenv("REPLICATES")
+    for bad in ("../CHARTER.md", str(tmp_path / "elsewhere.md")):
+        assert ab.main(argv[:-6] + ["--charter", bad, "--scenarios", write_scenarios(tmp_path),
+                                    "--run-dir", str(tmp_path / "run"), "--replicates", "2"]) == 3
+    assert ab.normalize_charter(str(repo), str(repo / "CHARTER.md")) == "CHARTER.md"
+    assert ab.normalize_charter(str(repo), "./a/../CHARTER.md") == "CHARTER.md"
