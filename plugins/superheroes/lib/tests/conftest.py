@@ -23,6 +23,10 @@ _LAUNCH_ID_ENV = _heartbeat.LAUNCH_ID_ENV
 # Single home for the autouse store-isolation dirname (#844 F7).
 _STORE_ISOLATION_DIRNAME = "_store_isolation"
 
+_REVIEWER_CLOUD_ENV = ("CLAUDE_CODE_REMOTE", "SUPERHEROES_REVIEWER_PASS",
+                       "SUPERHEROES_REVIEWER_PASS_SHA256", "CODEX_HOME", "CODEX_API_KEY",
+                       "OPENAI_API_KEY")
+
 
 def _isolated_default_store_root_path(tmp_path):
     """Path to the default-store root pinned by _isolate_store_root."""
@@ -129,6 +133,12 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # _neutral_git applies to the probes) so the cwd above is the only input repository discovery
     # gets; no list to extend. A test that needs one sets its own (applies after this fixture).
     for var in [name for name in os.environ if name.startswith("GIT_")]:
+        monkeypatch.delenv(var, raising=False)
+    # The session-start hook places the reviewer pass into the real ~/.codex sign-in when a cloud
+    # session carries one. Narrowest isolation: drop the cloud/reviewer variables for every test
+    # (HOME is left alone, since some tests legitimately need the real home), which makes that step
+    # a no-op unless a test opts in by setting its own (applies after this fixture).
+    for var in _REVIEWER_CLOUD_ENV:
         monkeypatch.delenv(var, raising=False)
 
 
