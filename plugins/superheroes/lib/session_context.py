@@ -125,8 +125,23 @@ def covenant(cwd, plugin_root):
 
 
 # ----------------------------------------------------------------- charter recovery (post-compact)
+# Charter -> skill directory, where the two differ (discovery loads architect-discovery).
+_CHARTER_SKILL_DIRS = {"discovery": "architect-discovery"}
+
+
 def _charter_skill_path(plugin_root, charter):
-    return os.path.join(os.path.abspath(plugin_root or "."), "skills", charter, "SKILL.md")
+    skill_dir = _CHARTER_SKILL_DIRS.get(charter, charter)
+    return os.path.join(os.path.abspath(plugin_root or "."), "skills", skill_dir, "SKILL.md")
+
+
+def _checkpoint_file(session_id, cwd=None):
+    """This session's checkpoint notes path, or None (invalid session id / unresolved config dir)."""
+    try:
+        import compaction_directive
+        return compaction_directive.checkpoint_path(session_id, cwd=cwd)
+    except Exception as exc:
+        _breadcrumb("Checkpoint file", type(exc).__name__)
+        return None
 
 
 def charter_recovery(transcript_path, source, plugin_root):
@@ -139,7 +154,7 @@ def charter_recovery(transcript_path, source, plugin_root):
     return text
 
 
-def _charter_recovery_parts(transcript_path, source, plugin_root):
+def _charter_recovery_parts(transcript_path, source, plugin_root, session_id=None, cwd=None):
     try:
         if source != "compact":
             return "", ""
@@ -148,7 +163,7 @@ def _charter_recovery_parts(transcript_path, source, plugin_root):
         if charter not in charter_detect.CHARTER_NAMES:
             return "", ""
         skill_path = _charter_skill_path(plugin_root, charter)
-        return (
+        text = (
             "This session was operating under the **%s** charter before compaction. "
             "The post-compaction summary is a paraphrase — re-read your charter "
             "SKILL.md from disk before acting:\n\n"
@@ -156,10 +171,47 @@ def _charter_recovery_parts(transcript_path, source, plugin_root):
             "The file on disk is the authority, not the summary.\n"
             "If a resume point exists at the top of this session's ledger, re-read it "
             "and prefer it over anything the summary asserts."
-        ) % (charter, skill_path), skill_path
+        ) % (charter, skill_path)
+        notes_path = _checkpoint_file(session_id, cwd)
+        if notes_path:
+            text += (
+                "\nThis session's checkpoint notes file (re-read it if it exists): %s"
+                % notes_path)
+        return text, skill_path
     except Exception as exc:
         _breadcrumb("Charter recovery", type(exc).__name__)
         return "", ""
+
+
+def _generic_recovery_parts(source, session_id, cwd=None):
+    """Compact with no charter detected: re-read the checkpoint notes (if any) and recap."""
+    try:
+        if source != "compact":
+            return "", ""
+        notes_path = _checkpoint_file(session_id, cwd)
+        text = "This session was compacted; no superheroes charter was detected. "
+        if notes_path:
+            text += (
+                "The post-compaction summary is a paraphrase — if this session's checkpoint "
+                "notes file exists, re-read it: %s. " % notes_path)
+        import compaction_directive
+        instruction = compaction_directive.RECAP_INSTRUCTION
+        text += instruction[0].upper() + instruction[1:]
+        return text, notes_path or ""
+    except Exception as exc:
+        _breadcrumb("Compaction recovery", type(exc).__name__)
+        return "", ""
+
+
+def checkpoint_file_record(session_id, cwd=None):
+    """One line naming this session's checkpoint notes file; '' when no valid path resolves."""
+    path = _checkpoint_file(session_id, cwd)
+    if not path:
+        return ""
+    return ("This session's checkpoint notes file: %s "
+            "(if it exists, it holds this session's checkpoint notes; "
+            "/superheroes:checkpoint saves it there — the mod does, where present, "
+            "otherwise the skill writes it)" % path)
 
 
 # ----------------------------------------------------------------- cache hygiene nudge
@@ -253,11 +305,13 @@ def cache_hygiene(plugin_root):
 _Rec = collections.namedtuple("_Rec", "name text hint")
 
 
-def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=None):
+def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=None,
+             session_id=None):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
-    Priority order: charter recovery (compact + charter only) → resolved roots → plugin
-    cache hygiene nudge → covenant (calibrated projects only).
+    Priority order: charter recovery (compact only: the charter's, else a generic recovery) →
+    resolved roots → checkpoint file (valid session id only) → plugin cache hygiene nudge →
+    covenant (calibrated projects only).
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
@@ -270,11 +324,18 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=N
     del _FAILURES[:]                                  # reset the per-assemble failure collector
     try:
         _charter_text, _charter_hint = _charter_recovery_parts(
-            transcript_path, source, plugin_root)
+            transcript_path, source, plugin_root, session_id, cwd)
+        if _charter_text:
+            recovery = _Rec("Charter recovery", _charter_text, _charter_hint)
+        else:
+            _generic_text, _generic_hint = _generic_recovery_parts(source, session_id, cwd)
+            recovery = _Rec("Compaction recovery", _generic_text, _generic_hint)
+        _ckpt = _checkpoint_file(session_id, cwd)
         records = [
-            _Rec("Charter recovery", _charter_text, _charter_hint),
+            recovery,
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
+            _Rec("Checkpoint file", checkpoint_file_record(session_id, cwd), _ckpt),
             _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), _cache_parent_hint(plugin_root)),
             _Rec("Covenant", covenant(cwd, plugin_root),
                  _covenant_doc(plugin_root)),
