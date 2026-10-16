@@ -9,7 +9,7 @@ Everything is written to the run dir (outside the repo). Its sides.json is the r
 disagrees with it (other commit, model, replicate count, scenarios, ...) is refused rather than mixed in.
 Answers: answers/<id>.<side>.r<k>.txt. Python >= 3.9, standard library only.
 """
-import argparse, contextlib, hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, contextlib, fcntl, hashlib, json, os, signal, random, re, shutil, subprocess, sys, tempfile, threading, time
 import concurrent.futures as cf
 from pathlib import Path
 
@@ -416,9 +416,17 @@ def prompt_bound(run_dir, sid, prompt):
 
 
 def exec_judge(cmd, prompt):
-    p = subprocess.run(cmd, input=prompt, capture_output=True, encoding="utf-8", errors="replace",
-                       timeout=JUDGE_TIMEOUT)
-    return p.returncode, p.stdout, p.stderr
+    # own session so a timeout can kill the npm launcher's native child too (SIGKILL cannot be forwarded)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            encoding="utf-8", errors="replace", start_new_session=True)
+    try:
+        out, err = proc.communicate(prompt, timeout=JUDGE_TIMEOUT)
+    except BaseException:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise
+    return proc.returncode, out, err
 
 
 def stage_judge(run_dir, scenarios, ident, force, jobs):
@@ -610,7 +618,7 @@ def build_parser():
     return ap
 
 
-def dispatch(a):
+def dispatch(a, stack):
     stage, config_dir = a.stage, None
     if stage in ("seats", "run"):
         # bites on: seats run with an unset/empty CLAUDE_CONFIG_DIR would silently use an unintended config (E1)
@@ -633,6 +641,16 @@ def dispatch(a):
         if made_default:
             shutil.rmtree(run_dir, ignore_errors=True)  # our own fresh, empty temp dir
         raise Refusal(f"run dir {run_dir} is inside the repo {repo}; nothing writes into the repo")
+    if stage in ("seats", "run"):
+        os.makedirs(run_dir, exist_ok=True)
+    if os.path.isdir(run_dir):
+        # bites on: two invocations on one run dir must not both pass validation and mix identities (held to exit)
+        fd = os.open(run_dir, os.O_RDONLY)
+        stack.callback(os.close, fd)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise Refusal(f"{run_dir} is in use by another ab.py invocation")
     stored = load_json(os.path.join(run_dir, "sides.json"))
     if stored is None and stage in ("judge", "report"):
         raise Refusal(f"{run_dir} has no sides.json; run seats (or run) first")
@@ -681,7 +699,8 @@ def dispatch(a):
 def main(argv=None):
     a = build_parser().parse_args(argv)
     try:
-        return dispatch(a)
+        with contextlib.ExitStack() as stack:
+            return dispatch(a, stack)
     except Refusal as e:
         print(f"ab.py: refused: {e}", file=sys.stderr)
         return EXIT_REFUSED

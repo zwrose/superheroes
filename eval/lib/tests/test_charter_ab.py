@@ -16,6 +16,8 @@ ab = importlib.util.module_from_spec(_spec)
 sys.modules["charter_ab"] = ab
 _spec.loader.exec_module(ab)
 
+_REAL_EXEC_JUDGE = ab.exec_judge
+
 SEED_PROMPT = (
     "You are the superheroes showrunner advisor for this repository. First read "
     "plugins/superheroes/skills/showrunner/SKILL.md in full, and read any reference file it "
@@ -581,3 +583,40 @@ def test_one_replicate_and_escaping_charter_refused_absolute_charter_normalized(
                                     "--run-dir", str(tmp_path / "run"), "--replicates", "2"]) == 3
     assert ab.normalize_charter(str(repo), str(repo / "CHARTER.md")) == "CHARTER.md"
     assert ab.normalize_charter(str(repo), "./a/../CHARTER.md") == "CHARTER.md"
+
+
+# ---------------------------------------------------------------- judge process tree, run-dir lock
+
+def test_judge_timeout_kills_the_whole_process_group(tmp_path, monkeypatch):
+    pidfile = tmp_path / "child.pid"
+    monkeypatch.setattr(ab, "JUDGE_TIMEOUT", 1)
+    script = f"sleep 60 & echo $! > {pidfile}; wait"
+    with pytest.raises(subprocess.TimeoutExpired):
+        _REAL_EXEC_JUDGE(["sh", "-c", script], "")
+    child = int(pidfile.read_text())
+    import time
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    os.kill(child, 9)
+    pytest.fail("grandchild of the timed-out judge survived")
+
+
+def test_second_invocation_on_a_locked_run_dir_refused(tmp_path, monkeypatch, git_env, capsys):
+    import fcntl
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    fd = os.open(run_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert ab.main(["seats", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter",
+                        "CHARTER.md", "--scenarios", write_scenarios(tmp_path), "--run-dir", str(run_dir)]) == 3
+        assert "in use" in capsys.readouterr().err
+    finally:
+        os.close(fd)
+    assert not (run_dir / "sides.json").exists()
