@@ -23,7 +23,7 @@ SIDES = ("base", "candidate")
 DIFF = ("same", "minor-difference", "material-difference")
 REQUIRED_FIELDS = ("id", "situation", "question", "expected_rule", "targeted_block")
 IDENTITY_KEYS = ("base_ref", "base_sha", "candidate_ref", "candidate_sha", "charter", "scenarios_file",
-                 "scenarios_sha256", "role", "model", "judge_model", "replicates", "seed")
+                 "scenarios_sha256", "role", "model", "judge_model", "replicates", "seed", "plugin_dir")
 UNGUARDED_KEYS = ("base_ref", "candidate_ref", "scenarios_file")  # names/paths only; the SHAs and hashes guard
 EXIT_BY_VERDICT = {"PASS": 0, "FAIL": 1, "INCOMPLETE": 2}
 EXIT_REFUSED = 3
@@ -154,6 +154,19 @@ def verdict(per_scenario, reps):
 
 def identity_mismatch(stored, current):
     return [k for k in IDENTITY_KEYS if k not in UNGUARDED_KEYS and stored.get(k) != current.get(k)]
+
+
+def plugin_dir_for(root, charter):
+    """Repo-relative nearest ancestor dir of charter, below root, that holds .claude-plugin/plugin.json; else None."""
+    rel = os.path.normpath(os.path.relpath(charter, root) if os.path.isabs(charter) else charter)
+    if rel == ".." or rel.startswith(".." + os.sep):
+        return None
+    for parent in Path(rel).parents:
+        if parent == Path("."):
+            break
+        if os.path.isfile(os.path.join(root, parent, ".claude-plugin", "plugin.json")):
+            return parent.as_posix()
+    return None
 
 
 def render_prompt(role, charter, situation, question):
@@ -298,11 +311,13 @@ def build_identity(a, stage, repo, stored):
     # bites on: zero or negative replicates run no seats, and the vacuous counts would report PASS
     if n_reps < 1:
         raise Refusal(f"replicates must be a positive integer, got {n_reps}")
+    charter = pick(a.charter, "charter", DEFAULT_CHARTER)
     ident = {"base_ref": base[0], "base_sha": base[1], "candidate_ref": cand[0], "candidate_sha": cand[1],
-             "charter": pick(a.charter, "charter", DEFAULT_CHARTER), "scenarios_file": scen_file,
+             "charter": charter, "scenarios_file": scen_file,
              "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),
              "judge_model": pick(a.judge_model, "judge_model", "gpt-6.1-sol"),
-             "replicates": n_reps, "seed": pick(a.seed, "seed", 1882)}
+             "replicates": n_reps, "seed": pick(a.seed, "seed", 1882),
+             "plugin_dir": plugin_dir_for(repo, charter) if strict else src.get("plugin_dir")}
     return ident, scenarios
 
 
@@ -320,8 +335,11 @@ def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
     if force and nonempty(out):
         # bites on: a forced rerun that fails must stay incomplete, so the old answer leaves the active path first
         os.replace(out, out + ".prev")
-    cmd = ["claude", "-p", "--model", ident["model"], "--allowedTools", "Read,Grep,Glob",
-           "--output-format", "text", prompt]
+    cmd = ["claude", "-p", "--model", ident["model"]]
+    if ident["plugin_dir"] is not None:
+        # bites on: each seat loads the plugin from its own side's worktree, not the installed one (v0)
+        cmd += ["--plugin-dir", os.path.join(side_dirs[side], ident["plugin_dir"])]
+    cmd += ["--allowedTools", "Read,Grep,Glob", "--output-format", "text", prompt]
     for attempt in (1, 2):
         t0 = time.time()
         try:
@@ -502,6 +520,7 @@ def stage_report(run_dir, scenarios, ident):
         vline = (f"PASS — on every scenario CANDIDATE's correct count is at least BASE's minus 1 (of {reps}), "
                  f"and no scenario has CANDIDATE wrong in 2+ of {reps} while BASE is right in 2+ of {reps}")
 
+    plugin = f"`--plugin-dir {ident['plugin_dir']}` in that side's worktree" if ident["plugin_dir"] else "no plugin dir"
     n_ctrl = sum(sc.get("control") is True for sc in scenarios)
     nonpass = [f"- {f['id']}: {'; '.join(f['reasons'])}" for f in result["failing"]]
     nonpass += [f"- {i}: incomplete — no verdict contribution" for i in result["incomplete"]]
@@ -516,8 +535,8 @@ def stage_report(run_dir, scenarios, ident):
         "Each has an `expected_rule` taken from BASE's own text.",
         f"- {reps} replicates per side per scenario: each a fresh headless `claude -p --model {ident['model']}` seat, "
         "`--allowedTools Read,Grep,Glob`, `CLAUDE_CONFIG_DIR` from the caller's environment, cwd = that side's "
-        f"worktree of the commit above, role \"{ident['role']}\", the same prompt (`ab.py` PROMPT), at most 4 "
-        "concurrent, 10-minute timeout, one retry on a failed or empty answer. "
+        f"worktree of the commit above, plugin: {plugin}, role \"{ident['role']}\", the same prompt (`ab.py` "
+        "PROMPT), at most 4 concurrent, 10-minute timeout, one retry on a failed or empty answer. "
         "Answers: `answers/<id>.<side>.r<k>.txt`.",
         f"- One codex judge call per scenario (`{ident['judge_model']}`, reasoning high, `-s read-only`, prompt on "
         f"stdin) over all {2*reps} answers. A/B labels are randomized per replicate (seed {ident['seed']}), and the "
@@ -619,6 +638,11 @@ def dispatch(a):
             for side, path in wts.items():
                 if not os.path.isfile(os.path.join(path, ident["charter"])):
                     raise Refusal(f"{side} ({ident[side + '_sha']}) has no charter at {ident['charter']}")
+                # bites on: a side whose worktree lacks the plugin manifest must refuse, not load another plugin (E10)
+                if ident["plugin_dir"] and not os.path.isfile(
+                        os.path.join(path, ident["plugin_dir"], ".claude-plugin", "plugin.json")):
+                    raise Refusal(f"{side} ({ident[side + '_sha']}) has no plugin manifest at "
+                                  f"{ident['plugin_dir']}/.claude-plugin/plugin.json")
             if stored is None:
                 atomic_write(os.path.join(run_dir, "sides.json"), json.dumps(ident, indent=1) + "\n")
             stage_seats(run_dir, wts, scenarios, ident, a.force, a.jobs, config_dir)

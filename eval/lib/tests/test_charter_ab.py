@@ -49,7 +49,8 @@ def per(sid, base, cand, complete=True):
 def make_ident(reps=1, **over):
     d = {"base_ref": "b", "base_sha": "a" * 40, "candidate_ref": "c", "candidate_sha": "b" * 40,
          "charter": "CHARTER.md", "scenarios_file": "/x/s.json", "scenarios_sha256": "0" * 64,
-         "role": "the tester", "model": "opus", "judge_model": "gpt-6.1-sol", "replicates": reps, "seed": 7}
+         "role": "the tester", "model": "opus", "judge_model": "gpt-6.1-sol", "replicates": reps, "seed": 7,
+         "plugin_dir": None}
     d.update(over)
     return d
 
@@ -262,6 +263,26 @@ def test_resume_keeps_existing_answer_unless_force(tmp_path, monkeypatch):
     assert cwd == "/wt/base" and env["CLAUDE_CONFIG_DIR"] == "/cfg"
 
 
+def test_seat_argv_binds_plugin_dir_to_its_side(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, _ = build_run(tmp_path, judged=False)
+    ident, sc, calls = dict(ident, plugin_dir="plugins/x"), scenarios[0], []
+
+    def fake(cmd, cwd, env):
+        calls.append((cmd, cwd))
+        return 0, "fresh answer", ""
+    monkeypatch.setattr(ab, "exec_seat", fake)
+    for side in ab.SIDES:  # rep 2 has no existing answer, so each call really runs the seat
+        assert ab.run_seat(run_dir, SIDE_DIRS, sc, side, 2, False, ident, "/cfg")["ok"]
+    assert [cwd for _, cwd in calls] == [SIDE_DIRS["base"], SIDE_DIRS["candidate"]]
+    for (cmd, cwd), side in zip(calls, ab.SIDES):
+        assert cmd.count("--plugin-dir") == 1
+        i = cmd.index("--plugin-dir")
+        assert cmd[i - 2:i] == ["--model", "opus"]
+        assert cmd[i + 1] == os.path.join(SIDE_DIRS[side], "plugins/x")
+        assert cmd[i + 2] == "--allowedTools"
+        assert cmd[-1] == ab.render_prompt("the tester", "CHARTER.md", sc["situation"], sc["question"])
+
+
 def test_failed_call_publishes_no_answer(tmp_path, monkeypatch):
     run_dir, scenarios, ident, _ = build_run(tmp_path, judged=False)
     sc, path = scenarios[0], ab.ans_path(run_dir, "s1", "base", 1)
@@ -310,8 +331,9 @@ def test_identity_mismatch_names_guarded_keys():
     stored = make_ident(3)
     assert ab.identity_mismatch(stored, dict(stored)) == []
     for key, new in (("model", "sonnet"), ("judge_model", "other"), ("candidate_sha", "c" * 40),
-                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1)):
+                     ("replicates", 5), ("scenarios_sha256", "1" * 64), ("seed", 1), ("plugin_dir", "plugins/x")):
         assert ab.identity_mismatch(stored, dict(stored, **{key: new})) == [key]
+    assert ab.identity_mismatch(dict(stored, plugin_dir="plugins/x"), stored) == ["plugin_dir"]
     moved = dict(stored, base_ref="x", candidate_ref="y", scenarios_file="/elsewhere.json")
     assert ab.identity_mismatch(stored, moved) == []
 
@@ -413,6 +435,48 @@ def test_worktrees_removed_when_the_body_raises(tmp_path, git_env):
             raise RuntimeError("stage blew up")
     assert len(seen) == 2 and not any(os.path.exists(p) for p in seen)
     assert worktree_count(repo) == 1
+
+
+def test_plugin_dir_for_finds_nearest_manifest(tmp_path):
+    def manifest(rel):
+        p = tmp_path / rel / ".claude-plugin" / "plugin.json"
+        p.parent.mkdir(parents=True)
+        p.write_text("{}")
+    manifest("plugins/x")
+    manifest("plugins/x/skills/z")
+    manifest("")  # the root's own manifest is not below the root, so it never counts
+    charter = "plugins/x/skills/y/SKILL.md"
+    (tmp_path / charter).parent.mkdir(parents=True)
+    (tmp_path / charter).write_text("c")
+    assert ab.plugin_dir_for(str(tmp_path), charter) == "plugins/x"
+    assert ab.plugin_dir_for(str(tmp_path), str(tmp_path / charter)) == "plugins/x"
+    assert ab.plugin_dir_for(str(tmp_path), "plugins/x/skills/z/SKILL.md") == "plugins/x/skills/z"  # nearest wins
+    assert ab.plugin_dir_for(str(tmp_path), "docs/CHARTER.md") is None
+    assert ab.plugin_dir_for(str(tmp_path), "../outside/CHARTER.md") is None
+    assert ab.plugin_dir_for(str(_AB_PATH.parents[2]), ab.DEFAULT_CHARTER) == "plugins/superheroes"
+
+
+def test_missing_plugin_manifest_on_a_side_refused(tmp_path, monkeypatch, git_env, capsys):
+    repo, _ = make_repo(tmp_path)
+    charter = repo / "plugins" / "x" / "skills" / "y" / "SKILL.md"
+    charter.parent.mkdir(parents=True)
+    charter.write_text("the plugin charter\n")
+    g = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(g + ["add", "."], check=True, capture_output=True)
+    subprocess.run(g + ["commit", "-q", "-m", "c2"], check=True, capture_output=True)
+    base = subprocess.run(g + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    manifest = repo / "plugins" / "x" / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}")
+    subprocess.run(g + ["add", "."], check=True, capture_output=True)
+    subprocess.run(g + ["commit", "-q", "-m", "c3"], check=True, capture_output=True)  # only c3 has the manifest
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    argv = ["seats", "--repo", str(repo), "--candidate", "HEAD", "--base", base, "--charter",
+            "plugins/x/skills/y/SKILL.md", "--scenarios", write_scenarios(tmp_path), "--run-dir", str(tmp_path / "run")]
+    assert ab.main(argv) == 3
+    err = capsys.readouterr().err
+    assert "no plugin manifest" in err and "base" in err
+    assert worktree_count(repo) == 1 and not (tmp_path / "run" / "sides.json").exists()
 
 
 def test_scenario_file_guards(tmp_path):

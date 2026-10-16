@@ -18,6 +18,13 @@ charter-moving changes. A change that only adds text, or touches nothing a seat 
 - `CLAUDE_CONFIG_DIR` exported (seats and runs refuse without it; there is no default);
 - live model access. It is not wired into CI.
 
+Each seat loads the plugin from its own side's worktree, through `--plugin-dir <worktree>/<plugin dir>`. The
+plugin dir is the nearest directory above the charter that holds `.claude-plugin/plugin.json` (for the default
+charter, `plugins/superheroes`), found once per run in the `--repo` checkout and kept in `sides.json`. So the
+reference files a charter points at resolve to the commit under test, not to the plugin installed in
+`CLAUDE_CONFIG_DIR`. If the charter has no plugin above it, no flag is passed. A side whose commit lacks the
+manifest is refused.
+
 ## What it costs
 
 For 15 scenarios at 3 replicates: about 90 seat calls (15 x 2 sides x 3) and 15 judge calls, roughly
