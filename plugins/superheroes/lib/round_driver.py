@@ -83,6 +83,7 @@ import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
 import risk_areas  # noqa: E402
 import review_round_policy  # noqa: E402
+import review_seats  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
@@ -101,9 +102,7 @@ from finding_identity import finding_identity, finding_label, normalize_title  #
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
 DIMENSIONS = round_phases.DIMENSIONS
-AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
-                "security-reviewer": "security", "test-role": "test",
-                "premortem-reviewer": "premortem"}
+AGENT_SUFFIX = review_seats.AGENT_SUFFIX
 # The cross-cutting lenses always get the WHOLE diff even when a big diff is sharded per-lens —
 # architecture and failure-mode reasoning is non-local, so a shard would blind them.
 CROSS_CUTTING_LENSES = ("architecture-reviewer", "premortem-reviewer")
@@ -9649,10 +9648,7 @@ def _shell_quote_path(path):
 
 def _panel_dimension_label(seat_key):
     """Rubric dimension label for a panel seat — from SUBJECT_FALLBACK, not filename stem."""
-    stem = AGENT_SUFFIX.get(seat_key)
-    if not isinstance(stem, str) or not stem:
-        return None
-    return review_round_policy.SUBJECT_FALLBACK.get(stem.split("-")[0].lower())
+    return review_seats.dimension_label(seat_key)
 
 
 def _session_pr_checkout_path(session_dir):

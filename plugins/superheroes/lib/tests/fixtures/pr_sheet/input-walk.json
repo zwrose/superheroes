@@ -1,0 +1,56 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "pr",
+  "number": 214,
+  "title": "Retry a failed payment",
+  "summary": "A payment that fails is tried again up to three times before the order is given up.",
+  "previousCommit": null,
+  "leftovers": {
+    "F6": {
+      "options": "none",
+      "recommendation": {"text": "Leave it as is", "reason": "The statement line already names the shop."}
+    },
+    "F7": {
+      "options": "leftover",
+      "recommendation": {"text": "Fix it in a follow-up", "reason": "The email needs wording the owner has not chosen yet.", "optionId": "fix-in-a-follow-up"}
+    }
+  },
+  "items": [
+    {
+      "id": "retry-window",
+      "kind": "Behavior change",
+      "title": "Retry for ten minutes after a failure",
+      "ifLeft": "A failed payment is retried for ten minutes, then the order is cancelled.",
+      "options": [
+        {"id": "ten-minutes", "label": "Ten minutes", "consequence": "Orders wait up to ten minutes for a payment to clear.", "sendsBack": false},
+        {"id": "one-minute", "label": "One minute", "consequence": "The PR goes back to shorten the window and returns with a new sheet.", "sendsBack": true}
+      ],
+      "recommendation": {"text": "Keep ten minutes", "reason": "Most card declines clear within that time.", "optionId": "ten-minutes"}
+    }
+  ],
+  "walk": {
+    "open": {"label": "Open the test shop", "url": "https://shop.example.test", "detail": "Sign in as the shop's test customer."},
+    "note": "Walk on your phone.",
+    "picturesFrom": "the advisor's own test account, which you can't open",
+    "stops": [
+      {"id": "p1", "title": "Pay with a card that fails once", "pr": 214, "group": "On your phone", "kind": "try",
+       "steps": ["Add an item to the cart", "Pay with the test card that declines once"],
+       "expect": "The second try goes through and the order is placed.",
+       "pictures": [
+         {"path": "elsewhere/cart-empty.png", "alt": "The empty cart", "caption": "Where you start"},
+         {"path": "elsewhere/cart-paid.png", "alt": "The paid order"}]},
+      {"id": "p2", "title": "Check the receipt email", "pr": 214, "group": "On your phone", "kind": "try",
+       "steps": ["Open the receipt email"], "expect": "It names the shop.", "pictures": []},
+      {"id": "p3", "title": "Pay with a second card", "pr": 214, "group": "On your phone", "kind": "try", "optional": true,
+       "steps": ["Pay with a second test card"], "expect": "The order is placed once."},
+      {"id": "p4", "title": "Read the bank's test dashboard", "pr": 214, "group": "On your phone", "kind": "try",
+       "steps": ["Open the dashboard", "Find the retried payment"], "expect": "One charge, not two.",
+       "notWalked": "It needs your own sign-in to the bank's test dashboard."},
+      {"id": "f1", "title": "The gave-up screen", "pr": 214, "group": "Failure screens · look only", "kind": "look",
+       "expect": "A plain message and a way back to the cart.",
+       "pictures": [
+         {"path": "elsewhere/declined-screen.png", "alt": "The gave-up screen", "caption": "After three failures"},
+         {"path": "elsewhere/no-such-picture.png", "alt": "The gave-up screen on a small phone"}]}
+    ]
+  }
+}
