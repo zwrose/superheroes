@@ -86,7 +86,7 @@ def test_defaulted_resolves_to_listed():
 
 
 def test_registered_role_with_no_model_on_vendor_parks():
-    result = DG.validate("synthesis", "codex", None)
+    result = DG.validate("synthesis", "cursor", None)
     assert result["ok"] is False
     assert "no sanctioned model" in result["reason"]
 
@@ -325,7 +325,7 @@ def test_fail_closed_edge_3_unknown_role():
 
 
 def test_fail_closed_edge_4_no_sanctioned_model_on_vendor():
-    result = DG.validate("synthesis", "codex", None)
+    result = DG.validate("synthesis", "cursor", None)
     assert result["ok"] is False
     assert result["allowlist"] == []
     assert "no sanctioned model" in result["reason"]

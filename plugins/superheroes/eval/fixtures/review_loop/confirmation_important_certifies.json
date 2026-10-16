@@ -5,9 +5,9 @@
   "fixEvents": [{"afterRound": 1, "changedSubjects": ["Test"], "coverageDecisions": []}],
   "reviewerEvents": [
     {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
-    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing test", "severity": "Important"}], "usageTotal": 1000},
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing test", "severity": "Important", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
     {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 1000},
-    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Important", "title": "Log line too verbose"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Important", "title": "Log line too verbose", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
     {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000}
   ],
   "expectedTerminal": "clean",

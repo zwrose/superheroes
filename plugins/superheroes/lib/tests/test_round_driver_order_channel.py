@@ -76,6 +76,18 @@ def _mixed_seat_map():
     return {"seats": seats}
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`,
+    `reviewer-deep`) live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = MR.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _emit(tmp_path, name, seat_map):
     """Run `next` so the driver RENDERS and writes the round's order files; return {seat: text}."""
     session_dir = str(tmp_path / name)
@@ -440,7 +452,9 @@ def test_reviewer_phase_transport_row_carries_the_vendor_source(monkeypatch, pha
     """The marker reaches the transport row — the seam `_seat_channel` and the gap collector read."""
     monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
                         lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
-    state = {"config": {}, "seatMap": {}, "pending": {}, "round": 1, "rounds": {}}
+    # a native `claude` seat takes the host's family from the seat map: the session carries an honest one
+    state = {"config": {"seatMap": {"hostFamily": "anthropic"}}, "seatMap": {}, "pending": {},
+             "round": 1, "rounds": {}}
     row = RD._seat_transport_row(state, phase, "verifier", 0, {}, {}, str(tmp_path))
     assert row["vendor"] == "claude"
     assert row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED
@@ -455,11 +469,14 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     The collector used to be panel-scoped, so a reviewer-phase fallback folded safely to stdout and
     disclosed NOTHING. It now derives from the same predicate the channel folds on, so the
     disclosure cannot lag the fold."""
+    # axis: a defaulted reviewer vendor replaced by an independent one keeps `defaulted`, so the
+    # provenance gap is still disclosed — see bite-proof record wo_b_1797_seat_orders
     session_dir = str(tmp_path / ("disc-" + phase))
     os.makedirs(session_dir, exist_ok=True)
     out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
                                     "fixerVendor": "claude", "verifyCommand": "none",
-                                    "seatMap": _mixed_seat_map()})
+                                    "seatMap": dict(_mixed_seat_map(),
+                                                    **_nonpanel_cell_proof(["claude", "codex"]))})
     assert out["ok"], out
     ok, state = RD.load_state(session_dir)
     assert ok, state
@@ -783,6 +800,10 @@ def _render_phase(phase, host_seat):
         "ratified_residuals": "",
         "residuals_provenance": "prov",
         "residuals_read_failure": None,
+        "threat_model": "",
+        "threat_model_read_failure": None,
+        "standing_rulings": [],
+        "standing_rulings_read_failure": None,
         "payload": {},
         "host_seat": host_seat,
         "placeholders": _phase_placeholders(phase, channel),

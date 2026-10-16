@@ -522,7 +522,7 @@ def test_claude_haiku_refused_by_allowlist_for_reviewer_role():
     assert resolved["entryReason"] == "allowlist-refused"
 
 
-@pytest.mark.parametrize("role", ["mechanical", "synthesis", "pilot"])
+@pytest.mark.parametrize("role", ["mechanical", "pilot"])
 @pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
 def test_unclassified_role_refused_for_dispatch_verbs(role, verb):
     resolved = SB.resolve_entry(
@@ -532,6 +532,17 @@ def test_unclassified_role_refused_for_dispatch_verbs(role, verb):
     assert resolved["ok"] is False
     assert resolved["entryReason"] == "verb-role-mismatch"
     assert "read_write" in resolved["detail"]
+
+
+def test_synthesis_role_is_read_only_refused_for_dispatch_write():
+    # axis: the grouping role is a read seat, so dispatch-write refuses it as read-only
+    resolved = SB.resolve_entry(
+        _seat_json("claude", "haiku-4.5", "medium", "synthesis"),
+        verb="dispatch-write",
+    )
+    assert resolved["ok"] is False
+    assert resolved["entryReason"] == "verb-role-mismatch"
+    assert "is read-only (read_write=read)" in resolved["detail"]
 
 
 @pytest.mark.parametrize("verb", ["guard-check", "dispatch-review"])
