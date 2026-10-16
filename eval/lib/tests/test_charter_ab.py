@@ -230,6 +230,8 @@ def test_populated_run_dir_without_sides_json_refused(tmp_path, monkeypatch, git
         assert ab.main(["seats", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter",
                         "CHARTER.md", "--scenarios", write_scenarios(tmp_path), "--run-dir", str(run_dir)]) == 3
     assert (run_dir / "sides.json").read_text() == "{not json"
+    for stage in ("judge", "report"):
+        assert ab.main([stage, "--repo", str(repo), "--run-dir", str(run_dir)]) == 3
 
 
 # ---------------------------------------------------------------- 7 unmap, make_mapping
