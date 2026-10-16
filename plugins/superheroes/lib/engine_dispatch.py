@@ -42,6 +42,7 @@ if _LIB_DIR not in sys.path:
 
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
+import cloud_pass  # noqa: E402  PASS_ENV, dropped at every public entry (stdlib-only module)
 import config_dir  # noqa: E402  claude config root resolution (#1273)
 import core_md  # noqa: E402  sandboxAccess calibration read, once at run open (#1562)
 import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
@@ -5750,6 +5751,14 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     return True, ""
 
 
+def _drop_reviewer_pass():
+    """Remove the reviewer pass from this process's environment. Every child the runner spawns
+    inherits from os.environ (directly or through launch_ledger.scrub_env, which copies it), so
+    dropping it here keeps it out of the run-child supervisor, the engine and every git call.
+    Called first by each public entry; a no-op when the pass is not set."""
+    os.environ.pop(cloud_pass.PASS_ENV, None)
+
+
 def dispatch_review(*args, seat=None, prompt_path=None,
                     repo_root=None, timeout=_PARAM_UNSET,
                     retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
@@ -5762,8 +5771,10 @@ def dispatch_review(*args, seat=None, prompt_path=None,
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to the host model."""
+    _drop_reviewer_pass()
     resolved_mode = {"mode": None}
     resolved_claude_mode = {"claudeMode": claude_mode}
+    cloud_history = {}
     timeout_source = (
         resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
     )
@@ -5859,10 +5870,12 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
             claude_mode=claude_mode, resolved_claude_mode=resolved_claude_mode,
             expected_result_kind=expected_result_kind,
-            pr_body_path=pr_body_path, session_dir=session_dir)
+            pr_body_path=pr_body_path, session_dir=session_dir, cloud_history=cloud_history)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         stamped["claudeMode"] = resolved_claude_mode["claudeMode"]
+        if "cloudHistory" in cloud_history:
+            stamped["cloudHistory"] = cloud_history["cloudHistory"]
         return stamped
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -5890,9 +5903,10 @@ def _dispatch_review_impl(seat, *, prompt_path,
                           max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
                           mode=None, claude_mode=None, resolved_mode=None,
                           resolved_claude_mode=None, expected_result_kind=None,
-                          pr_body_path=None, session_dir=None):
+                          pr_body_path=None, session_dir=None, cloud_history=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
-    'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
+    'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch. In a cloud
+    session `cloud_history`, when given, receives the history-completion answer under "cloudHistory"."""
     engine = seat["vendor"]
     role = seat["role"]
     role_kind = RUN_KIND_REVIEW
@@ -6097,9 +6111,32 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     run_dir=run_dir_real, engine=engine,
                 )
 
+        history_spent = 0.0  # cloud history preparation time, deducted from the supervise slice
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             resolved_claude_mode["claudeMode"] = claude_mode
+            if cloud_pass._is_cloud(os.environ):
+                # A cloud clone is shallow and has no origin/main; make both right before the view
+                # is built. Never blocks: if it is not ok, build_view still refuses as it does today.
+                try:
+                    import cloud_builder  # lazy: only a cloud session needs it
+                    # Bounded by the caller's wait, exactly as asked (the 540 s cap when none): a
+                    # stalled origin cannot hold the launch past it, and a spent budget ends the
+                    # preparation unfetched (build_view then refuses as it does today). The time
+                    # spent is deducted from the supervise slice below, so the caller's wait is
+                    # one budget, not two.
+                    history_started = time.monotonic()
+                    try:
+                        history = cloud_builder.ensure_history(
+                            repo_detail,
+                            budget=MAX_SYNC_WAIT if max_wait is None else int(max_wait),
+                        )
+                    finally:
+                        history_spent = time.monotonic() - history_started
+                except Exception:
+                    history = {"ok": False, "reason": "raised"}
+                if cloud_history is not None:
+                    cloud_history["cloudHistory"] = history
             try:
                 view = build_view(
                     repo_detail,
@@ -6254,6 +6291,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
 
         # Validated at entry (#862) — honored as asked, never clamped.
         slice_wait = MAX_SYNC_WAIT if max_wait is None else int(max_wait)
+        slice_wait = max(0.0, slice_wait - history_spent)
         while True:
             deadline = time.monotonic() + slice_wait
             try:
@@ -6286,6 +6324,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 return result
             if max_wait is not None:
                 return result
+            # History time is charged to the first slice only; later slices get the full wait.
+            slice_wait = MAX_SYNC_WAIT
             time.sleep(SUPERVISOR_POLL_INTERVAL)
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6428,6 +6468,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
     Never raises: any unexpected internal failure is converted to a structured result."""
+    _drop_reviewer_pass()
     timeout_source = (
         resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
     )
@@ -7336,6 +7377,7 @@ def _dispatch_poll_impl(run_dir):
 
 def dispatch_poll(run_dir):
     """Observational poll — never spawns."""
+    _drop_reviewer_pass()
     return _dispatch_poll_impl(run_dir)[0]
 
 
@@ -7470,6 +7512,7 @@ def _dispatch_abandon_impl(run_dir):
 
 def dispatch_abandon(run_dir):
     """Ordered abandon transition — terminates live children, then journals run-abandoned."""
+    _drop_reviewer_pass()
     return _dispatch_abandon_impl(run_dir)[0]
 
 
@@ -7543,6 +7586,7 @@ def build_parser():
 
 
 def main(argv):
+    _drop_reviewer_pass()
     dropped = seat_bundle.scan_dropped_flags(argv)
     if dropped:
         run_dir = None

@@ -22,7 +22,7 @@ _VISIBILITIES = (COMMITTED, GITIGNORED)
 
 
 def policy_path(cwd, root=None):
-    return os.path.join(mode_registry.project_store_dir(cwd, root), "doc-policy.json")
+    return os.path.join(mode_registry.project_store_dir(cwd, root), store_core.POLICY_FILENAME)
 
 
 def _safe_location(location):

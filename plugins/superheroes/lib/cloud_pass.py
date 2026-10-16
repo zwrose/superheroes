@@ -13,6 +13,11 @@ else; `place` opens exactly one path for writing.
   cloud_pass.py confirm   cloud session: does the reviewer answer with the pass in this environment
   cloud_pass.py record-confirmation --confirmation JSON [--cwd D] [--account A] [--environment E]
                           [--root D]   owner's machine: move the setup record's lapse date
+  placed_matches_marker(env)
+                          library only: does the placed sign-in hash to the session's marker
+  placed_pass_state(env, now)
+                          library only: read the placed sign-in's state (absent, unreadable,
+                          lapsed, valid) and lapse date, without calling the reviewer
 
 Stdlib only. Every public function takes `env=None` (a mapping; default the process environment)
 and returns a plain dict; an expected failure is a refusal with a `reason` token, never a raise.
@@ -320,6 +325,22 @@ def place(env=None):
     return {"action": "placed", "reason": None, "passLapses": _lapse_date(value)}
 
 
+def placed_matches_marker(env=None):
+    """True when PASS_MARKER_ENV is non-blank and the sign-in file at the reviewer's default path
+    hashes (SHA-256 of its exact bytes) to it, lowercased and stripped; False otherwise, including
+    when the marker is absent or the file cannot be read."""
+    env = _env(env)
+    marker = env.get(PASS_MARKER_ENV)
+    if not (isinstance(marker, str) and marker.strip()):
+        return False
+    try:
+        with open(_default_signin_path(env), "rb") as fh:
+            data = fh.read()
+    except Exception:
+        return False
+    return hashlib.sha256(data).hexdigest() == marker.strip().lower()
+
+
 def confirm(env=None, run=None, now=None):
     """Cloud session: does the reviewer answer with the pass in this environment. Never calls
     `place`; the invocation goes through `preflight_probe.cross_vendor_cli_probe`."""
@@ -337,14 +358,8 @@ def confirm(env=None, run=None, now=None):
     marker = env.get(PASS_MARKER_ENV)
     if isinstance(marker, str) and marker.strip():
         # The session start scrubbed the pass variable: the file must hash to the marker.
-        data = b""
-        try:
-            with open(_default_signin_path(env), "rb") as fh:
-                data = fh.read()
-            signin = json.loads(data)
-        except Exception:
-            signin = None
-        if not isinstance(signin, dict) or hashlib.sha256(data).hexdigest() != marker.strip().lower():
+        signin = _read_object(_default_signin_path(env)) if placed_matches_marker(env) else None
+        if signin is None:
             return no("pass-not-placed")
     else:
         if not (isinstance(env.get(PASS_ENV), str) and env[PASS_ENV].strip()):
@@ -405,6 +420,24 @@ def confirm(env=None, run=None, now=None):
         return no("reviewer-answer-unexpected")
     out["reviewerAnswered"] = True
     return out
+
+
+def placed_pass_state(env=None, now=None):
+    """The state of the sign-in already placed at the reviewer's default path, read from the file
+    alone: never calls the reviewer and never reads PASS_ENV. `state` is "absent" (no readable JSON
+    object there), "unreadable" (no readable access-token expiry), "lapsed" (expiry at or before
+    `now`) or "valid"; `passLapses` is the expiry date when it was readable, else None."""
+    env = _env(env)
+    now = time.time() if now is None else now
+    signin = _read_object(_default_signin_path(env))
+    if signin is None:
+        return {"state": "absent", "passLapses": None}
+    tokens = signin.get("tokens")
+    token = tokens.get("access_token") if isinstance(tokens, dict) else None
+    exp = _expiry(token) if isinstance(token, str) else None
+    if exp is None:
+        return {"state": "unreadable", "passLapses": None}
+    return {"state": "valid" if exp > now else "lapsed", "passLapses": _date(exp)}
 
 
 def record_confirmation(cwd, confirmation, *, account=None, environment=None, now=None,

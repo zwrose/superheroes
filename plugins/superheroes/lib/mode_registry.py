@@ -21,9 +21,9 @@ GLOBAL = "global"
 # so the backfill guard below and mode_migrate share one source of truth — a rename can't
 # silently disable the guard, and neither module imports the other for it (no cycle).
 MIGRATION_JOURNAL = "migration-journal.json"
-REGISTRY_FILENAME = "registry.json"
-META_FILENAME = "meta.json"
-CONFIG_DIRNAME = "config"
+REGISTRY_FILENAME = store_core.REGISTRY_FILENAME
+META_FILENAME = store_core.META_FILENAME
+CONFIG_DIRNAME = store_core.CONFIG_DIRNAME
 REBIND_KIND = "rebind"
 
 
@@ -240,7 +240,10 @@ def resolve(cwd, root=None, *, persist_backfill=True):
             return {"mode": verdict, "authoritative": False,
                     "source": "evidence", "evidence": verdict}
         remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
-        wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
+        try:
+            wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
+        except store_core.CalibrationWriteRefused:
+            wrote = None  # a cloud session never writes calibration; the read still answers
         if wrote is None:
             sys.stderr.write(
                 f"mode_registry: backfill of {verdict!r} could not be persisted "

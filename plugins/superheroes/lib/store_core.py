@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import os
+import pathlib
 import re
 import stat
 import subprocess
@@ -434,8 +435,53 @@ def derive_identifiers(cwd):
     return ident
 
 
+# The calibration layout inside a project store dir `<store_root>/projects/<key>/`. The writers
+# (mode_registry, architect_config) take their filenames from here, so the guard below and the
+# writers cannot drift apart.
+REGISTRY_FILENAME = "registry.json"
+META_FILENAME = "meta.json"
+POLICY_FILENAME = "doc-policy.json"
+CONFIG_DIRNAME = "config"
+PERMISSION_DIRNAME = "permission"
+PERMISSION_RULES_FILENAME = "rules.json"
+_STORE_TOP_FILES = (REGISTRY_FILENAME, META_FILENAME, POLICY_FILENAME)
+
+
+class CalibrationWriteRefused(PermissionError):
+    """A calibration file write was attempted in a cloud session (CLAUDE_CODE_REMOTE == "true").
+
+    A PermissionError, so an OSError: the callers that already treat an unwritable store as a
+    deferral keep doing so."""
+
+
+def is_calibration_path(path):
+    """True when `path` is a calibration file: under a project store dir `<root>/projects/<key>/`
+    one of the registry, meta and doc-policy files, config/*.md or permission/rules.json; or a *.md
+    directly in the in-repo calibration directory (`.claude/superheroes/`). The store root is not
+    consulted: writers take an explicit root, so the layout alone decides. Pure; compares fully
+    resolved paths."""
+    real = os.path.realpath(os.path.abspath(path))
+    parent, name = os.path.split(real)
+    import core_md
+    in_repo_dir = pathlib.PurePath(os.path.dirname(core_md.in_repo_core_rel_path())).parts
+    if name.endswith(".md") and pathlib.PurePath(parent).parts[-len(in_repo_dir):] == in_repo_dir:
+        return True
+    parts = pathlib.PurePath(real).parts
+    if len(parts) >= 3 and parts[-3] == "projects" and parts[-1] in _STORE_TOP_FILES:
+        return True
+    if len(parts) >= 4 and parts[-4] == "projects":
+        return ((parts[-2] == CONFIG_DIRNAME and parts[-1].endswith(".md"))
+                or (parts[-2] == PERMISSION_DIRNAME and parts[-1] == PERMISSION_RULES_FILENAME))
+    return False
+
+
 def atomic_write(path, text, tmp_prefix=".store-core."):
-    """Write text atomically via temp file + os.replace in the same directory."""
+    """Write text atomically via temp file + os.replace in the same directory.
+
+    In a cloud session (CLAUDE_CODE_REMOTE == "true") a calibration file is never written:
+    raises CalibrationWriteRefused before anything touches the disk."""
+    if os.environ.get("CLAUDE_CODE_REMOTE") == "true" and is_calibration_path(path):
+        raise CalibrationWriteRefused("calibration-write-in-cloud-session: %s" % path)
     d = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=tmp_prefix, suffix=".tmp")
