@@ -11,6 +11,7 @@ import core_md
 import model_registry
 import pr_comment
 import review_record as rr
+import seat_map as seat_map_module
 
 HEAD = "b" * 40
 EARLIER = "a" * 40
@@ -21,7 +22,7 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
 RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
-            "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
+            "observation": {"tokens": 100, "wallSeconds": 120, "read": "engaged"}, "graded": True, "runKind": "review"}
 PHRASES = ("no bugs", "bug-free", "bug free")
 
 
@@ -74,7 +75,8 @@ def finding(fid="code-001", **over):
 def account(**over):
     base = {"schema": "review-account/1", "pr": 7, "sessionId": "s1", "lane": "full", "laneReason": "big",
             "finalCommit": HEAD, "ci": "green", "reviewers": [reviewer()], "findings": [], "rawFindingsFiles": [],
-            "rounds": {"count": 1, "cap": 3, "stoppedAtCap": False}, "goAheads": [], "checked": ["read the diff"]}
+            "rounds": {"count": 1, "cap": 3, "stoppedAtCap": False}, "goAheads": [], "checked": ["read the diff"],
+            "makers": [{"family": "anthropic"}]}
     return {**base, **over}
 
 
@@ -827,10 +829,18 @@ MAKERS = [{"family": "anthropic", "source": "builder"}]
 OWNER_WORD = {"words": "go ahead", "where": "http://c/9"}
 
 
-def test_x1_maker_and_independence_fields_pass_through_and_show(tmp_path):
-    # axis: pass-through fields; makers, notIndependent or ownerWord dropped, altered or left out of the summary
-    fake = Fake()
-    send(tmp_path, fake, makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)])
+CLAUDE = model_registry.claude_models()[0]
+CLAUDE_RUN = dict(GOOD_RUN, source="claude", engineModel=CLAUDE)
+
+
+def maker_family_reviewer(name="code-reviewer", **over):
+    return reviewer(name, vendor="claude", model=CLAUDE, **over)
+
+
+def test_x1_makers_and_owner_word_pass_through_and_independence_shows(tmp_path):
+    # axis: makers and ownerWord dropped or altered; notIndependent shown only for a computed same-family row
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    send(tmp_path, fake, makers=MAKERS, reviewers=[maker_family_reviewer(ownerWord=OWNER_WORD)])
     rec = rr.read(7, readers=fake.readers())
     assert rec["makers"] == MAKERS
     assert rec["reviewers"][0]["notIndependent"] is True and rec["reviewers"][0]["ownerWord"] == OWNER_WORD
@@ -839,13 +849,16 @@ def test_x1_maker_and_independence_fields_pass_through_and_show(tmp_path):
     assert "owner's word: http://c/9" in body
 
 
-def test_x2_the_pass_through_fields_change_no_status():
-    # axis: no logic on the pass-through fields; status, parked or whatIsMissing depending on them
-    with_fields = build(account(makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)]))
+def test_x2_the_account_cannot_claim_independence_or_its_absence():
+    # axis: notIndependent taken from the account; an independent reviewer shown as not independent, or the reverse
+    claimed = build(account(makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)]))
     without = build(account())
-    assert [with_fields[k] for k in ("status", "parked", "whatIsMissing")] == \
+    assert [claimed[k] for k in ("status", "parked", "whatIsMissing")] == \
         [without[k] for k in ("status", "parked", "whatIsMissing")]
-    assert without["makers"] == [] and not {"notIndependent", "ownerWord"} & set(without["reviewers"][0])
+    assert "notIndependent" not in claimed["reviewers"][0] and claimed["reviewers"][0]["ownerWord"] == OWNER_WORD
+    denied = build(account(reviewers=[maker_family_reviewer(notIndependent=False, ownerWord=OWNER_WORD)]),
+                   Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)}))
+    assert denied["reviewers"][0]["notIndependent"] is True
 
 
 @pytest.mark.parametrize("over, key", [
@@ -864,10 +877,10 @@ def test_x3_malformed_pass_through_fields_refuse(tmp_path, over, key):
     assert fake.writes == []
 
 
-def test_x3_none_and_false_are_accepted_as_given():
+def test_x3_none_and_false_are_accepted_and_ignored():
     # axis: optional fields; None refused, or False dropped instead of carried as given
     rec = build(account(makers=None, reviewers=[reviewer(notIndependent=False, ownerWord=None)]))
-    assert rec["makers"] == [] and rec["reviewers"][0]["notIndependent"] is False
+    assert rec["makers"] == [] and "notIndependent" not in rec["reviewers"][0]
     assert "ownerWord" not in rec["reviewers"][0]
 
 
@@ -2032,3 +2045,309 @@ def test_lane_call_pattern_alternatives_equal_the_lane_vocabulary():
     assert sorted(probe.split("|")) == sorted(lane_call.LANES)
     for lane in lane_call.LANES:
         assert rr._LANE_RE.search("**Lane call:** " + lane + ". why").group(1) == lane
+
+
+# --- the reading rule, run identity and maker independence ---
+
+LIGHT = {"lane": "light"}
+
+
+def _run_with(observation):
+    return dict(GOOD_RUN, observation=observation)
+
+
+def test_an_engaged_light_lane_reviewer_counts_and_carries_its_reading():
+    # axis: a light-lane reviewer whose engine record reads engaged being credited, and carrying reading "engaged"
+    v = build(account(**LIGHT))["reviewers"][0]
+    assert v["ran"] == "engine-record" and v["reading"] == "engaged" and "runNote" not in v
+
+
+@pytest.mark.parametrize("lane", [None, "micro", "something-new"])
+def test_a_lane_that_is_not_full_applies_the_reading_rule(lane):
+    # axis: lane None, micro or unrecognised being treated as full, so a no-reading run is credited
+    fake = Fake(runs={"/run/code-reviewer": (_run_with({"read": "unknown"}), None)})
+    v = build(account(lane=lane), fake)["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown"
+
+
+@pytest.mark.parametrize("observation", [
+    {"tokens": 1, "read": "unknown"}, {"tokens": 1}, None, "engaged", ["engaged"]])
+def test_a_light_lane_reading_that_is_not_engaged_is_not_run(observation):
+    # axis: the engine-record branch of the reading rule; an unknown, absent or malformed reading being credited
+    fake = Fake(runs={"/run/code-reviewer": (_run_with(observation), None)})
+    rec = build(account(**LIGHT), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown" and "observation" not in v
+    assert v["runNote"] == "the engine's record of the run does not show that the reviewer read the change"
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+    assert rec["missingReviews"][0]["name"] == "code-reviewer" and rec["status"] == "not-reviewed"
+    assert "code-reviewer did not run" in rec["whatIsMissing"]
+
+
+def test_a_session_only_light_lane_reviewer_is_not_run():
+    # axis: the session-reported branch of the reading rule; a reviewer with no run directory credited on a light lane
+    rec = build(account(**LIGHT, reviewers=[reviewer(runDir="")]))
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown"
+    assert v["runNote"] == "no engine record of the run shows that the reviewer read the change"
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+
+
+def test_a_full_lane_reading_that_is_unknown_still_counts_and_carries_no_reading():
+    # axis: the full lane staying unchanged; the reading rule leaking into it
+    fake = Fake(runs={"/run/code-reviewer": (_run_with({"read": "unknown"}), None)})
+    full = build(account(), fake)["reviewers"][0]
+    assert full["ran"] == "engine-record" and "reading" not in full
+    session_only = build(account(reviewers=[reviewer(runDir="")]))["reviewers"][0]
+    assert session_only["ran"] == "reported-by-session" and "reading" not in session_only
+
+
+def test_a_reviewer_that_never_ran_on_a_light_lane_is_not_shown_as_reading():
+    # axis: reading "engaged" on a row that did not run
+    v = build(account(**LIGHT, reviewers=[reviewer(ran=False, runDir="")]))["reviewers"][0]
+    assert v["ran"] == "not-run" and v["reading"] == "not-shown"
+
+
+def test_a_mislabelled_engine_run_is_not_run():
+    # axis: the run-identity check; a codex run record credited to a row that names a claude reviewer
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(GOOD_RUN), None)})
+    rec = build(account(makers=[{"family": "someone-else"}], reviewers=[maker_family_reviewer()]), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["runNote"] == "the run record names a different reviewer than the account row"
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+
+
+@pytest.mark.parametrize("record", [
+    {k: v for k, v in GOOD_RUN.items() if k != "source"},
+    {k: v for k, v in GOOD_RUN.items() if k != "engineModel"},
+    dict(GOOD_RUN, engineModel=model_registry.codex_models()[1]),
+])
+def test_an_engine_record_that_does_not_name_the_row_reviewer_is_not_run(record):
+    # axis: the run-identity check; a missing or disagreeing source or model credited
+    v = build(account(), Fake(runs={"/run/code-reviewer": (record, None)}))["reviewers"][0]
+    assert v["ran"] == "not-run" and v["runNote"] == "the run record names a different reviewer than the account row"
+
+
+@pytest.mark.parametrize("vendor,alias,model_id", [
+    ("claude", model_registry.dispatch_token("claude", "sonnet-5.5"), "sonnet-5.5"),
+    ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6"),
+])
+def test_a_supported_dispatch_spelling_of_the_model_names_the_same_reviewer(vendor, alias, model_id):
+    # axis: the run-identity check; a dispatch spelling (tier alias, effort suffix) of the engine record's model demoted
+    run = dict(GOOD_RUN, source=vendor, engineModel=model_id)
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    v = build(account(makers=[{"family": "someone-else"}], reviewers=[reviewer(vendor=vendor, model=alias)]), fake)["reviewers"][0]
+    # bites on: the raw string comparison rejecting a completed review for naming the model by its dispatch token
+    assert v["ran"] == "engine-record" and "runNote" not in v
+    other = model_registry.codex_models()[1]
+    run = dict(GOOD_RUN, source="codex", engineModel=other)
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    assert build(account(), fake)["reviewers"][0]["ran"] == "not-run"
+
+
+def test_the_family_comes_from_the_credited_run_record(monkeypatch):
+    # axis: the family read from the row rather than from the engine record that was credited
+    seen = []
+    real = rr._family
+    monkeypatch.setattr(rr, "_family", lambda vendor, model: seen.append((vendor, model)) or real(vendor, model))
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(GOOD_RUN), None)})
+    v = build(account(), fake)["reviewers"][0]
+    assert v["family"] == "openai" and seen[-1] == (GOOD_RUN["source"], GOOD_RUN["engineModel"])
+
+
+def test_empty_or_omitted_makers_is_not_reviewed_with_the_fixed_line():
+    # axis: the no-maker line; a record with no named maker reading reviewed
+    line = "no maker is named, so independence cannot be shown"
+    omitted = {k: v for k, v in account().items() if k != "makers"}
+    for acct in (omitted, account(makers=[]), account(makers=None)):
+        rec = build(acct)
+        assert rec["status"] == "not-reviewed" and line in rec["whatIsMissing"]
+        assert rec["reviewers"][0]["ran"] == "engine-record"
+    assert line not in build(account())["whatIsMissing"]
+
+
+def test_a_reviewer_whose_family_cannot_be_read_is_not_run_while_makers_are_named():
+    # axis: a row with no readable family credited when makers are named
+    run = dict(GOOD_RUN, source="elsewhere", engineModel="x")
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    rec = build(account(reviewers=[reviewer(vendor="elsewhere", model="x")]), fake)
+    v = rec["reviewers"][0]
+    assert v["family"] is None and v["ran"] == "not-run"
+    assert v["runNote"] == "the reviewer's model family could not be read, so independence cannot be shown"
+    unnamed = build(account(makers=[], reviewers=[reviewer(vendor="elsewhere", model="x")]), fake)
+    assert unnamed["reviewers"][0]["ran"] == "engine-record"
+
+
+def test_a_same_family_reviewer_without_the_owners_word_is_not_run():
+    # axis: the maker-family branch; a reviewer from a maker's family credited with no owner's word
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    rec = build(account(reviewers=[maker_family_reviewer(notIndependent=False)]), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and "notIndependent" not in v
+    assert v["runNote"] == "the reviewer is from a maker's family and no owner's word for this change lets it run"
+    assert rec["status"] == "not-reviewed" and "code-reviewer did not run" in rec["whatIsMissing"]
+    assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+
+
+def test_a_same_family_reviewer_with_a_complete_owners_word_counts_and_shows_not_independent():
+    # axis: the owner's word admitting a same-family reviewer, and the render naming it not independent
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    rec = build(account(reviewers=[maker_family_reviewer(ownerWord=OWNER_WORD)]), fake)
+    v = rec["reviewers"][0]
+    assert v["ran"] == "engine-record" and v["notIndependent"] is True
+    body = rr.render(rec)
+    assert "- code-reviewer: ran (engine record); not independent of the makers (owner's word: http://c/9)" in body
+
+
+@pytest.mark.parametrize("word", [
+    None, {}, {"words": "go ahead"}, {"where": "http://c/9"}, {"words": "", "where": "http://c/9"},
+    {"words": "go ahead", "where": "  "}, {"words": 3, "where": "http://c/9"}])
+def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
+    # axis: the owner's-word completeness check; a missing, blank or non-text words or where admitting the reviewer
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(CLAUDE_RUN), None)})
+    rec = build(account(reviewers=[maker_family_reviewer(ownerWord=word)]), fake)
+    assert rec["reviewers"][0]["ran"] == "not-run" and "notIndependent" not in rec["reviewers"][0]
+
+
+# --- reading-next ---
+
+PANEL = list(seat_map_module.PANEL_ROSTER)
+SEAT_MAP = seat_map_module.to_receipt(
+    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
+NO_READING = dict(ENGAGED_RUN, observation={"read": "unknown"})
+
+
+def _seats(**over):
+    return dict(SEAT_MAP, **over)
+
+
+def test_reading_next_with_one_run_and_no_reading_reruns():
+    assert rr.reading_next([NO_READING], SEAT_MAP, ["anthropic"])["next"] == "rerun"
+    assert rr.reading_next([None], SEAT_MAP, ["anthropic"])["next"] == "rerun"
+
+
+def test_reading_next_accepts_when_any_run_shows_a_reading():
+    assert rr.reading_next([NO_READING, ENGAGED_RUN], None, [])["next"] == "accept"
+    assert rr.reading_next([ENGAGED_RUN], None, [])["next"] == "accept"
+
+
+def test_reading_next_does_not_accept_an_engaged_run_the_record_writer_would_not_credit():
+    forfeited = dict(ENGAGED_RUN, graded=False)
+    wrote = dict(ENGAGED_RUN, runKind="write")
+    # bites on: a forfeited or non-review run that merely engaged ending the retry
+    assert rr.reading_next([forfeited], None, ["anthropic"])["next"] == "rerun"
+    assert rr.reading_next([wrote], None, ["anthropic"])["next"] == "rerun"
+
+
+def test_reading_next_counts_only_the_first_two_runs():
+    assert rr.reading_next([NO_READING, NO_READING, ENGAGED_RUN], SEAT_MAP, ["anthropic"])["next"] == "move-up"
+
+
+def test_reading_next_moves_up_over_a_valid_independent_map():
+    out = rr.reading_next([NO_READING, None], SEAT_MAP, ["anthropic"])
+    assert out["next"] == "move-up" and out["reason"]
+
+
+def test_reading_next_parks_when_no_run_is_given():
+    assert rr.reading_next([], SEAT_MAP, ["anthropic"])["next"] == "park"
+
+
+def test_reading_next_parks_when_a_roster_seat_is_unfilled():
+    # axis: the unfilled-seat park; a map with an unfilled roster seat letting the lane move up
+    seats = dict(SEAT_MAP["seats"], **{PANEL[0]: {"source": "unfilled", "family": "openai"}})
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map is unfilled"}
+
+
+def test_reading_next_parks_when_a_roster_seat_is_a_makers_family():
+    # axis: the maker-family-seat park; a map with a seat from a maker's family letting the lane move up
+    seats = dict(SEAT_MAP["seats"], **{PANEL[-1]: {"source": "live", "family": "anthropic"}})
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map is from a maker's family"}
+
+
+def test_a_reviewer_before_the_only_makers_joined_is_not_reviewed():
+    # axis: a panel reviewer at a step no maker faced counted as independent because a later fixer named a maker
+    fake = Fake(runs={"/run/code-reviewer": (dict(CLAUDE_RUN, viewHeadSha=EARLIER), None)})
+    rev = [maker_family_reviewer(commit=EARLIER, step=2), reviewer("audit", step=3)]
+    rec = build(account(makers=[{"family": "anthropic", "fromStep": 3}], reviewers=rev), fake)
+    assert rec["status"] == "not-reviewed" and rec["reviewers"][0]["ran"] == "not-run"
+
+
+def test_reading_next_parks_when_a_roster_seat_names_no_vendor_or_model():
+    # axis: the dispatchable-seat park; a family-only seat letting the lane move up with no reviewer to dispatch
+    seats = {n: {k: v for k, v in e.items() if k not in ("vendor", "model")} for n, e in SEAT_MAP["seats"].items()}
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map names no vendor or model"}
+
+
+def _without(name):
+    return {"roster": [n for n in PANEL if n != name],
+            "seats": {n: v for n, v in SEAT_MAP["seats"].items() if n != name}}
+
+
+@pytest.mark.parametrize("seat_map", [
+    None, "text", [], {}, _seats(roster=[]), _seats(roster="ab"), {"roster": PANEL},
+    _seats(seats="x"), _seats(seats={PANEL[0]: SEAT_MAP["seats"][PANEL[0]]}),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: "x"})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live"}})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": ""}})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": 3}})),
+    {"roster": ["code-reviewer"], "seats": {"code-reviewer": {"source": "live", "family": "openai"}}},
+    _without("test-role"), _without("grounding-seat"),
+])
+def test_reading_next_parks_on_a_map_that_cannot_show_independence(seat_map):
+    out = rr.reading_next([NO_READING, NO_READING], seat_map, ["anthropic"])
+    assert out["next"] == "park" and out["reason"]
+
+
+def test_reading_next_parks_with_no_maker_family():
+    assert rr.reading_next([NO_READING, NO_READING], SEAT_MAP, [])["next"] == "park"
+
+
+def test_reading_next_cli_prints_one_object_and_exits_zero(tmp_path, monkeypatch, capsys):
+    maps = tmp_path / "map.json"
+    maps.write_text(json.dumps(SEAT_MAP))
+    monkeypatch.setattr(rr, "_engine_run", lambda d: ({"a": NO_READING, "b": NO_READING}.get(d), None))
+    base = ["reading-next", "--run-dir", "a", "--run-dir", "b", "--maker-family", "anthropic"]
+    assert rr.main(base + ["--seat-map", str(maps)]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "move-up"
+    assert rr.main(base + ["--seat-map", str(tmp_path / "missing.json")]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "park"
+    assert rr.main(base) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "park"
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json")
+    assert rr.main(base + ["--seat-map", str(bad)]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "park"
+    assert rr.main(["reading-next", "--run-dir", "a", "--maker-family", "anthropic"]) == 0
+    assert json.loads(capsys.readouterr().out)["next"] == "rerun"
+
+
+def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
+    # axis: the CLI entry point; reading-next composed with the real persisted run record, no stand-in for _engine_run
+    import test_engine_dispatch as ted
+
+    def run(name, outputs):
+        run_dir = str(tmp_path / name)
+        ted.ED.dispatch_review(
+            seat=ted._codex_seat(), prompt_path=ted._valid_prompt(tmp_path), repo_root=ted._repo(tmp_path),
+            run_engine=ted.FakeRunner(outputs), build_view=ted._fake_build_view(tmp_path), run_dir=run_dir)
+        return run_dir
+
+    engaged = run("engaged", [(ted._VALID_FINDINGS_STDOUT, False, 0, "")])
+    forfeited = run("forfeited", [("not json", False, 0, ""), ("not json", False, 0, "")])
+    second = run("second", [("not json", False, 0, ""), ("not json", False, 0, "")])
+    maps = tmp_path / "map.json"
+    maps.write_text(json.dumps(SEAT_MAP))
+    tail = ["--maker-family", "anthropic", "--seat-map", str(maps)]
+
+    def nxt(*dirs):
+        assert rr.main(["reading-next"] + [a for d in dirs for a in ("--run-dir", d)] + tail) == 0
+        return json.loads(capsys.readouterr().out)["next"]
+
+    assert nxt(engaged) == "accept"
+    assert nxt(forfeited) == "rerun"
+    assert nxt(forfeited, forfeited) == "rerun"  # one persisted run counted twice is still one run
+    assert nxt(forfeited, second) == "move-up"

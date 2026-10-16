@@ -27,7 +27,7 @@ exception into **Showrunner never builds**: in **micro** the advisor **types the
 
 **Consequence you must hold in mind: the advisor IS the maker, so the advisor's independent
 vet-from-artifacts does not exist for that PR.** The entire independent check collapses onto (a) one
-cross-vendor reviewer **outside the maker's family** and (b) the owner's **per-change authorization** — no
+reviewer **outside every maker's family** and (b) the owner's **per-change authorization** — no
 standing grants; every micro change is authorized on its own, and the authorizing owner is
 independent of the maker **but is not comparing the change against a build record they have read**:
 no build brief, no advisor vet — the reviewer receipt and the explicit authorization are what stand
@@ -327,10 +327,10 @@ above).
    reasoning** (duty 5). Judgment that leaves no trace generates no evidence.
 
    **Check the single reviewer's availability while the owner is present** (light and micro, as
-   bounded in `review-discipline.md`). **Mid-run forfeit** follows the rubric's three-case rule
-   (kickoff unavailability, mid-run forfeit with disclosed stand-in on the host model on **light**
-   only, **micro** resolving upward to the full lane or parking — silence is not forfeit; a terminal
-   forfeit result is). The single reviewer's review record answers to the reading rule in
+   bounded in `review-discipline.md`). An unavailable reviewer at kickoff or a **mid-run forfeit**
+   allows no stand-in on either lane: the change resolves upward to the full lane or parks, and
+   only the owner's word for that change admits a same-family reviewer, recorded not independent.
+   Silence is not forfeit; a terminal forfeit result is. The single reviewer's review record answers to the reading rule in
    `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
    and what a missing reading means. The investigation-record floor applies automatically to **every
    external review seat**, single-seat lanes included (see `review-discipline.md`).

@@ -2232,14 +2232,28 @@ def test_big_diff_schedules_gap_sweep(tmp_path):
     assert seen["gap"] is True
 
 
-def test_degraded_single_vendor_flows_to_certification_shape(tmp_path):
-    refusal, loop_receipt = _run_loop_with_loop_receipt(
+def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(tmp_path):
+    """A single live vendor that is the fixer's own: no auditor is seated, the audit counts as not
+    run (the fix is never certified as audited) and the receipt names the lost independence."""
+    seen = []
+
+    def auditor(targets, rnd):
+        seen.extend(dict(t) for t in (targets or []))
+        return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                 "evidence": "tests pass", "auditorVendor": "claude"} for t in (targets or [])]
+
+    refusal, state = _run_loop_capturing_state(
         _seams(reviewer=lambda dim, tier, rnd, ctx:
                ({"findings": [{"title": "bug", "severity": "Important",
                                "file": "f.py", "line": 1}]}
-                if rnd == 1 and dim == "code-reviewer" else [])),
+                if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
-    assert refusal["certificationShape"] == "audited-chain-degraded"
+    loop_receipt = RD.build_receipt(state)
+    assert refusal["verdict"] == "held" and refusal["certificationShape"] is None
+    assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
+                        for t in seen)
+    assert state["independenceDegraded"] is True
+    assert state["_auditOutcome"]["discharged"] == [] and state["_auditOutcome"]["unaudited"]
     assert loop_receipt["degraded"], "the lost independence must be named in the receipt"
 
 
@@ -2268,8 +2282,9 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     assert receipt["certificationShape"] == "audited-chain-degraded"
 
 
-def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
-    """#608: omitting fixerVendor must not assume claude — unknown fixer degrades, never false independent."""
+def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path):
+    """#608: omitting fixerVendor must not assume claude — an unknown fixer seats no auditor, so the
+    audit does not run and nothing is certified as audited."""
     captured = {"targets": None}
 
     def auditor(targets, rnd):
@@ -2284,10 +2299,9 @@ def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert result["verdict"] == "converged"
-    assert result["certificationShape"] == "audited-chain-degraded"
+    assert result["verdict"] == "held" and result["certificationShape"] is None
     t = captured["targets"][0]
-    assert t["independence"] == "degraded"
+    assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
 
 def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
@@ -4585,9 +4599,9 @@ def test_auditor_vendor_family_keyed_two_vendor_cross_family():
     assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "claude") == ("codex", "independent")
 
 
-def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
-    """Single live vendor with same fixer/verifier family → degraded, never false independent."""
-    assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == ("claude", "degraded")
+def test_auditor_vendor_family_keyed_single_vendor_same_family_unseatable():
+    """Single live vendor with the fixer's own family → no auditor, never the fixer standing in."""
+    assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == (None, "unseatable")
 
 
 # The #510-era `test_auditor_vendor_family_keyed_single_vendor_cross_family_independent` lived here.
@@ -4620,15 +4634,15 @@ def test_auditor_vendor_reads_auditor_role(monkeypatch):
     assert auditor == "codex"
 
 
-def test_auditor_vendor_unknown_fixer_degraded():
-    """#608: genuinely-unknown fixer vendor never yields a false-independent auditor stamp."""
-    auditor, independence = RD._auditor_vendor({"vendors": ["claude", "codex"]}, None)
-    assert auditor == "claude" and independence == "degraded"
+def test_auditor_vendor_unknown_fixer_unseatable():
+    """#608: a genuinely-unknown fixer vendor has no family to be independent of, so no vendor is
+    seated as its auditor."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, None) == (None, "unseatable")
 
 
-def test_auditor_vendor_empty_string_fixer_degraded():
-    """#608: empty-string fixer is unknown — same degraded path as None."""
-    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "")[1] == "degraded"
+def test_auditor_vendor_empty_string_fixer_unseatable():
+    """#608: empty-string fixer is unknown — same no-auditor path as None."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "") == (None, "unseatable")
 
 
 def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():
@@ -6756,13 +6770,13 @@ def test_legacy_sidecar_repair_is_idempotent(tmp_path):
 
 
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():
-    """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
-    DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the
-    same-vendor fallback loop returned ('cursor', 'independent') — a self-audit labelled
-    independent. This pins that lane closed while leaving the real cross-family path intact."""
+    """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix has no
+    auditor at all. Under the old registry (composer='cursor', grok='xai') the same-vendor fallback
+    loop returned ('cursor', 'independent') — a self-audit labelled independent. This pins that
+    lane closed while leaving the real cross-family path intact."""
     vendor, independence = RD._auditor_vendor({"vendors": ["cursor"]}, "cursor")
-    assert independence == "degraded"
-    assert vendor == "cursor"
+    assert independence == "unseatable"
+    assert vendor is None
     for other in ("claude", "codex"):
         v, ind = RD._auditor_vendor({"vendors": [other, "cursor"]}, "cursor")
         assert ind == "independent", (other, v, ind)
@@ -7480,3 +7494,177 @@ def test_fixed_disposition_receipt_carries_only_the_fix_fold_head():
     assert RD._fixed_disposition_receipt(state, None, "k@L1") == {"headSha": head}
     state["config"][RD.FIX_FOLD_HEAD_KEY] = ""
     assert RD._fixed_disposition_receipt(state, None, "k@L1") == {}
+
+
+# =============================================================================
+# an unfilled seat is never dispatched; no maker's family audits a fix
+# =============================================================================
+
+UNFILLED_SEAT = {"vendor": None, "model": None, "effort": None, "tier": "deep", "family": None,
+                 "source": "unfilled"}
+
+
+def _integration():
+    spec = importlib.util.spec_from_file_location(
+        "test_round_driver_integration", os.path.join(_HERE, "test_round_driver_integration.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _map_with_unfilled(tdi, seat):
+    seats = {dim: dict(entry) for dim, entry in tdi.SEAT_MAP["seats"].items()}
+    seats[seat] = dict(UNFILLED_SEAT)
+    return {"seats": seats}
+
+
+def test_unfilled_seat_gets_no_order_a_missing_envelope_and_advance_completes(tmp_path):
+    """E1: the panel's unfilled slot is not rendered, the driver records it missing (reason
+    `unfilled`) itself, and `advance` folds the panel without `incomplete-roster`."""
+    tdi = _integration()
+    rd, rr = tdi.round_driver, tdi.round_records
+    seat = rd.DIMENSIONS[1]
+    session_dir, gitdir, head_path = tdi._bootstrap(tmp_path, seatMap=_map_with_unfilled(tdi, seat))
+    state = tdi._state(session_dir)
+    pend = state["pending"]
+    manifest, err = rr.read_json(rd._orders_manifest_path(session_dir, 1, pend["phase"], 0))
+    assert err is None
+    assert seat not in manifest["seats"]
+    assert sorted(manifest["seats"]) == sorted(
+        rr.storage_key(d, 0) for d in rd.DIMENSIONS if d != seat)
+    assert not os.path.exists(rr.order_prompt_path(
+        session_dir, 1, pend["phase"], rr.storage_key(seat, 0), 0))
+    stored, err = rr.read_json(rr.store_path(
+        session_dir, 1, pend["phase"], rr.storage_key(seat, 0), 0))
+    assert err is None
+    assert stored["schema"] == rr.SEAT_MISSING_SCHEMA and stored["reason"] == "unfilled"
+    assert stored["seat"] == seat and stored["vendor"] is None and stored["model"] is None
+    ran = [d for d in rd.DIMENSIONS if d != seat]
+    tdi._write_dispatch_manifest(session_dir, pend, [(d, 0) for d in ran], lambda _s: "claude")
+    for dim in ran:
+        tdi._land(session_dir, state, pend, dim,
+                  tdi._payload_for(session_dir, state, pend, dim, [], head_path))
+        assert tdi._record(session_dir, dim)["ok"] is True
+    out = rd.cmd_advance(session_dir, git=tdi._fake_git(gitdir))
+    assert out["ok"] is True, out
+    after = tdi._state(session_dir)
+    rec = after["rounds"]["1"]
+    assert rec["seatStatus"][seat] == "missing"
+    assert all(rec["seatStatus"][d] == "run" for d in ran)
+    assert rec["missingSeats"] == [seat]
+
+
+def test_hand_submitted_payload_for_an_unfilled_seat_is_folded_missing_and_not_credited(tmp_path):
+    """E2: on the hand path a payload submitted for an unfilled seat is never credited, and the
+    driver's own missing envelope for it does not trip the record/submit interleave fence."""
+    d = str(tmp_path)
+    seat, ran = RD.DIMENSIONS[1], RD.DIMENSIONS[0]
+    seats = {dim: {"vendor": "claude", "model": "sonnet-5.5", "source": "default"}
+             for dim in RD.DIMENSIONS}
+    seats[seat] = dict(UNFILLED_SEAT)
+    n = _first_next(d, _cfg(seatMap={"seats": seats}))
+    finding = {"title": "ghost bug", "severity": "Important", "file": "f.py", "line": 1}
+    art = {"seats": {dim: {"findings": [dict(finding)] if dim in (seat, ran) else []}
+                     for dim in RD.DIMENSIONS}}
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+    assert out["ok"] is True, out
+    ok, state = RD.load_state(d)
+    assert ok
+    rec = state["rounds"]["1"]
+    assert rec["seatStatus"][seat] == "missing" and rec["seatStatus"][ran] == "run"
+    assert rec["missingSeats"] == [seat]
+    assert [f.get("dimension") for f in state["_toVerify"]] == [ran]
+
+
+def test_fold_panel_never_credits_an_unfilled_seats_findings_when_no_receipt_is_stored():
+    """E2, unit: `_fold_panel` reads the governing map off the artifact's own seat map."""
+    state = RD.new_state(_cfg())
+    seats = {dim: {"vendor": "claude", "model": "m", "source": "default"} for dim in RD.DIMENSIONS}
+    seats["security-reviewer"] = dict(UNFILLED_SEAT)
+    finding = {"title": "ghost bug", "severity": "Important", "file": "f.py", "line": 1}
+    RD._fold_panel(state, state["config"], {
+        "seats": {dim: {"findings": [dict(finding)]} for dim in RD.DIMENSIONS},
+        "seatMap": {"seats": seats}})
+    assert state["rounds"]["1"]["seatStatus"]["security-reviewer"] == "missing"
+    assert state["rounds"]["1"]["missingSeats"] == ["security-reviewer"]
+    assert "security-reviewer" not in {f.get("dimension") for f in state["_toVerify"]}
+    assert state["fullPanelRan"] is False
+
+
+def test_fold_panel_keeps_a_seeded_unfilled_seat_when_the_submitted_map_has_no_seats():
+    """An incomplete submitted map (no `seats`) does not release a seat the seeded map left unfilled."""
+    seats = {dim: {"vendor": "codex", "model": "m", "source": "default"} for dim in RD.DIMENSIONS}
+    seats["code-reviewer"] = dict(UNFILLED_SEAT)
+    state = RD.new_state(_cfg(seatMap={"seats": seats}))
+    RD._fold_panel(state, state["config"], {
+        "seats": {dim: {"findings": []} for dim in RD.DIMENSIONS},
+        "seatMap": {"makerFamilies": ["anthropic"]}})
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "missing"
+    assert state["fullPanelRan"] is False
+
+
+def _fix_state(config):
+    state = RD.new_state(config)
+    state["fixBatch"] = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+    return state
+
+
+def _pinned_map(vendor, **over):
+    seats = {dim: {"vendor": vendor, "model": "m", "source": "pinned"} for dim in RD.DIMENSIONS}
+    return {"seats": seats, **over}
+
+
+def test_auditor_vendor_excludes_every_makers_family():
+    """E5: fixer claude, vendors claude+codex, the map lists openai as a maker → no auditor."""
+    cfg = {"vendors": ["claude", "codex"]}
+    assert RD._auditor_vendor(cfg, "claude") == ("codex", "independent")
+    assert RD._auditor_vendor(cfg, "claude", maker_families=frozenset({"openai"})) == (
+        None, "unseatable")
+    state = _fix_state(_cfg(seatMap=_pinned_map("claude", makerFamilies=["openai"])))
+    targets = RD._audit_targets(state, state["config"], {})
+    assert [t["independence"] for t in targets] == ["unseatable"]
+    assert "auditorVendor" not in targets[0]
+    assert state["independenceDegraded"] is True
+
+
+def test_pinned_roster_restricts_the_auditor_to_the_pinned_vendors():
+    """E6: every filled seat pinned to codex → codex audits; with codex not live, never cursor."""
+    live = _fix_state(_cfg(vendors=["claude", "codex", "cursor"], seatMap=_pinned_map("codex")))
+    assert RD._audit_targets(live, live["config"], {})[0]["auditorVendor"] == "codex"
+    gone = _fix_state(_cfg(vendors=["claude", "cursor"], seatMap=_pinned_map("codex")))
+    targets = RD._audit_targets(gone, gone["config"], {})
+    assert "auditorVendor" not in targets[0] and targets[0]["independence"] == "unseatable"
+    assert gone["independenceDegraded"] is True
+
+
+def test_pinned_auditor_vendors_need_every_filled_seat_pinned():
+    pinned = {"vendor": "codex", "source": "pinned"}
+    assert RD_DISCLOSURES.pinned_auditor_vendors(
+        {"seats": {"a": pinned, "b": dict(UNFILLED_SEAT)}}) == {"codex"}
+    assert RD_DISCLOSURES.pinned_auditor_vendors(
+        {"seats": {"a": pinned, "b": {"vendor": "claude", "source": "default"}}}) is None
+    assert RD_DISCLOSURES.pinned_auditor_vendors({"seats": {"a": {"vendor": "codex"}}}) is None
+    assert RD_DISCLOSURES.pinned_auditor_vendors({}) is None
+
+
+def test_old_seat_map_without_maker_families_or_source_keeps_todays_selection():
+    """E8: no `makerFamilies`, no `source` → the plain family rule, minus the removed fallback."""
+    seats = {dim: {"vendor": "claude", "model": "m"} for dim in RD.DIMENSIONS}
+    two = _fix_state(_cfg(seatMap={"seats": seats}))
+    assert RD._audit_targets(two, two["config"], {})[0]["auditorVendor"] == "codex"
+    one = _fix_state(_cfg(vendors=["claude"], seatMap={"seats": seats}))
+    assert "auditorVendor" not in RD._audit_targets(one, one["config"], {})[0]
+    assert RD_DISCLOSURES.maker_families({"seats": seats}) == frozenset()
+    assert RD_DISCLOSURES.unfilled_seats({"seats": seats}) == frozenset()
+
+
+def test_a_result_submitted_for_a_target_with_no_auditor_is_ignored_and_the_target_is_unaudited():
+    """The fold treats a no-auditor target as an audit that did not run, whatever was submitted."""
+    state = _fix_state(_cfg(vendors=["claude"]))
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    tid = state["_auditTargets"][0]["id"]
+    RD._fold_audits(state, state["config"], {"results": [
+        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude"}]})
+    outcome = state["_auditOutcome"]
+    assert outcome["unaudited"] == [tid] and outcome["discharged"] == []
+    assert outcome["notDischarged"] == [tid]

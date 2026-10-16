@@ -16,6 +16,7 @@ _EVIDENCE_MAP_KEYS = frozenset({
     "liveVendors",
     "livenessPinScoped",
     "authorFamily",
+    "makerFamilies",
 })
 _LIST_EVIDENCE_MAP_KEYS = frozenset({
     "violations",
@@ -236,6 +237,18 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     return [{"round": selected_round_label, "basis": basis}]
 
 
+def maker_family_union(receipt_list):
+    """The one maker-history rule: every family any receipt's `makerFamilies` list named, or None when no
+    receipt carried the list. Receipt emission and the decisions that read makers both go through here."""
+    from receipt_disclosures import maker_families  # lazy: receipt_disclosures imports this module
+    out, saw = set(), False
+    for entry in receipt_list:
+        fams = maker_families(entry["map"])
+        saw = saw or isinstance(entry["map"].get("makerFamilies"), list) or bool(fams)
+        out.update(fams)
+    return frozenset(out) if saw else None
+
+
 def emit_receipt_seat_map(state, driver_author_family=None):
     """Derived read-time union for ``build_receipt`` — latest seats, merged evidence, last-wins scalars."""
     receipt_list = receipts(state)
@@ -314,10 +327,26 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["authorFamily"] = author_families[0]
     else:
         base.pop("authorFamily", None)
+    # every maker family any receipt named stays named: the union, never the last receipt's list
+    maker_families = maker_family_union(receipt_list)
+    if maker_families is not None:
+        base["makerFamilies"] = sorted(maker_families)
+    else:
+        base.pop("makerFamilies", None)
+    # the roster is the latest receipt's: it names the panel that receipt composed against
+    roster = None
+    for entry in receipt_list:
+        raw_roster = entry["map"].get("roster")
+        if isinstance(raw_roster, list):
+            roster = list(raw_roster)
+    if roster is not None:
+        base["roster"] = roster
+    else:
+        base.pop("roster", None)
     for entry in receipt_list:
         map_ = entry["map"]
         for k, v in map_.items():
-            if k in ("seats", "degradations") or k in _EVIDENCE_MAP_KEYS:
+            if k in ("seats", "degradations", "roster") or k in _EVIDENCE_MAP_KEYS:
                 continue
             base[k] = v
     return base

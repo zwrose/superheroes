@@ -3,6 +3,7 @@
 import model_registry
 import seat_map_receipts
 import session_contract
+from seat_map import is_unfilled as seat_is_unfilled
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -164,23 +165,81 @@ def live_vendors(config):
     return out
 
 
-def independent_auditor(config, fixer_vendor, runner_only=False):
+def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=frozenset(),
+                        pinned_vendors=None):
+    """The first live vendor whose auditor family is neither the fixer's nor any maker's.
+
+    ``maker_families`` are the families the seat map lists as makers; ``pinned_vendors``, when a
+    non-empty set, narrows the pool to those vendors (a pinned roster names who may audit)."""
     fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
     if fixer_fam is None:
         return None, None
+    barred = set(maker_families or ())
+    barred.add(fixer_fam)
     for v in live_vendors(config):
         if runner_only and not session_contract.runner_channel_vendor(v):
             continue
+        if pinned_vendors and v not in pinned_vendors:
+            continue
         if v != fixer_vendor:
             cand_fam = model_registry.family_for("auditor", v)
-            if cand_fam is not None and cand_fam != fixer_fam:
+            if cand_fam is not None and cand_fam not in barred:
                 return v, fixer_fam
     return None, fixer_fam
 
 
-def independent_auditor_available(config):
+def unfilled_seats(seat_map):
+    """Names of the seats the map marks `source == "unfilled"` (no candidate outside the makers)."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return frozenset()
+    return frozenset(name for name, entry in seats.items()
+                     if seat_is_unfilled(entry))
+
+
+def maker_families(seat_map):
+    """The map's `makerFamilies` as a set of family strings; an old map without the key names its maker through `authorFamily`."""
+    raw = seat_map.get("makerFamilies") if isinstance(seat_map, dict) else None
+    if not isinstance(raw, list):
+        legacy = seat_map.get("authorFamily") if isinstance(seat_map, dict) else None
+        return frozenset([legacy]) if isinstance(legacy, str) and legacy else frozenset()
+    return frozenset(f for f in raw if isinstance(f, str) and f)
+
+
+def pinned_auditor_vendors(seat_map):
+    """Vendors of the pinned seats, only when every filled seat of the map is pinned; else None."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return None
+    filled = [e for e in seats.values()
+              if isinstance(e, dict) and not seat_is_unfilled(e)]
+    if not filled or any(e.get("source") != "pinned" for e in filled):
+        return None
+    vendors = {e.get("vendor") for e in filled if isinstance(e.get("vendor"), str) and e.get("vendor")}
+    return vendors or None
+
+
+def accumulated_maker_families(state):
+    """Every maker family any submitted seat map named, plus the effective map's: a later, recomposed
+    map that omits an earlier maker does not release it — the receipt writer unions them, so the
+    decisions that read makers do too. Seat identities still come from the latest map alone."""
+    if not isinstance(state, dict):
+        return frozenset()
+    return (maker_families(seat_map_receipts.effective_seat_map(state))
+            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
+
+
+def auditor_constraints(state):
+    """(maker_families, pinned_vendors) for `independent_auditor`: makers accumulate over every
+    seat-map receipt; the pinned vendors come off the effective seat map."""
+    seat_map = seat_map_receipts.effective_seat_map(state) if isinstance(state, dict) else {}
+    return accumulated_maker_families(state), pinned_auditor_vendors(seat_map)
+
+
+def independent_auditor_available(config, maker_families=frozenset(), pinned_vendors=None):
     fixer = config.get("fixerVendor") if isinstance(config, dict) else None
-    vendor, fam = independent_auditor(config, fixer)
+    vendor, fam = independent_auditor(config, fixer, maker_families=maker_families,
+                                      pinned_vendors=pinned_vendors)
     return (vendor is not None, fam)
 
 
@@ -342,8 +401,9 @@ def build_degraded_prose(state, form, journal=None):
     cfg = state.get("config") or {}
     degraded_out = []
     if degraded(state):
-        degraded_out.append("independence: a single live vendor — the fix's auditor is the fixer's "
-                            "vendor; independence degraded and named in the certification shape")
+        degraded_out.append("independence: no live vendor outside the fixer's and the makers' "
+                            "families — the fix's audit did not run; independence degraded and "
+                            "named in the certification shape")
     if base_degraded(state):
         degraded_out.append(
             "base: reviewed against a base whose fetch degraded (%s) — the pin may be stale; "
@@ -536,6 +596,10 @@ __all__ = (
     "live_vendors",
     "independent_auditor",
     "independent_auditor_available",
+    "unfilled_seats",
+    "maker_families",
+    "pinned_auditor_vendors",
+    "auditor_constraints",
     "degraded",
     "base_degraded",
     "author_family",

@@ -43,8 +43,13 @@ UNSUPPORTED = "review-session-unsupported"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
+UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
+_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS)
+# synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
+# nothing, so it is not a reviewer of the change and the account does not list it
+_UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
 
@@ -161,21 +166,33 @@ def _bind(ran, run_dirs, engine_run):
     return {k: v[0] for k, v in hits.items() if len(v) == 1}
 
 
-# The `(round N)` suffix a persisted reviewer name carries: the one home of the format. `_reviewer` writes it
-# through REVIEWER_ROUND_FORMAT; REVIEWER_ROUND_SUFFIX is the pattern that strips it (review_learning's tally).
+# The `(round N)` suffix a persisted reviewer name carries: the one home of the format. `_reviewer` and
+# `_unfilled_reviewer` write it through REVIEWER_ROUND_FORMAT; REVIEWER_ROUND_SUFFIX is the pattern that strips it
+# (review_learning's tally).
 REVIEWER_ROUND_FORMAT = " (round {rnd})"
 REVIEWER_ROUND_SUFFIX = re.compile(r"\s*\(round \d+\)$")
 
 
-def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None, run_dir=None):
+def _step(rnd, phase):
+    """Where in the loop a reviewer sat: two steps a round, a panel, gap-sweep or verifier read before the
+    round's fix (even), every other review phase after it (odd)."""
+    return 2 * rnd + (0 if phase in _PRE_FIX_PHASES else 1)
+
+
+def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None, phase=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
     entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
-    out = {"name": f"{stem}{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": ran,
-           "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
-           "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
-           "commit": commit, "runDir": run_dir}
-    return dict(out, notIndependent=True) if seat in same else out
+    return {"name": f"{stem}{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": ran,
+            "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
+            "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
+            "commit": commit, "runDir": run_dir, "step": _step(rnd, phase) if phase else None}
+
+
+def _unfilled_reviewer(rnd, seat):
+    """A seat the round's map left unfilled: planned, never run, no vendor or model to name."""
+    return {"name": f"{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": False, "vendor": UNFILLED,
+            "model": UNFILLED, "commit": None, "runDir": None}
 
 
 def _slot_ran(state, key, row, env):
@@ -194,14 +211,23 @@ def _slot_ran(state, key, row, env):
 
 
 def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
-    slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS}
+    slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS
+             and k[0] not in _UNLISTED_PHASES}
     envs = {k: _envelope(_path(session_dir, k, v[0])) for k, v in slots.items()}
     ran = {k: v for k, v in slots.items() if _slot_ran(state, k, v[1], envs[k])}
     bound = _bind(ran, run_dirs, engine_run)
-    same = set(seat_map_receipts.same_family_seats(state, receipt_disclosures.author_family(state)))
+    unfilled = {}  # panel round -> the seats its governing map leaves unfilled
+    for rnd in sorted({k[1] for k in slots if k[0] == sc.PANEL_PHASE}
+                      | {int(n) for n, rec in (state.get("rounds") or {}).items()
+                         if str(n).isdigit() and isinstance(rec, dict) and "seatStatus" in rec}):
+        names = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) & set(round_phases.DIMENSIONS)
+        if names:
+            unfilled[rnd] = sorted(names)
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
+        if phase == sc.PANEL_PHASE and seat in unfilled.get(rnd, ()):
+            continue  # listed below as an unfilled seat, whether or not a slot was journaled for it
         env = envs[key]
         body = env.get("payload") if isinstance(env, dict) else None
         if key in ran and phase in _RAW_PHASES and raw_dir and body is None and not (isinstance(env, dict) and "payload" in env):
@@ -211,9 +237,11 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
-        out.append(_reviewer(state, rnd, seat, stem, key in ran, same, env,
+        out.append(_reviewer(state, rnd, seat, stem, key in ran, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
-                             _text(r.get("citedHead")), bound.get(key)))
+                             _text(r.get("citedHead")), bound.get(key), phase))
+    out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
+            if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
 
 
@@ -290,6 +318,14 @@ def _findings(state):
     return out
 
 
+def _original_maker_families(state, fix_round):
+    """Maker families named by the maps submitted no later than the first fix's round (a round's map is
+    folded before that round's fix); the seeded and legacy maps (non-numeric round) count."""
+    early = [e for e in seat_map_receipts.receipts(state)
+             if not str(e.get("round")).isdigit() or int(str(e["round"])) <= fix_round]
+    return receipt_disclosures.accumulated_maker_families({**state, "seatMapReceipts": early, "seatMap": None})
+
+
 def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     _check_extras(extras)
     if not os.path.isdir(session_dir):
@@ -314,9 +350,21 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                 review_record._readers(readers)["engine_run"], raw_dir)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
-    if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
+    baseline = receipt_disclosures.accumulated_maker_families(state)
+    # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
+    # shadow that baseline entry, or the original maker would drop out of the early panels' independence check
+    # ...but a family first named by a map submitted after the first fix was introduced by that fix, not a maker
+    # of the original change: the cumulative union stays the baseline for later auditor selection, while only
+    # the maps submitted up to the first fix decide whether the fixer's family faced the whole review
+    fixed = [int(n) for n, r in rounds.items() if isinstance(r, dict) and "fix" in r and str(n).isdigit()]
+    original = _original_maker_families(state, min(fixed)) if fixed else baseline
+    if fam and fam not in original and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
-        makers.append({"family": fam, "source": "review loop fixer"})
+        makers.append({"family": fam, "source": "review loop fixer",
+                       **({"fromStep": 2 * min(fixed) + 1} if fixed else {})})
+    for family in sorted(baseline):
+        if not any(isinstance(m, dict) and m.get("family") == family for m in makers):
+            makers.append({"family": family, "source": "seat map maker list"})
     last = decisions[-1] if decisions else {}
     cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
     capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
