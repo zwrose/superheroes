@@ -166,7 +166,8 @@ def test_marker_driver_submit_refuses_unrecognized(tmp_path):
 def test_marker_absent_backfills_on_first_stage():
     old = {"file": "o", "line": 1, "title": "old", "severity": "Important",
            SC.FINDING_KEY_FIELD: "o::old@L1"}
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -180,7 +181,8 @@ def test_marker_absent_backfills_on_first_stage():
 def test_marker_recognized_skips_backfill():
     old = {"file": "o", "line": 1, "title": "old", "severity": "Important",
            SC.FINDING_KEY_FIELD: "o::old@L1"}
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -195,7 +197,8 @@ def test_marker_recognized_skips_backfill():
 # --- family sync ----------------------------------------------------------------------
 
 def test_family_sync_restaged_key_clears_prior_family():
-    finding = {"file": "r.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "r.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     key = SC.finding_identity_key(compiled[0])
@@ -213,7 +216,8 @@ def test_family_sync_restaged_key_clears_prior_family():
 
 
 def test_family_sync_merge_over_disposition_keeps_only_merged_into():
-    finding = {"file": "m.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "m.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     key = SC.finding_identity_key(compiled[0])
@@ -316,7 +320,8 @@ def test_bite_bp2f_b_driver_submit_preflight_refusal(tmp_path):
 
 def test_bite_bp2f_c_record_disposition_family_sync():
     """axis: re-staged disposition family is byte-equal on ledger and live with no stale fields."""
-    finding = {"file": "b.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "b.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     key = SC.finding_identity_key(compiled[0])
@@ -334,7 +339,8 @@ def test_bite_bp2f_c_record_disposition_family_sync():
 
 def test_bite_bp2f_d_record_merged_into_family_sync():
     """axis: merge records only mergedInto on ledger and live — prior disposition family cleared."""
-    finding = {"file": "b.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "b.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     key = SC.finding_identity_key(compiled[0])

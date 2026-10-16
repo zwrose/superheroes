@@ -8,10 +8,14 @@ reference it, refused with a named reason, or named on stdout as referenced by n
 changed file is silently dropped.
 
 Selection is computed from test files' own text on every run; there is no maintained list of
-modules, roots, or mappings. Direct references only — a test that reaches a changed module
-through another module is not selected. CI's full suite is the receipt for anything this gate
-does not run. On a stacked branch the diff still includes the lower layers' files, so the
-selection is a superset.
+modules, roots, or mappings. A test is selected when it references a changed module
+directly, or references one non-test helper module that itself references the changed module
+and sits in the test file's own package tree (the directory holding its ``tests`` directory —
+an eval harness beside ``eval/tests`` for a driver it imports). One hop only: a test that
+reaches a changed module through two modules, or through a helper outside its own package
+tree, or through a helper in the changed module's own directory, is not selected. CI's full
+suite is the receipt for anything this gate does not run. On a stacked branch the diff still
+includes the lower layers' files, so the selection is a superset.
 
 A non-empty selection is not evidence the changed file is tested. The gate claims only that
 these test files mention the changed file and were run. Whether a module is adequately tested
@@ -209,6 +213,50 @@ def _find_referencing_tests(changed_path, is_python, test_texts):
     return selected
 
 
+def _package_root(test_path):
+    """The directory holding the ``tests`` directory a test file sits in."""
+    parts = test_path.split("/")[:-1]
+    index = len(parts) - 1 - parts[::-1].index("tests")
+    return "/".join(parts[:index])
+
+
+def _all_python_sources(repo_root):
+    """Tracked and untracked non-test Python sources — the candidate helper modules."""
+    paths = set(_git_paths(repo_root, "ls-files"))
+    paths |= set(_git_paths(repo_root, "ls-files", "--others", "--exclude-standard"))
+    return sorted(p for p in paths if _classify_path(p) == "python")
+
+
+def _under(root, path):
+    return path.startswith(root + "/") if root else True
+
+
+def _find_helper_hop_tests(changed_path, helper_texts, test_texts):
+    """Tests that reference a helper which itself references ``changed_path``.
+
+    A helper counts only when it sits in the package tree of the test that references it and
+    outside the changed module's own directory, so one lib module importing another never
+    widens a lib change's selection.
+    """
+    patterns = _reference_patterns(changed_path, True)
+    selected = set()
+    changed_dir = os.path.dirname(changed_path)
+    # axis: a test reaching a changed module through one helper in its own package tree — see bite-proof record c7l3_wo4_tooling
+    for helper_path, helper_text in helper_texts.items():
+        if helper_path == changed_path or helper_text is None:
+            continue
+        if changed_dir and _under(changed_dir, helper_path):
+            continue
+        if not any(pattern.search(helper_text) for pattern in patterns):
+            continue
+        in_tree = {
+            test_path: text for test_path, text in test_texts.items()
+            if _under(_package_root(test_path), helper_path)
+        }
+        selected |= _find_referencing_tests(helper_path, True, in_tree)
+    return selected
+
+
 def select_targets(repo_root, paths):
     """Classify every changed path and resolve the test files to run.
 
@@ -225,6 +273,7 @@ def select_targets(repo_root, paths):
 
     all_tests = _all_test_files(repo_root)
     test_texts = {path: _read_test_text(repo_root, path) for path in all_tests}
+    helper_texts = None
 
     for path in paths:
         exists = os.path.exists(os.path.join(repo_root, path))
@@ -247,6 +296,11 @@ def select_targets(repo_root, paths):
         if shape in ("helper", "python"):
             selection = _find_referencing_tests(path, True, test_texts)
             selected_tests.update(selection)
+            if helper_texts is None:
+                helper_texts = {
+                    p: _read_test_text(repo_root, p) for p in _all_python_sources(repo_root)
+                }
+            selected_tests.update(_find_helper_hop_tests(path, helper_texts, test_texts))
             if exists and not selection:
                 no_reference_refusals.append(path)
             elif not exists and not selection:

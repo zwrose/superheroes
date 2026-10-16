@@ -727,3 +727,64 @@ def test_script_runs_end_to_end_as_a_subprocess(repo):
 def test_default_python_is_pinned_runner():
     assert V.DEFAULT_PYTHON.endswith(os.path.join("scripts", "pinned-python"))
     assert os.path.isfile(V.DEFAULT_PYTHON)
+
+
+# ------------------------------------------- one hop through a helper in the test's own tree
+
+_EVAL = "plugins/superheroes/eval"
+
+
+def _eval_fixture(root, harness_path=_EVAL + "/harness.py"):
+    """An eval tree whose one test imports only the harness, which imports the lib driver."""
+    _init_git(root)
+    driver = _LIB + "/round_driver.py"
+    test = _EVAL + "/tests/test_harness.py"
+    _touch(root, driver, "DRIVER = 1\n")
+    _touch(root, harness_path, "import round_driver\n")
+    _touch(root, test, "import harness\n")
+    return driver, test
+
+
+# axis: a test reaching a changed module through one helper in its own package tree — see
+# bite-proof record c7l3_wo4_tooling.
+def test_driver_change_selects_the_eval_test_that_imports_only_the_harness(tmp_path):
+    root = str(tmp_path)
+    driver, test = _eval_fixture(root)
+    selected, *_ = _select(root, [driver])
+    assert test in selected
+
+
+def test_helper_outside_the_tests_package_tree_does_not_count(tmp_path):
+    root = str(tmp_path)
+    driver, test = _eval_fixture(root, harness_path="plugins/superheroes/other/harness.py")
+    selected, *_ = _select(root, [driver])
+    assert test not in selected
+
+
+def test_helper_in_the_changed_modules_own_directory_does_not_count(tmp_path):
+    root = str(tmp_path)
+    _init_git(root)
+    driver = _LIB + "/round_driver.py"
+    test = _TESTS + "/test_sibling.py"
+    _touch(root, driver, "DRIVER = 1\n")
+    _touch(root, _LIB + "/sibling.py", "import round_driver\n")
+    _touch(root, test, "import sibling\n")
+    selected, *_ = _select(root, [driver])
+    assert test not in selected
+
+
+def test_two_hops_do_not_count(tmp_path):
+    root = str(tmp_path)
+    driver, test = _eval_fixture(root)
+    _touch(root, _EVAL + "/outer.py", "import harness\n")
+    _touch(root, test, "import outer\n")
+    selected, *_ = _select(root, [driver])
+    assert test not in selected
+
+
+def test_hop_selection_does_not_lift_the_unreferenced_source_refusal(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    driver, _test = _eval_fixture(root)
+    monkeypatch.setattr(V, "changed_paths", lambda *a, **k: [driver])
+    assert V.main(["--repo-root", root, "--list-only"]) == 1
+    assert driver in capsys.readouterr().err
