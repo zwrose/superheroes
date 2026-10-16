@@ -194,7 +194,7 @@ def test_e1_judgment_skip_well_formed_follow_up_folds(tmp_path):
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
     entry = _ledger_by_key(_load_state(session_dir))[_TRADEOFF_ID]
-    assert entry["disposition"] == "out-of-scope"
+    assert entry["disposition"] == "left-for-owner"
     assert entry["followUp"] == _WELL_FORMED
 
 
@@ -269,7 +269,7 @@ def test_e5_judgment_skip_without_follow_up_folds(tmp_path):
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
     entry = _ledger_by_key(_load_state(session_dir))[_TRADEOFF_ID]
-    assert entry["disposition"] == "out-of-scope"
+    assert entry["disposition"] == "left-for-owner"
     assert "followUp" not in entry
 
 

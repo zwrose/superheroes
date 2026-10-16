@@ -109,11 +109,12 @@ def test_t1_e2_claude_cursor_fixer_cursor_durable_unseatable():
     assert round_driver._auditor_vendor(cfg, "cursor", runner_only=False) == ("claude", "independent")
 
 
-def test_t1_e3_codex_only_fixer_codex_degraded():
-    """Edge 3 — no independent vendor live at all: degraded same-family fallback."""
+def test_t1_e3_codex_only_fixer_codex_unseatable():
+    """Edge 3 — no independent vendor live at all: no auditor on either path, the fixer's own
+    vendor never stands in."""
     cfg = {"vendors": ["codex"], "fixerVendor": "codex"}
-    assert round_driver._auditor_vendor(cfg, "codex", runner_only=True) == ("codex", "degraded")
-    assert round_driver._auditor_vendor(cfg, "codex", runner_only=False) == ("codex", "degraded")
+    assert round_driver._auditor_vendor(cfg, "codex", runner_only=True) == (None, "unseatable")
+    assert round_driver._auditor_vendor(cfg, "codex", runner_only=False) == (None, "unseatable")
 
 
 def test_t1_e5_three_vendor_independent_runner_wins():
@@ -123,12 +124,12 @@ def test_t1_e5_three_vendor_independent_runner_wins():
     assert round_driver._auditor_vendor(cfg, "codex", runner_only=False) == ("claude", "independent")
 
 
-def test_t1_edge6_unknown_fixer_runner_only_degraded_fallback():
-    """Edge 6 — unknown fixer: first runner-channel vendor or unseatable."""
+def test_t1_edge6_unknown_fixer_is_unseatable_on_both_paths():
+    """Edge 6 — unknown fixer: no family to be independent of, so no auditor on either path."""
     cfg = {"vendors": ["claude", "codex"]}
     assert receipt_disclosures.independent_auditor(cfg, None) == (None, None)
-    assert round_driver._auditor_vendor(cfg, None, runner_only=True) == ("codex", "degraded")
-    assert round_driver._auditor_vendor(cfg, None, runner_only=False) == ("claude", "degraded")
+    assert round_driver._auditor_vendor(cfg, None, runner_only=True) == (None, "unseatable")
+    assert round_driver._auditor_vendor(cfg, None, runner_only=False) == (None, "unseatable")
     claude_only = {"vendors": ["claude"]}
     assert round_driver._auditor_vendor(claude_only, None, runner_only=True) == (None, "unseatable")
 
@@ -169,9 +170,12 @@ def test_t2_cmd_next_refuses_claude_auditor(tmp_path):
 
 
 def test_t2b_emit_orders_manifest_refuses_missing_auditor_vendor(tmp_path):
+    """An independent auditor exists (claude, fixer codex) but is not runner-channel: refuse."""
     session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
     target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
     state["_auditTargets"] = [target_no_vendor]
+    state["config"]["vendors"] = ["claude", "codex"]
+    state["config"]["fixerVendor"] = "codex"
     round_driver.save_state(session_dir, state)
     manifest_path = _orders_manifest_path(session_dir, 1, 0)
     assert not os.path.exists(manifest_path)
@@ -180,6 +184,91 @@ def test_t2b_emit_orders_manifest_refuses_missing_auditor_vendor(tmp_path):
             session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
             journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
     assert not os.path.exists(manifest_path)
+
+
+def test_t2c_emit_orders_manifest_does_not_refuse_a_target_with_no_eligible_auditor(tmp_path):
+    """No vendor outside the fixer's family is live at all: nothing to refuse over, the target
+    folds as an audit that did not run."""
+    session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
+    target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    target_no_vendor["independence"] = "unseatable"
+    state["_auditTargets"] = [target_no_vendor]
+    state["config"]["vendors"] = ["claude"]
+    state["config"]["fixerVendor"] = "claude"
+    state["headDiff"] = HEAD_DIFF
+    round_driver.save_state(session_dir, state)
+    try:
+        round_driver._emit_orders_manifest(
+            session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
+            journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
+    except round_driver.AuditorUnseatable:
+        pytest.fail("a target with no eligible auditor at all must not be refused")
+    # bites on: a render refusal (order-render-refused:*) passing as a successful emission
+    assert os.path.exists(_orders_manifest_path(session_dir, 1, 0))
+    state = _state(session_dir)
+    round_driver._fold_audits(state, state["config"], {"results": []})
+    outcome = state["_auditOutcome"]
+    assert outcome["notDischarged"] == [target_no_vendor["id"]]
+    assert outcome["discharged"] == []
+    assert outcome["unaudited"] == [target_no_vendor["id"]]
+
+
+def test_a_target_with_no_eligible_auditor_gets_no_order_and_a_missing_envelope(tmp_path):
+    """The no-auditor target is recorded missing in the orders-emit commit and rendered no order,
+    so the roster is complete and the fold can disclose it unaudited without a manual record-missing."""
+    session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
+    target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    state["_auditTargets"] = [target_no_vendor]
+    state["config"]["vendors"] = ["claude"]
+    state["config"]["fixerVendor"] = "claude"
+    round_driver.save_state(session_dir, state)
+    round_driver._emit_orders_manifest(
+        session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
+        journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
+    manifest = round_driver.round_records.read_json(_orders_manifest_path(session_dir, 1, 0))[0]
+    assert manifest["seats"] == {}
+    spath = round_driver.round_records.store_path(
+        session_dir, 1, P_AUDITS, round_driver.round_records.storage_key(target_no_vendor["id"], 0), 0)
+    stored = round_driver.round_records.read_json(spath)[0]
+    assert stored["schema"] == round_driver.round_records.SEAT_MISSING_SCHEMA
+    assert stored["reason"] == round_driver.UNFILLED_SEAT_REASON
+
+
+def test_a_hand_submit_target_with_no_eligible_auditor_gets_no_order_and_a_missing_envelope(tmp_path):
+    """The hand-submit path is not runner-only, but an ineligible audit target still gets no order."""
+    session_dir, state, target = _audits_emit_fixture(tmp_path, submit_used=True)
+    target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    state["_auditTargets"] = [target_no_vendor]
+    state["config"]["vendors"] = ["claude"]
+    state["config"]["fixerVendor"] = "claude"
+    assert not state.get("_advanceUsed")
+    round_driver.save_state(session_dir, state)
+    round_driver._emit_orders_manifest(
+        session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
+        journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
+    manifest = round_driver.round_records.read_json(_orders_manifest_path(session_dir, 1, 0))[0]
+    # bites on: the hand path rendering an audit order with an absent vendor for a target no auditor can take
+    assert manifest["seats"] == {}
+    spath = round_driver.round_records.store_path(
+        session_dir, 1, P_AUDITS, round_driver.round_records.storage_key(target_no_vendor["id"], 0), 0)
+    stored = round_driver.round_records.read_json(spath)[0]
+    assert stored["schema"] == round_driver.round_records.SEAT_MISSING_SCHEMA
+    assert stored["reason"] == round_driver.UNFILLED_SEAT_REASON
+
+
+def test_auditor_constraints_keep_every_maker_family_an_earlier_map_named():
+    state = {"seatMapReceipts": [
+        {"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "codex"}},
+                               "makerFamilies": ["anthropic", "openai"]}},
+        {"round": "2", "map": {"seats": {"code-reviewer": {"vendor": "claude"}},
+                               "makerFamilies": ["anthropic"]}}]}
+    makers, _pinned = receipt_disclosures.auditor_constraints(state)
+    # bites on: a later partial map releasing an earlier maker family from the independence check
+    assert makers == frozenset({"anthropic", "openai"})
+    config = {"fixerVendor": "claude", "vendors": ["claude", "codex"]}
+    vendor, _fam = receipt_disclosures.independent_auditor(
+        config, "claude", maker_families=makers, pinned_vendors=None)
+    assert vendor is None
 
 
 # T3 — edge 4: hand path bypasses auditor-unseatable refusal at emission

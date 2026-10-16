@@ -68,10 +68,10 @@ Everything below that names the light lane is an exception. Otherwise the build 
 - **No build brief and no pre-code brief check.** §4 and §5 are full-lane only, except §4's size
   step.
 - **You type the implementation** in this session instead of dispatching work orders (§7).
-- **Review before handback is one independent cross-vendor reviewer**, not the full `review-code`
-  panel loop. You typed the change, so you are the maker, and the reviewer sits outside your maker
-  family. Only the owner may choose a disclosed same-family reviewer at kickoff, when no
-  cross-vendor reviewer is available. A mid-run forfeit follows the rubric's three-case rule.
+- **Review before handback is one independent reviewer**, not the full `review-code` panel loop.
+  You typed the change, so you are a [maker](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#maker), and the reviewer sits
+  outside every maker's family. Only the owner's word for that change admits a same-family
+  reviewer, and the record says not independent. A forfeit allows no stand-in.
 - **Every light-lane review answers to the review record's reading rule** in `review-discipline.md`
   (§ What never changes in any lane), which owns the criterion, the retry, and what a missing
   reading means.
@@ -90,6 +90,7 @@ the escalation triggers below do that job together. Keep the kickoff conversatio
   `review-discipline.md` § Size counts them: a flat measured line, not an estimate.
 - The change spreads into surfaces the lane call did not anticipate.
 - The change touches a quiet-failure path.
+- The lane rule's floor reads full for the change (`rubric/review-discipline.md` § The lane floor).
 - The change needs something irreversible or expensive: a migration, a new dependency, an auth or
   data-model change, or a new external contract. These go to the owner before they are built, in
   any lane.
@@ -589,16 +590,16 @@ PR records test-pilot N/A with its stand-in evidence.
 
 ## 10. Review before handback
 
-**Full lane: run `review-code` with a vendor-mixed panel, as its own fix loop, to convergence.** The
+**Full lane: run `review-code` with a vendor-mixed panel (the roster its seat map composes from the lane call), as its own fix loop, to convergence.** The
 loop reviews, routes each fix back as an implementer work order, and re-reviews, until no blocking
 finding remains or you honestly park on an open blocker. Round scoping and cap economics are
-`review-code`'s own contract, and §12's delta grading does not apply here.
+`review-code`'s own contract, and §12's delta grading does not apply here. Open the PR as a draft
+before the review runs, so the review runs in PR mode and writes its review record against the PR.
 
-**Light lane: one independent cross-vendor reviewer** outside the maker family, with the review
+**Light lane: one independent reviewer** outside every maker's family, with the review
 record showing its reading, as Build lanes says. Review fixes stay orchestrator-typed, and work that needs an
 implementer dispatch is an escalation. An escalated build records every maker family in dispatch
-provenance. Panel composition excludes only one author family, so any additional maker family is a
-disclosed independence limitation in the PR body. Prefer keeping an escalated light build to one
+provenance. Every maker family the build records is passed to compose, so no maker's family is seated. Prefer keeping an escalated light build to one
 maker family. Re-review to convergence on that single seat, or honestly park on an open blocker.
 
 **Record each finding's handling in a dispositions table** in the PR body. Post the review results
@@ -616,7 +617,8 @@ blocker, and the dispositions table and the durable review receipt are posted.
 
 ## 11. Hand back the ready PR
 
-**Open a ready PR, not a draft.** Its body has two addressees and one home per fact. The **owner
+**A full-lane PR, opened as a draft before review, is marked ready at handback. A light-lane PR
+opens ready.** Its body has two addressees and one home per fact. The **owner
 half** answers *what is different, and do I accept it?* in consequences. The **build record**
 answers *did the process hold, and what must I route?* with mechanism. The owner half is not a
 summary of the build record.

@@ -60,6 +60,6 @@ def test_auditor_vendor_and_seed_share_one_rule():
         expected = (
             "independent"
             if receipt_disclosures.independent_auditor_available(full_cfg)[0]
-            else "degraded"
+            else "unseatable"
         )
         assert RD._auditor_vendor(full_cfg, fixer)[1] == expected

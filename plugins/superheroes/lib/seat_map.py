@@ -29,7 +29,13 @@ LENS_SEATS = (
 # (an explicit pin under the new key wins). Nothing on disk is rewritten.
 LEGACY_SEAT_ALIASES = {"test-reviewer": "test-role"}
 GROUNDING_SEAT = "grounding-seat"
-PANEL_ROSTER = LENS_SEATS + (GROUNDING_SEAT,)
+# Every seat a roster may name, the architecture reviewer included.
+KNOWN_SEATS = LENS_SEATS + (GROUNDING_SEAT,)
+# The risky full-lane roster: the default for any caller that names no roster, and the roster a
+# change with a touched or unclear risk gets. The architecture reviewer is not on it.
+PANEL_ROSTER = tuple(s for s in KNOWN_SEATS if s != "architecture-reviewer")
+# Seats on every full-lane panel; the specialists are added when the lane call has a floor.
+BASE_ROSTER = ("code-reviewer", "test-role", GROUNDING_SEAT)
 STRONG_TIER_SEATS = frozenset({"security-reviewer", "architecture-reviewer"})
 STRONG_TIER_REQUIRED = "reviewer-deep"
 CRITICAL_SEATS = frozenset({"security-reviewer", "premortem-reviewer", "code-reviewer"})
@@ -40,7 +46,7 @@ MIN_CRITICAL_FAMILIES = 2
 # ONE `xai` family) a composer-made diff could have cursor-grok reviewing its own tests with no
 # violation recorded. STRONG_TIER_SEATS / CRITICAL_SEATS keep their OTHER jobs (the reviewer-deep bar
 # and the critical-diversity bar) unchanged.
-MAKER_EXCLUDED_SEATS = frozenset(PANEL_ROSTER)
+MAKER_EXCLUDED_SEATS = frozenset(KNOWN_SEATS)
 # Degradation constraints that mean the liveness set was SYNTHESIZED rather than probed. A seat map
 # carrying any of these cannot prove an alternative family was absent, so a maker-family seat under
 # one is a violation, never an excused degradation (#670 review).
@@ -55,8 +61,39 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     "compose-failed",         # compose blew up and every seat fell open to the host model
     liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT,    # liveness read crashed — an unknown subset of cells were examined
 })
+# `source` of a seat no reviewer outside the makers' families could fill — recorded, never run.
+UNFILLED_SOURCE = "unfilled"
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
+
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
+# The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, the
+# gap-sweep / scoped reviewers and the synthesis grouper): compose probes and records these beside
+# the panel's own cells.
+NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep", "synthesis")
+
+
+def roster_for(lane_basis) -> tuple[str, ...]:
+    """The full-lane panel the lane call asks for. The generalist, the test seat and the grounding
+    seat are always on it; the security and premortem seats join whenever the floor is not None.
+    Fail-closed: a basis that is not a dict, or has no `floor` key, gets the risky roster."""
+    if isinstance(lane_basis, dict) and "floor" in lane_basis and lane_basis["floor"] is None:
+        return tuple(s for s in PANEL_ROSTER if s in BASE_ROSTER)
+    return PANEL_ROSTER
+
+
+def effective_roster(seat_map) -> tuple[str, ...] | None:
+    """The map's own `roster` when it is a non-empty list of strings, else None."""
+    raw = seat_map.get("roster") if isinstance(seat_map, dict) else None
+    if isinstance(raw, list) and raw and all(isinstance(s, str) for s in raw):
+        return tuple(raw)
+    return None
+
+
+def required_critical_families(roster) -> int:
+    """How many distinct families the critical seats on `roster` must span: the minimum, capped at
+    the number of critical seats the roster seats."""
+    return min(MIN_CRITICAL_FAMILIES, len(CRITICAL_SEATS & set(roster)))
+
 
 # Tiers _backfill's primary rotation tries after the seat's configured tier (#1269).
 _BACKFILL_DOWNGRADE_TO = "reviewer"
@@ -173,6 +210,9 @@ def _seat_tier(seat: str, cfg: dict) -> str:
 def _normalize_live_cell(entry) -> tuple[str, str, str | None] | None:
     if isinstance(entry, (list, tuple)) and len(entry) == 3:
         vendor, model, effort = entry[0], entry[1], entry[2]
+        # axis: a malformed effort never reaches a set as an unhashable triple — see bite-proof record c7l3_wo4_tooling
+        if effort is not None and not isinstance(effort, str):
+            return None
         if isinstance(vendor, str) and vendor and isinstance(model, str) and model:
             return (vendor, model, effort)
     return None
@@ -335,6 +375,28 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
     return _alternative_family_evidence(seat_map, seat, cfg, author_family) != ALT_NONE
 
 
+def is_unfilled(cfg) -> bool:
+    """True for the record of a seat no non-maker reviewer could fill: a known not-run seat, carrying
+    no vendor, model or family. A record that names a vendor is a seated reviewer whatever its
+    `source` says, so it is checked as one."""
+    return (
+        isinstance(cfg, dict)
+        and cfg.get("source") == UNFILLED_SOURCE
+        and cfg.get("vendor") is None
+    )
+
+
+def _unfilled_cfg(tier: str) -> dict:
+    return {
+        "vendor": None,
+        "model": None,
+        "effort": None,
+        "tier": tier,
+        "family": None,
+        "source": UNFILLED_SOURCE,
+    }
+
+
 def _seat_family(seat: str, cfg) -> str | None:
     """Registry-canonical family for one seat record; ``None`` when it cannot be derived."""
     if not isinstance(cfg, dict):
@@ -354,7 +416,7 @@ def _seat_family(seat: str, cfg) -> str | None:
 def _critical_families(seats: dict) -> set[str]:
     """The distinct families across the seated CRITICAL_SEATS — verify()'s counting rule extracted
     for clarity. classify_violations asks a different question (families reachable, not seated); the
-    shared invariant between the two paths is MIN_CRITICAL_FAMILIES (#680 round 3)."""
+    shared invariant between the two paths is required_critical_families (#680 round 3)."""
     return {
         fam
         for s in CRITICAL_SEATS
@@ -362,6 +424,15 @@ def _critical_families(seats: dict) -> set[str]:
         for fam in [_seat_family(s, seats[s])]
         if fam is not None
     }
+
+
+def _scanned_seats(seat_map: dict) -> tuple[str, ...]:
+    """The seats a scanning check walks: the map's own roster, else every known seat the map carries."""
+    roster = effective_roster(seat_map)
+    if roster is not None:
+        return roster
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    return tuple(s for s in KNOWN_SEATS if isinstance(seats, dict) and s in seats)
 
 
 def same_family_degradations(seat_map: dict, author_family: str | None) -> list[dict]:
@@ -372,7 +443,7 @@ def same_family_degradations(seat_map: dict, author_family: str | None) -> list[
     if not isinstance(seats, dict) or not author_family:
         return []
     out: list[dict] = []
-    for seat in PANEL_ROSTER:
+    for seat in _scanned_seats(seat_map):
         cfg = seats.get(seat)
         if not isinstance(cfg, dict):
             continue
@@ -526,6 +597,11 @@ def build(
 
     live = [v for v in (live_vendors or []) if isinstance(v, str) and v]
 
+    # The makers' families are barred from every maker-excluded seat: the author's plus every extra
+    # maker's. A seat none of the live reviewers can fill is recorded unfilled, never seated with a
+    # maker family.
+    makers: set[str] = {f for f in ({author_family} | set(extra_maker_families or ())) if f}
+
     role_pins = codex_role_pins or {}
 
     if live_cells is None:
@@ -628,7 +704,7 @@ def build(
         for try_tier in _backfill_rotation_tiers(tier):
             for vendor in seating_vendors:
                 cfg = _resolve_at_tier(seat, vendor, try_tier)
-                if cfg is not None:
+                if cfg is not None and cfg["family"] not in makers:
                     cfg = dict(cfg)
                     cfg["source"] = "backfill"
                     if try_tier != tier:
@@ -636,25 +712,32 @@ def build(
                     return cfg
         for try_tier in _BACKFILL_CLAUDE_ROTATION:
             cfg = _resolve_at_tier(seat, "claude", try_tier)
-            if cfg is not None:
+            if cfg is not None and cfg["family"] not in makers:
                 cfg = dict(cfg)
                 cfg["source"] = "backfill"
                 cfg["tier"] = try_tier
                 return cfg
-        fallback_family = family_for("reviewer", "claude") or "anthropic"
-        return {
-            "vendor": seating_vendors[0] if seating_vendors else "claude",
-            "model": "",
-            "effort": None,
-            "tier": tier,
-            "family": fallback_family,
-            "source": "backfill",
-        }
+        return _unfilled_cfg(tier)
+
+    def _note_unfilled(seat: str) -> None:
+        if any(
+            d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
+            for d in degradations
+        ):
+            return
+        degradations.append({
+            "constraint": "seat-unfilled",
+            "seat": seat,
+            "reason": (
+                "seat %s has no live candidate outside the makers' families (%s) — "
+                "recorded unfilled, not run" % (seat, ", ".join(sorted(makers)))
+            ),
+        })
 
     # Per-seat eligibility
     eligible_by_seat: dict[str, list[dict]] = {}
-    same_family_seats: set[str] = set()
-    pinned_maker_seats: set[str] = set()
+    maker_emptied_seats: set[str] = set()
+    pin_unfilled_seats: set[str] = set()
     for seat in roster:
         base = [cfg for cfg in (_resolve(seat, v) for v in seating_vendors) if cfg is not None]
 
@@ -677,7 +760,11 @@ def build(
                     "constraint": "grounding-provenance",
                     "reason": "author or narrative family unknown — grounding independence not guaranteed",
                 })
-            eligible = [cfg for cfg in base if cfg["family"] not in excl]
+            # makers are barred first, so the fallback below relaxes narrative independence over the non-makers
+            pool = [cfg for cfg in base if cfg["family"] not in makers]
+            if base and not pool:
+                maker_emptied_seats.add(seat)
+            eligible = [cfg for cfg in pool if cfg["family"] not in excl]
             if not eligible:
                 degradations.append({
                     "constraint": "grounding-independence",
@@ -687,44 +774,17 @@ def build(
                 # pre-selecting "not the narrative family" — that old ordering picked the AUTHOR's
                 # own family whenever author and narrative were the only live families. Maker
                 # exclusion outranks narrative independence.
-                eligible = list(base)
+                eligible = pool
         else:
             eligible = list(base)
 
-        # #670: the maker family is barred from EVERY seat in MAKER_EXCLUDED_SEATS. When an
-        # alternative family is live the maker never seats (zero cost). When none is, the seat
-        # fills with the maker family and the collapse is DISCLOSED — never silently clean, and
-        # never an empty seat that falls through to the seat-unfilled backfill.
-        if author_family and seat in MAKER_EXCLUDED_SEATS and eligible:
-            excluded_makers = {author_family}
-            if extra_maker_families:
-                excluded_makers |= extra_maker_families
-            non_maker = [cfg for cfg in eligible if cfg["family"] not in excluded_makers]
-            if non_maker:
-                eligible = non_maker
-            elif extra_maker_families:
-                author_only = [
-                    cfg for cfg in eligible if cfg["family"] != author_family
-                ]
-                if author_only:
-                    eligible = author_only
-                    for cfg in eligible:
-                        fam = cfg["family"]
-                        if fam in extra_maker_families:
-                            degradations.append({
-                                "constraint": "secondary-maker-seated",
-                                "seat": seat,
-                                "reason": (
-                                    "seat %s carries the secondary maker family %s: "
-                                    "no other family is live"
-                                    % (seat, fam)
-                                ),
-                            })
-                            break
-                else:
-                    same_family_seats.add(seat)
-            else:
-                same_family_seats.add(seat)
+        # #670: the makers' families are barred from EVERY seat in MAKER_EXCLUDED_SEATS. A seat with
+        # no live candidate outside them is left empty and recorded unfilled below — never seated
+        # with a maker family and never backfilled.
+        if makers and seat in MAKER_EXCLUDED_SEATS and eligible:
+            eligible = [cfg for cfg in eligible if cfg["family"] not in makers]
+            if not eligible:
+                maker_emptied_seats.add(seat)
 
         eligible_by_seat[seat] = eligible
 
@@ -765,6 +825,19 @@ def build(
         )
         if pin_cell_live and is_allowed(tier, pin_vendor, model, effort):
             fam = family_for(tier, pin_vendor)
+            if pin_seat in MAKER_EXCLUDED_SEATS and fam in makers:
+                # a pin cannot seat a maker: the seat is left unfilled and no other vendor replaces it
+                pin_unfilled_seats.add(pin_seat)
+                eligible_by_seat[pin_seat] = []
+                degradations.append({
+                    "constraint": "pin-breaks-constraint",
+                    "seat": pin_seat,
+                    "reason": (
+                        "pinned seat %s names vendor %s, whose family %s is a maker family — "
+                        "the seat is recorded unfilled" % (pin_seat, pin_vendor, fam)
+                    ),
+                })
+                continue
             if pin_seat == GROUNDING_SEAT:
                 excl = {f for f in (author_family, narrative_family) if f}
                 if fam and fam in excl:
@@ -781,25 +854,6 @@ def build(
                         "reason": f"pinned strong seat {pin_seat} is below reviewer-deep",
                     }
                 )
-            if pin_seat in MAKER_EXCLUDED_SEATS and author_family and fam == author_family:
-                pinned_maker_seats.add(pin_seat)
-                degradations.append({
-                    "constraint": "pin-breaks-constraint",
-                    "seat": pin_seat,
-                    "reason": "pinned seat %s carries the maker family %s" % (pin_seat, author_family),
-                })
-            if (
-                pin_seat in MAKER_EXCLUDED_SEATS
-                and extra_maker_families
-                and fam in extra_maker_families
-            ):
-                pinned_maker_seats.add(pin_seat)
-                degradations.append({
-                    "constraint": "pin-breaks-constraint",
-                    "seat": pin_seat,
-                    "reason": "pinned seat %s carries the secondary maker family %s"
-                    % (pin_seat, fam),
-                })
             eligible_by_seat[pin_seat] = [
                 {
                     "vendor": pin_vendor,
@@ -823,15 +877,24 @@ def build(
     fixed_seats: dict[str, dict] = {}
     for seat in roster:
         cfgs = eligible_by_seat.get(seat, [])
-        if not cfgs:
+        if not cfgs and (seat in maker_emptied_seats or seat in pin_unfilled_seats):
+            unfilled = _unfilled_cfg(_tier_for(seat))
+            fixed_seats[seat] = unfilled
+            _note_unfilled(seat)
+            options[seat] = [unfilled]
+        elif not cfgs:
             fixed = _backfill(seat)
             fixed_seats[seat] = fixed
-            degradations.append(
-                {
-                    "constraint": "seat-unfilled",
-                    "reason": f"seat {seat} had no eligible vendor — backfilled to {fixed['vendor']}",
-                }
-            )
+            if is_unfilled(fixed):
+                _note_unfilled(seat)
+            else:
+                degradations.append(
+                    {
+                        "constraint": "seat-unfilled",
+                        "seat": seat,
+                        "reason": f"seat {seat} had no eligible vendor — backfilled to {fixed['vendor']}",
+                    }
+                )
             options[seat] = [fixed]
         elif len(cfgs) == 1 and cfgs[0].get("source") == "pinned":
             fixed_seats[seat] = cfgs[0]
@@ -847,10 +910,12 @@ def build(
             options[seat] = sorted_cfgs if sorted_cfgs else cfgs
 
     def _assignment_key(assignment: dict[str, dict]) -> tuple:
+        # an unfilled seat carries no family, so it never counts as an author seat
         author_count = sum(
-            1 for s in roster if assignment[s]["family"] == author_family
+            1 for s in roster
+            if assignment[s]["family"] is not None and assignment[s]["family"] == author_family
         )
-        vendor_tuple = tuple(assignment[s]["vendor"] for s in roster)
+        vendor_tuple = tuple(assignment[s]["vendor"] or "" for s in roster)
         return (author_count, vendor_tuple)
 
     def _meets_soft(assignment: dict[str, dict], check_author_minority: bool, check_critical: bool) -> bool:
@@ -858,17 +923,17 @@ def build(
             critical_families = {
                 assignment[s]["family"]
                 for s in roster
-                if s in CRITICAL_SEATS
+                if s in CRITICAL_SEATS and assignment[s]["family"] is not None
             }
-            if len(critical_families) < 2:
+            if len(critical_families) < required_critical_families(roster):
                 return False
         if check_author_minority and author_family:
             # Per-seat maker prohibition (every roster seat) plus numeric minority cap. For a full
-            # PANEL_ROSTER the per-seat bar subsumes the cap; seats discounted are unavoidable
-            # (`same_family_seats`) or owner-pinned (`pinned_maker_seats`).
+            # PANEL_ROSTER the per-seat bar subsumes the cap. An unfilled seat has no family and is
+            # never an author seat.
             author_seats = [
                 s for s in roster
-                if s not in same_family_seats and s not in pinned_maker_seats
+                if assignment[s]["family"] is not None
                 and assignment[s]["family"] == author_family
             ]
             if len(author_seats) >= math.ceil(len(roster) / 2):
@@ -897,6 +962,9 @@ def build(
     all_assignments = _enumerate_assignments()
     if not all_assignments:
         seats_out = {s: _backfill(s) for s in roster}
+        for s in roster:
+            if is_unfilled(seats_out[s]):
+                _note_unfilled(s)
     else:
         survivors = [
             a for a in all_assignments
@@ -930,7 +998,8 @@ def build(
                     })
                 degradations.append({
                     "constraint": "critical-diversity",
-                    "reason": "relaxed critical-diversity — no assignment spanned ≥2 families",
+                    "reason": "relaxed critical-diversity — no assignment spanned ≥%d families"
+                    % required_critical_families(roster),
                 })
                 seats_out = chosen
 
@@ -985,6 +1054,8 @@ def build(
         "authorFamily": author_family,
         "narrativeFamily": narrative_family,
         "livenessPinScoped": bool(liveness_pin_scoped),
+        "makerFamilies": sorted(makers),
+        "roster": list(roster),
     }
     if resolved_cells_source is not None:
         result["liveCellsSource"] = resolved_cells_source
@@ -1183,7 +1254,7 @@ def classify_violations(
             stamped["evidence"] = "unproven-liveness"
             unexcused.append(stamped)
             continue
-        if len(achievable) >= MIN_CRITICAL_FAMILIES:
+        if len(achievable) >= required_critical_families(effective_roster(seat_map) or PANEL_ROSTER):
             stamped = dict(v)
             stamped["evidence"] = "alternative-live"
             unexcused.append(stamped)
@@ -1224,9 +1295,17 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
 
     violations: list[dict] = []
 
-    for seat in PANEL_ROSTER:
+    roster = effective_roster(seat_map) or PANEL_ROSTER
+    # axis: every seat the lane basis calls for must be on the roster; an absent basis calls for the risky one — see bite-proof record wo_a_1797_roster
+    for seat in roster_for(seat_map.get("laneBasis")):
+        if seat not in roster:
+            violations.append({"seat": seat, "constraint": "roster-missing-required"})
+    for seat in roster:
         if seat not in seats:
             violations.append({"seat": seat, "constraint": "missing-seat"})
+        elif is_unfilled(seats[seat]):
+            # a known not-run seat, disclosed as a `seat-unfilled` degradation
+            continue
         elif not isinstance(seats[seat], dict):
             violations.append({"seat": seat, "constraint": "malformed"})
 
@@ -1235,7 +1314,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
             if seat not in seats:
                 continue
             cfg = seats[seat]
-            if not isinstance(cfg, dict):
+            if not isinstance(cfg, dict) or is_unfilled(cfg):
                 continue
             seat_fam = _seat_family(seat, cfg)
             if seat_fam is None:
@@ -1258,7 +1337,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
             violations.append({"seat": seat, "constraint": "strong-tier"})
 
     critical_families = _critical_families(seats)
-    if len(critical_families) < MIN_CRITICAL_FAMILIES:
+    if len(critical_families) < required_critical_families(roster):
         violations.append({"constraint": "critical-diversity"})
 
     violations.sort(key=lambda v: (v.get("constraint", ""), v.get("seat", "")))
@@ -1292,6 +1371,11 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
             seen.add(key)
             degradations.append(rec)
     receipt_live_cells, receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
+    raw_makers = seat_map.get("makerFamilies")
+    maker_families = {f for f in (raw_makers if isinstance(raw_makers, list) else []) if isinstance(f, str) and f}
+    if isinstance(af, str) and af:
+        maker_families.add(af)
+    roster = list(_scanned_seats(seat_map))
     out = {
         "seats": seat_map.get("seats", {}),
         "degradations": degradations,
@@ -1303,12 +1387,20 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
+        "makerFamilies": sorted(maker_families),
+        "roster": roster,
     }
     role_pins, pins_usable = _read_codex_role_pins(seat_map)
     if pins_usable and role_pins:
         out["codexRolePins"] = dict(role_pins)
     elif "codexRolePins" in seat_map:
         out["codexRolePins"] = seat_map["codexRolePins"]
+    if "laneBasis" in seat_map:
+        out["laneBasis"] = seat_map["laneBasis"]
+    # compose stamps these three together; a map that never went through compose carries none
+    for key in ("hostFamily", "nonPanelLiveCells", "nonPanelLiveCellsSource"):
+        if key in seat_map:
+            out[key] = seat_map[key]
     return out
 
 
@@ -1324,6 +1416,14 @@ def build_parser():
     cc.add_argument(c, "--narrative-family", contract="free-text", default=None)
     cc.add_argument(c, "--pr-number", contract="free-text", default=None)
     cc.add_argument(c, "--head-sha", contract="free-text", default=None)
+    cc.add_argument(
+        c,
+        "--base-ref",
+        contract="free-text",
+        default=None,
+        help="the pinned base commit; with --head-sha it names the diff the lane call reads, "
+             "and the roster follows it (absent or unreadable: the full risky roster)",
+    )
     cc.add_argument(c, "--repo-root", contract="free-text", default=".")
     cc.add_argument(
         c,
@@ -1344,11 +1444,109 @@ def build_parser():
         "--pins",
         contract="free-text",
         default=None,
-        help="JSON dict of seat pins passed to build()",
+        help="JSON dict of seat pins passed to build(); overlays the seat pins in core.md per seat",
     )
     cc.add_argument(c, "--host-model", contract="free-text", default=None)
     cc.add_argument(c, "--implementation-engine", contract="free-text", default=None)
+    cc.add_argument(
+        c,
+        "--maker-family",
+        contract="free-text",
+        action="append",
+        default=[],
+        dest="maker_family",
+        help="repeatable; a model family that wrote or fixed this change and may not review it "
+             "(a build passes its implementers' and fixers' families)",
+    )
     return ap
+
+
+_CHANGED_PATHS_TIMEOUT = 120
+
+
+def _lane_basis(repo_root, base_ref, head_sha):
+    """The lane call for the change between the pinned base and the reviewed head. Fail-closed: a
+    missing base or head, a git failure, or an unreadable answer is `lane_call.unavailable`, whose
+    floor is full, so the roster can only grow from it. Never raises."""
+    import subprocess
+
+    import lane_call
+
+    def closed(why):
+        return lane_call.unavailable("lane-basis-unavailable: %s" % why, proposed="full")
+
+    if not base_ref:
+        return closed("no --base-ref was given")
+    if not head_sha:
+        return closed("no --head-sha was given")
+    try:
+        done = subprocess.run(
+            ["git", "-C", repo_root, "diff", "--name-only", "-z", "--no-renames",
+             "%s...%s" % (base_ref, head_sha)],
+            capture_output=True, timeout=_CHANGED_PATHS_TIMEOUT,
+        )
+        if done.returncode != 0:
+            return closed("git diff exited %d" % done.returncode)
+        paths = [p for p in done.stdout.decode("utf-8").split("\0") if p]
+        return lane_call.call(repo_root, paths, proposed="full")
+    except Exception as exc:
+        return closed("%s: %s" % (type(exc).__name__, exc))
+
+
+def _lane_basis_receipt(basis):
+    """The lane basis as the receipt carries it: floor, lane, reasons and area names; the path
+    lists reduced to counts."""
+    import lane_call
+
+    touched = [h for h in basis.get("touched", []) if isinstance(h, dict)]
+    names = [h.get("name") for h in touched if isinstance(h.get("name"), str)]
+    return {
+        "floor": basis.get("floor"),
+        "lane": basis.get("lane"),
+        "why": [lane_call.why_line_paths_stripped(w, names) for w in basis.get("why", [])
+                if isinstance(w, str)],
+        "riskAreas": basis.get("riskAreas"),
+        "touched": [
+            {"name": h.get("name"), "matched": len(h.get("matched") or [])} for h in touched
+        ],
+    }
+
+
+def _core_pin_degradations(prefs, repo_root):
+    """The disclosures for core.md seat pins that did not apply: an unreadable core.md, an invalid
+    entry, and a `seatPins` that is not an object (which the loader drops silently)."""
+    def disclose(reason, detail):
+        return {"constraint": "pin", "reason": reason, "detail": detail}
+
+    out: list[dict[str, str]] = []
+    if prefs.get("readError") is not None:
+        out.append(disclose(
+            "core.md could not be read, so its seat pins were not applied — the panel composes unpinned",
+            str(prefs["readError"]),
+        ))
+    invalid = prefs.get("invalidSeatPins")
+    if isinstance(invalid, dict):
+        for seat, why in sorted(invalid.items()):
+            out.append(disclose(
+                "core.md seat pin for %s is not usable — the seat composes by rotation" % seat,
+                str(why),
+            ))
+    if prefs.get("readError") is None:
+        try:
+            import core_md
+
+            raw = core_md.gate_config_usable_prefs(core_md.engine_preferences_for_gate(cwd=repo_root))
+            if "seatPins" in raw and not isinstance(raw["seatPins"], dict):
+                out.append(disclose(
+                    "core.md seatPins is not an object, so none of its seat pins were applied",
+                    "seatPins is a %s" % type(raw["seatPins"]).__name__,
+                ))
+        except Exception as exc:
+            out.append(disclose(
+                "core.md seatPins could not be re-read, so a malformed value would go unnoticed",
+                "%s: %s" % (type(exc).__name__, exc),
+            ))
+    return out
 
 
 def _panel_codex_role_pins(codex_models: dict | None) -> dict[str, str]:
@@ -1391,6 +1589,20 @@ def main(argv):
                 return 1
 
         prefs = engine_pref.load_engine_prefs(args.repo_root)
+        lane_basis = _lane_basis(args.repo_root, args.base_ref, args.head_sha)
+        roster = roster_for(lane_basis)
+        family_degradations.extend(_core_pin_degradations(prefs, args.repo_root))
+        # Seat pins from core.md bind every seat of the roster; --pins overrides per seat. A core.md
+        # pin for a known seat the roster does not seat is skipped: a project-wide specialist pin
+        # does not apply to a change that does not seat the specialist.
+        core_pins = prefs.get("seatPins")
+        merged_pins = {
+            seat: pin for seat, pin in (core_pins if isinstance(core_pins, dict) else {}).items()
+            if seat in roster or seat not in KNOWN_SEATS
+        }
+        merged_pins.update(pins or {})
+        if merged_pins:
+            pins = merged_pins
         codex_role_pins = _panel_codex_role_pins(prefs.get("codexModels"))
         invalid_codex = prefs.get("invalidCodexModels")
         if isinstance(invalid_codex, dict):
@@ -1403,12 +1615,14 @@ def main(argv):
 
         author_family = args.author_family
         narrative_family = args.narrative_family
+        receipt_host_family = None
         if args.implementation_engine is not None:
             if args.author_family is not None or args.narrative_family is not None:
                 print("family-flags-conflict", file=sys.stderr)
                 return 1
             host_model = args.host_model if args.host_model is not None else ""
             host_fam = model_registry.host_family(host_model)
+            receipt_host_family = host_fam
             impl_engine = args.implementation_engine
             claude_host_fam = model_registry.family_for("code-fixer", "claude")
             author_family = model_registry.family_for("code-fixer", impl_engine)
@@ -1456,20 +1670,35 @@ def main(argv):
             ):
                 extra_maker_families = frozenset({host_fam_for_extra})
 
+        flag_makers = frozenset(f for f in (args.maker_family or []) if f)
+        if flag_makers:
+            extra_maker_families = frozenset(extra_maker_families or ()) | flag_makers
+
         live_cells = None
         live_cells_source = None
+        import preflight_probe
+
+        non_panel_report: dict = {}
         if args.live_vendors is not None:
             live = [v for v in args.live_vendors.split(",") if v]
             liveness_pin_scoped = False
             live_cells_source = "synthesized"
+            synthesized_nonpanel = preflight_probe.needed_configs_for(NONPANEL_CELL_ROLES, live)
+            non_panel_report = {
+                "liveCells": sorted(
+                    {(vendor, model, effort) for vendor, cells in synthesized_nonpanel.items()
+                     for model, effort in cells},
+                    key=lambda cell: (cell[0], cell[1], cell[2] is not None, cell[2] or ""),
+                ),
+                "source": liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED,
+            }
         else:
             now = time.time()
             cache_path = liveness_cache.receipt_path(".")
-            import preflight_probe
 
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(
-                configured, pins, codex_role_pins=codex_role_pins or None,
+                configured, pins, roster=roster, codex_role_pins=codex_role_pins or None,
             )
             if not pins and not codex_role_pins:
                 needed_override = None
@@ -1478,11 +1707,13 @@ def main(argv):
                 preflight_probe.live_vendors_for_composition(
                     configured,
                     needed_override=needed_override,
+                    extra_needed=preflight_probe.needed_configs_for(NONPANEL_CELL_ROLES, configured),
+                    extra_report=non_panel_report,
                     cache_path=cache_path,
                     now=now,
                 )
             )
-        seed = seed_from(args.pr_number, args.head_sha)
+        seed =seed_from(args.pr_number, args.head_sha)
         build_kwargs: dict = {
             "pins": pins,
             "liveness_pin_scoped": liveness_pin_scoped,
@@ -1493,13 +1724,18 @@ def main(argv):
         if extra_maker_families is not None:
             build_kwargs["extra_maker_families"] = extra_maker_families
         sm = build(
-            PANEL_ROSTER,
+            roster,
             live,
             author_family,
             narrative_family,
             seed,
             **build_kwargs,
         )
+        sm["laneBasis"] = _lane_basis_receipt(lane_basis)
+        sm["hostFamily"] = receipt_host_family
+        sm["nonPanelLiveCells"] = [list(c) for c in non_panel_report.get("liveCells", [])]
+        sm["nonPanelLiveCellsSource"] = non_panel_report.get(
+            "source", liveness_cache.LIVE_CELLS_SOURCE_UNPROBED)
         if family_degradations:
             sm["degradations"] = list(sm.get("degradations", [])) + family_degradations
         extra_degradations: list[dict[str, str]] = []

@@ -5,17 +5,17 @@
   "fixEvents": [{"afterRound": 1, "changedSubjects": ["Test"], "coverageDecisions": []}],
   "reviewerEvents": [
     {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
-    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing test", "severity": "Important"}], "usageTotal": 1000},
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing test", "severity": "Important", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
     {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 1000},
-    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
     {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000},
-    {"round": 5, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout"}], "usageTotal": 1000},
+    {"round": 5, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout", "consequence": "a reviewer-found defect stays in the change"}], "usageTotal": 1000},
     {"round": 5, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000}
   ],
   "rounds": [
-    {"security": {"confidence": "high", "findings": []}, "test": {"confidence": "high", "findings": [{"severity": "Important", "title": "Missing test"}]}},
+    {"security": {"confidence": "high", "findings": []}, "test": {"confidence": "high", "findings": [{"severity": "Important", "title": "Missing test", "consequence": "a reviewer-found defect stays in the change"}]}},
     {"changedSubjects": ["Test"], "securitySkipped": true},
-    {"confirmationFindings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout"}]}
+    {"confirmationFindings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout", "consequence": "a reviewer-found defect stays in the change"}]}
   ],
   "expectedTerminal": "halted",
   "mustNotPass": true,

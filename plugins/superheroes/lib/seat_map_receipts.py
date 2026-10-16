@@ -16,11 +16,16 @@ _EVIDENCE_MAP_KEYS = frozenset({
     "liveVendors",
     "livenessPinScoped",
     "authorFamily",
+    "makerFamilies",
+    "nonPanelLiveCells",
+    "nonPanelLiveCellsSource",
+    "hostFamily",
 })
 _LIST_EVIDENCE_MAP_KEYS = frozenset({
     "violations",
     "liveCells",
     "liveVendors",
+    "nonPanelLiveCells",
 })
 # liveCellsSource trust — lower rank is less trusted; unrecognized sources rank below unprobed.
 _LIVE_CELLS_SOURCE_TRUST = {
@@ -236,6 +241,18 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     return [{"round": selected_round_label, "basis": basis}]
 
 
+def maker_family_union(receipt_list):
+    """The one maker-history rule: every family any receipt's `makerFamilies` list named, or None when no
+    receipt carried the list. Receipt emission and the decisions that read makers both go through here."""
+    from receipt_disclosures import maker_families  # lazy: receipt_disclosures imports this module
+    out, saw = set(), False
+    for entry in receipt_list:
+        fams = maker_families(entry["map"])
+        saw = saw or isinstance(entry["map"].get("makerFamilies"), list) or bool(fams)
+        out.update(fams)
+    return frozenset(out) if saw else None
+
+
 def emit_receipt_seat_map(state, driver_author_family=None):
     """Derived read-time union for ``build_receipt`` — latest seats, merged evidence, last-wins scalars."""
     receipt_list = receipts(state)
@@ -293,6 +310,27 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["liveCellsSource"] = _merge_live_cells_source(live_cells_sources)
     else:
         base.pop("liveCellsSource", None)
+    non_panel_sources: list = []
+    for entry in receipt_list:
+        if "nonPanelLiveCellsSource" in entry["map"]:
+            non_panel_sources.append(entry["map"]["nonPanelLiveCellsSource"])
+    if non_panel_sources:
+        base["nonPanelLiveCellsSource"] = _merge_live_cells_source(non_panel_sources)
+    else:
+        base.pop("nonPanelLiveCellsSource", None)
+    host_families: list = []
+    for entry in receipt_list:
+        if "hostFamily" in entry["map"]:
+            host_families.append(entry["map"]["hostFamily"])
+    if host_families:
+        # receipts that disagree on the host (or any that cannot name it) leave the host unknown
+        agreed = (
+            all(isinstance(fam, str) and fam for fam in host_families)
+            and len(set(host_families)) == 1
+        )
+        base["hostFamily"] = host_families[0] if agreed else None
+    else:
+        base.pop("hostFamily", None)
     pin_values: list = []
     for entry in receipt_list:
         if "livenessPinScoped" in entry["map"]:
@@ -314,10 +352,26 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["authorFamily"] = author_families[0]
     else:
         base.pop("authorFamily", None)
+    # every maker family any receipt named stays named: the union, never the last receipt's list
+    maker_families = maker_family_union(receipt_list)
+    if maker_families is not None:
+        base["makerFamilies"] = sorted(maker_families)
+    else:
+        base.pop("makerFamilies", None)
+    # the roster is the latest receipt's: it names the panel that receipt composed against
+    roster = None
+    for entry in receipt_list:
+        raw_roster = entry["map"].get("roster")
+        if isinstance(raw_roster, list):
+            roster = list(raw_roster)
+    if roster is not None:
+        base["roster"] = roster
+    else:
+        base.pop("roster", None)
     for entry in receipt_list:
         map_ = entry["map"]
         for k, v in map_.items():
-            if k in ("seats", "degradations") or k in _EVIDENCE_MAP_KEYS:
+            if k in ("seats", "degradations", "roster") or k in _EVIDENCE_MAP_KEYS:
                 continue
             base[k] = v
     return base
@@ -328,6 +382,9 @@ def _merge_live_cells_source(sources: list) -> object:
     best_rank = -1
     worst_value = None
     for source in sources:
+        if not isinstance(source, str):
+            # a malformed (unhashable / non-string) source proves nothing: least trusted, unprobed
+            source = liveness_cache.LIVE_CELLS_SOURCE_UNPROBED
         rank = _LIVE_CELLS_SOURCE_TRUST.get(source, _UNRECOGNIZED_LIVE_CELLS_SOURCE_TRUST)
         if rank < best_rank or best_rank < 0:
             best_rank = rank
