@@ -334,10 +334,48 @@ def build_identity(a, stage, repo, stored):
     return ident, scenarios
 
 
+_LIVE, _LIVE_LOCK, _STOPPING = set(), threading.Lock(), threading.Event()
+
+
+def run_group(cmd, timeout, prompt=None, **kw):
+    """Run cmd in its own session, tracked so an interrupt can kill its whole group (SIGKILL cannot be forwarded)."""
+    with _LIVE_LOCK:
+        if _STOPPING.is_set():
+            raise InterruptedError("interrupted; not starting another model call")
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
+                                errors="replace", start_new_session=True, **kw)
+        _LIVE.add(proc)
+    try:
+        out, err = proc.communicate(prompt, timeout=timeout)
+    except BaseException:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise
+    finally:
+        with _LIVE_LOCK:
+            _LIVE.discard(proc)
+    return proc.returncode, out, err
+
+
+@contextlib.contextmanager
+def cancel_on_interrupt():
+    """On Ctrl-C stop new attempts and kill every live model process group before the workers are joined."""
+    _STOPPING.clear()
+    try:
+        yield
+    except KeyboardInterrupt:
+        with _LIVE_LOCK:
+            _STOPPING.set()
+            for proc in _LIVE:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+        raise
+
+
 def exec_seat(cmd, cwd, env):
-    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, encoding="utf-8", errors="replace",
-                       timeout=SEAT_TIMEOUT, stdin=subprocess.DEVNULL)
-    return p.returncode, p.stdout, p.stderr
+    return run_group(cmd, SEAT_TIMEOUT, cwd=cwd, env=env)
 
 
 def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
@@ -353,7 +391,10 @@ def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
         # bites on: each seat loads the plugin from its own side's worktree, not the installed one (v0)
         cmd += ["--plugin-dir", os.path.join(side_dirs[side], ident["plugin_dir"])]
     cmd += ["--allowedTools", "Read,Grep,Glob", "--output-format", "text", prompt]
+    ok = False
     for attempt in (1, 2):
+        if _STOPPING.is_set():
+            break
         t0 = time.time()
         try:
             rc, text, err = exec_seat(cmd, side_dirs[side], dict(os.environ, CLAUDE_CONFIG_DIR=config_dir))
@@ -375,7 +416,7 @@ def stage_seats(run_dir, side_dirs, scenarios, ident, force, jobs, config_dir):
     tasks = [(sc, side, rep) for rep in range(1, ident["replicates"] + 1) for sc in scenarios for side in SIDES]
     path = os.path.join(run_dir, "answers", "seats.json")
     prior = {(r["id"], r["side"], r["rep"]): r for r in load_json(path, []) or []}
-    with cf.ThreadPoolExecutor(max_workers=max(1, min(jobs, 4))) as ex:
+    with cf.ThreadPoolExecutor(max_workers=max(1, min(jobs, 4))) as ex, cancel_on_interrupt():
         for r in ex.map(lambda t: run_seat(run_dir, side_dirs, *t, force, ident, config_dir), tasks):
             if not r["skipped"] or (r["id"], r["side"], r["rep"]) not in prior:
                 prior[(r["id"], r["side"], r["rep"])] = r
@@ -416,17 +457,7 @@ def prompt_bound(run_dir, sid, prompt):
 
 
 def exec_judge(cmd, prompt):
-    # own session so a timeout can kill the npm launcher's native child too (SIGKILL cannot be forwarded)
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            encoding="utf-8", errors="replace", start_new_session=True)
-    try:
-        out, err = proc.communicate(prompt, timeout=JUDGE_TIMEOUT)
-    except BaseException:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
-        raise
-    return proc.returncode, out, err
+    return run_group(cmd, JUDGE_TIMEOUT, prompt)
 
 
 def stage_judge(run_dir, scenarios, ident, force, jobs):
@@ -456,6 +487,8 @@ def stage_judge(run_dir, scenarios, ident, force, jobs):
                 if os.path.exists(stale):
                     os.replace(stale, stale + ".prev")
         for attempt in (1, 2):
+            if _STOPPING.is_set():
+                break
             t0 = time.time()
             try:
                 rc, text, err = exec_judge(cmd, prompt)
@@ -473,7 +506,7 @@ def stage_judge(run_dir, scenarios, ident, force, jobs):
 
     path = os.path.join(jd, "judge-attempts.json")
     prior = load_json(path, {})
-    with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+    with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex, cancel_on_interrupt():
         for sid, a in ex.map(one, scenarios):
             if a != 0 or sid not in prior:
                 prior[sid] = a

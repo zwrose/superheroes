@@ -620,3 +620,34 @@ def test_second_invocation_on_a_locked_run_dir_refused(tmp_path, monkeypatch, gi
     finally:
         os.close(fd)
     assert not (run_dir / "sides.json").exists()
+
+
+def test_interrupt_kills_live_groups_and_blocks_retries():
+    import threading
+    import time
+    got = {}
+
+    def worker():
+        try:
+            got["r"] = ab.run_group(["sh", "-c", "sleep 60"], 60, "")
+        except BaseException as e:  # noqa: BLE001
+            got["e"] = e
+
+    with pytest.raises(KeyboardInterrupt):
+        with ab.cancel_on_interrupt():
+            t = threading.Thread(target=worker)
+            t.start()
+            for _ in range(100):
+                with ab._LIVE_LOCK:
+                    if ab._LIVE:
+                        break
+                time.sleep(0.05)
+            raise KeyboardInterrupt
+    t.join(10)
+    assert not t.is_alive()
+    assert got["r"][0] == -9  # killed by the interrupt handler, not by the 60s timeout
+    assert ab._STOPPING.is_set() and not ab._LIVE
+    with pytest.raises(InterruptedError):
+        ab.run_group(["true"], 5)
+    with ab.cancel_on_interrupt():  # a new stage starts clean
+        assert not ab._STOPPING.is_set()
