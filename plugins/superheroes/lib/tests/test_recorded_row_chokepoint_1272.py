@@ -458,7 +458,8 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
         "seats": {
             dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
             for dim in RD.DIMENSIONS
-        }
+        },
+        **TRI._nonpanel_cell_proof(["codex"]),
     }
     session_dir, gitdir, head_path, head_sha = _bootstrap_head_before_next(
         tmp_path,

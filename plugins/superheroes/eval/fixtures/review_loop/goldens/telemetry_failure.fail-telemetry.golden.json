@@ -17,5 +17,5 @@
     "reason": "telemetry-write-failed"
   },
   "terminal": "clean",
-  "tokenTotal": 1001
+  "tokenTotal": 1000
 }

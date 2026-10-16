@@ -66,6 +66,10 @@ UNFILLED_SOURCE = "unfilled"
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
+# The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, the
+# gap-sweep / scoped reviewers and the synthesis grouper): compose probes and records these beside
+# the panel's own cells.
+NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep", "synthesis")
 
 
 def roster_for(lane_basis) -> tuple[str, ...]:
@@ -1390,9 +1394,10 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         out["codexRolePins"] = seat_map["codexRolePins"]
     if "laneBasis" in seat_map:
         out["laneBasis"] = seat_map["laneBasis"]
-    # compose stamps the host family; a map that never went through compose carries none
-    if "hostFamily" in seat_map:
-        out["hostFamily"] = seat_map["hostFamily"]
+    # compose stamps these three together; a map that never went through compose carries none
+    for key in ("hostFamily", "nonPanelLiveCells", "nonPanelLiveCellsSource"):
+        if key in seat_map:
+            out[key] = seat_map[key]
     return out
 
 
@@ -1668,14 +1673,25 @@ def main(argv):
 
         live_cells = None
         live_cells_source = None
+        import preflight_probe
+
+        non_panel_report: dict = {}
         if args.live_vendors is not None:
             live = [v for v in args.live_vendors.split(",") if v]
             liveness_pin_scoped = False
             live_cells_source = "synthesized"
+            synthesized_nonpanel = preflight_probe.needed_configs_for(NONPANEL_CELL_ROLES, live)
+            non_panel_report = {
+                "liveCells": sorted(
+                    {(vendor, model, effort) for vendor, cells in synthesized_nonpanel.items()
+                     for model, effort in cells},
+                    key=lambda cell: (cell[0], cell[1], cell[2] is not None, cell[2] or ""),
+                ),
+                "source": liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED,
+            }
         else:
             now = time.time()
             cache_path = liveness_cache.receipt_path(".")
-            import preflight_probe
 
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(
@@ -1688,11 +1704,13 @@ def main(argv):
                 preflight_probe.live_vendors_for_composition(
                     configured,
                     needed_override=needed_override,
+                    extra_needed=preflight_probe.needed_configs_for(NONPANEL_CELL_ROLES, configured),
+                    extra_report=non_panel_report,
                     cache_path=cache_path,
                     now=now,
                 )
             )
-        seed = seed_from(args.pr_number, args.head_sha)
+        seed =seed_from(args.pr_number, args.head_sha)
         build_kwargs: dict = {
             "pins": pins,
             "liveness_pin_scoped": liveness_pin_scoped,
@@ -1712,6 +1730,9 @@ def main(argv):
         )
         sm["laneBasis"] = _lane_basis_receipt(lane_basis)
         sm["hostFamily"] = receipt_host_family
+        sm["nonPanelLiveCells"] = [list(c) for c in non_panel_report.get("liveCells", [])]
+        sm["nonPanelLiveCellsSource"] = non_panel_report.get(
+            "source", liveness_cache.LIVE_CELLS_SOURCE_UNPROBED)
         if family_degradations:
             sm["degradations"] = list(sm.get("degradations", [])) + family_degradations
         extra_degradations: list[dict[str, str]] = []

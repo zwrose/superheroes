@@ -447,7 +447,7 @@ def _claim_reviewer(session_dir, phase, art):
     (`reviewerVendor`), which the driver requires when independence replaced the reviewer engine."""
     if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) and isinstance(art, dict) and "reviewerVendor" not in art:
         ok, state = RD.load_state(session_dir)
-        vendor = RD._nonpanel_selection(state, session_dir)[0] if ok else None
+        vendor = RD._nonpanel_selection(state, session_dir, phase)[0] if ok else None
         if vendor:
             return dict(art, reviewerVendor=vendor)
     return art
@@ -559,10 +559,22 @@ def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
     raise AssertionError("never reached %s within %d steps" % (target_phase, max_steps))
 
 
+def _synthesis_seatable_map(vendors, fixer_vendor):
+    """An assertable seat map whose host family is known and outside the makers', so the synthesis
+    seat can stand on `claude` (needs a fixer other than `claude`, so that the makers exclude anthropic)."""
+    return dict(_assertable_seat_map(vendors, fixer_vendor), hostFamily="anthropic")
+
+
 def _at(tmp_path, target_phase, cfg=None):
     """Drive a fresh session to `target_phase`. `cfg` overrides the default profile so a test can
-    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`)."""
+    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`). A walk through
+    synthesis defaults to a profile that seats it: a `codex` fixer and a known, non-maker host family."""
     d = str(tmp_path)
+    if cfg is None and target_phase == RD.P_SYNTHESIS:
+        respond = _responder(round1_findings=_A_FINDING,
+                             seat_map=_synthesis_seatable_map(["claude", "codex"], "codex"))
+        n = _drive_to_phase(d, _cfg(fixerVendor="codex"), respond, target_phase)
+        return d, n
     n = _drive_to_phase(d, cfg or _cfg(), _responder(round1_findings=_A_FINDING), target_phase)
     return d, n
 
@@ -1059,7 +1071,10 @@ def test_submit_audits_collection_manifest_key_refused(tmp_path):
 def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
     """A refused manifest key does not run the fold — no auditRounds entry, no _auditOutcome, no
     decisions recorded."""
-    d, n = _at(tmp_path, RD.P_AUDITS)
+    d = str(tmp_path)
+    n = _drive_to_phase(d, _cfg(fixerVendor="codex"), _responder(
+        round1_findings=_A_FINDING, seat_map=_synthesis_seatable_map(["claude", "codex"], "codex")),
+        RD.P_AUDITS)
     good, _targets = _audit_artifact(n)
     bad = dict(good)
     bad["collectionManifest"] = {"no-such-key": "claude"}
@@ -1217,7 +1232,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1265,7 +1280,7 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1342,7 +1357,7 @@ def _multifile_delta_respond(captured, fixer_artifact):
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1407,7 +1422,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
                     {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1553,7 +1568,7 @@ def test_two_verifier_faults_in_one_round_are_both_recorded():
         return []
 
     _result, state = _run_loop_capturing_state(
-        _seams(reviewer=reviewer, verifier=wave_verifier),
+        _seams(reviewer=reviewer, verifier=wave_verifier, vendors=["claude", "codex"]),
         _cfg_cert(diff=_big_diff(25)),
     )
     faults = _state_verifier_faults(state)
@@ -1590,7 +1605,7 @@ def test_run_loop_verifier_valid_reason_control():
                 "vendor": "codex"}
 
     result, state = _run_loop_capturing_state(
-        _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
+        _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier, vendors=["claude", "codex"]),
         _cfg_cert(),
     )
     assert not _state_verifier_faults(state)
@@ -1989,7 +2004,7 @@ def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
                                       for t in (targets or [])],
         fix_step=fix_step,
-        io={"stall_menu": stall_menu})
+        io={"stall_menu": stall_menu}, vendors=["claude", "codex"])
     receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
     assert len(stall_menus) == 2
     assert "one-more-round" in stall_menus[0]["choices"]
@@ -2230,7 +2245,7 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
         return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
     receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
-                          _cfg_cert(maxRounds=20))
+                          _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
     assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
@@ -3227,7 +3242,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
         return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Test"]}
 
     receipt = RD.run_loop(
-        _seams(reviewer=reviewer, fix_step=fix_step),
+        _seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"]),
         _cfg_cert(dimensions=["test-role"], recordsPath=str(records), maxRounds=20))
     assert receipt["verdict"] != "cannot-certify"
     assert fired["scoped"] == 1, "the scoped finder must fire over the real new surface"
@@ -3258,6 +3273,7 @@ _ALL_CHANNELS = {
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],
+    "synthesisUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude"}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",
@@ -5311,6 +5327,18 @@ def _verified_clean_seat_map(vendors):
     raise AssertionError("no verify-clean seat map for vendors %r" % vendors)
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`,
+    `reviewer-deep`) live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _assertable_seat_map(vendors, fixer_vendor="claude"):
     """Receipt-shaped seat map — ``unexcused_violations`` empty at construction (#1190)."""
     SM = _load("seat_map")
@@ -5323,6 +5351,7 @@ def _assertable_seat_map(vendors, fixer_vendor="claude"):
             m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
             receipt = SM.to_receipt(m, author)
             if SM.unexcused_violations(receipt, driver_author_family) == []:
+                receipt.update(_nonpanel_cell_proof(live))
                 return receipt
     raise AssertionError(
         "no assertable seat map for vendors %r driver_author_family=%r"
@@ -6852,7 +6881,7 @@ def _rearm_forever_seams():
         leg_rnds["verify"].append(rnd)
         return "pass"
 
-    seams = _seams(reviewer=reviewer, fix_step=fix_step, verify_runner=verify_runner)
+    seams = _seams(reviewer=reviewer, fix_step=fix_step, verify_runner=verify_runner, vendors=["claude", "codex"])
     seams["_legRnds"] = leg_rnds
     return seams
 
@@ -6946,7 +6975,7 @@ def _rearm_until_converge_seams(converge_at):
         fix_n["n"] += 1
         return {"fixes": [], "headDiff": _headf_ns(fix_n["n"]), "changedSubjects": ["Code"]}
 
-    return _seams(reviewer=reviewer, fix_step=fix_step)
+    return _seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"])
 
 
 def test_round_nine_below_ceiling_does_not_halt_on_ceiling(tmp_path):

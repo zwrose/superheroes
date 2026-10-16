@@ -287,7 +287,7 @@ PROVENANCE_SOURCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISP
 def _maker_barred(state, config):
     """Predicate: True when a vendor may not review (maker family, the fixer's vendor, or an
     unresolvable reviewer family) — `receipt_disclosures.reviewer_ineligible`, the same bar
-    `independent_reviewer` applies when the driver selects a non-panel reviewer — including the host
+    `nonpanel_reviewer` applies when the driver selects a non-panel reviewer — including the host
     family a native seat takes from the seat map, so the two sides judge a vendor identically."""
     return receipt_disclosures.nonpanel_barred(state, config)
 
@@ -447,6 +447,10 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
     elif phase == P_AUDITS:
         artifact = _assemble_audits(roster, indexed, dispatch_manifest, disclosures)
     elif phase == P_SYNTHESIS:
+        fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,
+                                     _maker_barred(state, config), disclosures)
+        if fault is not None:
+            return None, fault
         artifact = _assemble_synthesis(roster, indexed, disclosures)
     elif phase in (P_GAPSWEEP, P_SCOPED):
         fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,

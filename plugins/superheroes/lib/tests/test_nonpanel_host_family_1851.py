@@ -26,6 +26,18 @@ import round_driver as RD  # noqa: E402
 NONPANEL = (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)
 
 
+def _proof(*vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`, `reviewer-deep`)
+    live: a non-claude reviewer is seated only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _map(host="anthropic", **extra):
     out = {"hostFamily": host}
     out.update(extra)
@@ -44,8 +56,8 @@ def _engine(monkeypatch, vendor, source=None):
                         lambda root: (vendor, source or RD.VENDOR_SOURCE_CONFIGURED))
 
 
-def _pick(state):
-    return RD._nonpanel_selection(state)
+def _pick(state, phase=RD.P_VERIFIERS):
+    return RD._nonpanel_selection(state, None, phase)
 
 
 # --- edge 1: no seat map at all -----------------------------------------------------------------
@@ -57,11 +69,14 @@ def test_no_seat_map_is_an_unknown_host_and_leaves_native_claude_ineligible(monk
     state = _state(vendors=["claude", "codex"])
     assert RD.effective_seat_map(state) == {}
     assert RDS.host_family(RD.effective_seat_map(state)) is None
-    # codex is a runner-channel vendor, unaffected by the host: it is seated in claude's place
-    assert _pick(state) == ("codex", RD.VENDOR_SOURCE_INDEPENDENT)
+    # codex is a runner-channel vendor, unaffected by the host: with its cells proven (a map that
+    # names no host family) it is seated in claude's place
+    proven = _state(_proof("codex"), vendors=["claude", "codex"])
+    assert RDS.host_family(RD.effective_seat_map(proven)) is None
+    assert _pick(proven) == ("codex", RD.VENDOR_SOURCE_INDEPENDENT)
     # nothing else to fall to: the only live vendor is the native one on an unknown host
     assert _pick(_state(vendors=["claude"])) == (None, None)
-    assert RD._nonpanel_unseatable(_state(vendors=["claude"]))
+    assert RD._nonpanel_unseatable(_state(vendors=["claude"]), None, RD.P_VERIFIERS)
 
 
 # --- edge 2: hostFamily null --------------------------------------------------------------------
@@ -71,7 +86,7 @@ def test_a_null_or_malformed_host_family_makes_the_native_candidate_ineligible(m
     # axis: hostFamily null / not a non-empty string -> native candidate ineligible — see bite-proof
     # record wo_r_1851_host_family (R2)
     _engine(monkeypatch, "claude")
-    state = _state(_map(host=host), vendors=["claude", "codex"])
+    state = _state(_map(host=host, **_proof("codex")), vendors=["claude", "codex"])
     assert _pick(state) == ("codex", RD.VENDOR_SOURCE_INDEPENDENT)
     assert _pick(_state(_map(host=host), vendors=["claude"])) == (None, None)
     absent = _map()
@@ -101,7 +116,7 @@ def test_the_selection_judges_the_native_seat_by_the_seat_map_host_family(monkey
     _engine(monkeypatch, "claude")
     state = _state(_map(host="openai", makerFamilies=["openai"]), vendors=["claude"])
     assert _pick(state) == (None, None)
-    assert RD._nonpanel_unseatable(state) is True
+    assert RD._nonpanel_unseatable(state, None, RD.P_VERIFIERS) is True
     row = RD._seat_transport_row(state, RD.P_VERIFIERS, "seat", 0, state["config"], {}, "/repo")
     assert row["vendor"] is None
 
@@ -156,20 +171,21 @@ def test_with_no_makers_and_no_fixer_a_native_engine_on_an_unknown_host_is_not_s
     _engine(monkeypatch, "claude")
     assert phase in NONPANEL
     # unknown host (no seat map): the native engine is ineligible although nothing is barred
-    assert _pick(_state(vendors=["claude"])) == (None, None)
-    assert _pick(_state(_map(host=None), vendors=["claude"])) == (None, None)
+    assert _pick(_state(vendors=["claude"]), phase) == (None, None)
+    assert _pick(_state(_map(host=None), vendors=["claude"]), phase) == (None, None)
     # a known eligible host: the engine is seated with its own vendorSource
     state = _state(_map(host="anthropic"), vendors=["claude"])
-    assert _pick(state) == ("claude", RD.VENDOR_SOURCE_CONFIGURED)
+    assert _pick(state, phase) == ("claude", RD.VENDOR_SOURCE_CONFIGURED)
     row = RD._seat_transport_row(state, phase, "seat", 0, state["config"], {}, "/repo")
     assert row["vendor"] == "claude" and row["vendorSource"] == RD.VENDOR_SOURCE_CONFIGURED
     # a defaulted preference read is carried through unchanged
     _engine(monkeypatch, "claude", RD.VENDOR_SOURCE_DEFAULTED)
-    assert _pick(state) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
+    assert _pick(state, phase) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
 
 
 def test_with_no_makers_and_no_fixer_a_runner_engine_is_unaffected_by_the_host(monkeypatch):
     _engine(monkeypatch, "codex")
-    assert _pick(_state(vendors=["claude", "codex"])) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
-    assert _pick(_state(_map(host=None), vendors=["claude", "codex"])) == (
+    assert _pick(_state(_proof("codex"), vendors=["claude", "codex"])) == (
+        "codex", RD.VENDOR_SOURCE_CONFIGURED)
+    assert _pick(_state(_map(host=None, **_proof("codex")), vendors=["claude", "codex"])) == (
         "codex", RD.VENDOR_SOURCE_CONFIGURED)

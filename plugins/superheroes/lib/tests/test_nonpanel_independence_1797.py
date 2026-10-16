@@ -14,6 +14,7 @@ for _p in (_HERE, _LIB):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import model_registry  # noqa: E402
 import receipt_disclosures as RDS  # noqa: E402
 import round_adapters as RA  # noqa: E402
 import round_driver as RD  # noqa: E402
@@ -66,8 +67,27 @@ def test_independent_reviewer_never_treats_an_unresolvable_family_as_independent
 
 # --- the transport chokepoint -------------------------------------------------------------------
 
+def _cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`, `reviewer-deep`)
+    live: a non-claude reviewer is seated only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
+def _proven(cfg):
+    """``cfg`` with a seat map proving the cells of its live vendors (kept beside any map it has)."""
+    cfg = dict(cfg)
+    cfg["seatMap"] = dict(cfg.get("seatMap") or {}, **_cell_proof(cfg.get("vendors") or ()))
+    return cfg
+
+
 def _state(**cfg):
-    return {"config": cfg, "rounds": {}, "seatMapReceipts": []}
+    return {"config": _proven(cfg), "rounds": {}, "seatMapReceipts": []}
 
 
 def _seat(vendor, family):
@@ -76,11 +96,12 @@ def _seat(vendor, family):
 
 def _maker_state(**cfg):
     # an earlier receipt names openai as a maker; a later one names only anthropic; both nonempty
+    proof = _cell_proof(cfg.get("vendors") or ())
     return {"config": cfg, "rounds": {}, "seatMapReceipts": [
-        {"round": "1", "map": {"seats": {"code-reviewer": _seat("codex", "openai")},
-                               "makerFamilies": ["openai"]}},
-        {"round": "2", "map": {"seats": {"code-reviewer": _seat("claude", "anthropic")},
-                               "makerFamilies": ["anthropic"]}},
+        {"round": "1", "map": dict({"seats": {"code-reviewer": _seat("codex", "openai")},
+                                    "makerFamilies": ["openai"]}, **proof)},
+        {"round": "2", "map": dict({"seats": {"code-reviewer": _seat("claude", "anthropic")},
+                                    "makerFamilies": ["anthropic"]}, **proof)},
     ]}
 
 
@@ -243,9 +264,9 @@ def test_hand_submit_guard_reads_the_shared_missing_policy(tmp_path, monkeypatch
 def _library_verifier_fold(monkeypatch, verifier):
     """Run the in-process verifier seam and fold its artifact; the selection replaces `claude`."""
     monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("claude", RD.VENDOR_SOURCE_CONFIGURED))
-    cfg = {"vendors": ["claude", "codex"], "fixerVendor": "claude"}
+    cfg = _proven({"vendors": ["claude", "codex"], "fixerVendor": "claude"})
     state = RD.new_state(cfg)
-    assert RD._nonpanel_selection(state)[0] == "codex"
+    assert RD._nonpanel_selection(state, None, RD.P_VERIFIERS)[0] == "codex"
     state["_toVerify"] = [{"severity": "Important", "file": "a.py", "line": 1, "body": "b"}]
     artifact = RD._run_seam({"verifier": verifier}, RD.P_VERIFIERS, {"clusters": [{"ids": ["v0"]}]},
                             state, state["config"])

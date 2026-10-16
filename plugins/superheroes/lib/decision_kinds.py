@@ -36,6 +36,7 @@ DECISION_KINDS = (
     "self-recovery",
     "stall-choice",
     "stall-menu",
+    "synthesis-unseatable",
     "unknown-surface",
     "verifier-refuted",
     "verify-fail",

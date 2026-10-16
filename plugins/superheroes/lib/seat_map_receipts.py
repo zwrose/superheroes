@@ -17,12 +17,15 @@ _EVIDENCE_MAP_KEYS = frozenset({
     "livenessPinScoped",
     "authorFamily",
     "makerFamilies",
+    "nonPanelLiveCells",
+    "nonPanelLiveCellsSource",
     "hostFamily",
 })
 _LIST_EVIDENCE_MAP_KEYS = frozenset({
     "violations",
     "liveCells",
     "liveVendors",
+    "nonPanelLiveCells",
 })
 # liveCellsSource trust — lower rank is less trusted; unrecognized sources rank below unprobed.
 _LIVE_CELLS_SOURCE_TRUST = {
@@ -307,6 +310,14 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["liveCellsSource"] = _merge_live_cells_source(live_cells_sources)
     else:
         base.pop("liveCellsSource", None)
+    non_panel_sources: list = []
+    for entry in receipt_list:
+        if "nonPanelLiveCellsSource" in entry["map"]:
+            non_panel_sources.append(entry["map"]["nonPanelLiveCellsSource"])
+    if non_panel_sources:
+        base["nonPanelLiveCellsSource"] = _merge_live_cells_source(non_panel_sources)
+    else:
+        base.pop("nonPanelLiveCellsSource", None)
     host_families: list = []
     for entry in receipt_list:
         if "hostFamily" in entry["map"]:
@@ -371,6 +382,9 @@ def _merge_live_cells_source(sources: list) -> object:
     best_rank = -1
     worst_value = None
     for source in sources:
+        if not isinstance(source, str):
+            # a malformed (unhashable / non-string) source proves nothing: least trusted, unprobed
+            source = liveness_cache.LIVE_CELLS_SOURCE_UNPROBED
         rank = _LIVE_CELLS_SOURCE_TRUST.get(source, _UNRECOGNIZED_LIVE_CELLS_SOURCE_TRUST)
         if rank < best_rank or best_rank < 0:
             best_rank = rank
