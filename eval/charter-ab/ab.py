@@ -334,18 +334,18 @@ def build_identity(a, stage, repo, stored):
     return ident, scenarios
 
 
-_LIVE, _LIVE_LOCK, _STOPPING = set(), threading.Lock(), threading.Event()
+_RUNNING_PROCS, _RUNNING_PROCS_LOCK, _STOPPING = set(), threading.Lock(), threading.Event()
 
 
 def run_group(cmd, timeout, prompt=None, **kw):
     """Run cmd in its own session, tracked so an interrupt can kill its whole group (SIGKILL cannot be forwarded)."""
-    with _LIVE_LOCK:
+    with _RUNNING_PROCS_LOCK:
         if _STOPPING.is_set():
             raise InterruptedError("interrupted; not starting another model call")
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
                                 errors="replace", start_new_session=True, **kw)
-        _LIVE.add(proc)
+        _RUNNING_PROCS.add(proc)
     try:
         out, err = proc.communicate(prompt, timeout=timeout)
     except BaseException:
@@ -354,8 +354,8 @@ def run_group(cmd, timeout, prompt=None, **kw):
         proc.communicate()
         raise
     finally:
-        with _LIVE_LOCK:
-            _LIVE.discard(proc)
+        with _RUNNING_PROCS_LOCK:
+            _RUNNING_PROCS.discard(proc)
     return proc.returncode, out, err
 
 
@@ -366,9 +366,9 @@ def cancel_on_interrupt():
     try:
         yield
     except KeyboardInterrupt:
-        with _LIVE_LOCK:
+        with _RUNNING_PROCS_LOCK:
             _STOPPING.set()
-            for proc in _LIVE:
+            for proc in _RUNNING_PROCS:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(proc.pid, signal.SIGKILL)
         raise

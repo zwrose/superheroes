@@ -638,15 +638,15 @@ def test_interrupt_kills_live_groups_and_blocks_retries():
             t = threading.Thread(target=worker)
             t.start()
             for _ in range(100):
-                with ab._LIVE_LOCK:
-                    if ab._LIVE:
+                with ab._RUNNING_PROCS_LOCK:
+                    if ab._RUNNING_PROCS:
                         break
                 time.sleep(0.05)
             raise KeyboardInterrupt
     t.join(10)
     assert not t.is_alive()
     assert got["r"][0] == -9  # killed by the interrupt handler, not by the 60s timeout
-    assert ab._STOPPING.is_set() and not ab._LIVE
+    assert ab._STOPPING.is_set() and not ab._RUNNING_PROCS
     with pytest.raises(InterruptedError):
         ab.run_group(["true"], 5)
     with ab.cancel_on_interrupt():  # a new stage starts clean
