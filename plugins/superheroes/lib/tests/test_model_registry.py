@@ -277,7 +277,8 @@ def test_family_for_review_roles():
     assert MR.family_for("reviewer-deep", "codex") == "openai"
     assert MR.family_for("reviewer-deep", "cursor") == "xai"
     assert MR.family_for("implementer", "cursor") == "xai"
-    assert MR.family_for("synthesis", "codex") is None
+    assert MR.family_for("synthesis", "codex") == "openai"
+    assert MR.family_for("synthesis", "cursor") is None
     for role in _REVIEW_ROLES:
         for vendor in MR.vendors():
             cell = MR.matrix_config(role, vendor)
@@ -297,7 +298,8 @@ def test_allowlist():
     impl_claude = MR.allowlist("implementer", "claude")
     assert impl_claude[0] == ("sonnet-5.5", "high")
     assert ("haiku-4.5", "medium") not in impl_claude
-    assert MR.allowlist("synthesis", "codex") == ()
+    assert ("gpt-6.1-sol", "high") in MR.allowlist("synthesis", "codex")
+    assert MR.allowlist("synthesis", "cursor") == ()
 
 
 def test_is_allowed():
@@ -415,7 +417,7 @@ def test_resolve_dispatch_fail_closed_edges():
     assert r["ok"] is False and "unknown role" in r["reason"]
     assert r["candidates"] == []
 
-    r = MR.resolve_dispatch("synthesis", "codex")
+    r = MR.resolve_dispatch("synthesis", "cursor")
     assert r["ok"] is False and "no sanctioned model" in r["reason"]
     assert r["candidates"] == []
 

@@ -111,7 +111,8 @@ def test_t5_library_run_loop_parks_cannot_certify_without_fixing():
 
     refusal, receipt = _run_loop_with_loop_receipt(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
+            ({"findings": [dict(_TRADEOFF, consequence="a reviewer-found defect stays in the change")]}
+             if rnd == 1 and dim == "code-reviewer" else []),
         fix_step=fix_step, io={"judgment_gate": judgment_gate}), _cfg_cert())
     assert refusal["verdict"] == "cannot-certify"
     reason = (receipt["certification"] or {}).get("reason") or ""
@@ -156,7 +157,8 @@ _AGGREGATE_REASON = ("gate-guidance-aggregate-oversize: %d guided finding(s) exc
 
 def _tradeoff_findings(n):
     return [{"title": "widen the API %d" % i, "severity": "Important", "file": "f%d.py" % i,
-             "line": i, "tradeoff": True} for i in range(1, n + 1)]
+             "line": i, "tradeoff": True,
+             "consequence": "a reviewer-found defect stays in the change"} for i in range(1, n + 1)]
 
 
 def _session_with_findings(tmp_path, n, name="judgment"):
