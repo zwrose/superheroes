@@ -792,7 +792,10 @@ under `SUPERHEROES_WORKTREES_ROOT` when set and `~/.superheroes-worktrees` other
 its path and the builder's session id on the `reserved` record, and starts the session with that
 worktree as its working directory, never the primary checkout. A target path that already exists on disk, or that git
 still registers, is a **collision**: the launch refuses (`launch-worktree-collision`) rather than
-reuse a checkout another build may be holding. The `own-worktree` standing ruling stays in the
+reuse a checkout another build may be holding. A **cloud launch** (`--place cloud`) is the
+exception: it makes no worktree and records neither field on `reserved`; its record carries
+`place: "cloud"`, and its `started` record names the cloud session (`cloudSessionName`, and
+`cloudSessionId` when the launch reports the session's id). The `own-worktree` standing ruling stays in the
 composed prompt as defense in depth — a builder that never sees the primary checkout cannot
 violate it. That record carries the mechanical park/refusal accounting
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
