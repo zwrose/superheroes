@@ -108,7 +108,9 @@ shape is wrong and the thinking wins.
    **unconditionally**: is there a consequence of merging that this PR's owner half never states? It
    is scoped to the **principle only** — the review seat owns the omission floor's presence match, and
    you do not re-run it. When the answer is not `None`, that consequence goes into the **owner half**
-   too, not only here.
+   too, not only here. There is **no floor-green precondition**.
+   **A dispatched grounding seat does not retire it** — when one lands, you become the backstop for
+   that seat being absent, vacuous, or misconfigured.
 5. **Degradations.** Everything that cost something promised — in the build, and in **your own vet**
    (a probe you could not run, a surface you could not reach, a window that closes with your session).
 6. **Accounting, with attribution.** Orders dispatched and reworks, each blocking finding attributed
@@ -327,6 +329,8 @@ a defect in the receipt, because absence is exactly what a reader cannot interpr
 A **triggered** field that did not trigger is simply **absent** — and that is safe only because its
 trigger is greppable in the artifacts, so any reader can re-derive whether it should have fired
 without trusting the receipt's author.
+
+The receipt stands without your context.
 
 ## The owner-half write — register
 
