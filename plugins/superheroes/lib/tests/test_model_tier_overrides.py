@@ -2,6 +2,8 @@ import importlib.util
 import json
 import os
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 

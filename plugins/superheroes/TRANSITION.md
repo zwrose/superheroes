@@ -197,6 +197,15 @@ These retirements ship in the same release as the review record, and never apart
 - `lib/cloud_cleanup.py` is new, with three verbs: `plan` says whether a cloud lane's pull request has merged or closed and what to send its session, `record` records how that request went, and `branch` deletes the pull request's branch when the repository kept it.
 - The advisor cleans up a cloud lane only after its pull request merges or closes, the same way for both. While the pull request is open, handed back or parked, nothing is cleaned up. The only step it asks of the owner is the archive prompt, and on a request that could not be confirmed it asks nothing; nothing reminds the owner about an unanswered prompt.
 
+### Cloud builds: lower-layer cleanup
+
+- A cloud session can no longer write calibration through the tier-override writer or the migration movers; they refuse there.
+- A reused process id no longer blocks recording a lane's outcome. This holds for lanes launched from now on: their record keeps the child's start time and command, and a process that differs from them is not the lane's child. Older lanes behave as before.
+- The relay check no longer crashes on a timestamp with no zone; it skips that record. It also counts a send as an answer's only when the send opens with that answer's own header line, so a send with no header, or one that quotes another answer's id, is ignored.
+- A relay name is now at most 64 characters, with odd characters in the account folder's name replaced by `-`, so a long or unusual folder name no longer stops the relay from starting.
+- The owner's message about a finished lane's session is now conditional. It says there will be one prompt if the builder's session has a tool to remove itself, and that the session stays listed until the owner removes it by hand if it has none.
+- A parked PR that is already closed or let through gets no renewal advice, and a newer park on a PR that was closed is recorded again. A cloud lane now records its account, so the renewal check no longer reads an explicit default config folder as a different account.
+
 ### Vet slot: builder content in the slot span refuses
 
 - `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.

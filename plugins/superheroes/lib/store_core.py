@@ -21,6 +21,12 @@ import sys
 import tempfile
 import threading
 
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import calibration_paths  # noqa: E402  (sibling; stdlib-only leaf)
+
 GIT_OK = "ok"
 GIT_DECLINED = "declined"        # git ran and exited non-zero — an authoritative "no"
 GIT_UNAVAILABLE = "unavailable"  # git could not be run at all — the answer is unknown
@@ -436,15 +442,19 @@ def derive_identifiers(cwd):
 
 
 # The calibration layout inside a project store dir `<store_root>/projects/<key>/`. The writers
-# (mode_registry, architect_config) take their filenames from here, so the guard below and the
-# writers cannot drift apart.
-REGISTRY_FILENAME = "registry.json"
-META_FILENAME = "meta.json"
-POLICY_FILENAME = "doc-policy.json"
-CONFIG_DIRNAME = "config"
-PERMISSION_DIRNAME = "permission"
-PERMISSION_RULES_FILENAME = "rules.json"
-_STORE_TOP_FILES = (REGISTRY_FILENAME, META_FILENAME, POLICY_FILENAME)
+# (mode_registry, architect_config) take their filenames from here, so the guard and the writers
+# cannot drift apart. The names live in `calibration_paths`, the one home of the classification.
+REGISTRY_FILENAME = calibration_paths.REGISTRY_FILENAME
+META_FILENAME = calibration_paths.META_FILENAME
+POLICY_FILENAME = calibration_paths.POLICY_FILENAME
+CONFIG_DIRNAME = calibration_paths.CONFIG_DIRNAME
+PERMISSION_DIRNAME = calibration_paths.PERMISSION_DIRNAME
+PERMISSION_RULES_FILENAME = calibration_paths.PERMISSION_RULES_FILENAME
+_STORE_TOP_FILES = calibration_paths.STORE_TOP_FILES
+
+
+# The one refusal-reason token every cloud-session calibration-write refusal carries.
+CLOUD_REFUSAL_REASON = "calibration-write-in-cloud-session"
 
 
 class CalibrationWriteRefused(PermissionError):
@@ -454,25 +464,12 @@ class CalibrationWriteRefused(PermissionError):
     deferral keep doing so."""
 
 
-def is_calibration_path(path):
-    """True when `path` is a calibration file: under a project store dir `<root>/projects/<key>/`
-    one of the registry, meta and doc-policy files, config/*.md or permission/rules.json; or a *.md
-    directly in the in-repo calibration directory (`.claude/superheroes/`). The store root is not
-    consulted: writers take an explicit root, so the layout alone decides. Pure; compares fully
-    resolved paths."""
-    real = os.path.realpath(os.path.abspath(path))
-    parent, name = os.path.split(real)
-    import core_md
-    in_repo_dir = pathlib.PurePath(os.path.dirname(core_md.in_repo_core_rel_path())).parts
-    if name.endswith(".md") and pathlib.PurePath(parent).parts[-len(in_repo_dir):] == in_repo_dir:
-        return True
-    parts = pathlib.PurePath(real).parts
-    if len(parts) >= 3 and parts[-3] == "projects" and parts[-1] in _STORE_TOP_FILES:
-        return True
-    if len(parts) >= 4 and parts[-4] == "projects":
-        return ((parts[-2] == CONFIG_DIRNAME and parts[-1].endswith(".md"))
-                or (parts[-2] == PERMISSION_DIRNAME and parts[-1] == PERMISSION_RULES_FILENAME))
-    return False
+is_calibration_path = calibration_paths.is_calibration_path
+
+
+def in_cloud_session():
+    """True in a cloud session: CLAUDE_CODE_REMOTE is exactly "true" (not "TRUE", "1" or "false")."""
+    return os.environ.get("CLAUDE_CODE_REMOTE") == "true"
 
 
 def atomic_write(path, text, tmp_prefix=".store-core."):
@@ -480,13 +477,13 @@ def atomic_write(path, text, tmp_prefix=".store-core."):
 
     In a cloud session (CLAUDE_CODE_REMOTE == "true") a calibration file is never written:
     raises CalibrationWriteRefused before anything touches the disk."""
-    if os.environ.get("CLAUDE_CODE_REMOTE") == "true" and is_calibration_path(path):
-        raise CalibrationWriteRefused("calibration-write-in-cloud-session: %s" % path)
+    if in_cloud_session() and is_calibration_path(path):
+        raise CalibrationWriteRefused("%s: %s" % (CLOUD_REFUSAL_REASON, path))
     d = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=tmp_prefix, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
@@ -530,7 +527,7 @@ def _entry_dir_is_live(root, entry_id, *, strict=False):
     In strict mode, an unstatable path or a non-directory raises ``PointerUnreadable``;
     ``FileNotFoundError`` returns False (dangling pointer). In fail-open mode, uses
     ``os.path.isdir`` (stat errors read as not live)."""
-    path = os.path.join(root, "entries", entry_id)
+    path = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
     if not strict:
         return os.path.isdir(path)
     try:
@@ -639,7 +636,7 @@ def resolve_global(cwd, root, _consumer="store_core", heal=True, *, strict=False
         write_pointer(root, rh, entry_id)
         healed = True
 
-    entry_dir = os.path.join(root, "entries", entry_id)
+    entry_dir = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
     if heal and healed:
         write_keys_json(entry_dir, ident)
     return {"entry_id": entry_id, "dir": entry_dir, "healed": healed}

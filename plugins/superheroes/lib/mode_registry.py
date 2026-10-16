@@ -11,6 +11,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
+import calibration_paths
 import control_plane
 import store_core
 
@@ -139,7 +140,7 @@ def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=
 
 # Legacy single-file profile locations — used for detection (core_md._legacy_candidates, legacy-profile-unsupported refusal; hero_evidence mode-detection probe).
 _HERO_LEGACY_INREPO = {
-    "review-crew": os.path.join(".claude", "review-profile.md"),
+    "review-crew": calibration_paths.LEGACY_INREPO_REVIEW_PROFILE,
     "test-pilot": os.path.join(".claude", "test-pilot", "profile.md"),
 }
 # Unified layer paths — evidence / mode-detection probes (#81 / #123).
@@ -277,20 +278,22 @@ def decide_mode(cwd, env_value, root=None):
     return _decide_result(GLOBAL, "provisional")
 
 
-def resolve_artifact(cwd, in_repo_path, global_path, root=None):
+def resolve_artifact(cwd, in_repo_path, global_path, root=None, *, persist_backfill=True):
     """FR-6: an EXISTING artifact resolves to where it physically lives; a NEW artifact
     resolves by the recorded mode. When BOTH copies exist — the transient window during a
     mode flip's copy phase — resolve by the authoritative recorded mode (mode-authoritative),
     so a reader never prefers a source the registry has already flipped away from."""
     in_exists = os.path.exists(in_repo_path)
     gl_exists = os.path.exists(global_path)
+    # the keyword is passed only when it is False, so every default caller makes the call it made before
+    keyword = {} if persist_backfill else {"persist_backfill": False}
     if in_exists and gl_exists:
-        return in_repo_path if resolve(cwd, root)["mode"] == IN_REPO else global_path
+        return in_repo_path if resolve(cwd, root, **keyword)["mode"] == IN_REPO else global_path
     if in_exists:
         return in_repo_path
     if gl_exists:
         return global_path
-    return in_repo_path if resolve(cwd, root)["mode"] == IN_REPO else global_path
+    return in_repo_path if resolve(cwd, root, **keyword)["mode"] == IN_REPO else global_path
 
 
 def ensure_project_store(cwd, root=None):

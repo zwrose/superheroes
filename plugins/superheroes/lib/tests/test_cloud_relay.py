@@ -260,6 +260,32 @@ def test_send_stamped_before_sent_after_is_ignored(world):
     assert out["reason"] == "relay-silent" and out["delivered"] is False
 
 
+@pytest.mark.parametrize("stamp, aware", [
+    ("2026-10-12T10:00:00.000Z", True), ("2026-10-12T10:00:00+00:00", True),
+    ("2026-10-12T10:00:00+02:00", True), ("2026-10-12T10:00:00", False),
+    ("not a time", False), ("", False), (None, False), (12, False)])
+def test_a_relay_stamp_reads_as_a_time_only_when_it_carries_a_zone(stamp, aware):
+    when = cr._time(stamp)
+    assert (when is not None) is aware
+    assert when is None or when.tzinfo is not None
+
+
+# axis: a record stamped without a zone is skipped, not compared with the aware sentAfter — see bite-proof record c8a_wo4.md
+def test_a_send_stamped_without_a_zone_neither_raises_nor_counts_as_delivered(world):
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION, msg["forward"], "2026-10-12T10:00:00.000"))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-silent"
+
+
+def test_a_sent_after_without_a_zone_reads_every_send_as_not_after_it(world):
+    # `_sends` is skipped altogether when `sentAfter` is unreadable: nothing is attributed, the message is silent.
+    msg = _composed(world, stamp="2000-01-01T00:00:00")
+    _write_record(world, _send_lines("toolu_1", SESSION, msg["forward"], "2026-10-12T10:00:00.000Z"))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-silent"
+
+
 def test_altered_send_beats_an_exact_send_for_the_same_message(world):
     # E6: one successful altered send plus one successful exact send is a mismatch, not delivered.
     msg = _composed(world)
@@ -294,15 +320,47 @@ def test_another_pending_messages_send_is_not_this_messages_mismatch(world):
     assert out["reason"] == "relay-text-mismatch"  # its own altered send still counts against it
 
 
-def test_send_with_no_id_marker_is_attributed_to_the_message(world):
-    # E8: a send to the session carrying no id marker at all is this message's send.
+def test_send_with_no_header_is_not_attributed_to_the_message(world):
+    # E8: a send to the session that does not open with this message's header line is not its send;
+    # with no send attributed the message ends silent, not mismatched.
     msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION, "Use the narrow fix.", "2026-10-12T10:00:00.000Z"))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+    assert "firstDifference" not in out
+
+
+# axis: a send is this message's only when it starts with this message's own header line — see bite-proof record c8a_wo4.md
+def test_a_body_that_quotes_another_messages_id_does_not_fool_that_messages_check(world):
+    _ensure_alive(world)
+    a = _compose(world, text="first body")
+    b = _compose(world, text="second body")
+    # message A's forwarded text quotes B's id in its body
+    quoting = "%s\n\nsee (id %s)" % (cr.FORWARD_HEADER % a["msgId"], b["msgId"])
+    state = json.load(open(_state_file(world)))
+    state["pending"][a["msgId"]]["forward"] = quoting
+    json.dump(state, open(_state_file(world), "w"))
+    for msg in (a, b):
+        _backdate(world, msg["msgId"], BEFORE)
+    # only A's send exists: B must not take it as its own (a mismatch)
+    _write_record(world, _send_lines("toolu_1", SESSION, quoting, "2026-10-12T10:00:00.000Z"))
+    out, _ = _check(world, b["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-silent"
+    out, _ = _check(world, a["msgId"])
+    assert out["delivered"] is True
+    # an exact delivery of B is read as delivered, with A's quoting send alongside
     _write_record(world,
-                  _send_lines("toolu_1", SESSION, "Use the narrow fix.", "2026-10-12T10:00:00.000Z"),
-                  _send_lines("toolu_2", SESSION, msg["forward"], "2026-10-12T10:00:01.000Z"))
+                  _send_lines("toolu_1", SESSION, quoting, "2026-10-12T10:00:00.000Z"),
+                  _send_lines("toolu_2", SESSION, b["forward"], "2026-10-12T10:00:01.000Z"))
+    out, _ = _check(world, b["msgId"])
+    assert out["delivered"] is True and out["reason"] is None
+
+
+def test_leading_whitespace_before_the_header_still_attributes_the_send(world):
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION, "  \n" + msg["forward"], "2026-10-12T10:00:00.000Z"))
     out, _ = _check(world, msg["msgId"])
-    assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False
-    assert out["firstDifference"]["index"] == 0
+    assert out["reason"] == "relay-text-mismatch"  # attributed, but not the exact text
 
 
 def test_results_and_calls_need_their_ids(world):
@@ -370,6 +428,29 @@ def test_accounts_sharing_a_basename_get_distinct_relay_names(tmp_path):
     one, two = tmp_path / "one" / ".claude", tmp_path / "two" / ".claude"
     assert cr.relay_name(str(one)) != cr.relay_name(str(two))
     assert cr.relay_name(str(one)) == cr.relay_name(str(one) + "/")
+
+
+# axis: every relay name fits the builder's session-name pattern, and a cut keeps names distinct — see bite-proof record c8a_wo4.md
+@pytest.mark.parametrize("base", ["a" * 200, "my account \u00e9\u4e2d x", "x" * 46, "x" * 47])
+def test_a_relay_name_fits_the_builders_session_name_pattern(tmp_path, base):
+    name = cr.relay_name(str(tmp_path / base))
+    assert engine_adapter._CLOUD_SESSION_NAME_RE.fullmatch(name)
+    assert len(name) <= 64
+
+
+def test_two_long_config_dirs_that_differ_only_after_the_cut_get_different_names(tmp_path):
+    one, two = tmp_path / ("a" * 100 + "1"), tmp_path / ("a" * 100 + "2")
+    assert cr.relay_name(str(one)) != cr.relay_name(str(two))
+    assert len(cr.relay_name(str(one))) == len(cr.relay_name(str(two))) == 64
+
+
+def test_an_all_dots_config_dir_is_refused_as_invalid(world, tmp_path):
+    dots = str(tmp_path / "...")
+    assert cr.relay_name(dots) is None
+    out = cr.ensure(world.repo, dots, env=world.env, run=FakeRun(lists=["[]"]))
+    assert out["ok"] is False and out["reason"] == "config-dir-invalid"
+    out = cr.compose(world.repo, dots, SESSION, "x", env=world.env)
+    assert out["ok"] is False and out["reason"] == "config-dir-invalid"
 
 
 def test_record_noise_is_skipped(world):
@@ -491,11 +572,13 @@ def test_listed_entry_is_alive_whatever_its_state(world):
 
 
 def test_a_refusing_argv_builder_refuses_the_verb(world, monkeypatch):
-    # E14: the start refuses a relay name the builder will not take; the listing refuses when its
-    # builder does. Neither runs a command.
-    odd = os.path.join(os.path.dirname(world.config), ".claude two")
+    # E14: the start refuses when the builder refuses; the listing refuses when its builder does.
+    # Neither runs a command past the one listing. The refusal is injected: a config dir's name can no
+    # longer be one the builder refuses, because `relay_name` sanitizes it.
+    monkeypatch.setattr(engine_adapter, "claude_relay_argv",
+                        lambda name, prompt: {"argv": [], "reason": "cloud-session-name-invalid", "detail": "d"})
     run = FakeRun(lists=["[]"])
-    out = cr.ensure(world.repo, odd, env=world.env, run=run)
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["ok"] is False and out["reason"] == "relay-start-failed" and out["detail"]
     assert run.starts() == [] and len(run.calls) == 1
     monkeypatch.setattr(engine_adapter, "claude_agents_list_argv",

@@ -981,3 +981,16 @@ def test_a_pending_write_whose_state_write_fails_grants_no_reservation(w, monkey
     monkeypatch.setattr(os, "replace", real_replace)
     granted = _record(w, "m-2", "pending")
     assert granted["ok"] and granted["request"]["msgId"] == "m-2" and granted["request"]["outcome"] == "pending"
+
+
+_UNCONDITIONAL_PROMPT = "You'll get one prompt for it: tap Allow once."
+
+
+# axis: the owner message promises a prompt only if the builder has the archive tool — see bite-proof record c8a_wo4.md
+@pytest.mark.parametrize("message", [CC.OWNER_MESSAGE_MERGED, CC.OWNER_MESSAGE_CLOSED], ids=["merged", "closed"])
+def test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool(message):
+    assert CC.OWNER_ARCHIVE_PROMPT_CONDITIONAL in message
+    # the conditional meaning, checked independently of the shared constant's wording
+    assert message.index("If its session has a tool") < message.index("tap Allow once")
+    assert "If it has none, it will say so" in message
+    assert _UNCONDITIONAL_PROMPT not in message

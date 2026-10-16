@@ -753,7 +753,11 @@ CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
 # The one home for the spelling; the launch argv writes it and the setup reader reads it.
 CLOUD_SETTINGS_SECTION = "remote"
 CLOUD_SETTINGS_ENVIRONMENT_KEY = "defaultEnvironmentId"
-_CLOUD_SESSION_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# The one home of the cloud session-name contract; `cloud_relay.relay_name` derives its names from it.
+CLOUD_SESSION_NAME_LIMIT = 64
+CLOUD_SESSION_NAME_CHARS = "A-Za-z0-9._-"
+CLOUD_SESSION_NAME_UNSAFE_RE = re.compile("[^%s]" % CLOUD_SESSION_NAME_CHARS)
+_CLOUD_SESSION_NAME_RE = re.compile("[%s]{1,%d}" % (CLOUD_SESSION_NAME_CHARS, CLOUD_SESSION_NAME_LIMIT))
 
 
 def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_name):

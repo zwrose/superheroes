@@ -1,6 +1,6 @@
 # Place call WO-C bite-proof: the failed-check marker, the cloud prompt's two lines and the named base on the remote
 
-Bite-proof record for `plugins/superheroes/lib/cloud_ready.py` (C1 to C5), `plugins/superheroes/lib/launch_place.py` (C6) and `plugins/superheroes/lib/launcher.py` (C7 to C11). Detectors are in `plugins/superheroes/lib/tests/test_cloud_ready.py`, `test_launch_place.py` and `test_launcher_cloud.py`.
+Bite-proof record for `plugins/superheroes/lib/cloud_ready.py` (C1 to C5), `plugins/superheroes/lib/launch_place.py` (C6) and `plugins/superheroes/lib/launcher.py` (C7 to C11). Detectors are in `plugins/superheroes/lib/tests/test_cloud_ready.py`, `test_launch_place.py` and `test_launcher_cloud.py`. C9 to C11 were rewritten in C8a WO1 against the current check: `_base_on_remote` asks GitHub through `_gh_commit_lookup`, and `_cloud_base_refusal` maps the answer.
 
 **Status.** The implementer ran every proof (C1 to C11): each neutralization is a targeted Edit in the shipped file, the red is the single named test node run alone, the restore is the inverse Edit, and the green is the same node. Reds and greens below are the pytest output of each run (the harness's certificate-trust lines are filtered out of the capture; every pytest line is as printed); the absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
 
@@ -11,9 +11,9 @@ Bite-proof record for `plugins/superheroes/lib/cloud_ready.py` (C1 to C5), `plug
 
 ## Declared guarded-element set
 
-C1 any marker present means not ready; C2 the `reviewer` part maps to `passPresent`; C3 the `version` part maps to `version`; C4 the `calibration` part maps to `calibration`; C5 any other part, or a damaged marker, maps to `setup`; C6 `fix_text` adds "check again" for a failed check; C7 the `Cloud environment:` prompt line; C8 the `Base commit:` prompt line; C9 the base check reads the remote and not tracking refs; C10 a non-zero fetch refuses; C11 an unchecked remote refuses.
+C1 any marker present means not ready; C2 the `reviewer` part maps to `passPresent`; C3 the `version` part maps to `version`; C4 the `calibration` part maps to `calibration`; C5 any other part, or a damaged marker, maps to `setup`; C6 `fix_text` adds "check again" for a failed check; C7 the `Cloud environment:` prompt line; C8 the `Base commit:` prompt line; C9 the base check asks the server (GitHub's commits endpoint through `gh`), not local tracking refs; C10 only the HTTP 422 no-commit answer reads as absent, and any other `gh` failure is unchecked; C11 an unchecked remote refuses.
 
-Not neutralized, and so unproven by a run in this record: the exact `fix_text` strings for `no-setup` (C6's one neutralization turns off the whole failed-check branch, and the version assertion and the `no-setup` assertion both sit in the one detector node, which stops at the first); the empty-origin-URL, `git init` failure, timeout and `mkdtemp` failure edges of `_base_on_remote` (each has its own test, and each maps to `None` by the same `if found is None` branch that C11 neutralizes); the scratch-directory removal in the `finally` (tested by `test_E8_E9_the_scratch_directory_is_removed_whatever_the_fetch_says` and `test_E9_the_scratch_directory_is_removed_when_the_fetch_cannot_run`, with no neutralization of its own).
+Not neutralized, and so unproven by a run in this record: the exact `fix_text` strings for `no-setup` (C6's one neutralization turns off the whole failed-check branch, and the version assertion and the `no-setup` assertion both sit in the one detector node, which stops at the first); the no-origin, non-GitHub-origin, `gh`-cannot-run and timeout edges of `_base_on_remote` (tested by `test_an_origin_that_is_not_a_github_address_is_unchecked_without_asking`, `test_a_gh_that_cannot_run_or_times_out_is_unchecked` and `test_any_other_gh_failure_is_unchecked`, each mapping to `None` by the same `if found is None` branch that C11 neutralizes).
 
 ### C1: any marker present means not ready. Axis: marker presence
 
@@ -393,133 +393,179 @@ FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_compose_cloud_
 1 passed in 7.69s
 ```
 
-### C9: the base check reads the remote and not tracking refs. Axis: the source of the answer (T3c)
+### C9: the base check asks the server. Axis: the source of the answer
 
-- **Neutralization applied.** In `_cloud_base_refusal`, `found = _base_on_remote_fn(repo_root, stamped["baseCommit"], env)` replaced with `found = bool(_git_scrubbed(repo_root, "branch", "-r", "--contains", stamped["baseCommit"], env=env, timeout=_WORKTREE_GIT_TIMEOUT).stdout.strip())`, re-introducing the read of local tracking refs.
-- **Node.** `test_launcher_cloud.py::test_edge3_a_stale_tracking_ref_does_not_decide_the_result`
-- **Red:**
+- **Guarded code.** `_base_on_remote` reads `origin`'s owner and repository and calls `_gh_commit_lookup`, which runs `gh api repos/<owner>/<repo>/commits/<sha> --jq .sha`; `_cloud_base_refusal` takes its answer from `_base_on_remote_fn`. No local tracking ref is read. The axis comment is at `_cloud_base_refusal` ("the named base is on the remote, read fresh from the server and never from local tracking refs").
+- **Named node.** `test_launcher_cloud.py::test_the_default_gh_call_asks_the_commits_endpoint`. It pins the argv of `_gh_commit_lookup`, which sits outside the functions this proof may neutralize (`_base_on_remote`, `_cloud_base_refusal`), so no neutralization inside them can turn it red. It was not run red.
+- **Neutralization chosen.** In `_base_on_remote`, the `_gh_commit_lookup(...)` call and its `None` check replaced with `return True if _git_scrubbed(repo_root, "branch", "-r", "--contains", base, env=env, timeout=_WORKTREE_GIT_TIMEOUT).stdout.strip() else None`, re-introducing a read of local tracking refs. The node that reaches it is `test_launcher_cloud.py::test_a_pushed_commit_is_on_the_remote`.
+- **Unrunnable here.** The red run stopped in the fixture, at `git commit` in `test_launcher._init_repo`, before reaching the neutralized line. The commit signer listens on localhost and the sandbox blocks it, and `conftest.py` deletes every `GIT_*` variable per test, so the wrapper's `GIT_CONFIG_*` override never reaches this fixture. That output is not a red. It was captured as the run printed it, and the neutralization was restored by the inverse Edit (launcher.py unchanged from HEAD).
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-__________ test_edge3_a_stale_tracking_ref_does_not_decide_the_result __________
+____________________ test_a_pushed_commit_is_on_the_remote _____________________
 
-tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1247/test_edge3_a_stale_tracking_re0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-78/test_a_pushed_commit_is_on_the0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fc07e232b40>
 
-    def test_edge3_a_stale_tracking_ref_does_not_decide_the_result(tmp_path):
-        # axis: the remote is read, not local tracking refs
-        repo = _cloud_repo(tmp_path)
-        later = _later_commit(tmp_path, repo)
-        _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-        assert "origin/main" in _git(repo, "branch", "-r", "--contains", later)
-        calls = []
-        result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
-                         premise=_valid_premise(repo, baseCommit=later))
->       _assert_refused_cloud_lane(repo, result, "launch-cloud-base-not-on-remote", "cloud-base")
+    def test_a_pushed_commit_is_on_the_remote(tmp_path, monkeypatch):
+        # axis: the base is asked of GitHub afresh
+>       repo = _origin(tmp_path, "git@github.com:acme/widgets.git")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:579: 
+/home/user/c8a-wo1/plugins/superheroes/lib/tests/test_launcher_cloud.py:670: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/home/user/c8a-wo1/plugins/superheroes/lib/tests/test_launcher_cloud.py:655: in _origin
+    repo = _init_repo(tmp_path / "repo")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/c8a-wo1/plugins/superheroes/lib/tests/test_launcher.py:57: in _init_repo
+    subprocess.run(
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-repo = '/private/tmp/claude-501/pytest-of-zwrose/pytest-1247/test_edge3_a_stale_tracking_re0/repo'
-result = {'ok': True, 'reason': None, 'launchId': 'launch-ec99ed854dd8fc62', 'place': 'cloud', ...}
-reason = 'launch-cloud-base-not-on-remote', stage = 'cloud-base'
+input = None, capture_output = False, timeout = None, check = True
+popenargs = (['git', '-C', '/tmp/claude-0/pytest-of-root/pytest-78/test_a_pushed_commit_is_on_the0/repo', '-c', 'user.email=test@test.local', '-c', ...],)
+kwargs = {}
 
-    def _assert_refused_cloud_lane(repo, result, reason, stage):
->       assert result["ok"] is False
-E       assert True is False
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+    
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+    
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+    
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+    
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+    
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+    
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+    
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+    
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['git', '-C', '/tmp/claude-0/pytest-of-root/pytest-78/test_a_pushed_commit_is_on_the0/repo', '-c', 'user.email=test@test.local', '-c', 'user.name=test', 'commit', '-q', '-m', 'init']' returned non-zero exit status 128.
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:480: AssertionError
+/root/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/subprocess.py:571: CalledProcessError
+----------------------------- Captured stderr call -----------------------------
+error: Debug: Namespace set to "git" (ignored)
+Debug: Key file set to "/home/claude/.ssh/commit_signing_key.pub" (ignored, using server key)
+MCP server request failed (attempt 1/3), retrying in 120.009226ms: failed to send request: Post "http://127.0.0.1:37799/mcp": dial tcp 127.0.0.1:37799: connect: connection refused
+MCP server request failed (attempt 2/3), retrying in 251.713788ms: failed to send request: Post "http://127.0.0.1:37799/mcp": dial tcp 127.0.0.1:37799: connect: connection refused
+Error: failed to call MCP server: MCP server request failed after 2 retries: failed to send request: Post "http://127.0.0.1:37799/mcp": dial tcp 127.0.0.1:37799: connect: connection refused
+Usage:
+  environment-runner code-sign [flags]
+
+Flags:
+  -h, --help   help for code-sign
+
+Error: failed to call MCP server: MCP server request failed after 2 retries: failed to send request: Post "http://127.0.0.1:37799/mcp": dial tcp 127.0.0.1:37799: connect: connection refused
+
+fatal: failed to write commit object
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_edge3_a_stale_tracking_ref_does_not_decide_the_result
-1 failed in 10.59s
+FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_a_pushed_commit_is_on_the_remote
+1 failed in 5.16s
 ```
 
-- **Restore.** The inverse Edit; quoted from launcher.py:2328: `    found = _base_on_remote_fn(repo_root, stamped["baseCommit"], env)`
-- **Green.**
+### C10: only the HTTP 422 no-commit answer reads as absent. Axis: the failure class decides
 
-```
-.                                                                        [100%]
-1 passed in 10.27s
-```
-
-### C10: a non-zero fetch refuses. Axis: the fetch's exit code decides
-
-- **Neutralization applied.** In `_base_on_remote`, `return fetched.returncode == 0` replaced with `return True`.
-- **Node.** `test_launcher_cloud.py::test_the_real_round_trip_finds_a_pushed_commit_and_misses_an_unpushed_one`
-- **Red:**
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-__ test_the_real_round_trip_finds_a_pushed_commit_and_misses_an_unpushed_one ___
-
-local_remote = namespace(repo='/private/tmp/claude-501/pytest-of-zwrose/pytest-1249/test_the_real_round_trip_finds0/repo', remote=Pos...0/remote.git'), pushed='ebee9b869cac809673074a2460bfb2e4834165e3', unpushed='c100445827e04637d4a624933c60a2fb73f7bcf6')
-
-    def test_the_real_round_trip_finds_a_pushed_commit_and_misses_an_unpushed_one(local_remote):
-        # axis: the base is read from the remote afresh, in an empty repository
-        assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
->       assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
-E       AssertionError: assert True is False
-E        +  where True = <function _base_on_remote at 0x10a812de0>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1249/test_the_real_round_trip_finds0/repo', 'c100445827e04637d4a624933c60a2fb73f7bcf6', None)
-E        +    where <function _base_on_remote at 0x10a812de0> = L._base_on_remote
-E        +    and   '/private/tmp/claude-501/pytest-of-zwrose/pytest-1249/test_the_real_round_trip_finds0/repo' = namespace(repo='/private/tmp/claude-501/pytest-of-zwrose/pytest-1249/test_the_real_round_trip_finds0/repo', remote=Pos...0/remote.git'), pushed='ebee9b869cac809673074a2460bfb2e4834165e3', unpushed='c100445827e04637d4a624933c60a2fb73f7bcf6').repo
-E        +    and   'c100445827e04637d4a624933c60a2fb73f7bcf6' = namespace(repo='/private/tmp/claude-501/pytest-of-zwrose/pytest-1249/test_the_real_round_trip_finds0/repo', remote=Pos...0/remote.git'), pushed='ebee9b869cac809673074a2460bfb2e4834165e3', unpushed='c100445827e04637d4a624933c60a2fb73f7bcf6').unpushed
-
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:640: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_the_real_round_trip_finds_a_pushed_commit_and_misses_an_unpushed_one
-1 failed in 6.33s
-```
-
-- **Restore.** The inverse Edit; quoted from launcher.py:2310: `        return fetched.returncode == 0`
-- **Green.**
-
-```
-.                                                                        [100%]
-1 passed in 8.80s
-```
+- **Guarded code.** In `_base_on_remote`, a non-zero `gh` exit is `False` (not on the remote) only when stderr carries `no commit found for sha` and `http 422`; every other failure (404, 401, a dropped connection, 500) is `None`, unchecked.
+- **Node.** `test_launcher_cloud.py::test_only_the_422_no_commit_answer_is_absent`
+- **Neutralization chosen.** `if _BASE_ABSENT_MARKER in said and "http 422" in said:` replaced with `if _BASE_ABSENT_MARKER in said and "http 404" in said:`, so the 422 answer no longer reads as absent and comes back `None`.
+- **Unrunnable here.** Not run. The node's fixture `_origin` calls the same `_init_repo` that stopped C9 at `git commit`, so a run would stop in the fixture and could not show a bite. No receipt exists for this element.
 
 ### C11: an unchecked remote refuses. Axis: the check fails closed
 
-- **Neutralization applied.** In `_cloud_base_refusal`, `return "launch-cloud-base-remote-unchecked"` replaced with `return None`, so a remote that could not be asked lets the launch through.
-- **Node.** `test_launcher_cloud.py::test_edge3_a_checkout_with_no_origin_is_unchecked_and_refuses`
+- **Guarded code.** In `_cloud_base_refusal`, a `None` answer from `_base_on_remote_fn` maps to `launch-cloud-base-remote-unchecked`.
+- **Node.** `test_launcher_cloud.py::test_cloud_base_refusal_maps_the_round_trip_to_its_token`
+- **Neutralization applied.** In `_cloud_base_refusal`, `return "launch-cloud-base-remote-unchecked"` (under `if found is None:`) replaced with `return None`, so a remote that could not be asked lets the launch through.
 - **Red:**
 
 ```
-F                                                                        [100%]
+.F.                                                                      [100%]
 =================================== FAILURES ===================================
-________ test_edge3_a_checkout_with_no_origin_is_unchecked_and_refuses _________
+_ test_cloud_base_refusal_maps_the_round_trip_to_its_token[None-launch-cloud-base-remote-unchecked] _
 
-tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1251/test_edge3_a_checkout_with_no_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f87b46b3530>
+answer = None, reason = 'launch-cloud-base-remote-unchecked'
 
-    def test_edge3_a_checkout_with_no_origin_is_unchecked_and_refuses(tmp_path):
-        # axis: a remote that could not be asked refuses
-        repo = _init_repo(tmp_path / "repo")
-        calls = []
-        result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
->       _assert_refused_cloud_lane(repo, result, "launch-cloud-base-remote-unchecked", "cloud-base")
+    @pytest.mark.parametrize("answer,reason", [
+        (False, "launch-cloud-base-not-on-remote"),
+        (None, "launch-cloud-base-remote-unchecked"),
+        (True, None),
+    ])
+    def test_cloud_base_refusal_maps_the_round_trip_to_its_token(monkeypatch, answer, reason):
+        seen = []
+    
+        def asked(repo_root, base, env):
+            seen.append((repo_root, base))
+            return answer
+    
+        monkeypatch.setattr(L, "_base_on_remote_fn", asked)
+>       assert L._cloud_base_refusal("/repo", {"baseCommit": "abc123"}, None) == reason
+E       AssertionError: assert None == 'launch-cloud-base-remote-unchecked'
+E        +  where None = <function _cloud_base_refusal at 0x7f87b1b323e0>('/repo', {'baseCommit': 'abc123'}, None)
+E        +    where <function _cloud_base_refusal at 0x7f87b1b323e0> = L._cloud_base_refusal
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:538: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-repo = '/private/tmp/claude-501/pytest-of-zwrose/pytest-1251/test_edge3_a_checkout_with_no_0/repo'
-result = {'ok': True, 'reason': None, 'launchId': 'launch-c03453e55275dc4b', 'place': 'cloud', ...}
-reason = 'launch-cloud-base-remote-unchecked', stage = 'cloud-base'
-
-    def _assert_refused_cloud_lane(repo, result, reason, stage):
->       assert result["ok"] is False
-E       assert True is False
-
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:480: AssertionError
+/home/user/c8a-wo1/plugins/superheroes/lib/tests/test_launcher_cloud.py:634: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_edge3_a_checkout_with_no_origin_is_unchecked_and_refuses
-1 failed in 9.09s
+FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_cloud_base_refusal_maps_the_round_trip_to_its_token[None-launch-cloud-base-remote-unchecked]
+1 failed, 2 passed in 3.58s
 ```
 
-- **Restore.** The inverse Edit; quoted from launcher.py:2331: `        return "launch-cloud-base-remote-unchecked"`
-- **Green.**
+- **Restore.** The inverse Edit; quoted from launcher.py: `        return "launch-cloud-base-remote-unchecked"`
+- **Green:**
 
 ```
-.                                                                        [100%]
-1 passed in 10.02s
+...                                                                      [100%]
+3 passed in 1.20s
 ```

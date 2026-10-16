@@ -170,7 +170,6 @@ def test_switch_on_refused_without_account(tmp_path):
 
 
 def _refused_for_a_failed_check(repo, store, monkeypatch):
-    monkeypatch.setitem(sys.modules, "cloud_check", CC)
     got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
     assert got == {
         "action": "refused",
@@ -205,7 +204,6 @@ def test_switch_on_goes_ahead_with_a_ready_record_and_no_failed_check_marker(tmp
     repo, store = _setup_repo(tmp_path)
     _check(repo, store)
     assert not os.path.lexists(CC.failed_check_path(repo, ACCOUNT, store))
-    monkeypatch.setitem(sys.modules, "cloud_check", CC)
     got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
     assert got["action"] == "written"
     assert got["message"] == CS.switch_message("on", "fixture")
@@ -220,8 +218,16 @@ def test_switch_on_refused_when_the_failed_check_marker_cannot_be_read(tmp_path,
     def _boom(*a, **k):
         raise RuntimeError("the marker read failed")
 
-    monkeypatch.setattr(CC, "read_failed_check", _boom)
+    monkeypatch.setitem(sys.modules, "cloud_setup", CS)
+    monkeypatch.setattr(CS, "read_failed_check", _boom)
     _refused_for_a_failed_check(repo, store, monkeypatch)
+
+
+def test_project_config_does_not_import_cloud_check():
+    # axis: the switch-on guard reads the marker through cloud_setup and never imports cloud_check — see bite-proof record c8a_wo1.md
+    with open(os.path.join(_LIB, "project_config.py"), encoding="utf-8") as fh:
+        source = fh.read()
+    assert "import cloud_check" not in source
 
 
 def test_switch_with_non_boolean_is_malformed_before_the_reader_is_asked(tmp_path, monkeypatch):

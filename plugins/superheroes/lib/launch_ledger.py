@@ -84,6 +84,10 @@ _CLOUD_STARTED_FIELDS = (
     "cloudSessionName", "cloudSessionId", "cloudSessionUrl", "cloudSessionUnconfirmed",
 )
 
+# Birth identity of a spawned child (vet 464): optional strings on a `started` record.
+_BIRTH_IDENTITY_FIELDS = ("pidLstart", "pidCommand")
+_BIRTH_COMMAND_LIMIT = 200
+
 _LOCK_SUFFIX = ".lock"
 _LOCK_NAME = LEDGER_NAME + _LOCK_SUFFIX
 _DEFAULT_LOCK_TIMEOUT = 30.0
@@ -205,12 +209,14 @@ def _ledger_refusal(reason, root_fd=None, repo_fd=None, ledger_fd=None):
     return {"ok": False, "reason": reason, "fh": None, "path": None}
 
 
-def _open_ledger_dirs(repo_root, env=None):
-    """Open validated root and repo-id directory fds. Never raises."""
+def _open_ledger_dirs(repo_root, env=None, *, create=True):
+    """Open validated root and repo-id directory fds. Never raises. With create=False nothing is
+    made: a root or repo-id directory that is absent gives the reason ledger-missing, and an
+    existing one is checked exactly as before."""
     if env is None:
         env = os.environ
 
-    resolved = resolve_root(repo_root, env=env)
+    resolved = resolve_root(repo_root, env=env, create=create)
     if not resolved["ok"]:
         return {"ok": False, "reason": resolved["reason"], "root_fd": None,
                 "repo_fd": None, "root": None, "repo_id": None}
@@ -225,19 +231,23 @@ def _open_ledger_dirs(repo_root, env=None):
     repo_fd = None
     try:
         root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        return {"ok": False, "reason": "ledger-root-unusable", "root_fd": None,
+    except OSError as exc:
+        reason = "ledger-root-unusable"
+        if not create and isinstance(exc, FileNotFoundError):
+            reason = "ledger-missing"
+        return {"ok": False, "reason": reason, "root_fd": None,
                 "repo_fd": None, "root": root, "repo_id": repo_id}
 
     if _is_fd_group_or_world_accessible(root_fd):
         return _ledger_refusal("ledger-root-insecure", root_fd=root_fd)
 
-    try:
-        os.mkdir(repo_id, mode=0o700, dir_fd=root_fd)
-    except FileExistsError:
-        pass
-    except OSError:
-        return _ledger_refusal("ledger-repo-dir-unusable", root_fd=root_fd)
+    if create:
+        try:
+            os.mkdir(repo_id, mode=0o700, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        except OSError:
+            return _ledger_refusal("ledger-repo-dir-unusable", root_fd=root_fd)
 
     try:
         repo_fd = os.open(
@@ -248,7 +258,7 @@ def _open_ledger_dirs(repo_root, env=None):
     except OSError as exc:
         reason = "ledger-repo-dir-unusable"
         if isinstance(exc, FileNotFoundError):
-            reason = "ledger-repo-dir-missing"
+            reason = "ledger-repo-dir-missing" if create else "ledger-missing"
         elif getattr(exc, "errno", None) in (getattr(os, "ENOTDIR", None),):
             reason = "ledger-repo-dir-not-directory"
         else:
@@ -270,12 +280,13 @@ def _open_ledger_dirs(repo_root, env=None):
     }
 
 
-def open_ledger(repo_root, mode, env=None):
-    """The ONLY way to obtain a ledger file handle. Never raises."""
+def open_ledger(repo_root, mode, env=None, *, create=True):
+    """The ONLY way to obtain a ledger file handle. Never raises. With create=False no directory is
+    made: an absent root or repo-id directory gives the reason ledger-missing."""
     if mode not in ("r", "a"):
         return {"ok": False, "reason": "ledger-mode-invalid", "fh": None, "path": None}
 
-    opened = _open_ledger_dirs(repo_root, env=env)
+    opened = _open_ledger_dirs(repo_root, env=env, create=create)
     if not opened["ok"]:
         return {"ok": False, "reason": opened["reason"], "fh": None, "path": None}
 
@@ -515,8 +526,10 @@ def repo_identity(repo_root):
     return hashlib.sha256(real.encode("utf-8")).hexdigest()
 
 
-def _candidate_root_validation_reason(repo_root, root, env=None):
-    """Return a refusal reason token, or None when root is usable. Never raises."""
+def _candidate_root_validation_reason(repo_root, root, env=None, *, create=True):
+    """Return a refusal reason token, or None when root is usable. Never raises. With create=False
+    an absent root is not made; it is reported usable (there is nothing to check yet), and an
+    existing root gets every check."""
     if env is None:
         env = os.environ
     repo_real = os.path.realpath(repo_root)
@@ -534,10 +547,13 @@ def _candidate_root_validation_reason(repo_root, root, env=None):
     if _path_inside(repo_real, root) or _path_inside(common_real, root):
         return "ledger-root-in-repo"
 
-    try:
-        os.makedirs(root, mode=0o700, exist_ok=True)
-    except OSError:
-        return "ledger-root-unusable"
+    if create:
+        try:
+            os.makedirs(root, mode=0o700, exist_ok=True)
+        except OSError:
+            return "ledger-root-unusable"
+    elif not os.path.lexists(root):
+        return None
 
     if not os.path.isdir(root) or not os.access(root, os.W_OK):
         return "ledger-root-unusable"
@@ -558,8 +574,9 @@ def default_root():
     return os.path.join(tempfile.gettempdir(), LEDGER_DIR_NAME)
 
 
-def resolve_root(repo_root, env=None):
-    """Resolve ledger root outside the repo; refuse in-repo paths."""
+def resolve_root(repo_root, env=None, *, create=True):
+    """Resolve ledger root outside the repo; refuse in-repo paths. With create=False the root is
+    not made when it is absent."""
     if env is None:
         env = os.environ
     if not _has_git_entry(repo_root):
@@ -574,16 +591,16 @@ def resolve_root(repo_root, env=None):
     except OSError:
         return {"ok": False, "root": None, "reason": "ledger-root-unusable"}
 
-    reason = _candidate_root_validation_reason(repo_root, root, env=env)
+    reason = _candidate_root_validation_reason(repo_root, root, env=env, create=create)
     if reason is not None:
         return {"ok": False, "root": None, "reason": reason}
 
     return {"ok": True, "root": root, "reason": None}
 
 
-def ledger_path(repo_root, env=None):
+def ledger_path(repo_root, env=None, *, create=True):
     """Pure query for reporting/refusal reasons; does not open the ledger."""
-    resolved = resolve_root(repo_root, env=env)
+    resolved = resolve_root(repo_root, env=env, create=create)
     if not resolved["ok"]:
         return {"ok": False, "path": None, "reason": resolved["reason"]}
     repo_id = repo_identity(repo_root)
@@ -663,9 +680,11 @@ def append(repo_root, record, env=None):
     return _append_raw(repo_root, record, env=env)
 
 
-def read(repo_root, env=None):
-    """Read ledger; surface torn tails and interior corruption fail-closed."""
-    opened = open_ledger(repo_root, "r", env=env)
+def read(repo_root, env=None, *, create=True):
+    """Read ledger; surface torn tails and interior corruption fail-closed. With create=False an
+    absent root or repo-id directory reads as an existing empty ledger directory does, and
+    nothing is made."""
+    opened = open_ledger(repo_root, "r", env=env, create=create)
     if not opened["ok"]:
         if opened["reason"] == "ledger-missing":
             return {"state": "missing", "records": []}
@@ -919,11 +938,16 @@ def _validate_reserved_place(rec):
             value = rec.get(field)
             if not isinstance(value, str) or not value.strip():
                 return "fold-bad-field:reserved:%s" % field
+        # The launching account's id, when the launcher could read it: absent, or a non-empty string.
+        if "accountId" in rec:
+            account_id = rec["accountId"]
+            if not isinstance(account_id, str) or not account_id.strip():
+                return "fold-bad-field:reserved:accountId"
         for field in _CLOUD_FORBIDDEN_RESERVED_FIELDS:
             if field in rec:
                 return "fold-bad-field:reserved:place-local-field"
         return None
-    for field in ("cloudEnvironment", "pluginVersion"):
+    for field in ("cloudEnvironment", "pluginVersion", "accountId"):
         if field in rec:
             return "fold-bad-field:reserved:%s" % field
     return None
@@ -1090,6 +1114,14 @@ def _validate_started_cloud_fields(rec):
     return None
 
 
+def _validate_started_identity_fields(rec):
+    """Shape of the optional birth-identity fields on a `started` record: strings when present."""
+    for field in _BIRTH_IDENTITY_FIELDS:
+        if field in rec and not isinstance(rec[field], str):
+            return "fold-bad-field:started:%s" % field
+    return None
+
+
 def _validate_event_fields(rec):
     event = rec["event"]
     if event == "reserved":
@@ -1141,6 +1173,9 @@ def _validate_event_fields(rec):
         cloud_err = _validate_started_cloud_fields(rec)
         if cloud_err:
             return cloud_err
+        identity_err = _validate_started_identity_fields(rec)
+        if identity_err:
+            return identity_err
     elif event == "retry":
         attempt = rec["attempt"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -1311,6 +1346,9 @@ def fold(records):
                 "place": PLACE_CLOUD if rec.get("place") == PLACE_CLOUD else PLACE_LOCAL,
                 "cloudEnvironment": rec.get("cloudEnvironment"),
                 "pluginVersion": rec.get("pluginVersion"),
+                # The launching account's id on a cloud lane; None on a local lane and on any
+                # record written before the id was recorded or when it could not be read.
+                "accountId": rec.get("accountId"),
                 "cloudSessionId": None,
                 "cloudSessionName": None,
                 "cloudSessionUrl": None,
@@ -1388,6 +1426,11 @@ def fold(records):
             pid_started_ts = dict(info.get("pidStartedTs", {}))
             pid_started_ts[rec["pid"]] = rec["ts"]
             info["pidStartedTs"] = pid_started_ts
+            for field in _BIRTH_IDENTITY_FIELDS:
+                if field in rec:
+                    by_pid = dict(info.get(field, {}))
+                    by_pid[rec["pid"]] = rec[field]
+                    info[field] = by_pid
             if info["place"] == PLACE_CLOUD:
                 info["cloudSessionId"] = rec.get("cloudSessionId")
                 info["cloudSessionName"] = rec["cloudSessionName"]
@@ -1755,6 +1798,65 @@ def _read_process_facts(pid):
         return None
 
 
+def _read_ps_text(pid, flag):
+    """One ``ps`` column for ``pid``, stripped; None on any failure or an empty read."""
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", flag],
+            capture_output=True,
+            text=True,
+            timeout=_PS_READ_TIMEOUT_SECONDS,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        )
+        if result.returncode != 0:
+            return None
+        text = (result.stdout or "").strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def read_birth_identity(pid):
+    """Return ``{"pidLstart": ..., "pidCommand": ...}`` for a live pid; a field is omitted when its read fails.
+
+    ``pidLstart`` is the raw ``ps -o lstart=`` string and ``pidCommand`` the first 200
+    characters of ``ps -o command=``, both stripped. Never raises; empty on any failure.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return {}
+    identity = {}
+    lstart = _read_ps_text(pid, "lstart=")
+    if lstart is not None:
+        identity["pidLstart"] = lstart
+    command = _read_ps_text(pid, "command=")
+    if command is not None:
+        identity["pidCommand"] = command[:_BIRTH_COMMAND_LIMIT].strip()
+    return {key: value for key, value in identity.items() if value}
+
+
+def _birth_identity_is_foreign(recorded, fresh):
+    """True only when every recorded field is in the fresh read and at least one differs.
+
+    Raw strings are compared, never parsed times (``ps`` is read under TZ=UTC so they are caller-stable). Anything uncertain (no recorded
+    identity, an unreadable fresh read, or a fresh read missing a recorded field) is False.
+    """
+    if not isinstance(recorded, dict) or not isinstance(fresh, dict):
+        return False
+    held = [
+        field for field in _BIRTH_IDENTITY_FIELDS
+        if isinstance(recorded.get(field), str) and recorded[field]
+    ]
+    if not held:
+        return False
+    if not all(isinstance(fresh.get(field), str) and fresh[field] for field in held):
+        return False
+    # The start time is the only immutable birth identifier; a command alone can change under a live
+    # process (exec, title update, `<defunct>`), so a command-only record never proves a reused pid.
+    if "pidLstart" not in held:
+        return False
+    return fresh["pidLstart"] != recorded["pidLstart"]
+
+
 def _pid_is_foreign(pid, started_ts, session_id):
     """True only with a non-empty session id and positive foreign evidence; sessionless lanes skip."""
     if not isinstance(session_id, str) or not session_id:
@@ -1781,7 +1883,7 @@ def _pid_is_foreign(pid, started_ts, session_id):
     return (foreign_start or foreign_session) and not (same_start or same_session)
 
 
-def _child_group_is_live(pid, *, started_ts, session_id):
+def _child_group_is_live(pid, *, started_ts, session_id, birth_identity=None):
     """True when the recorded pid or its process group still has live members.
 
     Signal 0 is an existence probe, never a real signal: this function must never
@@ -1791,11 +1893,22 @@ def _child_group_is_live(pid, *, started_ts, session_id):
     reused pid cannot block terminalization forever (one ``ps`` read, bounded by
     ``_PS_READ_TIMEOUT_SECONDS``). Every uncertain identity answer stays True,
     because the caller refuses on True.
+
+    A recorded birth identity (``pidLstart``/``pidCommand`` from the ``started`` record)
+    is checked first, before any shortcut: a fresh read that lacks no recorded field and
+    has a different start time is a reused pid, not the lane's child, so it is not live.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     if pid == 1:
         return True
+    # axis: a reused pid reads as foreign by its recorded birth identity — before the own-group and zombie shortcuts.
+    recorded = {
+        field: value for field, value in (birth_identity or {}).items()
+        if field in _BIRTH_IDENTITY_FIELDS and isinstance(value, str) and value
+    }
+    if recorded and _birth_identity_is_foreign(recorded, read_birth_identity(pid)):
+        return False
     settle_seconds = 2.0
     try:
         if pid == os.getpid() or pid == os.getpgid(0):
@@ -1861,6 +1974,8 @@ def _validate_started_repair(started_repair):
     # The cloud-session fields a repaired `started` copies; the same shape rules as a
     # first-attempt record's, lane agreement being checked when the repaired record folds.
     if _validate_started_cloud_fields(started_repair):
+        return False
+    if _validate_started_identity_fields(started_repair):
         return False
     return True
 
@@ -1965,6 +2080,9 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                     pid,
                     started_ts=info.get("pidStartedTs", {}).get(pid),
                     session_id=info.get("sessionId"),
+                    birth_identity={
+                        field: info.get(field, {}).get(pid) for field in _BIRTH_IDENTITY_FIELDS
+                    },
                 ):
                     return {
                         "ok": False,
@@ -1985,6 +2103,9 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                     started_repair["pid"],
                     started_ts=None,
                     session_id=info.get("sessionId"),
+                    birth_identity={
+                        field: started_repair.get(field) for field in _BIRTH_IDENTITY_FIELDS
+                    },
                 ):
                     return {
                         "ok": False,
@@ -2008,7 +2129,7 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 # path where the ledger was already having trouble (#1054).
                 if started_repair.get("evidence"):
                     started_record["evidence"] = started_repair["evidence"]
-                for field in _CLOUD_STARTED_FIELDS:
+                for field in _CLOUD_STARTED_FIELDS + _BIRTH_IDENTITY_FIELDS:
                     if field in started_repair:
                         started_record[field] = started_repair[field]
                 folded_repair = fold(records + [started_record])

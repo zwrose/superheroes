@@ -154,7 +154,7 @@ machine = <test_launcher_place._Machine object at 0x1097b4ef0>
             _git(world.repo, "update-ref", "refs/heads/moving", second)
             raise OSError("no platform")
     
-        monkeypatch.setattr(L, "_default_cloud_spawn", spawn_that_moves_the_ref_then_fails)
+        monkeypatch.setattr(L, "default_cloud_spawn", spawn_that_moves_the_ref_then_fails)
         code, result = _launch(world, capsys, 232, baseCommit="moving")
     
         assert code == 0, result

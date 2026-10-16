@@ -5629,6 +5629,289 @@ def test_record_outcome_refuses_when_process_facts_unreadable(tmp_path, monkeypa
     assert facts_calls
 
 
+# --- birth identity of the recorded child (vet 464) ---------------------------
+
+
+_BORN = {"pidLstart": "Mon Oct 12 09:00:00 2026", "pidCommand": "claude --model test"}
+
+
+def _identity_lane(tmp_path, monkeypatch, launch_id, identity=None, **reserved_extra):
+    """A reserved+started lane whose started record carries `identity` (the birth-identity fields).
+
+    The repository is `git init` only, so these fixtures make no git commit."""
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    repo = str(root)
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-%s" % launch_id
+    _declare(repo, batch, 1)
+    assert ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo, **reserved_extra))["ok"]
+    started = _started(launch_id)
+    started.update(identity or {})
+    assert ll.append(repo, started)
+    return repo
+
+
+def _fresh_identity(monkeypatch, fresh):
+    """Fix what the fresh birth-identity read returns; returns the list of pids it was asked about."""
+    asked = []
+
+    def fake(pid):
+        asked.append(pid)
+        return dict(fresh)
+
+    monkeypatch.setattr(ll, "read_birth_identity", fake)
+    return asked
+
+
+def test_a_started_record_folds_its_birth_identity_by_pid(tmp_path, monkeypatch):
+    repo = _identity_lane(tmp_path, monkeypatch, "l-fold-identity", _BORN)
+    lane = ll.fold(ll.read(repo)["records"])["launches"]["l-fold-identity"]
+    assert lane["pidLstart"] == {_FAKE_BUILDER_PID: _BORN["pidLstart"]}
+    assert lane["pidCommand"] == {_FAKE_BUILDER_PID: _BORN["pidCommand"]}
+    legacy = _identity_lane(tmp_path / "legacy", monkeypatch, "l-fold-legacy")
+    lane = ll.fold(ll.read(legacy)["records"])["launches"]["l-fold-legacy"]
+    assert "pidLstart" not in lane and "pidCommand" not in lane
+
+
+@pytest.mark.parametrize("field", ["pidLstart", "pidCommand"])
+@pytest.mark.parametrize("bad", [7, None, ["x"], True])
+def test_a_started_record_with_a_non_string_birth_identity_does_not_fold(field, bad):
+    reserved = _reserved("l1", "b", ["a"], "/tmp")
+    started = _started("l1")
+    started[field] = bad
+    result = ll.fold([reserved, started])
+    assert result["ok"] is False and result["reason"].endswith("started:%s" % field)
+
+
+def test_a_legacy_started_record_keeps_todays_logic_and_reads_no_identity(tmp_path, monkeypatch):
+    # edge: a legacy record (no new fields) -- the recorded pid reads live, and no fresh read is taken
+    repo = _identity_lane(tmp_path, monkeypatch, "l-legacy")
+    _fake_signal0_alive(monkeypatch)
+    asked = _fresh_identity(monkeypatch, {"pidLstart": "other", "pidCommand": "other"})
+    result = ll.record_outcome(repo, "l-legacy", "handback", "done")
+    assert result["ok"] is False and result["reason"] == "terminal-child-live:999999"
+    assert asked == []
+
+
+def test_record_outcome_refuses_when_the_fresh_identity_equals_the_recorded_one(tmp_path, monkeypatch):
+    # edge: both fields recorded, fresh read equal -> the lane's own child, live
+    repo = _identity_lane(tmp_path, monkeypatch, "l-same", _BORN)
+    _fake_signal0_alive(monkeypatch)
+    asked = _fresh_identity(monkeypatch, _BORN)
+    result = ll.record_outcome(repo, "l-same", "handback", "done")
+    assert result["ok"] is False and result["reason"] == "terminal-child-live:999999"
+    assert asked == [_FAKE_BUILDER_PID]
+
+
+# axis: a reused pid is told from the lane's child by its recorded start time — see bite-proof record c8a_wo4.md
+def test_record_outcome_records_when_the_start_time_differs(tmp_path, monkeypatch):
+    # edge: both recorded, lstart differs -> a reused pid, not live
+    repo = _identity_lane(tmp_path, monkeypatch, "l-lstart", _BORN)
+    _fake_signal0_alive(monkeypatch)
+    _fresh_identity(monkeypatch, dict(_BORN, pidLstart="Tue Oct 13 10:00:00 2026"))
+    assert ll.record_outcome(repo, "l-lstart", "handback", "done")["ok"] is True
+
+
+# axis: a changed command alone never reads the pid as reused while the start time matches — see bite-proof record c8a_wo4.md
+def test_record_outcome_refuses_when_only_the_command_differs(tmp_path, monkeypatch):
+    # edge: both recorded, command differs (same start time) -> a live exec/retitle, so live
+    repo = _identity_lane(tmp_path, monkeypatch, "l-command", _BORN)
+    _fake_signal0_alive(monkeypatch)
+    _fresh_identity(monkeypatch, dict(_BORN, pidCommand="vim notes.txt"))
+    result = ll.record_outcome(repo, "l-command", "handback", "done")
+    assert result["ok"] is False and result["reason"] == "terminal-child-live:999999"
+
+
+# axis: an unreadable fresh identity reads as live, never as foreign — see bite-proof record c8a_wo4.md
+def test_record_outcome_refuses_when_the_fresh_identity_read_fails_entirely(tmp_path, monkeypatch):
+    # edge: a fresh read that fails entirely -> uncertain, so live
+    repo = _identity_lane(tmp_path, monkeypatch, "l-fails", _BORN)
+    _fake_signal0_alive(monkeypatch)
+    _fresh_identity(monkeypatch, {})
+    result = ll.record_outcome(repo, "l-fails", "handback", "done")
+    assert result["ok"] is False and result["reason"] == "terminal-child-live:999999"
+
+
+@pytest.mark.parametrize("fresh", [
+    {"pidLstart": "Tue Oct 13 10:00:00 2026"},  # command missing, start time differs
+    {"pidCommand": "vim notes.txt"},  # start time missing, command differs
+])
+def test_record_outcome_refuses_when_the_fresh_identity_lacks_a_recorded_field(tmp_path, monkeypatch, fresh):
+    # edge: a fresh read with one field missing, while both are recorded -> uncertain, so live
+    repo = _identity_lane(tmp_path, monkeypatch, "l-missing", _BORN)
+    _fake_signal0_alive(monkeypatch)
+    _fresh_identity(monkeypatch, fresh)
+    result = ll.record_outcome(repo, "l-missing", "handback", "done")
+    assert result["ok"] is False and result["reason"] == "terminal-child-live:999999"
+
+
+@pytest.mark.parametrize("recorded, fresh, records", [
+    ({"pidLstart": "Mon"}, {"pidLstart": "Tue"}, True),  # the held field differs; the other is not held
+    ({"pidLstart": "Mon"}, {"pidLstart": "Tue", "pidCommand": "x"}, True),  # the fresh read's extra field is moot
+    ({"pidLstart": "Mon"}, {"pidLstart": "Mon", "pidCommand": "x"}, False),  # equal
+    ({"pidLstart": "Mon"}, {"pidCommand": "x"}, False),  # the held field is missing from the fresh read
+    ({"pidCommand": "c"}, {"pidCommand": "d"}, False),  # a command alone never proves a reused pid (exec / retitle)
+    ({"pidCommand": "c"}, {"pidLstart": "Mon"}, False),
+])
+def test_a_recorded_identity_with_one_field_compares_that_field_alone(tmp_path, monkeypatch, recorded, fresh, records):
+    # edge: a recorded identity with only one field
+    repo = _identity_lane(tmp_path, monkeypatch, "l-one-field", recorded)
+    _fake_signal0_alive(monkeypatch)
+    _fresh_identity(monkeypatch, fresh)
+    result = ll.record_outcome(repo, "l-one-field", "handback", "done")
+    assert result["ok"] is records
+    if not records:
+        assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_a_differing_identity_beats_the_zombie_shortcut(tmp_path, monkeypatch):
+    repo = _identity_lane(tmp_path, monkeypatch, "l-zombie-id", _BORN)
+    _fake_signal0_alive(monkeypatch)
+    monkeypatch.setattr(ll, "_read_process_facts",
+                        lambda pid: {"stat": "Z", "startTs": 1.0, "command": "claude"})
+    _fresh_identity(monkeypatch, dict(_BORN, pidLstart="Tue Oct 13 10:00:00 2026"))
+    assert ll.record_outcome(repo, "l-zombie-id", "handback", "done")["ok"] is True
+
+
+def test_a_differing_identity_beats_the_callers_own_process_group_shortcut(monkeypatch):
+    # edge: the pid is the caller's own process group, with a recorded identity that differs
+    own = os.getpid()
+    _fresh_identity(monkeypatch, dict(_BORN, pidLstart="Tue Oct 13 10:00:00 2026"))
+    assert ll._child_group_is_live(own, started_ts=None, session_id=None, birth_identity=_BORN) is False
+    _fresh_identity(monkeypatch, _BORN)
+    assert ll._child_group_is_live(own, started_ts=None, session_id=None, birth_identity=_BORN) is True
+    assert ll._child_group_is_live(own, started_ts=None, session_id=None) is True
+
+
+def test_the_repair_path_applies_the_same_identity_rule(tmp_path, monkeypatch):
+    # edge: the repair path (started_ts=None) -- a differing identity records, an equal one or none refuses
+    _fake_signal0_alive(monkeypatch)
+    base = {"attempt": 1, "pid": _FAKE_BUILDER_PID, "logPath": "/tmp/log", "errPath": "/tmp/err"}
+    cases = [
+        (dict(base, **_BORN), dict(_BORN, pidLstart="Tue Oct 13 10:00:00 2026"), True),
+        (dict(base, **_BORN), _BORN, False),
+        (dict(base, **_BORN), {}, False),
+        (dict(base), dict(_BORN), False),
+    ]
+    for n, (repair, fresh, records) in enumerate(cases):
+        root = tmp_path / ("repo-%d" % n)
+        root.mkdir()
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        repo, launch_id = str(root), "l-repair-%d" % n
+        _ledger_env(tmp_path / str(n), monkeypatch)
+        _declare(repo, "b-%d" % n, 1)
+        assert ll.reserve(repo, _reserved(launch_id, "b-%d" % n, ["a"], repo))["ok"]
+        _fresh_identity(monkeypatch, fresh)
+        result = ll.terminalize(repo, launch_id, child_ever_spawned=True, outcome="park",
+                                evidence="ev", started_repair=repair)
+        assert result["ok"] is records, (n, result)
+        if records:
+            lane = ll.fold(ll.read(repo)["records"])["launches"][launch_id]
+            assert lane["pidLstart"] == {_FAKE_BUILDER_PID: _BORN["pidLstart"]}
+
+
+class _PsRun:
+    """A `subprocess.run` stand-in answering `ps -ww -p PID -o <column>` from a dict of column -> output
+    (an exception value is raised; None is a non-zero exit)."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        answer = self.answers.get(argv[-1])
+        if isinstance(answer, BaseException):
+            raise answer
+        if answer is None:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=answer, stderr="")
+
+
+def test_read_birth_identity_reads_the_raw_start_string_and_the_first_200_command_characters(monkeypatch):
+    run = _PsRun({"lstart=": "Mon Oct 12 09:00:00 2026\n", "command=": "  " + "c" * 300 + "\n"})
+    monkeypatch.setattr(ll.subprocess, "run", run)
+    assert ll.read_birth_identity(4242) == {"pidLstart": "Mon Oct 12 09:00:00 2026", "pidCommand": "c" * 200}
+    assert all(call[:4] == ["ps", "-ww", "-p", "4242"] for call in run.calls)
+
+
+@pytest.mark.parametrize("answers, expected", [
+    ({"lstart=": None, "command=": "cmd\n"}, {"pidCommand": "cmd"}),
+    ({"lstart=": "Mon\n", "command=": OSError("no ps")}, {"pidLstart": "Mon"}),
+    ({"lstart=": "\n", "command=": ""}, {}),
+    ({"lstart=": None, "command=": None}, {}),
+])
+def test_read_birth_identity_omits_a_field_whose_read_fails(monkeypatch, answers, expected):
+    monkeypatch.setattr(ll.subprocess, "run", _PsRun(answers))
+    assert ll.read_birth_identity(4242) == expected
+
+
+def test_the_birth_identity_is_read_under_a_pinned_time_zone(monkeypatch):
+    # axis: ps renders lstart in the caller's zone, so the reader pins one zone for every caller
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        return subprocess.CompletedProcess(argv, 0, stdout="x\n", stderr="")
+
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    monkeypatch.setattr(ll.subprocess, "run", run)
+    ll.read_birth_identity(4242)
+    assert seen and all(env["TZ"] == "UTC" and env["LC_ALL"] == "C" for env in seen)
+
+
+def test_a_live_childs_identity_is_stable_across_caller_time_zones(monkeypatch):
+    # edge: the same live pid read under two caller zones is the same child, never a reused pid
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        monkeypatch.setenv("TZ", "UTC")
+        recorded = ll.read_birth_identity(child.pid)
+        assert recorded.get("pidLstart"), "ps is unavailable here"
+        monkeypatch.setenv("TZ", "Etc/GMT-8")
+        fresh = ll.read_birth_identity(child.pid)
+        assert fresh["pidLstart"] == recorded["pidLstart"]
+        assert ll._birth_identity_is_foreign(recorded, fresh) is False
+        monkeypatch.setattr(ll, "read_birth_identity", lambda pid: fresh)
+        assert ll._child_group_is_live(child.pid, started_ts=None, session_id=None,
+                                       birth_identity=recorded) is True
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.parametrize("pid", [0, -3, None, True, "7"])
+def test_read_birth_identity_of_a_non_pid_is_empty_and_runs_nothing(monkeypatch, pid):
+    run = _PsRun({})
+    monkeypatch.setattr(ll.subprocess, "run", run)
+    assert ll.read_birth_identity(pid) == {} and run.calls == []
+
+
+# --- the launching account's id on a cloud reserved record (C7p FU2) ----------
+
+
+def _cloud_reserved(**extra):
+    return _reserved("l-cloud", "b-cloud", ["a"], "/tmp", place="cloud", cloudEnvironment="env_1",
+                     pluginVersion="1.2.3", **extra)
+
+
+def test_a_cloud_reserved_record_folds_its_account_id():
+    lane = ll.fold([_cloud_reserved(accountId="acct-1")])["launches"]["l-cloud"]
+    assert lane["accountId"] == "acct-1"
+    assert ll.fold([_cloud_reserved()])["launches"]["l-cloud"]["accountId"] is None  # a legacy cloud lane
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 7, None, ["a"], True])
+def test_a_cloud_reserved_record_with_an_empty_or_non_string_account_id_does_not_fold(bad):
+    result = ll.fold([_cloud_reserved(accountId=bad)])
+    assert result["ok"] is False and result["reason"] == "fold-bad-field:reserved:accountId"
+
+
+def test_a_local_reserved_record_carries_no_account_id():
+    result = ll.fold([_reserved("l1", "b", ["a"], "/tmp", accountId="acct-1")])
+    assert result["ok"] is False and result["reason"] == "fold-bad-field:reserved:accountId"
+
+
 def test_record_outcome_refuses_on_conflicting_identity_arms(tmp_path, monkeypatch):
     # axis: one arm says same, the other foreign -> stay live (both orderings)
     session_id = _SESSION_UUID_CONFLICT

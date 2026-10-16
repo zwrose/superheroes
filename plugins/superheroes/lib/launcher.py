@@ -30,6 +30,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_ready  # noqa: E402
+import cloud_setup  # noqa: E402
 import config_dir  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
@@ -82,6 +83,16 @@ _expand_home = config_dir._expand_home
 # exec-time environment, not the live resolution, so a spawn-plumbing check is not a receipt.
 EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
 EFFORT_REFLECTION_ENV = "CLAUDE_EFFORT"
+
+
+def pin_effort(env, effort):
+    """Pin ``effort`` in ``env`` for a child: overwrite the documented input and drop the stale
+    reflection. A None effort is the inherit case and touches neither."""
+    if effort is not None:
+        env[EFFORT_ENV] = effort
+        env.pop(EFFORT_REFLECTION_ENV, None)
+
+
 # Owner ruling 2026-08-25 (in-channel, walk-3 sitting): every use of Opus 5 runs at effort
 # `medium` — "opus 5 works better at medium overall". The launcher pins it at the spawn point
 # so a builder can never run at whatever effort the launching session happened to carry;
@@ -1305,6 +1316,7 @@ def compose_launch(
     place=None, cloud_environment=None, session_name=None,
 ):
     """Compose prompt and argv. Never raises."""
+    import launch_lines  # the one home of the launch line labels (cloud_builder parses them back)
     if place not in (None, PLACE_LOCAL, PLACE_CLOUD):
         return _fail("launch-place-invalid")
     cloud = place == PLACE_CLOUD
@@ -1332,22 +1344,32 @@ def compose_launch(
         base = premise.get("baseCommit") if isinstance(premise, dict) else None
         if not isinstance(base, str) or not base.strip():
             return _fail("premise-missing-field:baseCommit")
+        # Cloud intake reads the base back as a full lowercase 40-hex sha; a value it would refuse
+        # is refused here, as given (never stripped or case-folded).
+        # axis: the cloud prompt carries only a full lowercase 40-hex base commit — see bite-proof record c8a_wo2.md
+        if not valid_adopts_head(base):
+            return _fail("premise-base-commit-invalid")
         # axis: the cloud prompt names the cloud environment on its own line — see bite-proof record wo_c_place_call
-        environment_line = "Cloud environment: %s" % cloud_environment
+        environment_line = launch_lines.format_line(launch_lines.ENVIRONMENT, cloud_environment)
         # axis: the cloud prompt names the base commit on its own line — see bite-proof record wo_c_place_call
-        base_line = "Base commit: %s" % base
+        base_line = launch_lines.format_line(launch_lines.BASE, base)
         if adopts is not None:
             # axis: the cloud prompt names the adopted branch on its own line right after the base commit — see bite-proof record adopt_branch
             base_line += "\n" + adopts
-        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n%s\n%s\n\n%s" % (
-            _WORKHORSE_CMD, issue, version, environment_line, base_line, rulings_block,
+        place_line = launch_lines.format_line(launch_lines.PLACE, "cloud session")
+        version_line = launch_lines.format_line(launch_lines.VERSION, version)
+        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s" % (
+            _WORKHORSE_CMD, issue, place_line, version_line, environment_line, base_line,
+            rulings_block,
         )
     elif adopts is not None:
         local_base = premise.get("baseCommit")
         if not isinstance(local_base, str) or not local_base.strip():
             return _fail("premise-missing-field:baseCommit")
-        prompt = "%s\n\nIssue: #%s\n\n%s\nBase commit: %s\n\n%s" % (
-            _WORKHORSE_CMD, issue, adopts, local_base, rulings_block,
+        # A local adopt launch never reaches cloud intake, so its base keeps the non-empty check.
+        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n\n%s" % (
+            _WORKHORSE_CMD, issue, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
+            rulings_block,
         )
     else:
         prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
@@ -1439,7 +1461,27 @@ def _make_terminate_handler(state):
     return handler
 
 
-def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
+def _drain_pty(master, chunks, budget=0.5):
+    """Append what is still buffered in the pty master to ``chunks``, for at most ``budget`` seconds.
+
+    Stops on no data ready, an empty read, an OSError (EIO once the child has gone, or a closed
+    descriptor) or the budget elapsing. Never raises.
+    """
+    try:
+        deadline = time.monotonic() + budget
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if not ready:
+                break
+            data = os.read(master, 65536)
+            if not data:
+                break
+            chunks.append(data)
+    except Exception:
+        pass
+
+
+def default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     """Run the cloud launch command once under a pseudo-terminal and return what it printed.
 
     The command refuses to run without a terminal, so its stdin, stdout and stderr are the slave
@@ -1502,6 +1544,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                 deadline = time.monotonic() + timeout
                 while True:
                     if term_state["pending"]:
+                        _drain_pty(master, chunks)
                         raise _LauncherTerminated()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -1522,6 +1565,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                     wait_until = max(deadline, time.monotonic() + 0.1)
                     while True:
                         if term_state["pending"]:
+                            _drain_pty(master, chunks)
                             raise _LauncherTerminated()
                         remaining = wait_until - time.monotonic()
                         if remaining <= 0:
@@ -1584,7 +1628,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             pass
 
 
-def _strip_terminal_sequences(text):
+def strip_terminal_sequences(text):
     """The text with terminal control sequences and control bytes other than the newline removed."""
     text = _TERMINAL_OSC_RE.sub("", text)
     text = _TERMINAL_CSI_RE.sub("", text)
@@ -1592,7 +1636,7 @@ def _strip_terminal_sequences(text):
     return _TERMINAL_CONTROL_RE.sub("", text)
 
 
-def _read_cloud_receipt(text, session_name):
+def read_cloud_receipt(text, session_name):
     """The `(session_id, session_url)` of a coherent creation receipt in `text`, else None.
 
     Coherent: a `Created cloud session: <name>` line whose name is `session_name`, then a `View:`
@@ -1687,7 +1731,7 @@ def _run_cloud_spawn(
     session may exist, and only its owner's `record-outcome` ends the lane. Never raises for a
     command that ran.
     """
-    spawn = spawn_fn or _default_cloud_spawn
+    spawn = spawn_fn or default_cloud_spawn
     try:
         with open(err_path, "ab"):
             pass
@@ -1708,9 +1752,9 @@ def _run_cloud_spawn(
 
     pid = spawned.get("pid")
     output = spawned.get("output")
-    text = _strip_terminal_sequences(output) if isinstance(output, str) else ""
+    text = strip_terminal_sequences(output) if isinstance(output, str) else ""
     # axis: where the id is read from — only a coherent creation receipt, never a token elsewhere.
-    receipt = _read_cloud_receipt(text, session_name)
+    receipt = read_cloud_receipt(text, session_name)
 
     started = {
         "event": "started",
@@ -1997,9 +2041,7 @@ def _spawn_attempt(
     # nothing while destroying the one honest observable — a child's reflection is evidence of
     # what the CLI resolved only for as long as we do not forge it, and a forged one is exactly
     # the placebo receipt vet 178 caught. A None effort is the inherit case and touches neither.
-    if effort is not None:
-        child_env[EFFORT_ENV] = effort
-        child_env.pop(EFFORT_REFLECTION_ENV, None)
+    pin_effort(child_env, effort)
     try:
         out_fh = open(log_path, "ab")
     except OSError:
@@ -2029,6 +2071,9 @@ def _spawn_attempt(
         "logPath": log_path,
         "errPath": err_path,
     }
+    # axis: the child's birth identity is recorded at spawn so a reused pid is told from the lane's child.
+    # Empty on any failed read; the spawn never depends on it.
+    started.update(ll.read_birth_identity(proc.pid))
     if isinstance(evidence, str) and evidence.strip():
         started["evidence"] = evidence
     append_result = _append_under_lock(repo_root, started, env=env)
@@ -2048,7 +2093,8 @@ def _spawn_attempt(
                     "logPath": log_path,
                     "errPath": err_path,
                 },
-                **({"evidence": started["evidence"]} if "evidence" in started else {})
+                **({"evidence": started["evidence"]} if "evidence" in started else {}),
+                **{field: started[field] for field in ll._BIRTH_IDENTITY_FIELDS if field in started}
             ),
         )
         fail_reason = _terminalization_reason(term, append_result["reason"])
@@ -2899,6 +2945,11 @@ def launch_build(
         reserved["place"] = PLACE_CLOUD
         reserved["cloudEnvironment"] = cloud_environment
         reserved["pluginVersion"] = plugin_ver
+        # The launching account's id, so a later reader decides "the advisor's account" by id,
+        # not by config-dir path. Omitted when the account cannot be read.
+        account_id = cloud_setup.launching_account(env, cwd=repo_root)
+        if isinstance(account_id, str) and account_id:
+            reserved["accountId"] = account_id
     else:
         reserved["worktree"] = worktree_path
         reserved["sessionId"] = compose_result["sessionId"]
@@ -3032,10 +3083,7 @@ def launch_build(
         # The same rule as the local spawn: the variable outranks the `--effort` flag, so a
         # resolved effort overwrites the ambient value and drops the stale reflection; a None
         # effort touches neither.
-        resolved_effort = compose_result["effort"]
-        if resolved_effort is not None:
-            cloud_env[EFFORT_ENV] = resolved_effort
-            cloud_env.pop(EFFORT_REFLECTION_ENV, None)
+        pin_effort(cloud_env, compose_result["effort"])
         success_base = {
             "ok": True,
             "reason": None,
@@ -3328,6 +3376,9 @@ def _try_reserve_for_refusal(
         reserved["place"] = PLACE_CLOUD
         reserved["cloudEnvironment"] = cloud_environment
         reserved["pluginVersion"] = plugin_version
+        account_id = cloud_setup.launching_account(env, cwd=repo_root)
+        if isinstance(account_id, str) and account_id:
+            reserved["accountId"] = account_id
     result = ll.reserve(repo_root, reserved, env=env)
     # This accounting reservation can itself land on a live lane's surfaces, so it carries
     # the same disclosure a normal reservation does (#1054). Dropping it here is how the
@@ -3428,7 +3479,7 @@ def _report_title(title_fn, repo_root, issue):
 
 def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     """The launch report for one batch, built from the ledger's started launches."""
-    read = ll.read(repo_root, env=env)
+    read = ll.read(repo_root, env=env, create=False)
     if read["state"] == "missing":
         return {"ok": True, "report": None, "lanes": 0}
     if read["state"] != "ok":
@@ -3455,14 +3506,17 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
         if isinstance(rec, dict) and rec.get("event") == "reserved"
     }
     lookup = title_fn or _issue_title
-    lanes = []
+    calls = []
     for issue in sorted(last_started, key=lambda i: first_index[i]):
         launch_id, info = last_started[issue]
-        lanes.append({
-            "issue": issue,
-            "title": _report_title(lookup, repo_root, issue),
-            "placeCall": launch_report.report_place_call(reserved.get(launch_id), info["place"]),
-        })
+        calls.append((issue, launch_report.report_place_call(reserved.get(launch_id), info["place"])))
+    # titles are looked up only for a report that will render, by the renderer's own predicate
+    wanted = launch_report.yields_report([call for _issue, call in calls])
+    lanes = [
+        {"issue": issue, "title": _report_title(lookup, repo_root, issue) if wanted else None,
+         "placeCall": call}
+        for issue, call in calls
+    ]
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),

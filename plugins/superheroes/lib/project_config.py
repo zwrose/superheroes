@@ -390,11 +390,13 @@ def _item_by_slug(slug):
     return _SLUG_INDEX.get(slug)
 
 
-def _guardian_cadence_raw(cwd, root):
+def _guardian_cadence_raw(cwd, root, *, persist_backfill=True):
     import guardian_store
 
     try:
-        layer_p = guardian_store.guardian_layer_path(cwd, root)
+        layer_p = guardian_store.guardian_layer_path(
+            cwd, root, persist_backfill=persist_backfill
+        )
     except Exception:
         return None
     if core_md._layer_is_empty(layer_p):
@@ -555,10 +557,11 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None,
     }
 
 
-def read(cwd, root=None):
+def read(cwd, root=None, *, persist_backfill=True):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
-    facts = core_md.read(cwd, root)
-    guardian_cfg = guardian_sweep.read_config(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    facts = core_md.read(cwd, root, **keyword)
+    guardian_cfg = guardian_sweep.read_config(cwd, root, **keyword)
     risk_areas_read = core_md.read_risk_areas(cwd, root)
     if facts is None:
         absent_items = []
@@ -568,7 +571,7 @@ def read(cwd, root=None):
             if item["home"] == HOME_RISK_AND_TRUST:
                 raw = {"threatModel": None, "riskAreas": None}
             elif item["home"] == HOME_GUARDIAN_CADENCE:
-                raw = _guardian_cadence_raw(cwd, root)
+                raw = _guardian_cadence_raw(cwd, root, **keyword)
             else:
                 raw = None
             entry = _resolve_item_entry(
@@ -598,7 +601,7 @@ def read(cwd, root=None):
             raw = {"threatModel": threat,
                    "riskAreas": _read_project_config_raw(mapping, core_md.RISK_AREAS_KEY)}
         elif item["home"] == HOME_GUARDIAN_CADENCE:
-            raw = _guardian_cadence_raw(cwd, root)
+            raw = _guardian_cadence_raw(cwd, root, **keyword)
         else:
             raw = _read_project_config_raw(mapping, slug)
         entry = _resolve_item_entry(
@@ -642,12 +645,13 @@ def view(cwd, root=None):
     }
 
 
-def get_item(cwd, slug, root=None):
+def get_item(cwd, slug, root=None, *, persist_backfill=True):
     """Return one item's read contract, or a refusal when the slug is unknown."""
     item = _item_by_slug(slug)
     if item is None:
         return {"action": "refused", "reason": REASON_UNKNOWN_SLUG}
-    payload = read(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    payload = read(cwd, root, **keyword)
     for entry in payload["items"]:
         if entry["slug"] == slug:
             return {
@@ -758,10 +762,8 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
                     "message": cloud_setup.switch_message("refused", project_name),
                 }
             try:
-                import cloud_check
-
                 # axis: a failed-check marker that is present, or damaged, or cannot be read keeps cloud builds from switching on — see bite-proof record wo_d_place_call
-                check_failed = cloud_check.read_failed_check(cwd, account, root=root) is not None
+                check_failed = cloud_setup.read_failed_check(cwd, account, root=root) is not None
             except Exception:
                 # axis: a marker read that raises refuses the switch-on, never proceeds — see bite-proof record wo_d_place_call
                 check_failed = True

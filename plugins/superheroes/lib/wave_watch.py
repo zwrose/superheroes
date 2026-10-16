@@ -856,6 +856,26 @@ def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env, granted=Fals
     return slug, None
 
 
+# A tick's one-slot cell for the repository slug holds this until the slug has been resolved.
+_SLUG_UNRESOLVED = object()
+
+
+def _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell):
+    """The slug a granted reader uses: the one the tick already knows, else what the tick's cell
+    holds, else one resolution that fills the cell. A resolution that failed (None) is cached for
+    the tick too, and is not tried again within it. Never raises."""
+    if known_slug is not None:
+        return known_slug
+    if slug_cell is not None and slug_cell[0] is not _SLUG_UNRESOLVED:
+        return slug_cell[0]
+    slug, _refusal_result = _resolve_repo_slug(
+        repo_root, deadline, monotonic, gh_run, env, granted=True,
+    )
+    if slug_cell is not None:
+        slug_cell[0] = slug
+    return slug
+
+
 def _resolve_pr_stack_groups(
     repo_root, deadline, monotonic, gh_run, membership_reader, env, degraded,
     changed_prs, repo_slug,
@@ -1055,7 +1075,7 @@ def _lane_activity_epoch(repository, number):
 
 
 def _fetch_cloud_activity(
-    repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
+    repo_root, issues, deadline, monotonic, gh_run, env, known_slug, slug_cell=None,
 ):
     """One GraphQL read for every issue; {issue: epoch or None}. None = unreadable. Never raises.
 
@@ -1068,11 +1088,7 @@ def _fetch_cloud_activity(
     # against the one-request minimum, so elapsed bookkeeping cannot flip that decision.
     if deadline - monotonic() <= 0:
         return None
-    slug = known_slug
-    if slug is None:
-        slug, _refusal_result = _resolve_repo_slug(
-            repo_root, deadline, monotonic, gh_run, env, granted=True,
-        )
+    slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
     if slug is None:
         return unreadable
     remaining = deadline - monotonic()
@@ -1127,7 +1143,7 @@ def _cloud_activity_age(info, activity_time, now):
 
 def _evaluate_cloud_activity(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
-    cloud_state, known_slug=None,
+    cloud_state, known_slug=None, slug_cell=None,
 ):
     """Stale started cloud lanes by their GitHub activity. No request without one."""
     started = {
@@ -1154,7 +1170,7 @@ def _evaluate_cloud_activity(
             activity = cached[1]
         else:
             activity = _fetch_cloud_activity(
-                repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
+                repo_root, issues, deadline, monotonic, gh_run, env, known_slug, slug_cell,
             )
             if activity is None:
                 # Skipped for lack of budget: no request was made, so leave the cache alone.
@@ -1234,7 +1250,7 @@ def _parse_http_response(stdout):
 
 
 def _read_issue_comments(
-    repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state,
+    repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state, slug_cell=None,
 ):
     """(state, comments): state True read, False unreadable, None no request made. Never raises.
 
@@ -1244,11 +1260,7 @@ def _read_issue_comments(
     """
     if deadline - monotonic() <= 0:
         return None, []
-    slug = known_slug
-    if slug is None:
-        slug, _refusal_result = _resolve_repo_slug(
-            repo_root, deadline, monotonic, gh_run, env, granted=True,
-        )
+    slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
     if slug is None:
         return False, []
     url = "repos/%s/issues/comments?since=%s&per_page=100" % (slug, since)
@@ -1364,7 +1376,7 @@ def _builder_note(comment, watched, answered):
 
 def _evaluate_builder_notes(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
-    note_state, known_slug=None,
+    note_state, known_slug=None, slug_cell=None,
 ):
     """Unanswered builder notes on live started cloud lanes' issues, by comment id."""
     watched = {
@@ -1385,7 +1397,7 @@ def _evaluate_builder_notes(
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
         return []
     state, comments = _read_issue_comments(
-        repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state,
+        repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state, slug_cell,
     )
     if state is None:
         # A watched channel that was never sampled for lack of budget is disclosed.
@@ -2177,6 +2189,9 @@ def _evaluate_tick(
     )
     stale_cloud_launches = []
     builder_notes = []
+    # One slot for the tick: whichever read resolves the repository slug first fills it, and the
+    # others reuse it, a failed resolution (None) included.
+    slug_cell = [_SLUG_UNRESOLVED]
     if lane_event_due:
         open_pr_numbers = None
         repo_slug = None
@@ -2202,6 +2217,8 @@ def _evaluate_tick(
             repo_slug, _slug_refusal = _resolve_repo_slug(
                 repo_root, deadline, monotonic, gh_run, env,
             )
+            if repo_slug is not None or _slug_refusal is not None:
+                slug_cell[0] = repo_slug  # a skipped lookup (None, None) stays unresolved for the first granted reader
             if repo_slug is None:
                 degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
         else:
@@ -2232,7 +2249,7 @@ def _evaluate_tick(
         stale_cloud_launches = _evaluate_cloud_activity(
             repo_root, live_lanes, deadline=activity_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
-            known_slug=repo_slug,
+            known_slug=repo_slug, slug_cell=slug_cell,
         )
         stale_live_launches = stale_live_launches + stale_cloud_launches
         # No fresh clock read: the notes window is fixed from the activity grant, so it
@@ -2246,7 +2263,7 @@ def _evaluate_tick(
         builder_notes = _evaluate_builder_notes(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
-            known_slug=repo_slug,
+            known_slug=repo_slug, slug_cell=slug_cell,
         )
 
     cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state)

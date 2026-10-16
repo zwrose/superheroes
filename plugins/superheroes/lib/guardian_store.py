@@ -42,11 +42,12 @@ class UnknownSnapshotVersion(Exception):
     pass
 
 
-def guardian_layer_path(cwd, root=None):
+def guardian_layer_path(cwd, root=None, *, persist_backfill=True):
     """Mode-aware path to guardian.md, co-located with core.md.
 
     May raise ``core_md.RepoRootUnavailable`` when git cannot be run."""
-    return core_md.layer_path(cwd, "guardian", root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    return core_md.layer_path(cwd, "guardian", root, **keyword)
 
 
 def guardian_dir(cwd, root=None):

@@ -73,7 +73,7 @@ def _resolve_cadence(raw):
     return cadence, cadence_tuned
 
 
-def read_config(cwd, root=None):
+def read_config(cwd, root=None, *, persist_backfill=True):
     """Read guardian.md layer → thresholds, coverage, vitals knobs.
 
     Empty/absent → defaults with `configStatus` healthy (defaults are authoritative).
@@ -82,7 +82,8 @@ def read_config(cwd, root=None):
     Vitals collection is on by default; a guardian-config `vitals: false` (or
     `collectVitals: false`) disables it. `verifyBudgetSeconds` (alias
     `vitalsBudgetSeconds`) tunes the shared verify/vitals time budget."""
-    layer_p = guardian_store.guardian_layer_path(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    layer_p = guardian_store.guardian_layer_path(cwd, root, **keyword)
     thresholds = dict(guardian_lens.RED_LINE_THRESHOLDS)
     coverage = []
     vitals_enabled = True
