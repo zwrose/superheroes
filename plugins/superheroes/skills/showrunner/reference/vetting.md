@@ -3,6 +3,8 @@
 - [Vetting — the mechanism behind duty 4](#vetting--the-mechanism-behind-duty-4)
 - [Order-quality accounting](#order-quality-accounting)
 - [Dispatch provenance against engine doctrine](#dispatch-provenance-against-engine-doctrine)
+- [Adversarial probes at vet](#adversarial-probes-at-vet)
+- [Grading the third-rework tripwire](#grading-the-third-rework-tripwire)
 - [The collector — pointer, ordinals, and age](#the-collector--pointer-ordinals-and-age)
 - [The merged-PR backstop](#the-merged-pr-backstop)
 - [The collector preamble](#the-collector-preamble)
@@ -58,7 +60,19 @@ Vet dispatch provenance against engine doctrine (CONVENTIONS §7.5). A provenanc
 non-first-party model dispatched through the cursor CLI, or a fable tier on an external engine, is
 a **defect to catch at vet** — not a builder judgment call to accept.
 
+## Adversarial probes at vet
+
+Spend vet time on the adversarial probes the suite does not contain: does the guard actually fire when its target breaks? does the test assert what its name claims? does the behavior actually behave?
+
+## Grading the third-rework tripwire
+
+This is the vet-time grading of the third-rework tripwire; the ruling is [review-discipline.md § The third-rework tripwire](../../../rubric/review-discipline.md#the-third-rework-tripwire).
+
+When a builder parks here, the tripwire is firing as designed — **welcome it and go looking for the design problem**, rather than ordering another rework.
+
 ## The collector — pointer, ordinals, and age
+
+Reading it is a vet-time step: the one moment you are already in disposition mode, and the one moment guaranteed to recur whatever the project's release model.
 
 **Locating the collector is part of the duty.** Record its issue pointer in durable memory the first
 time you open or find it. If you cannot resolve it, the pending field says so as a **disclosed
@@ -89,6 +103,8 @@ not happening, and the receipt says so plainly rather than re-listing as though 
 normal. **An item the reconciliation surfaces means the primary path failed for that item** — not
 routine throughput.
 
+The merged-PR backstop and the collector's preamble are yours at the same moment.
+
 ## The merged-PR backstop
 
 **At vet, grep merged-PR bodies for the Follow-ups for the advisor heading** and reconcile against
@@ -109,6 +125,12 @@ the collector pointer cannot be resolved, record the preamble duty as a **disclo
 the vet receipt — never a silent skip, and never a second collector.
 
 ## The owner-half slot — states you will meet
+
+The slot is the builder's to create (the **workhorse** charter's §11 has the builder create it and governs what it must preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop below is still yours).
+
+Consequence up, mechanism down — *an independent reader checked this, and this is what they concluded* is the most merge-relevant single fact on the page.
+
+**Post the receipt first, then write the owner half that points at it** — a failure between the two leaves a receipt with no pointer (visible, recoverable), never a verdict pointing at a receipt that does not exist.
 
 **A heading without its marker is a failed stamp.** A body that carries the `## Advisor vet`
 heading without the advisor-vet marker is a current-contract builder that failed to stamp. Re-stamp
