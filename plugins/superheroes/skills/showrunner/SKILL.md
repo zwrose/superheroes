@@ -610,39 +610,24 @@ above).
    a branch, or held on the collector with its id; every decision and gotcha is recorded with its
    provenance line, or placed on the plugin surface the routing test names.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
-   preflight**. At dispatch time you stand where the builder stands at its own preflight — about to
-   go autonomous on assumptions nobody has exercised — with no equivalent check unless you run it.
-   **The checks** live in
+   preflight**. **The checks** live in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md`, from `engine-auth` to
-   `grant-state`. **Read that file at dispatch time.** Its owner-capability check points at the
-   owner-involvement taxonomy later in this duty.
+   `grant-state`. **Read that file at dispatch time.** Its owner-capability check points at the owner-involvement taxonomy in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` § The owner-involvement taxonomy.
 
    **Record every check ran or N/A, and end on a recorded go / no-go in the dispatch durable
-   record.** Checks marked always run every time; conditional checks run when the work needs them.
-   An N/A carries a **one-line reason**; "marked N/A" without a reason is a silent skip. **A failed
+   record.** **A failed
    check is a no-go** — the dispatch does not launch until it is cleared or explicitly
-   owner-accepted. Keep the preflight proportionate: a twenty-minute preflight before every dispatch
-   repeats, one layer up, the cost mistake the product already watches for.
+   owner-accepted.
 
-   **Prove each engine live before a wave.** At each wave preflight, one conformance probe per
-   dispatchable engine runs on its channel and must return a typed result that validates; the
-   result is recorded in the walked `engine-auth` check
-   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md`). A configuration
-   selftest proves configuration, never that the engine answers. The probe strengthens what
-   `engine-auth` must mean in a wave; it does not add a check to the list.
+   **Prove each engine live before a wave.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/workhorse/reference/dispatch-mechanics.md` § The conformance probe when you run a probe or read its result.**
-   **A failed probe is the owner's choice.** The failure is loud: it names the engine, what failed,
-   and the lanes that depend on it. Nothing launches on that engine without the owner's word. The
-   owner either holds the wave to troubleshoot, or launches without that engine — and when that
-   engine supplied a lane's second family, the preflight names the substitute family, or those full
-   lanes park.
+   **A failed probe is the owner's choice.** Nothing launches on that engine without the owner's word.
 
    **Invoke the launcher — never hand-compose a launch.** Run
    `${CLAUDE_PLUGIN_ROOT}/lib/launcher.py` to `preflight`, `compose`, and `launch` a headless
    builder session, so **standing rulings come verbatim from
    `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md`** — a rulings block reconstructed from memory
-   is what collides builds in a shared checkout. Supply the checks as data; the launcher records
-   each and the go/no-go, and it establishes `standing-rulings` itself. **A launcher or ledger
+   is what collides builds in a shared checkout. **A launcher or ledger
    refusal is a no-go: clear its cause, never force it.**
    A launch can run in a cloud session and a lane can be a cloud lane. Their mechanics are in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md`.
@@ -660,10 +645,7 @@ above).
    simulated phones, is yours, not the builder's. A finished **cloud** lane has no worktree to reap:
    once its pull request merges or closes, its cleanup is the archive request and the branch step.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane when a cloud lane's pull request merges or closes.**
-   When the issue's done-definition names an iPhone
-   check (a check on a simulated iPhone), the premise carries `"iphoneCheck": true`. The premise
-   names no place to check.
-   **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**
+      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**
 
    **Declare a batch before its launches, and record every terminal outcome** — handback, park,
    refusal, or died; an unrecorded outcome makes the batch unreadable rather than clean. **Read
@@ -676,25 +658,15 @@ above).
    **Grant scope is always enumerated, never a fuzzy noun** — state scope as
    **enumerated PRs, a time box, or a count** (not an undefined phrase like "everything in these
    batches"). Standing exclusions: **release PRs are excluded, and force-push is never granted.**
-   **Owner involvement sorts three distinct ways:** **Owner capability** — what an
-   agent structurally cannot do regardless of authority (sign-in so a browser pilot is not blocked,
-   account actions, anything needing credentials the product forbids an agent from handling). **No
-   substitute exists.** **Owner authority** — a commitment or trade that binds the owner; you can hold
-   work and park, so latency is affordable. **A live human to unblock** — premise corrections, forks
-   inside ratified scope; **this resolves to the advisor**, and it is almost all of what actually
-   happens. **Who launched and whether the owner is available are independent
-   axes** — attended, reachable-with-latency, and asleep all appear under advisor launch; do not use
-   advisor-launch as a proxy for owner-absence. A running headless session is deaf — a need
-   raised after launch reaches nobody. **Clear owner-capability preconditions at dispatch time — with
+   Owner involvement sorts three ways — owner capability, owner authority, a live human to unblock — defined in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` § The owner-involvement taxonomy.
+   **Clear owner-capability preconditions at dispatch time — with
    the owner, before the session goes autonomous** — not via a builder preflight when nobody is there.
-   State a **duration** — a session that expires two hours into a four-hour build is the same
-   failure, later. If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
+   If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
    the advisor will read without being told to look — never improvise a channel; the builder charter
    carries the builder's half.
 
    **Recovery follows the doctrine, never memory.** Read
-   `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery and follow it rather
-   than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
+   `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery and follow it.
    **Before composing a successor's launch, run the unpushed-work sweep** that § Recovery describes, and record what you found for handoff. The calls that are the advisor's: whether a takeover
    is a **resume** (same instance and account only) or an **adoption** (a fresh session from durable
    artifacts, and **the only path across instances or accounts**); **pinning** each builder's
@@ -713,12 +685,6 @@ above).
    **When a cloud build's PR is parked because the reviewer pass lapsed, tell the owner, and send it back for review once the pass is renewed: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back.**
    **When a cloud lane stops or stalls, recover it at once from its pushed work: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Adoption mechanics.**
    **When a cloud-built stack layer hands back, link it, or record the link still owed, before the vet: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Cloud lanes.**
-
-   **The orchestration that remains is yours because the harness does not carry it:** the
-   launcher's detached spawn of headless builders; arming the wave watch and re-arming it; reading
-   liveness from transcript freshness; the builder's turn-end rule for headless sessions; the
-   per-account config pin on every spawned session; the launcher-provisioned worktree per build; the
-   semantic heartbeat; the launch ledger; and the standing rulings block.
 
    **Done when:** every launch ran through the launcher on a recorded go with each check marked ran
    or N/A; every lane in the batch has its terminal outcome recorded, and your vet ruling recorded
