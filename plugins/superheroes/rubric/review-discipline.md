@@ -656,6 +656,8 @@ it with a disclosure line** — never a park, and never a silent skip.
 **The show-it duty is wayfinding, not media** — **no screenshots and no recordings**. The duty is to
 remove the friction of putting hands on the build.
 
+Taste is judged on the finished thing, and **owners largely do not read diffs** — "it's in the diff" satisfies nothing. **Zero reconstruction, not zero clicks** — the owner never rebuilds the after-state (no checkout, no dev server, no reading source to imagine output). A running URL they click meets the standard; "check out the branch and run the dev server" fails it. **Where that is unreachable, say so rather than prescribe infrastructure.**
+
 **(a) An entry point, ranked** — take the **highest level the project supports**; **disclose whenever
 it is `command` or below.** An absent project declaration means **`none`**.
 
