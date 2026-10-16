@@ -46,6 +46,21 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_PID", raising=False)
     # The `started` append pauses between its tries; no test waits for it.
     monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
+    # The launches below keep their base on a local bare remote; the commit is asked of that
+    # remote by git rather than of GitHub. The GitHub question has its own tests.
+    monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
+
+
+def _local_remote_has(repo_root, base, env):
+    got = subprocess.run(
+        ["git", "-C", repo_root, "remote", "get-url", "origin"],
+        capture_output=True, text=True)
+    origin = got.stdout.strip()
+    if got.returncode != 0 or not origin:
+        return None
+    has = subprocess.run(
+        ["git", "-C", origin, "cat-file", "-e", base + "^{commit}"], capture_output=True)
+    return has.returncode == 0
 
 
 def _pty_available():
@@ -265,14 +280,17 @@ def _compose_cloud(repo, **kwargs):
     return L.compose_launch(repo, 656, _stamped(repo), **kwargs)
 
 
-def test_compose_cloud_prompt_differs_from_local_by_exactly_the_two_place_lines(tmp_path):
+def test_compose_cloud_prompt_differs_from_local_by_exactly_the_four_place_lines(tmp_path):
     # axis: the prompt differs from the local one by exactly those lines
     repo = _init_repo(tmp_path / "repo")
     local = L.compose_launch(repo, 656, _stamped(repo))
     cloud = _compose_cloud(repo)
     assert local["ok"] is True and cloud["ok"] is True
     version = L.plugin_version()
-    lines = "Place: cloud session\nAdvisor plugin version: %s\n\n" % version
+    lines = (
+        "Place: cloud session\nAdvisor plugin version: %s\nCloud environment: %s\n"
+        "Base commit: %s\n\n" % (version, ENV_ID, _head_sha(repo))
+    )
     assert lines in cloud["prompt"]
     assert cloud["prompt"].replace(lines, "", 1) == local["prompt"]
     rulings = local["doctrine"]["rulingsBlock"]
@@ -280,6 +298,46 @@ def test_compose_cloud_prompt_differs_from_local_by_exactly_the_two_place_lines(
     assert cloud["doctrine"]["rulingsBlock"] == rulings
     assert local["prompt"].endswith(rulings)
     assert cloud["prompt"].endswith(rulings)
+
+
+def test_compose_cloud_prompt_names_the_environment_on_its_own_line(tmp_path):
+    # axis: the cloud prompt names the cloud environment on its own line
+    repo = _init_repo(tmp_path / "repo")
+    lines = _compose_cloud(repo)["prompt"].split("\n")
+    assert lines.count("Cloud environment: %s" % ENV_ID) == 1
+    at = lines.index("Advisor plugin version: %s" % L.plugin_version())
+    assert lines[at + 1] == "Cloud environment: %s" % ENV_ID
+    named = _compose_cloud(repo, cloud_environment="env_01Other")
+    assert "\nCloud environment: env_01Other\n" in named["prompt"]
+
+
+def test_compose_cloud_prompt_names_the_base_commit_on_its_own_line(tmp_path):
+    # axis: the cloud prompt names the premise's base commit on its own line
+    repo = _init_repo(tmp_path / "repo")
+    base = _head_sha(repo)
+    lines = _compose_cloud(repo)["prompt"].split("\n")
+    assert lines.count("Base commit: %s" % base) == 1
+    at = lines.index("Cloud environment: %s" % ENV_ID)
+    assert lines[at + 1] == "Base commit: %s" % base
+
+
+def test_compose_local_prompt_carries_neither_line(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    for local in (L.compose_launch(repo, 656, _stamped(repo)),
+                  L.compose_launch(repo, 656, _stamped(repo), place="local")):
+        assert local["ok"] is True
+        assert "Cloud environment:" not in local["prompt"]
+        assert "Base commit:" not in local["prompt"]
+
+
+def test_compose_cloud_without_a_base_commit_refuses(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise = dict(_stamped(repo))
+    del premise["baseCommit"]
+    result = L.compose_launch(repo, 656, premise, place="cloud", cloud_environment=ENV_ID,
+                              session_name="issue-656-preview")
+    assert result["ok"] is False
+    assert result["reason"] == "premise-missing-field:baseCommit"
 
 
 def test_compose_cloud_result_keys(tmp_path):
@@ -474,68 +532,254 @@ def test_edge2_compose_refusal_is_a_cloud_lane(tmp_path):
     assert calls == []
 
 
-# --- edge 3: HEAD must be on a remote branch ----------------------------------------------
+# --- edge 3: the named base commit must be on the remote -----------------------------------
+# bite-proof record wo_c_place_call
 
 
-def test_edge3_head_not_on_a_remote_branch_is_an_accounted_refusal(tmp_path):
-    # axis: no cloud spawn from a commit the remote lacks
+def _later_commit(tmp_path, repo):
+    """A commit on the working repo that no remote has; its sha."""
+    count = len(os.listdir(tmp_path / "repo"))
+    (tmp_path / "repo" / ("later-%d.txt" % count)).write_text("later\n")
+    _git(repo, "add", ".")
+    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
+    return _head_sha(repo)
+
+
+def test_edge3_a_checkout_with_no_origin_is_unchecked_and_refuses(tmp_path):
+    # axis: a remote that could not be asked refuses
     repo = _init_repo(tmp_path / "repo")
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
-    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-on-remote", "cloud-base")
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-base-remote-unchecked", "cloud-base")
     assert calls == []
     assert "warnings" in result
 
 
-def test_edge3_a_remote_branch_without_head_still_refuses(tmp_path):
+def test_edge3_a_base_the_remote_lacks_refuses(tmp_path):
+    # axis: a named base absent from the remote refuses
     repo = _cloud_repo(tmp_path)
-    (tmp_path / "repo" / "later.txt").write_text("later\n")
-    _git(repo, "add", ".")
-    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
+    later = _later_commit(tmp_path, repo)
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
-                     premise=_valid_premise(repo, baseCommit=_head_sha(repo)))
-    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-on-remote", "cloud-base")
+                     premise=_valid_premise(repo, baseCommit=later))
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-base-not-on-remote", "cloud-base")
     assert calls == []
 
 
-def test_edge3_head_that_is_not_the_stamped_base_refuses(tmp_path):
-    # axis: the session starts from HEAD, so HEAD must be the base the gates ran against
+def test_edge3_a_head_that_is_not_the_named_base_is_not_refused_when_the_remote_has_the_base(
+    tmp_path,
+):
+    # axis: the checkout's HEAD need not be the named base
     repo = _cloud_repo(tmp_path)
     base = _head_sha(repo)
-    (tmp_path / "repo" / "later.txt").write_text("later\n")
-    _git(repo, "add", ".")
-    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    later = _later_commit(tmp_path, repo)
+    assert later != base
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
                      premise=_valid_premise(repo, baseCommit=base))
-    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-base", "cloud-base")
+    assert result["ok"] is True, result
+    assert len(calls) == 1
+    assert ("Base commit: %s" % base) in calls[0]["argv"][2].split("\n")
+
+
+def test_edge3_a_stale_tracking_ref_does_not_decide_the_result(tmp_path):
+    # axis: the remote is read, not local tracking refs
+    repo = _cloud_repo(tmp_path)
+    later = _later_commit(tmp_path, repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert "origin/main" in _git(repo, "branch", "-r", "--contains", later)
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
+                     premise=_valid_premise(repo, baseCommit=later))
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-base-not-on-remote", "cloud-base")
     assert calls == []
 
 
-def test_edge3_head_moved_while_reserving_terminalizes_the_unstarted_lane(tmp_path, monkeypatch):
-    # axis: the checkout is re-checked right before the command; reservation can wait on the lock
+def test_edge3_the_remote_losing_the_base_while_reserving_terminalizes_the_unstarted_lane(
+    tmp_path, monkeypatch,
+):
+    # axis: the base is re-checked right before the command; reservation can wait on the lock
     repo = _cloud_repo(tmp_path)
     real_reserve = ll.reserve
 
-    def reserve_then_drift(*args, **kwargs):
+    def reserve_then_lose_the_base(*args, **kwargs):
         result = real_reserve(*args, **kwargs)
-        (tmp_path / "repo" / "later.txt").write_text("later\n")
-        _git(repo, "add", ".")
-        _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
-        _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        monkeypatch.setattr(L, "_base_on_remote_fn", lambda *a, **k: False)
         return result
 
-    monkeypatch.setattr(ll, "reserve", reserve_then_drift)
+    monkeypatch.setattr(ll, "reserve", reserve_then_lose_the_base)
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
     assert result["ok"] is False
-    assert result["reason"] == "launch-cloud-head-not-base"
+    assert result["reason"] == "launch-cloud-base-not-on-remote"
     assert calls == []
     lane = _lanes(repo)[result["launchId"]]
     assert lane["terminal"] is True
     assert lane["started"] is False
+
+
+@pytest.mark.parametrize("answer,reason", [
+    (False, "launch-cloud-base-not-on-remote"),
+    (None, "launch-cloud-base-remote-unchecked"),
+    (True, None),
+])
+def test_cloud_base_refusal_maps_the_round_trip_to_its_token(monkeypatch, answer, reason):
+    seen = []
+
+    def asked(repo_root, base, env):
+        seen.append((repo_root, base))
+        return answer
+
+    monkeypatch.setattr(L, "_base_on_remote_fn", asked)
+    assert L._cloud_base_refusal("/repo", {"baseCommit": "abc123"}, None) == reason
+    assert seen == [("/repo", "abc123")]
+
+
+def _gh_runner(monkeypatch, answer):
+    """Replace the gh call; record each (owner, repo, sha, timeout). ``answer`` is a
+    CompletedProcess, None, or an exception to raise."""
+    seen = []
+
+    def run(owner, repo, sha, env, timeout):
+        seen.append((owner, repo, sha, timeout))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(L, "_gh_commit_lookup", run)
+    monkeypatch.setattr(L, "_base_on_remote_fn", L._base_on_remote)
+    return seen
+
+
+def _origin(tmp_path, url):
+    repo = _init_repo(tmp_path / "repo")
+    if url is not None:
+        _git(repo, "remote", "add", "origin", url)
+    return repo
+
+
+SHA = "a" * 40
+
+
+def _done(code, out="", err=""):
+    return subprocess.CompletedProcess([], code, stdout=out, stderr=err)
+
+
+def test_a_pushed_commit_is_on_the_remote(tmp_path, monkeypatch):
+    # axis: the base is asked of GitHub afresh
+    repo = _origin(tmp_path, "git@github.com:acme/widgets.git")
+    seen = _gh_runner(monkeypatch, _done(0, SHA + "\n"))
+    assert L._base_on_remote(repo, SHA, None) is True
+    assert seen == [("acme", "widgets", SHA, L._WORKTREE_GIT_TIMEOUT)]
+
+
+def test_a_success_that_names_another_commit_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets")
+    _gh_runner(monkeypatch, _done(0, "b" * 40 + "\n"))
+    assert L._base_on_remote(repo, SHA, None) is None
+
+
+def test_only_the_422_no_commit_answer_is_absent(tmp_path, monkeypatch):
+    # axis: only GitHub saying it has no such commit is "not on the remote"
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    _gh_runner(monkeypatch, _done(
+        1, "", "gh: No commit found for SHA: %s (HTTP 422)" % SHA))
+    assert L._base_on_remote(repo, SHA, None) is False
+    assert L._cloud_base_refusal(repo, {"baseCommit": SHA}, None) == (
+        "launch-cloud-base-not-on-remote")
+
+
+@pytest.mark.parametrize("err", [
+    "gh: Not Found (HTTP 404)",
+    "gh: Bad credentials (HTTP 401)",
+    "error connecting to api.github.com",
+    "gh: Server Error (HTTP 500)",
+])
+def test_any_other_gh_failure_is_unchecked(tmp_path, monkeypatch, err):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    _gh_runner(monkeypatch, _done(1, "", err))
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert L._cloud_base_refusal(repo, {"baseCommit": SHA}, None) == (
+        "launch-cloud-base-remote-unchecked")
+
+
+def test_a_gh_that_cannot_run_or_times_out_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    _gh_runner(monkeypatch, None)
+    assert L._base_on_remote(repo, SHA, None) is None
+
+
+@pytest.mark.parametrize("raised", [
+    OSError("gh missing"), subprocess.TimeoutExpired(["gh"], 180),
+])
+def test_the_default_gh_call_maps_a_missing_gh_and_a_timeout_to_no_answer(
+    monkeypatch, raised,
+):
+    def run(*args, **kwargs):
+        raise raised
+
+    monkeypatch.setattr(L.subprocess, "run", run)
+    assert L._gh_commit_lookup("acme", "widgets", SHA, None, 5) is None
+
+
+def test_the_default_gh_call_asks_the_commits_endpoint(monkeypatch):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append((argv, kwargs["timeout"]))
+        return _done(0, SHA)
+
+    monkeypatch.setattr(L.subprocess, "run", run)
+    L._gh_commit_lookup("acme", "widgets", SHA, None, 7)
+    assert seen == [(["gh", "api", "repos/acme/widgets/commits/" + SHA, "--jq", ".sha"], 7)]
+
+
+@pytest.mark.parametrize("url", [
+    "git@github.com:acme/widgets.git",
+    "git@github.com:acme/widgets",
+    "ssh://git@github.com/acme/widgets.git",
+    "ssh://git@github.com/acme/widgets",
+    "https://github.com/acme/widgets.git",
+    "https://github.com/acme/widgets",
+])
+def test_every_github_address_form_names_its_owner_and_repository(tmp_path, monkeypatch, url):
+    repo = _origin(tmp_path, url)
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    assert L._base_on_remote(repo, SHA, None) is True
+    assert seen[0][:2] == ("acme", "widgets")
+
+
+@pytest.mark.parametrize("url", [
+    "https://gitlab.com/acme/widgets.git",
+    "https://github.com.evil.example/acme/widgets.git",
+    "/srv/git/widgets.git",
+    "file:///srv/git/widgets.git",
+    "git@github.com:acme",
+])
+def test_an_origin_that_is_not_a_github_address_is_unchecked_without_asking(
+    tmp_path, monkeypatch, url,
+):
+    repo = _origin(tmp_path, url)
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert seen == []
+
+
+def test_E5_no_origin_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, None)
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert seen == []
+    assert L._cloud_base_refusal(repo, {"baseCommit": SHA}, None) == (
+        "launch-cloud-base-remote-unchecked")
+
+
+def test_a_git_that_cannot_run_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    monkeypatch.setattr(L, "_git_scrubbed", lambda *a, **k: None)
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert seen == []
 
 
 # --- the launch that works -----------------------------------------------------------------
@@ -1050,11 +1294,13 @@ def test_outcome5_a_session_token_without_a_creation_line_is_not_a_session_id(tm
 
 def test_outcome5_a_stray_token_beside_a_receipt_for_another_name_is_not_an_id(tmp_path):
     repo = _cloud_repo(tmp_path)
-    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+    # The foreign receipt is complete, so the only thing wrong with it is the name it announces.
+    result = _launch(repo, tmp_path, _fake_spawn(_spawned(
         "Reusing session_old123 for context\n"
-        "Created cloud session: %s\n" % name
+        + _announced("issue-656-someone-elses", "session_01OtherLane")
     )))
     _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
 
 
 def test_outcome5_a_receipt_announcing_a_different_name_is_unconfirmed(tmp_path):
@@ -1290,29 +1536,68 @@ def test_pending_started_is_returned_when_the_unconfirmed_path_append_fails(
     assert "pendingStarted" in result["remedy"]
 
 
-def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(tmp_path):
+def _signal_after_hello_is_read(monkeypatch, signum):
+    """Send this process `signum` from inside the launcher's own read, once `hello` has come back.
+
+    The wrapper returns the bytes it read, so the launcher has captured them before it sees the
+    cancellation; the signal never races the capture.
+    """
+    import os as _os
+
+    real_read = _os.read
+    seen = []
+    sent = []
+
+    def read_then_signal(fd, length):
+        data = real_read(fd, length)
+        seen.append(data)
+        if not sent and b"hello" in b"".join(seen):
+            sent.append(fd)
+            _os.kill(_os.getpid(), signum)
+        return data
+
+    monkeypatch.setattr(L.os, "read", read_then_signal)
+    return sent
+
+
+def _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, signum):
     import os as _os
     import signal as _signal
-    import threading
 
-    log = tmp_path / "term.stdout"
-    before = _signal.getsignal(_signal.SIGTERM)
-    timer = threading.Timer(0.5, lambda: _os.kill(_os.getpid(), _signal.SIGTERM))
-    timer.start()
-    try:
-        result = L._default_cloud_spawn(
-            ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
-        )
-    finally:
-        timer.cancel()
+    log = tmp_path / "signalled.stdout"
+    before = _signal.getsignal(signum)
+    sent = _signal_after_hello_is_read(monkeypatch, signum)
+    result = L._default_cloud_spawn(
+        ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
+    )
+    assert sent
     assert result["readError"] == "_LauncherTerminated"
     assert "hello" in result["output"]
     assert "hello" in log.read_text()
     assert result["rc"] is not None
-    assert _signal.getsignal(_signal.SIGTERM) is before
+    assert _signal.getsignal(signum) is before
 
 
-def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(tmp_path, monkeypatch):
+def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(
+    tmp_path, monkeypatch, terminal,
+):
+    import signal as _signal
+
+    _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGTERM)
+
+
+def test_a_sigint_to_the_launcher_ends_the_command_group_and_keeps_the_output(
+    tmp_path, monkeypatch, terminal,
+):
+    # axis: Ctrl-C is a cancellation like SIGTERM — the same outcome, never a KeyboardInterrupt
+    import signal as _signal
+
+    _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGINT)
+
+
+def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(
+    tmp_path, monkeypatch, terminal,
+):
     # axis: a launcher cancelled between child creation and the read loop still ends the group
     import os as _os
     import signal as _signal
@@ -1339,7 +1624,7 @@ def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(tmp_path, mo
 
 
 def test_a_sigterm_landing_during_the_cleanup_does_not_cut_the_group_kill_short(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, terminal,
 ):
     # axis: a launcher cancelled while the cleanup is under way still ends the group it started
     import os as _os
@@ -1682,9 +1967,7 @@ def test_cli_compose_without_a_place_is_the_local_compose(tmp_path):
     assert result["sessionId"]
 
 
-def test_cli_launch_forwards_place_and_environment_only_when_a_place_is_given(
-    tmp_path, monkeypatch,
-):
+def test_cli_launch_refuses_an_environment_and_compose_forwards_one(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     checks_path, premise_path = tmp_path / "checks.json", tmp_path / "premise.json"
     _write_json(checks_path, _all_checks())
@@ -1696,13 +1979,21 @@ def test_cli_launch_forwards_place_and_environment_only_when_a_place_is_given(
         return {"ok": False, "reason": "injected-stop"}
 
     monkeypatch.setattr(L, "launch_build", capture)
+    composed = []
+
+    def compose(*args, **kwargs):
+        composed.append(kwargs)
+        return {"ok": False, "reason": "injected-stop"}
+
+    monkeypatch.setattr(L, "compose_launch", compose)
     common = dict(repo_root=repo, premise=str(premise_path), checks=str(checks_path),
                   log_dir=str(tmp_path / "logs"))
-    L._cli_launch(_args(**common))
-    L._cli_launch(_args(place="cloud", cloud_environment=ENV_ID, **common))
-    assert "place" not in forwarded[0] and "cloud_environment" not in forwarded[0]
-    assert forwarded[1]["place"] == "cloud"
-    assert forwarded[1]["cloud_environment"] == ENV_ID
+    refused = L._cli_launch(_args(place="cloud", cloud_environment=ENV_ID, **common))
+    assert refused["ok"] is False and refused["reason"] == "launch-cloud-environment-routed"
+    assert forwarded == []
+    L._cli_compose(_args(place="cloud", cloud_environment=ENV_ID, **common))
+    assert composed[0]["place"] == "cloud"
+    assert composed[0]["cloud_environment"] == ENV_ID
 
 
 def test_cli_preflight_forwards_the_place(tmp_path, monkeypatch):
@@ -1731,3 +2022,99 @@ def test_cli_place_flag_accepts_only_local_and_cloud(verb, capsys):
         L.main([verb, "--repo-root", "r", *common, "--place", "elsewhere"])
     assert exc.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+_VERB_ARGS = {
+    "launch": ["--issue", "1", "--premise", "p", "--checks", "c", "--log-dir", "l"],
+    "compose": ["--issue", "1", "--premise", "p"],
+    "preflight": ["--checks", "c"],
+}
+
+
+@pytest.mark.parametrize("verb", ["compose", "preflight"])
+@pytest.mark.parametrize("word", ["local", "cloud"])
+def test_cli_place_flag_reaches_compose_and_preflight_as_a_mechanical_place(
+    verb, word, monkeypatch,
+):
+    seen = []
+    monkeypatch.setattr(L, "_cli_" + verb, lambda args: seen.append(args.place) or {"ok": True})
+    assert L.main([verb, "--repo-root", "r", *_VERB_ARGS[verb], "--place", word]) == 0
+    assert seen == [word]
+
+
+def test_cli_launch_place_flag_is_the_launch_word_and_takes_only_local_and_cloud(
+    monkeypatch, capsys,
+):
+    seen = []
+    monkeypatch.setattr(L, "_cli_launch", lambda args: seen.append(args.place) or {"ok": True})
+    for word in ("local", "cloud"):
+        assert L.main(["launch", "--repo-root", "r", *_VERB_ARGS["launch"], "--place", word]) == 0
+    assert L.main(["launch", "--repo-root", "r", *_VERB_ARGS["launch"]]) == 0
+    assert seen == ["local", "cloud", None]
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        L.main(["launch", "--repo-root", "r", *_VERB_ARGS["launch"], "--place", "elsewhere"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("verb", ["compose", "preflight"])
+def test_cli_compose_and_preflight_take_no_boundary_file(verb, capsys):
+    # A boundary is a fallback resource of a launch; the previews have nowhere to take one.
+    with pytest.raises(SystemExit) as exc:
+        L.main([
+            verb, "--repo-root", "r", *_VERB_ARGS[verb], "--place", "cloud", "--boundary", "b",
+        ])
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --boundary" in capsys.readouterr().err
+
+
+def test_a_cloud_place_with_slot_generation_and_boundary_answers_cloud_with_slot(tmp_path):
+    # The mechanical cloud launch names the cloud's own refusal, never a slot or boundary token.
+    repo = _cloud_repo(tmp_path)
+    calls = []
+    result = _launch(
+        repo, tmp_path, _fake_spawn(calls=calls),
+        slot="slot-a", generation=1, boundary={"slotRef": "slot-a@1"},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-cloud-with-slot"
+    _assert_nothing_written(repo, calls)
+
+
+_ROUTED_CLOUD = {
+    "place": "cloud", "pointedAtCloud": True, "by": "word", "reason": None, "need": None,
+    "cloudVersion": None, "advisorVersion": None, "environment": ENV_ID, "reported": None,
+}
+
+
+def test_cli_launch_holds_slot_generation_and_boundary_back_from_a_cloud_call(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    checks_path, premise_path = tmp_path / "checks.json", tmp_path / "premise.json"
+    boundary_path = tmp_path / "boundary.json"
+    _write_json(checks_path, _all_checks())
+    _write_json(premise_path, _valid_premise(repo))
+    _write_json(boundary_path, {"slotRef": "slot-a@1"})
+    forwarded = []
+
+    def capture(*args, **kwargs):
+        forwarded.append(kwargs)
+        return {"ok": True, "reason": None}
+
+    monkeypatch.setattr(
+        L.launch_place, "route", lambda cwd, premise, word=None, **kw: _ROUTED_CLOUD,
+    )
+    monkeypatch.setattr(L, "launch_build", capture)
+    result = L._cli_launch(_args(
+        repo_root=repo, premise=str(premise_path), checks=str(checks_path),
+        log_dir=str(tmp_path / "logs"), place="cloud", slot="slot-a", generation=1,
+        boundary=str(boundary_path),
+    ))
+    assert len(forwarded) == 1
+    assert forwarded[0]["place"] == "cloud"
+    assert forwarded[0]["cloud_environment"] == ENV_ID
+    for held_back in ("slot", "generation", "boundary"):
+        assert held_back not in forwarded[0]
+    assert result["fallbackResourcesUnused"] == {"slot": "slot-a", "generation": 1}
