@@ -78,6 +78,25 @@ SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine":
                       for dim in RD.DIMENSIONS}}
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`,
+    `reviewer-deep`) live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = RD.model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
+# A session whose verifier is seated on the independent `codex` vendor (the fixer is `claude`).
+VERIFIER_SEATABLE = {"seatMap": dict(SEAT_MAP, **_nonpanel_cell_proof(["claude", "codex"]))}
+# A session whose synthesis seat stands on the native `claude` cell: a fixer outside the anthropic
+# family and a known, non-maker host family.
+SYNTHESIS_SEATABLE = {"fixerVendor": "codex", "seatMap": dict(SEAT_MAP, hostFamily="anthropic")}
+
+
 # =============================================================================================
 # the substituted adapter sibling
 # =============================================================================================
@@ -120,7 +139,7 @@ class FakeAdapters(object):
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
-                 session_dir=None):
+                 session_dir=None, orders_manifest=None):
         self.assembled.append({"phase": phase, "envelopes": envelopes,
                                "dispatch_manifest": dispatch_manifest,
                                "session_dir": session_dir})
@@ -144,6 +163,7 @@ class FakeAdapters(object):
             return {"seats": seats}, None
         if phase == RD.P_VERIFIERS:
             verdicts = []
+            seat_vendors = {}
             for env in (envelopes or []):
                 if not isinstance(env, dict):
                     continue
@@ -152,10 +172,20 @@ class FakeAdapters(object):
                 payload = env.get("payload")
                 if not isinstance(payload, dict):
                     continue
+                source = (env.get("executionEvidence") or {}).get("source")
                 for verdict in payload.get("verdicts") or []:
                     if isinstance(verdict, dict):
                         verdicts.append(dict(verdict))
-            return {"verdicts": verdicts}, None
+                        if isinstance(verdict.get("id"), str):
+                            seat_vendors[verdict["id"]] = (
+                                source if source in ("claude", "codex", "cursor") else "")
+            artifact = {"verdicts": verdicts, "verifierSeatVendors": seat_vendors}
+            # like the real adapter (per seat): the executed vendor is the envelope's execution evidence
+            sources = {(env.get("executionEvidence") or {}).get("source") for env in (envelopes or [])
+                       if isinstance(env, dict) and env.get("schema") != RR.SEAT_MISSING_SCHEMA}
+            if len(sources) == 1 and next(iter(sources)) in ("claude", "codex", "cursor"):
+                artifact["verifierVendor"] = next(iter(sources))
+            return artifact, None
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}, None
         if phase == RD.P_VERIFY:
@@ -792,7 +822,7 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 session_dir=None):
+                                 session_dir=None, orders_manifest=None):
         seats = {}
         for env in (envelopes or []):
             seat = env.get("seat")
@@ -826,7 +856,7 @@ def test_adapter_provenance_accumulates_per_phase_in_one_round(tmp_path, adapter
     verifier_omitted = [{"seat": "src/f.py:3", "occurrence": 0, "reason": "timeout"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 session_dir=None):
+                                 session_dir=None, orders_manifest=None):
         if phase == RD.P_PANEL:
             seats = {}
             for env in (envelopes or []):
@@ -1480,7 +1510,7 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     per-slot supersede leaves fold reading CONFIRMED, not PLAUSIBLE."""
     verifier_seat = "verifier:f.py:0"
     adapters.rosters[RD.P_VERIFIERS] = [verifier_seat]
-    d = _session(tmp_path)
+    d = _session(tmp_path, **VERIFIER_SEATABLE)
     _record_panel_with_verifier_cluster(d)
     assert _advance(d, tmp_path)["ok"] is True
     pend = _pending(d)
@@ -1496,7 +1526,9 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     verdict_payload = {"verdicts": [{"id": "v0", "verdict": "CONFIRMED",
                                      "reason": "confirmed by sweep-silence fixture",
                                      "evidence": "reproduced the cited line"}]}
-    _land(d, verifier_seat, payload=verdict_payload)
+    # the seat ran on the driver's selected non-maker vendor (codex; fixer is claude)
+    _land(d, verifier_seat, payload=verdict_payload,
+          executionEvidence=_execution_evidence(source="codex"))
 
     sweep_out = RD.cmd_record_result(d, sweep=True, supersede=True,
                                      expect_sha256=RR.MISSING_CAS_TOKEN)
@@ -2208,6 +2240,7 @@ def _record_panel_with_verifier_cluster(session_dir, file="f.py", line=1):
         "severity": "Important",
         "title": "issue",
         "dimension": "Code",
+        "consequence": "a reviewer-found defect stays in the change",
     }
     for seat in RD.DIMENSIONS:
         payload = {"findings": [finding] if seat == "code-reviewer" else []}
@@ -2215,7 +2248,7 @@ def _record_panel_with_verifier_cluster(session_dir, file="f.py", line=1):
 
 
 def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_path, adapters):
-    d = _session(tmp_path)
+    d = _session(tmp_path, **VERIFIER_SEATABLE)
     verifier_seat = "verifier:f.py:0"
     adapters.rosters[RD.P_VERIFIERS] = [verifier_seat]
     _record_panel_with_verifier_cluster(d)
@@ -2248,7 +2281,7 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
 
 def test_advance_emits_synthesis_verified_json_sidecar(tmp_path, adapters):
     """Synthesis dispatch writes verified.json from the pending findings payload."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     _record_panel_with_verifier_cluster(d)
     assert _advance(d, tmp_path)["ok"] is True
     out = _advance(d, tmp_path)              # verifiers: empty roster → synthesis dispatch
@@ -2274,7 +2307,7 @@ def test_tampered_manifest_rebuild_refuses_ingest(tmp_path, adapters):
     seat = "verifier:f.py:0"
 
     def _emit_verifiers_orders(name):
-        d = _session(tmp_path, name=name)
+        d = _session(tmp_path, name=name, **VERIFIER_SEATABLE)
         adapters.rosters[RD.P_VERIFIERS] = [seat]
         _record_panel_with_verifier_cluster(d)
         assert _advance(d, tmp_path)["ok"] is True
@@ -2432,7 +2465,7 @@ def test_advance_refuses_a_fold_the_submit_chokepoint_rejects(tmp_path, adapters
     _record_all_panel_seats(d)
 
     def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None,
-                     session_dir=None):
+                     session_dir=None, orders_manifest=None):
         return {"seats": {"architecture": {"findings": []}}}, None
 
     adapters.assemble = bad_assemble
@@ -2450,7 +2483,7 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     _record_all_panel_seats(d)
 
     def boom(phase, envelopes, state, config, dispatch_manifest=None,
-             session_dir=None):
+             session_dir=None, orders_manifest=None):
         raise RuntimeError("adapter exploded")
 
     adapters.assemble = boom
@@ -3108,7 +3141,7 @@ def test_advance_owner_artifact_off_menu_choice_still_wins(tmp_path, adapters):
 
 def test_advance_owner_artifact_terminal_refusal(tmp_path, adapters):
     gitdir = _gitdir(tmp_path, "owner-artifact-terminal")
-    d = _session(tmp_path, name="owner-artifact-terminal")
+    d = _session(tmp_path, name="owner-artifact-terminal", **SYNTHESIS_SEATABLE)
     _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
     path = _write_owner_artifact(tmp_path, {"choice": RD.HOLD_CHOICE})
     out = _advance(d, tmp_path, owner_artifact_path=path)
@@ -3202,7 +3235,7 @@ def _drive_to_terminal(d, tmp_path, adapters, gitdir=None):
 
 def test_terminal_advance_writes_the_receipt_and_publishes_the_sidecar(tmp_path, adapters):
     gitdir = _gitdir(tmp_path)
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     out = _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
     assert out["terminal"] == "converged"
     receipt_path = os.path.join(d, RD.RECEIPT_FILE)
@@ -3229,7 +3262,7 @@ def test_terminal_advance_writes_the_receipt_and_publishes_the_sidecar(tmp_path,
 def test_sidecar_journals_repair_begin_before_it_publishes(tmp_path, adapters):
     """ORDERING IS THE CONTRACT: a sidecar is never published that the journal could not record."""
     gitdir = _gitdir(tmp_path)
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
     outcomes = [e["outcome"] for e in _journal(d)
                 if e["outcome"] in ("sidecar-repair-begin", "sidecar-repaired")]
@@ -3239,7 +3272,7 @@ def test_sidecar_journals_repair_begin_before_it_publishes(tmp_path, adapters):
 def test_advance_on_an_existing_terminal_is_idempotent_and_repairs_the_sidecar(tmp_path,
                                                                               adapters):
     gitdir = _gitdir(tmp_path)
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
     sidecar_path = os.path.join(gitdir, "superheroes", "review-receipt.json")
     before = _state(d)
@@ -3338,7 +3371,7 @@ def test_sidecar_git_dir_is_per_worktree_never_the_shared_common_dir(tmp_path, m
 def test_terminal_sidecar_lands_in_a_real_git_dir(tmp_path, adapters):
     """One end-to-end pass with the REAL git seam — a fake-git-only proof would never show that the
     seam's arguments resolve against a real repository."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     repo = str(tmp_path / "repo")
     os.makedirs(repo)
     subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
@@ -3443,6 +3476,10 @@ def test_attest_writes_an_uncertified_receipt_with_its_evidence(tmp_path, adapte
     assert RD.RECEIPT_FILE not in receipt["artifacts"]
     assert RD.STATE_FILE not in receipt["artifacts"]
     assert RD.JOURNAL_FILE not in receipt["artifacts"]
+    # the state mirror is rewritten with every state write, so it is no more a stable artifact than
+    # the state file: it sits in the session dir at attest time and is never digested
+    assert os.path.isfile(os.path.join(d, RD.MIRROR_FILE))
+    assert RD.MIRROR_FILE not in receipt["artifacts"]
     for rel, digest in receipt["artifacts"].items():
         assert digest and len(digest) == 64
         with open(os.path.join(d, rel), "rb") as fh:
@@ -3656,7 +3693,7 @@ def test_death_between_advance_and_terminal(tmp_path, adapters):
 
 def test_death_between_terminal_and_sidecar(tmp_path, adapters):
     gitdir = _gitdir(tmp_path)
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
     sidecar_path = os.path.join(gitdir, "superheroes", "review-receipt.json")
     os.remove(sidecar_path)                          # terminal reached, sidecar lost — the kill
@@ -3673,7 +3710,7 @@ def test_death_between_sidecar_begin_and_sidecar_complete(tmp_path, adapters):
     """A crash between the two journal halves leaves begin-without-complete; the next `advance`
     re-validates and republishes idempotently by content hash."""
     gitdir = _gitdir(tmp_path)
-    d = _session(tmp_path)
+    d = _session(tmp_path, **SYNTHESIS_SEATABLE)
     _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
     sidecar_path = os.path.join(gitdir, "superheroes", "review-receipt.json")
     os.remove(sidecar_path)

@@ -122,6 +122,8 @@ def _native_verdicts_branch():
         "newIssues": None,
         "evidence": None,
         "auditorVendor": None,
+        "unnamedChange": None,
+        "unnamedChangeAllowedBySeq": None,
         "investigated": ["plugins/superheroes/lib/engine_result_channel.py"],
     }
 
@@ -1049,11 +1051,11 @@ def test_preflight_entry_launch_without_claude_parks_when_no_other_live(tmp_path
         sm = SM.build(*args, **kwargs)
         degradations = list(sm.get("degradations") or [])
         degradations.append({
-            "constraint": "same-family",
+            "constraint": "seat-unfilled",
             "seat": "architecture-reviewer",
             "reason": (
-                "seat architecture-reviewer seated the maker family xai — "
-                "no alternative family is live"
+                "seat architecture-reviewer has no live candidate outside the makers' "
+                "families (xai) — recorded unfilled, not run"
             ),
         })
         out = dict(sm)
@@ -1079,6 +1081,7 @@ def test_preflight_entry_launch_without_claude_parks_when_no_other_live(tmp_path
 
 
 def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
+    # a legacy map seated the maker family and disclosed it as `same-family`; it still parks
     repo = _repo(tmp_path)
 
     def _park_build(*args, **kwargs):
@@ -1110,6 +1113,68 @@ def test_preflight_entry_parks_on_same_family(tmp_path, monkeypatch):
     assert code == 0
     assert payload["engine-auth"]["state"] == "fail"
     assert "PARK" in payload["engine-auth"]["reason"]
+
+
+def test_e7_preflight_entry_parks_on_a_real_unfilled_seat(tmp_path):
+    # codex is the implementer and the only vendor left live: nothing outside the maker's family
+    # can fill a seat, so the composed map records them unfilled and the full lane parks
+    repo = _repo(tmp_path)
+    cal = _calibration_rows(implementation="codex", reviewer="codex", pilot="cursor")
+    claude_fail = _failed_probe_result("claude", "resultProduction", repo=repo)
+    cursor_fail = _failed_probe_result("cursor", "resultProduction", repo=repo)
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail, cursor=cursor_fail)
+    payload, code = CP.preflight_entry(
+        repo,
+        paths,
+        launch_without=["claude", "cursor"],
+        owner_words=["proceed anyway", "proceed anyway"],
+        calibration_rows=cal,
+    )
+    assert code == 0
+    assert payload["engine-auth"]["state"] == "fail"
+    assert "PARK" in payload["engine-auth"]["reason"]
+    assert "no reviewer outside the maker family" in payload["engine-auth"]["reason"]
+    seats = payload.get("seatMap", {}).get("seats") or {}
+    lens_seats = [s for s in payload["seatMap"]["roster"] if s in SM.LENS_SEATS]
+    assert lens_seats
+    for seat in lens_seats:
+        assert seats[seat]["source"] == "unfilled", seat
+    assert all(v.get("family") != "openai" for v in seats.values())
+
+
+def test_e7_preflight_entry_does_not_park_on_a_backfilled_seat(tmp_path, monkeypatch):
+    # a `seat-unfilled` record whose seat a non-maker backfill filled (it names a vendor) is not a park
+    repo = _repo(tmp_path)
+
+    def _backfill_build(*args, **kwargs):
+        sm = SM.build(*args, **kwargs)
+        out = dict(sm)
+        out["degradations"] = list(sm.get("degradations") or []) + [{
+            "constraint": "seat-unfilled",
+            "seat": "architecture-reviewer",
+            "reason": "seat architecture-reviewer had no eligible vendor — backfilled to claude",
+        }]
+        seats = dict(sm["seats"])
+        seats["architecture-reviewer"] = {
+            "vendor": "claude", "model": "m", "effort": "high",
+            "tier": "reviewer", "family": "anthropic", "source": "backfill",
+        }
+        out["seats"] = seats
+        return out
+
+    monkeypatch.setattr(CP.seat_map, "build", _backfill_build)
+    cal = _calibration_rows(implementation="codex", reviewer="codex", pilot="cursor")
+    cursor_fail = _failed_probe_result("cursor", "resultProduction", repo=repo)
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, cursor=cursor_fail)
+    payload, code = CP.preflight_entry(
+        repo,
+        paths,
+        launch_without=["cursor"],
+        owner_words=["proceed anyway"],
+        calibration_rows=cal,
+    )
+    assert code == 0
+    assert "PARK" not in payload["engine-auth"]["reason"]
 
 
 def test_probe_refuses_reused_run_dir_with_folded_result(tmp_path):
@@ -3288,6 +3353,8 @@ class _AstraCliFakeRunner:
                 "newIssues": None,
                 "evidence": None,
                 "auditorVendor": None,
+                "unnamedChange": None,
+                "unnamedChangeAllowedBySeq": None,
                 "investigated": ["app/session_guard.py"],
             }
             with open(result_path, "w", encoding="utf-8") as fh:

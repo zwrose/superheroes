@@ -719,7 +719,11 @@ def _hand_submit_artifact(session_dir, pend, panel_findings, head_path):
     roster, reason = round_adapters.roster_for(phase, state, state["config"])
     assert reason is None, (phase, reason)
     seat, _occurrence = _slots_of(roster)[0]
-    return _payload_for(session_dir, state, pend, seat, panel_findings, head_path)
+    artifact = _payload_for(session_dir, state, pend, seat, panel_findings, head_path)
+    if phase in (round_driver.P_GAPSWEEP, round_driver.P_SCOPED):
+        # a hand submit names the vendor the single-seat reviewer was dispatched on
+        artifact = dict(artifact, reviewerVendor=round_driver._nonpanel_selection(state, session_dir, phase)[0])
+    return artifact
 
 
 def _record_all_roster_slots(session_dir, gitdir, head_path, pend, panel_findings):
