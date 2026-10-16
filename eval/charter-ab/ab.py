@@ -333,7 +333,7 @@ def build_identity(a, stage, repo, stored):
              "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),
              "judge_model": pick(a.judge_model, "judge_model", "gpt-6.1-sol"),
              "replicates": n_reps, "seed": pick(a.seed, "seed", 1882), "prompt_sha256": sha256_text(PROMPT),
-             "plugin_dir": plugin_dir_for(repo, charter) if strict else src.get("plugin_dir")}
+             "plugin_dir": (stored or {}).get("plugin_dir")}  # seats/run: settled from the side worktrees
     return ident, scenarios
 
 
@@ -730,11 +730,14 @@ def dispatch(a, stack):
             for side, path in wts.items():
                 if not os.path.isfile(os.path.join(path, ident["charter"])):
                     raise Refusal(f"{side} ({ident[side + '_sha']}) has no charter at {ident['charter']}")
-                # bites on: a side whose worktree lacks the plugin manifest must refuse, not load another plugin (E10)
-                if ident["plugin_dir"] and not os.path.isfile(
-                        os.path.join(path, ident["plugin_dir"], ".claude-plugin", "plugin.json")):
-                    raise Refusal(f"{side} ({ident[side + '_sha']}) has no plugin manifest at "
-                                  f"{ident['plugin_dir']}/.claude-plugin/plugin.json")
+            # bites on: the plugin root comes from the evaluated trees, not the caller's checkout; sides must agree (E10)
+            found = {side: plugin_dir_for(path, ident["charter"]) for side, path in wts.items()}
+            if len(set(found.values())) != 1:
+                raise Refusal(f"sides disagree on the plugin dir: base {found['base']!r}, candidate {found['candidate']!r}")
+            plugin_dir = found["base"]
+            if stored is not None and stored.get("plugin_dir") != plugin_dir:
+                raise Refusal(f"identity mismatch with {run_dir}/sides.json on: plugin_dir")
+            ident["plugin_dir"] = plugin_dir
             wtf = os.path.join(run_dir, "worktrees.json")  # every root any seat of this run dir has run under
             roots = set(load_json(wtf, []) or []) | {r for q in wts.values() for r in (q, os.path.realpath(q))}
             atomic_write(wtf, json.dumps(sorted(roots)))

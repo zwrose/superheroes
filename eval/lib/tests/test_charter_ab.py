@@ -571,8 +571,39 @@ def test_missing_plugin_manifest_on_a_side_refused(tmp_path, monkeypatch, git_en
             "plugins/x/skills/y/SKILL.md", "--scenarios", write_scenarios(tmp_path), "--run-dir", str(tmp_path / "run")]
     assert ab.main(argv) == 3
     err = capsys.readouterr().err
-    assert "no plugin manifest" in err and "base" in err
+    assert "disagree on the plugin dir" in err and "base" in err
     assert worktree_count(repo) == 1 and not (tmp_path / "run" / "sides.json").exists()
+
+
+def test_plugin_dir_comes_from_the_evaluated_trees_not_the_checkout(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    charter = repo / "plugins" / "x" / "skills" / "y" / "SKILL.md"
+    charter.parent.mkdir(parents=True)
+    charter.write_text("the plugin charter\n")
+    manifest = repo / "plugins" / "x" / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}")
+    g = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+
+    def commit(msg):
+        subprocess.run(g + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(g + ["commit", "-q", "-m", msg], check=True, capture_output=True)
+        return subprocess.run(g + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    base = commit("with manifest")
+    charter.write_text("edited\n")
+    cand = commit("edited")
+    manifest.unlink()
+    commit("manifest moved away")  # the caller's checkout (HEAD) no longer has it
+    assert ab.plugin_dir_for(str(repo), "plugins/x/skills/y/SKILL.md") is None
+    seen = {}
+    monkeypatch.setattr(ab, "stage_seats", lambda run_dir, wts, sc, ident, *r: seen.update(ident=ident))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    argv = ["seats", "--repo", str(repo), "--candidate", cand, "--base", base, "--charter",
+            "plugins/x/skills/y/SKILL.md", "--scenarios", write_scenarios(tmp_path), "--run-dir", str(tmp_path / "run")]
+    assert ab.main(argv) == 0
+    assert seen["ident"]["plugin_dir"] == "plugins/x"
+    assert json.loads((tmp_path / "run" / "sides.json").read_text())["plugin_dir"] == "plugins/x"
+    assert ab.main(argv) == 0  # resume compares against the stored value
 
 
 def test_scenario_file_guards(tmp_path):
