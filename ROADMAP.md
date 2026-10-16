@@ -129,8 +129,9 @@ the owner is the direct consumer of.
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
    logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)* It stays
-   open after the 0.43.0 cut: the review epic it carried is delivered, but the deferred layers of
-   one child and the owner-attended board sweep, the reset's closing act, remain.
+   open after the 0.43.0 cut: the review epic it carried is delivered, but its exit is not yet
+   met, because the reset's closing act, an owner-attended board sweep that settles what is still
+   filed under the milestone, has not run.
 2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.

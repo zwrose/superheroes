@@ -1086,8 +1086,9 @@ section; (6) the spine's own waiver sentence is not separately pinned. The waive
 copy-holders are the **showrunner** charter only, because micro is the showrunner's lane.
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
-`agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
-six, including `grounding-reviewer`. The one dispatching leg, the **code leg**, runs a
+`agents/*-reviewer` files plus `agents/test-role.md` (the one panel seat not named `-reviewer`)
+is the single home of the **sanctioned reviewer universe** — now six, including
+`grounding-reviewer`. The one dispatching leg, the **code leg**, runs a
 **sanctioned subset** of that universe, not the whole of it: its roster homes in
 `round_driver.DIMENSIONS` and the same roster re-keyed as `round_driver.AGENT_SUFFIX`, and is the
 five code reviewers. `grounding-reviewer` stays a **spec-only** agent — the doc-provenance seat

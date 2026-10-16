@@ -94,7 +94,7 @@ machine, under the same review, vet and merge rules either way.
 | `/superheroes:showrunner-resume` | Pick the advisor seat back up from durable state in a new or restarted session. |
 | `/superheroes:checkpoint` | Works in any session, charter or not: freshen live state, save the checkpoint notes, and emit a ready-to-paste `/compact` command. Where mods are present the superheroes mod steers every compaction automatically from those notes; on hosts without mods the PreCompact fallback steers it and the manual paste is the floor. With the mod in an interactive session, or a session in the desktop app's Code tab, it also checkpoints and compacts by itself once the context passes a threshold: a heads-up band above the prompt offers **Now** or **Snooze**, and the threshold, the allowance before the harness's own auto-compaction, and auto / click-only / off are the plugin's settings (`/config`). |
 | `/superheroes:adopt-version` | Take up a newly installed superheroes version in this live seat — diff, re-read what changed, run the upgrade checklist, and brief the owner — with no handoff. Works in any charter seat. |
-| `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in three batches: what blocks work first, then decisions not tied to one PR, then one sheet per PR whose saved Merge verdict is the owner's merge word. |
+| `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in three batches: what blocks work first, then decisions not tied to one PR, then one sheet per PR, where a saved Merge verdict plus "done" in the chat is the owner's merge word. |
 
 ## Workhorse — the builder session
 
@@ -105,7 +105,8 @@ comparable tier and from another vendor, then builds test-first with tiered suba
 diffs, verifies UI work in a real browser via test-pilot, runs multi-model review with every
 finding dispositioned in the PR body, and hands back a **ready PR**. That is the full lane; a
 small, low-risk change the advisor calls light gets the builder's own typing and one independent
-reviewer, and a change touching one of the project's risk areas always gets the full lane. It
+reviewer, and a change touching one of the project's risk areas, or whose risk is unclear (every
+change, until the project has done its Risk and trust sitting), always gets the full lane. It
 runs on the owner's machine or, for a project with cloud builds on, headless in a cloud session.
 It **never merges**.
 
@@ -149,7 +150,8 @@ Panels are composed to be vendor-complementary — models that didn't write the 
 brief, or the spec) are the ones reviewing it, and no reviewer from a maker's family runs without
 the owner's word for that change. The full-lane panel follows the lane call: a code reviewer, the
 test role (which writes break-it tests on the project's risk areas) and a grounding seat on every
-change, plus security and premortem reviewers when a risk area is touched. Every review, on every
+change, plus security and premortem reviewers when a risk area is touched or risk is unclear.
+Every review, on every
 lane, writes one **review record** on the PR, which the advisor's vet reads; every finding states
 its consequence, and a leftover with a real consequence comes to the owner.
 
