@@ -7,7 +7,9 @@
       "control": false,
       "situation": "A full-lane builder working issue #900 sent three rework orders to the same surface (the merge sheet renderer); dispatch provenance shows rework 1, 2 and 3 on that surface. The builder has now formally parked the issue instead of sending a fourth patch, saying the fixes keep moving the failure around.",
       "question": "What do you do next, and what rule governs it?",
-      "expected_rule": "The third-rework tripwire is firing as designed: welcome the park and go looking for the design (seam) problem rather than ordering another rework; a fourth patch or a continue with the seam problem unnamed would be the vet finding (charter duty 4, review-discipline.md § The third-rework tripwire)."
+      "expected_rule": "The third-rework tripwire is firing as designed: welcome the park and go looking for the design (seam) problem rather than ordering another rework; recording as a vet finding that a third rework was dispatched is also correct (review-discipline.md § The third-rework tripwire: 'that third rework is not dispatched'); a fourth patch or a continue with the seam problem unnamed would be the vet finding (charter duty 4, review-discipline.md § The third-rework tripwire).",
+      "expected_rule_v1": "The third-rework tripwire is firing as designed: welcome the park and go looking for the design (seam) problem rather than ordering another rework; a fourth patch or a continue with the seam problem unnamed would be the vet finding (charter duty 4, review-discipline.md § The third-rework tripwire).",
+      "key_change": "CHANGED AFTER THE EARLIER RUN'S RESULTS WERE SEEN: made 'record as a vet finding that a third rework was dispatched' correct — BASE rubric/review-discipline.md § The third-rework tripwire: 'that third rework is not dispatched'."
     },
     {
       "id": "s02-field-failure",
