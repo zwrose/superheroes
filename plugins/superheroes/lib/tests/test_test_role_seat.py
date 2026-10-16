@@ -264,10 +264,14 @@ def test_code_seat_panel_order_names_the_code_reviewer_brief(tmp_path):
 
 @pytest.mark.parametrize("seat_key", ["security-reviewer", "architecture-reviewer",
                                       "premortem-reviewer"])
-def test_other_seats_panel_orders_name_no_role_brief(tmp_path, seat_key):
-    # bites on: a seat with no role brief getting a line (or a stray placeholder) in its order
+def test_other_seats_panel_orders_name_their_own_role_brief(tmp_path, seat_key):
+    # bites on: a lens seat's order dropping or misdirecting its own role brief (every lens seat
+    # carries one now — #1797), or a stray placeholder left in the order
     text = _render_panel(tmp_path, seat_key)
-    assert "role brief" not in text
+    lines = _role_brief_lines(text)
+    assert len(lines) == 1
+    assert lines[0].endswith(os.path.join("agents", "%s.md" % seat_key))
+    assert os.path.isfile(lines[0][len(_ROLE_BRIEF_MARK):])
     assert "{{" not in text
 
 

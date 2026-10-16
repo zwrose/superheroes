@@ -873,6 +873,15 @@ def test_calibration_seat_column_matches_build_argv_for_seated_roles():
             for tier in valid_tiers:
                 cell = EP._effective_model(
                     role, vendor, _pin_role_for_calibration(role), tier, prefs)
+                if MR.engine_pref_role_kind(role) is None:
+                    # A seated role with no argv role_kind of its own (the grouping pass rides the
+                    # reviewer engine and has no engine-pref key): there is no build_argv shape to
+                    # compare, so the column must show the registry's own cell.
+                    registry_cell = MR.matrix_config(role, vendor)
+                    expected = (registry_cell[0] if vendor == "codex"
+                                else MR.cursor_dispatch_id(role))
+                    assert cell == expected, (role, vendor, tier, cell, expected)
+                    continue
                 expected = _expected_build_argv_model(role, vendor, tier, prefs, cell)
                 assert cell == expected, (role, vendor, tier, cell, expected)
 
