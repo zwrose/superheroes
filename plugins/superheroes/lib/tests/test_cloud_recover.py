@@ -24,7 +24,9 @@ import cloud_builder  # noqa: E402
 import cloud_recover as CR  # noqa: E402
 import heartbeat  # noqa: E402
 import launch_ledger as ll  # noqa: E402
+import launch_place  # noqa: E402
 import launcher as L  # noqa: E402
+import cloud_ready  # noqa: E402
 
 REPO = "owner/repo"
 BATCH = "b-recover"
@@ -97,7 +99,8 @@ class Gh:
         if "/comments?" in endpoint:
             if self.comments_fail:
                 return subprocess.CompletedProcess(argv, 1, "", "boom")
-            return subprocess.CompletedProcess(argv, 0, json.dumps(self.comments), "")
+            since = parse_qs(urlparse(endpoint).query)["since"][0]  # like GitHub: only comments updated after `since`
+            return subprocess.CompletedProcess(argv, 0, json.dumps([c for c in self.comments if c["created_at"] > since]), "")
         return subprocess.CompletedProcess(argv, 1, "", "unrouted")
 
 
@@ -821,7 +824,13 @@ def test_t5_the_minutes_redone_are_counted_from_the_last_push(w):
 
     assert "About 6 minutes of work" in text(370)
     assert "About 1 minute of work" in text(60) and "1 minutes" not in text(60)
-    assert "About 0 minutes of work" in text(0) and "About 0 minutes of work" in text(-300)
+    assert text(0).endswith("No work since its last push is lost.")
+    assert text(-300).endswith("No work since its last push is lost.")
+    assert text(59).endswith("No work since its last push is lost.")
+    assert text(60).endswith("About 1 minute of work since its last push is being redone.")
+    assert text(119 * 60).endswith("About 119 minutes of work since its last push is being redone.")
+    assert text(120 * 60).endswith("About 2 hours of work since its last push is being redone.")
+    assert text(4320 * 60).endswith("About 72 hours of work since its last push is being redone.")
     assert text(1800, push_time_source="commit").endswith("About 30 minutes of work since its last pushed commit is being redone.")
     assert CR.message(17, place="local", stopped_at=_at(10, 0), pushed_at=_at(9, 54), tz=UTC)["text"] == (
         "The cloud builder on #17 stopped at 10:00. I recovered the lane from its pushed work on your machine. "
@@ -840,7 +849,7 @@ def test_t5_a_delayed_push_is_counted_from_the_push_not_the_commit(w):
     w.gh.activity.clear()  # the activity read fails: the commit time stands in, and the words say so
     entry = CR.pushed(w.root, 17, repo=REPO, run=w.gh)["newest"]
     assert entry["pushTimeSource"] == "commit"
-    assert "About 120 minutes of work since its last pushed commit" in CR.message(
+    assert "About 2 hours of work since its last pushed commit" in CR.message(
         17, place="cloud", stopped_at=stopped, pushed_at=entry["pushedAt"], push_time_source="commit", tz=UTC)["text"]
 
 
@@ -856,6 +865,173 @@ def test_message_checks_its_arguments():
     assert CR.message(0, place="cloud", stopped_at=None)["reason"] == "issue-invalid"
     assert CR.message(17, place="cloud", stopped_at=None, push_time_source="clock")["reason"] == "push-time-source-invalid"
     assert CR.message(17, place="cloud", stopped_at="noon")["reason"] == "time-invalid"
+
+
+# ---------------------------------------------------------------- relaunch after a version-mismatch refusal
+
+
+MISMATCH = cloud_builder._refusal_comment("plugin-version-mismatch", running="1.2.2", launched="1.2.3")
+UNSTACKED = {k: v for k, v in _premise(SimpleNamespace(base="0" * 40), 17).items() if k not in ("stack", "layerPosition")}
+
+
+def _relaunch(w, launch_id="l1"):
+    return CR.relaunch_refusal(w.root, launch_id, repo=REPO, run=w.gh)
+
+
+def _refused_lane(w, *bodies):
+    _lane(w, "l1", premise=dict(UNSTACKED, baseCommit=w.base))
+    _died(w, "l1", outcome="refusal")
+    w.gh.comments = [_comment(b, age=600 - i, cid=i + 1) for i, b in enumerate(bodies)]
+
+
+def test_t_r1_a_version_mismatch_refusal_relaunches_on_the_owners_machine_naming_both_versions(w):
+    _refused_lane(w, MISMATCH)
+    got = _relaunch(w)
+    assert got["ok"] is True and (got["cloudVersion"], got["advisorVersion"], got["issue"]) == ("1.2.2", "1.2.3", 17)
+    premise = got["premise"]
+    assert premise["reportedCloud"] == {"pluginVersion": "1.2.2"}
+    assert "placeCall" not in premise and "standingExclusions" not in premise
+    assert L.validate_premise(premise, w.root)["ok"] is True  # the real launcher check
+    assert not os.path.exists(_state_file(w))  # nothing is recorded
+
+    def readiness(cwd, **kw):
+        # A stub shaped as `cloud_ready._result` shapes a version mismatch: the real `readiness` needs a cloud
+        # setup record, a calibration stamp and a project setting, none of which this fixture has, and without
+        # them it reports no cloud version at all.
+        conditions = {name: name != "version" for name in cloud_ready.CONDITION_ORDER}
+        return cloud_ready._result(conditions, setting=False, cloud_version=kw["reported"]["pluginVersion"],
+                                   advisor_version="1.2.3")
+
+    # The real routing step; `needs_fn` is also stubbed (to no needs) because the fixture repository keeps no Canon or
+    # specs in-repo, which the real `machine_needs` reads as a need of the owner's machine and would answer "needs".
+    # The cloud setting is off here: the launch word is what points the build at the cloud, so the report names both.
+    placement = launch_place.route(w.root, premise, launch_place.CLOUD_WORD, readiness_fn=readiness,
+                                   needs_fn=lambda *a, **k: [])
+    assert placement["place"] == "local" and placement["reason"] == "version"
+    assert "1.2.2" in launch_place.reason_text(placement) and "1.2.3" in launch_place.reason_text(placement)
+
+    # Without the word, and with the setting off, nothing points at the cloud: the report names neither version.
+    # That is why the doctrine's relaunch passes the word.
+    wordless = launch_place.route(w.root, premise, readiness_fn=readiness, needs_fn=lambda *a, **k: [])
+    assert launch_place.reason_text(wordless) is None
+
+
+def test_the_relaunch_doctrine_passes_the_cloud_word():
+    doctrine = os.path.join(os.path.dirname(__file__), "..", "..", "skills", "showrunner", "reference",
+                            "orchestration.md")
+    with open(doctrine, encoding="utf-8") as f:
+        paragraphs = re.split(r"\n\s*\n", f.read())
+    [relaunch] = [p for p in paragraphs if "relaunch-refusal" in p]
+    assert "launcher.py launch --place cloud" in " ".join(relaunch.split())
+
+
+def test_t_r1b_a_second_relaunch_cannot_make_two_builders(w):
+    _lane(w, "l1")  # one live cloud launch for issue 17
+    again = {"event": "reserved", "launchId": "l2", "ts": time.time(), "schema": ll.SCHEMA, "batchId": BATCH,
+             "repoId": ll.repo_identity(w.root), "issue": 17, "surfaces": ["plugins/y"], "premise": {}, "preflight": {},
+             "argv": [], "doctrineDigest": "abc123", "model": "test-model", "place": ll.PLACE_CLOUD,
+             "cloudEnvironment": "env-1", "pluginVersion": "1.2.3", "configDir": "/cfg/acct"}
+    got = ll.reserve(w.root, again)
+    assert got["ok"] is False and got["reason"].startswith("surface-overlap:")
+
+
+def test_a_relaunch_is_refused_for_a_live_lane_and_for_a_lane_that_did_not_end_in_refusal(w):
+    _lane(w, "l1", premise=dict(UNSTACKED, baseCommit=w.base))
+    w.gh.comments = [_comment(MISMATCH)]
+    assert _relaunch(w) == {"ok": False, "reason": "lane-not-ended"}
+    _died(w, "l1")
+    assert _relaunch(w) == {"ok": False, "reason": "lane-not-refusal"}
+
+
+def test_a_relaunch_checks_its_arguments_and_the_lane(w):
+    assert CR.relaunch_refusal(w.root, "", repo=REPO, run=w.gh) == {"ok": False, "reason": "launch-id-invalid"}
+    assert _relaunch(w, "l-none") == {"ok": False, "reason": "lane-unknown"}
+
+
+def test_a_relaunch_is_refused_when_the_comments_cannot_be_read(w):
+    _refused_lane(w, MISMATCH)
+    w.gh.comments_fail = True
+    assert _relaunch(w) == {"ok": False, "reason": "comments-unreadable"}
+
+
+@pytest.mark.parametrize("bodies", [
+    [], ["Looks fine."], ["> " + MISMATCH], ["I saw this:\n\n" + MISMATCH], [MISMATCH + " Please retry."],
+    [cloud_builder._refusal_comment("cloud-environment-mismatch", actual="env-a", expected="env-b")],
+    [cloud_builder._refusal_comment("plugin-version-mismatch")],
+], ids=["none", "unrelated", "quoted", "after-another-line", "edited", "other-refusal", "unreadable-version"])
+def test_a_relaunch_needs_a_whole_version_mismatch_refusal_comment(w, bodies):
+    _refused_lane(w, *bodies)
+    assert _relaunch(w) == {"ok": False, "reason": "refusal-comment-missing"}
+
+
+def test_a_refusal_comment_older_than_the_lane_is_ignored(w):
+    _refused_lane(w)
+    w.gh.comments = [_comment(MISMATCH, age=7200 + 3600)]
+    assert _relaunch(w) == {"ok": False, "reason": "refusal-comment-missing"}
+
+
+def test_a_refusal_posted_after_the_reservation_but_before_the_start_receipt_counts(w):
+    _refused_lane(w)  # reserved 7260 seconds ago, started 7200
+    w.gh.comments = [_comment(MISMATCH, age=7230)]
+    assert _relaunch(w)["ok"] is True
+
+
+def test_a_refusal_in_the_same_second_as_the_reservation_counts(w):
+    _refused_lane(w)
+    reserved = ll.fold(ll.read(w.root)["records"])["launches"]["l1"]["reservedTs"]
+    w.gh.comments = [dict(_comment(MISMATCH), created_at=datetime.datetime.fromtimestamp(int(reserved), UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))]
+    assert _relaunch(w)["ok"] is True
+
+
+def test_a_refusal_lane_with_a_later_started_launch_is_refused_as_replaced(w):
+    _refused_lane(w, MISMATCH)
+    assert _relaunch(w)["ok"] is True
+    _lane(w, "l2", start_age=60)  # a later launch for issue 17, started
+    assert _relaunch(w) == {"ok": False, "reason": "lane-replaced"}
+
+
+def test_with_two_refusal_comments_the_newest_wins(w):
+    newer = cloud_builder._refusal_comment("plugin-version-mismatch", running="1.2.4", launched="1.2.3")
+    _refused_lane(w, MISMATCH, newer)
+    got = _relaunch(w)
+    assert got["cloudVersion"] == "1.2.4" and got["premise"]["reportedCloud"] == {"pluginVersion": "1.2.4"}
+
+
+def test_a_relaunch_with_a_lane_that_has_no_premise_is_refused(w):
+    _lane(w, "l1", premise="gone")
+    _died(w, "l1", outcome="refusal")
+    w.gh.comments = [_comment(MISMATCH)]
+    assert _relaunch(w) == {"ok": False, "reason": "lane-premise-unreadable"}
+
+
+def test_refusal_versions_reads_only_a_whole_version_mismatch_comment():
+    rv = cloud_builder.refusal_versions
+    assert rv(MISMATCH) == ("1.2.2", "1.2.3") and rv("\n" + MISMATCH + "\n") == ("1.2.2", "1.2.3")
+    assert rv(cloud_builder._refusal_comment("cloud-environment-mismatch", actual="a", expected="b")) is None
+    assert rv(MISMATCH + " One more sentence.") is None
+    assert rv("> " + MISMATCH) is None
+    assert rv(None) is None and rv(12) is None
+
+
+# ---------------------------------------------------------------- the resume table's cloud rows
+
+
+def test_t_r2_a_cloud_lane_answers_working_and_stopped_for_the_resume_rows(w):
+    _lane(w, "l1")
+    assert _assess(w, state="working", age=60)["verdict"] == "working"
+    assert _assess(w, state="archived")["verdict"] == "stopped"
+    skill = os.path.join(os.path.dirname(__file__), "..", "..", "skills", "showrunner-resume", "SKILL.md")
+    with open(skill, encoding="utf-8") as fh:
+        text = fh.read()
+    paragraph = next(p for p in text.split("\n\n") if p.startswith("**A cloud lane**"))
+    assert "`cloud_recover.py assess`" in paragraph
+    assert "`working` satisfies row 2" in paragraph and "`stopped` satisfies row 4" in paragraph
+    assert "orchestration.md` § Adoption mechanics" in paragraph
+    assert "`ask-to-push`" in paragraph and "(`ask`, then `asked`)" in paragraph and "`awaiting-handover`" in paragraph
+    assert "still needs the pull-request read" in paragraph and "the park-record read" in paragraph
+    assert "satisfies no row" in paragraph
+    assert "`activityAgeSeconds`" in paragraph and "`relaunch-refusal`" in paragraph
+    assert paragraph.index("`relaunch-refusal`") < paragraph.index("generic `ended` rule")
 
 
 # ---------------------------------------------------------------- the one input check
@@ -905,6 +1081,7 @@ _CENSUS = {
     "ask": ["--repo-root", "{root}", "--launch-id", "l-none"],
     "asked": ["--repo-root", "{root}", "--launch-id", "l-none", "--uncertain"],
     "successor": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
+    "relaunch-refusal": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
     "message": ["--issue", "17", "--place", "cloud", "--stopped-at", "1760000000", "--pushed-at", "1759999000"],
 }
 

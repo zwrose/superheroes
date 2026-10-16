@@ -181,6 +181,12 @@ def _refusal_comment(reason, running=None, launched=None, actual=None, expected=
     return REFUSAL_HEADER + "\n\n" + body
 
 
+def refusal_versions(body):
+    """(running, launched) a whole version-mismatch refusal comment (exactly `_refusal_comment`'s words) names; None for any other body."""
+    match = isinstance(body, str) and re.search(r"plugin (\d+\.\d+\.\d+); the launch named plugin (\d+\.\d+\.\d+)\.", body.strip(), re.ASCII)
+    return match.groups() if match and body.strip() == _refusal_comment("plugin-version-mismatch", *match.groups()) else None
+
+
 def _refused(reason, **named):
     return {"ok": False, "outcome": "refusal", "reason": reason, "startedFrom": None,
             "comment": _refusal_comment(reason, **named)}
