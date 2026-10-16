@@ -55,6 +55,25 @@ _REMOVED_SYMBOLS = frozenset({
 })
 
 
+# The relay is a separate, ruled use of a background session; its argv builder is the one place
+# the flag may be spelled. The retired surface is background *dispatch*.
+_RELAY_ARGV_FILE = "engine_adapter.py"
+_RELAY_ARGV_FUNCTION = "claude_relay_argv"
+
+
+def _admitted_relay_flag(name, tree):
+    """The `--bg` literals admitted: those inside `claude_relay_argv` in `engine_adapter.py`."""
+    if name != _RELAY_ARGV_FILE:
+        return set()
+    return {
+        id(inner)
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef) and fn.name == _RELAY_ARGV_FUNCTION
+        for inner in ast.walk(fn)
+        if isinstance(inner, ast.Constant) and inner.value == "--bg"
+    }
+
+
 def retired_background_problems(lib_root):
     problems = []
     scanned = set()
@@ -73,7 +92,10 @@ def retired_background_problems(lib_root):
         except SyntaxError:
             problems.append("%s:unparseable" % rel)
             continue
+        admitted = _admitted_relay_flag(name, tree)
         for node in ast.walk(tree):
+            if id(node) in admitted:
+                continue
             if isinstance(node, ast.Constant) and node.value in _FORBIDDEN_LITERALS:
                 problems.append("%s:%d:%s" % (rel, node.lineno, node.value))
             elif isinstance(node, ast.Name) and node.id in _REMOVED_SYMBOLS:
@@ -135,3 +157,22 @@ def test_census_bites_on_planted_background_surface(tmp_path):
         "background_outcome",
     ]
     assert not any(p.startswith("clean.py:") for p in problems)
+
+
+def test_census_admits_the_flag_only_in_the_relay_argv_builder(tmp_path):
+    # axis: `--bg` is admitted in claude_relay_argv of engine_adapter.py and nowhere else
+    (tmp_path / "engine_adapter.py").write_text(
+        'def claude_cloud_argv():\n'
+        '    return ["claude", "--bg"]\n'
+        '\n'
+        'def claude_relay_argv(name, prompt):\n'
+        '    return ["claude", "--bg", "-n", name, prompt]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "elsewhere.py").write_text(
+        'def claude_relay_argv(name, prompt):\n'
+        '    return ["claude", "--bg", "-n", name, prompt]\n',
+        encoding="utf-8",
+    )
+    problems, _scanned = retired_background_problems(str(tmp_path))
+    assert problems == ["elsewhere.py:2:--bg", "engine_adapter.py:2:--bg"]
