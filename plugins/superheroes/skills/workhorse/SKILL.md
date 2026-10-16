@@ -590,7 +590,7 @@ PR records test-pilot N/A with its stand-in evidence.
 
 ## 10. Review before handback
 
-**Full lane: run `review-code` with a vendor-mixed panel, as its own fix loop, to convergence.** The
+**Full lane: run `review-code` with a vendor-mixed panel (the roster its seat map composes from the lane call), as its own fix loop, to convergence.** The
 loop reviews, routes each fix back as an implementer work order, and re-reviews, until no blocking
 finding remains or you honestly park on an open blocker. Round scoping and cap economics are
 `review-code`'s own contract, and §12's delta grading does not apply here. Open the PR as a draft
@@ -599,8 +599,7 @@ before the review runs, so the review runs in PR mode and writes its review reco
 **Light lane: one independent reviewer** outside every maker's family, with the review
 record showing its reading, as Build lanes says. Review fixes stay orchestrator-typed, and work that needs an
 implementer dispatch is an escalation. An escalated build records every maker family in dispatch
-provenance. Panel composition excludes only one author family, so any additional maker family is a
-disclosed independence limitation in the PR body. Prefer keeping an escalated light build to one
+provenance. Every maker family the build records is passed to compose, so no maker's family is seated. Prefer keeping an escalated light build to one
 maker family. Re-review to convergence on that single seat, or honestly park on an open blocker.
 
 **Record each finding's handling in a dispositions table** in the PR body. Post the review results

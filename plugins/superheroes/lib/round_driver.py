@@ -103,9 +103,10 @@ AGENT_SUFFIX = review_seats.AGENT_SUFFIX
 # The cross-cutting lenses always get the WHOLE diff even when a big diff is sharded per-lens —
 # architecture and failure-mode reasoning is non-local, so a shard would blind them.
 CROSS_CUTTING_LENSES = ("architecture-reviewer", "premortem-reviewer")
-# Seats whose panel order names their agent file as a role brief — a seat on another vendor never
-# sees its agent's system prompt, so the order is where the brief reaches it.
-ROLE_BRIEF_SEATS = frozenset({"test-role", "code-reviewer"})
+# Every lens seat's panel order names its agent file as a role brief — a seat on another vendor
+# never sees its agent's system prompt, so the order is where the brief reaches it. Derived from
+# AGENT_SUFFIX so a lens added there carries its brief without a second list to forget.
+ROLE_BRIEF_SEATS = frozenset(AGENT_SUFFIX)
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
@@ -159,7 +160,11 @@ def _order_lint_text(order_text, context):
             and isinstance(verify, str) and verify.strip() and budget.endswith(verify)):
         elided = budget[:-len(verify)] + QUOTED_DATA_LINT_ELISION
         text = text.replace(budget, elided, 1)
-    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
+    # The threat-model and standing-rulings blocks are owner prose end to end: the whole rendered
+    # block (the renderer's own formatter, so the bytes match) is elided.
+    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals"),
+                   round_orders.format_threat_model_block(context).rstrip(),
+                   round_orders.format_rulings_block(context).rstrip()):
         if isinstance(quoted, str):
             quoted = order_lint.normalize_newlines(quoted)
         if isinstance(quoted, str) and quoted.strip():
@@ -351,6 +356,7 @@ receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 live_vendors = receipt_disclosures.live_vendors
 independent_auditor = receipt_disclosures.independent_auditor
+independent_reviewer = receipt_disclosures.independent_reviewer
 independent_auditor_available = receipt_disclosures.independent_auditor_available
 unfilled_seats = receipt_disclosures.unfilled_seats
 maker_families = receipt_disclosures.maker_families
@@ -1119,6 +1125,99 @@ def _cert_shape(state, base):
 # state lifecycle
 # =============================================================================================
 
+def _roster_lens_dimensions(seat_map_obj):
+    """The lens seats of a seeded seat map's ``roster``, in ``DIMENSIONS`` order; ``[]`` when the
+    map, the roster, or its lens members cannot be read, or when the roster omits a seat its own
+    lane basis requires (the caller then keeps all five lenses). The roster is read through
+    ``seat_map.effective_roster``; an unknown seat name is ignored."""
+    roster = seat_map.effective_roster(seat_map_obj)
+    if roster is None:
+        return []
+    basis = seat_map_obj.get("laneBasis")
+    # axis: a roster short of its lane basis never reduces the lenses — see bite-proof record wo_a_1797_roster
+    if any(n not in roster for n in seat_map.roster_for(basis)):
+        return []
+    return [d for d in DIMENSIONS if d in roster]
+
+
+def _diff_header_sides(line):
+    """The (a-side, b-side) canonical paths of one ``diff --git`` header (git C-quoting undone), or
+    None when it cannot be read unambiguously. Delegates to the canonical reader in
+    ``sanitized_view`` — this module keeps no path decoder of its own; the rename policy (both sides
+    count as changed paths) is this caller's."""
+    import sanitized_view
+    try:
+        return sanitized_view.sides_from_diff_git_line(line.encode("utf-8", "surrogateescape"))
+    except (UnicodeError, ValueError):
+        return None
+
+
+def _diff_changed_paths(diff_text):
+    """The canonical paths a git diff names (both sides of each file header, git C-quoting undone), or
+    None when the diff cannot be read as such (not text, no file header, or a header this reader
+    cannot parse). Read from the diff in hand rather than re-derived from a pinned head: the head a
+    post-fix diff describes is not on the config, and a stale head would fail open."""
+    if not isinstance(diff_text, str):
+        return None
+    headers = [ln for ln in diff_text.split("\n") if ln.startswith("diff --git ")]
+    if not headers:
+        return None
+    paths = []
+    for ln in headers:
+        sides = _diff_header_sides(ln)
+        if sides is None:
+            return None
+        for p in sides:
+            if p not in paths:
+                paths.append(p)
+    return paths
+
+
+LANE_EXPANDED_RECOMPOSE = decision_kinds.LANE_EXPANDED_RECOMPOSE
+
+
+def _reevaluate_lane_dimensions(state, config, diff_text):
+    """Re-ask the lane call at a new reviewed head (#1797). A session whose seat map was composed for
+    a reduced roster (``laneBasis.floor`` None) continues unchanged while the head still touches no
+    risk area. When the head's basis calls for seats the governing map's roster lacks, or its risk
+    cannot be read, the session HALTS ``lane-expanded-recompose``: the driver holds none of the
+    setup-time facts to recompose a seat map mid-session, so the review restarts with a freshly
+    composed map on the current head. Returns True when it halted. Never raises."""
+    sm = config.get("seatMap")
+    basis = sm.get("laneBasis") if isinstance(sm, dict) else None
+    if not (isinstance(basis, dict) and "floor" in basis and basis["floor"] is None):
+        return False
+    new_basis = None
+    try:
+        import lane_call
+        paths = _diff_changed_paths(diff_text)
+        repo_root = config.get("repoRoot")
+        if paths is None or not isinstance(repo_root, str) or not repo_root:
+            new_basis = lane_call.unavailable("lane-basis-unavailable: head diff or repo root unreadable",
+                                              proposed="full")
+        else:
+            new_basis = lane_call.call(repo_root, paths, proposed="full")
+    except Exception:
+        new_basis = {"floor": "full"}
+    if not isinstance(new_basis, dict) or new_basis.get("floor") is None:
+        return False
+    roster = seat_map.effective_roster(sm)
+    if roster is not None and all(n in roster for n in seat_map.roster_for(new_basis)):
+        return False
+    state["terminal"] = "halted"
+    state["certification"] = {
+        "shape": None,
+        "reason": (LANE_EXPANDED_RECOMPOSE + ": this change now touches a risk area (or its risk cannot "
+                   "be read), and the seat map was composed for a smaller roster — the review must "
+                   "restart with a freshly composed seat map on the current head; certification "
+                   "withheld")}
+    _decision(state, LANE_EXPANDED_RECOMPOSE,
+              "the head touches a risk area (or its risk cannot be read) beyond the reduced seat "
+              "map — halt; run Setup again into a fresh session on the current head")
+    state["step"] = P_TERMINAL
+    return True
+
+
 def _default_config(overrides=None):
     cfg = {
         "leg": "code",
@@ -1131,7 +1230,7 @@ def _default_config(overrides=None):
         # Hard round ceiling (default circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE) — owner-tunable
         # like maxRounds. A named ceiling below maxRounds refuses at load; unnamed uses the flat default.
         "maxRoundsAbsolute": None,
-        "dimensions": list(DIMENSIONS),
+        "dimensions": None,  # resolved below: explicit list, else the seat map's lens roster, else all five
         # Optional records export (#507 WO-D). When `recordsPath` is set the driver writes the
         # session's round-records ledger there after each folded round — written whole, replacing
         # whatever was at that path, and never read back. Absent → nothing is written.
@@ -1153,7 +1252,7 @@ def _default_config(overrides=None):
     cfg["panel"] = cfg.get("leg") == "panel"
     cfg["code"] = cfg.get("leg") != "panel"
     if not isinstance(cfg.get("dimensions"), list) or not cfg["dimensions"]:
-        cfg["dimensions"] = list(DIMENSIONS)
+        cfg["dimensions"] = _roster_lens_dimensions(cfg.get("seatMap")) or list(DIMENSIONS)
     cap_val = cfg.get("fixBatchCap")
     if cap_val is not None:
         if not isinstance(cap_val, int) or isinstance(cap_val, bool) or cap_val < 1:
@@ -1242,6 +1341,8 @@ def new_state(config=None):
         "_records": [],
         "_coverage": [],
     }
+    # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
+    _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
     return state
 
 
@@ -2181,7 +2282,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     if phase == P_PANEL:
         _fold_panel(state, config, artifact, session_dir=session_dir)
     elif phase == P_VERIFIERS:
-        _fold_verifiers(state, config, artifact)
+        _fold_verifiers(state, config, artifact, session_dir=session_dir)
     elif phase == P_SYNTHESIS:
         _fold_synthesis(state, config, artifact)
     elif phase == P_GAPSWEEP:
@@ -2693,9 +2794,14 @@ def synthesis_staged_id_fault(state, artifact):
     return None
 
 
-def _fold_verifiers(state, config, artifact):
+def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
+    if _nonpanel_unseatable(state, session_dir):
+        # No verifier could be seated outside the makers: any verdict submitted never ran, so it
+        # folds exactly like silence (every staged finding stays unverified), as an unseatable
+        # audit target does.
+        verdicts = []
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
@@ -2816,14 +2922,9 @@ def _judgment_row_ids(findings):
     return ids
 
 
-def _escape_guidance_placeholder_syntax(text):
-    """Escape ``{{`` so owner guidance cannot inject order placeholders during render.
-
-    Fixed-point: each pass strictly increases length and strictly decreases ``{{`` count, so the
-    loop terminates on any finite input."""
-    while "{{" in text:
-        text = text.replace("{{", "{ {")
-    return text
+# One home: `round_orders.escape_placeholder_syntax` (the order renderer also escapes the threat-model
+# and standing-rulings blocks with it).
+_escape_guidance_placeholder_syntax = round_orders.escape_placeholder_syntax
 
 
 def _guidance_oversize(text):
@@ -4125,7 +4226,8 @@ def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_dif
         return False
     state["headDiff"] = diff_text
     state["reviewedDiff"] = diff_text
-    return True
+    # axis: the lane basis is re-asked at every full panel scheduled over a new head — see bite-proof record wo_a_1797_roster
+    return not _reevaluate_lane_dimensions(state, config, diff_text)
 
 
 def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_seam=None):
@@ -4140,6 +4242,8 @@ def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_s
         return False
     state["headDiff"] = diff_text
     state["reviewedDiff"] = diff_text
+    if _reevaluate_lane_dimensions(state, config, diff_text):
+        return False
     _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
@@ -4164,6 +4268,9 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
     post_fix = bool(state.pop("_postFixEntry", False))
+    if not state.get("_headDiffUnknown"):
+        if _reevaluate_lane_dimensions(state, config, state.get("headDiff")):
+            return
     # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
     # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
     # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
@@ -6839,6 +6946,19 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "collection-manifest-key"})
             return {"ok": False, "reason": fault}
+    if (not _via_advance and phase in _NONPANEL_REVIEWER_PHASES
+            and _adapters().missing_policy(phase) == _adapters().MISSING_REFUSE_FOLD
+            and _nonpanel_unseatable(state, session_dir)):
+        # No reviewer outside the makers' families can be seated: no order was emitted for this
+        # phase, so a hand artifact for it is not a review that ran. Refuse the fold (the advance
+        # path's refuse-fold policy for a single-seat phase) rather than let an empty artifact
+        # converge the round.
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                      "round": pending.get("round"), "attempt": attempt,
+                                      "outcome": "nonpanel-reviewer-unseatable"})
+        return {"ok": False, "reason": "nonpanel-reviewer-unseatable",
+                "detail": "no reviewer outside the makers' families can be seated for %s; no order "
+                          "was emitted and a submitted artifact is not a review that ran" % phase}
     if phase == P_VERIFIERS:
         fault = verifier_results_fault(artifact)
         if fault:
@@ -7613,6 +7733,9 @@ _READ_ONLY_CHANNEL_PHASES = frozenset(round_orders.ORDER_PHASES) - {P_FIXER}
 
 VENDOR_SOURCE_CONFIGURED = "configured"
 VENDOR_SOURCE_DEFAULTED = "defaulted"
+# A non-panel reviewer seat whose configured engine sat in a maker family and was replaced by a
+# live vendor outside every maker family (`receipt_disclosures.independent_reviewer`).
+VENDOR_SOURCE_INDEPENDENT = "independent"
 
 
 def _vendor_is_resolved(row):
@@ -7630,6 +7753,8 @@ def _vendor_is_resolved(row):
     # pair that must fold to opposite channels.
     if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
         return False
+    # VENDOR_SOURCE_INDEPENDENT is a vendor the driver chose from the live set on positive evidence
+    # (a known family outside the makers): resolved, so it falls through to the vendor check.
     vendor = row.get("vendor")
     return isinstance(vendor, str) and bool(vendor.strip())
 
@@ -7687,6 +7812,46 @@ def _reviewer_engine_vendor(repo_root):
         return engine_pref.resolve_engine("review", prefs), source
     except Exception:  # noqa: BLE001 — same degradation, and the vendor is then a stand-in
         return "claude", VENDOR_SOURCE_DEFAULTED
+
+
+_NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
+
+
+def _nonpanel_reviewer_vendor(state, config, repo_root):
+    """`(vendor, source)` for verifiers / gap-sweep / scoped, outside every maker family; `(None,
+    None)` when no live vendor qualifies (the seat is unseatable).
+
+    With no maker family known and no fixer declared there is nothing to be independent of, so the
+    reviewer engine stands exactly as before (same vendor, same `vendorSource`)."""
+    vendor, source = _reviewer_engine_vendor(repo_root)
+    cfg = config if isinstance(config, dict) else {}
+    makers = receipt_disclosures.accumulated_maker_families(state)
+    fixer = cfg.get("fixerVendor")
+    if not makers and not fixer:
+        return vendor, source
+    chosen, _family = receipt_disclosures.independent_reviewer(cfg, vendor, makers, fixer)
+    if chosen is None:
+        return None, None
+    if chosen == vendor or source == VENDOR_SOURCE_DEFAULTED:
+        # A defaulted vendor stays DISCLOSED when replaced: the preference read did not answer, so
+        # the provenance gap is still real and the seat still folds to the stdout contract.
+        return chosen, source
+    return chosen, VENDOR_SOURCE_INDEPENDENT
+
+
+def _nonpanel_unseatable(state, session_dir=None):
+    """True when no reviewer outside every maker family can be seated for the verifier / gap-sweep /
+    scoped phases. The same decision `_emit_orders_manifest` records slots missing on, read on the
+    fold side so a hand-`submit` session cannot fold a result for a slot that never ran."""
+    return _nonpanel_selection(state, session_dir)[0] is None
+
+
+def _nonpanel_selection(state, session_dir=None):
+    """`(vendor, source)` the non-panel reviewer selection stands on for this session."""
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir) if session_dir else {}
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    return _nonpanel_reviewer_vendor(state, cfg, repo_root)
 
 
 def effective_seat_map(state):
@@ -7761,8 +7926,8 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
     if phase == P_SYNTHESIS:
         # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
         return {"vendor": "claude", "model": None, "engine": None}
-    if phase in (P_VERIFIERS, P_GAPSWEEP, P_SCOPED):
-        vendor, source = _reviewer_engine_vendor(repo_root)
+    if phase in _NONPANEL_REVIEWER_PHASES:
+        vendor, source = _nonpanel_reviewer_vendor(state, cfg, repo_root)
         return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
     return {"vendor": None, "model": None, "engine": None}
 
@@ -8407,6 +8572,19 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     return ph
 
 
+def _standing_rulings_for_orders(state):
+    """``(rows, failure)``: the session's live out-of-scope rulings as ``{findingKey, reason}`` rows
+    for every order's standing-rulings block, or ``([], "<token>: <detail>")`` when the rulings log
+    is unreadable — an unreadable log is never rendered as 'no rulings'. Only out-of-scope rulings
+    ride here: guidance rulings reach the fixer through ``GATE_GUIDANCE``."""
+    _rows, fault = _read_rulings_log(state)
+    if fault is not None:
+        return [], "%s: %s" % fault
+    return ([{"findingKey": key, "reason": entry.get("reason")}
+             for key, entry in _live_ruling_by_key(state).items()
+             if entry.get("ruling") == "out-of-scope"], None)
+
+
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
                                 pending_payload, row, roster=None, materialize_shared_inputs=True):
     """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
@@ -8435,6 +8613,8 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     if not isinstance(residuals, str):
         residuals = ""
     core_resolved, layer_resolved, _root_refusal = _resolved_calibration_paths(repo_root)
+    threat_model, threat_failure = round_orders.resolve_order_threat_model(core_resolved)
+    standing_rulings, standing_failure = _standing_rulings_for_orders(state)
     return {
         "session_dir": session_dir,
         "round": rnd,
@@ -8453,6 +8633,10 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "verify_command": cfg.get("verifyCommand"),
         "residuals_provenance": prov,
         "residuals_read_failure": res_failure,
+        "threat_model": threat_model,
+        "threat_model_read_failure": threat_failure,
+        "standing_rulings": standing_rulings,
+        "standing_rulings_read_failure": standing_failure,
         "payload": pending_payload if isinstance(pending_payload, dict) else {},
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
@@ -8589,6 +8773,8 @@ def _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt, sea
         "reason": UNFILLED_SEAT_REASON,
         "evidence": ("no auditor outside the makers' families is available for this target"
                      if phase == P_AUDITS else
+                     "no reviewer outside the makers' families is available for this seat"
+                     if phase in _NONPANEL_REVIEWER_PHASES else
                      "the seat map leaves this seat unfilled: no candidate outside the makers' families"),
         "occurrence": occurrence,
     }
@@ -8650,6 +8836,16 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                 raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     unfilled = receipt_disclosures.unfilled_seats(seat_map) if phase == P_PANEL else frozenset(noauditor_ids)
+    if phase in _NONPANEL_REVIEWER_PHASES:
+        cfg = state.get("config") or {}
+        repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
+                     or os.getcwd())
+        if _nonpanel_unseatable(state, session_dir):
+            # Every live vendor sits in a maker family: no reviewer can be seated for ANY slot of
+            # this phase, on either channel (a hand-submit session has no runner-channel rule to
+            # refuse under, but an unseatable slot still gets no order). The driver records each
+            # slot missing in the orders-emit commit below; the fold counts it as not run.
+            unfilled = frozenset(key for key, _occ in round_records.roster_slots(roster))
     seats = {}
     order_hashes = {}
     rendered = []
@@ -8675,7 +8871,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # axis: that a fallback fold is DISCLOSED, not that the fold is safe. Safety is
         # `_seat_channel`'s job and is checked separately; a safe fold with no receipt is the
         # silence this collector exists to prevent.
-        if phase in _READ_ONLY_CHANNEL_PHASES and not _seat_is_engine(row):
+        if phase in _READ_ONLY_CHANNEL_PHASES:
             if not _vendor_is_resolved(row):
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence,
                                     "phase": phase, "vendorSource": row.get("vendorSource")})

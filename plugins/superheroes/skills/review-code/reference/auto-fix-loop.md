@@ -69,7 +69,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **corroborating evidence only** and can never satisfy that investigation floor. The parser also
 > **tolerates a bare top-level array** `[...]` of finding objects, but anything else
 > (prose with no parseable JSON object/array, an empty stream, an array of non-objects) parses as
-> `unreadable`, which forfeits the slot to a re-run on the host model and silently doubles the
+> `unreadable`, which forfeits the slot to a re-run on a vendor outside every maker family (the
+> driver's choice; with none, the seat is recorded missing and counts as not run) and silently doubles the
 > round's cost.
 
 > **Reviewer-seat dispatch runs through the dispatch RUNNER — reviewer role ONLY.**
@@ -88,7 +89,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
 > `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
 > stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
-> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a re-run on the host model and the
+> toward the panel, and the loop's behaviour is unchanged). A forfeit → the orchestrator re-runs the seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, only when that vendor takes the same delivery channel as the emitted order (never hand-compose a replacement order), recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat; for the non-panel phases the driver re-emits the order to the same selected vendor, with no switch to another vendor in this layer); with no such vendor live on that channel, the seat is recorded missing (`record-missing`) and counts as not run, and it is never re-run on the host model when the host's family is a maker and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); the driver also records
 > the fall-open on the receipt from the orchestrator's `ranManifest` (`round-driver.md`,
 > `dispatch-panel`).
@@ -199,7 +200,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `run-dir-claude-mode-unknown` | a continuation of a run whose journal records a claude mode that is neither declared nor retired; refused with `attempts: 0`, nothing re-opened or spawned |
 >
 > **Investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
-> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
+> the investigation floor and forfeits vacuously — fail-safe (the seat is re-run on a vendor outside every maker family, or recorded missing and counted as not run when there is none; never on the host model when the host's family is a maker), never a
 > false clean.
 >
 > **CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the

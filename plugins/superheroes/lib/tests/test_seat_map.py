@@ -74,7 +74,7 @@ def test_three_vendor_happy_path():
 
 def test_claude_implemented_build():
     seed = SM.seed_from(99, None)
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "anthropic", seed)
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "anthropic", seed)
     for seat in SM.STRONG_TIER_SEATS:
         assert m["seats"][seat]["family"] != "anthropic"
     assert m["seats"][SM.GROUNDING_SEAT]["family"] != "anthropic"
@@ -190,7 +190,7 @@ def test_to_receipt_json_roundtrip():
 
 def test_biting_maker_family_openai_author():
     seed = SM.seed_from(510, None)
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", "anthropic", seed)
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "openai", "anthropic", seed)
     strong_critical = SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS
     for seat in strong_critical:
         assert m["seats"][seat]["family"] != "openai"
@@ -204,7 +204,7 @@ def test_isolate_strong_seat_exclusion_with_pins():
         "premortem-reviewer": {"vendor": "claude"},
     }
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+        SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
     )
     for seat in SM.STRONG_TIER_SEATS:
         assert m["seats"][seat]["family"] != "anthropic"
@@ -222,7 +222,7 @@ def test_pinned_maker_seats_report_pin_breaks_constraint_not_author_minority():
         "grounding-seat": {"vendor": "claude"},
     }
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+        SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
     )
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
     for seat in (
@@ -537,7 +537,7 @@ def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch,
     assert "codex" not in receipt["liveVendors"]
     codex_deep = [
         s
-        for s in SM.LENS_SEATS
+        for s in SM.PANEL_ROSTER
         if receipt["seats"][s]["vendor"] == "codex"
         and receipt["seats"][s]["model"] == reviewer_deep_model
         and receipt["seats"][s]["effort"] == reviewer_deep_effort
@@ -563,7 +563,7 @@ def test_cli_compose_with_live_vendors_override(capsys):
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
-    assert len(receipt["seats"]) == 6
+    assert len(receipt["seats"]) == len(SM.PANEL_ROSTER)
     assert "degradations" in receipt
     assert "seed" in receipt
     assert receipt["violations"] == []
@@ -613,27 +613,50 @@ def test_cli_compose_with_pins(capsys):
     assert receipt["seats"]["security-reviewer"]["source"] == "pinned"
 
 
-def test_review_code_skill_wires_seat_pins_from_ep_to_compose():
-    from skill_surface import surface_text
-    text = surface_text("review-code")
-    assert ".seatPins" in text
-    assert "(.seatPins // {}) == {} then empty" in text
-    assert '[ -n "$SEAT_PINS" ]' in text
-    assert "PINS_ARGS" in text
-    assert "--pins" in text
-    assert '"${PINS_ARGS[@]}"' in text
-    seat_pins_idx = text.index("SEAT_PINS")
-    assert 'echo "$EP"' in text[seat_pins_idx - 120:seat_pins_idx + 80]
-    compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
-    assert "SEAT_PINS" in compose_line or "PINS_ARGS" in compose_line
-    assert "seat_map.py" in compose_line and '"${PINS_ARGS[@]}"' in compose_line
+def _review_code_skill_and_setup_text():
+    import os
+    root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "review-code"))
+    with open(os.path.join(root, "SKILL.md"), encoding="utf-8") as fh:
+        skill = fh.read()
+    with open(os.path.join(root, "reference", "setup.md"), encoding="utf-8") as fh:
+        setup = fh.read()
+    return skill, setup
+
+
+def _compose_line(setup):
+    compose_at = setup.index("SEAT_MAP=$(python3")
+    return setup[compose_at:setup.index("\n", compose_at)]
+
+
+def test_review_code_skill_composes_after_the_base_pin_and_leaves_pins_to_core_md():
+    skill, setup = _review_code_skill_and_setup_text()
+    compose_line = _compose_line(setup)
+    assert "seat_map.py" in compose_line and " compose " in compose_line
+    # compose reads seatPins from core.md itself: nothing hands it the pins from $EP
+    assert "--pins" not in compose_line and "PINS_ARGS" not in compose_line
+    assert "SEAT_PINS" not in skill + setup and "PINS_ARGS" not in skill + setup
+    # the lane call needs the pinned base and the reviewed head, so compose runs after the base pin
+    assert '--base-ref "$BASE_REF"' in compose_line and '--head-sha "$COMPOSE_HEAD"' in compose_line
+    # the compose head is the commit the review diff reads: local HEAD on every path (both diff
+    # "$BASE_REF"...HEAD) (#1797)
+    head_pick = setup[:setup.index("SEAT_MAP=$(python3")].rsplit("\n", 3)
+    head_pick = "\n".join(head_pick)
+    assert 'COMPOSE_HEAD=$(git rev-parse HEAD)' in head_pick and 'COMPOSE_HEAD="$HEAD_SHA"' not in head_pick and "REVIEW_PATH" not in head_pick
+    assert '--head-sha "$HEAD_SHA"' not in compose_line
     assert '--repo-root "$REPO_ROOT"' in compose_line
+    # the compose block lives in setup.md under its own heading, and SKILL.md points at it right after the base pin
+    assert "\n## Compose the panel seat map\n" in setup
+    assert "SEAT_MAP=$(python3" not in skill
+    base_pin_at = skill.index('BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}")')
+    pointer_at = skill.index("reference/setup.md` § Compose the panel seat map")
+    assert base_pin_at < pointer_at
+    assert "$SEAT_MAP" in skill and "$AUTHOR_FAMILY" in skill
 
 
 def test_review_code_skill_wires_repo_root_to_compose():
-    from skill_surface import surface_text
-    text = surface_text("review-code")
-    compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
+    _skill, setup = _review_code_skill_and_setup_text()
+    compose_at = setup.index("SEAT_MAP=$(python3")
+    compose_line = setup[compose_at:compose_at + 500]
     assert '--repo-root "$REPO_ROOT"' in compose_line
 
 
@@ -710,7 +733,7 @@ def test_composer_authored_diff_excludes_cursor_from_strong_critical_and_groundi
 
     author = MRG.family_for("code-fixer", "cursor")
     assert author == "xai"
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", SM.seed_from(651, None))
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, author, "anthropic", SM.seed_from(651, None))
     for seat in sorted(SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS):
         assert m["seats"][seat]["family"] != "xai", seat
     assert m["seats"][SM.GROUNDING_SEAT]["family"] != "xai"
@@ -2301,7 +2324,7 @@ def test_dod_aug15_partial_codex_cell_live():
     live_cells = _aug15_live_cells()
     reviewer_deep_model, reviewer_deep_effort = _aug15_reviewer_deep_cell()
     m = SM.build(
-        SM.PANEL_ROSTER,
+        SM.KNOWN_SEATS,
         live_vendors,
         "xai",
         "anthropic",
@@ -2319,7 +2342,7 @@ def test_dod_aug15_partial_codex_cell_live():
     assert codex_lens, "codex lost from every lens seat despite its matrix cell live"
     for seat in SM.LENS_SEATS:
         pinned = SM.build(
-            SM.PANEL_ROSTER,
+            SM.KNOWN_SEATS,
             live_vendors,
             "xai",
             "anthropic",
@@ -3179,7 +3202,7 @@ def test_codex_role_pin_sol_seats_deep_at_xhigh():
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     m = SM.build(
-        SM.PANEL_ROSTER,
+        SM.KNOWN_SEATS,
         ["claude", "cursor"],
         "xai",
         "anthropic",
@@ -3207,7 +3230,7 @@ def test_codex_role_pin_astra_registered_seats_at_high():
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     m = SM.build(
-        SM.PANEL_ROSTER,
+        SM.KNOWN_SEATS,
         ["claude", "cursor"],
         "xai",
         "anthropic",
@@ -3263,7 +3286,7 @@ def test_codex_role_pin_astra_not_live_falls_back_to_matrix():
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     m = SM.build(
-        SM.PANEL_ROSTER,
+        SM.KNOWN_SEATS,
         ["claude", "cursor"],
         "xai",
         "anthropic",
@@ -3297,7 +3320,7 @@ def test_one_run_model_pin_takes_own_effort_in_build(monkeypatch):
         ["codex", "gpt-5.6-sol", "xhigh"],
     ]
     m = SM.build(
-        SM.PANEL_ROSTER,
+        SM.KNOWN_SEATS,
         ["claude", "codex", "cursor"],
         "xai",
         "anthropic",
@@ -3331,6 +3354,7 @@ def test_one_run_model_pin_takes_own_effort_in_reachable_configs(monkeypatch):
     result = SM.reachable_configs(
         ["codex", "cursor"],
         {"architecture-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
+        roster=SM.KNOWN_SEATS,
         codex_role_pins={"reviewer-deep": "gpt-6-astra"},
     )
     assert ["gpt-5.6-sol", "xhigh"] in result["codex"]
@@ -3350,7 +3374,7 @@ def test_one_run_pin_explicit_effort_still_wins(monkeypatch):
         ["codex", "gpt-5.6-sol", "xhigh"],
     ]
     m = SM.build(
-        SM.PANEL_ROSTER,
+        SM.KNOWN_SEATS,
         ["claude", "codex", "cursor"],
         "xai",
         "anthropic",
@@ -3827,7 +3851,7 @@ def test_cli_compose_claude_impl_openai_host_author_is_anthropic(capsys):
     assert len(splits) == 1
     assert "anthropic" in splits[0]["reason"]
     assert "openai" in splits[0]["reason"]
-    maker_seats = set(SM.LENS_SEATS) | {SM.GROUNDING_SEAT}
+    maker_seats = set(SM.PANEL_ROSTER)
     for seat in maker_seats:
         fam = receipt["seats"][seat]["family"]
         assert fam not in ("anthropic", "openai"), (seat, fam)
@@ -3963,7 +3987,7 @@ def test_cli_compose_reads_codex_models_from_repo(tmp_path, capsys):
     receipt = json.loads(capsys.readouterr().out)
     codex_deep = [
         receipt["seats"][s]
-        for s in SM.LENS_SEATS
+        for s in SM.PANEL_ROSTER
         if receipt["seats"][s]["vendor"] == "codex"
         and receipt["seats"][s]["tier"] == "reviewer-deep"
     ]
@@ -4212,8 +4236,8 @@ def test_backfill_for_a_non_maker_reason_never_returns_a_maker_family(monkeypatc
         return real_matrix(tier, vendor)
 
     monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
-    only_maker = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
-    with_other = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0)
+    only_maker = SM.build(SM.KNOWN_SEATS, ["claude"], "anthropic", "openai", 0)
+    with_other = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0)
     for seat in SM.STRONG_TIER_SEATS:
         assert only_maker["seats"][seat]["source"] == "unfilled", seat
         assert with_other["seats"][seat]["source"] == "backfill", seat
@@ -4232,3 +4256,407 @@ def test_build_grounding_maker_exclusion_precedes_the_narrative_fallback():
     seat = m["seats"][SM.GROUNDING_SEAT]
     assert seat["vendor"] == "codex" and seat["family"] == "openai"
     assert any(d.get("constraint") == "grounding-independence" for d in m["degradations"])
+
+
+# --- the full-lane roster follows the lane call (axis comments: bite-proof record wo_a_1797_roster) ---
+
+import subprocess
+
+import core_md as CM
+import lane_call as LC
+
+RISKY_ROSTER = SM.PANEL_ROSTER
+NO_FLOOR_ROSTER = tuple(s for s in SM.PANEL_ROSTER if s in SM.BASE_ROSTER)
+_PAYMENTS = {
+    "name": "Payments",
+    "covers": ["src/payments/*"],
+    "why": "Charges customers.",
+    "undo": "Hard: a charge needs a refund.",
+}
+_GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+
+
+def _git(repo, *args):
+    done = subprocess.run(["git", "-C", str(repo), *_GIT_ID, *args], capture_output=True, text=True, check=True)
+    return done.stdout.strip()
+
+
+def _project(tmp_path, monkeypatch, *, areas=None, prefs=None, corrupt=False):
+    """A git repo with a base commit and a head commit that adds src/payments/charge.py and
+    docs/notes.md; its core.md (in the store the env points at) holds the given risk areas and
+    engine preferences. Returns (repo, base, head)."""
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    store = str(tmp_path / "store")
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("base\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "src" / "payments").mkdir(parents=True)
+    (repo / "src" / "payments" / "charge.py").write_text("x = 1\n")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "notes.md").write_text("notes\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "change")
+    head = _git(repo, "rev-parse", "HEAD")
+    if corrupt:
+        core = repo / ".claude" / "superheroes"
+        core.mkdir(parents=True)
+        (core / "core.md").write_text("not a core file\n\x00\n")
+        return str(repo), base, head
+    facts = {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+             "patterns": "- x: a.ts:1"}
+    if prefs is not None:
+        facts["enginePreferences"] = prefs
+    CM.write(str(repo), facts, "confirmed", root=store, now="2026-06-26")
+    if areas is not None:
+        assert CM.write_project_config_item(str(repo), CM.RISK_AREAS_KEY, areas, root=store)["action"] == "written"
+    return str(repo), base, head
+
+
+def _docs_commit(repo):
+    """A commit on top of the project's head that changes only docs/other.md; returns (parent, sha)."""
+    parent = _git(repo, "rev-parse", "HEAD")
+    with open(os.path.join(repo, "docs", "other.md"), "w") as fh:
+        fh.write("other\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "docs")
+    return parent, _git(repo, "rev-parse", "HEAD")
+
+
+def _compose(capsys, repo, *extra, base=None, head=None, live="claude,codex,cursor"):
+    argv = ["x", "compose", "--live-vendors", live, "--author-family", "xai", "--narrative-family",
+            "anthropic", "--pr-number", "1", "--repo-root", repo, *extra]
+    if base is not None:
+        argv += ["--base-ref", base]
+    if head is not None:
+        argv += ["--head-sha", head]
+    capsys.readouterr()
+    assert SM.main(argv) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def _bases(tmp_path, monkeypatch):
+    """One real lane-call basis per way the floor comes out full."""
+    repo, _base, _head = _project(tmp_path / "set", monkeypatch, areas=[_PAYMENTS])
+    unset, _b, _h = _project(tmp_path / "unset", monkeypatch)
+    store, unset_store = str(tmp_path / "set" / "store"), str(tmp_path / "unset" / "store")
+    return {
+        "touches-a-risk-area": LC.call(repo, ["src/payments/charge.py"], proposed="full", root=store),
+        "risk-areas-not-set": LC.call(unset, ["docs/notes.md"], proposed="full", root=unset_store),
+        "unmatchable-path": LC.call(repo, ["/abs/outside.py"], proposed="full", root=store),
+        "no-paths": LC.call(repo, [], proposed="full", root=store),
+        "unavailable": LC.unavailable("lane-basis-unavailable: test", proposed="full"),
+    }
+
+
+def test_roster_for_full_floor_adds_the_specialists(tmp_path, monkeypatch):
+    # axis: a basis whose floor is not None gets the security and premortem seats — see bite-proof record wo_a_1797_roster
+    for name, basis in _bases(tmp_path, monkeypatch).items():
+        assert basis["floor"] == "full", name
+        assert SM.roster_for(basis) == RISKY_ROSTER, name
+
+
+def test_roster_for_no_floor_is_the_generalist_the_test_seat_and_the_grounding_seat(tmp_path, monkeypatch):
+    repo, _base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    basis = LC.call(repo, ["docs/notes.md"], proposed="full")
+    assert basis["floor"] is None
+    assert SM.roster_for(basis) == NO_FLOOR_ROSTER
+
+
+def test_roster_for_fails_closed_on_a_basis_it_cannot_read():
+    # axis: a basis that is missing, not a dict, or has no floor key gets the full risky roster — see bite-proof record wo_a_1797_roster
+    for basis in (None, "full", [], 7, {}, {"lane": "full"}, {"floor": "full"}, {"floor": ""}, {"floor": "none"}):
+        assert SM.roster_for(basis) == RISKY_ROSTER, basis
+
+
+def test_architecture_is_never_in_a_composed_roster(tmp_path, monkeypatch):
+    for basis in list(_bases(tmp_path, monkeypatch).values()) + [None, {"floor": None}]:
+        assert "architecture-reviewer" not in SM.roster_for(basis)
+    assert "architecture-reviewer" not in SM.PANEL_ROSTER
+    assert set(SM.LENS_SEATS) == {"architecture-reviewer", "code-reviewer", "security-reviewer",
+                                  "test-role", "premortem-reviewer"}
+    assert SM.KNOWN_SEATS == SM.LENS_SEATS + (SM.GROUNDING_SEAT,)
+
+
+def test_roster_for_keeps_the_panel_roster_order():
+    assert SM.roster_for({"floor": None}) == tuple(s for s in SM.PANEL_ROSTER if s in NO_FLOOR_ROSTER)
+
+
+def test_effective_roster_is_a_non_empty_list_of_strings_or_none():
+    assert SM.effective_roster({"roster": ["a", "b"]}) == ("a", "b")
+    for bad in ({}, {"roster": []}, {"roster": "ab"}, {"roster": ("a",)}, {"roster": ["a", 1]}, None, "x"):
+        assert SM.effective_roster(bad) is None, bad
+
+
+def test_compose_roster_follows_the_lane_call(tmp_path, monkeypatch, capsys):
+    repo, base, head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    inside = _compose(capsys, repo, base=base, head=head)
+    assert tuple(inside["roster"]) == RISKY_ROSTER and set(inside["seats"]) == set(RISKY_ROSTER)
+    assert inside["laneBasis"]["floor"] == "full"
+    assert inside["laneBasis"]["touched"] == [{"name": "Payments", "matched": 1}]
+    # path lists ride as counts, never as the paths
+    assert "charge.py" not in json.dumps(inside["laneBasis"])
+    parent, docs_head = _docs_commit(repo)
+    outside = _compose(capsys, repo, base=parent, head=docs_head)
+    assert tuple(outside["roster"]) == NO_FLOOR_ROSTER and set(outside["seats"]) == set(NO_FLOOR_ROSTER)
+    assert outside["laneBasis"]["floor"] is None and outside["laneBasis"]["touched"] == []
+    assert outside["violations"] == []
+    assert not any(d["constraint"] == "critical-diversity" for d in outside["degradations"])
+
+
+def test_compose_without_a_base_ref_composes_the_risky_roster(tmp_path, monkeypatch, capsys):
+    # axis: compose's fail-closed lane basis on a missing base ref — see bite-proof record wo_a_1797_roster
+    repo, _base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    _parent, docs_head = _docs_commit(repo)
+    receipt = _compose(capsys, repo, head=docs_head)
+    assert tuple(receipt["roster"]) == RISKY_ROSTER
+    assert receipt["laneBasis"]["floor"] == "full"
+    assert any("--base-ref" in w for w in receipt["laneBasis"]["why"])
+
+
+def test_compose_without_a_head_sha_composes_the_risky_roster(tmp_path, monkeypatch, capsys):
+    repo, base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    for head in (None, ""):
+        receipt = _compose(capsys, repo, base=base, head=head)
+        assert tuple(receipt["roster"]) == RISKY_ROSTER and receipt["laneBasis"]["floor"] == "full"
+
+
+def test_compose_composes_the_risky_roster_when_git_cannot_answer(tmp_path, monkeypatch, capsys):
+    repo, _base, head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    _parent, docs_head = _docs_commit(repo)
+    assert tuple(_compose(capsys, repo, base="0" * 40, head=docs_head)["roster"]) == RISKY_ROSTER
+
+    def failing(exc):
+        def run(*_a, **_k):
+            raise exc
+        return run
+
+    for exc in (FileNotFoundError("git"), subprocess.TimeoutExpired("git", 120), OSError("boom")):
+        monkeypatch.setattr(subprocess, "run", failing(exc))
+        receipt = _compose(capsys, repo, base=head, head=docs_head)
+        assert tuple(receipt["roster"]) == RISKY_ROSTER, exc
+        assert receipt["laneBasis"]["floor"] == "full"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, b"\xff\xfe", b""))
+    assert tuple(_compose(capsys, repo, base=head, head=docs_head)["roster"]) == RISKY_ROSTER
+
+
+def test_compose_ignores_usable_paths_from_a_failed_git_diff(tmp_path, monkeypatch, capsys):
+    # axis: the exit-status guard, not the empty path list, is what rejects a failed diff — stdout names
+    # a path outside every risk area, so only the guard keeps the risky roster
+    repo, base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    _parent, docs_head = _docs_commit(repo)
+    real_run = subprocess.run
+
+    def with_exit(code):
+        def run(argv, *a, **k):
+            if "diff" in argv:
+                return subprocess.CompletedProcess(argv, code, b"docs/other.md\0", b"failure")
+            return real_run(argv, *a, **k)
+        return run
+
+    monkeypatch.setattr(subprocess, "run", with_exit(128))
+    failed = _compose(capsys, repo, base=base, head=docs_head)
+    assert tuple(failed["roster"]) == RISKY_ROSTER and failed["laneBasis"]["floor"] == "full"
+    monkeypatch.setattr(subprocess, "run", with_exit(0))
+    clean = _compose(capsys, repo, base=base, head=docs_head)
+    assert tuple(clean["roster"]) == NO_FLOOR_ROSTER and clean["laneBasis"]["floor"] is None
+
+
+def test_compose_with_no_changed_paths_composes_the_risky_roster(tmp_path, monkeypatch, capsys):
+    repo, _base, head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    receipt = _compose(capsys, repo, base=head, head=head)
+    assert tuple(receipt["roster"]) == RISKY_ROSTER and receipt["laneBasis"]["floor"] == "full"
+
+
+def test_compose_with_risk_areas_not_set_composes_the_risky_roster(tmp_path, monkeypatch, capsys):
+    repo, base, head = _project(tmp_path, monkeypatch)
+    receipt = _compose(capsys, repo, base=base, head=head)
+    assert tuple(receipt["roster"]) == RISKY_ROSTER and receipt["laneBasis"]["floor"] == "full"
+
+
+# --- seat pins come from core.md ----------------------------------------------------------------
+
+
+def test_core_md_seat_pins_bind_a_base_seat_and_a_specialist_with_no_pins_flag(tmp_path, monkeypatch, capsys):
+    # axis: compose reads enginePreferences.seatPins from core.md itself — see bite-proof record wo_a_1797_roster
+    prefs = {"seatPins": {"code-reviewer": {"vendor": "claude"}, "security-reviewer": {"vendor": "claude"}}}
+    repo, _base, _head = _project(tmp_path, monkeypatch, prefs=prefs)
+    receipt = _compose(capsys, repo)
+    for seat in ("code-reviewer", "security-reviewer"):
+        assert receipt["seats"][seat]["source"] == "pinned", seat
+        assert receipt["seats"][seat]["vendor"] == "claude", seat
+
+
+def test_pins_flag_overrides_core_md_for_the_seat_it_names(tmp_path, monkeypatch, capsys):
+    prefs = {"seatPins": {"code-reviewer": {"vendor": "claude"}, "security-reviewer": {"vendor": "claude"}}}
+    repo, _base, _head = _project(tmp_path, monkeypatch, prefs=prefs)
+    receipt = _compose(capsys, repo, "--pins", json.dumps({"code-reviewer": {"vendor": "codex"}}))
+    assert receipt["seats"]["code-reviewer"]["vendor"] == "codex"
+    assert receipt["seats"]["code-reviewer"]["source"] == "pinned"
+    assert receipt["seats"]["security-reviewer"]["source"] == "pinned"
+    assert receipt["seats"]["security-reviewer"]["vendor"] == "claude"
+
+
+def test_core_md_pin_for_a_seat_the_roster_does_not_seat_is_skipped_without_a_degradation(tmp_path, monkeypatch, capsys):
+    prefs = {"seatPins": {"security-reviewer": {"vendor": "claude"}, "architecture-reviewer": {"vendor": "claude"},
+                          "code-reviewer": {"vendor": "claude"}}}
+    repo, _base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS], prefs=prefs)
+    parent, docs_head = _docs_commit(repo)
+    receipt = _compose(capsys, repo, base=parent, head=docs_head)
+    assert tuple(receipt["roster"]) == NO_FLOOR_ROSTER
+    assert receipt["seats"]["code-reviewer"]["source"] == "pinned"
+    assert not any(d["constraint"] == "pin" for d in receipt["degradations"])
+
+
+def test_core_md_pin_for_an_unknown_seat_and_an_argv_pin_outside_the_roster_stay_disclosed(tmp_path, monkeypatch, capsys):
+    prefs = {"seatPins": {"not-a-seat": {"vendor": "claude"}}}
+    repo, _base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS], prefs=prefs)
+    parent, docs_head = _docs_commit(repo)
+    receipt = _compose(capsys, repo, "--pins", json.dumps({"security-reviewer": {"vendor": "claude"}}),
+                       base=parent, head=docs_head)
+    assert tuple(receipt["roster"]) == NO_FLOOR_ROSTER
+    reasons = [d["reason"] for d in receipt["degradations"] if d["constraint"] == "pin"]
+    assert "pin for unknown seat not-a-seat" in reasons
+    assert "pin for unknown seat security-reviewer" in reasons
+
+
+def test_an_unreadable_core_md_composes_unpinned_and_says_so(tmp_path, monkeypatch, capsys):
+    repo, _base, _head = _project(tmp_path, monkeypatch, corrupt=True)
+    receipt = _compose(capsys, repo)
+    pin = [d for d in receipt["degradations"] if d["constraint"] == "pin"]
+    assert len(pin) == 1 and "composes unpinned" in pin[0]["reason"]
+    assert "core-md-unreadable" in pin[0]["detail"]
+    assert all(cfg["source"] != "pinned" for cfg in receipt["seats"].values())
+
+
+def test_invalid_core_md_pin_entries_are_each_disclosed(tmp_path, monkeypatch, capsys):
+    prefs = {"seatPins": {"code-reviewer": "not-a-dict", "security-reviewer": {"model": "x"},
+                          "test-role": {"vendor": "claude"}}}
+    repo, _base, _head = _project(tmp_path, monkeypatch, prefs=prefs)
+    receipt = _compose(capsys, repo)
+    pin = {d["reason"]: d["detail"] for d in receipt["degradations"] if d["constraint"] == "pin"}
+    assert len(pin) == 2
+    assert any("code-reviewer" in r and d == "pin must be an object with a vendor" for r, d in pin.items())
+    assert any("security-reviewer" in r and d == "missing or invalid vendor" for r, d in pin.items())
+    assert receipt["seats"]["test-role"]["source"] == "pinned"
+
+
+def test_a_seat_pins_value_that_is_not_an_object_is_disclosed(tmp_path, monkeypatch, capsys):
+    for bad, kind in ((["code-reviewer"], "list"), ("claude", "str"), (7, "int")):
+        repo, _base, _head = _project(tmp_path / kind, monkeypatch, prefs={"seatPins": bad})
+        receipt = _compose(capsys, repo)
+        pin = [d for d in receipt["degradations"] if d["constraint"] == "pin"]
+        assert len(pin) == 1 and "not an object" in pin[0]["reason"], kind
+        assert pin[0]["detail"] == "seatPins is a %s" % kind
+        assert all(cfg["source"] != "pinned" for cfg in receipt["seats"].values())
+
+
+# --- critical diversity scales with the roster --------------------------------------------------
+
+
+def test_required_critical_families_scales_with_the_critical_seats_the_roster_seats():
+    # axis: the critical-diversity bar is the roster's, not a fixed two — see bite-proof record wo_a_1797_roster
+    assert SM.required_critical_families(SM.PANEL_ROSTER) == 2
+    assert SM.required_critical_families(SM.KNOWN_SEATS) == 2
+    assert SM.required_critical_families(NO_FLOOR_ROSTER) == 1
+
+
+def test_a_valid_no_floor_panel_has_no_critical_diversity_degradation_or_violation():
+    # axis: a one-critical-seat roster is not held to two families — see bite-proof record wo_a_1797_roster
+    for live in (["claude"], ["claude", "codex"], THREE_VENDORS):
+        m = dict(SM.build(NO_FLOOR_ROSTER, live, "xai", "anthropic", 0), laneBasis={"floor": None})
+        assert not any(d["constraint"] == "critical-diversity" for d in m["degradations"]), live
+        assert SM.verify(m, "xai") == [], live
+        classified = SM.classify_violations(m)
+        assert classified["unexcused"] == [] and classified["excusedByLiveness"] == [], live
+        assert m["roster"] == list(NO_FLOOR_ROSTER)
+
+
+def test_the_risky_roster_still_needs_two_critical_families():
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0)
+    assert any(d["constraint"] == "critical-diversity" for d in m["degradations"])
+    assert {"constraint": "critical-diversity"} in SM.verify(m, "xai")
+    broken = dict(m, roster=[])
+    assert {"constraint": "critical-diversity"} in SM.verify(broken, "xai")
+
+
+def test_classify_violations_holds_the_critical_family_bar_of_the_roster():
+    # axis: the classifier reads the roster's critical-family requirement, not a fixed two — see bite-proof record wo_a_1797_roster
+    viol = [{"constraint": "critical-diversity"}]
+    stands = {"constraint": "critical-diversity", "evidence": "alternative-live"}
+    # requirement 1: one reachable family meets the bar, so the violation stands (a fixed two would excuse it)
+    reduced = dict(SM.build(NO_FLOOR_ROSTER, ["claude"], "xai", "anthropic", 0),
+                   laneBasis={"floor": None}, violations=list(viol))
+    assert SM.required_critical_families(NO_FLOOR_ROSTER) == 1
+    got = SM.classify_violations(reduced)
+    assert got["unexcused"] == [stands] and got["excusedByLiveness"] == []
+    # requirement 2: one reachable family cannot meet the bar (excused); two can (stands)
+    one = dict(SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0), violations=list(viol))
+    got = SM.classify_violations(one)
+    assert stands not in got["unexcused"] and got["excusedByLiveness"]
+    two = dict(SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0), violations=list(viol))
+    assert stands in SM.classify_violations(two)["unexcused"]
+
+
+# --- the maker's family is barred from every known seat -----------------------------------------
+
+
+def test_an_architecture_seat_composed_through_an_explicit_roster_cannot_be_pinned_to_a_maker():
+    # axis: MAKER_EXCLUDED_SEATS covers every known seat, architecture included — see bite-proof record wo_a_1797_roster
+    pins = {"architecture-reviewer": {"vendor": "claude"}}
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0, pins=pins)
+    assert m["seats"]["architecture-reviewer"]["source"] == "unfilled"
+    assert m["seats"]["architecture-reviewer"]["family"] is None
+    assert any(d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "architecture-reviewer"
+               for d in m["degradations"])
+    assert set(SM.KNOWN_SEATS) == SM.MAKER_EXCLUDED_SEATS
+
+
+# --- verify checks the map's own roster ---------------------------------------------------------
+
+
+def test_verify_a_three_seat_map_has_no_missing_seat():
+    m = dict(SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0), laneBasis={"floor": None})
+    assert SM.verify(m, "xai") == []
+    assert not any(v["constraint"] == "missing-seat" for v in SM.to_receipt(m, "xai")["violations"])
+    assert SM.to_receipt(m, "xai")["roster"] == list(NO_FLOOR_ROSTER)
+
+
+@pytest.mark.parametrize("basis", [{"floor": "full"}, None, "unreadable", {}])
+def test_verify_holds_a_reduced_roster_to_its_lane_basis(basis):
+    # axis: the roster must cover roster_for(laneBasis); a full, absent or unreadable basis needs the risky roster — see bite-proof record wo_a_1797_roster
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    got = SM.verify(dict(m, laneBasis=basis), "xai")
+    for gone in ("security-reviewer", "premortem-reviewer"):
+        assert {"constraint": "roster-missing-required", "seat": gone} in got
+    reduced = SM.verify(dict(m, laneBasis={"floor": None}), "xai")
+    assert not any(v["constraint"] == "roster-missing-required" for v in reduced)
+
+
+def test_verify_a_roster_that_omits_the_generalist_or_the_test_seat_is_a_violation():
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    for gone in ("test-role", "code-reviewer"):
+        trimmed = dict(m, roster=[s for s in NO_FLOOR_ROSTER if s != gone])
+        assert {"constraint": "roster-missing-required", "seat": gone} in SM.verify(trimmed, "xai")
+
+
+def test_verify_holds_an_unreadable_roster_to_the_full_risky_panel():
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    for bad in ([], "code-reviewer", None, ["code-reviewer", 3]):
+        v = SM.verify(dict(m, roster=bad), "xai")
+        missing = {x["seat"] for x in v if x["constraint"] == "missing-seat"}
+        assert missing == {"security-reviewer", "premortem-reviewer"}, bad
+
+
+def test_same_family_scan_covers_every_known_seat_when_the_map_names_no_roster():
+    m = SM.build(SM.KNOWN_SEATS, ["claude"], "anthropic", "openai", 0)
+    m.pop("roster")
+    m["seats"] = {s: dict(cfg) for s, cfg in m["seats"].items()}
+    seat = "architecture-reviewer"
+    m["seats"][seat] = {"vendor": "claude", "model": "opus-5.5", "effort": "xhigh", "tier": "reviewer-deep",
+                        "source": "live", "family": "anthropic"}
+    assert any(d["seat"] == seat for d in SM.same_family_degradations(m, "anthropic"))
+    assert seat in SM.to_receipt(m, "anthropic")["roster"]

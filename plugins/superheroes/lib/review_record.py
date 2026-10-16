@@ -1102,14 +1102,16 @@ def _shows_reading(run):
             and isinstance(obs, dict) and obs.get("read") == "engaged")
 
 
-def _move_up_blocker(seat_map, maker_families):
-    """The first reason a seat map does not let a second no-reading review move up to the full lane, else None."""
+def _move_up_blocker(seat_map, maker_families, lane_basis=None):
+    """The first reason a seat map does not let a second no-reading review move up to the full lane, else None.
+    The panel it must hold is the one the lane basis calls for; with no basis, the full risky panel."""
     roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
     if not isinstance(roster, list) or not roster:
         return "the seat map has no roster"
-    # axis: a map composed for fewer seats than the full panel cannot show the whole panel independent, so it parks
-    if not set(seat_map_module.PANEL_ROSTER) <= set(roster):
-        return "the seat map's roster omits a panel seat"
+    # axis: a map composed for fewer seats than the lane basis calls for cannot show the whole panel independent, so it parks — see bite-proof record wo_a_1797_roster
+    missing = [n for n in seat_map_module.roster_for(lane_basis) if n not in roster]
+    if missing:
+        return "the seat map's roster omits a panel seat: " + ", ".join(missing)
     seats = seat_map.get("seats")
     if not isinstance(seats, dict) or not all(isinstance(seats.get(n), dict) for n in roster):
         return "the seat map has no entry for a roster seat"
@@ -1127,8 +1129,9 @@ def _move_up_blocker(seat_map, maker_families):
     return None
 
 
-def reading_next(runs, seat_map, maker_families):
-    """What follows a review whose reading is not shown: accept, rerun, move-up or park. Pure: no model call, no write."""
+def reading_next(runs, seat_map, maker_families, lane_basis=None):
+    """What follows a review whose reading is not shown: accept, rerun, move-up or park. Pure: no model call, no write.
+    The lane basis is the one given, else the one the seat map carries from its compose."""
     runs = list(runs)[:2]
     if any(_shows_reading(run) for run in runs):
         return {"next": "accept", "reason": "the engine's record shows that the reviewer read the change"}
@@ -1136,7 +1139,9 @@ def reading_next(runs, seat_map, maker_families):
         return {"next": "park", "reason": "no run was given, so no reading can be shown"}
     if len(runs) < 2:
         return {"next": "rerun", "reason": "the one run does not show that the reviewer read the change"}
-    blocker = _move_up_blocker(seat_map, frozenset(maker_families))
+    if lane_basis is None and isinstance(seat_map, dict):
+        lane_basis = seat_map.get("laneBasis")
+    blocker = _move_up_blocker(seat_map, frozenset(maker_families), lane_basis)
     if blocker:
         return {"next": "park", "reason": blocker}
     return {"next": "move-up", "reason": "two runs do not show a reading and the seat map holds independent seats"}
