@@ -29,6 +29,7 @@
       "tokens": 100,
       "unit": "reviewer-minutes"
     },
+    "decisionRechecks": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
       "source": "GitHub PR"
@@ -45,6 +46,7 @@
         "reason": "fixed in 1a2b3c4",
         "reviewer": "code-reviewer",
         "severity": "Minor",
+        "sheetPart": "how-the-review-went",
         "title": "A null guard was missing"
       }
     ],
@@ -53,8 +55,29 @@
       "source": "reported by the session",
       "value": "full"
     },
+    "laneBasis": {
+      "floor": "full",
+      "lane": "full",
+      "proposalTaken": true,
+      "proposed": "full",
+      "riskAreas": {
+        "detail": "not-read",
+        "reason": "unreadable",
+        "state": "not-set"
+      },
+      "source": "unavailable",
+      "touched": [],
+      "unmatchable": [],
+      "why": [
+        "risk-unclear-not-set: the account names no repository, so its risk areas were not read"
+      ]
+    },
     "leftForOwner": [],
-    "makers": [],
+    "makers": [
+      {
+        "family": "anthropic"
+      }
+    ],
     "missingReviews": [
       {
         "goAhead": null,
@@ -65,6 +88,7 @@
     "pr": 7,
     "previousRecord": null,
     "rawOutputs": [],
+    "refused": [],
     "reviewers": [
       {
         "commit": null,
@@ -74,6 +98,7 @@
         "model": "gpt-5.6-sol",
         "name": "code-reviewer",
         "observation": {
+          "read": "engaged",
           "tokens": 100,
           "wallSeconds": 120
         },
@@ -97,6 +122,7 @@
     ],
     "rounds": {
       "cap": 3,
+      "capKind": "rounds",
       "count": 1,
       "source": "reported by the session",
       "stoppedAtCap": false

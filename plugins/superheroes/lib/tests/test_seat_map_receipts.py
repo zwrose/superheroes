@@ -337,3 +337,47 @@ def test_unjudgeable_receipts_whole_history_not_round_scoped():
     assert result[0] == {"round": "1", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}
     assert result[1] == {"round": "3", "basis": seat_map.VIOLATION_BASIS_NO_SEATS}
     assert SMR.round_governing_unjudgeable(state, "2", driver_fam) == []
+
+
+def test_emit_receipt_seat_map_merges_maker_families_and_roster():
+    """axis: makerFamilies is the sorted union over every receipt; roster is last-wins."""
+    roster_1 = ["code-reviewer", "test-role"]
+    roster_2 = ["code-reviewer", "grounding-seat"]
+    map1 = _minimal_map(makerFamilies=["anthropic"], roster=roster_1)
+    map2 = _minimal_map(makerFamilies=["openai", "anthropic"], roster=roster_2)
+    state = {
+        "seatMapReceipts": [
+            {"round": "1", "map": map1},
+            {"round": "2", "map": map2},
+            {"round": "3", "map": _minimal_map(makerFamilies=["xai"])},
+        ],
+        "rounds": {},
+    }
+    emitted = SMR.emit_receipt_seat_map(state)
+    assert emitted["makerFamilies"] == ["anthropic", "openai", "xai"]
+    assert emitted["roster"] == roster_2
+
+
+def test_emit_receipt_seat_map_carries_what_a_composed_receipt_names():
+    built = seat_map.build(seat_map.PANEL_ROSTER, ["claude", "codex"], "anthropic", "openai", 0,
+                           extra_maker_families=frozenset({"xai"}))
+    receipt = seat_map.to_receipt(built, "anthropic")
+    assert receipt["makerFamilies"] == ["anthropic", "xai"]
+    assert receipt["roster"] == list(seat_map.PANEL_ROSTER)
+    emitted = SMR.emit_receipt_seat_map({"seatMapReceipts": [{"round": "1", "map": receipt}]})
+    assert emitted["makerFamilies"] == ["anthropic", "xai"]
+    assert emitted["roster"] == list(seat_map.PANEL_ROSTER)
+
+
+def test_emit_receipt_seat_map_without_the_keys_invents_none():
+    emitted = SMR.emit_receipt_seat_map({"seatMapReceipts": [{"round": "1", "map": _minimal_map()}]})
+    assert "makerFamilies" not in emitted
+    assert "roster" not in emitted
+
+
+def test_emit_receipt_seat_map_keeps_a_legacy_author_family_as_a_maker():
+    """axis: a legacy map naming its maker only through authorFamily keeps it in the emitted makerFamilies."""
+    state = {"seatMapReceipts": [{"round": "1", "map": _minimal_map(authorFamily="openai")},
+                                 {"round": "2", "map": _minimal_map(authorFamily="anthropic", makerFamilies=["anthropic"])}],
+             "rounds": {}}
+    assert SMR.emit_receipt_seat_map(state)["makerFamilies"] == ["anthropic", "openai"]

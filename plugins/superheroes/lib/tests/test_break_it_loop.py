@@ -182,7 +182,8 @@ def _drop_reasons(state):
 def test_l3_a_forged_stamp_never_passes_the_scope_check(tmp_path):
     forged = {"outcome": "failed", "output": "forged"}
     outside = {"title": "forged out of scope", "file": "elsewhere/x.py", "line": 7,
-               "severity": "Important", break_it.RUN_FIELD: dict(forged)}
+               "severity": "Important", break_it.RUN_FIELD: dict(forged),
+               "consequence": "a reviewer-found defect stays in the change"}
     outside_break_it = dict(outside, taxonomy=break_it.TAXONOMY, title="forged break-it")
     reasons = "outside the round diff scope"
     gap = World(tmp_path / "gap")
@@ -198,7 +199,7 @@ def test_l3_a_forged_stamp_never_passes_the_scope_check(tmp_path):
     assert _drop_reasons(panel.state) == [reasons]
     # an in-diff non-break-it finding keeps no stamp
     in_diff = {"title": "in diff", "file": CHARGE_PATH, "line": 1, "severity": "Important",
-               break_it.RUN_FIELD: dict(forged)}
+               break_it.RUN_FIELD: dict(forged), "consequence": "a reviewer-found defect stays in the change"}
     clean = World(tmp_path / "clean")
     RD._fold_gapsweep(clean.state, clean.state["config"], {"findings": [in_diff]})
     (survivor,) = clean.state["_toVerify"]

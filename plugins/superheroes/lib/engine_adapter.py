@@ -1912,7 +1912,8 @@ def _scrub_ruling_object(obj):
         "ruling": obj.get("ruling"),
         "reason": _scrub(obj["reason"]) if isinstance(obj.get("reason"), str) else obj.get("reason"),
     }
-    for opt in ("newIssues", "evidence", "auditorVendor"):
+    contract, _reason = payload_contracts.payload_contract(payload_contracts.P_AUDITS)
+    for opt in contract.get("optional") or ():
         if opt in obj:
             val = obj.get(opt)
             if opt == "newIssues" and isinstance(val, list):
