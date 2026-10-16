@@ -28,7 +28,9 @@ _SPEC.loader.exec_module(_TDI)
 
 from session_checkout import seed_session_meta  # noqa: E402
 from test_round_driver import (  # noqa: E402
-    DIFF, HEAD, HEAD_NEW_SURFACE, _cfg, _drive_cli, _drive_to_phase, _responder,
+    _claim_reviewer,
+    DIFF, HEAD, HEAD_NEW_SURFACE, _cfg, _drive_cli, _drive_to_phase, _nonpanel_cell_proof,
+    _responder, _synthesis_seatable_map,
 )
 
 _bootstrap = _TDI._bootstrap
@@ -158,7 +160,8 @@ def test_t1c_hand_submit_audits_then_verify(tmp_path):
     assert n3["ok"] and n3["phase"] in (RD.P_SCOPED, RD.P_VERIFIERS, RD.P_TERMINAL)
 
 
-_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+               "consequence": "a reviewer-found defect stays in the change"}]
 
 
 # axis: verify fail after audits halts — no scoped finder or panel afterward
@@ -270,8 +273,10 @@ def _drive_ceiling_round_two_fixer(tmp_path, cfg, respond, repo, init_head, *, m
 # axis: ceiling gate fail on post-fix head halts — never a clean park
 def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
-    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
-    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1,
+                 "consequence": "a reviewer-found defect stays in the change"}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo,
+               seatMap=_nonpanel_cell_proof(["claude", "codex"]))
     respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
     d, n, _head_a, _head_b = _drive_ceiling_round_two_fixer(
         tmp_path, cfg, respond, repo, init_head)
@@ -326,7 +331,8 @@ def _multi_file_diff(n):
 
 
 def _n_findings(n):
-    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1}
+    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1,
+             "consequence": "a reviewer-found defect stays in the change"}
             for i in range(n)]
 
 
@@ -430,7 +436,8 @@ def test_t5_durable_fix_batch_files(tmp_path):
     cap = round_phases.FIX_BATCH_CAP_DEFAULT
     over = cap + 2
     session_dir, gitdir, head_path = _bootstrap(
-        tmp_path, verifyCommand="pytest -q", diff=_multi_file_diff(over))
+        tmp_path, verifyCommand="pytest -q", diff=_multi_file_diff(over), fixerVendor="cursor",
+        seatMap=dict(_TDI.SEAT_MAP, hostFamily="anthropic"))
     with open(head_path, "w", encoding="utf-8") as fh:
         fh.write(_multi_head(over))
     findings = _n_findings(over)
@@ -452,9 +459,11 @@ def test_t5_durable_fix_batch_files(tmp_path):
 # axis: fixBatch accumulator resets each round — round 3 audits target B only
 def test_t6_fix_batch_resets_per_round(tmp_path):
     d = str(tmp_path)
-    cfg = _cfg(verifyCommand="pytest -q")
-    finding_a = [{"title": "A", "severity": "Important", "file": "f.py", "line": 1}]
-    finding_b = [{"title": "B", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(verifyCommand="pytest -q", seatMap=_nonpanel_cell_proof(["claude", "codex"]))
+    finding_a = [{"title": "A", "severity": "Important", "file": "f.py", "line": 1,
+                  "consequence": "a reviewer-found defect stays in the change"}]
+    finding_b = [{"title": "B", "severity": "Important", "file": "newsurf.py", "line": 1,
+                  "consequence": "a reviewer-found defect stays in the change"}]
     scoped_once = {"done": False}
 
     def respond(phase, payload, rnd):
@@ -471,7 +480,7 @@ def test_t6_fix_batch_resets_per_round(tmp_path):
     n = _drive_to_phase(d, cfg, respond, RD.P_AUDITS)
     while n["round"] < 3:
         s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
-                          respond(n["phase"], n["payload"], n["round"]))
+                          _claim_reviewer(d, n["phase"], respond(n["phase"], n["payload"], n["round"])))
         assert s["ok"], s
         n = RD.cmd_next(d)
         if n["action"] == RD.P_TERMINAL:
@@ -516,8 +525,9 @@ def test_t5_escalated_split_carries_rung_on_both_slices(tmp_path):
     d = str(tmp_path)
     findings = _n_findings(over)
     head = _multi_head(over)
-    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(over))
-    respond = _responder(round1_findings=findings, head=head)
+    cfg = _cfg(verifyCommand="pytest -q", diff=_multi_file_diff(over), fixerVendor="codex")
+    respond = _responder(round1_findings=findings, head=head,
+                         seat_map=_synthesis_seatable_map(["claude", "codex"], "codex"))
     n = _drive_to_phase(d, cfg, respond, RD.P_SYNTHESIS)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       respond(n["phase"], n["payload"], n["round"]))

@@ -729,8 +729,9 @@ say how it changes and what the advisor says when the owner finds a review slow.
      touches, read with `lib/risk_areas.py touched` over the PR's changed paths;
   2. whether the review loop followed it: the reviewers that ran, the rounds, and whether the loop
      stopped at its cap, all from the review record;
-  3. what the review spent its time on: the record's cost (reviewer minutes, summed across the
-     reviewers, not the time the owner waited) and its round count. The record neither times fix
+  3. what the review spent its time on: the record's cost (reviewer minutes, which count only the
+     reviewers the engine recorded, not the time the owner waited; `cost.notCounted` names the
+     reviewers the engine did not record, whose time is not in the minutes, so read it and say so) and its round count. The record neither times fix
      rounds nor says which rounds ran a fix, so the answer gives the round count, says that fix work
      is not recorded, and estimates neither;
   4. a proposed calibration change, or none, with its reason.

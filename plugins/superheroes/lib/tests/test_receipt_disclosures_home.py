@@ -242,3 +242,31 @@ def test_session_contract_exports_match_driver_and_records():
             assert getattr(round_records, name) is home, name
     sample = {"id": "v0", "title": "probe", "file": "a.py", "line": 1}
     assert round_driver._finding_identity_key(sample) == session_contract.finding_identity_key(sample)
+
+
+def test_vendor_bearing_unfilled_source_is_seated_in_every_consumer():
+    entry = {"source": "unfilled", "vendor": "codex", "family": "openai"}
+    state_map = {"seats": {"code-reviewer": entry}}
+    assert receipt_disclosures.unfilled_seats(state_map) == frozenset()
+    assert receipt_disclosures.pinned_auditor_vendors(state_map) is None
+    bare = {"seats": {"code-reviewer": {"source": "unfilled", "vendor": None}}}
+    assert receipt_disclosures.unfilled_seats(bare) == frozenset({"code-reviewer"})
+
+
+def test_legacy_author_family_stays_a_maker_family():
+    assert receipt_disclosures.maker_families({"authorFamily": "openai"}) == frozenset({"openai"})
+    assert receipt_disclosures.maker_families(
+        {"authorFamily": "openai", "makerFamilies": ["anthropic"]}) == frozenset({"anthropic"})
+    state = {"seatMap": {"authorFamily": "openai", "seats": {}}}
+    assert "openai" in receipt_disclosures.accumulated_maker_families(state)
+
+
+def test_independent_reviewer_skips_a_preferred_vendor_that_is_not_live():
+    # a configured-but-unavailable preferred reviewer must not win over a live independent one
+    import receipt_disclosures as rd
+    vendor, family = rd.independent_reviewer({"vendors": ["claude", "cursor"]}, "codex",
+                                             {"anthropic"}, "claude")
+    assert vendor == "cursor" and family is not None
+    vendor, _family = rd.independent_reviewer({"vendors": ["claude", "codex"]}, "codex",
+                                              {"anthropic"}, "claude")
+    assert vendor == "codex"

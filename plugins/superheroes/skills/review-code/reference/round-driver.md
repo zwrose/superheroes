@@ -12,12 +12,13 @@
 - [Actions and payloads](#actions-and-payloads)
 - [The re-dispatch carry](#the-re-dispatch-carry)
 - [Transition — plugin versions under a live session](#transition--plugin-versions-under-a-live-session)
+- [Session repair](#session-repair)
 - [Journal and receipt](#journal-and-receipt)
 - [Certification shapes](#certification-shapes)
 - [Invariants](#invariants)
 - [Port note](#port-note)
 
-`lib/round_driver.py` is the **one entrypoint** for the review-code auto-fix loop (#507). It
+`lib/round_driver.py` is the **one entrypoint** for the review-code auto-fix loop. It
 collapses the old `code_loop_plan.py` plan/record/decide choreography, the manual circuit-breaker
 call, and the head-diff derivation into a single `next`/`submit` state machine the orchestrator
 obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`.
@@ -26,7 +27,7 @@ obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`.
 
 Round 1 is always a full `reviewer-deep` baseline panel. Rounds 2+ are **delta rounds**: fix
 audits over the just-fixed findings plus a scoped finder over the fix's new surface — a full panel
-runs again only on the #174 re-arm triggers (Critical surfaced since the last qualifying panel, or
+runs again only on the confirmation re-arm triggers (Critical surfaced since the last qualifying panel, or
 cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). On
 the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
 calls `next`, dispatches the emitted order (or fulfills a gate action), and `submit`s the
@@ -34,8 +35,14 @@ artifact. **Prose-driven review** on the read-only path (`--review-only`) is a d
 lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
 is not governed by this loop contract.
 
-Degraded / single-vendor environments stay **on** the mandated path: the same driver, the same
-journal, and `independence: "degraded"` stamps on audit targets and the terminal certification
+Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
+keys of the previous round's fix batch>]}` for a delta round, or `{"on": "wider", "why": "<the
+reason>"}` for a full panel (an unknown fix surface, or a confirmation re-arm). Round 1 records no
+`focus`. The review record lists every wider round with its reason.
+
+Single-vendor environments stay **on** the mandated path: the same driver, the same journal, and,
+when no live vendor sits outside the fixer's and the makers' families, a fix whose audit does not
+run (it is never counted as audited) with `independence: "degraded"` on the terminal certification
 shape — never a silent off-ramp.
 
 ## next / submit protocol
@@ -59,7 +66,7 @@ Every step thereafter:
 python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 ```
 
-`--diff-path` belongs only on the first `next` of a session (#699 rider 6). A continuation
+`--diff-path` belongs only on the first `next` of a session. A continuation
 `next` that passes it is refused with `diff-path-not-fresh-state` — check raw stdout and the
 driver journal; the driver does not crash.
 
@@ -69,7 +76,7 @@ from the shell per `SKILL.md` Setup; the driver refuses a later `--diff-path` be
 round-1 artifact mid-session would break the pin/stat contract the base guard stamped at birth.
 Same discipline as `--vendors` / `--fixer-vendor` on non-fresh state.
 
-**`--seat-map <path>`** carries the #510 seat map into round 1 and is subject to that same
+**`--seat-map <path>`** carries the seat map into round 1 and is subject to that same
 fresh-state discipline. The file must be a JSON **object** shaped `{"seats": {"<dimension>":
 {"vendor": "...", "model": "...", "engine": "..."}}}`, keyed by the full reviewer dimension names —
 an unreadable file, malformed JSON, or a non-object all fail loud with `seat-map-unparseable`,
@@ -404,9 +411,9 @@ carries a vendor positively known to be a host seat, and every other case — an
 vendor the driver cannot resolve — renders the **stdout** contract instead. The fold is deliberately
 asymmetric, because the two mistakes are not: a host seat handed the stdout contract still returns
 its payload for the orchestrator to land, while an engine seat handed a write contract forfeits on
-the forbidden write (#767 class). **A vendor the driver DEFAULTED to is not a resolved vendor**: the
-reviewer phases (verifiers, gap-sweep, scoped) fall back to a stand-in on the host model when the
-engine-preference read cannot answer — `engine_pref.load_engine_prefs` never raises, so that
+the forbidden write. **A vendor the driver DEFAULTED to is not a resolved vendor**: the
+reviewer phases (verifiers, gap-sweep, scoped) take a stand-in vendor when the
+engine-preference read cannot answer (a forfeited or unreadable reviewer seat is re-run on a vendor outside every maker family, the driver's choice; when there is none the seat is recorded missing and counts as not run, and it is never re-run on the host model when the host's family is a maker) — `engine_pref.load_engine_prefs` never raises, so that
 failure arrives as `refusal_engine_prefs(readError=…)`, and `readError` is what marks it (a
 genuinely absent config is `degenerate_engine_prefs()`, whose documented defaults *are* the
 configuration). The transport row therefore carries `vendorSource: "configured" | "defaulted"`,
@@ -418,7 +425,7 @@ from the **same** predicate the channel folds on, across every `dispatch-review`
 verifiers, synthesis, gap-sweep, audits, scoped), so a channel that fell back for want of vendor
 evidence can never do so without a receipt. `dispatch-fixer` is outside this rule: it is a
 foreground in-place writer, never a `dispatch-review` consumer, and its vendor is unknown by
-default (#608).
+default.
 
 **Supply `--seat-map` on the first `next` to keep host seats on the direct-write path.** Round 1 is
 the round that dispatches the panel, and before this flag the driver's only vendor source was the
@@ -470,9 +477,9 @@ calls `next`, so that is where the invariant is enforced. On refusal the driver 
 line with `outcome: "refused-base-guard"`.
 
 **Why it exists.** The review diff base used to live only in skill text, and that text drifted. A
-live incident put ~6,600 already-merged lines into a review of 2,931 real ones (#637), and an unset
-base produced a zero-line diff at exit 0 that the loop certified clean. #641 fixed the text; #648
-moved the invariant into the driver so a future text edit cannot reintroduce it. On fresh state the
+live incident put ~6,600 already-merged lines into a review of 2,931 real ones, and an unset
+base produced a zero-line diff at exit 0 that the loop certified clean. The text was fixed first;
+the invariant then moved into the driver so a future text edit cannot reintroduce it. On fresh state the
 guard also stamps `baseGuard` on the receipt path — `"checked-stat-bound"` on this CLI path,
 `"not-checked"` on the library/eval path — so a receipt can never silently *look* guarded when it
 was not. The stat binding applies to the **round-1** diff artifact the driver receives on fresh
@@ -550,9 +557,20 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" rule --session-dir "$SESSION_DIR" \
 The ruling file is JSON: `_provenance` (same shape as owner gate artifacts) plus a non-empty
 `rulings` list. Each entry has `id` (finding id or key), `ruling` (`out-of-scope` or `guidance`),
 `reason`, and for out-of-scope a shaped `followUp`; for guidance a non-empty `guidance` string
-within the gate row byte cap. **Never append a ruling to a seat prompt** — the driver carries
-live guidance in the fixer order's gate block and excludes out-of-scope keys from the fix batch;
-the fix batch sha256 in the order commits to the batch file bytes.
+within the gate row byte cap. A guidance entry may also carry `allowsChange`, a JSON boolean
+(`true` lets the fix change behaviour its finding does not name; anything but a boolean is refused
+with `ruling-file-shape`, and so is `allowsChange` on an `out-of-scope` entry). `rule` copies it onto
+the `rulingsLog` row; owner-gate guidance never carries it. **Never append a ruling to a seat
+prompt** — the driver carries live guidance in the fixer order's gate block and excludes
+out-of-scope keys from the fix batch; the fix batch sha256 in the order commits to the batch file
+bytes.
+
+An entry may also carry `decidedBy`, the decision the ruling rests on:
+`{"kind": "canon" | "residual" | "sheet-answer", "ref": ...}` and nothing else. For `canon` and
+`residual` the `ref` is a non-blank string (the Canon entry's id, or the residual's text); for
+`sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`. A `decidedBy` of any other shape
+is refused with `ruling-decided-by-malformed`. `rule` only records it in `rulingsLog`; it does not
+decide the finding's outcome — the end of the loop does (§ Dispositions).
 
 On success the driver appends to `state.rulingsLog` and the round's `rulings`, records
 dispositions for out-of-scope rows, and refreshes gate guidance for a not-yet-emitted fixer batch.
@@ -560,16 +578,45 @@ A guidance ruling that supersedes a live out-of-scope ruling clears that disposi
 the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
 fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
-A ruling while a pending fixer attempt already has emitted orders is refused — a ruling waits until
-that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes unchanged):
+
+A ruling is accepted whenever it arrives, at any step that is not terminal, and binds the next fix of
+its finding. `rule` only records: a fixer attempt whose orders are already out is never stopped and
+its batch never reshaped, so its result folds normally. Refusal tokens (each leaves state bytes unchanged;
+none is about timing):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
-`ruling-critical-out-of-scope`,
-`ruling-session-terminal`, `ruling-attempt-pending`,
+`ruling-critical-out-of-scope`, `ruling-decided-by-malformed`,
+`ruling-session-terminal`,
 `disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
 
+### Where a ruling reaches the fixer (the one resolution point)
+
+Which finding a ruling names is worked out once, as a fixer batch is finalized: every batch passes
+`_resolve_ruled_batch` (called by `_queue_fix_batch`, the one writer of the batch). Out-of-scope
+decisions drop their findings first. Each effective `guidance` or `fix` decision is then attached to
+the row it binds (a decision given to a finding merged into another rides the representative, as
+`ruledBy`), and each finding such a decision names that has not been sent under it joins the batch,
+whatever its severity. A finding is found by following the lineage and `mergedInto` to the one live
+row. One that is no longer live comes back from the ledger as an open finding when a fixer order
+carried it before the ruling (the fix went against the ruling, so the next round sends it back) or
+when it left the live list with no disposition. For any other the ruling names no live finding: a
+`ruling-no-live-finding` decision records it and the end-of-loop settle takes the finding.
+`state.sentUnderDecision` keeps, by lineage root, the decision `seq` each finding was last sent under,
+so a decision is sent once; a round with no blocker still starts a fixer leg for an owner-named row.
+`state.restagedAfterDispositionSeq` marks a finding restaged from the ledger: the disposition the ruling
+reopened does not exclude it as discharged.
+
+### Below-blocking findings settle at convergence
+
+No below-blocking finding joins a fix batch on its own. When the loop converges, every finding with
+no outcome gets one (§ Dispositions): left for the owner with its consequence when it states a real
+one, otherwise craft. The only below-blocking finding a fixer receives is one an owner `guidance` or
+`fix` decision names.
+
 Owner-gate guidance is held to the same measure. A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at submit with `gate-guidance-oversize`, nothing folds, and the owner resubmits shorter guidance; on the library `run_loop` path the fold parks `cannot-certify` with the same token. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a submit whose fix batch would carry more guidance than one order holds refuses with `gate-guidance-aggregate-oversize` (the library fold parks with it), and the render refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
+
+A finding has one effective decision: the latest of a `rule` ruling and an owner-gate decision (`skip`, `fix-with-guidance`, `fix-as-suggested`), ordered by one shared sequence; a gate entry written before that sequence existed counts as older than every sequenced decision. A later `fix-as-suggested` (or a `fix-with-guidance` with no guidance text) supersedes an earlier skip or guidance; a skip carries its `followUp`. The fixer order renders only that decision — guidance the owner later replaced is never shown beside the new guidance — and a tradeoff whose effective decision is a non-Critical skip is not put to the owner again. Only guidance carries: a skip (a `rule` out-of-scope ruling or an owner-gate skip) binds its own finding only — also inside a lineage made by carried guidance — so a reworded or different finding at its place is judged fresh — fixed, or left for the owner. When a later round raises a finding at the same file and line under different wording, it takes the guidance decision of the finding it rewords (`state.findingLineage`, with a `ruling-carried` entry in the decisions), provided exactly one finding is raised at that place in that round (across every staging of the round, the panel and a gap sweep alike — a carry a later staging of the round makes ambiguous is undone, `ruling-carry-revoked`, with the disposition it inherited), the earlier finding is not itself raised again in that round, and only one earlier decision sits there. Anything less certain carries nothing, and the reworded finding is judged fresh.
 
 ## Batch concurrency — an independent batch goes out together
 
@@ -616,12 +663,11 @@ Three invariants shape how each round spends verification and fixer capacity.
 **One full verify run per round.** The fixer order carries a **scoped verify budget** — tests that
 reference the batch's target files plus the project's static validators, at most once each — never
 the project's full verify command. The orchestrator's `run-verify` phase is the round's **one**
-full gate run on the post-fix head. Field evidence from PR #1332 and the C13 layer-2c lane: every
+full gate run on the post-fix head. Field evidence from a stacked lane: every
 fixer round that ran the full gate inside a 900 s attempt forfeited on
 `worktree-dirtied-by-attempt`; one project ran its gate 141 times across 24 lanes. A touched-tests gate that diffs against `main` selects a stacked branch's whole stack; the
-`{baseRef}` token that #1336 (on `main`) introduces is what keeps the gate to its own layer —
-this layer's driver predates that change, so a stacked lane passes `--base <layer base>` by hand
-until the stack merges. At the ceiling round the gate always runs on the post-fix head, including when the
+`{baseRef}` token is what keeps the gate to its own layer — where the driver predates it, a stacked
+lane passes `--base <layer base>` by hand until the stack merges. At the ceiling round the gate always runs on the post-fix head, including when the
 round's earlier gate already passed.
 
 **The gate and the fix audits run concurrently.** After a fixer fold the durable path advertises
@@ -660,8 +706,8 @@ the **configured** dimensions, never by the seats that happened to return. Repor
 `2 blocking` from the same round is not.
 
 **Trajectory and convergence claims cite complete rounds only.** A trend drawn through partial rounds
-reads a queued backlog as a regression and an unexamined surface as clean. Field evidence (the #723
-stack's halves, 2026-08-09): two lenses never examined one half across several rounds, so the first
+reads a queued backlog as a regression and an unexamined surface as clean. Field evidence (a stacked
+review, 2026-08-09): two lenses never examined one half across several rounds, so the first
 complete round landed their whole backlog at once and read as a new crop — and leg planning was
 steered by the partial trend line.
 
@@ -677,7 +723,7 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   durable owner of record**; seeding sets it (`_stage_findings`, `lib/round_driver.py`). A marker value the driver
   does not recognize refuses at the fold with `disposition-ledger-owner-unrecognized`
   (`_fold`, `lib/round_driver.py`).
-- The three dispositions: `fixed` carries `dispositionReceipt {headSha}` — the fix-fold head the
+- The three dispositions recorded as the loop goes (the three the end of the loop adds are below): `fixed` carries `dispositionReceipt {headSha}` — the fix-fold head the
   config records, and an empty receipt when it records none (`_fixed_disposition_receipt`,
   `lib/round_driver.py`); `refuted` carries `refutedReason`;
   `out-of-scope` carries `outOfScopeReason` plus a `followUp` object with shape
@@ -686,15 +732,67 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   `missing-follow-up-item`, `missing-revisit-trigger` or `missing-class-closure`
   (`follow_up_shape_fault`, `lib/session_contract.py`).
 - Where each is recorded: `fixed` at the audits fold for every target the independent auditor
-  discharged; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
+  discharged — and only for a target whose auditor named no unnamed behaviour change (`unnamedChange`,
+  the behaviour the fix changes that its finding does not name), or whose auditor named, by
+  `unnamedChangeAllowedBySeq`, a carried decision (the target's own or a batch sibling's) that is
+  still current, is a `guidance` ruling with `allowsChange: true` and is not overridden by the
+  target's own `allowsChange: false`; any other target is `not-discharged`
+  with the auditor's reason, recorded as `auditUnnamedChange` on the round with an
+  `audit-unnamed-change` decision, and returns to the fix list; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an
   owner-judgment `skip` and an audit-stall `accept-the-disclosed-risk`, both of which now accept an
   **optional `followUp` object**.
+- `fixed` is also recorded when a later **complete** full panel (round 2 or later) does not raise
+  again a finding a fixer round reported fixing: the fixer fold records the identity keys of the
+  findings it was handed (`fixReportedKeys` on the round), the credit needs a non-escalated fix report
+  with fixes, made at or after the finding's latest raise, and the disposition carries
+  `dispositionReceipt {kind: "full-panel-not-reraised", panelRound}`. It lands before the panel's own
+  findings are staged, so the end-of-loop settle never counts it a leftover. A finding with a current
+  disposition, merged into another, or ruled out of scope is left as it is; an incomplete panel gives
+  no credit.
+- An out-of-scope finding is offered to a fixer in at most one round while it stays out of scope
+  (one episode: the decision's sequence number, or its round for a legacy gate decision). The first
+  offer is recorded in `state.outOfScopeFixerRounds`; in a later round of the same episode the
+  finding is left out of the fix batch, its out-of-scope disposition is recorded again naming the
+  round it was offered in, and an `out-of-scope-fix-spent` decision says so. A later `guidance`
+  decision ends the episode. A batch emptied only this way settles through empty-batch convergence
+  and is not counted in `fixBatchExcludedByDischarge`.
 - Without a `followUp` the disposition is still recorded. A **malformed** `followUp`
   is refused at submit with `follow-up-malformed`, so the owner corrects it while still present.
 - A verifier drop, author-justified drop, or synthesis merge whose staged id is missing, maps to
   nothing, is duplicated, or has no derivable finding key refuses `staged-id-unresolvable` at
   submit — never silently skipped.
+
+### How the loop settles what is left
+
+Every finding the review took in ends with an outcome. This is the one place the rule is stated;
+other docs link here.
+
+- **When.** Only when the loop reaches a terminal, by the one terminal writer (`_set_terminal`,
+  `lib/round_driver.py`). A stop at a round cap settles the same way; only the reason differs, and it
+  names the cap.
+- **Who keeps its disposition.** A finding that is fixed, or shown wrong (disposition `refuted`), keeps
+  that disposition, as does a finding merged into another (it follows the other). A Nit the readout
+  cap collapsed is already `craft`, recorded when it was collapsed.
+- **Who is settled.** Every other finding the review took in — no disposition, a disposition older than
+  the finding's last raise, or `out-of-scope` — is settled by `settle` (`lib/finding_outcomes.py`):
+  1. A finding whose only consequence is code quality (`consequenceKind` `code-quality`) is `craft`.
+     It is recorded for the owner's veto and no ruling overrides it.
+  2. Otherwise, a finding whose latest ruling cites a `decidedBy` decision that is **on record** is
+     `ruling`, and the decision is named.
+  3. Otherwise it is `left-for-owner` (a [leftover](../../../rubric/glossary.md#leftover)). The reason
+     says why it is open and, when a cited decision did not resolve, why not.
+- **Severity never decides the outcome.** `settle` is never given it.
+- **On record.** A decision is on record only when it is an active Canon entry (complete, and not
+  superseded), a recorded residual (its text appears in the residuals the review read), or a settled
+  saved sheet answer for this PR (`aligned` on a card the published sheet gives no options, or a picked option). A decision that cannot be read is not
+  on record.
+- **Where it is written.** The disposition ledger, as disposition `craft`, `left-for-owner` or
+  `ruling`, with `settledReason`, and for a `ruling` (or a `left-for-owner` whose cited decision was not on record) also `decidedBy`. An out-of-scope finding keeps its
+  `outOfScopeReason` and `followUp`. The session record adapter reads these as the outcomes of the same
+  name ([review-record.md](review-record.md) § The full lane writes it from the session).
+- **Once.** A second settle finds nothing left to settle. If the disposition ledger cannot be read,
+  nothing is settled and the state records `settleSkipped` with the fault.
 
 ## Actions and payloads
 
@@ -765,11 +863,11 @@ refuse the same way. `_fold_synthesis` then runs `verification.merge_and_rank` o
 
 | `action` / `phase` | Orchestrator fulfills |
 | --- | --- |
-| `dispatch-panel` | Dispatch the round's `reviewer-deep` panel per `payload.dimensions`, `payload.tier`, and optional `payload.shards` (big-diff sharding; cross-cutting lenses always get the whole diff). Submit `{seats: {<dim>: {findings, receiptMissing?, receiptStale?, vacuous?, reason?}}, seatMap?, ranManifest?}`. A seat whose `dispatch-review` returned `reason: "vacuous"` (or equivalent double vacuous forfeit) is folded with `vacuous: true` or `reason: "vacuous"`. `ranManifest: {<dim>: <vendor>}` is the orchestrator's OWN trusted record of which vendor produced each seat's folded findings — mirroring `collectionManifest`; an in-seat `ranVendor` echo is advisory only and authenticates nothing. The driver mechanically compares it to the seat map's configured vendor and records a per-round `fellOpen` dispatch-provenance row + a `degraded` disclosure for any `run` seat that fell open to a different vendor — the disclosure is machinery, not builder discipline. A cross-vendor seat that ran without a trusted manifest entry is disclosed as provenance-unavailable. The guarantee is exactly as strong as the orchestrator's manifest — the driver cannot cryptographically verify engine identity and does not pretend to (the same posture as `collectionManifest`). Receipt-missing seats re-dispatch at most `REDISPATCH_BUDGET` times (`loop_plan_common.REDISPATCH_BUDGET` — the single home) before terminal `missing` with findings carried unverified. The driver refuses a submit whose seat keys are not configured dimensions — keys must be the full reviewer names from `payload.dimensions`, never the findings-file stems (`architecture`, `code`, …); unknown keys only — a partial seats map (subset of configured dimensions) and an empty one are still accepted, and an absent lens is caught later by the panel's own incomplete-panel park, not here. Recovery is to re-key the seats map and resubmit the same phase/attempt/state-hash (no re-dispatch, no fresh session dir). **`payload.dimensions` is an independent batch — dispatch its seats concurrently, per § Batch concurrency above; submit the phase once, with every seat in the one artifact.** |
-| `dispatch-verifiers` | One verifier per cluster in `payload.clusters` (`model: $VERIFIER_MODEL`, reviewer engine). Submit `{verdicts: [...]}`. **`payload.clusters` is an independent batch — dispatch its verifiers concurrently, per § Batch concurrency above; submit the phase once, with every verdict in the one artifact.** |
-| `dispatch-synthesis` | One synthesis judge over `payload.findings` (`model: $SYNTH_MODEL`). Submit `{grouping: [{group_id, member_ids}, ...]}`. Mechanical compile (citation, diff-scope, dedupe, nit cap) and `verification.merge_and_rank` run inside the driver — the merge keeps the **highest** severity among a group's members on the normalized fail-closed vocabulary (`circuit_breaker.severity_rank` / `effective_severity`), so a group can never come out less blocking than its most severe member; the **author-justification post-filter** runs here too (may drop only non-CONFIRMED findings; CONFIRMED survives stamped `challenge: "author-justified"`). |
+| `dispatch-panel` | Dispatch the round's `reviewer-deep` panel per `payload.dimensions`, `payload.tier`, and optional `payload.shards` (big-diff sharding; cross-cutting lenses always get the whole diff). A dimension whose seat the seat map marks `source: "unfilled"` (no candidate outside the makers' families) gets no order: the driver writes its `seat-missing/1` record itself with reason `unfilled`, and a hand submit folds that dimension `missing` whatever payload it carries. Submit `{seats: {<dim>: {findings, receiptMissing?, receiptStale?, vacuous?, reason?}}, seatMap?, ranManifest?}`. A seat whose `dispatch-review` returned `reason: "vacuous"` (or equivalent double vacuous forfeit) is folded with `vacuous: true` or `reason: "vacuous"`. `ranManifest: {<dim>: <vendor>}` is the orchestrator's OWN trusted record of which vendor produced each seat's folded findings — mirroring `collectionManifest`; an in-seat `ranVendor` echo is advisory only and authenticates nothing. The driver mechanically compares it to the seat map's configured vendor and records a per-round `fellOpen` dispatch-provenance row + a `degraded` disclosure for any `run` seat that fell open to a different vendor — the disclosure is machinery, not builder discipline. A cross-vendor seat that ran without a trusted manifest entry is disclosed as provenance-unavailable. The guarantee is exactly as strong as the orchestrator's manifest — the driver cannot cryptographically verify engine identity and does not pretend to (the same posture as `collectionManifest`). Receipt-missing seats re-dispatch at most `REDISPATCH_BUDGET` times (`loop_plan_common.REDISPATCH_BUDGET` — the single home) before terminal `missing` with findings carried unverified. The driver refuses a submit whose seat keys are not configured dimensions — keys must be the full reviewer names from `payload.dimensions`, never the findings-file stems (`architecture`, `code`, …); unknown keys only — a partial seats map (subset of configured dimensions) and an empty one are still accepted, and an absent lens is caught later by the panel's own incomplete-panel park, not here. Recovery is to re-key the seats map and resubmit the same phase/attempt/state-hash (no re-dispatch, no fresh session dir). **`payload.dimensions` is an independent batch — dispatch its seats concurrently, per § Batch concurrency above; submit the phase once, with every seat in the one artifact.** |
+| `dispatch-verifiers` | One verifier per cluster in `payload.clusters` (`model: $VERIFIER_MODEL`, dispatched on the vendor the orders manifest names for the seat — the reviewer engine only when the manifest names none; the driver replaces a maker-family reviewer engine). Each non-panel phase seats its reviewer only on a vendor whose dispatched cell for that phase (the verifier cell for verifiers, the reviewer-deep cell for gap sweep and scoped) the seat map proves live; a seat map that carries none of the cell-proof keys proves no non-claude cell. A native host seat takes the host's family from the seat map, and an unknown host makes it ineligible. Submit `{verdicts: [...], verifierVendor}` where `verifierVendor` is the vendor that actually ran; on a hand `submit`, verdicts whose `verifierVendor` is not the driver's selected vendor (or is absent when the selection replaced the reviewer engine, whatever the preference read's provenance) fold as silence; on the durable `record-result` + `advance` path the executed vendor is each stored envelope's runner execution evidence (`executionEvidence.source`), never the selection, judged per cluster (a seat's evidence authenticates only its own cluster's verdicts; absent or different evidence folds that cluster as silence while a proven cluster still folds), against the vendor the verifier orders manifest recorded at emission rather than a fresh read of the live preference, and the round records each pairing as `verifierProvenance`. A host-seat (file-channel) verifier landing as a bare payload carries no runner evidence; its executed vendor is the driver's own orders-manifest entry for the seat (recorded with `provenance: dispatch-manifest`), unless that vendor is in a maker family. The gap-sweep and scoped-finder results are authenticated the same way against the vendor recorded at emission: an unauthenticated result folds as the seat missing (refuse-fold), and a hand `submit` for them carries `reviewerVendor` when independence replaced the reviewer engine. A non-panel result whose vendor equals the ordered vendor still does not count when that vendor is in a maker family (or is the fixer's), and a hand finder `submit` on an emission whose orders manifest no longer verifies is refused. **`payload.clusters` is an independent batch — dispatch its verifiers concurrently, per § Batch concurrency above; submit the phase once, with every verdict in the one artifact.** |
+| `dispatch-synthesis` | One synthesis judge over `payload.findings`, dispatched on the vendor the orders manifest names for the seat (outside every maker family and the fixer's vendor, on a proven synthesis cell). When no vendor qualifies there is no synthesis order: the driver folds no grouping (every verified finding stays separate), records `synthesisUnseatable` and discloses it on the receipt. Submit `{grouping: [{group_id, member_ids}, ...]}`. Mechanical compile (citation, diff-scope, dedupe, nit cap) and `verification.merge_and_rank` run inside the driver — the merge keeps the **highest** severity among a group's members on the normalized fail-closed vocabulary (`circuit_breaker.severity_rank` / `effective_severity`), so a group can never come out less blocking than its most severe member; the **author-justification post-filter** runs here too (may drop only non-CONFIRMED findings; CONFIRMED survives stamped `challenge: "author-justified"`). |
 | `dispatch-gap-sweep` | Big-diff only: one full-diff finder pass at `reviewer-deep`. Submit `{findings: [...]}`. |
-| `dispatch-audits` | Delta round: one auditor per target in `payload.targets`. Seat each auditor at the registry's `auditor` role (`dispatch_guard check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str|null>,"role":"auditor"}'`). **Auditor independence:** an auditor is never the fixer's vendor when an independent runner-channel vendor is live; on a durable-record session with no independent runner-channel vendor live at all, the auditor is the first live runner-channel vendor (which may be the fixer's own), and audit targets plus the receipt independence block are stamped `independence: "degraded"` (basis `auditor-same-family`); when an independent-family vendor is live only as a host seat, or with no runner-channel vendor at all, `next` refuses `auditor-unseatable`; a hand-submit session may still seat an independent host auditor. `payload.targets[].auditorVendor` names the vendor to dispatch each auditor on; on a durable-record session the driver seats only a runner-backed vendor (`codex`/`cursor`). Each target carries **two** id-shaped fields: `id` (per-location — the dispatch/result/manifest key) and `identity` (line-less, driver-internal stall alias), plus `verdict` and `evidence` — finding-derived text that rides into each auditor seat's order payload. Submit `{results: [...], collectionManifest: {<result-id>: <vendor>}}`. **Every transport key is `payload.targets[].id`:** each `results[].id` and **every** `collectionManifest` key must be the per-location `id` — never `targets[].identity` (driver-internal; must not be used as a transport key). A manifest key outside the round's target ids is **refused at submit** with the mistake named — nothing folds, recovery is a corrected resubmit on the same phase/attempt/state-hash. **Hand `submit`** keeps `collectionManifest` (orchestrator-written; a missing entry folds `not-discharged` + `unauthenticated` with an `audit-provenance-fail` decision naming the expected key and the keys found). **Durable-record path** at state v5 derives `collectionManifest` from each stored envelope's `executionEvidence.source`; a landing whose provenance cannot be derived refuses **`provenance-underivable`** at `record-result`/sweep. A clearing ruling (`discharged` / `discharged-but-new-issue`) is authenticated **iff `collectionManifest[id]` exists AND equals the driver-recorded selected auditor** (where `id` is the per-location target id); a missing entry or wrong vendor → **not-discharged + `unauthenticated`**. The in-result `auditorVendor` is **advisory only**; an echo that disagrees with the trusted source is disclosed as `echoMismatch` but the trusted source governs and the discharge stands. Recorded per round as `auditProvenance` from the adapter's per-seat `provenanceSource`: `"runner-record"` when every audited seat's source is dispatch-observed runner evidence; `"hand-landed-evidence"` when every audited seat's source is hand-landed execution evidence; `"mixed-evidence"` when sources disagree or any audited seat lacks a derived source; `"collection-manifest"` on a hand `submit` at any version (or when no `provenanceSource` is present). The driver **cannot cryptographically verify engine identity and does not pretend to** — the guarantee is exactly as strong as the recorded dispatch provenance. **`payload.targets` is an independent batch — dispatch its auditors concurrently, per § Batch concurrency above; submit the phase once, with every result in the one artifact.** For a fix auditor's `ruling` result, the orchestrator may land the stub envelope with `payload: null`, and `record-result --evidence-run-dir` fills it from the runner's graded record. **Concurrent gate.** When the delta round was entered from a fixer fold, `payload.verify` carries the verify gate — `{phase: "run-verify", command, round, attempt, landingPath}` — and the gate is dispatched **in the same turn as the auditors** (it reads the post-fix head; the audits read the fix diff; neither waits on the other). On the durable-record path write `{"result": …}` to `payload.verify.landingPath` when the gate finishes; `advance` folds it once `run-verify` is pending (the phase right after this one). On a hand-`submit` session keep the result and submit it at `run-verify`. A missing gate result when `run-verify` is pending refuses `orchestrator-payload-missing` — it is never skipped. |
+| `dispatch-audits` | Delta round: one auditor per target in `payload.targets`. Seat each auditor at the registry's `auditor` role (`dispatch_guard check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str|null>,"role":"auditor"}'`). **Auditor independence:** an auditor is never from the fixer's model family and never from any maker's family (the seat map's `makerFamilies`); when every filled roster seat is pinned, the auditor must also be one of the pinned vendors. When no live vendor qualifies there is no auditor and no vendor stands in: the target carries no `auditorVendor` and is stamped `independence: "unseatable"`, the audit counts as not run (its fix is never counted as audited or discharged, and any result submitted for it is ignored), and the receipt independence block is stamped `degraded`. On a durable-record session `next` refuses `auditor-unseatable` only when a qualifying vendor is live solely as a host seat, not as a runner-channel vendor; a hand-submit session may still seat an independent host auditor. `payload.targets[].auditorVendor` names the vendor to dispatch each auditor on; on a durable-record session the driver seats only a runner-backed vendor (`codex`/`cursor`). Each target carries **two** id-shaped fields: `id` (per-location — the dispatch/result/manifest key) and `identity` (line-less, driver-internal stall alias), plus `verdict` and `evidence` — finding-derived text that rides into each auditor seat's order payload. Submit `{results: [...], collectionManifest: {<result-id>: <vendor>}}`. **Every transport key is `payload.targets[].id`:** each `results[].id` and **every** `collectionManifest` key must be the per-location `id` — never `targets[].identity` (driver-internal; must not be used as a transport key). A manifest key outside the round's target ids is **refused at submit** with the mistake named — nothing folds, recovery is a corrected resubmit on the same phase/attempt/state-hash. **Hand `submit`** keeps `collectionManifest` (orchestrator-written; a missing entry folds `not-discharged` + `unauthenticated` with an `audit-provenance-fail` decision naming the expected key and the keys found). **Durable-record path** at state v5 derives `collectionManifest` from each stored envelope's `executionEvidence.source`; a landing whose provenance cannot be derived refuses **`provenance-underivable`** at `record-result`/sweep. A clearing ruling (`discharged` / `discharged-but-new-issue`) is authenticated **iff `collectionManifest[id]` exists AND equals the driver-recorded selected auditor** (where `id` is the per-location target id); a missing entry or wrong vendor → **not-discharged + `unauthenticated`**. The in-result `auditorVendor` is **advisory only**; an echo that disagrees with the trusted source is disclosed as `echoMismatch` but the trusted source governs and the discharge stands. Recorded per round as `auditProvenance` from the adapter's per-seat `provenanceSource`: `"runner-record"` when every audited seat's source is dispatch-observed runner evidence; `"hand-landed-evidence"` when every audited seat's source is hand-landed execution evidence; `"mixed-evidence"` when sources disagree or any audited seat lacks a derived source; `"collection-manifest"` on a hand `submit` at any version (or when no `provenanceSource` is present). The driver **cannot cryptographically verify engine identity and does not pretend to** — the guarantee is exactly as strong as the recorded dispatch provenance. **`payload.targets` is an independent batch — dispatch its auditors concurrently, per § Batch concurrency above; submit the phase once, with every result in the one artifact.** For a fix auditor's `ruling` result, the orchestrator may land the stub envelope with `payload: null`, and `record-result --evidence-run-dir` fills it from the runner's graded record. **Concurrent gate.** When the delta round was entered from a fixer fold, `payload.verify` carries the verify gate — `{phase: "run-verify", command, round, attempt, landingPath}` — and the gate is dispatched **in the same turn as the auditors** (it reads the post-fix head; the audits read the fix diff; neither waits on the other). On the durable-record path write `{"result": …}` to `payload.verify.landingPath` when the gate finishes; `advance` folds it once `run-verify` is pending (the phase right after this one). On a hand-`submit` session keep the result and submit it at `run-verify`. A missing gate result when `run-verify` is pending refuses `orchestrator-payload-missing` — it is never skipped. |
 | `dispatch-scoped-finder` | Delta round: scoped scan over `payload.hunks` (the split's computed new surface — file → hunk ranges + text) at `reviewer-deep`, dispatched with `"role":"scoped-finder"` in the `--seat` bundle. Submit `{findings: [...]}`. Emitted **only when the computed new surface is non-empty**; a genuinely empty new surface (the split returned `unknown: False` with no new hunks) skips this dispatch and records `scopedFinder: skipped-empty-surface` on the round (receipt-visible) — never a vacuous scan over nothing. |
 | `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). **The verify step may run harness-backgrounded and polled in-turn** — the already-sanctioned shape for long local work — because the host's foreground command-timeout cap bounds a **single call**, not the step; what stays forbidden is unchanged, `&`/setsid/nohup and ending the turn to wait. Hand path: submit `{result: "pass" \| "fail" \| "timeout" \| "skipped" \| "none" \| "unverified"}`. Durable-record path: orchestrator-fulfilled — `advance` folds from the host bare payload at `$SESSION_DIR/round-N/landing/run-verify/<skey>.a<K>.payload.json` where `<skey>` is `round_records.storage_key("verify")` (no orders manifest, no anchor). **The fold writes the durable seat record** for that slot (`seat-result/1` at `$SESSION_DIR/round-N/seats/run-verify/<skey>.a<K>.json`, stamped `fulfilledBy: "orchestrator"`, `orderSha256` / `manifestSha256` = `not-emitted` because there is no anchor to check them against) **in the same commit as the fold**, so a `verifyResult` folded this way reconstructs from the record exactly as a seat-path fold does. **Both artifacts present → `landing-ambiguous`, no fold** — the bare payload and a durable seat record are two claims for one slot, the same invariant the seat path refuses on the envelope/bare-payload pair; delete whichever is not the one you meant. The refusal is **unconditional**: a re-entry after this fold already committed refuses too, rather than re-folding, because recognising "this record is mine" duplicates the already-folded judgment `submit`'s duplicate contract owns. Fail → terminal halt, certification withheld. **Placement.** After a fixer round the gate is the phase after `dispatch-audits` (advertised on the audits payload — see that row), or the phase right after `dispatch-fixer` when the post-fix surface is unknown (the full panel follows its `pass`), or the last phase of the ceiling round (the round at the ceiling completes — fix and gate — before the `round-ceiling` park, and the gate runs on the post-fix head even when the round's earlier gate already passed). `fail`/`timeout` halt before any next panel or scoped finder. **It is the round's one full verify run** — the fixer's order carries a scoped budget, never this command. |
 | `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff \| headDiffPath, escalated?, coverageDecisions?}` — `coverageDecisions` is a list of coverage-decision objects the driver accumulates into `state["_coverage"]`. The post-fix head diff comes from git via the **guarded per-round command in the SKILL's Setup** (`git diff "$BASE_REF"...HEAD` against the **pinned remote base commit** — never a local branch name, and never a bare copy without Setup's failed-diff and empty-diff halts; if `$BASE_REF` is not in this shell, restore and re-validate it first), never the fixer's self-report. Provide it **inline** (`headDiff`) or, since a real head diff can be hundreds of KB and cannot reasonably inline into a JSON submit artifact, as an **absolute** file path (`headDiffPath`) the driver reads itself (**inline wins if both are present**). A missing / non-absolute / unreadable `headDiffPath` or empty content is treated as an **unknown surface** → the next round runs a full reviewer-deep panel (the unknown→run-everything rule), never an empty diff and never a silent scoped skip; the source used is recorded on the round as `headDiffSource: inline\|path\|unknown`. The changed policy subjects the confirmation re-arm consumes are **derived by the driver itself** from the reviewed-vs-head diff through the accumulated findings (the injectable `changed_subjects` seam — library default + CLI wire the real git derivation); a self-reported `changedSubjects` is ignored on the live path. **Batches.** `payload.batch` carries at most `fixBatchCap` findings (default per § Round economy); a larger blocking set is dispatched as consecutive `dispatch-fixer` attempts in the same round (`fix-batch.json`, `fix-batch.1.json`, …), each folded on its own, and the round's audit targets derive from the whole batch. The emitted order's verify line is the **scoped budget** (`{{VERIFY_BUDGET}}` — the batch's target files, their referencing tests, the static validators), never the full verify command. |
@@ -800,9 +898,9 @@ apply the wrong disposition. Recorded rows that predate the cited-head derivatio
 were recorded at this version, not refused.
 
 **A session from an earlier plugin version is not continued.** State the driver mints carries
-`sessionGeneration`, set to the integer `2`; the key is written only when state is minted and is
+`sessionGeneration`, set to the integer `4`; the key is written only when state is minted and is
 never added to a loaded state. A saved state is from an earlier version when it is a JSON object
-whose `sessionGeneration` is absent or is anything other than the integer `2`, or whose
+whose `sessionGeneration` is absent or is anything other than the integer `4`, or whose
 `schemaVersion` is an integer the driver still supports (`2`, `3` or `4`) that is older than the
 current state version, `5`. Any other `schemaVersion` (`1`, a later one, a non-integer, `true`, or
 `null`) is not an earlier session: the state loader refuses it as unsupported and no restart marker
@@ -826,11 +924,37 @@ could not write is removed again); `markerWritten` appears only in those two cas
 and every other file stays as it was; a session lock held by another process answers the usual
 `<cmd>-locked` refusal with its `holder`, likewise without a journal row. A finished session from an earlier
 version is left alone: `next` on it returns its terminal answer again. A missing, unreadable, non-JSON
-or non-object `loop-state.json` is handled by the refusals that exist for those cases.
+or non-object `loop-state.json` is repaired from its mirror when the mirror can be trusted (§ Session
+repair), and otherwise handled by the refusals that exist for those cases.
 
 The caller starts the review again, once, in a fresh session directory: Setup into a new
 `$SESSION_DIR`, then Bootstrap from round 1 there. It leaves the old directory as it is and never
 edits it to make the session continue.
+
+## Session repair
+
+Every write of `loop-state.json` is followed by a write of `loop-state.mirror.json`: the exact state
+bytes, their sha256, and the session id from `meta.json` (or null when there is none). The two-phase
+commits stage both files together, so no commit installs a state without its mirror.
+
+A locked command repairs a damaged state before it reads one: `next`, `submit`, `rule`,
+`record-result`, `record-missing`, `advance`, `attest` and `checkpoint` each take the session lock,
+replay any sealed commit, and only then check the state file. One that reads as a JSON object is
+left alone. One that is missing, unreadable, not JSON, or not an object is restored from the mirror
+byte for byte, and the journal gets one row, `cmd: "repair"`, `outcome: "session-repaired"`, naming
+the `damaged` kind and the restored state's `round`. The session then carries on from the last
+committed write, with every finding, disposition and outcome it held.
+
+The mirror restores only when it parses, names the mirror schema, hashes to the hash it carries,
+holds a JSON object of a supported `schemaVersion`, and names the same session id as `meta.json`
+(when both name one). A mirror of an unfinished earlier-version session is never restored: the
+command gets the `session-from-earlier-version` restart refusal. Any other mirror that fails a check
+changes nothing, and the command meets the refusal it always met. A read outside the lock (the
+fresh-state checks of `--vendors`, `--fixer-vendor` and `--seat-map`) never repairs.
+
+**Not covered:** a damaged journal or disposition ledger, and a session whose state file and mirror
+are both damaged. The mirror is also not part of the attestation digest: it is rewritten with every
+state write, like the state file.
 
 ## Journal and receipt
 
@@ -886,7 +1010,7 @@ is the home for the driver-or-park valve.
   `schemaVersion` is at least `STATE_SCHEMA_VERSION` — receipt schema versions 2–4 omit it
 - `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
-**Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
+**Seat-map storage.** The driver stores each round's submitted seat map as an append-only
 `state["seatMapReceipts"]` list (`{round, map}` entries). There is no shared accumulated
 `state["seatMap"]` blob — `_fold_panel` appends one receipt per non-empty submitted map; reads
 route through projection helpers (`_seat_map_receipts` and its family). A legacy persisted
@@ -895,7 +1019,7 @@ migration). `build_receipt`'s `seatMap` is a derived union projection (latest se
 union by whole-row identity, other keys last-receipt-wins). `--seat-map` at fresh state seeds
 receipt round `"0"`.
 
-**Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line.
+**Per-round fields and `degraded` disclosures.** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line.
 
 | Round field | Set when | `degraded` line |
 | --- | --- | --- |
@@ -942,7 +1066,7 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded — including a durable-record audit seated on the fixer's own runner-channel vendor when no independent vendor is live at all (basis `auditor-same-family`), a true single-vendor configuration, base fetch degraded, the seat map disclosed same-family self-review, no usable seat map was submitted (`seat-map-unavailable`), the submitted seat map's violation basis is incomplete (`seat-map-unavailable` shape driver — same token as absent-map), or a standing pin excused a constraint. |
+| `*-degraded` | Appended when `independence` is degraded — including a fix whose audit did not run because no live vendor sits outside the fixer's and the makers' families, a true single-vendor configuration, base fetch degraded, the seat map disclosed same-family self-review, no usable seat map was submitted (`seat-map-unavailable`), the submitted seat map's violation basis is incomplete (`seat-map-unavailable` shape driver — same token as absent-map), or a standing pin excused a constraint. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 
@@ -955,7 +1079,7 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 - **Capped-with-open-Critical park** — confirmation budget exhausted with a Critical still owed.
 - **Round-ceiling halt** — a hard bound on the round counter (default 10, config `maxRoundsAbsolute`): the round **at** the ceiling **runs to completion**, then the loop **refuses to begin** the next round — unconditional in that **no finding state can buy another round**, not in that it preempts the current round's own terminal; terminal `halted` with certification **withheld**; reason token `round-ceiling` (**distinct from** `max-iterations`, whose ratified meaning — the cap reached *with an open finding* — is unchanged); the receipt states the **ceiling** and the **rounds reached**, and names the round not begun. A fold answer from `cmd_submit` carries `foldLanded` only when a fold actually committed; an `advance` whose nested submit parked at the ceiling answers `notFolded` with the terminal halt rather than a `folded` receipt, and the durable seat record is either written in the fold's commit or its absence is stated on the receipt.
 
-**Library `recordsPath` / `round-records.json` seam (#720, #1187).** When config carries
+**Library `recordsPath` / `round-records.json` seam.** When config carries
 `recordsPath`, each in-memory ledger record is written through `review_memory.summarize_record` (a
 skeleton — no evidence bodies) and carries the declared per-round disclosure block selected by
 `_declared_disclosures` from `CARRIED_DISCLOSURE_CHANNELS`. The file is an export of the session's
@@ -977,7 +1101,7 @@ sidecar replay by `targetKind` and refuses rather than falling back. The library
 Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.py`):
 
 - Round 1 = full `reviewer-deep` baseline. Unknown changed surface → full panel (never risk a blind skip).
-- #174 confirmation economics kept: at most two full confirmation panels; a Critical since the last
+- Confirmation economics kept: at most two full confirmation panels; a Critical since the last
   qualifying panel or cross-cutting rework (≥3 subjects) re-arms one more; Critical still owed at
   the cap → `capped-with-open-critical` park.
 - Audit-keyed stall breaker (`circuit_breaker.check_audit_breaker`) — not the old per-finding
@@ -1004,7 +1128,11 @@ Layer 1 (`run_loop`) is the one-entrypoint loop orchestration with injectable se
 `synthesis`, `verifier`, `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `io`);
 Layer 2 (`next`/`submit`) is the state machine between orchestrator dispatches. Parity is locked
 by the goldens in `test_round_driver.py` and the PARITY receipt in `test_retry_budget_parity.py`.
-Treat `round_driver.py` as the contract of record.
+Treat `round_driver.py` as the contract of record. The `verifier` seam may return `{"verdicts": [...],
+"vendor": v}` and the gap-sweep and scoped-finder `reviewer` calls `{"findings": [...], "vendor": v}`
+to report the vendor that ran; a finder result that reports a vendor other than the driver's
+selection (or an ineligible one), or reports none when the selection replaced the reviewer engine,
+parks the loop `cannot-certify` instead of folding.
 
 **`run_loop` return contract.** `run_loop` drives the scripted seam path end-to-end and returns the
 driver's terminal receipt, built from the loop state alone (`_driver_receipt`,
