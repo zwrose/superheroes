@@ -29,8 +29,10 @@ def _cfg(**over):
 
 def _clamped_collision_pair():
     prefix = "x" * 165
-    alpha = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
-    beta = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important"}
+    alpha = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
+             "consequence": "a reviewer-found defect stays in the change"}
+    beta = {"file": "f.py", "line": 5, "title": prefix + " beta", "severity": "Important",
+            "consequence": "a reviewer-found defect stays in the change"}
     return alpha, beta
 
 
@@ -151,7 +153,7 @@ def test_finding_key_of_prefers_finding_key_over_id():
 
 def test_carry_recombination_merges_same_anchor_rows_with_different_severity():
     """T6: carry concatenation merges loop-owned keys with different severity/dimension."""
-    base = {"file": "a.py", "line": 1, "title": "t"}
+    base = {"file": "a.py", "line": 1, "title": "t", "consequence": "a reviewer-found defect stays in the change"}
     minor = dict(base, severity="Minor", dimension="Code")
     important = dict(base, severity="Important", dimension="Security")
     compiled_a, _ = RD.mechanical_compile([minor], None)
@@ -175,7 +177,8 @@ def test_carry_recombination_merges_same_anchor_rows_with_different_severity():
 def test_legacy_unsuffixed_key_bridges_to_recompiled_long_title_copy():
     """T8: legacy unsuffixed loop key merges with freshly compiled long-title copy."""
     prefix = "x" * 165
-    finding = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
+    finding = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     minted_key = compiled[0][SC.FINDING_KEY_FIELD]
     bare_key = SC.location_key(finding)
@@ -454,7 +457,8 @@ def test_durable_skeleton_carries_finding_key_so_resume_keeps_one_identity():
     RM = _load("review_memory")
 
     prefix = "x" * 165
-    finding = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important"}
+    finding = {"file": "f.py", "line": 5, "title": prefix + " alpha", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     long_finding = compiled[0]
     skeleton = RM.summarize_record({"findings": [dict(long_finding)]})

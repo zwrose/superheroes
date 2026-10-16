@@ -49,6 +49,8 @@ FI = _load("finding_identity")
 LC = _load("liveness_cache")
 model_registry = _load("model_registry")
 
+_CONSEQUENCE = "a reviewer-found defect stays in the change"
+
 
 def _seat_map_receipts(seat_map, round_id="1"):
     return [{"round": round_id, "map": dict(seat_map)}]
@@ -101,8 +103,11 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         return []
 
     def default_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                for c in (clusters or []) for i in (c.get("ids") or [])]
+        # Report the vendor it ran on: with the default fixer `claude` the independent selection is
+        # `codex`, and an unreported verdict does not count once the selection replaced the engine.
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
 
     def default_synthesis(findings, rnd):
         return None
@@ -123,8 +128,24 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     if vendors is not None:
         io_out.setdefault("seatMap", _assertable_seat_map(vendors, fixer_vendor))
 
+    base_reviewer = reviewer or default_reviewer
+
+    def finder_reporting_reviewer(dim, tier, rnd, ctx):
+        # Like the verifier above: the gap-sweep / scoped-finder callbacks report the vendor they ran
+        # on ({"findings": [...], "vendor": v}); with the default fixer `claude` the independent
+        # selection is `codex`, and an unreported finder result does not count once it replaced the
+        # reviewer engine (#1851 L4 K).
+        result = base_reviewer(dim, tier, rnd, ctx)
+        if dim not in ("gap-sweep", "scoped-finder"):
+            return result
+        if isinstance(result, list):
+            return {"findings": result, "vendor": "codex"}
+        if isinstance(result, dict):
+            return dict(result, vendor=result.get("vendor", "codex"))
+        return result
+
     return {
-        "reviewer": reviewer or default_reviewer,
+        "reviewer": finder_reporting_reviewer,
         "verifier": verifier or default_verifier,
         "synthesis": synthesis or default_synthesis,
         "auditor": auditor or default_auditor,
@@ -423,6 +444,17 @@ def _seed_repo_root_if_missing(session_dir, checkout_path):
     seed_session_meta(session_dir, checkout_path)
 
 
+def _claim_reviewer(session_dir, phase, art):
+    """A hand-submitting orchestrator names the vendor it dispatched the single-seat reviewer on
+    (`reviewerVendor`), which the driver requires when independence replaced the reviewer engine."""
+    if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) and isinstance(art, dict) and "reviewerVendor" not in art:
+        ok, state = RD.load_state(session_dir)
+        vendor = RD._nonpanel_selection(state, session_dir, phase)[0] if ok else None
+        if vendor:
+            return dict(art, reviewerVendor=vendor)
+    return art
+
+
 def _drive_cli(session_dir, cfg, respond, max_steps=80):
     """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`.
 
@@ -438,7 +470,7 @@ def _drive_cli(session_dir, cfg, respond, max_steps=80):
         assert n["ok"], n
         if n["action"] == RD.P_TERMINAL:
             return n["payload"]
-        art = respond(n["phase"], n["payload"], n["round"])
+        art = _claim_reviewer(session_dir, n["phase"], respond(n["phase"], n["payload"], n["round"]))
         s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
         assert s["ok"], s
     raise AssertionError("driver did not reach a terminal within %d steps" % max_steps)
@@ -502,7 +534,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
 # the chokepoint: the pending step survives, the state file is byte-identical, and recovery is a
 # corrected resubmit on the SAME phase/attempt/state-hash.
 
-_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+_A_FINDING = [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]
 _GOOD_VERIFY = {"result": "pass"}
 
 
@@ -523,15 +555,28 @@ def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
             return n
         assert n["action"] != RD.P_TERMINAL, "reached terminal before %s" % target_phase
         s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
-                          respond(n["phase"], n["payload"], n["round"]))
+                          _claim_reviewer(session_dir, n["phase"],
+                                          respond(n["phase"], n["payload"], n["round"])))
         assert s["ok"], s
     raise AssertionError("never reached %s within %d steps" % (target_phase, max_steps))
 
 
+def _synthesis_seatable_map(vendors, fixer_vendor):
+    """An assertable seat map whose host family is known and outside the makers', so the synthesis
+    seat can stand on `claude` (needs a fixer other than `claude`, so that the makers exclude anthropic)."""
+    return dict(_assertable_seat_map(vendors, fixer_vendor), hostFamily="anthropic")
+
+
 def _at(tmp_path, target_phase, cfg=None):
     """Drive a fresh session to `target_phase`. `cfg` overrides the default profile so a test can
-    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`)."""
+    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`). A walk through
+    synthesis defaults to a profile that seats it: a `codex` fixer and a known, non-maker host family."""
     d = str(tmp_path)
+    if cfg is None and target_phase == RD.P_SYNTHESIS:
+        respond = _responder(round1_findings=_A_FINDING,
+                             seat_map=_synthesis_seatable_map(["claude", "codex"], "codex"))
+        n = _drive_to_phase(d, _cfg(fixerVendor="codex"), respond, target_phase)
+        return d, n
     n = _drive_to_phase(d, cfg or _cfg(), _responder(round1_findings=_A_FINDING), target_phase)
     return d, n
 
@@ -795,7 +840,7 @@ def test_submit_audits_non_dict_entry_refused(tmp_path):
     # and whose drop list that fold does not surface. This fixture must not read as the project
     # asserting that a thin candidate travels safely.
     {"ruling": "discharged-but-new-issue",
-     "newIssues": [{"title": "new", "severity": "Important", "file": "f.py", "line": 1}]},
+     "newIssues": [{"title": "new", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]},
 ], ids=["discharged", "not-discharged-with-reason", "not-discharged-bare", "discharged-new-issue"])
 def test_submit_audits_wellformed_accepted(tmp_path, over):
     d, n = _at(tmp_path, RD.P_AUDITS)
@@ -1028,7 +1073,10 @@ def test_submit_audits_collection_manifest_key_refused(tmp_path):
 def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
     """A refused manifest key does not run the fold — no auditRounds entry, no _auditOutcome, no
     decisions recorded."""
-    d, n = _at(tmp_path, RD.P_AUDITS)
+    d = str(tmp_path)
+    n = _drive_to_phase(d, _cfg(fixerVendor="codex"), _responder(
+        round1_findings=_A_FINDING, seat_map=_synthesis_seatable_map(["claude", "codex"], "codex")),
+        RD.P_AUDITS)
     good, _targets = _audit_artifact(n)
     bad = dict(good)
     bad["collectionManifest"] = {"no-such-key": "claude"}
@@ -1145,7 +1193,7 @@ def test_happy_path_audited_chain_certification(tmp_path):
     d = str(tmp_path)
     cfg = _cfg()
     payload = _drive_cli(d, cfg, _responder(
-        round1_findings=[{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}],
+        round1_findings=[{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}],
         vendors=cfg["vendors"]))
     assert payload["verdict"] == "converged"
     assert payload["certification"]["shape"] == "audited-chain"
@@ -1185,8 +1233,8 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
             seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
-                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+                    {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "PLAUSIBLE", "reason": "checked"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1233,8 +1281,8 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
             seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
-                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+                    {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1275,7 +1323,7 @@ def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
     seen = {"scoped": False}
 
     base = _responder(round1_findings=[
-        {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}])
+        {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}])
 
     def respond(phase, payload, rnd):
         if phase == RD.P_SCOPED:
@@ -1310,8 +1358,8 @@ def _multifile_delta_respond(captured, fixer_artifact):
             seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
-                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+                    {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1375,8 +1423,8 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
             seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
             if rnd == 1:
                 seats["code-reviewer"] = {"findings": [
-                    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
-            return {"seats": seats}
+                    {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
+            return {"seats": seats, "seatMap": _assertable_seat_map(["claude", "codex"])}
         if phase == RD.P_VERIFIERS:
             return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
@@ -1431,7 +1479,7 @@ def test_fixer_inline_head_diff_wins_over_path(tmp_path):
 
 def test_run_loop_code_leg_end_to_end(tmp_path):
     receipt = RD.run_loop(_seams(reviewer=lambda dim, tier, rnd, ctx:
-                                 ({"findings": [{"title": "bug", "severity": "Important",
+                                 ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE,
                                                  "file": "f.py", "line": 1}]}
                                   if rnd == 1 and dim == "code-reviewer" else [])),
                           _cfg_cert())
@@ -1472,7 +1520,7 @@ def test_run_loop_panel_leg_shape(tmp_path):
 
 
 def _panel_finding_reviewer():
-    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}
+    finding = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
 
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "code-reviewer":
@@ -1511,8 +1559,8 @@ def test_two_verifier_faults_in_one_round_are_both_recorded():
             return [{"id": i, "verdict": "CONFIRMED"} for i in ids]
         return [{"verdict": "CONFIRMED", "reason": "checked"} for _i in ids]
 
-    finding = {"title": "bug", "severity": "Important", "file": "f0.py", "line": 1}
-    gap_finding = {"title": "gap", "severity": "Important", "file": "f1.py", "line": 1}
+    finding = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f0.py", "line": 1}
+    gap_finding = {"title": "gap", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f1.py", "line": 1}
 
     def reviewer(dim, tier, rnd, ctx):
         if dim == "gap-sweep":
@@ -1522,7 +1570,7 @@ def test_two_verifier_faults_in_one_round_are_both_recorded():
         return []
 
     _result, state = _run_loop_capturing_state(
-        _seams(reviewer=reviewer, verifier=wave_verifier),
+        _seams(reviewer=reviewer, verifier=wave_verifier, vendors=["claude", "codex"]),
         _cfg_cert(diff=_big_diff(25)),
     )
     faults = _state_verifier_faults(state)
@@ -1554,11 +1602,12 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
 
 def test_run_loop_verifier_valid_reason_control():
     def good_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
-                for c in (clusters or []) for i in (c.get("ids") or [])]
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
 
     result, state = _run_loop_capturing_state(
-        _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
+        _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier, vendors=["claude", "codex"]),
         _cfg_cert(),
     )
     assert not _state_verifier_faults(state)
@@ -1601,7 +1650,7 @@ def _persistent_not_discharged_seams(io=None):
 
     return _seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verifier=plaus_verifier,
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
@@ -1631,7 +1680,7 @@ def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
     """Build state with a stalled audit target (empty findings list) for accept-risk tests."""
     state = RD.new_state(_cfg_cert())
     state["findings"] = []
-    f = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+    f = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
          "verdict": verdict, "evidence": evidence}
     state["fixBatch"] = [f]
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
@@ -1882,7 +1931,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
 
     seams = _seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verifier=plaus_verifier,
         auditor=auditor,
@@ -1952,12 +2001,12 @@ def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
 
     seams = _seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
                                       for t in (targets or [])],
         fix_step=fix_step,
-        io={"stall_menu": stall_menu})
+        io={"stall_menu": stall_menu}, vendors=["claude", "codex"])
     receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
     assert len(stall_menus) == 2
     assert "one-more-round" in stall_menus[0]["choices"]
@@ -2053,9 +2102,9 @@ def _ledger_by_key(state):
 
 def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_path):
     """accept-the-disclosed-risk must not clear PLAUSIBLE siblings — only per-target qualifiers."""
-    confirmed = {"title": "confirmed-bug", "severity": "Important", "file": "a.py", "line": 1,
+    confirmed = {"title": "confirmed-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "a.py", "line": 1,
                  "verdict": "CONFIRMED", "evidence": "tests pass"}
-    plausible = {"title": "plausible-bug", "severity": "Important", "file": "b.py", "line": 2,
+    plausible = {"title": "plausible-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "b.py", "line": 2,
                   "verdict": "PLAUSIBLE", "evidence": "maybe"}
     state, targets = _dual_stall_target_state(confirmed, plausible)
     assert state["_acceptRiskEligible"] is True
@@ -2068,16 +2117,19 @@ def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_pat
     ledger = _ledger_by_key(state)
     confirmed_key = RD._finding_key_of(targets[0])
     plausible_key = RD._finding_key_of(targets[1])
-    assert ledger[confirmed_key]["disposition"] == "out-of-scope"
+    assert ledger[confirmed_key]["disposition"] == "left-for-owner"
     assert ledger[confirmed_key]["followUp"] == follow_up
-    assert ledger[plausible_key].get("disposition") is None
+    assert ledger[plausible_key].get("disposition") == "left-for-owner"
+    assert ledger[confirmed_key].get("outOfScopeReason")
+    assert "outOfScopeReason" not in ledger[plausible_key]
+    assert "followUp" not in ledger[plausible_key]
 
 
 def test_accept_risk_never_dispositions_critical_targets(tmp_path):
     """Critical stalled targets stay open — out-of-scope on Critical is forbidden at certification."""
-    critical = {"title": "crit", "severity": "Critical", "file": "c.py", "line": 1,
+    critical = {"title": "crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "c.py", "line": 1,
                 "verdict": "CONFIRMED", "evidence": "proven"}
-    important = {"title": "imp", "severity": "Important", "file": "d.py", "line": 2,
+    important = {"title": "imp", "severity": "Important", "consequence": _CONSEQUENCE, "file": "d.py", "line": 2,
                  "verdict": "CONFIRMED", "evidence": "proven"}
     state, targets = _dual_stall_target_state(critical, important)
     follow_up = {"item": "accept important only", "revisitTrigger": "next milestone",
@@ -2089,8 +2141,8 @@ def test_accept_risk_never_dispositions_critical_targets(tmp_path):
     ledger = _ledger_by_key(state)
     critical_key = RD._finding_key_of(targets[0])
     important_key = RD._finding_key_of(targets[1])
-    assert ledger[critical_key].get("disposition") is None
-    assert ledger[important_key]["disposition"] == "out-of-scope"
+    assert ledger[critical_key].get("disposition") == "left-for-owner"
+    assert ledger[important_key]["disposition"] == "left-for-owner"
     assert state["terminal"] == "cannot-certify"
     assert state["certification"]["shape"] is None
 
@@ -2115,11 +2167,11 @@ def test_accepted_risk_leaving_a_critical_open_parks_and_never_converges(tmp_pat
 
 def test_accepted_risk_with_an_ineligible_critical_sibling_parks(tmp_path):
     """An ineligible Critical (PLAUSIBLE, or no evidence) still blocks convergence."""
-    important = {"title": "imp", "severity": "Important", "file": "d.py", "line": 2,
+    important = {"title": "imp", "severity": "Important", "consequence": _CONSEQUENCE, "file": "d.py", "line": 2,
                  "verdict": "CONFIRMED", "evidence": "proven"}
-    plausible_crit = {"title": "plausible-crit", "severity": "Critical", "file": "c.py",
+    plausible_crit = {"title": "plausible-crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "c.py",
                       "line": 1, "verdict": "PLAUSIBLE", "evidence": "maybe"}
-    noevidence_crit = {"title": "noevidence-crit", "severity": "Critical", "file": "e.py",
+    noevidence_crit = {"title": "noevidence-crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "e.py",
                        "line": 3, "verdict": "CONFIRMED", "evidence": None}
     for crit in (plausible_crit, noevidence_crit):
         state, targets = _dual_stall_target_state(important, crit)
@@ -2129,8 +2181,8 @@ def test_accepted_risk_with_an_ineligible_critical_sibling_parks(tmp_path):
         assert state["step"] == RD.P_TERMINAL
         assert crit["title"] in state["certification"]["reason"]
         ledger = _ledger_by_key(state)
-        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "out-of-scope"
-        assert ledger[RD._finding_key_of(targets[1])].get("disposition") is None
+        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "left-for-owner"
+        assert ledger[RD._finding_key_of(targets[1])].get("disposition") == "left-for-owner"
 
 
 # =============================================================================
@@ -2186,9 +2238,9 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
     def reviewer(dim, tier, rnd, ctx):
         if dim == "scoped-finder" and not scoped_state["fired"]:
             scoped_state["fired"] = True
-            return [{"title": "hole", "severity": "Critical", "file": "f.py", "line": 1}]
+            return [{"title": "hole", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]
         if rnd == 1 and dim == "code-reviewer":
-            return {"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            return {"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
         return []
 
     counter = {"n": 0}
@@ -2198,7 +2250,7 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
         return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
     receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
-                          _cfg_cert(maxRounds=20))
+                          _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
     assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
@@ -2232,14 +2284,28 @@ def test_big_diff_schedules_gap_sweep(tmp_path):
     assert seen["gap"] is True
 
 
-def test_degraded_single_vendor_flows_to_certification_shape(tmp_path):
-    refusal, loop_receipt = _run_loop_with_loop_receipt(
+def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(tmp_path):
+    """A single live vendor that is the fixer's own: no auditor is seated, the audit counts as not
+    run (the fix is never certified as audited) and the receipt names the lost independence."""
+    seen = []
+
+    def auditor(targets, rnd):
+        seen.extend(dict(t) for t in (targets or []))
+        return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                 "evidence": "tests pass", "auditorVendor": "claude"} for t in (targets or [])]
+
+    refusal, state = _run_loop_capturing_state(
         _seams(reviewer=lambda dim, tier, rnd, ctx:
-               ({"findings": [{"title": "bug", "severity": "Important",
+               ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE,
                                "file": "f.py", "line": 1}]}
-                if rnd == 1 and dim == "code-reviewer" else [])),
+                if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
-    assert refusal["certificationShape"] == "audited-chain-degraded"
+    loop_receipt = RD.build_receipt(state)
+    assert refusal["verdict"] == "held" and refusal["certificationShape"] is None
+    assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
+                        for t in seen)
+    assert state["independenceDegraded"] is True
+    assert state["_auditOutcome"]["discharged"] == [] and state["_auditOutcome"]["unaudited"]
     assert loop_receipt["degraded"], "the lost independence must be named in the receipt"
 
 
@@ -2256,7 +2322,7 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude"))
     assert receipt["verdict"] == "converged"
@@ -2268,8 +2334,9 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     assert receipt["certificationShape"] == "audited-chain-degraded"
 
 
-def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
-    """#608: omitting fixerVendor must not assume claude — unknown fixer degrades, never false independent."""
+def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path):
+    """#608: omitting fixerVendor must not assume claude — an unknown fixer seats no auditor, so the
+    audit does not run and nothing is certified as audited."""
     captured = {"targets": None}
 
     def auditor(targets, rnd):
@@ -2281,13 +2348,12 @@ def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
            "baseGuard": RD.BASE_GUARD_CHECKED}
     result = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert result["verdict"] == "converged"
-    assert result["certificationShape"] == "audited-chain-degraded"
+    assert result["verdict"] == "held" and result["certificationShape"] is None
     t = captured["targets"][0]
-    assert t["independence"] == "degraded"
+    assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
 
 def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
@@ -2303,7 +2369,7 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
            "baseGuard": RD.BASE_GUARD_CHECKED}
     receipt = RD.run_loop(_seams(
             reviewer=lambda dim, tier, rnd, ctx:
-                ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+                ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
                  if rnd == 1 and dim == "code-reviewer" else []),
             auditor=auditor, fixer_vendor="codex"), cfg)
     assert receipt["verdict"] == "converged"
@@ -2342,7 +2408,7 @@ def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
     two consecutive rounds (the contract `check_audit_breaker` advertises but the wire never fed)."""
     import circuit_breaker as CB
     state = RD.new_state(_cfg())
-    f = {"title": "leaks memory", "severity": "Important", "file": "f.py", "line": 1,
+    f = {"title": "leaks memory", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
          "dimension": "Security", "taxonomy": "CWE-401", "classKey": "Security::CWE-401::orig"}
     state["fixBatch"] = [f]
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
@@ -2368,7 +2434,7 @@ def test_audit_outcome_carries_title_so_distinct_classkeys_dont_false_stall(tmp_
 
     def fold(title, classkey):
         state = RD.new_state(_cfg())
-        state["fixBatch"] = [{"title": title, "severity": "Important", "file": "f.py", "line": 1,
+        state["fixBatch"] = [{"title": title, "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
                               "dimension": "Security", "taxonomy": "CWE-401", "classKey": classkey}]
         state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
         tgt = state["_auditTargets"][0]
@@ -2411,7 +2477,7 @@ def test_verify_skip_with_configured_command_halts(tmp_path):
     did NOT run — fail closed to halt, never advance unverified into a round that could certify."""
     result = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "skipped"), _cfg_cert(verifyCommand="pytest -q"))
     assert result["verdict"] == "halted"
@@ -2421,7 +2487,7 @@ def test_verify_skip_with_no_command_still_advances(tmp_path):
     """A skip result with NO verify command configured is a legitimate unverified advance."""
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "none"), _cfg_cert(verifyCommand="none"))
     assert receipt["verdict"] == "converged"
@@ -2438,7 +2504,7 @@ def test_new_blocker_does_not_drop_unresolved_target_at_different_line():
     state["_auditOutcome"] = {"notDischarged": ["f.py::same bug"], "discharged": []}
     state["auditRounds"] = [{"round": 2, "outcomes": [
         {"identity": "f.py::same bug", "ruling": "not-discharged"}]}]
-    state["findings"] = [{"title": "same bug", "severity": "Important", "file": "f.py", "line": 2}]
+    state["findings"] = [{"title": "same bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}]
     RD._settle_delta(state, state["config"])
     assert state["step"] == RD.P_FIXER
     assert sorted(b.get("line") for b in state["_fixBatch"]) == [1, 2]
@@ -2697,7 +2763,7 @@ def test_receipt_carries_audit_provenance_per_round(tmp_path):
     the field (build_receipt must project it, not leave it recorded in state only)."""
     d = str(tmp_path)
     _drive_cli(d, _cfg(), _responder(
-        round1_findings=[{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]))
+        round1_findings=[{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     provs = [r.get("auditProvenance") for r in receipt["rounds"]]
@@ -2865,7 +2931,7 @@ def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     authenticates, and the recorded auditor is the trusted driver value."""
     state = RD.new_state(_cfg())  # vendors claude+codex, fixer claude → the auditor is codex
     state["round"] = 2
-    state["fixBatch"] = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+    state["fixBatch"] = [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tgt = state["_auditTargets"][0]
     assert tgt["auditorVendor"] == "codex"
@@ -2879,9 +2945,9 @@ def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
 def test_judgment_dispositions_distinct_for_same_title_different_lines():
     """#507 R2 v5: two same-title tradeoff blockers at DIFFERENT lines get DISTINCT disposition ids,
     so a skip for the one never collides onto the other (the line-less id collapsed them)."""
-    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+    a = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
          "tradeoff": True}
-    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 20,
+    b = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 20,
          "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(a), dict(b)])
@@ -2913,7 +2979,7 @@ def test_fixer_vendor_flag_rejects_unknown_and_wires_fresh(tmp_path):
 def test_receipt_missing_seat_surfaces_unverified(tmp_path):
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "security-reviewer":
-            return {"findings": [{"title": "leak", "severity": "Important",
+            return {"findings": [{"title": "leak", "severity": "Important", "consequence": _CONSEQUENCE,
                                   "file": "f.py", "line": 1}],
                     "receiptMissing": True}
         return []
@@ -2987,7 +3053,7 @@ def test_validate_receipt_round_trip_and_rejections(tmp_path):
 def test_verify_fail_halts(tmp_path):
     result = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "fail"), _cfg_cert())
     assert result["verdict"] == "halted"
@@ -2998,7 +3064,7 @@ def test_verify_timeout_halts(tmp_path):
     never advancing into a delta round that could certify."""
     result = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "timeout"), _cfg_cert())
     assert result["verdict"] == "halted"
@@ -3020,9 +3086,9 @@ def test_omitted_panel_seat_cannot_certify_full_panel(tmp_path):
 
 def test_mechanical_compile_drops_uncited_and_out_of_scope():
     findings = [
-        {"title": "cited", "severity": "Important", "file": "f.py", "line": 2},   # in diff scope
-        {"title": "uncited", "severity": "Important", "file": None, "line": None},  # citation drop
-        {"title": "off-scope", "severity": "Important", "file": "f.py", "line": 999},  # scope drop
+        {"title": "cited", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2},   # in diff scope
+        {"title": "uncited", "severity": "Important", "consequence": _CONSEQUENCE, "file": None, "line": None},  # citation drop
+        {"title": "off-scope", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 999},  # scope drop
     ]
     compiled, drops = RD.mechanical_compile(findings, DIFF)
     titles = {f.get("title") for f in compiled}
@@ -3038,15 +3104,16 @@ def test_mechanical_compile_keeps_distinct_lines_same_title():
     survive — the per-location anchor (file, line, title) no longer collapses them the way the
     line-less file::title identity did (it dropped the second line's blocker)."""
     findings = [
-        {"title": "Same bug", "severity": "Important", "file": "f.py", "line": 1},
-        {"title": "Same bug", "severity": "Important", "file": "f.py", "line": 2},
+        {"title": "Same bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1},
+        {"title": "Same bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2},
     ]
     compiled, _ = RD.mechanical_compile(findings, DIFF)
     assert sorted(f.get("line") for f in compiled) == [1, 2]
 
 
 def test_mechanical_compile_nit_cap():
-    findings = [{"title": "nit%d" % i, "severity": "Nit", "file": "f.py", "line": 1}
+    findings = [{"title": "nit%d" % i, "severity": "Nit", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
+                 "consequenceKind": "code-quality"}
                 for i in range(9)]
     compiled, _ = RD.mechanical_compile(findings, None)
     nits = [f for f in compiled if f.get("severity") == "Nit"]
@@ -3058,8 +3125,10 @@ def test_mechanical_compile_nit_cap():
 def test_mechanical_compile_nit_cap_lowercase_equivalent_to_exact_case():
     """Lowercase 'nit' severity variants count toward the Nit cap like exact-case 'Nit'."""
     def _findings(severity):
+        # a stated consequence and the code-quality kind: the finding survives compile and reaches the cap
         return [
-            {"title": "nit%d" % i, "severity": severity, "file": "f.py", "line": i + 1}
+            {"title": "nit%d" % i, "severity": severity, "consequence": _CONSEQUENCE, "file": "f.py",
+             "line": i + 1, "consequenceKind": "code-quality"}
             for i in range(9)
         ]
 
@@ -3076,12 +3145,18 @@ def test_mechanical_compile_nit_cap_lowercase_equivalent_to_exact_case():
 
     compiled_lower, _ = RD.mechanical_compile(_findings("nit"), None)
     compiled_exact, _ = RD.mechanical_compile(_findings("Nit"), None)
+    assert _post_cap_counts(compiled_exact) == (RD._NIT_CAP, 1, RD._NIT_CAP + 1)  # the cap really acted
     assert _post_cap_counts(compiled_lower) == _post_cap_counts(compiled_exact)
+    # compile canonicalizes severity before the cap, so only a direct call puts "nit" in front of the cap itself
+    capped_lower = RD._nit_cap(_findings("nit"))
+    capped_exact = RD._nit_cap(_findings("Nit"))
+    assert _post_cap_counts(capped_exact) == (RD._NIT_CAP, 1, RD._NIT_CAP + 1)
+    assert _post_cap_counts(capped_lower) == _post_cap_counts(capped_exact)
 
 
 def test_mechanical_compile_normalizes_list_dimension():
     findings = [
-        {"title": "hole", "severity": "Important", "file": "f.py", "line": 2,
+        {"title": "hole", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
          "dimension": ["security", "perf"]},
     ]
     compiled, drops = RD.mechanical_compile(findings, DIFF)
@@ -3092,7 +3167,7 @@ def test_mechanical_compile_normalizes_list_dimension():
 
 def test_settle_delta_list_dimension_via_mechanical_compile(tmp_path):
     """#583: list-valued dimension must not crash _settle_delta's dim_map grouping."""
-    raw = [{"title": "hole", "severity": "Important", "file": "f.py", "line": 2,
+    raw = [{"title": "hole", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
             "dimension": ["security", "perf"]}]
     compiled, _ = RD.mechanical_compile(raw, DIFF)
     state = _delta_state_ready(confirmations=0, surfaced=[], findings=compiled)
@@ -3130,7 +3205,7 @@ def test_reviewer_redispatch_bounded_by_single_home_budget(tmp_path):
 # #507 WO-D: challenged-coverage breaker + resume/records seam
 # =============================================================================
 
-_CHALLENGED_FINDING = {"title": "coverage decision is false", "severity": "Important",
+_CHALLENGED_FINDING = {"title": "coverage decision is false", "severity": "Important", "consequence": _CONSEQUENCE,
                        "file": "f.py", "line": 1, "dimension": "Test", "taxonomy": "coverage",
                        "classKey": "Test::coverage::x"}
 
@@ -3181,7 +3256,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
         return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Test"]}
 
     receipt = RD.run_loop(
-        _seams(reviewer=reviewer, fix_step=fix_step),
+        _seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"]),
         _cfg_cert(dimensions=["test-role"], recordsPath=str(records), maxRounds=20))
     assert receipt["verdict"] != "cannot-certify"
     assert fired["scoped"] == 1, "the scoped finder must fire over the real new surface"
@@ -3211,6 +3286,8 @@ _ALL_CHANNELS = {
     "priorCommentsUnavailable": True,
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
+    "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],
+    "synthesisUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude"}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",
@@ -3331,7 +3408,7 @@ def test_producer_omits_the_disclosures_key_when_no_channel_survives(tmp_path):
 
 def test_producer_writes_skeletons_not_evidence_bodies(tmp_path):
     big = "evidence-body-" + ("X" * 400)
-    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+    finding = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
                "dimension": "Code", "body": big, "evidence": big}
     records = tmp_path / "round-records.json"
     record = _seed_record(1, {"vacuousSeats": ["test-role"]})
@@ -3407,7 +3484,7 @@ def test_producer_parks_when_the_atomic_write_raises_oserror(tmp_path, monkeypat
 def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monkeypatch):
     records = tmp_path / "round-records.json"
     records.write_text("[]")
-    finding = {"title": "panel-bug", "severity": "Important", "file": "f.py", "line": 1,
+    finding = {"title": "panel-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
                "dimension": "Code"}
     state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["findings"] = []
@@ -3450,9 +3527,9 @@ def test_producer_is_inert_without_a_records_path(tmp_path, monkeypatch):
 
 def _two_round_disclosure_seams():
     """Round 1 baseline panel and round 2 scoped-finder delta — each records disclosure channels."""
-    f1 = {"title": "bug", "severity": "Important", "file": "f.py", "line": 2,
+    f1 = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
           "dimension": "Code"}
-    f2 = {"title": "bug2", "severity": "Important", "file": "f.py", "line": 3,
+    f2 = {"title": "bug2", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 3,
           "dimension": "Code"}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -3471,7 +3548,7 @@ def _two_round_disclosure_seams():
 def _vacuous_round1_seams():
     """Round 1: one vacuous seat (a real `vacuousSeats` + `seatMapUnavailable` record) plus a
     blocking finding so the run continues past round 1 to a terminal."""
-    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 2,
+    finding = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
                "dimension": "Code"}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -3830,7 +3907,7 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
 
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "code-reviewer":
-            return {"findings": [{"title": "bug", "severity": "Important",
+            return {"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE,
                                   "file": "f.py", "line": 1}]}
         return []
 
@@ -4585,9 +4662,9 @@ def test_auditor_vendor_family_keyed_two_vendor_cross_family():
     assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "claude") == ("codex", "independent")
 
 
-def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
-    """Single live vendor with same fixer/verifier family → degraded, never false independent."""
-    assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == ("claude", "degraded")
+def test_auditor_vendor_family_keyed_single_vendor_same_family_unseatable():
+    """Single live vendor with the fixer's own family → no auditor, never the fixer standing in."""
+    assert RD._auditor_vendor({"vendors": ["claude"]}, "claude") == (None, "unseatable")
 
 
 # The #510-era `test_auditor_vendor_family_keyed_single_vendor_cross_family_independent` lived here.
@@ -4620,15 +4697,15 @@ def test_auditor_vendor_reads_auditor_role(monkeypatch):
     assert auditor == "codex"
 
 
-def test_auditor_vendor_unknown_fixer_degraded():
-    """#608: genuinely-unknown fixer vendor never yields a false-independent auditor stamp."""
-    auditor, independence = RD._auditor_vendor({"vendors": ["claude", "codex"]}, None)
-    assert auditor == "claude" and independence == "degraded"
+def test_auditor_vendor_unknown_fixer_unseatable():
+    """#608: a genuinely-unknown fixer vendor has no family to be independent of, so no vendor is
+    seated as its auditor."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, None) == (None, "unseatable")
 
 
-def test_auditor_vendor_empty_string_fixer_degraded():
-    """#608: empty-string fixer is unknown — same degraded path as None."""
-    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "")[1] == "degraded"
+def test_auditor_vendor_empty_string_fixer_unseatable():
+    """#608: empty-string fixer is unknown — same no-auditor path as None."""
+    assert RD._auditor_vendor({"vendors": ["claude", "codex"]}, "") == (None, "unseatable")
 
 
 def test_auditor_vendor_family_keyed_pass1_prefers_different_cli():
@@ -4648,7 +4725,7 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude"))
     assert receipt["verdict"] == "converged"
@@ -4662,12 +4739,12 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
 # the judgment gate is an INTERVENTION, not a terminal (#507 R2a)
 # =============================================================================
 
-_TRADEOFF = {"title": "widen the API", "severity": "Important",
+_TRADEOFF = {"title": "widen the API", "severity": "Important", "consequence": _CONSEQUENCE,
              "file": "f.py", "line": 1, "tradeoff": True}
 # The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
 # same-title tradeoff blockers at different lines never collide (#507 R2 v5).
 _TRADEOFF_ID = "f.py::widen the api@L1"
-_RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Important",
+_RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Important", "consequence": _CONSEQUENCE,
                              "file": "pkg/resume_identity.py", "line": 42, "tradeoff": True}
 _RESUME_IDENTITY_TRADEOFF_ID = "pkg/resume_identity.py::resume identity fields@L42"
 
@@ -4675,7 +4752,7 @@ _RESUME_IDENTITY_TRADEOFF_ID = "pkg/resume_identity.py::resume identity fields@L
 def test_judgment_payload_rows_carry_single_classification_literal():
     """Every present-judgment row must use the one classification literal the gate-policy enum assumes."""
     state = RD.new_state(_cfg())
-    finding_b = {"title": "narrow the API", "severity": "Minor",
+    finding_b = {"title": "narrow the API", "severity": "Minor", "consequence": _CONSEQUENCE,
                  "file": "g.py", "line": 2, "tradeoff": True}
     state["_judgmentFindings"] = [dict(_TRADEOFF), finding_b]
     state["step"] = RD.P_JUDGMENT
@@ -4778,9 +4855,9 @@ def test_partial_skip_end_to_end_marks_clean_except_skipped(tmp_path):
     """A run that fixes one judgment finding and skips another converges CLEAN EXCEPT FOR SKIPPED:
     the skipped one rides the top-level channel and the certification reason leads with the marker,
     even though real fix-and-audit work ran."""
-    trade_a = {"title": "widen the API", "severity": "Important",
+    trade_a = {"title": "widen the API", "severity": "Important", "consequence": _CONSEQUENCE,
                "file": "f.py", "line": 1, "tradeoff": True}
-    trade_b = {"title": "drop the flag", "severity": "Important",
+    trade_b = {"title": "drop the flag", "severity": "Important", "consequence": _CONSEQUENCE,
                "file": "f.py", "line": 2, "tradeoff": True}
 
     def judgment_gate(payload):
@@ -4839,7 +4916,7 @@ def test_missing_or_unknown_disposition_fails_closed_to_fix():
 def test_mechanical_blocker_carried_through_judgment_gate():
     """A mechanical (non-tradeoff) blocker in the SAME batch is carried through the gate and rides
     the fix batch even when the tradeoff finding is skipped — never abandoned at the gate."""
-    mech = {"title": "null deref", "severity": "Critical", "file": "f.py", "line": 2}
+    mech = {"title": "null deref", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
     state = RD.new_state(_cfg())
     took = RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
     assert took is True and state["step"] == RD.P_JUDGMENT
@@ -4864,11 +4941,11 @@ def test_judgment_colliding_identity_different_severity_dispositions_not_collaps
     clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
     the assertion then reads per row — severity is not the distinguishing axis."""
     loc_id_prefix = RD.session_contract.location_key({"title": "same choice " + "x" * 205 + " alpha",
-                                                      "severity": "Critical", "file": "f.py", "line": 10,
+                                                      "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
                                                       "tradeoff": True})
-    critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical",
+    critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical", "consequence": _CONSEQUENCE,
                 "file": "f.py", "line": 10, "tradeoff": True}
-    important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",
+    important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important", "consequence": _CONSEQUENCE,
                  "file": "f.py", "line": 10, "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(critical), dict(important)])
@@ -5072,7 +5149,7 @@ def _gate_guidance_record_id_line(block):
 
 def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
     """E3: durable record id is minted once at the fold and appears on the record-id line."""
-    mech = {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1}
+    mech = {"title": "widen the API", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
     RD._fold_judgment(state, state["config"], {"dispositions": [
@@ -5105,9 +5182,9 @@ def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
 
 def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
-    a = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Important",
+    a = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Important", "consequence": _CONSEQUENCE,
          "file": "f.py", "line": 10, "tradeoff": True}
-    b = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",
+    b = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important", "consequence": _CONSEQUENCE,
          "file": "f.py", "line": 10, "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(a), dict(b)])
@@ -5148,9 +5225,9 @@ def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
 
 def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
     """Edge 10: same title at different lines → distinct identity lines, no ambiguity note."""
-    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+    a = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
          "tradeoff": True}
-    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 20,
+    b = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 20,
          "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(a), dict(b)])
@@ -5264,6 +5341,18 @@ def _verified_clean_seat_map(vendors):
     raise AssertionError("no verify-clean seat map for vendors %r" % vendors)
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`,
+    `reviewer-deep`) live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _assertable_seat_map(vendors, fixer_vendor="claude"):
     """Receipt-shaped seat map — ``unexcused_violations`` empty at construction (#1190)."""
     SM = _load("seat_map")
@@ -5276,6 +5365,7 @@ def _assertable_seat_map(vendors, fixer_vendor="claude"):
             m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
             receipt = SM.to_receipt(m, author)
             if SM.unexcused_violations(receipt, driver_author_family) == []:
+                receipt.update(_nonpanel_cell_proof(live))
                 return receipt
     raise AssertionError(
         "no assertable seat map for vendors %r driver_author_family=%r"
@@ -6756,13 +6846,13 @@ def test_legacy_sidecar_repair_is_idempotent(tmp_path):
 
 
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():
-    """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
-    DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the
-    same-vendor fallback loop returned ('cursor', 'independent') — a self-audit labelled
-    independent. This pins that lane closed while leaving the real cross-family path intact."""
+    """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix has no
+    auditor at all. Under the old registry (composer='cursor', grok='xai') the same-vendor fallback
+    loop returned ('cursor', 'independent') — a self-audit labelled independent. This pins that
+    lane closed while leaving the real cross-family path intact."""
     vendor, independence = RD._auditor_vendor({"vendors": ["cursor"]}, "cursor")
-    assert independence == "degraded"
-    assert vendor == "cursor"
+    assert independence == "unseatable"
+    assert vendor is None
     for other in ("claude", "codex"):
         v, ind = RD._auditor_vendor({"vendors": [other, "cursor"]}, "cursor")
         assert ind == "independent", (other, v, ind)
@@ -6786,11 +6876,11 @@ def _rearm_forever_seams():
             return []
         if dim == "scoped-finder":
             seq["n"] += 1
-            return [{"title": "scoped-%d" % seq["n"], "severity": "Important",
+            return [{"title": "scoped-%d" % seq["n"], "severity": "Important", "consequence": _CONSEQUENCE,
                      "file": "newsurf.py", "line": 1}]
         if dim == "code-reviewer":
             seq["n"] += 1
-            return {"findings": [{"title": "panel-%d" % seq["n"], "severity": "Important",
+            return {"findings": [{"title": "panel-%d" % seq["n"], "severity": "Important", "consequence": _CONSEQUENCE,
                                   "file": "f.py", "line": 1}]}
         return {}
 
@@ -6805,7 +6895,7 @@ def _rearm_forever_seams():
         leg_rnds["verify"].append(rnd)
         return "pass"
 
-    seams = _seams(reviewer=reviewer, fix_step=fix_step, verify_runner=verify_runner)
+    seams = _seams(reviewer=reviewer, fix_step=fix_step, verify_runner=verify_runner, vendors=["claude", "codex"])
     seams["_legRnds"] = leg_rnds
     return seams
 
@@ -6854,7 +6944,7 @@ def test_delta_at_ceiling_records_ledger_then_parks_on_advance():
 def test_delta_at_ceiling_challenged_principle_parks_without_ceiling():
     """Challenged-principle park at the ceiling round terminates; the ceiling boundary never runs."""
     # axis: challenged-principle-recurring parks inside _settle_delta — round-ceiling is advance-only
-    finding = {"title": "recurs", "file": "a.js", "severity": "Critical", "dimension": "code-reviewer",
+    finding = {"title": "recurs", "file": "a.js", "severity": "Critical", "consequence": _CONSEQUENCE, "dimension": "code-reviewer",
                "classKey": "Code::x::recurs"}
     prior = {
         "schemaVersion": 2, "round": 9, "kind": "delta",
@@ -6885,11 +6975,11 @@ def _rearm_until_converge_seams(converge_at):
             return []
         if dim == "scoped-finder":
             seq["n"] += 1
-            return [{"title": "scoped-%d" % seq["n"], "severity": "Important",
+            return [{"title": "scoped-%d" % seq["n"], "severity": "Important", "consequence": _CONSEQUENCE,
                      "file": "newsurf.py", "line": 1}]
         if dim == "code-reviewer":
             seq["n"] += 1
-            return {"findings": [{"title": "panel-%d" % seq["n"], "severity": "Important",
+            return {"findings": [{"title": "panel-%d" % seq["n"], "severity": "Important", "consequence": _CONSEQUENCE,
                                   "file": "f.py", "line": 1}]}
         return {}
 
@@ -6899,7 +6989,7 @@ def _rearm_until_converge_seams(converge_at):
         fix_n["n"] += 1
         return {"fixes": [], "headDiff": _headf_ns(fix_n["n"]), "changedSubjects": ["Code"]}
 
-    return _seams(reviewer=reviewer, fix_step=fix_step)
+    return _seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"])
 
 
 def test_round_nine_below_ceiling_does_not_halt_on_ceiling(tmp_path):
@@ -7480,3 +7570,177 @@ def test_fixed_disposition_receipt_carries_only_the_fix_fold_head():
     assert RD._fixed_disposition_receipt(state, None, "k@L1") == {"headSha": head}
     state["config"][RD.FIX_FOLD_HEAD_KEY] = ""
     assert RD._fixed_disposition_receipt(state, None, "k@L1") == {}
+
+
+# =============================================================================
+# an unfilled seat is never dispatched; no maker's family audits a fix
+# =============================================================================
+
+UNFILLED_SEAT = {"vendor": None, "model": None, "effort": None, "tier": "deep", "family": None,
+                 "source": "unfilled"}
+
+
+def _integration():
+    spec = importlib.util.spec_from_file_location(
+        "test_round_driver_integration", os.path.join(_HERE, "test_round_driver_integration.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _map_with_unfilled(tdi, seat):
+    seats = {dim: dict(entry) for dim, entry in tdi.SEAT_MAP["seats"].items()}
+    seats[seat] = dict(UNFILLED_SEAT)
+    return {"seats": seats}
+
+
+def test_unfilled_seat_gets_no_order_a_missing_envelope_and_advance_completes(tmp_path):
+    """E1: the panel's unfilled slot is not rendered, the driver records it missing (reason
+    `unfilled`) itself, and `advance` folds the panel without `incomplete-roster`."""
+    tdi = _integration()
+    rd, rr = tdi.round_driver, tdi.round_records
+    seat = rd.DIMENSIONS[1]
+    session_dir, gitdir, head_path = tdi._bootstrap(tmp_path, seatMap=_map_with_unfilled(tdi, seat))
+    state = tdi._state(session_dir)
+    pend = state["pending"]
+    manifest, err = rr.read_json(rd._orders_manifest_path(session_dir, 1, pend["phase"], 0))
+    assert err is None
+    assert seat not in manifest["seats"]
+    assert sorted(manifest["seats"]) == sorted(
+        rr.storage_key(d, 0) for d in rd.DIMENSIONS if d != seat)
+    assert not os.path.exists(rr.order_prompt_path(
+        session_dir, 1, pend["phase"], rr.storage_key(seat, 0), 0))
+    stored, err = rr.read_json(rr.store_path(
+        session_dir, 1, pend["phase"], rr.storage_key(seat, 0), 0))
+    assert err is None
+    assert stored["schema"] == rr.SEAT_MISSING_SCHEMA and stored["reason"] == "unfilled"
+    assert stored["seat"] == seat and stored["vendor"] is None and stored["model"] is None
+    ran = [d for d in rd.DIMENSIONS if d != seat]
+    tdi._write_dispatch_manifest(session_dir, pend, [(d, 0) for d in ran], lambda _s: "claude")
+    for dim in ran:
+        tdi._land(session_dir, state, pend, dim,
+                  tdi._payload_for(session_dir, state, pend, dim, [], head_path))
+        assert tdi._record(session_dir, dim)["ok"] is True
+    out = rd.cmd_advance(session_dir, git=tdi._fake_git(gitdir))
+    assert out["ok"] is True, out
+    after = tdi._state(session_dir)
+    rec = after["rounds"]["1"]
+    assert rec["seatStatus"][seat] == "missing"
+    assert all(rec["seatStatus"][d] == "run" for d in ran)
+    assert rec["missingSeats"] == [seat]
+
+
+def test_hand_submitted_payload_for_an_unfilled_seat_is_folded_missing_and_not_credited(tmp_path):
+    """E2: on the hand path a payload submitted for an unfilled seat is never credited, and the
+    driver's own missing envelope for it does not trip the record/submit interleave fence."""
+    d = str(tmp_path)
+    seat, ran = RD.DIMENSIONS[1], RD.DIMENSIONS[0]
+    seats = {dim: {"vendor": "claude", "model": "sonnet-5.5", "source": "default"}
+             for dim in RD.DIMENSIONS}
+    seats[seat] = dict(UNFILLED_SEAT)
+    n = _first_next(d, _cfg(seatMap={"seats": seats}))
+    finding = {"title": "ghost bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
+    art = {"seats": {dim: {"findings": [dict(finding)] if dim in (seat, ran) else []}
+                     for dim in RD.DIMENSIONS}}
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+    assert out["ok"] is True, out
+    ok, state = RD.load_state(d)
+    assert ok
+    rec = state["rounds"]["1"]
+    assert rec["seatStatus"][seat] == "missing" and rec["seatStatus"][ran] == "run"
+    assert rec["missingSeats"] == [seat]
+    assert [f.get("dimension") for f in state["_toVerify"]] == [ran]
+
+
+def test_fold_panel_never_credits_an_unfilled_seats_findings_when_no_receipt_is_stored():
+    """E2, unit: `_fold_panel` reads the governing map off the artifact's own seat map."""
+    state = RD.new_state(_cfg())
+    seats = {dim: {"vendor": "claude", "model": "m", "source": "default"} for dim in RD.DIMENSIONS}
+    seats["security-reviewer"] = dict(UNFILLED_SEAT)
+    finding = {"title": "ghost bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
+    RD._fold_panel(state, state["config"], {
+        "seats": {dim: {"findings": [dict(finding)]} for dim in RD.DIMENSIONS},
+        "seatMap": {"seats": seats}})
+    assert state["rounds"]["1"]["seatStatus"]["security-reviewer"] == "missing"
+    assert state["rounds"]["1"]["missingSeats"] == ["security-reviewer"]
+    assert "security-reviewer" not in {f.get("dimension") for f in state["_toVerify"]}
+    assert state["fullPanelRan"] is False
+
+
+def test_fold_panel_keeps_a_seeded_unfilled_seat_when_the_submitted_map_has_no_seats():
+    """An incomplete submitted map (no `seats`) does not release a seat the seeded map left unfilled."""
+    seats = {dim: {"vendor": "codex", "model": "m", "source": "default"} for dim in RD.DIMENSIONS}
+    seats["code-reviewer"] = dict(UNFILLED_SEAT)
+    state = RD.new_state(_cfg(seatMap={"seats": seats}))
+    RD._fold_panel(state, state["config"], {
+        "seats": {dim: {"findings": []} for dim in RD.DIMENSIONS},
+        "seatMap": {"makerFamilies": ["anthropic"]}})
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "missing"
+    assert state["fullPanelRan"] is False
+
+
+def _fix_state(config):
+    state = RD.new_state(config)
+    state["fixBatch"] = [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]
+    return state
+
+
+def _pinned_map(vendor, **over):
+    seats = {dim: {"vendor": vendor, "model": "m", "source": "pinned"} for dim in RD.DIMENSIONS}
+    return {"seats": seats, **over}
+
+
+def test_auditor_vendor_excludes_every_makers_family():
+    """E5: fixer claude, vendors claude+codex, the map lists openai as a maker → no auditor."""
+    cfg = {"vendors": ["claude", "codex"]}
+    assert RD._auditor_vendor(cfg, "claude") == ("codex", "independent")
+    assert RD._auditor_vendor(cfg, "claude", maker_families=frozenset({"openai"})) == (
+        None, "unseatable")
+    state = _fix_state(_cfg(seatMap=_pinned_map("claude", makerFamilies=["openai"])))
+    targets = RD._audit_targets(state, state["config"], {})
+    assert [t["independence"] for t in targets] == ["unseatable"]
+    assert "auditorVendor" not in targets[0]
+    assert state["independenceDegraded"] is True
+
+
+def test_pinned_roster_restricts_the_auditor_to_the_pinned_vendors():
+    """E6: every filled seat pinned to codex → codex audits; with codex not live, never cursor."""
+    live = _fix_state(_cfg(vendors=["claude", "codex", "cursor"], seatMap=_pinned_map("codex")))
+    assert RD._audit_targets(live, live["config"], {})[0]["auditorVendor"] == "codex"
+    gone = _fix_state(_cfg(vendors=["claude", "cursor"], seatMap=_pinned_map("codex")))
+    targets = RD._audit_targets(gone, gone["config"], {})
+    assert "auditorVendor" not in targets[0] and targets[0]["independence"] == "unseatable"
+    assert gone["independenceDegraded"] is True
+
+
+def test_pinned_auditor_vendors_need_every_filled_seat_pinned():
+    pinned = {"vendor": "codex", "source": "pinned"}
+    assert RD_DISCLOSURES.pinned_auditor_vendors(
+        {"seats": {"a": pinned, "b": dict(UNFILLED_SEAT)}}) == {"codex"}
+    assert RD_DISCLOSURES.pinned_auditor_vendors(
+        {"seats": {"a": pinned, "b": {"vendor": "claude", "source": "default"}}}) is None
+    assert RD_DISCLOSURES.pinned_auditor_vendors({"seats": {"a": {"vendor": "codex"}}}) is None
+    assert RD_DISCLOSURES.pinned_auditor_vendors({}) is None
+
+
+def test_old_seat_map_without_maker_families_or_source_keeps_todays_selection():
+    """E8: no `makerFamilies`, no `source` → the plain family rule, minus the removed fallback."""
+    seats = {dim: {"vendor": "claude", "model": "m"} for dim in RD.DIMENSIONS}
+    two = _fix_state(_cfg(seatMap={"seats": seats}))
+    assert RD._audit_targets(two, two["config"], {})[0]["auditorVendor"] == "codex"
+    one = _fix_state(_cfg(vendors=["claude"], seatMap={"seats": seats}))
+    assert "auditorVendor" not in RD._audit_targets(one, one["config"], {})[0]
+    assert RD_DISCLOSURES.maker_families({"seats": seats}) == frozenset()
+    assert RD_DISCLOSURES.unfilled_seats({"seats": seats}) == frozenset()
+
+
+def test_a_result_submitted_for_a_target_with_no_auditor_is_ignored_and_the_target_is_unaudited():
+    """The fold treats a no-auditor target as an audit that did not run, whatever was submitted."""
+    state = _fix_state(_cfg(vendors=["claude"]))
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    tid = state["_auditTargets"][0]["id"]
+    RD._fold_audits(state, state["config"], {"results": [
+        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude"}]})
+    outcome = state["_auditOutcome"]
+    assert outcome["unaudited"] == [tid] and outcome["discharged"] == []
+    assert outcome["notDischarged"] == [tid]

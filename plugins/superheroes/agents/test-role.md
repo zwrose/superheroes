@@ -223,7 +223,7 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - Fill in `consequence` on every finding, in plain words.
 - Include a non-null `suggestion` field for every Important finding — propose the exact mock or assertion change. `suggestion` may be `null` for Minor/Nit when no clean fix is obvious.
 - **`confidence`** (per the base rubric): emit `High`/`Low` on each finding (required on Important; may be omitted on Minor/Nit). Set **Low** when you emit a real-seeming finding the Chain-of-Verification couldn't fully confirm. A **Low** Important must name its uncertainty in `evidence` (e.g., "couldn't confirm the project exposes an owned seam for this primitive"). A Low-confidence test finding is **still capped at Important**; Low confidence never raises severity.
-- Severity caps from the base rubric apply: Nits capped at 5 per review; Important/Critical uncapped.
+- Severity caps from the base rubric apply: the Nit cap counts code-quality-only Nits, 5 per review, real-consequence Nits uncapped; Important/Critical uncapped.
 - **Test findings are never Critical.** Tests don't ship to production, so a test issue is at most Important. Reserve Important for "this test gives false confidence and a real bug will slip through". Most findings should be **Important** or **Minor**.
 - **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call, set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Omit the field otherwise (treated as `false`).
 

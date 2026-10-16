@@ -591,25 +591,62 @@ def _cached_cache_provenance(receipt, now):
     }
 
 
+def _union_needed(*needed_sets):
+    """Per-vendor union of needed sets, first-seen order, each cell once. Never mutates its inputs."""
+    out = {}
+    for needed in needed_sets:
+        for vendor, entries in needed.items():
+            merged = out.setdefault(vendor, [])
+            for entry in entries or ():
+                if tuple(entry) not in (tuple(m) for m in merged):
+                    merged.append(entry)
+    return out
+
+
+def _fill_extra_report(extra_report, liveness, extra):
+    """Read the extra (non-panel) needed set through liveness_cache.live_from — the one liveness
+    reader — keeping only its live cells. A liveness read error is `unprobed` with no cells; the
+    extra set's dead-cell notes are never surfaced."""
+    if extra_report is None:
+        return
+    unprobed = {"liveCells": [], "source": liveness_cache.LIVE_CELLS_SOURCE_UNPROBED}
+    _live, cells, read_notes = liveness_cache.live_from(liveness, extra)
+    if any(n.get("constraint") == liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT for n in read_notes):
+        extra_report.update(unprobed)
+        return
+    extra_report.update({"liveCells": cells, "source": liveness_cache.LIVE_CELLS_SOURCE_PROBED})
+
+
 def live_vendors_for_composition(
     configured_vendors,
     tiers=("reviewer-deep", "reviewer"),
     run=None,
     *,
     needed_override=None,
+    extra_needed=None,
+    extra_report=None,
     cache_path=None,
     now=None,
 ):
-    """Derive live vendors for seat_map.build from composition preflight. Claude is always live."""
+    """Derive live vendors for seat_map.build from composition preflight. Claude is always live.
+
+    `extra_needed` is a second needed set (the non-panel cells) probed, cache-checked and
+    cache-written in the SAME pass as the panel's `needed`; the returned panel verdict is still
+    `live_from` over the panel set alone, so a dead extra cell never changes `live`, `live_cells`
+    or the notes. A caller that passes an `extra_report` dict gets it filled with the extra set's
+    {"liveCells", "source"} (source `unprobed` and no cells when the probe could not run)."""
     needed = needed_override if needed_override is not None else needed_configs_for(tiers, configured_vendors)
+    extra = extra_needed if isinstance(extra_needed, dict) else {}
+    probed_needed = _union_needed(needed, extra)
     notes = []
 
-    codex_floor_refusal = codex_cli_floor_probe(run) if needed.get("codex") else None
+    codex_floor_refusal = codex_cli_floor_probe(run) if probed_needed.get("codex") else None
 
     if codex_floor_refusal is None and cache_path is not None and now is not None:
         rec = liveness_cache.read(cache_path, now=now)
-        if rec is not None and liveness_cache.covers(rec.get("needed", {}), needed):
+        if rec is not None and liveness_cache.covers(rec.get("needed", {}), probed_needed):
             live, live_cells, dead_notes = liveness_cache.live_from(rec["liveness"], needed)
+            _fill_extra_report(extra_report, rec["liveness"], extra)
             remaining = liveness_cache.remaining_ttl(rec, now)
             probed_at = rec["probedAt"]
             notes.append({
@@ -632,10 +669,10 @@ def live_vendors_for_composition(
             )
 
     liveness = composition_liveness(
-        {**needed, "claude": []}, run, codex_floor_refusal=codex_floor_refusal,
+        {**probed_needed, "claude": []}, run, codex_floor_refusal=codex_floor_refusal,
     )
     if codex_floor_refusal is None and cache_path is not None and now is not None:
-        wrote = liveness_cache.write(liveness, needed, path=cache_path, now=now)
+        wrote = liveness_cache.write(liveness, probed_needed, path=cache_path, now=now)
         if not wrote:
             notes.append({
                 "constraint": "preflight-cache-write-failed",
@@ -646,6 +683,9 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
+    # A Codex floor refusal already marks every Codex cell dead in `liveness`; the other vendors'
+    # successfully probed cells stay live evidence, so the refusal is not threaded in here.
+    _fill_extra_report(extra_report, liveness, extra)
     return (
         live,
         live_cells,
@@ -709,10 +749,15 @@ def main(argv):
             needed_override = seat_map.reachable_configs(configured, pins)
         now = time.time()
         cache_path = liveness_cache.receipt_path(args.cwd)
+        import seat_map  # noqa: E402 — lazy: breaks import cycle with seat_map
+
+        non_panel = {}
         live, live_cells, liveness, notes, _live_cells_source, cache_provenance = (
             live_vendors_for_composition(
                 configured,
                 needed_override=needed_override,
+                extra_needed=needed_configs_for(seat_map.NONPANEL_CELL_ROLES, configured),
+                extra_report=non_panel,
                 cache_path=cache_path,
                 now=now,
             )
@@ -725,6 +770,9 @@ def main(argv):
         sys.stdout.write(json.dumps({
             "live": live,
             "liveCells": live_cells,
+            "nonPanelLiveCells": non_panel.get("liveCells", []),
+            "nonPanelLiveCellsSource": non_panel.get(
+                "source", liveness_cache.LIVE_CELLS_SOURCE_UNPROBED),
             "cachePath": cache_path,
             "cacheProvenance": cache_provenance,
             "crossVendorEngines": configured,
