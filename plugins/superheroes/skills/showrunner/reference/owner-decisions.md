@@ -425,6 +425,10 @@ Venue-1 continuations and craft declines are craft calls. The advisor executes a
 Venue-2 scope changes (category 4), product declines (category 4; any decline that trades away something a product reading
 could want), and items whose door grading is uncertain are owner calls.
 
+Every PR ends with a *Follow-ups for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim without a receipt — it evaporates in working context. At a [craft call](../../../rubric/glossary.md#craft-call) you execute it now and record the determination, dated and reasoned, for cheap owner veto; at an [owner call](../../../rubric/glossary.md#owner-call) it is the owner's word, via the collector.
+
+**Craft calls** — venue-1 continuations, craft declines with a revisit trigger, an owner-owed or relay memory entry — happen **immediately**, under the standing order in `owner-decisions.md`. **Owner calls** are the owner's word, and each is a case of the line: a new issue is [category 6](../../../rubric/owner-vs-craft-line.md#the-ten-owner-categories), and a scope change, a product decline, or a product fold is category 4. The project's **standing proposals collector** is one open issue per project, never one issue per proposal.
+
 **The standing order is always on.** The advisor decides craft calls itself **at every hour**,
 whether or not the owner is reachable. **There is no overnight mode and no daytime mode**: the
 owner's presence governs **when a decision is discussed**, never **whose decision it is**. Saving
@@ -438,6 +442,9 @@ not met the standing order's condition at all — doubt resolves upward, exactly
 owner is sitting right here.
 
 **Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
+
+- **Attended** — the owner is here and the vet-delivery message reaches them in this session. The already-appended item is proposed in that message and, if they rule, **struck minutes after it was appended** — the normal attended outcome, not churn.
+- **Absent** — unreachable for this session, or reachable only after it ends. The item **awaits the batch**, carrying this vet's ordinal. Waiting for the owner to reconnect before appending is what leaves collectors empty while items live only in receipts.
 
 **Each append carries its door grading for a machinery item — the band, the evidence tier, and the resulting tier the front door recorded — and for a product item the classification and the ratification it rides, since no evidence bar applied to it; each append also carries its venue recommendation, so the owner's batch is one word per item. When a machinery item's door grading is uncertain, each of its band, evidence tier, and resulting tier that is not yet settled reads `grading not yet settled`, and each settled one keeps its value; when a product item rides no ratified milestone, its ratification reads `grading not yet settled`. Both still append — they are owner calls until the grading is clear.**
 
@@ -506,6 +513,8 @@ the ruling record rather than read from the registry. Row-first fails closed and
 used.
 
 **Any session processing a field report, and any vet whose evidence includes an observed-in-the-field failure, reads the registry.**
+
+**Nothing fires on its own**: no cadence, no release-tied default, no scheduled routine.
 
 **The registry scan is prose-bound and nothing mechanical enforces it; the registry's floor value is that whether we already declined something is one comment away.** This limit is known and carried knowingly — not a defect to be fixed later.
 

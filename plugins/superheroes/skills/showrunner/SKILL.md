@@ -102,15 +102,8 @@ above).
 
    **A weight call names `light` or `full`, states its measurables (child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.**
 
-   **Vetting a spec is yours; fixing it and approving it never are.** When discovery opens the spec
-   PR — or, where the project keeps specs out of the repo or gitignored, hands over the stored spec,
-   which stands in for the PR — you vet it against three sources: the repo, the other approved specs,
-   and Canon across every piece (read it as the
-   [contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#reading-canon) says). **You never edit
-   the spec.** Every finding goes back to discovery in one vet record on the PR (or beside the stored
-   spec), each finding marked craft or owner call by the
-   [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md). Discovery fixes the
-   craft findings, and you vet again after its fixes. **A product call the spec does not settle
+   **Vetting a spec is yours; fixing it and approving it never are.** **You never edit
+   the spec.** **A product call the spec does not settle
    reaches the owner on discovery's final sheet, never as a fix you made.** You never ask the owner
    to approve a spec: once your vet is clean, discovery's final sheet asks.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/spec-vet.md` when you vet a spec or write its vet record.** It holds the checks, the record's shape, and how discovery learns the vet is done.
@@ -123,13 +116,7 @@ above).
 
    **After approval.** Your after-approval work starts only once the owner's approval stands under
    the conditions held in discovery's step 8 (the one home for them; follow it, do not restate it). A saved Approve alone starts
-   nothing. Then you add the breakdown to the same spec PR (or beside the stored spec) and
-   vet it. The independent package read still runs where it applies, before an epic's children
-   file, and single-issue work keeps its fast path
-   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` § The breakdown rides the
-   spec PR). Approval and the merge word are separate acts. One merge word from the owner covers the
-   spec and its breakdown, and the issues file with the owner's word as the PR merges
-   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md` § Merging a spec PR). **Before
+   nothing. The breakdown follows `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` § The breakdown rides the spec PR. **Before
    the breakdown starts, confirm the approval is recorded with its date** — the dated approval is
    what a later before-or-after-approval test reads.
 
@@ -242,34 +229,18 @@ above).
    **Decomposition is post-approval work**, as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines it. Epic
    machinery activates at **two or more children, never below**; one child takes the single-issue
    fast path.
-   **The three artifacts.** A decomposition produces a **coverage map** (every acceptance criterion
-   owned by exactly one named child — none unowned, none owned twice), a **contract register**
-   (numbered binding sentences, each naming its consuming children, each either decided now or
-   marked **decide-by** naming the child that owns the decision), and a **package-read audit trail** —
-   all three **beside the spec in the work item's folder**, linked from the epic body. An
+   An
    **unallocated criterion or an unowned decide-by is a routing defect you repair before any child
    build starts.**
-   **Seam first.** Where one child creates a seam others build on, **sequence that child first** so
-   the register's contracts get their real review as working code rather than as a document.
-   **The package read before children file.** An **adversarial read by seats independent of the
-   package's author**, across **five lenses**, at a **weight you call** with its measurables (child
-   count, register-entry count) and a **round ceiling**; it repeats until a round returns **only
-   mechanical items**, ends with a **recorded verification pass**, and **parks to the owner with the
-   children unfiled** if it hits its ceiling unconverged. **You are the maker when you authored the
+   **You are the maker when you authored the
    package** — your own model family is excluded from every seat.
    **A spec contradiction never resolves as a silent spec edit.** A package-read contradiction
    finding resolves as a **package fix**, an **owner-stamped spec amendment**, or a **recorded
    refutation in the audit trail** — those three, and nothing else.
-   **Amendments after approval.** Every post-approval spec amendment carries the class `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` assigns it. The amended artifact and
-   its dated, owner-stamped log entry come first; **unstarted children are mechanically re-injected or
-   re-checked against the coverage map, children already building are explicitly notified, and a
-   recorded coverage-map re-check runs after every affected spec amendment**; a **substantive**
-   amendment additionally sends the touched parts back through the read loop before injection. **A
+   **Amendments after approval.** Every post-approval spec amendment carries the class `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` assigns it. **A
    child that never received an amendment is a process defect, not a builder defect.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` when you amend an approved spec.**
-   **Cross-epic seams are reciprocal.** Recorded in **both** registers and **both** affected child
-   bodies; a seam recorded on one side only is a blocking package-read finding. Where one side is a
-   single-issue spec, that child's **issue body stands in for the register**.
+   **Cross-epic seams are reciprocal**; a seam recorded on one side only is a blocking package-read finding.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` when you decompose a spec, run a package read, or record a cross-epic seam.**
 
    **Route each issue to exactly one of four routes.** The four intake routes are named
@@ -285,11 +256,6 @@ above).
    case matches, the route is the advisor's judgment call, recorded with the route and anchor at
    routing time. **No precedence procedure exists and none ships** — the recorded judgment is the
    whole mechanism, and a route recorded without its judgment is the gap.
-   **Two outcomes are worth naming, because both arrive looking like discovery.** A follow-up the
-   owner **already ruled on** — a dated, owner-attributed ruling reachable where it was made —
-   routes **`build-ready`** anchored to that ruling, with **no discovery step**. A follow-up raising
-   a **product question no approved artifact answers** routes **`discovery`** — the spec-trigger
-   test decides it, not how small the follow-up looks.
    **Intake routing records the route and the anchor, nothing more** — no discovery size, no lane,
    and no review weight are assigned when the route is *chosen*. The **lane call and the presentation call attach to the build-ready marking**, a
    later act than route selection: an issue routed to `discovery` has nothing to lane yet.
@@ -299,18 +265,13 @@ above).
    `detective` goes to the detective with a named diagnosis budget; `micro` stays in this session as
    your own hard-line edit. For a `build-ready` issue — and only then — **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
-   else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
-   process constraints (test right-sizing, E2E policy), and launch context (local export paths,
-   known-broken links, environment quirks) — and **an order you launch names this advisor session** for the
+   else.** **An order you launch names this advisor session** for the
    builder to message, plus a size estimate for a light build
    (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The size-consideration
    slot).
 
    **State every scope exclusion that leaves an audience or delivery channel on old behavior as a
-   plain consequence at filing time** — in the issue, in plain language: *who* is still on the old
-   behavior, and *what they will still experience*. **Headless and interactive are parity
-   surfaces:** shipping a rule, prompt, or behavior to one and not the other is a scope fork named as
-   a consequence, never an unstated boundary. **The premises of an order you send bind you, the
+   plain consequence at filing time.** **The premises of an order you send bind you, the
    dispatcher** — amend the order when the world moves under it. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you write a consequence line or amend a live order.**
 
    **Call the lane when you mark the issue build-ready, with the owner present at kickoff.**
@@ -324,13 +285,10 @@ above).
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you make the lane call.**
    **Record the lane call and one line of reasoning in the issue** (in the **PR** for micro), and
    **record the show it / say it / nothing to see presentation call alongside it, with one line of
-   reasoning** (duty 5). Judgment that leaves no trace generates no evidence.
+   reasoning** (duty 5).
 
    **Check the single reviewer's availability while the owner is present** (light and micro, as
-   bounded in `review-discipline.md`). An unavailable reviewer at kickoff or a **mid-run forfeit**
-   allows no stand-in on either lane: the change resolves upward to the full lane or parks, and
-   only the owner's word for that change admits a same-family reviewer, recorded not independent.
-   Silence is not forfeit; a terminal forfeit result is. The single reviewer's review record answers to the reading rule in
+   bounded in `review-discipline.md`). The single reviewer's review record answers to the reading rule in
    `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
    and what a missing reading means. The investigation-record floor applies automatically to **every
    external review seat**, single-seat lanes included (see `review-discipline.md`).
@@ -349,19 +307,12 @@ above).
    - Read the **issue**, the **recorded lane call and its one line of reasoning**, the **diff**, the
      **dispositions table**, and the **receipts** (no build brief).
    **Full and light** — continue with:
-   - **Skeleton** — a routed issue missing a skeleton slot is a **named vet finding**; micro is
-     exempt.
-   - **DoD bar** — a DoD bullet that names an activity rather than an outcome a vet can grade
-     from the handback's artifacts alone is a **vet finding against the issue**.
-   - **Currency spot-check** — spot-check the issue body: **both halves** (the whole body
-     matches the work's current state, and a build-ready issue's Anchor link resolves to the
-     approved decision in one hop). **A stale What or DoD fails the spot-check even when the
-     anchor link resolves.**
+   - **Skeleton** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The three-slot skeleton defines it; micro is exempt.
+   - **DoD bar** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The DoD bar defines it.
+   - **Currency spot-check** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § Currency defines it. **A stale What or DoD fails the spot-check even when the anchor link resolves.**
    - **The standing anchor-coverage row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing anchor-coverage vet row defines it.
    - **The review record checks** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § The review record checks defines them.
-   - **The standing NFR row** — at **every** child PR vet in a spec package, grade the three
-     package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
-     and guidelines never hardened into gates.
+   - **The standing NFR row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing NFR vet row defines it, at **every** child PR vet in a spec package.
    - **The standing register row** — the row `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines. It is graded at
      **every** child PR vet in a package that has a register (and is simply **not applicable** where
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
@@ -377,21 +328,15 @@ above).
      `rubric/test-receipt-evidence.md` (run selection per
      `skills/showrunner/reference/vet-receipt.md` spine field 1) — do **not** re-run green suites.
      Run locally only when CI has not run (a branch update, a conflict) or a specific claim needs a
-     new probe. Spend vet time on the **adversarial probes the suite does not contain**: does the
-     guard actually fire when its target breaks? does the test assert what its name claims? does
-     the behavior actually behave? Apply probe mutations as a **targeted, revertible edit through
+     new probe. Spend vet time on the **adversarial probes the suite does not contain**. Apply probe mutations as a **targeted, revertible edit through
      the host's edit action**, never a whole-file rewrite and never an ad-hoc shell edit, and
      **revert them when the probe is done**.
    - **A general convention never overrides the issue's owner-ratified scope** — yours or a
      reviewer's. **Route it as a follow-up**; do not send the builder back to widen a diff the owner
      already bounded.
-   - **Grade the third-rework tripwire from dispatch-provenance.** When a surface's **rework
-     orders** show it reached the third-rework threshold, the build must show **either** a
-     converged-lane handback that refuses the fourth patch, **states that the third-rework tripwire
-     fired**, and names the seam problem, **or** a formal park. A **fourth patch, or a continue with
+   - **Grade the third-rework tripwire from dispatch-provenance.** A **fourth patch, or a continue with
      the seam problem unnamed, is the vet finding**; you do not wait for the build to disclose it —
-     the provenance is the trigger. When a builder parks here, the tripwire is firing as designed —
-     **welcome it and go looking for the design problem**, rather than ordering another rework.
+     the provenance is the trigger.
      Canonical ruling: `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`
      under `### The third-rework tripwire`.
    - **Bounded acceptance for prose-contract DoDs** (canonical:
@@ -400,45 +345,19 @@ above).
    - **Record the order-quality accounting and vet dispatch provenance against engine doctrine**
      (CONVENTIONS `§7.5`) at every vet. Zero parks or zero receipt-integrity catches is a signal to
      inspect, never a clean sheet.
-   - **Disposition the PR's follow-ups before the vet receipt posts.** Every PR ends with a *Follow-ups
-     for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
-     without a receipt — it evaporates in working context. Each `FU` id gets its own keyed
-     disposition in the receipt's field 7. Which kind a follow-up is gets sorted by the
-     [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md). At a
-     [craft call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#craft-call) you execute it now and record
-     the determination, dated and reasoned, for cheap owner veto; at an
-     [owner call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#owner-call) it is the owner's word, via the
-     collector; **doubt resolves upward**. **Craft calls** — venue-1 continuations, craft declines
-     with a revisit trigger, an owner-owed or relay memory entry — happen **immediately**, under the
-     standing order in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`.
-     **Owner calls** are the owner's word, and each is a case of the line: a new issue is
-     [category 6](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#the-ten-owner-categories),
-     and a scope change, a product decline, or a product fold is category 4. Venue-3 filings are always owner calls: a new issue spends board attention, a commitment
-     call by definition, even when its content is craft. The project's **standing proposals
-     collector** is one open issue per project, never one issue per proposal. **Every owner call is
+   - **Disposition the PR's follow-ups before the vet receipt posts.** Each `FU` id gets its own keyed
+     disposition in the receipt's field 7. Which kind a follow-up is gets sorted by the [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md); **doubt resolves upward**.
+     **Every owner call is
      appended to the collector at vet time, unconditionally**, so the collector is the complete
      register by construction. The append record's contents live in `owner-decisions.md` § Craft
      calls and owner calls. **Attendance governs only discussion, never appending** — read it from
-     whether the owner is actually reachable here, never from who launched you (duty 9's three states
-     are independent axes):
-     - **Attended** — the owner is here and the vet-delivery message reaches them in this session.
-       The already-appended item is proposed in that message and, if they rule, **struck minutes
-       after it was appended** — the normal attended outcome, not churn.
-     - **Absent** — unreachable for this session, or reachable only after it ends. The item **awaits
-       the batch**, carrying this vet's ordinal. Waiting for the owner to reconnect before appending
-       is what leaves collectors empty while items live only in receipts.
+     whether the owner is actually reachable here, never from who launched you (duty 9's three states are independent axes).
      A vet receipt states only **completed dispositions and live proposals — never the future tense**.
      *"The next vet will pick it up"* is a failure, never a workflow.
      **A field report, or a vet whose evidence includes a failure observed in the field, reads the
-     revisit-trigger registry** — one pinned, always-current comment on the collector issue, whose
-     marker `owner-decisions.md` defines. **Nothing fires on its own**: no cadence, no release-tied
-     default, no scheduled routine.
-   - **Reconcile the collector at every vet — you are the backstop's actor.** Reading it is a
-     vet-time step: the one moment you are already in disposition mode, and the one moment
-     guaranteed to recur whatever the project's release model. **Failing to locate the collector is
-     never `None`** — it is a disclosed degradation, and you never open a second collector. Age is
-     counted in vet ordinals, and an item two or more vets old is escalated plainly. The merged-PR
-     backstop and the collector's preamble are yours at the same moment.
+     revisit-trigger registry**. **Nothing fires on its own**.
+   - **Reconcile the collector at every vet — you are the backstop's actor.** **Failing to locate the collector is
+     never `None`** — it is a disclosed degradation, and you never open a second collector.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when you record the accounting, reconcile the collector, or run the merged-PR backstop.**
    - **A configured reviewer dispatch you make while vetting is never killed before its structural
      timeout** — the timeout is the tripwire, not your read of intermediate signals. A memory recalls
@@ -448,45 +367,26 @@ above).
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
      field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
-     The spine's **lane** and **misses-log appends** fields are among those slots — see
-     `vet-receipt.md` for their identities and fill contract.
-     The `None` is what makes an absence readable, because
-     presence-by-grep cannot tell *not applicable* from *forgotten*. **The template is a floor, never
-     a ceiling** — a probes field that reads like a form has hollowed out the one field that cannot
-     be. The receipt stands without your context.
    - **Ask the principle question, unconditionally:** *what does the owner still carry after merging
-     that this PR's owner half does not say?* Scoped to the **principle only** — the review seat owns
-     the omission floor's presence match (CONVENTIONS `§10.7`) and you do not re-run it — and it is a
-     **mandatory receipt field with an explicit `None`**. There is **no floor-green precondition**.
-     **A dispatched grounding seat does not retire it** — when one lands, you become the backstop for
-     that seat being absent, vacuous, or misconfigured.
+     that this PR's owner half does not say?* It is a **mandatory receipt field with an explicit `None`**.
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
-     empty (the **workhorse** charter's §11 has the builder create it and governs what it must
-     preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
-     below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
+     empty. **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
      **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
      **The write goes through `vet_slot.py write`.** A refusal is a no-go: fix it at its source —
      add the missing disposition to the receipt, or have the builder correct its list — never with a
      hand edit. **The verdict's form** lives in `vet-receipt.md` spine field 1; a slot not in that
      form reads NOT-READY by construction. Probes, accounting and dispositions are **mechanism**:
-     collapse them inside `<details>` below those four, or leave them to the receipt. Consequence up,
-     mechanism down — *an independent reader checked this, and this is what they concluded* is the
-     most merge-relevant single fact on the page. **One conditional:** when the principle check finds
+     collapse them inside `<details>` below those four, or leave them to the receipt. **One conditional:** when the principle check finds
      an omission, the missing consequence goes **there too**, not only in the receipt. **Never
      owner-call proposals:** *what should we do next* is a different question from *do I merge*.
      **The slot is append-only and yours** — edit your own prior text in place, never the builder's
      prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the empty slot for you** and
      seeds a reminder comment beneath it: write **beneath the marker**, replacing the reminder.
-     **Post the receipt first, then write the owner half that points at it** — a failure between the
-     two leaves a receipt with no pointer (visible, recoverable), never a verdict pointing at a
-     receipt that does not exist. **Check the slot against your most recent receipt whenever you
+     **Post the receipt first, then write the owner half that points at it**. **Check the slot against your most recent receipt whenever you
      next read this PR's body.** **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when the slot is missing, unstamped, or stale.**
    - **Time the vet by the show-it level, not by attendance.** **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when the call is show it.**
    - **You may escalate to a full panel before merge when the lane call looks wrong** — the vet is
-     the backstop for lane calls in both directions. Escalation is optional and proportionate: a
-     focused read-only panel or a single-seat reviewer covers a narrow doubt. A PR that adds a
-     gate, hook, or enforcement mechanism must cite its unlock condition, and sequential orders on
-     one worktree must show a commit between them. **Read
+     the backstop for lane calls in both directions. **Read
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when you doubt the lane or vet
      a gate** — it holds the triggers and how to size the escalation.
 
@@ -503,8 +403,7 @@ above).
    - **Test 2:** is the call, or a consequence it carries, the owner's under the
      [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md)?
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/perceivability.md` when you apply Test 1** —
-   it holds the enumerable net. That net is deliberately wide and, **alone, too wide**; Test 2
-   decides whose call it is.
+   it holds the enumerable net.
    **Fail-direction is explicitly not an owner call** — inside a policy already chosen it applies a
    set rule to a new case, which is always craft
    ([always craft](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#always-craft)); the premortem
@@ -518,52 +417,25 @@ above).
       spot-check — fail-direction flips, receipt-shape changes, storage moves; the panel is the check.
    3. **nothing to see** — neither test → nothing perceivable to judge — internal correctness, tech
       debt, bug fixes with no perceivable surface.
-   **Overlap (owner call vs craft call):** fail-direction inside an already-chosen policy is the
-   lenses' craft call; changing what the product does **by default for an unconfigured user** touches
-   categories 4 and 5 of the line
-   ([the ten owner categories](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#the-ten-owner-categories))
-   and is the owner's. When a change is both, **show it** wins.
+   When a change is both, **show it** wins.
    **The call is made at routing, not at handback.** When the issue is routed, **read the
    project's `## Show-it surface` declaration in `core.md`** so a **show it** call matches what level
    the project can actually offer, then record the call **in the issue with one line of reasoning**
    — the same moment and place as the lane call (duty 3). For **show it**, the issue's **Definition
    of Done carries the presentation obligation as a bullet**, so the builder inherits it as scope,
-   not as a surprise. A duty that first appears at handback is a duty nobody was resourced to
-   discharge; the same holds for the wayfinding half — an entry point is **planned**, not
-   retrofitted after the last dispatch returns. **Mid-build revision valve:** if a builder discovers
+   not as a surprise. **Mid-build revision valve:** if a builder discovers
    a perceivable surface mid-build after a **nothing to see** call, **upgrade the call with a
-   disclosure line** in the issue — never a park, never a silent skip — because the call will
-   sometimes be wrong, and a wrong call must not become an undischargeable duty. **Issue bodies do
-   not adopt the two-half PR template** — an issue's readers ask *is this worth doing*, a different
-   question from *do I merge*.
-   **Presentation duty (show it only) — show the after-state, not the delta.** Taste is judged on the
-   finished thing, and **owners largely do not read diffs** — "it's in the diff" satisfies nothing.
-   **Zero reconstruction, not zero clicks** — the owner never rebuilds the after-state (no checkout,
-   no dev server, no reading source to imagine output). A running URL they click meets the standard;
-   "check out the branch and run the dev server" fails it. **Where that is unreachable, say so rather
-   than prescribe infrastructure.** Take the highest ranked entry-point level the project supports
-   (`${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`), disclose at **command** or below, plus
-   drive-to-state instructions — `attended` and **none** remain the honest floor. Disclosure names
+   disclosure line** in the issue — never a park, never a silent skip.
+   **Presentation duty (show it only) — show the after-state, not the delta.** Disclosure names
    what could not be presented and why, and **reaches the owner before the merge click**.
+   **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Presentation standard when the call is show it** — zero reconstruction, the entry-point levels and when to disclose at `command` or below, and the drive-to-state instructions.
    **Delivery acceptance is an owner gate in this duty's sense** — it reaches the owner before the
    merge click, presented with the final child's handback — or with the no-PR close — in **one
    sitting**, never a separate process. The verdict is **advisory** and the acceptance is the **owner's**.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when a spec's last child closes or its validation run fails.**
-   **Calibration home:** a project's own answers are its Canon's standing rulings and ceded calls
-   (`${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md`), never a configuration value; the line itself is
-   the same in every project. One transition applies, defined in
-   `${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md` (§ The same line in every project): while a
-   project's "material consequence line" configuration item still holds its own prose, read that
-   prose alongside Canon.
    **About to deliver open decisions to the owner → read
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` first** —
-   the full contract lives there. Without it, delivery drifts both ways — short of full rigor, or
-   over-filtered — and the owner becomes the backstop for delivery quality. Name each item's
-   *why it is yours* ground from the owner-vs-craft line, as the filter says, **written down**,
-   not re-derived silently. Three further shapes are that file's, not this one's: **how you derive
-   an item's tier and its craft-or-owner classification** rather than inheriting it, **the batches
-   the walk runs and what the last of them carries**, and **the recap each sitting carries for the
-   owner**.
+   the full contract lives there.
    `/superheroes:discuss-open-decisions` is the owner's keystroke for the same contract on demand;
    it does not replace this standing duty.
 
@@ -739,39 +611,24 @@ above).
    a branch, or held on the collector with its id; every decision and gotcha is recorded with its
    provenance line, or placed on the plugin surface the routing test names.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
-   preflight**. At dispatch time you stand where the builder stands at its own preflight — about to
-   go autonomous on assumptions nobody has exercised — with no equivalent check unless you run it.
-   **The checks** live in
+   preflight**. **The checks** live in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md`, from `engine-auth` to
-   `grant-state`. **Read that file at dispatch time.** Its owner-capability check points at the
-   owner-involvement taxonomy later in this duty.
+   `grant-state`. **Read that file at dispatch time.** Its owner-capability check points at the owner-involvement taxonomy in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` § The owner-involvement taxonomy.
 
    **Record every check ran or N/A, and end on a recorded go / no-go in the dispatch durable
-   record.** Checks marked always run every time; conditional checks run when the work needs them.
-   An N/A carries a **one-line reason**; "marked N/A" without a reason is a silent skip. **A failed
+   record.** **A failed
    check is a no-go** — the dispatch does not launch until it is cleared or explicitly
-   owner-accepted. Keep the preflight proportionate: a twenty-minute preflight before every dispatch
-   repeats, one layer up, the cost mistake the product already watches for.
+   owner-accepted.
 
-   **Prove each engine live before a wave.** At each wave preflight, one conformance probe per
-   dispatchable engine runs on its channel and must return a typed result that validates; the
-   result is recorded in the walked `engine-auth` check
-   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md`). A configuration
-   selftest proves configuration, never that the engine answers. The probe strengthens what
-   `engine-auth` must mean in a wave; it does not add a check to the list.
+   **Prove each engine live before a wave.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/workhorse/reference/dispatch-mechanics.md` § The conformance probe when you run a probe or read its result.**
-   **A failed probe is the owner's choice.** The failure is loud: it names the engine, what failed,
-   and the lanes that depend on it. Nothing launches on that engine without the owner's word. The
-   owner either holds the wave to troubleshoot, or launches without that engine — and when that
-   engine supplied a lane's second family, the preflight names the substitute family, or those full
-   lanes park.
+   **A failed probe is the owner's choice.** Nothing launches on that engine without the owner's word.
 
    **Invoke the launcher — never hand-compose a launch.** Run
    `${CLAUDE_PLUGIN_ROOT}/lib/launcher.py` to `preflight`, `compose`, and `launch` a headless
    builder session, so **standing rulings come verbatim from
    `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md`** — a rulings block reconstructed from memory
-   is what collides builds in a shared checkout. Supply the checks as data; the launcher records
-   each and the go/no-go, and it establishes `standing-rulings` itself. **A launcher or ledger
+   is what collides builds in a shared checkout. **A launcher or ledger
    refusal is a no-go: clear its cause, never force it.**
    A launch can run in a cloud session and a lane can be a cloud lane. Their mechanics are in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md`.
@@ -789,10 +646,7 @@ above).
    simulated phones, is yours, not the builder's. A finished **cloud** lane has no worktree to reap:
    once its pull request merges or closes, its cleanup is the archive request and the branch step.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane when a cloud lane's pull request merges or closes.**
-   When the issue's done-definition names an iPhone
-   check (a check on a simulated iPhone), the premise carries `"iphoneCheck": true`. The premise
-   names no place to check.
-   **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**
+      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**
 
    **Declare a batch before its launches, and record every terminal outcome** — handback, park,
    refusal, or died; an unrecorded outcome makes the batch unreadable rather than clean. **Read
@@ -805,25 +659,15 @@ above).
    **Grant scope is always enumerated, never a fuzzy noun** — state scope as
    **enumerated PRs, a time box, or a count** (not an undefined phrase like "everything in these
    batches"). Standing exclusions: **release PRs are excluded, and force-push is never granted.**
-   **Owner involvement sorts three distinct ways:** **Owner capability** — what an
-   agent structurally cannot do regardless of authority (sign-in so a browser pilot is not blocked,
-   account actions, anything needing credentials the product forbids an agent from handling). **No
-   substitute exists.** **Owner authority** — a commitment or trade that binds the owner; you can hold
-   work and park, so latency is affordable. **A live human to unblock** — premise corrections, forks
-   inside ratified scope; **this resolves to the advisor**, and it is almost all of what actually
-   happens. **Who launched and whether the owner is available are independent
-   axes** — attended, reachable-with-latency, and asleep all appear under advisor launch; do not use
-   advisor-launch as a proxy for owner-absence. A running headless session is deaf — a need
-   raised after launch reaches nobody. **Clear owner-capability preconditions at dispatch time — with
+   Owner involvement sorts three ways — owner capability, owner authority, a live human to unblock — defined in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` § The owner-involvement taxonomy.
+   **Clear owner-capability preconditions at dispatch time — with
    the owner, before the session goes autonomous** — not via a builder preflight when nobody is there.
-   State a **duration** — a session that expires two hours into a four-hour build is the same
-   failure, later. If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
+   If owner capability is discovered mid-run, **park durably** on the **issue or PR** — somewhere
    the advisor will read without being told to look — never improvise a channel; the builder charter
    carries the builder's half.
 
    **Recovery follows the doctrine, never memory.** Read
-   `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery and follow it rather
-   than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
+   `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery and follow it.
    **Before composing a successor's launch, run the unpushed-work sweep** that § Recovery describes, and record what you found for handoff. The calls that are the advisor's: whether a takeover
    is a **resume** (same instance and account only) or an **adoption** (a fresh session from durable
    artifacts, and **the only path across instances or accounts**); **pinning** each builder's
@@ -842,12 +686,6 @@ above).
    **When a cloud build's PR is parked because the reviewer pass lapsed, tell the owner, and send it back for review once the pass is renewed: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back.**
    **When a cloud lane stops or stalls, recover it at once from its pushed work: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Adoption mechanics.**
    **When a cloud-built stack layer hands back, link it, or record the link still owed, before the vet: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Cloud lanes.**
-
-   **The orchestration that remains is yours because the harness does not carry it:** the
-   launcher's detached spawn of headless builders; arming the wave watch and re-arming it; reading
-   liveness from transcript freshness; the builder's turn-end rule for headless sessions; the
-   per-account config pin on every spawned session; the launcher-provisioned worktree per build; the
-   semantic heartbeat; the launch ledger; and the standing rulings block.
 
    **Done when:** every launch ran through the launcher on a recorded go with each check marked ran
    or N/A; every lane in the batch has its terminal outcome recorded, and your vet ruling recorded

@@ -1,6 +1,7 @@
 # Contents
 
 - [Orchestration — launcher, ledger, and wave mechanics](#orchestration--launcher-ledger-and-wave-mechanics)
+- [What the harness does not carry](#what-the-harness-does-not-carry)
 - [Batches and terminal outcomes](#batches-and-terminal-outcomes)
 - [Reading `count`](#reading-count)
 - [Amending a lane's record](#amending-a-lanes-record)
@@ -17,6 +18,14 @@
 This page is reference for the advisor running launches and waves. Duty 9 of the Showrunner charter
 states the rules; this page holds the mechanics behind them. The authoritative semantics of every
 verb named here live in `lib/launcher.py` and `lib/launch_ledger.py`.
+
+## What the harness does not carry
+
+**The orchestration that remains is yours because the harness does not carry it:** the
+launcher's detached spawn of headless builders; arming the wave watch and re-arming it; reading
+liveness from transcript freshness; the builder's turn-end rule for headless sessions; the
+per-account config pin on every spawned session; the launcher-provisioned worktree per build; the
+semantic heartbeat; the launch ledger; and the standing rulings block.
 
 ## Batches and terminal outcomes
 
@@ -363,6 +372,8 @@ report one that is not confirmed as the cleanup's steps say.
 
 The recovery rules live in `rubric/launch-doctrine.md` § Recovery, and the charter keeps the
 advisor's calls. Three of those calls have mechanics beyond the charter:
+
+Follow the doctrine rather than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
 
 - **Pin** each builder's transcript by its issue token instead of re-discovering it newest-first.
 - **Read liveness** from a double-confirmed process check plus pinned-transcript freshness — never
