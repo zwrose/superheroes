@@ -3,7 +3,7 @@
 This document is the standing doctrine for headless builder launches and recovery: the eight rulings
 a dispatch must carry verbatim, the seven-check dispatch preflight every launch records before it
 goes autonomous, and the recovery doctrine for taking over a build that stopped. Advisors read it
-for intent; `lib/launch_doctrine.py` parses the two marked blocks below fail-closed — not the
+for intent; `lib/launch_doctrine.py` parses the three marked blocks below fail-closed — not the
 recovery prose. A whole-file SHA-256 digest of this artifact is still recorded on every dispatch
 as `doctrineDigest` — editing recovery prose changes that digest even though it is not
 machine-parsed.
@@ -12,7 +12,7 @@ The rulings block exists because reconstructing those lines from memory is what 
 shared-checkout collision — `own-worktree` is first because that ruling is the one that collision
 dropped.
 
-**Machine-parsed blocks:** the two HTML-comment-delimited sections below are parsed byte-for-byte.
+**Machine-parsed blocks:** the three HTML-comment-delimited sections below are parsed byte-for-byte.
 Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 
 <!-- launch-doctrine:rulings:begin -->
@@ -35,6 +35,16 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `owner-capability` (conditional) — Owner-capability preconditions cleared, with a stated duration
 - `grant-state` (conditional) — Grant state
 <!-- launch-doctrine:preflight:end -->
+
+**Cloud launch permission (documentation only — not parsed).** The block below holds one sentence.
+`lib/launch_doctrine.py` parses it as one line that must carry the never-a-force-push and
+never-`main` limits, and `compose_launch` carries it in every cloud launch prompt and in no local one. A cloud session pushes only to its own designated branch unless
+its launch says otherwise, so the sentence is how the owner's standing permission to push reaches
+the builder.
+
+<!-- launch-doctrine:cloud-launch:begin -->
+Standing permission from the owner: push to your own build branch (the one you create at intake, or the branch the launch adopts) and to any layer branch the issue's advisor-written order gives this session to build; never to a branch the order names only as a base, never a force-push, never `main`.
+<!-- launch-doctrine:cloud-launch:end -->
 
 **Wave live canary (documentation only — not parsed).** A wave preflight runs the conformance probe
 once per dispatchable engine — one command per engine, three legs, result recorded as the

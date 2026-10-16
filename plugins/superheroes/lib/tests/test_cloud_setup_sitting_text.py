@@ -176,3 +176,21 @@ def test_check_helper_commands_pass_no_relative_working_directory():
     for line in section:
         if 'cloud_check.py"' in line:
             assert "--cwd" not in line, "cloud_check command passes --cwd: %r" % line
+
+
+def test_a_null_snapshot_leaves_before_out_of_both_pick_commands():
+    # axis: both pick commands that pass a snapshot value say to leave --before out when it was null
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    said = [i for i, line in enumerate(section)
+            if re.search(r"leave `--before` out when .*was null", line, re.IGNORECASE)]
+    assert len(said) == 2, "section 6 has %d lines saying to leave --before out on a null value, not 2: %r" % (
+        len(said), said)
+    plain = _first(section, 'cloud_environment.py" pick --cwd . --before <the value step 1 kept>')
+    judge = _first(section, 'cloud_check.py" judge')
+    recovery = _first(section, 'cloud_environment.py" pick --cwd . --before <the snapshot value> '
+                               '--confirmed <the environment now in use>')
+    assert None not in (plain, judge, recovery), (plain, judge, recovery)
+    assert said[0] < plain, "the step 3 rule (%d) does not come before the plain pick (%d)" % (said[0], plain)
+    assert judge < said[1] < recovery, "the step 8 rule (%d) is not between the judge (%d) and recovery (%d) lines" % (
+        said[1], judge, recovery)

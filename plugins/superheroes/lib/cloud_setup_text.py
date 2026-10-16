@@ -33,6 +33,7 @@ import store_core
 
 REVIEWER_CLI_PACKAGE = "@openai/codex"
 DUPLICATION_CHECKER_PACKAGE = "jscpd@5.0.12"
+SANDBOX_TOOL_PACKAGES = "bubblewrap socat"
 SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
 TOOL_STEPS_MARKER = "# The project's own tool steps, if any, go below this line."
@@ -327,6 +328,22 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         % REVIEWER_CLI_PACKAGE,
         '  npm install -g "%s" && echo "duplication checker ok" || echo "duplication checker FAILED"'
         % DUPLICATION_CHECKER_PACKAGE,
+        ') >> "$LOG" 2>&1 &',
+        "",
+        "# Install the two packages the write sandbox needs.",
+        "(",
+        '  apt-get install -y %s || { apt-get update && apt-get install -y %s; } \\'
+        % (SANDBOX_TOOL_PACKAGES, SANDBOX_TOOL_PACKAGES),
+        '    && echo "sandbox tools ok" || echo "sandbox tools FAILED"',
+        ') >> "$LOG" 2>&1 &',
+        "",
+        "# Install the project's pinned Python, when it has a .python-version file.",
+        "(",
+        "  if [ -f .python-version ]; then",
+        '    uv python install && echo "pinned python ok" || echo "pinned python FAILED"',
+        "  else",
+        '    echo "pinned python: no .python-version in $PWD"',
+        "  fi",
         ') >> "$LOG" 2>&1 &',
         "wait",
     ]

@@ -136,7 +136,7 @@ These retirements ship in the same release as the review record, and never apart
 ### Cloud builds: the setup sitting
 
 - A project is set up for cloud builds by asking the advisor to set up cloud builds. The advisor lists four hand steps: make a cloud environment and pick it by name with Claude Code's `/remote-env` picker on the account the builds run on, paste the setup text into it, sign in once to the separate reviewer sign-in, and paste the reviewer pass. It then runs one check session in that environment and reports three results: the cloud's plugin version, its calibration, and whether the reviewer answered.
-- New `lib/cloud_environment.py` reads the environment the owner picked from Claude Code's user settings (`remote.defaultEnvironmentId` in `settings.json` under the account's config directory): `snapshot` before the pick, `pick --before <value>` after it (a retry adds `--confirmed <id>`, so an unchanged value equal to the confirmed id is kept, not asked again). A missing or unchanged value is no pick, and the owner is asked to pick again; the owner is never asked for the id.
+- New `lib/cloud_environment.py` reads the environment the owner picked from Claude Code's user settings (`remote.defaultEnvironmentId` in `settings.json` under the account's config directory): `snapshot` before the pick, `pick --before <value>` after it (a retry adds `--confirmed <id>`, so an unchanged value equal to the confirmed id is kept, not asked again). `compare --environment <id>` checks the picked environment against the one in use before the pass is made, before the check starts, and before it is judged. A missing or unchanged value is no pick, and the owner is asked to pick again; the owner is never asked for the id.
 - New `lib/cloud_check.py` holds the sitting: `setup-message`, `sign-in`, `start`, `report`, `judge` and `setup-text`. `start` and `judge` take `--environment <id>`. A passed check writes the setup record and leaves the cloud-builds setting as it was. A failed check writes nothing and switches cloud builds off when they were on.
 - `cloud_pass.py make` takes `--environment <id>` and then adds a fifth line to its block, `SUPERHEROES_CLOUD_ENVIRONMENT`, naming the environment. The check passes only when the session reports that same id, because a cloud launch naming an id that matches no environment lands in the account's default environment without an error. A pass block made without `--environment` fails the check.
 - The setup text ends with its tool-steps marker line, a log line and `exit 0`. A project's own install steps go directly under the marker line.
@@ -192,10 +192,12 @@ These retirements ship in the same release as the review record, and never apart
 - `cloud_parked.py send-back` has a new `superseded` list: a parked PR whose lane was replaced is listed there and never messaged.
 - Recovery needs the session's listed state as input, which is a host action, and it never recovers a lane whose session reads working with recent activity.
 
-### Cloud builds: cleanup after a cloud lane ends
+### Cloud builds: cleanup and the reviewer pass at the gardening pass
 
 - `lib/cloud_cleanup.py` is new, with three verbs: `plan` says whether a cloud lane's pull request has merged or closed and what to send its session, `record` records how that request went, and `branch` deletes the pull request's branch when the repository kept it.
 - The advisor cleans up a cloud lane only after its pull request merges or closes, the same way for both. While the pull request is open, handed back or parked, nothing is cleaned up. The only step it asks of the owner is the archive prompt, and on a request that could not be confirmed it asks nothing; nothing reminds the owner about an unanswered prompt.
+- The gardening pass has a new duty 8: it reads the reviewer pass for a project with a cloud setup, through the new `cloud_setup.py gardening` verb, and says the days left and the lapse date, with `Renew now` when the pass would lapse before the next pass is owed. The gardening record carries that line. Nothing reads the lapse date between passes.
+- The label of the pass's list is now "The eight duties, a closed list."; duties 1 to 7 are unchanged.
 
 ### Cloud builds: lower-layer cleanup
 
@@ -205,6 +207,15 @@ These retirements ship in the same release as the review record, and never apart
 - A relay name is now at most 64 characters, with odd characters in the account folder's name replaced by `-`, so a long or unusual folder name no longer stops the relay from starting.
 - The owner's message about a finished lane's session is now conditional. It says there will be one prompt if the builder's session has a tool to remove itself, and that the session stays listed until the owner removes it by hand if it has none.
 - A parked PR that is already closed or let through gets no renewal advice, and a newer park on a PR that was closed is recorded again. A cloud lane now records its account, so the renewal check no longer reads an explicit default config folder as a different account.
+
+### Cloud builds: headless builders and the cloud container
+
+- Cloud builders start in auto permission mode with the question dialog off (`--disallowedTools AskUserQuestion`), and the setup check session keeps neither.
+- Every cloud launch prompt carries one standing-permission sentence from `rubric/launch-doctrine.md`'s new cloud-launch block.
+- The setup text now installs `bubblewrap` and `socat` and, when the project has a `.python-version`, its pinned interpreter with `uv python install`. Each step logs `ok` or `FAILED` and never stops the script.
+- The cloud builder reference now covers the headless rule, the container's limits, environment-only failures by a two-part test, per-round review findings on the PR, and an oversized review record.
+- The wave watch's builder-note answer may also be posted on the issue as the durable record.
+- The gardening pass's `Renew now` line now tells the owner to sign the reviewer in again if the date does not move.
 
 ### Vet slot: builder content in the slot span refuses
 

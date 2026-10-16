@@ -224,21 +224,27 @@ def test_inside_fixture_carries_exactly_the_machine_local_document_policy(tmp_pa
 
 # --- the script runs ------------------------------------------------------------------------
 
-def _stubs(tmp_path):
+def _stubs(tmp_path, code=0):
     stub = tmp_path / "stubs"
     stub.mkdir()
     log = tmp_path / "stub-calls.log"
-    for name in ("git", "npm"):
+    for name in ("git", "npm", "apt-get", "uv"):
         path = stub / name
-        path.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n' % (name, log))
+        path.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit %d\n' % (name, log, code))
         path.chmod(0o755)
     return stub, log
 
 
-def _run_script(w, text):
-    stub, log = _stubs(w.tmp)
+def _run_script(w, text, code=0, pinned=False):
+    """Runs the script from a working directory of its own, with every tool stubbed to exit `code`."""
+    stub, log = _stubs(w.tmp, code)
+    work = w.tmp / "work"
+    work.mkdir()
+    if pinned:
+        (work / ".python-version").write_text("3.12\n")
     env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
-    proc = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60)
+    proc = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60,
+                          cwd=str(work))
     return proc, log
 
 
@@ -284,18 +290,55 @@ def test_script_publishes_no_stamp_when_a_calibration_file_cannot_be_written(tmp
 
 def test_script_exits_zero_even_when_every_tool_fails(tmp_path):
     w = _inside(tmp_path)
-    text = _compose(w)["text"]
-    stub = tmp_path / "failing"
-    stub.mkdir()
-    for name in ("git", "npm"):
-        (stub / name).write_text("#!/bin/bash\nexit 1\n")
-        (stub / name).chmod(0o755)
-    env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
-    proc = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0
-    log = (w.home / "superheroes-cloud-setup.log").read_text()
-    assert "plugin FAILED" in log and "reviewer cli FAILED" in log
-    assert "duplication checker FAILED" in log
+    proc, log = _run_script(w, _compose(w)["text"], code=1, pinned=True)
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "plugin FAILED" in setup_log and "reviewer cli FAILED" in setup_log
+    assert "duplication checker FAILED" in setup_log
+    calls = log.read_text()
+    assert "apt-get " in calls and "uv " in calls
+
+
+def test_setup_text_installs_the_sandbox_tools_and_the_pinned_python_before_the_wait(tmp_path):
+    lines = _compose(_inside(tmp_path))["text"].splitlines()
+    install = "apt-get install -y bubblewrap socat"
+    wait = lines.index("wait")
+    marker = lines.index(CS.TOOL_STEPS_MARKER)
+    assert any(install in line for line in lines[:wait])
+    assert any("uv python install" in line for line in lines[:wait])
+    assert wait < marker
+
+
+def test_failing_sandbox_tools_and_pinned_python_are_logged_and_the_script_exits_zero(tmp_path):
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], code=1, pinned=True)
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "sandbox tools FAILED" in setup_log and "pinned python FAILED" in setup_log
+    assert "sandbox tools ok" not in setup_log and "pinned python ok" not in setup_log
+    assert "apt-get update" in log.read_text()
+
+
+def test_working_sandbox_tools_and_pinned_python_are_logged_ok(tmp_path):
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pinned=True)
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "sandbox tools ok" in setup_log and "pinned python ok" in setup_log
+    calls = log.read_text().splitlines()
+    assert "uv python install" in calls
+    assert "apt-get install -y bubblewrap socat" in calls
+    assert "apt-get update" not in calls
+
+
+def test_no_python_version_file_is_logged_by_directory_and_uv_is_never_called(tmp_path):
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"])
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "pinned python: no .python-version in %s" % (w.tmp / "work") in setup_log
+    assert "pinned python ok" not in setup_log and "pinned python FAILED" not in setup_log
+    assert "uv " not in log.read_text()
 
 
 @pytest.mark.parametrize("build", [_outside, _inside])

@@ -105,11 +105,15 @@ RULING_INVARIANTS = {
     ),
 }
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
+# The cloud-launch sentence lives once, in rubric/launch-doctrine.md; the parser checks only what it must carry.
+CLOUD_LAUNCH_INVARIANTS = ("never a force-push", "never `main`")
 
 _RULINGS_BEGIN = "<!-- launch-doctrine:rulings:begin -->"
 _RULINGS_END = "<!-- launch-doctrine:rulings:end -->"
 _PREFLIGHT_BEGIN = "<!-- launch-doctrine:preflight:begin -->"
 _PREFLIGHT_END = "<!-- launch-doctrine:preflight:end -->"
+_CLOUD_LAUNCH_BEGIN = "<!-- launch-doctrine:cloud-launch:begin -->"
+_CLOUD_LAUNCH_END = "<!-- launch-doctrine:cloud-launch:end -->"
 _CHARTER_BEGIN = "<!-- launch-doctrine:preflight-charter:begin -->"
 _CHARTER_END = "<!-- launch-doctrine:preflight-charter:end -->"
 
@@ -133,6 +137,7 @@ def _refuse(reason: str) -> dict:
         "checks": [],
         "rulingsBlock": None,
         "digest": None,
+        "cloudLaunchLine": None,
     }
 
 
@@ -141,6 +146,7 @@ def _ok(
     checks: list[dict],
     rulings_block: str,
     digest: str,
+    cloud_launch_line: str,
 ) -> dict:
     return {
         "ok": True,
@@ -149,6 +155,7 @@ def _ok(
         "checks": checks,
         "rulingsBlock": rulings_block,
         "digest": digest,
+        "cloudLaunchLine": cloud_launch_line,
     }
 
 
@@ -242,6 +249,16 @@ def _parse_preflight_block(text: str, body: str, body_start: int) -> tuple[list[
     return checks, None
 
 
+def _parse_cloud_launch_block(text: str, body: str, body_start: int) -> tuple[str | None, str | None]:
+    lines = [raw_line for raw_line in body.split("\n") if raw_line.strip()]
+    if len(lines) != 1:
+        return None, f"doctrine-malformed-line:{_line_number(text, body_start)}"
+    for phrase in CLOUD_LAUNCH_INVARIANTS:
+        if phrase not in lines[0]:
+            return None, f"doctrine-cloud-launch-invariant-missing:{phrase}"
+    return lines[0], None
+
+
 def parse(text: object) -> dict:
     """Parse doctrine text. Never raises."""
     if not isinstance(text, str) or not text:
@@ -278,8 +295,19 @@ def parse(text: object) -> dict:
     if reason is not None:
         return _refuse(reason)
 
+    cloud_body, reason = _extract_block(text, _CLOUD_LAUNCH_BEGIN, _CLOUD_LAUNCH_END, "cloud-launch")
+    if reason is not None:
+        return _refuse(reason)
+    cloud_block_start = text.find(_CLOUD_LAUNCH_BEGIN) + len(_CLOUD_LAUNCH_BEGIN)
+    if cloud_block_start < len(text) and text[cloud_block_start] == "\n":
+        cloud_block_start += 1
+
+    cloud_launch_line, reason = _parse_cloud_launch_block(text, cloud_body, cloud_block_start)
+    if reason is not None:
+        return _refuse(reason)
+
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return _ok(rulings, checks, rulings_block, digest)
+    return _ok(rulings, checks, rulings_block, digest, cloud_launch_line)
 
 
 def load(path: str | None = None) -> dict:

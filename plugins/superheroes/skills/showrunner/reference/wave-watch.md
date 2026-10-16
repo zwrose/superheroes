@@ -423,7 +423,7 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 
 Each note names the session to answer (`cloudSessionName`) and the account it runs on (`configDir`).
 Compare `configDir` with the account you run on, your resolved config directory (`CLAUDE_CONFIG_DIR`
-when set, otherwise `~/.claude`). Answer by message, never on the issue.
+when set, otherwise `~/.claude`). Answer by message, or through the relay below. The send is still the gate for `note-answered`; posting the same answer on the issue as the durable record is allowed and recommended.
 
 **What the answer says.** Name the chosen option literally, in your own words: the line, value or
 step the builder should use, written out in full. Never answer by reference to the note ("go ahead
