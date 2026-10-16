@@ -294,11 +294,15 @@ def build_identity(a, stage, repo, stored):
     if cand is None:
         raise Refusal("--candidate is required for the first use of a run dir")
     base = resolve(a.base, "base") or default_base(repo, cand[1], cand[0])
+    n_reps = pick(reps, "replicates", 3)
+    # bites on: zero or negative replicates run no seats, and the vacuous counts would report PASS
+    if n_reps < 1:
+        raise Refusal(f"replicates must be a positive integer, got {n_reps}")
     ident = {"base_ref": base[0], "base_sha": base[1], "candidate_ref": cand[0], "candidate_sha": cand[1],
              "charter": pick(a.charter, "charter", DEFAULT_CHARTER), "scenarios_file": scen_file,
              "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),
              "judge_model": pick(a.judge_model, "judge_model", "gpt-6.1-sol"),
-             "replicates": pick(reps, "replicates", 3), "seed": pick(a.seed, "seed", 1882)}
+             "replicates": n_reps, "seed": pick(a.seed, "seed", 1882)}
     return ident, scenarios
 
 
@@ -313,6 +317,9 @@ def run_seat(run_dir, side_dirs, sc, side, rep, force, ident, config_dir):
     if nonempty(out) and not force:
         return dict(res, attempts=0, ok=True, skipped=True)
     prompt = render_prompt(ident["role"], ident["charter"], sc["situation"], sc["question"])
+    if force and nonempty(out):
+        # bites on: a forced rerun that fails must stay incomplete, so the old answer leaves the active path first
+        os.replace(out, out + ".prev")
     cmd = ["claude", "-p", "--model", ident["model"], "--allowedTools", "Read,Grep,Glob",
            "--output-format", "text", prompt]
     for attempt in (1, 2):
@@ -404,13 +411,19 @@ def stage_judge(run_dir, scenarios, ident, force, jobs):
         atomic_write(pp, prompt)
         if not force and nonempty(out) and parse_judge(read_text(out), reps) and prompt_bound(run_dir, sid, prompt):
             return sid, 0
+        if force:
+            # bites on: a forced rerun that fails must stay incomplete, so the old output and hash leave the active path
+            for stale in (out, shap):
+                if os.path.exists(stale):
+                    os.replace(stale, stale + ".prev")
         for attempt in (1, 2):
             t0 = time.time()
             try:
-                _, text, err = exec_judge(cmd, prompt)
+                rc, text, err = exec_judge(cmd, prompt)
             except (subprocess.TimeoutExpired, OSError) as e:
-                text, err = "", f"{type(e).__name__}: {e}"
-            ok = parse_judge(text, reps) is not None
+                rc, text, err = None, "", f"{type(e).__name__}: {e}"
+            # bites on: a judge call that exited non-zero is not published even when its stdout parses
+            ok = rc == 0 and parse_judge(text, reps) is not None
             log(run_dir, f"judge {sid} attempt {attempt} ok={ok} {time.time()-t0:.0f}s")
             if ok:
                 atomic_write(out, text)

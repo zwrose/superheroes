@@ -428,3 +428,44 @@ def test_scenario_file_guards(tmp_path):
                 {"scenarios": [scen("a")]}, {"role": "r", "scenarios": "no"}):
         with pytest.raises(ab.Refusal):
             load(bad)
+
+
+# ---------------------------------------------------------------- round-1 fixes: replicates, judge rc, forced reruns
+
+def test_non_positive_replicates_refused(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    argv = ["run", "--repo", str(repo), "--candidate", "HEAD", "--base", "HEAD", "--charter", "CHARTER.md",
+            "--scenarios", write_scenarios(tmp_path), "--run-dir", str(tmp_path / "run")]
+    for bad in ("0", "-1"):
+        assert ab.main(argv + ["--replicates", bad]) == 3
+    monkeypatch.setenv("REPLICATES", "0")
+    assert ab.main(argv) == 3
+    assert not (tmp_path / "run" / "sides.json").exists()
+
+
+def test_judge_nonzero_exit_is_not_published(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, _ = build_run(tmp_path, judged=False)
+    monkeypatch.setattr(ab, "exec_judge", lambda cmd, prompt: (1, judge_line(1), "boom"))
+    ab.stage_judge(run_dir, scenarios[:1], ident, False, 1)
+    out, _, shap = ab.judge_paths(run_dir, "s1")
+    assert not os.path.exists(out) and not os.path.exists(shap)
+    assert os.path.exists(out + ".fail1.err") and os.path.exists(out + ".fail2.err")
+
+
+def test_failed_forced_rerun_stays_incomplete(tmp_path, monkeypatch):
+    run_dir, scenarios, ident, mapping = build_run(tmp_path)
+    assert ab.stage_report(run_dir, scenarios, ident) == 0
+    monkeypatch.setattr(ab, "exec_seat", lambda c, w, e: (1, "", "outage"))
+    for sc in scenarios:
+        for side in ab.SIDES:
+            ab.run_seat(run_dir, SIDE_DIRS, sc, side, 1, True, ident, "/cfg")
+    assert ab.stage_report(run_dir, scenarios, ident) == 2
+    assert Path(ab.ans_path(run_dir, "s1", "base", 1) + ".prev").exists()
+    # restore answers, then fail only the forced judge rerun
+    for sc in scenarios:
+        for side in ab.SIDES:
+            Path(ab.ans_path(run_dir, sc["id"], side, 1)).write_text(f"answer {sc['id']} {side} 1\n")
+    monkeypatch.setattr(ab, "exec_judge", lambda cmd, prompt: (1, "", "outage"))
+    ab.stage_judge(run_dir, scenarios, ident, True, 1)
+    assert ab.stage_report(run_dir, scenarios, ident) == 2
