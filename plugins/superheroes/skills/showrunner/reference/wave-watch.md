@@ -192,16 +192,30 @@ not a pattern to keep.
 
 ## Before treating `lane-stale` as a wedge
 
-`lane-stale` is a **wedged builder**: a started lane whose recorded leader pid is positively live,
-with no terminal heartbeat (`parked` / `handback`), whose session transcript is colder than the
-quiet window **or** cannot be resolved. Only a terminal stamp (`parked` / `handback`) takes a
+For a local lane, `lane-stale` is a **wedged builder**: a started lane whose recorded leader pid is
+positively live, with no terminal heartbeat (`parked` / `handback`), whose session transcript is
+colder than the quiet window **or** cannot be resolved. Only a terminal stamp (`parked` / `handback`) takes a
 lane out of this check — a `blocked` lane stays in it, so `lane-blocked` wins precedence and
 `lane-stale` surfaces under `alsoObserved` or fires when `lane-blocked` is ignored. That is the wedge. The one-shot `run`
 verb applies the same rule, so a scheduled `run` reports a wedged lane even when no watch loop is
 armed.
 
-Before emitting `lane-stale`, the watcher resolves the lane's session transcript from the **session
-id the launcher recorded on the launch record** and compares its mtime to
+A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no pid to probe and no transcript, so it
+takes none of the checks below. The watcher reads its activity on GitHub instead: the newest of its
+issue's last update, the last update of a PR that closes the issue, and the last commit on a branch
+whose name carries the issue number. It makes one request per tick, no more often than
+`CLOUD_ACTIVITY_POLL_SECONDS` in `lib/wave_watch.py` allows, and only
+while a cloud lane is live. A cloud lane quiet past `LIVENESS_QUIET_WINDOW_SECONDS`, counted from the
+later of its start and its last activity, is `lane-stale`. Its entry carries `place: "cloud"` and
+`activityAgeSeconds` in place of `transcriptAgeSeconds`.
+
+Before you treat a cloud lane's `lane-stale` as a wedge, read the session's state in the host's
+session listing. A session the platform shows working is not wedged. A branch whose name omits the
+issue number is not read until its PR opens, so a builder on such a branch can read quiet while it
+works.
+
+For a local lane, before emitting `lane-stale`, the watcher resolves the lane's session transcript
+from the **session id the launcher recorded on the launch record** and compares its mtime to
 `LIVENESS_QUIET_WINDOW_SECONDS` in `lib/wave_watch.py`. Each `lane-stale` entry carries `launchId`,
 `state` (heartbeat state or null), `transcriptAgeSeconds` (null when unresolved), and
 `quietWindowSeconds`.
@@ -344,10 +358,15 @@ fire last, which is not necessarily the one whose green you are claiming: a watc
 invocation. Every `loop` result also carries `passedOver` and `passedOverCount` (empty or zero when
 nothing was passed over). `run` results never carry `arms`, `passedOver`, or `passedOverCount`.
 
-`lane-stale` is a **wedged builder** under the quiet-window rule above. It fires only when the
-builder's pid is positively alive — an uncertain probe is not a wedge, and a dead builder is
-`builder-exited` instead. See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
+`lane-stale` is a **wedged builder** under the quiet-window rule above. For a local lane it fires
+only when the builder's pid is positively alive — an uncertain probe is not a wedge, and a dead
+builder is `builder-exited` instead. See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
 for resolution, degradation tokens, and why an unresolvable transcript still alerts.
+
+For a [cloud lane](../../../rubric/glossary.md#cloud-lane) the watcher never reports `builder-exited`,
+`lane-terminal`, `lane-blocked`, or `lane-never-stamped`, and never reads a transcript. Its ending
+reaches you through its PR and its issue. While a batch has a live cloud lane, every result carries
+`cloudLanes`, which lists them.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
 on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
@@ -378,6 +397,7 @@ Notes beyond the token name:
 - `pr-signal-never-sampled` (`loop` only — not reported by `run`)
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
+- `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
@@ -407,14 +427,17 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
   as long as you leave it running.
 - **A started lane that has never stamped a heartbeat across the full watch window
   is reported as a `lane-never-stamped` degradation at the deadline** — but
-  `builder-exited` still surfaces it when its recorded pid dies.
+  `builder-exited` still surfaces it when its recorded pid dies. A cloud lane has no heartbeat and no
+  pid, so the watcher reports neither for it.
 
 ## How it relates to the heartbeat sweep
 
 The heartbeat sweep (`lib/heartbeat.py`) reads **endings** — `terminal`, `nonterminal`, and
-`unknown` — on a schedule the advisor runs and acts on. **Liveness** lives in `wave_watch`: pid
-positively live plus session transcript age against `LIVENESS_QUIET_WINDOW_SECONDS`. The watcher is a
-blocking arm (`loop` at wave launch, or a one-off `run`) — `loop` returns on the first arm its exit
+`unknown` — on a schedule the advisor runs and acts on. **Liveness** lives in `wave_watch`: for a
+local lane, pid positively live plus session transcript age against `LIVENESS_QUIET_WINDOW_SECONDS`,
+and for a [cloud lane](../../../rubric/glossary.md#cloud-lane), its activity on GitHub against the
+same window. The sweep reports a cloud lane `nonterminal` with reason `cloud-lane-no-heartbeat`,
+which says nothing about liveness. The watcher is a blocking arm (`loop` at wave launch, or a one-off `run`) — `loop` returns on the first arm its exit
 classifier does not pass over — a refusal, a lane-ending event, an unknown event, or a
 `stack-state-changed` carrying the launchable idle-seat flag — or at its `--max-total-seconds`
 ceiling (see "What ends a loop and what it passes over"); `run` returns at once. Neither the sweep

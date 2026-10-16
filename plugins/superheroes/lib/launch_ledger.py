@@ -23,6 +23,7 @@ import math
 import os
 import uuid
 import posixpath
+import re
 import signal
 import stat
 import subprocess
@@ -56,6 +57,22 @@ VET_RULINGS = ("ready", "not-ready", "parked-blocker")
 _AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
 WHOLE_REPO = ":whole-repo:"
+# Where a lane runs. Decided once, by the `reserved` record, and every reader branches on the
+# folded `place`. A cloud lane has no local process the build depends on, no session
+# transcript, no worktree and no heartbeat file, so no reader may conclude anything about one
+# from a pid or a heartbeat file.
+PLACE_LOCAL = "local"
+PLACE_CLOUD = "cloud"
+PLACES = (PLACE_LOCAL, PLACE_CLOUD)
+_CLOUD_SESSION_ID_RE = re.compile(r"^session_[A-Za-z0-9]+$")
+# Reserved fields that describe a local checkout or a local pilot slot; a cloud lane has none.
+_CLOUD_FORBIDDEN_RESERVED_FIELDS = (
+    "worktree", "sessionId", "slot", "generation", "boundary", "iphoneId",
+)
+# Optional `started` fields a cloud lane records about its cloud session.
+_CLOUD_STARTED_FIELDS = (
+    "cloudSessionName", "cloudSessionId", "cloudSessionUrl", "cloudSessionUnconfirmed",
+)
 
 _LOCK_SUFFIX = ".lock"
 _LOCK_NAME = LEDGER_NAME + _LOCK_SUFFIX
@@ -882,7 +899,31 @@ def _validate_boundary_block(block, slot, generation):
     return None
 
 
+def _validate_reserved_place(rec):
+    """Shape of the lane's place: `place` is absent (local) or exactly "cloud"."""
+    if "place" in rec:
+        # axis: a wrong place value is refused — only the absent field and "cloud" are records this ledger writes.
+        if rec["place"] != PLACE_CLOUD:
+            return "fold-bad-field:reserved:place"
+        for field in ("cloudEnvironment", "pluginVersion"):
+            value = rec.get(field)
+            if not isinstance(value, str) or not value.strip():
+                return "fold-bad-field:reserved:%s" % field
+        for field in _CLOUD_FORBIDDEN_RESERVED_FIELDS:
+            if field in rec:
+                return "fold-bad-field:reserved:place-local-field"
+        return None
+    for field in ("cloudEnvironment", "pluginVersion"):
+        if field in rec:
+            return "fold-bad-field:reserved:%s" % field
+    return None
+
+
 def _validate_reserved_optional_fields(rec):
+    place_err = _validate_reserved_place(rec)
+    if place_err:
+        return place_err
+
     if "surfaceOverlap" in rec:
         # The live lanes this launch's premise surfaces overlapped at reserve time (#1054).
         # Overlap is a recorded, disclosed warning rather than a refusal — landing order is
@@ -1023,6 +1064,22 @@ def _validate_batch_declared(rec):
     return None
 
 
+def _validate_started_cloud_fields(rec):
+    """Shape of the optional cloud-session fields on a `started` record (lane agreement is `fold`'s)."""
+    for field in ("cloudSessionName", "cloudSessionUrl"):
+        if field in rec:
+            value = rec[field]
+            if not isinstance(value, str) or not value.strip():
+                return "fold-bad-field:started:%s" % field
+    if "cloudSessionId" in rec:
+        value = rec["cloudSessionId"]
+        if not isinstance(value, str) or not _CLOUD_SESSION_ID_RE.fullmatch(value):
+            return "fold-bad-field:started:cloudSessionId"
+    if "cloudSessionUnconfirmed" in rec and rec["cloudSessionUnconfirmed"] is not True:
+        return "fold-bad-field:started:cloudSessionUnconfirmed"
+    return None
+
+
 def _validate_event_fields(rec):
     event = rec["event"]
     if event == "reserved":
@@ -1071,6 +1128,9 @@ def _validate_event_fields(rec):
             evidence = rec["evidence"]
             if not isinstance(evidence, str) or not evidence.strip():
                 return "fold-bad-field:started:evidence"
+        cloud_err = _validate_started_cloud_fields(rec)
+        if cloud_err:
+            return cloud_err
     elif event == "retry":
         attempt = rec["attempt"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -1235,6 +1295,16 @@ def fold(records):
                 # The simulator device provisioned at reserve time; None on every record that
                 # carries none. It survives terminalization, so a reader can still reap it.
                 "iphoneId": rec.get("iphoneId"),
+                # Where the lane runs, decided here and nowhere else. Never missing: an absent
+                # `place` on the record is a local lane. The cloud session values are filled
+                # in by the lane's `started` record.
+                "place": PLACE_CLOUD if rec.get("place") == PLACE_CLOUD else PLACE_LOCAL,
+                "cloudEnvironment": rec.get("cloudEnvironment"),
+                "pluginVersion": rec.get("pluginVersion"),
+                "cloudSessionId": None,
+                "cloudSessionName": None,
+                "cloudSessionUrl": None,
+                "cloudSessionUnconfirmed": False,
             }
             continue
 
@@ -1261,6 +1331,31 @@ def fold(records):
             }
 
         if event == "started":
+            # Lane agreement: the record's cloud fields must match the place the lane's
+            # `reserved` record decided.
+            if info["place"] == PLACE_CLOUD:
+                if "cloudSessionName" not in rec:
+                    return {
+                        "ok": False,
+                        "reason": "fold-bad-field:started:cloudSessionName",
+                        "launches": {},
+                        "batchDeclarations": batch_declarations,
+                    }
+                # axis: an identity-less cloud start is refused — exactly one of the confirmed id and the unconfirmed marker.
+                if ("cloudSessionId" in rec) == ("cloudSessionUnconfirmed" in rec):
+                    return {
+                        "ok": False,
+                        "reason": "fold-bad-field:started:cloudSessionId",
+                        "launches": {},
+                        "batchDeclarations": batch_declarations,
+                    }
+            elif any(field in rec for field in _CLOUD_STARTED_FIELDS):
+                return {
+                    "ok": False,
+                    "reason": "fold-bad-field:started:cloud-field-on-local-lane",
+                    "launches": {},
+                    "batchDeclarations": batch_declarations,
+                }
             prev_attempt = info.get("attempt")
             if prev_attempt is not None and rec["attempt"] <= prev_attempt:
                 return {
@@ -1283,6 +1378,11 @@ def fold(records):
             pid_started_ts = dict(info.get("pidStartedTs", {}))
             pid_started_ts[rec["pid"]] = rec["ts"]
             info["pidStartedTs"] = pid_started_ts
+            if info["place"] == PLACE_CLOUD:
+                info["cloudSessionId"] = rec.get("cloudSessionId")
+                info["cloudSessionName"] = rec["cloudSessionName"]
+                info["cloudSessionUrl"] = rec.get("cloudSessionUrl")
+                info["cloudSessionUnconfirmed"] = "cloudSessionUnconfirmed" in rec
         elif event == "retry":
             pass
         elif event in TERMINAL_EVENTS:
@@ -1748,6 +1848,10 @@ def _validate_started_repair(started_repair):
         evidence = started_repair["evidence"]
         if not isinstance(evidence, str) or not evidence.strip():
             return False
+    # The cloud-session fields a repaired `started` copies; the same shape rules as a
+    # first-attempt record's, lane agreement being checked when the repaired record folds.
+    if _validate_started_cloud_fields(started_repair):
+        return False
     return True
 
 
@@ -1835,7 +1939,11 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
-        if info.get("started"):
+        # A cloud lane has no local process the build depends on: the recorded pid is the
+        # launch command's own, already exited, so no probe reads it.
+        # axis: a cloud lane's outcome records with a live pid — the probe is skipped by place.
+        cloud_lane = info.get("place") == PLACE_CLOUD
+        if info.get("started") and not cloud_lane:
             # One _child_group_is_live per recorded attempt, each with bounded
             # settle — all inside the lock. At most one started per launch today.
             for pid in _started_pids_to_probe(info):
@@ -1859,7 +1967,7 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                         "ok": False, "reason": "terminal-repair-unavailable",
                         "kind": None, "outcome": None, "reaped": reaped,
                     }
-                if _child_group_is_live(
+                if not cloud_lane and _child_group_is_live(
                     started_repair["pid"],
                     started_ts=None,
                     session_id=info.get("sessionId"),
@@ -1886,6 +1994,9 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 # path where the ledger was already having trouble (#1054).
                 if started_repair.get("evidence"):
                     started_record["evidence"] = started_repair["evidence"]
+                for field in _CLOUD_STARTED_FIELDS:
+                    if field in started_repair:
+                        started_record[field] = started_repair[field]
                 folded_repair = fold(records + [started_record])
                 if not folded_repair["ok"]:
                     return {
@@ -2255,7 +2366,7 @@ def _count_indeterminate(batch_id, reason):
         },
         "amendments": _zero_amendments(),
         "amendedLaunches": 0,
-        "lanes": {"declared": 0, "resolved": 0},
+        "lanes": {"declared": 0, "resolved": 0, "cloud": 0},
         "attempts": {"total": 0, "extra": 0, "outcomes": _zero_attempt_outcomes()},
         "laneDetail": [],
         "slots": [],
@@ -2363,6 +2474,7 @@ def count(repo_root, batch_id, env=None):
     }
     attempt_outcomes = _zero_attempt_outcomes()
     lane_detail = []
+    cloud_lanes = 0
 
     for issue in sorted(lane_groups):
         lane_launch_ids = lane_groups[issue]
@@ -2392,6 +2504,8 @@ def count(repo_root, batch_id, env=None):
 
         final_info = folded["launches"][ordered[-1]]
         counts["total"] += 1
+        if final_info.get("place") == PLACE_CLOUD:
+            cloud_lanes += 1
         if final_info.get("terminalKind") == "refused":
             counts["refusedToLaunch"] += 1
         elif final_info.get("terminalKind") == "outcome":
@@ -2405,6 +2519,8 @@ def count(repo_root, batch_id, env=None):
             "outcome": final_info.get("outcome"),
             "terminalKind": final_info.get("terminalKind"),
             "attemptOutcomes": attempt_labels,
+            # axis: a cloud lane is marked in count — the place of the lane's final launch.
+            "place": final_info["place"],
         })
 
     amendments = _zero_amendments()
@@ -2480,7 +2596,7 @@ def count(repo_root, batch_id, env=None):
         "counts": counts,
         "amendments": amendments,
         "amendedLaunches": amended_launches,
-        "lanes": {"declared": decls[0], "resolved": distinct_lanes},
+        "lanes": {"declared": decls[0], "resolved": distinct_lanes, "cloud": cloud_lanes},
         "attempts": {
             "total": len(batch_launches),
             "extra": len(batch_launches) - distinct_lanes,

@@ -51,6 +51,8 @@ REASON_REPO_IDENTITY_UNAVAILABLE = "heartbeat-repo-identity-unavailable"
 REASON_WRITE_FAILED = "heartbeat-write-failed"
 REASON_LEDGER_UNREADABLE = "heartbeat-ledger-unreadable"
 REASON_HEARTBEAT_MISSING = "heartbeat-missing"
+# A cloud lane has no heartbeat file; its liveness is not a thing this sweep can read.
+REASON_CLOUD_LANE = "cloud-lane-no-heartbeat"
 
 _LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _NOTE_MAX_LEN = 500
@@ -487,7 +489,11 @@ def _ledger_live_launches(repo_root, env=None):
     if not folded["ok"]:
         return _fail(REASON_LEDGER_UNREADABLE, live=[])
     live = ll.live_launches(read_result["records"])
-    return _ok(live=live)
+    places = {
+        launch_id: folded["launches"][launch_id].get("place", ll.PLACE_LOCAL)
+        for launch_id in live
+    }
+    return _ok(live=live, places=places)
 
 
 def sweep(repo_root, *, env=None, now=None):
@@ -500,6 +506,20 @@ def sweep(repo_root, *, env=None, now=None):
 
     entries = []
     for launch_id in ledger["live"]:
+        # axis: a cloud lane never reads unknown for lacking a heartbeat — it is decided by place, before any file is read.
+        if ledger["places"].get(launch_id) == ll.PLACE_CLOUD:
+            entries.append({
+                "launchId": launch_id,
+                "class": "nonterminal",
+                "place": ll.PLACE_CLOUD,
+                "state": None,
+                "phase": None,
+                "lastDispatch": None,
+                "ageSeconds": None,
+                "note": None,
+                "reason": REASON_CLOUD_LANE,
+            })
+            continue
         classified = _read_file_classification(repo_root, launch_id, env=env, now=now)
         entry_class = classified.get("class_") or classified.get("class")
         if entry_class not in SWEEP_CLASSES:
@@ -507,6 +527,7 @@ def sweep(repo_root, *, env=None, now=None):
         entry = {
             "launchId": launch_id,
             "class": entry_class,
+            "place": ll.PLACE_LOCAL,
             "state": classified.get("state"),
             "phase": classified.get("phase"),
             "lastDispatch": classified.get("lastDispatch"),

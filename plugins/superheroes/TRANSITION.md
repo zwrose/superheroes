@@ -77,6 +77,13 @@ These retirements ship in the same release as the review record, and never apart
 - A run directory reused with a different prompt now refuses `run-dir-prompt-mismatch` instead of replaying the earlier result.
 - A Claude-built PR's grouping pass can sit on codex when the seat map proves that cell live.
 
+### Launch ledger: cloud lanes
+
+- The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
+- `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
+- Heartbeat sweep entries gain `place`.
+- An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
+
 ### Review: the PR sheet builder
 
 - `pr_sheet.py build` makes a PR sheet's data file from the PR's review record and the advisor's input, `pr-sheet-input/1`, whose shape its module docstring defines. A stack that merges whole gets one sheet from all its records.

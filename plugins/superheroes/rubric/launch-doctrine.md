@@ -248,3 +248,8 @@ empty or unchanging log says nothing about whether the session is working. **Nev
 by a global process match**: a `pgrep` on an engine's name catches long-lived daemons and, under
 parallel load, sibling sessions' dispatches — poll the thing you own (your own output file, your own
 recorded pid, your own task id).
+
+A [cloud lane](glossary.md#cloud-lane) has no local pid to probe, no session transcript, and no
+heartbeat, so none of the signals above applies to it. Its liveness is read from its activity on
+GitHub; the procedure is in the showrunner's
+[wave-watch reference](../skills/showrunner/reference/wave-watch.md#before-treating-lane-stale-as-a-wedge).

@@ -707,6 +707,7 @@ def _ledger_live_state(repo_root, env=None):
         for launch_id, info in folded["launches"].items():
             entry = {
                 "batchId": info["batchId"],
+                "place": info.get("place"),
                 "slot": info.get("slot"),
                 "generation": info.get("generation"),
                 "terminalReason": _terminal_reason_from_fold(info, records),
@@ -781,6 +782,9 @@ def _slot_reservation_gate(
         if exclude_launch_id and launch_id == exclude_launch_id:
             continue
         if info.get("batchId") != batch_id:
+            continue
+        # A cloud lane holds no local pilot slot (its record forbids one).
+        if info.get("place") == ll.PLACE_CLOUD:
             continue
         if info.get("slot") is None:
             missing.append(launch_id)
