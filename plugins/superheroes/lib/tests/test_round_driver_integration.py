@@ -105,7 +105,8 @@ _WRITE_META_HEAD = object()
 
 def _blocking_finding(title, line):
     return {"file": FIXED_FILE, "line": line, "title": title, "severity": "Important",
-            "detail": "%s at %s:%d" % (title, FIXED_FILE, line)}
+            "detail": "%s at %s:%d" % (title, FIXED_FILE, line),
+            "consequence": "a reviewer-found defect stays in the change"}
 
 
 # =============================================================================================

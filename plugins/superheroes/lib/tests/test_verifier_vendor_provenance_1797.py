@@ -21,7 +21,8 @@ def _cell_proof(vendors=("claude", "codex")):
 def _state():
     state = RD.new_state({"repoRoot": "/nonexistent-review-project", "vendors": ["claude", "codex"],
                           "fixerVendor": "claude", "seatMap": _cell_proof()})
-    state["_toVerify"] = [{"file": "a.py", "line": 1, "title": "defect", "severity": "Important"}]
+    state["_toVerify"] = [{"file": "a.py", "line": 1, "title": "defect", "severity": "Important",
+                           "consequence": "a reviewer-found defect stays in the change"}]
     return state
 
 
@@ -78,11 +79,16 @@ import round_adapters  # noqa: E402
 import test_round_driver_integration as IT  # noqa: E402
 
 
+def _blocking_finding(title, line):
+    return dict(IT._blocking_finding(title, line),
+                consequence="a reviewer-found defect stays in the change")
+
+
 def _drive_verifiers_with_source(tmp_path, monkeypatch, source, name):
     """record-result + advance a REFUTED verdict whose stored envelope's execution evidence names
     ``source`` (fixer claude, so codex is the selected verifier vendor). -> (state, pre_state)."""
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
-    findings = [IT._blocking_finding("unchecked index", 2)]
+    findings = [_blocking_finding("unchecked index", 2)]
     IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
     state = IT._state(session_dir)
     assert RD._nonpanel_selection(state, session_dir, RD.P_VERIFIERS)[0] == "codex"
@@ -155,7 +161,7 @@ def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, overlap=False, 
     """Two findings far apart (two clusters); ``source_for(index)`` names each cluster seat's
     execution-evidence source. -> (final state, ids of cluster 0's findings, ids of cluster 1's)."""
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name, **cfg_over)
-    findings = [IT._blocking_finding("unchecked index", 2), dict(IT._blocking_finding("late defect", 2), file=IT.FILES[1])]
+    findings = [_blocking_finding("unchecked index", 2), dict(_blocking_finding("late defect", 2), file=IT.FILES[1])]
     IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
     state = IT._state(session_dir)
     pend = state["pending"]
@@ -235,7 +241,7 @@ def _drive_with_preference_change(tmp_path, monkeypatch, source, name, tamper=No
     monkeypatch.setattr(engine_pref, "resolve_engine", lambda _role, _prefs: pref["engine"])
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name,
                                                    vendors=["claude", "codex", "cursor"])
-    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+    IT._drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)], head_path,
                        RD.P_VERIFIERS)
     state = IT._state(session_dir)
     assert RD._nonpanel_selection(state, session_dir, RD.P_VERIFIERS)[0] == "codex"
@@ -286,7 +292,7 @@ def _drive_native_verifiers(tmp_path, name, fixer="codex", vendors=("claude", "c
         tmp_path, name=name, fixerVendor=fixer, vendors=list(vendors),
         seatMap={"hostFamily": "anthropic", "nonPanelLiveCellsSource": "synthesized",
                  "nonPanelLiveCells": []})
-    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+    IT._drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)], head_path,
                        RD.P_VERIFIERS)
     state = IT._state(session_dir)
     pend = state["pending"]
@@ -428,7 +434,7 @@ def test_a_hand_submitted_finder_needs_the_recorded_vendor_claim(tmp_path):
 
 def _drive_scoped_with_source(tmp_path, monkeypatch, source, name):
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
-    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+    IT._drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)], head_path,
                        RD.P_SCOPED)
     state = IT._state(session_dir)
     assert RD._nonpanel_selection(state, session_dir, RD.P_SCOPED)[0] == "codex"
@@ -488,7 +494,7 @@ def test_a_hand_artifact_cannot_supply_its_own_per_seat_provenance(tmp_path):
 
 def _hand_verifier_session(tmp_path, name):
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
-    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+    IT._drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)], head_path,
                        RD.P_VERIFIERS)
     state = IT._state(session_dir)
     state.pop("_advanceUsed", None)  # the same session, now answered by hand
@@ -500,7 +506,7 @@ def _hand_verifier_session(tmp_path, name):
 def _drive_scoped_tampered(tmp_path, monkeypatch, name, tamper):
     session_dir, gitdir, head_path = IT._bootstrap(
         tmp_path, name=name, vendors=["claude", "codex", "cursor"], seatMap=_cell_proof(("claude", "codex", "cursor")))
-    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+    IT._drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)], head_path,
                        RD.P_SCOPED)
     state = IT._state(session_dir)
     assert RD._nonpanel_selection(state, session_dir, RD.P_SCOPED)[0] == "codex"
@@ -524,7 +530,7 @@ def test_a_tampered_manifest_cannot_authenticate_an_unordered_finder(tmp_path, m
 
 def test_finder_hand_submit_is_authenticated_through_the_submit_path(tmp_path):
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name="hand-finder")
-    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+    IT._drive_to_phase(session_dir, gitdir, [_blocking_finding("unchecked index", 2)], head_path,
                        RD.P_SCOPED)
     state = IT._state(session_dir)
     state.pop("_advanceUsed", None)

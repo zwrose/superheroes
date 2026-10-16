@@ -45,6 +45,10 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 
 Every finding gets a reason and an outcome (`null` while undecided): fixed, shown wrong, a craft call,
 left for the owner, or settled by an owner ruling. Exact spellings: `review_findings_schema.OUTCOMES`.
+When a review loop ends, every finding it took in is settled by its consequence, never its severity
+([how the loop settles what is left](round-driver.md#how-the-loop-settles-what-is-left)). A finding with
+a real consequence that is left unfixed with no on-record decision is a [leftover](../../../rubric/glossary.md#leftover)
+and takes the outcome `left-for-owner`.
 
 ```json
 {"schema": "review-account/1", "pr": 12, "sessionId": "s1", "lane": "light",
@@ -92,9 +96,10 @@ Outcomes:
 
 - A fixed finding becomes `fixed`, with the round it was audited in.
 - A finding refuted by verification becomes `shown-wrong`, with the refuted reason; a refutation whose reason starts `author-justified` becomes `left-for-owner`.
-- An out-of-scope finding becomes `ruling` only when the session's rulings log holds an out-of-scope ruling for it that names who ruled and when; any other out-of-scope finding becomes `left-for-owner`.
+- When the loop ends, every finding it took in that is not fixed or shown wrong is settled by its consequence ([how the loop settles what is left](round-driver.md#how-the-loop-settles-what-is-left) says how). The adapter reads a settled disposition `craft`, `left-for-owner` or `ruling` as the outcome of the same name, with the recorded `settledReason` as its reason.
+- An out-of-scope finding is settled like any other open one: it becomes `ruling` only when a decision on record settles it, and otherwise `left-for-owner`, a leftover.
 - A finding merged into another takes the representative's outcome, and its reason names the representative.
-- A finding the loop never disposed of, whose disposition is not newer than the finding, or whose merge cannot be followed stays undecided (`null`, "still open when the review loop ended"), so the record reads not reviewed.
+- A finding with no disposition newer than the finding, or whose merge cannot be followed, stays undecided (`null`, "still open when the review loop ended"), so the record reads not reviewed.
 
 Refusals, before anything is posted:
 

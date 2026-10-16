@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Session-contract path and phase constants — leaf module with no round_* imports."""
+import copy
 import hashlib
 import json
 from dataclasses import dataclass
 
 import model_registry
+import review_findings_schema
 
 from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
@@ -29,6 +31,9 @@ __all__ = (
     "FOLLOW_UP_FIELDS",
     "follow_up_shape_fault",
     "copy_follow_up_field",
+    "copy_decided_by_field",
+    "decided_by_of",
+    "has_decided_by",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
     "DispositionLedgerReadFault",
@@ -186,7 +191,8 @@ SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
 FINDING_KEY_FIELD = "findingKey"
 
-DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
+# The three settled outcomes (craft, left-for-owner, ruling) are written only by the end-of-loop settle.
+DISPOSITIONS = ("fixed", "refuted", "out-of-scope") + review_findings_schema.OUTCOMES[2:]
 FOLLOW_UP_FIELDS = ("item", "revisitTrigger", "classClosure")
 
 
@@ -218,6 +224,24 @@ def copy_follow_up_field(source, target):
     """Copy followUp from source onto target when the key is present (defensive copy)."""
     if "followUp" in source:
         target["followUp"] = dict(source["followUp"])
+
+
+def copy_decided_by_field(source, target):
+    """Copy decidedBy from source onto target when the key is present (deep copy)."""
+    if "decidedBy" in source:
+        target["decidedBy"] = copy.deepcopy(source["decidedBy"])
+
+
+def decided_by_of(row):
+    """The row's decidedBy when the row is a dict holding it, else None."""
+    if isinstance(row, dict):
+        return row.get("decidedBy")
+    return None
+
+
+def has_decided_by(row):
+    """True when the row is a dict with the decidedBy key present, whatever its value."""
+    return isinstance(row, dict) and "decidedBy" in row
 
 
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
@@ -347,7 +371,7 @@ def disposition_ledger_owner_classification(state):
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
-    "outOfScopeReason", "followUp", MERGED_INTO_FIELD,
+    "outOfScopeReason", "followUp", MERGED_INTO_FIELD, "settledReason", "decidedBy",
 )
 
 

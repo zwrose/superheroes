@@ -30,6 +30,7 @@ _FALLBACK_CANONICAL_MEMBER_KEYS = (
     "confidence",
     "tradeoff",
     "consequence",
+    "consequenceKind",
 )
 _FALLBACK_SEVERITY_ENUM = ("Critical", "Important", "Minor", "Nit")
 _FALLBACK_SEVERITY_TIERS = frozenset(_FALLBACK_SEVERITY_ENUM)
@@ -46,6 +47,7 @@ _FALLBACK_DIMENSION_ENUM = (
     "Grounding",
 )
 _FALLBACK_CONFIDENCE_ENUM = ("High", "Low", None)
+_FALLBACK_CONSEQUENCE_KIND_ENUM = ("code-quality", "real", None)
 _FALLBACK_FINDING_PROPERTY_SCHEMAS = {
     key: {} for key in _FALLBACK_CANONICAL_MEMBER_KEYS
 }
@@ -55,11 +57,21 @@ _FALLBACK_FINDING_PROPERTY_SCHEMAS["confidence"] = {"enum": list(_FALLBACK_CONFI
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["line"] = {"type": ["integer", "null"]}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["tradeoff"] = {"type": ["boolean", "null"]}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["consequence"] = {"type": ["string", "null"]}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["consequenceKind"] = {
+    "type": ["string", "null"],
+    "enum": list(_FALLBACK_CONSEQUENCE_KIND_ENUM),
+}
 
 SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
 
 # The findings member that states what goes wrong if the finding is left unfixed.
 CONSEQUENCE_KEY = "consequence"
+
+# The findings member that classifies the consequence, and the two kinds it can name.
+CONSEQUENCE_KIND_KEY = "consequenceKind"
+CODE_QUALITY = "code-quality"
+REAL = "real"
+CONSEQUENCE_KINDS = (CODE_QUALITY, REAL)
 
 # The five outcomes a finding can reach; the only spelling of them in lib/.
 OUTCOMES = ("fixed", "shown-wrong", "craft", "left-for-owner", "ruling")
@@ -69,6 +81,15 @@ OUTCOME_SET = frozenset(OUTCOMES)
 
 # The outcome for a finding only the owner can decide.
 LEFT_FOR_OWNER = OUTCOMES[3]
+
+# The PR sheet part each outcome lands in, keyed by outcome.
+OUTCOME_SHEET_PART = dict(zip(OUTCOMES, (
+    "how-the-review-went",
+    "how-the-review-went",
+    "decided-as-craft",
+    "what-youre-accepting",
+    "already-decided",
+)))
 
 # Synonym key → canonical member key. Structural mappings are listed separately.
 SUBSTANCE_KEY_SYNONYMS = {

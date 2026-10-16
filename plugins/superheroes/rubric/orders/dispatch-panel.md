@@ -66,5 +66,5 @@ justification); a CONFIRMED finding survives stamped
 Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an
 issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base
 rubric's "Triage rubric"). Set `dimension` to "{{DIMENSION}}" on every entry. Severity caps
-from the base rubric apply (Nits at most 5 reported per agent).
+from the base rubric apply (at most 5 code-quality-only Nits reported per agent; real-consequence Nits are uncapped).
 {{OUTPUT_CHANNEL_BLOCK}}

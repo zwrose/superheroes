@@ -45,9 +45,12 @@ def _big_diff(n_files=25):
         "@@ -1 +1 @@\n-a\n+b\n" % (i, i, i, i) for i in range(n_files))
 
 
-_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
-_TWO_FINDINGS = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1},
-                 {"title": "other bug", "severity": "Minor", "file": "f.py", "line": 2}]
+_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+               "consequence": "a reviewer-found defect stays in the change"}]
+_TWO_FINDINGS = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+                  "consequence": "a reviewer-found defect stays in the change"},
+                 {"title": "other bug", "severity": "Minor", "file": "f.py", "line": 2,
+                  "consequence": "a reviewer-found defect stays in the change"}]
 
 
 def _nonpanel_cell_proof(vendors):
@@ -399,7 +402,8 @@ def test_audits_assembles_results_and_a_trusted_collection_manifest(tmp_path):
 
 
 def test_scoped_finder_assembles_its_candidate_findings(tmp_path):
-    candidates = [{"title": "new bug", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    candidates = [{"title": "new bug", "severity": "Important", "file": "newsurf.py", "line": 1,
+                   "consequence": "a reviewer-found defect stays in the change"}]
 
     def build(n, state):
         hand = {"findings": list(candidates)}

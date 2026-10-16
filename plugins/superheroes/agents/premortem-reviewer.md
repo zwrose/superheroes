@@ -96,7 +96,7 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - `evidence` carries the three-leg chain (trigger → propagation → impact) on every Critical/Important finding; a **Low**-confidence finding names which leg is uncertain.
 - Carry `confidence` (`High`/`Low`) per the base rubric — your self-assessment after the Chain-of-Verification. A **Low** Critical/Important MUST name exactly what is uncertain in its `evidence` line (usually which leg of the chain you could not verify). Use **Low** rather than dropping a possibly-real failure chain; use **High** when the chain passed cleanly.
 - Include a non-null `suggestion` for every Critical/Important finding — the concrete guard (the project's transaction idiom, the retry wrapper, the atomic update shape, the `down()` migration), citing the project's canonical pattern when one exists.
-- `detectability` findings are capped at Important. Severity caps from the base rubric apply (Nits at most 5).
+- `detectability` findings are capped at Important. Severity caps from the base rubric apply (the Nit cap counts code-quality-only Nits; real-consequence Nits are uncapped).
 - **Tradeoff flag:** failure-handling fixes often have multiple valid shapes (transaction vs compensation vs idempotency key) — set `"tradeoff": true` when choosing between them is a real judgment call, so the finding routes to the user instead of the auto-fixer.
 
 ## Examples of Good vs Bad Findings

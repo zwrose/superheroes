@@ -238,7 +238,8 @@ def test_t2_library_scoped_finder_that_does_not_authenticate_parks_the_loop(vend
             calls["scoped"] += 1
             return {"findings": [], "vendor": vendor}
         if rnd == 1 and dim == "code-reviewer":
-            return {"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+            return {"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+                                  "consequence": "a reviewer-found defect stays in the change"}]}
         return []
 
     def fix_step(batch, rnd, payload):
@@ -470,7 +471,9 @@ def test_verifier_rejection_reaches_the_receipt(tmp_path):
 
 def test_unauthenticated_library_finder_findings_are_retained_unverified():
     state, _calls = _library_run({"findings": [{"title": "real defect", "severity": "Important",
-                                                "file": "a.py", "line": 1}], "vendor": "claude"})
+                                                "file": "a.py", "line": 1,
+                                                "consequence": "a reviewer-found defect stays in the change"}],
+                                  "vendor": "claude"})
     assert _parked(state)
     assert "expected=codex" in state["certification"]["reason"] and "reported=claude" in state["certification"]["reason"]
     kept = [f for f in state["findings"] if f.get("title") == "real defect"]

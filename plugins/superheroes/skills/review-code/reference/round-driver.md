@@ -555,6 +555,13 @@ within the gate row byte cap. **Never append a ruling to a seat prompt** — the
 live guidance in the fixer order's gate block and excludes out-of-scope keys from the fix batch;
 the fix batch sha256 in the order commits to the batch file bytes.
 
+An entry may also carry `decidedBy`, the decision the ruling rests on:
+`{"kind": "canon" | "residual" | "sheet-answer", "ref": ...}` and nothing else. For `canon` and
+`residual` the `ref` is a non-blank string (the Canon entry's id, or the residual's text); for
+`sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`. A `decidedBy` of any other shape
+is refused with `ruling-decided-by-malformed`. `rule` only records it in `rulingsLog`; it does not
+decide the finding's outcome — the end of the loop does (§ Dispositions).
+
 On success the driver appends to `state.rulingsLog` and the round's `rulings`, records
 dispositions for out-of-scope rows, and refreshes gate guidance for a not-yet-emitted fixer batch.
 A guidance ruling that supersedes a live out-of-scope ruling clears that disposition family from
@@ -566,7 +573,7 @@ that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
-`ruling-critical-out-of-scope`,
+`ruling-critical-out-of-scope`, `ruling-decided-by-malformed`,
 `ruling-session-terminal`, `ruling-attempt-pending`,
 `disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
 
@@ -678,7 +685,7 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   durable owner of record**; seeding sets it (`_stage_findings`, `lib/round_driver.py`). A marker value the driver
   does not recognize refuses at the fold with `disposition-ledger-owner-unrecognized`
   (`_fold`, `lib/round_driver.py`).
-- The three dispositions: `fixed` carries `dispositionReceipt {headSha}` — the fix-fold head the
+- The three dispositions recorded as the loop goes (the three the end of the loop adds are below): `fixed` carries `dispositionReceipt {headSha}` — the fix-fold head the
   config records, and an empty receipt when it records none (`_fixed_disposition_receipt`,
   `lib/round_driver.py`); `refuted` carries `refutedReason`;
   `out-of-scope` carries `outOfScopeReason` plus a `followUp` object with shape
@@ -696,6 +703,37 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
 - A verifier drop, author-justified drop, or synthesis merge whose staged id is missing, maps to
   nothing, is duplicated, or has no derivable finding key refuses `staged-id-unresolvable` at
   submit — never silently skipped.
+
+### How the loop settles what is left
+
+Every finding the review took in ends with an outcome. This is the one place the rule is stated;
+other docs link here.
+
+- **When.** Only when the loop reaches a terminal, by the one terminal writer (`_set_terminal`,
+  `lib/round_driver.py`). A stop at a round cap settles the same way; only the reason differs, and it
+  names the cap.
+- **Who keeps its disposition.** A finding that is fixed, or shown wrong (disposition `refuted`), keeps
+  that disposition, as does a finding merged into another (it follows the other). A Nit the readout
+  cap collapsed is already `craft`, recorded when it was collapsed.
+- **Who is settled.** Every other finding the review took in — no disposition, a disposition older than
+  the finding's last raise, or `out-of-scope` — is settled by `settle` (`lib/finding_outcomes.py`):
+  1. A finding whose only consequence is code quality (`consequenceKind` `code-quality`) is `craft`.
+     It is recorded for the owner's veto and no ruling overrides it.
+  2. Otherwise, a finding whose latest ruling cites a `decidedBy` decision that is **on record** is
+     `ruling`, and the decision is named.
+  3. Otherwise it is `left-for-owner` (a [leftover](../../../rubric/glossary.md#leftover)). The reason
+     says why it is open and, when a cited decision did not resolve, why not.
+- **Severity never decides the outcome.** `settle` is never given it.
+- **On record.** A decision is on record only when it is an active Canon entry (complete, and not
+  superseded), a recorded residual (its text appears in the residuals the review read), or a settled
+  saved sheet answer for this PR (`accept`, or a picked option). A decision that cannot be read is not
+  on record.
+- **Where it is written.** The disposition ledger, as disposition `craft`, `left-for-owner` or
+  `ruling`, with `settledReason`, and for a `ruling` also `decidedBy`. An out-of-scope finding keeps its
+  `outOfScopeReason` and `followUp`. The session record adapter reads these as the outcomes of the same
+  name ([review-record.md](review-record.md) § The full lane writes it from the session).
+- **Once.** A second settle finds nothing left to settle. If the disposition ledger cannot be read,
+  nothing is settled and the state records `settleSkipped` with the fault.
 
 ## Actions and payloads
 

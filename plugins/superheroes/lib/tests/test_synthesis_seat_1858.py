@@ -33,7 +33,8 @@ import test_verifier_vendor_provenance_1797 as P17  # noqa: E402
 import review_loop_runner as HARNESS  # noqa: E402
 
 UNSEATABLE_LINE = "synthesis-unseatable (round 1)"
-_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+               "consequence": "a reviewer-found defect stays in the change"}]
 
 
 def _seat_map(host="anthropic", makers=()):

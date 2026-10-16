@@ -160,7 +160,8 @@ def test_t1c_hand_submit_audits_then_verify(tmp_path):
     assert n3["ok"] and n3["phase"] in (RD.P_SCOPED, RD.P_VERIFIERS, RD.P_TERMINAL)
 
 
-_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+               "consequence": "a reviewer-found defect stays in the change"}]
 
 
 # axis: verify fail after audits halts — no scoped finder or panel afterward
@@ -272,7 +273,8 @@ def _drive_ceiling_round_two_fixer(tmp_path, cfg, respond, repo, init_head, *, m
 # axis: ceiling gate fail on post-fix head halts — never a clean park
 def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
-    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1,
+                 "consequence": "a reviewer-found defect stays in the change"}]
     cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo,
                seatMap=_nonpanel_cell_proof(["claude", "codex"]))
     respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
@@ -329,7 +331,8 @@ def _multi_file_diff(n):
 
 
 def _n_findings(n):
-    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1}
+    return [{"title": "bug%d" % i, "severity": "Important", "file": "f%d.py" % i, "line": 1,
+             "consequence": "a reviewer-found defect stays in the change"}
             for i in range(n)]
 
 
@@ -457,8 +460,10 @@ def test_t5_durable_fix_batch_files(tmp_path):
 def test_t6_fix_batch_resets_per_round(tmp_path):
     d = str(tmp_path)
     cfg = _cfg(verifyCommand="pytest -q", seatMap=_nonpanel_cell_proof(["claude", "codex"]))
-    finding_a = [{"title": "A", "severity": "Important", "file": "f.py", "line": 1}]
-    finding_b = [{"title": "B", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    finding_a = [{"title": "A", "severity": "Important", "file": "f.py", "line": 1,
+                  "consequence": "a reviewer-found defect stays in the change"}]
+    finding_b = [{"title": "B", "severity": "Important", "file": "newsurf.py", "line": 1,
+                  "consequence": "a reviewer-found defect stays in the change"}]
     scoped_once = {"done": False}
 
     def respond(phase, payload, rnd):

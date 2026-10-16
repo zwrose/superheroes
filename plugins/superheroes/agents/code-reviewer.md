@@ -172,7 +172,7 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - Every finding carries the base rubric's `confidence` (High/Low) from the in-pass Chain-of-Verification. A **Low** Critical or Important MUST name exactly what is uncertain in its `evidence` line (e.g. "could not confirm the null path is reachable without seeing the caller").
 - Include a non-null `suggestion` field for every Critical or Important finding — propose the concrete fix (the real constant name, the canonical pattern shape, the renamed file).
 - `suggestion` may be `null` for Minor/Nit when no clean fix is obvious.
-- Severity caps from the base rubric apply: Nits capped at 5 per review (summarize the rest as a count); Important/Critical uncapped.
+- Severity caps from the base rubric apply: the Nit cap counts code-quality-only Nits, 5 per review (summarize the rest as a count), real-consequence Nits uncapped; Important/Critical uncapped.
 - If you find yourself reporting >10 Minors, dedupe — they're often facets of the same underlying issue.
 - **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Omit the field otherwise (treated as `false`).
 

@@ -138,7 +138,8 @@ reads the channel, never your reasoning.
     "evidence": "<for Important/Critical: trigger + impact / the reachable path; omit or null for Minor/Nit>",
     "confidence": "High | Low",
     "tradeoff": "<true only if multiple valid fix approaches exist; omit otherwise>",
-    "consequence": "<what goes wrong for the owner or the user if this is left unfixed, in plain words; code quality only when that is all it costs>"
+    "consequence": "<what goes wrong for the owner or the user if this is left unfixed, in plain words; code quality only when that is all it costs>",
+    "consequenceKind": "code-quality | real"
   }
 ]
 ```
@@ -147,6 +148,7 @@ reads the channel, never your reasoning.
 - `taxonomy` carries the dimension's named taxonomy term where one applies (e.g. OWASP class for Security, defect class for Code, test smell for Test, failure class for Failure-Mode). Optional for most agents; **required** by the Failure-Mode reviewer. Omit when no named term applies to the finding.
 - `severity` is a **closed enum** — exactly one of `Critical`, `Important`, `Minor`, `Nit`. Do **not** emit any other scale: no `high`/`medium`/`low`, no `blocker`/`major`/`info`, no lowercase variants. A blocker is `Critical` or `Important`. Consumers fail **closed** — any unrecognized severity is treated as **blocking**, so an off-scale label mis-routes your finding rather than silently downgrading it.
 - `consequence` states what happens if the finding is left unfixed. A finding whose only cost is code quality says so. Emit the key on every finding (null only when you cannot state one).
+- `consequenceKind` is `code-quality` when the only cost of leaving the finding is code quality, and `real` for any other consequence. A code-quality finding the review leaves unfixed is decided as craft and listed for the owner's veto; a real one comes to the owner. Emit the key on every finding (null only when no consequence is stated).
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
@@ -175,7 +177,8 @@ as one.
 
 ## Severity caps
 
-- **Nits:** at most 5 reported per review; summarize the rest as a count.
+- **Nits:** at most 5 code-quality-only Nits (`consequenceKind: code-quality`) reported per review;
+  summarize the rest as a count. A Nit with a real consequence is never capped.
 - **Critical / Important:** uncapped (load-bearing).
 - **Minor:** uncapped, but each must pass the verification rules; if reporting
   >10, dedupe — they're usually facets of one issue.

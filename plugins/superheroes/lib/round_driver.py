@@ -66,6 +66,7 @@ import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import finding_outcomes  # noqa: E402
 import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
@@ -83,6 +84,7 @@ import risk_areas  # noqa: E402
 import review_round_policy  # noqa: E402
 import review_seats  # noqa: E402
 import receipt_disclosures  # noqa: E402
+import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
 import round_records  # noqa: E402
@@ -199,6 +201,7 @@ RULING_TARGET_AMBIGUOUS = "ruling-target-ambiguous"
 RULING_REASON_MISSING = "ruling-reason-missing"
 RULING_SESSION_TERMINAL = "ruling-session-terminal"
 RULING_FOLLOW_UP_MALFORMED = "ruling-follow-up-malformed"
+RULING_DECIDED_BY_MALFORMED = "ruling-decided-by-malformed"
 RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
 RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
 RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
@@ -860,6 +863,7 @@ def _diff_scope_ok(finding, valid):
 
 
 COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
+COMPILE_DROP_NO_CONSEQUENCE = "no stated consequence"
 
 
 def _coerce_line(value):
@@ -867,8 +871,10 @@ def _coerce_line(value):
 
 
 def _nit_cap(findings):
-    """After dedupe, keep at most 5 Nits; the overflow collapses to ONE summary entry so the
-    readout isn't buried (the base rubric's severity cap)."""
+    """After dedupe, keep at most 5 code-quality Nits; the overflow collapses to ONE summary entry
+    so the readout isn't buried (the base rubric's severity cap). Only a Nit whose consequenceKind
+    is exactly "code-quality" collapses: a Nit with any other kind is kept, whatever the count. The
+    summary row's `members` holds the collapsed Nit dicts, so each still reaches the ledger."""
     kept = []
     nits = []
     for f in findings:
@@ -876,15 +882,21 @@ def _nit_cap(findings):
             nits.append(f)
         else:
             kept.append(f)
-    if len(nits) <= _NIT_CAP:
-        kept.extend(nits)
-        return kept
-    kept.extend(nits[:_NIT_CAP])
-    overflow = len(nits) - _NIT_CAP
-    kept.append({
-        "title": "+ %d more Nits — see findings-*.json for details" % overflow,
-        "severity": "Nit", "file": None, "line": None, "summaryEntry": True,
-    })
+    members = []
+    quality_seen = 0
+    for nit in nits:
+        if nit.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.CODE_QUALITY:
+            quality_seen += 1
+            if quality_seen > _NIT_CAP:
+                members.append(nit)
+                continue
+        kept.append(nit)
+    if members:
+        kept.append({
+            "title": "+ %d more Nits — see findings-*.json for details" % len(members),
+            "severity": "Nit", "file": None, "line": None, "summaryEntry": True,
+            "members": members,
+        })
     return kept
 
 
@@ -896,10 +908,37 @@ def _merge_same_finding(existing, incoming):
         merged = dict(incoming)
     else:
         merged = dict(existing)
+    merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(
+        [existing, incoming])
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
     merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
+    seqs = [f.get(session_contract.RAISED_SEQ_FIELD) for f in (existing, incoming)]
+    seqs = [q for q in seqs if isinstance(q, int) and not isinstance(q, bool)]
+    if seqs:  # the newest raise, so settlement sees the merged live copy as current
+        merged[session_contract.RAISED_SEQ_FIELD] = max(seqs)
     return merged
+
+
+COMPILE_DROP_MERGED_SAME_PLACE = "merged with a finding at the same place and title"
+
+
+def _finding_anchor(finding):
+    """The per-LOCATION anchor — (file, line, normalized title) — two findings share iff they merge."""
+    return (finding.get("file"), finding.get("line"), normalize_title(str(finding.get("title") or "")))
+
+
+def _merge_drops(findings):
+    """One drop row for each finding `_compile_by_anchor` absorbs into an earlier one at its anchor."""
+    seen = set()
+    drops = []
+    for f in findings:
+        key = _finding_anchor(f)
+        if key in seen:
+            drops.append({"file": f.get("file"), "line": f.get("line"), "title": f.get("title"),
+                          "reason": COMPILE_DROP_MERGED_SAME_PLACE})
+        seen.add(key)
+    return drops
 
 
 def _compile_by_anchor(findings):
@@ -912,7 +951,7 @@ def _compile_by_anchor(findings):
     by_anchor = {}
     order = []
     for f in findings:
-        key = (f.get("file"), f.get("line"), normalize_title(str(f.get("title") or "")))
+        key = _finding_anchor(f)
         if key in by_anchor:
             by_anchor[key] = _merge_same_finding(by_anchor[key], f)
         else:
@@ -934,6 +973,9 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
          dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
          two distinct-line findings that share a title (a dropped blocker);
       6. nit cap.
+    A finding that states no consequence (`finding_outcomes.has_stated_consequence`) is dropped
+    after the citation, line and diff-scope checks; a break-it-stamped finding is held to the same
+    rule — `scope_exempt` exempts diff scope only.
     Returns (compiled, drops) where each drop names WHY (never silently dropped)."""
     if not isinstance(findings, list):
         findings = []
@@ -943,7 +985,7 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
     for f in findings:
         if not isinstance(f, dict):
             continue
-        if f.get("file") is None or f.get("line") is None:
+        if not isinstance(f.get("file"), str) or f.get("line") is None:
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
@@ -962,6 +1004,10 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
             continue
+        if not finding_outcomes.has_stated_consequence(f):
+            drops.append({"file": fc.get("file"), "line": fc.get("line"),
+                          "title": fc.get("title"), "reason": COMPILE_DROP_NO_CONSEQUENCE})
+            continue
         fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
@@ -972,8 +1018,10 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
                 fc.pop("dimension", None)
         kept.append(fc)
     compiled = _compile_by_anchor(kept)
+    drops.extend(_merge_drops(kept))
     compiled = _nit_cap(compiled)
-    _mint_finding_keys(compiled)
+    collapsed = [m for f in compiled if f.get("summaryEntry") for m in f.get("members") or []]
+    _mint_finding_keys(compiled + collapsed)
     return compiled, drops
 
 
@@ -1208,7 +1256,7 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
     roster = seat_map.effective_roster(sm)
     if roster is not None and all(n in roster for n in seat_map.roster_for(new_basis)):
         return False
-    state["terminal"] = "halted"
+    _set_terminal(state, "halted")
     state["certification"] = {
         "shape": None,
         "reason": (LANE_EXPANDED_RECOMPOSE + ": this change now touches a risk area (or its risk cannot "
@@ -1489,8 +1537,65 @@ def _backfill_ledger_from_records(state, ledger, seen):
                 ledger.append(entry)
 
 
+def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
+    """Seed (or re-seed) one finding's ledger entry — identity key, raisedRound, raisedSeq — and
+    return the entry. A same-round disposition family already on the ledger entry is carried over;
+    any other is stripped. Touches neither ``_toVerify`` nor the live findings."""
+    existing = ledger[seen[key]] if key in seen else None
+    entry = _strip_disposition_family(dict(finding))
+    entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+    entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+    entry[session_contract.RAISED_ROUND_FIELD] = round_no
+    if (isinstance(existing, dict)
+            and session_contract.has_disposition_family(existing)
+            and existing.get("dispositionRound") == round_no):
+        for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+            if field in existing:
+                entry[field] = existing[field]
+    else:
+        entry = _strip_disposition_family(entry)
+        entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+        entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        entry[session_contract.RAISED_ROUND_FIELD] = round_no
+    if isinstance(existing, dict) and not _disposition_is_current(existing):
+        # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
+        # never turns a real one into a craft decision.
+        entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
+            [existing, entry])
+    entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        seen[key] = len(ledger)
+        ledger.append(entry)
+    return entry
+
+
+def _seed_collapsed_nits(state, ledger, seen, finding, round_no):
+    """Seed each Nit a summary row collapsed and record it ``craft`` at once; a row without members
+    (or any other finding) seeds nothing."""
+    members = finding.get("members") if finding.get("summaryEntry") else None
+    if not isinstance(members, list):
+        return
+    for member in members:
+        key = _finding_identity_key(member) if isinstance(member, dict) else None
+        if not key:
+            continue
+        held = ledger[seen[key]] if key in seen else None
+        live = _live_finding_by_key(state, key)
+        if any(isinstance(h, dict) and h.get(review_findings_schema.CONSEQUENCE_KIND_KEY)
+               != review_findings_schema.CODE_QUALITY for h in (held, live)):
+            continue  # an already-held finding (ledger or live) with a real consequence keeps its owner path
+        _seed_ledger_entry(state, ledger, seen, member, key, round_no)
+        _record_disposition(
+            state, key, "craft", round_no,
+            settledReason="over the readout cap; code quality only: "
+            + str(member.get(review_findings_schema.CONSEQUENCE_KEY) or "no consequence stated"))
+
+
 def _stage_findings(state, compiled):
-    """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate."""
+    """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate. Each member
+    a Nit-cap summary row collapsed is seeded too and recorded ``craft`` at once."""
     if not isinstance(compiled, list):
         state["_toVerify"] = compiled
         return
@@ -1511,29 +1616,8 @@ def _stage_findings(state, compiled):
         if not key:
             sanitized.append(finding)
             continue
-        existing = ledger[seen[key]] if key in seen else None
-        entry = _strip_disposition_family(dict(finding))
-        entry.pop(session_contract.RAISED_SEQ_FIELD, None)
-        entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
-        entry[session_contract.RAISED_ROUND_FIELD] = round_no
-        if (isinstance(existing, dict)
-                and session_contract.has_disposition_family(existing)
-                and existing.get("dispositionRound") == round_no):
-            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
-                if field in existing:
-                    entry[field] = existing[field]
-        else:
-            entry = _strip_disposition_family(entry)
-            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
-            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
-            entry[session_contract.RAISED_ROUND_FIELD] = round_no
-        entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+        entry = _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
         sanitized.append(entry)
-        if key in seen:
-            ledger[seen[key]] = entry
-        else:
-            seen[key] = len(ledger)
-            ledger.append(entry)
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
         if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
             _record_disposition(
@@ -1541,6 +1625,7 @@ def _stage_findings(state, compiled):
                 outOfScopeReason=live_oos.get("reason"),
                 followUp=live_oos.get("followUp"),
                 rulingSeq=live_oos.get("seq"))
+        _seed_collapsed_nits(state, ledger, seen, finding, round_no)
         seeded = True
     state["_toVerify"] = sanitized
     if seeded:
@@ -1726,6 +1811,180 @@ def _record_merged_into(state, key, into_key):
         ledger.append(entry)
     if live is not None:
         _apply_disposition_family(live, family)
+
+
+# ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
+
+def _set_terminal(state, verdict, *, cap=False):
+    """The one writer of the loop's terminal verdict: set it, then give every finding the review
+    took in an outcome (`_settle_open_findings`). `cap` marks a stop at a round cap."""
+    state["terminal"] = verdict
+    _settle_open_findings(state, cap=cap)
+
+
+def _decision_sources(state):
+    """The `sources` dict `finding_outcomes.on_record` reads: the Canon text and the ratified
+    residuals. A source that cannot be read is left out — an unresolvable decision is not on record."""
+    sources = {}
+    config = state.get("config") if isinstance(state.get("config"), dict) else {}
+    root = config.get("repoRoot")
+    try:
+        import canon
+        # Both copies, so a supersession on the default branch retires an entry the working copy
+        # still holds; a copy that cannot be read refuses and leaves Canon out.
+        _, working, default_text = canon._locate(root)
+        sources["canonText"] = working + "\n" + default_text
+    except Exception:  # noqa: BLE001 — fail closed: no Canon text means no Canon decision
+        sources.pop("canonText", None)
+    try:
+        text, provenance, failure = round_orders.resolve_order_residuals(root, config.get("baseRef"))
+        if not failure and isinstance(text, str) and text.strip():
+            sources["residualText"] = text
+            based = isinstance(provenance, str) and "(base-pinned)" in provenance
+            sources["residualSource"] = "base" if based else "calibration store"
+    except Exception:  # noqa: BLE001 — fail closed: no residual text means no residual decision
+        sources.pop("residualText", None)
+        sources.pop("residualSource", None)
+    return sources
+
+
+def _compile_drop_recorded(state, drop):
+    rounds = state.get("rounds")
+    for rec in (rounds.values() if isinstance(rounds, dict) else ()):
+        recorded = rec.get("compileDrops") if isinstance(rec, dict) else None
+        if isinstance(recorded, list) and drop in recorded:
+            return True
+    return False
+
+
+def _seed_pending_new_issues(state):
+    """Compile the auditors' new issues that never reached the ledger and seed the survivors, so a
+    terminal reached before they were folded still settles them. Drops are recorded once."""
+    pending = state.get("_newIssues")
+    pending = [ni for ni in pending if isinstance(ni, dict)] if isinstance(pending, list) else []
+    if not pending:
+        return
+    compiled, drops = mechanical_compile(pending, state.get("reviewedDiff"))
+    _record_compile_drops(state, [d for d in drops if not _compile_drop_recorded(state, d)])
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    round_no = state["round"]
+    seeded = False
+    for finding in compiled:
+        _seed_collapsed_nits(state, ledger, seen, finding, round_no)
+        key = _finding_identity_key(finding)
+        if finding.get("summaryEntry") or not key:
+            continue
+        # A pending issue is unprocessed whatever its identity: re-seed it over any entry that
+        # shares the key, which drops that entry's disposition (the re-raise outranks it).
+        _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
+        seeded = True
+    state.pop("_newIssues", None)  # seeded once: a second settle finds nothing pending
+    if seeded:
+        state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = (
+            session_contract.DISPOSITION_LEDGER_OWNER_VALUE)
+
+
+def _newest_content(row, live):
+    """The live copy, unless the ledger row was raised after it (staged, not yet synthesized)."""
+    if not isinstance(live, dict):
+        return row
+    live_seq = live.get(session_contract.RAISED_SEQ_FIELD)
+    row_seq = row.get(session_contract.RAISED_SEQ_FIELD)
+    if (isinstance(live_seq, int) and not isinstance(live_seq, bool)
+            and isinstance(row_seq, int) and not isinstance(row_seq, bool) and row_seq > live_seq):
+        kind_key = review_findings_schema.CONSEQUENCE_KIND_KEY
+        cq = review_findings_schema.CODE_QUALITY
+        if live.get(kind_key) != cq and row.get(kind_key) == cq:
+            return live  # a newer code-quality report never replaces a consequence the owner decides
+        return row
+    return live
+
+
+def _disposition_is_current(row):
+    """True when row carries a known disposition newer than the finding's last raise."""
+    disp = row.get("disposition")
+    disp_seq = row.get(session_contract.DISPOSITION_SEQ_FIELD)
+    raised_seq = row.get(session_contract.RAISED_SEQ_FIELD)
+    return (disp in session_contract.DISPOSITIONS and disp != "out-of-scope"
+            and isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
+            and isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
+            and disp_seq > raised_seq)
+
+
+def _skip_settle(state, fault):
+    token = getattr(fault, "token", None) or "ledger-fault"
+    detail = getattr(fault, "detail", None) or str(fault)
+    # A state field, not a decision: the last decision is the terminal's cause and must stay put.
+    state["settleSkipped"] = {"token": token, "detail": detail}
+
+
+def _settle_open_findings(state, cap=False):
+    """Give every finding the review took in exactly one outcome once the loop has ended.
+
+    A finding that is fixed or refuted (and not re-raised since) keeps it, and a finding merged
+    into another follows that one. Every other finding — no disposition, a stale one, or
+    out-of-scope — is settled by `finding_outcomes.settle` and written through `_record_disposition`.
+    Severity is never passed on. Idempotent: a second call finds nothing left to settle."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is None and session_contract.disposition_ledger_owner_classification(state) \
+            == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT:
+        _, fault = session_contract.read_disposition_ledger(state, required=False)
+    if fault is not None:
+        _skip_settle(state, fault)
+        return
+    _seed_pending_new_issues(state)
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        _skip_settle(state, fault)
+        return
+    live_by_key = {}
+    for finding in state.get("findings") or []:
+        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        if key and not finding.get("summaryEntry"):
+            live_by_key.setdefault(key, finding)
+    rulings = _live_ruling_by_key(state)
+    verdict = state.get("terminal")
+    if cap:
+        why_open = "still open when the loop reached its round cap"
+    elif verdict == "converged":
+        why_open = "left unfixed when the review loop converged"
+    else:
+        why_open = "still open when the review loop ended (" + str(verdict) + ")"
+    todo = []
+    for key in list(ledger_by_key) + [k for k in live_by_key if k not in ledger_by_key]:
+        row = ledger_by_key.get(key) or live_by_key[key]
+        if not isinstance(row, dict) or row.get("summaryEntry") or row.get(session_contract.MERGED_INTO_FIELD):
+            continue
+        if _disposition_is_current(row):
+            continue
+        todo.append((key, row, _newest_content(row, live_by_key.get(key))))
+    if not todo:
+        return
+    sources = {}
+    if any(session_contract.decided_by_of(rulings.get(key)) for key, _, _ in todo):
+        try:
+            sources = _decision_sources(state)
+        except Exception:  # noqa: BLE001 — fail closed: no sources, nothing on record
+            sources = {}
+        if not isinstance(sources, dict):
+            sources = {}
+    for key, row, content in todo:
+        reason = why_open
+        if row.get("disposition") == "out-of-scope":
+            reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
+        result = finding_outcomes.settle(
+            content, ruling=rulings.get(key), sources=sources, open_reason=reason)
+        live = live_by_key.get(key)
+        if content is row and live is not None and live is not row:
+            # The newer staged report outranks the live copy: the owner record reads live content first.
+            live.update({k: v for k, v in row.items()
+                         if k not in session_contract.DISPOSITION_FAMILY_FIELDS})
+        carried = {}
+        if row.get("disposition") == "out-of-scope":
+            carried = {name: row[name] for name in ("outOfScopeReason", "followUp") if name in row}
+        _record_disposition(state, key, result["outcome"], state["round"],
+                            settledReason=result["reason"], decidedBy=result["decidedBy"], **carried)
 
 
 def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
@@ -2097,7 +2356,7 @@ def _challenged_recurring_halt(state, config):
 def _park_cannot_certify(state, detail):
     """A fail-closed park with certification withheld (challenged principle / corrupt resume). Maps
     to a `halted` terminal — never a silent clean."""
-    state["terminal"] = "cannot-certify"
+    _set_terminal(state, "cannot-certify")
     state["certification"] = {"shape": None, "reason": detail or "cannot certify — park"}
     _decision(state, "cannot-certify", detail)
     state["step"] = P_TERMINAL
@@ -3012,6 +3271,19 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     state["step"] = P_SYNTHESIS
 
 
+def _sync_merged_consequences(state, kept):
+    """Carry a synthesized representative's merged consequence onto its ledger row, so a later
+    re-seed or restage from the ledger cannot lose a member's real consequence."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    for finding in kept:
+        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        if key in seen:
+            for field in ("consequence", "consequenceKind"):
+                if field in finding:
+                    ledger[seen[key]][field] = finding[field]
+
+
 def _fold_synthesis(state, config, artifact):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
@@ -3064,6 +3336,7 @@ def _fold_synthesis(state, config, artifact):
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
+    _sync_merged_consequences(state, kept)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
     # a delta settle — the delta round has its own scoped scan + audit breaker.)
     plan = delta_surface.shard_plan(state.get("reviewedDiff") or "")
@@ -4258,7 +4531,7 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
     if result == "fail":
-        state["terminal"] = "halted"
+        _set_terminal(state, "halted")
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
         _decision(state, "verify-fail", "verify gate failed — halt, certification withheld")
         state["step"] = P_TERMINAL
@@ -4267,7 +4540,7 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         if _verify_command_configured(config):
             # A configured verify command reported a skip — it did NOT actually run its checks. Fail
             # closed: a configured verification must PASS, never advance on a skip (#507 R2 residual-2).
-            state["terminal"] = "halted"
+            _set_terminal(state, "halted")
             state["certification"] = {
                 "shape": None,
                 "reason": ("verify gate reported %r but a verify command is configured (%r) — the "
@@ -4282,7 +4555,7 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "verify gate skipped (%s) — advancing unverified (no verify command)" % result)
     elif result != "pass":
         # timeout / missing / unknown → the gate did NOT pass; fail closed.
-        state["terminal"] = "halted"
+        _set_terminal(state, "halted")
         state["certification"] = {
             "shape": None,
             "reason": "verify gate did not pass (result %r) — halt, certification withheld" % (result,)}
@@ -4722,7 +4995,7 @@ def _fold_scoped(state, config, artifact):
     """Fold the scoped new-finding scan over the fix's new surface; its candidates + the audits'
     new-issue candidates route through the same stage/cluster/verify fold."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    new_issues = state.get("_newIssues") or []
+    new_issues = state.pop("_newIssues", None) or []  # consumed: the terminal seeds only what is left
     combined = list(candidates) + [ni for ni in new_issues if isinstance(ni, dict)]
     compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
     _record_compile_drops(state, drops)
@@ -4928,14 +5201,14 @@ def _advance_round(state, config, *, reason):
 
 
 def _park_round_ceiling(state, detail):
-    state["terminal"] = "halted"
+    _set_terminal(state, "halted", cap=True)
     state["certification"] = {"shape": None, "reason": detail or "round ceiling reached"}
     _decision(state, "round-ceiling", detail)
     state["step"] = P_TERMINAL
 
 
 def _park_capped(state, detail):
-    state["terminal"] = "capped-with-open-critical"
+    _set_terminal(state, "capped-with-open-critical", cap=True)
     state["certification"] = {"shape": None, "reason": detail or "capped with an open Critical — park"}
     _decision(state, "capped-with-open-critical", detail)
     state["step"] = P_TERMINAL
@@ -4944,7 +5217,7 @@ def _park_capped(state, detail):
 def _park_capped_open(state, detail):
     """The audit-round cap reached with a non-Critical blocker still not-discharged: park, withhold
     certification — never certify clean over an unresolved Important (#507 v12)."""
-    state["terminal"] = "capped-with-open-blocker"
+    _set_terminal(state, "capped-with-open-blocker", cap=True)
     state["certification"] = {"shape": None,
                               "reason": detail or "capped with open blocking findings — park"}
     _decision(state, "capped-with-open-blocker", detail)
@@ -5217,7 +5490,7 @@ def _fold_stall(state, config, artifact):
     _record_round(state, "stallChoice", choice)
     _decision(state, "stall-choice", choice)
     if choice == HOLD_CHOICE:
-        state["terminal"] = "held"
+        _set_terminal(state, "held")
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
     elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
         follow_up = artifact.get("followUp") if isinstance(artifact.get("followUp"), dict) else None
@@ -5258,7 +5531,7 @@ def _fold_stall(state, config, artifact):
         return
     else:
         # an ineligible accept-the-risk or an unknown choice fails closed to a park.
-        state["terminal"] = "stalled"
+        _set_terminal(state, "stalled")
         state["certification"] = {"shape": None,
                                   "reason": "stall unresolved — certification withheld"}
     state["step"] = P_TERMINAL
@@ -5367,7 +5640,7 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("seat-map-violation")
     if _seat_map_unproven_liveness(state):
         shape_drivers.append("unproven-liveness")
-    state["terminal"] = "converged"
+    _set_terminal(state, "converged")
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
@@ -6177,7 +6450,7 @@ def run_loop(seams, config=None):
         _park_cannot_certify(state, "journal-fault-unrecordable: %s" % jf)
         return _driver_receipt(state)
     if guard >= _RUN_LOOP_GUARD and not state.get("terminal"):
-        state["terminal"] = "halted"
+        _set_terminal(state, "halted")
         state["certification"] = {"shape": None, "reason": "run_loop guard tripped — fail closed"}
     return _driver_receipt(state)
 
@@ -6561,6 +6834,11 @@ def _load_ruling_file(path):
     return doc, file_sha, None
 
 
+def _decided_by_well_formed(decided_by):
+    """The shared decidedBy contract (finding_outcomes), the one home rule ingestion and settlement read."""
+    return finding_outcomes.decided_by_well_formed(decided_by)
+
+
 def _validate_ruling_entries(doc):
     rulings = doc.get("rulings")
     if not isinstance(rulings, list) or not rulings:
@@ -6582,6 +6860,10 @@ def _validate_ruling_entries(doc):
         if not isinstance(reason, str) or not reason.strip():
             return None, None, RULING_REASON_MISSING
         entry = {"id": rid.strip(), "ruling": kind, "reason": reason.strip()}
+        if session_contract.has_decided_by(spec):
+            if not _decided_by_well_formed(session_contract.decided_by_of(spec)):
+                return None, None, RULING_DECIDED_BY_MALFORMED
+            session_contract.copy_decided_by_field(spec, entry)
         if kind == "out-of-scope":
             follow_up = spec.get("followUp")
             fault = session_contract.follow_up_shape_fault(follow_up)
@@ -6704,6 +6986,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             "by": by,
         }
         session_contract.copy_follow_up_field(entry, log_row)
+        session_contract.copy_decided_by_field(entry, log_row)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
         _writable_rulings_log(state).append(log_row)
@@ -11500,7 +11783,7 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
 def _cmd_attest_locked(session_dir, failure_ref, note, git=None, state=None, binding=None,
                        artifact_snapshot=None):
     roster = _attest_roster(session_dir, state)
-    state["terminal"] = ATTESTED_VERDICT
+    _set_terminal(state, ATTESTED_VERDICT)
     state["certification"] = None
     state["_attestation"] = {
         "failure": binding.get("ref"),

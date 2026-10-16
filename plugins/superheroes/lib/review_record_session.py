@@ -258,6 +258,8 @@ def _decide(own, by_key, rulings):
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))
         return (_LEFT_FOR_OWNER if (why or "").startswith("author-justified") else _SHOWN_WRONG), why, rep
+    if disp in (_CRAFT, _LEFT_FOR_OWNER, _RULING):  # the end-of-loop settle names its outcome and reason
+        return disp, _text(rep.get("settledReason")), rep
     why = _text(rep.get("outOfScopeReason"))
     ruling = rulings.get(sc.finding_identity_key(rep)) or rulings.get(rep.get("id")) or {}
     prov = ruling.get("provenance") if ruling.get("ruling") == "out-of-scope" else None
