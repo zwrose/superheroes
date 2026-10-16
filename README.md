@@ -149,8 +149,8 @@ runs — gap review, the source check both ways, and grounding (see the-architec
 Panels are composed to be vendor-complementary — models that didn't write the code (or the
 brief, or the spec) are the ones reviewing it, and no reviewer from a maker's family runs without
 the owner's word for that change. The full-lane panel follows the lane call: a code reviewer, the
-test role (which writes break-it tests on the project's risk areas) and a grounding seat on every
-change, plus security and premortem reviewers when a risk area is touched or risk is unclear.
+test role (which writes break-it tests on the project's risk areas) and a grounding seat (which
+checks the PR body on a read-only review) on every change, plus security and premortem reviewers when a risk area is touched or risk is unclear.
 Every review, on every
 lane, writes one **review record** on the PR, which the advisor's vet reads; every finding states
 its consequence, and a leftover with a real consequence comes to the owner.
