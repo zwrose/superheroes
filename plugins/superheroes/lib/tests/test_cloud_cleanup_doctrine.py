@@ -27,9 +27,9 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_cleanup  # noqa: E402
-# The layer below's head this layer is built on (its bring-current head with main, so main's
-# changes to duties 1 to 7 count as the base, not as this layer's).
-_BASE = "0e3761754fb20001076bd025c15a3b39e92be1ca"
+# `main` just before the cloud-builders stack merged: this layer's base must stay reachable from
+# `main` after the stack's squash merge, which leaves the layer heads it was built on unreachable.
+_BASE = "458cc409ac56bcf2b23a04bd8dfe0a33d805deb9"
 
 _REF = "skills/showrunner/reference"
 _MERGE_TRAIN = f"{_REF}/merge-train.md"
@@ -277,6 +277,11 @@ def test_builder_side_of_the_archive_request():
 
 
 def _added_lines(rel):
+    commit = subprocess.run(["git", "-C", _REPO, "cat-file", "-e", f"{_BASE}^{{commit}}"], capture_output=True)
+    assert commit.returncode == 0, f"the base commit {_BASE} is not in this repository"
+    present = subprocess.run(["git", "-C", _REPO, "cat-file", "-e", f"{_BASE}:plugins/superheroes/{rel}"], capture_output=True)
+    if present.returncode != 0:  # the file is new since the base, so every line of it is added
+        return _read(os.path.join(_PLUGIN, rel)).split("\n")
     base = subprocess.run(
         ["git", "-C", _REPO, "show", f"{_BASE}:plugins/superheroes/{rel}"],
         capture_output=True,

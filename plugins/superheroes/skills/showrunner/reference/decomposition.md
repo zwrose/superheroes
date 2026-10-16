@@ -371,6 +371,10 @@ filing dry-run runs against that PR's head.
 Single-issue work keeps the fast path below: no register and no package read. The single child's
 proposed body is the breakdown.
 
+Approval and the merge word are separate acts. One merge word from the owner covers the
+spec and its breakdown, and the issues file with the owner's word as the PR merges
+(`merge-train.md` § Merging a spec PR).
+
 ## The single-issue fast path
 
 **Epic machinery activates at two or more children, never below.** One child means **no register**

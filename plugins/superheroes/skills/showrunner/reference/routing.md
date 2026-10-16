@@ -1,3 +1,12 @@
+# Contents
+
+- [Routing — the lane call and routing detail](#routing--the-lane-call-and-routing-detail)
+- [The lane call — the question that governs](#the-lane-call--the-question-that-governs)
+- [Parallel lanes that extend a shared set](#parallel-lanes-that-extend-a-shared-set)
+- [Two outcomes that look like discovery](#two-outcomes-that-look-like-discovery)
+- [Scope exclusions and parity surfaces](#scope-exclusions-and-parity-surfaces)
+- [The premises of an order bind you](#the-premises-of-an-order-bind-you)
+
 # Routing — the lane call and routing detail
 
 This page is reference for the advisor at routing time. It holds the guidance behind the lane call
@@ -51,6 +60,18 @@ When you route **parallel lanes that extend a shared registry, kind-set, or enum
 all of them have landed. Name the **completeness gate** too — the check that fails until the
 extension is exhaustive — so **every lane after the first** expects it to fire and budgets the
 integration commit.
+
+## Two outcomes that look like discovery
+
+**Two outcomes are worth naming, because both arrive looking like discovery.** A follow-up the
+owner **already ruled on** — a dated, owner-attributed ruling reachable where it was made —
+routes **`build-ready`** anchored to that ruling, with **no discovery step**. A follow-up raising
+a **product question no approved artifact answers** routes **`discovery`** — the spec-trigger
+test decides it, not how small the follow-up looks.
+
+At routing, everything durable belongs in the issue — scope and owner decisions, process
+constraints (test right-sizing, E2E policy), and launch context (local export paths,
+known-broken links, environment quirks).
 
 ## Scope exclusions and parity surfaces
 

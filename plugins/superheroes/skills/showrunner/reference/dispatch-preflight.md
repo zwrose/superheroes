@@ -1,6 +1,13 @@
+# Contents
+
+- [Dispatch preflight checks](#dispatch-preflight-checks)
+- [Proving engines live before a wave](#proving-engines-live-before-a-wave)
+- [Where a build runs](#where-a-build-runs)
+- [The owner-involvement taxonomy](#the-owner-involvement-taxonomy)
+
 # Dispatch preflight checks
 
-The seven enumerated checks the advisor runs before launching a builder session. Read them at dispatch time.
+The seven enumerated checks the advisor runs before launching a builder session. Read them at dispatch time. At dispatch time you stand where the builder stands at its own preflight — about to go autonomous on assumptions nobody has exercised — with no equivalent check unless you run it.
 
 <!-- launch-doctrine:preflight-charter:begin -->
    1. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
@@ -34,8 +41,31 @@ launch on your own judgment; declare it `na` only when nothing is live. Two refu
 mechanically and are not yours to waive: a second **live** launch for one issue, and an identical
 worktree path (`launch-worktree-collision`).
 
-Check 6's "(see below)" refers to the owner-involvement taxonomy in the Showrunner charter's duty
-9 (dispatch and preflight), not to anything in this file.
+Check 6's "(see below)" refers to § The owner-involvement taxonomy, at the end of this file.
+
+Checks marked always run every time; conditional checks run when the work needs them.
+An N/A carries a **one-line reason**; "marked N/A" without a reason is a silent skip.
+
+Keep the preflight proportionate: a twenty-minute preflight before every dispatch
+repeats, one layer up, the cost mistake the product already watches for.
+
+Supply the checks as data; the launcher records
+each and the go/no-go, and it establishes `standing-rulings` itself.
+
+## Proving engines live before a wave
+
+At each wave preflight, one conformance probe per
+dispatchable engine runs on its channel and must return a typed result that validates; the
+result is recorded in the walked `engine-auth` check
+(`dispatch-preflight.md`). A configuration
+selftest proves configuration, never that the engine answers. The probe strengthens what
+`engine-auth` must mean in a wave; it does not add a check to the list.
+
+The failure is loud: it names the engine, what failed,
+and the lanes that depend on it. The
+owner either holds the wave to troubleshoot, or launches without that engine — and when that
+engine supplied a lane's second family, the preflight names the substitute family, or those full
+lanes park.
 
 ## Where a build runs
 
@@ -81,3 +111,19 @@ How it knows the reason is fixed:
 - A reason this machine can read again stops once that condition reads true again. These are no cloud setup, a lapsed reviewer pass, a calibration mismatch, and a version mismatch read from the setup record.
 - Any other reason stops only once a check made on a later day has passed and the cloud reads ready. These are no reviewer pass, an unreachable cloud, and a version a builder reported.
 - It also clears once any build in a later launch goes to the cloud.
+
+## The owner-involvement taxonomy
+
+**Owner involvement sorts three distinct ways:** **Owner capability** — what an
+agent structurally cannot do regardless of authority (sign-in so a browser pilot is not blocked,
+account actions, anything needing credentials the product forbids an agent from handling). **No
+substitute exists.** **Owner authority** — a commitment or trade that binds the owner; you can hold
+work and park, so latency is affordable. **A live human to unblock** — premise corrections, forks
+inside ratified scope; **this resolves to the advisor**, and it is almost all of what actually
+happens. **Who launched and whether the owner is available are independent
+axes** — attended, reachable-with-latency, and asleep all appear under advisor launch; do not use
+advisor-launch as a proxy for owner-absence. A running headless session is deaf — a need
+raised after launch reaches nobody.
+
+State a **duration** — a session that expires two hours into a four-hour build is the same
+failure, later.
