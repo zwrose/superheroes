@@ -24,7 +24,14 @@ _TRI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TRI)
 
 _bootstrap = _TRI._bootstrap
-_blocking_finding = _TRI._blocking_finding
+
+
+def _blocking_finding(title, line):
+    finding = _TRI._blocking_finding(title, line)
+    finding["consequence"] = "a reviewer-found defect stays in the change"
+    return finding
+
+
 _state = _TRI._state
 _fake_git = _TRI._fake_git
 _drive_to_phase = _TRI._drive_to_phase
@@ -160,14 +167,11 @@ def _pending_fixer_two_findings(tmp_path, *, fixer_orders_emitted=False):
     ("ruling-target-unknown", "unknown_id"),
     ("ruling-critical-out-of-scope", "critical_oos"),
     ("ruling-session-terminal", "terminal"),
-    ("ruling-attempt-pending", "attempt_recorded"),
-    ("ruling-attempt-pending", "attempt_emitted_no_result"),
     ("disposition-ledger-owner-unrecognized", "unrecognized_owner"),
     ("disposition-ledger-malformed", "malformed_ledger"),
 ])
 def test_rule_refusal_tokens(tmp_path, token, setup):
-    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(
-        tmp_path, fixer_orders_emitted=setup in ("attempt_recorded", "attempt_emitted_no_result"))
+    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
     ruling_path = tmp_path / "rulings.json"
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     before = _state_bytes(session_dir)
@@ -215,20 +219,6 @@ def test_rule_refusal_tokens(tmp_path, token, setup):
         state = _state(session_dir)
         state["terminal"] = True
         RD.save_state(session_dir, state)
-        _write_ruling_file(ruling_path, [{"id": id_a, "ruling": "guidance",
-                                           "reason": "r", "guidance": "g"}])
-        before = _state_bytes(session_dir)
-        out = _rule(session_dir, str(ruling_path))
-    elif setup in ("attempt_recorded", "attempt_emitted_no_result"):
-        state = _state(session_dir)
-        pend = state["pending"]
-        roster, _ = __import__("round_adapters").roster_for(
-            pend["phase"], state, state.get("config") or {})
-        seat, occurrence = RR.roster_slots(roster)[0]
-        _write_dispatch_manifest(session_dir, pend, _slots_of(roster), _auditor_vendor_for(state))
-        if setup == "attempt_recorded":
-            payload = {"fixes": [], "headDiff": "diff --git a/x b/x\n"}
-            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
         _write_ruling_file(ruling_path, [{"id": id_a, "ruling": "guidance",
                                            "reason": "r", "guidance": "g"}])
         before = _state_bytes(session_dir)
@@ -348,17 +338,21 @@ def test_ruling_target_ambiguous_when_staged_id_reused():
     assert fault == RD.RULING_TARGET_AMBIGUOUS
 
 
-def test_rule_refuses_when_fixer_orders_already_emitted(tmp_path):
-    """axis: rule refuses ruling-attempt-pending once the pending fixer attempt has emitted orders."""
+def test_rule_accepts_when_fixer_orders_already_emitted(tmp_path):
+    """axis: rule records a ruling once the pending fixer attempt has emitted orders (it used to
+    refuse ruling-attempt-pending) and leaves that attempt's pending step and batch as they were."""
     session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-    before = _state_bytes(session_dir)
+    before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
          "followUp": _follow_up()}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == "ruling-attempt-pending", out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"] == before["pending"]
+    assert after["_fixBatch"] == before["_fixBatch"]
+    assert after["_fixQueue"] == before["_fixQueue"]
+    assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 1
 
 
 def test_fixer_order_pins_fix_batch_sha256(tmp_path):
@@ -381,13 +375,16 @@ def test_fixer_order_pins_fix_batch_sha256(tmp_path):
     if not isinstance(row_b, dict):
         row_b = (state.get("_fixQueue") or [{}])[0]
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-    before = _state_bytes(session_dir)
+    before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
          "followUp": _follow_up()}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == "ruling-attempt-pending", out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"] == before["pending"]
+    assert RD._ensure_fix_batch_file(session_dir, rnd, after) == batch_path
+    with open(batch_path, "rb") as fh:
+        assert hashlib.sha256(fh.read()).hexdigest() == batch_sha
 
 
 def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
@@ -436,28 +433,35 @@ def test_edge6_two_rule_calls_append(tmp_path):
 
 
 def test_edge7_guidance_off_batch_no_supersede(tmp_path):
+    """axis: guidance on a row outside the emitted batch is recorded at once and leaves the pending
+    attempt and its emitted batch as they were."""
     session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-    before = _state_bytes(session_dir)
+    before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "guidance", "reason": "off batch", "guidance": "later"}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == "ruling-attempt-pending", out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"] == before["pending"]
+    assert after["_fixBatch"] == before["_fixBatch"]
+    assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 1
 
 
-def test_rule_refuses_emitted_fixer_when_ruling_would_empty_batch(tmp_path):
-    """axis: rule refuses ruling-attempt-pending even when the rulings would empty the fixer batch."""
+def test_rule_accepts_emitted_fixer_when_ruling_would_empty_batch(tmp_path):
+    """axis: rule records rulings that would empty the emitted fixer batch (it used to refuse
+    ruling-attempt-pending) and leaves that batch alone: a fix under way is never stopped."""
     session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-    before = _state_bytes(session_dir)
+    before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "out-of-scope", "reason": "a", "followUp": _follow_up()},
         {"id": id_b, "ruling": "out-of-scope", "reason": "b", "followUp": _follow_up()}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == "ruling-attempt-pending", out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"] == before["pending"]
+    assert after["_fixBatch"] == before["_fixBatch"]
+    assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 2
 
 
 def test_edge8_empty_batch_advances(tmp_path):
@@ -560,7 +564,8 @@ def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):
         RD._fix_batch_file_sha256(session_dir, rnd, state)
 
 
-def test_edge9_non_fixer_step_refuses_guidance(tmp_path):
+def test_edge9_non_fixer_step_accepts_guidance(tmp_path):
+    """axis: guidance is accepted at a step that is not the fixer step (it used to be refused)."""
     session_dir, gitdir, head_path, row_a, _ = _pending_fixer_two_findings(tmp_path)
     state = _state(session_dir)
     rnd = state["round"]
@@ -573,12 +578,12 @@ def test_edge9_non_fixer_step_refuses_guidance(tmp_path):
         RD.P_AUDITS, state, state.get("config") or {})
     _write_dispatch_manifest(session_dir, pend, _slots_of(roster), _auditor_vendor_for(state))
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
-    before = _state_bytes(session_dir)
+    log_before = len(_state(session_dir).get("rulingsLog") or [])
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == RD.RULING_GUIDANCE_NOT_FIXER, out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    log_after = _state(session_dir)["rulingsLog"]
+    assert len(log_after) == log_before + 1 and log_after[-1]["ruling"] == "guidance"
 
 
 def _owner_absent(state):
