@@ -4600,10 +4600,13 @@ def _drop_spent_out_of_scope_rows(state, rows):
         if not isinstance(held_row, dict):
             held_row = row
         # Re-record the disposition whole (it replaces the family), keeping what it carried — its
-        # followUp included — and naming the round the finding was already offered in.
+        # followUp included, from the effective decision when a restage dropped it from the snapshot.
         fields = {name: value for name, value
                   in session_contract.disposition_family_snapshot(held_row).items()
                   if name not in ("disposition", "dispositionRound")}
+        recovered = _follow_up_of(_live_out_of_scope_ruling_for_key(state, key))
+        if recovered and not fields.get("followUp"):
+            fields["followUp"] = recovered
         reason = (
             "out of scope; already offered to a fixer in round %s and not offered again while it "
             "stays out of scope" % offered_round)
@@ -6074,11 +6077,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
     # A decision the audit credited a fix under has been delivered: the resolver must not send it again.
     lineage = _lineage_map(state)
+    discharged_ids = set(outcome.get("discharged") or [])
     for audit in outcome["audits"]:
         marked = []
         if audit.get("allowedChange") and audit.get("id") in change_allowed_ids:
             marked.extend(bound_by_id[audit["id"]])
-        if audit.get("ruling") == "discharged" and audit.get("id") in targets_by_id:
+        if audit.get("id") in discharged_ids and audit.get("id") in targets_by_id:
             # The allowing ruling reached the audit and the audit cleared the fix: delivered, with or without
             # an unnamed change, so the resolver does not reopen it.
             own = _row_decision(state, effective, ledger_by_key, audit["id"])
