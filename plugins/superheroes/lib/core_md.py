@@ -28,6 +28,7 @@ import store_core      # noqa: E402  (sibling)
 # shipped; then raise this version, pinning the new literal in the tests rather than referencing
 # this constant, so an older build refuses the profile instead of rewriting it.
 SCHEMA_VERSION = 2
+CORE_FILENAME = "core.md"
 
 CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
@@ -535,12 +536,13 @@ def relocate_file(src, dst):
 
 def in_repo_core_rel_path():
     """Relative path from repository root to in-repo ``core.md`` — layout home for drift guards."""
-    return os.path.join(".claude", "superheroes", "core.md")
+    return os.path.join(".claude", "superheroes", CORE_FILENAME)
 
 
 def _core_candidates(cwd, root=None):
     in_repo = os.path.join(_repo_root(cwd), in_repo_core_rel_path())
-    global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
+    global_path = os.path.join(mode_registry.project_store_dir(cwd, root),
+                               mode_registry.CONFIG_DIRNAME, CORE_FILENAME)
     return in_repo, global_path
 
 
@@ -650,7 +652,7 @@ def engine_preferences_for_gate(*, cwd=None, root=None, profile_path=None):
     try:
         if profile_path:
             layer = os.path.realpath(profile_path)
-            core_beside = os.path.join(os.path.dirname(layer), "core.md")
+            core_beside = os.path.join(os.path.dirname(layer), CORE_FILENAME)
             return _classify_core_md_at_path(core_beside)
 
         cwd = cwd or os.getcwd()
@@ -689,7 +691,7 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     try:
         if profile_path:
             layer = os.path.realpath(profile_path)
-            path = os.path.join(os.path.dirname(layer), "core.md")
+            path = os.path.join(os.path.dirname(layer), CORE_FILENAME)
         else:
             cwd = cwd or os.getcwd()
             path = core_path(cwd, root)
@@ -966,7 +968,7 @@ def _gate_structural_refusal(*, cwd=None, root=None, profile_path=None):
     try:
         if profile_path:
             layer = os.path.realpath(profile_path)
-            return _structural_refusal_at_path(os.path.join(os.path.dirname(layer), "core.md"))
+            return _structural_refusal_at_path(os.path.join(os.path.dirname(layer), CORE_FILENAME))
         cwd = cwd or os.getcwd()
         in_repo, global_path = _core_candidates(cwd, root)
         for path in (in_repo, global_path):

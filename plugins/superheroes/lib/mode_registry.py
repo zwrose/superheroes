@@ -21,6 +21,9 @@ GLOBAL = "global"
 # so the backfill guard below and mode_migrate share one source of truth — a rename can't
 # silently disable the guard, and neither module imports the other for it (no cycle).
 MIGRATION_JOURNAL = "migration-journal.json"
+REGISTRY_FILENAME = "registry.json"
+META_FILENAME = "meta.json"
+CONFIG_DIRNAME = "config"
 REBIND_KIND = "rebind"
 
 
@@ -66,7 +69,7 @@ class UnknownSchemaVersion(Exception):
 
 
 def registry_path(cwd, root=None):
-    return os.path.join(project_store_dir(cwd, root), "registry.json")
+    return os.path.join(project_store_dir(cwd, root), REGISTRY_FILENAME)
 
 
 def read_registry(cwd, root=None):
@@ -162,7 +165,8 @@ def _repo_root(cwd):
 
 def _hero_layer_global_path(cwd, hero, root=None):
     """Unified global layer in the control-plane project store (not the hero's legacy store)."""
-    return os.path.join(project_store_dir(cwd, root), "config", _HERO_LAYER_FILENAME[hero])
+    return os.path.join(project_store_dir(cwd, root), CONFIG_DIRNAME,
+                        _HERO_LAYER_FILENAME[hero])
 
 
 def hero_evidence(cwd, root=None, hero_roots=None):
@@ -298,7 +302,7 @@ def ensure_project_store(cwd, root=None):
                                capture_output=True, text=True, timeout=10)
             if r.returncode != 0 and not os.path.isdir(os.path.join(d, ".git")):
                 return None
-        meta = os.path.join(d, "meta.json")
+        meta = os.path.join(d, META_FILENAME)
         if not os.path.isfile(meta):
             # sourcePath is mint-time provenance: the config key is a one-way hash, so
             # without it an abandoned store can never be traced back to its source repo
