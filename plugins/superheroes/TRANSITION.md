@@ -152,6 +152,13 @@ These retirements ship in the same release as the review record, and never apart
 - A cloud build hands back only with its review record written. In a cloud session (`CLAUDE_CODE_REMOTE` is `true`), `review_record.py` reads the repository, the pull request and its issue through `gh api` REST, and takes the issue the pull request closes from the body's first line (`Closes #N`) in place of GitHub's closing references. When the writer refuses with `review-record-gh-failed`, or writes a record whose final commit the session reported instead of reading it from the PR, the builder posts a review receipt naming the head it reviewed, leaves the PR not ready, and parks naming the review record as missing.
 - `rubric/review-discipline.md` § Size names the builder note as how a cloud builder messages the advisor at the size tripwire.
 
+### Showrunner: builder notes in the wave watch
+
+- The watch reports a cloud builder's note as the event `builder-note`. It ends the `loop` without ending a lane, and it belongs to a third event class, `ATTENTION_EVENTS`, beside `LANE_ENDING_EVENTS` and `BENIGN_EVENTS`. A reader that matches on the two older classes must take the third into account.
+- A note keeps firing on every arm until the advisor runs `wave_watch.py note-answered --repo-root <root> --comment-id <id>`, which records it in `builder-notes-answered.json` beside the launch ledger.
+- While a batch has a live cloud lane, the watch makes one REST read of the repository's issue comments per tick, conditional on the stored ETag, so an unchanged list costs no rate limit.
+- A read that fails is disclosed as `builder-note-unavailable`.
+
 ### Vet slot: builder content in the slot span refuses
 
 - `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.

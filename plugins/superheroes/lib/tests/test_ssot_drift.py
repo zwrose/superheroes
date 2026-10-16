@@ -452,7 +452,7 @@ def _wave_watch_verbs_from_home():
 def _wave_watch_verbs_from_doc(doc):
     """Documented verbs from the wave-watch.md intro bullet list — scoped to that block."""
     m = re.search(
-        r"It has two verbs:\n\n(.*?)\n\n\*\*The re-arm",
+        r"It has three verbs:\n\n(.*?)\n\n\*\*The re-arm",
         doc,
         re.DOTALL,
     )
@@ -512,7 +512,7 @@ def _wave_watch_exit_contract_from_doc(doc):
 def _wave_watch_exit_contract_verbs_from_doc(doc):
     """Verbs whose intro bullets state the one-JSON-line stdout contract."""
     m = re.search(
-        r"It has two verbs:\n\n(.*?)\n\n\*\*The re-arm",
+        r"It has three verbs:\n\n(.*?)\n\n\*\*The re-arm",
         doc,
         re.DOTALL,
     )

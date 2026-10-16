@@ -834,6 +834,7 @@ above).
    and acts on what they report.** The sweep reports; it never asserts a lane dead, and it resumes
    nothing on its own. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` when you run the sweep or read its classes.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` when you arm or re-arm a wave watch.**
+   **When the wave watch reports `builder-note`, a cloud builder is waiting on your answer: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` and answer before you re-arm.**
 
    **The orchestration that remains is yours because the harness does not carry it:** the
    launcher's detached spawn of headless builders; arming the wave watch and re-arming it; reading

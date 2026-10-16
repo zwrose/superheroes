@@ -199,6 +199,10 @@ class _Gh:
             )
         if argv[:3] == ["gh", "pr", "list"]:
             return subprocess.CompletedProcess(argv, 0, stdout="[]", stderr="")
+        if argv[:3] == ["gh", "api", "-i"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="HTTP/2.0 200 OK\n\n[]", stderr="",
+            )
         if argv[:3] == ["gh", "api", "graphql"]:
             if self.graphql is not None:
                 return self.graphql(argv, **kwargs)
