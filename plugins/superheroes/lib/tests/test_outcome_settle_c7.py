@@ -95,18 +95,22 @@ def _staged_state(findings, cfg=None):
 # --- T1: code quality only is craft, wherever it sits ------------------------------------------
 
 @pytest.mark.parametrize("risk_area", [False, True], ids=["no-risk-area", "risk-area-covers-file"])
-def test_t1_code_quality_minor_left_at_convergence_is_craft(risk_area, tmp_path, sources_calls):
+def test_t1_code_quality_minor_left_at_convergence_is_craft(risk_area, tmp_path, sources_calls, monkeypatch):
     cfg = TRD._cfg_cert()
     if risk_area:
         area = dict(TRA.PAYMENTS, name="The reviewed file", covers=["f.py"])
         repo, store = TRA._repo(tmp_path, [area])
-        read = TRA.R.touched(repo, ["f.py"], root=store)
+        # The loop's readers pass no store root, so the fixture's store must be the default one.
+        monkeypatch.setenv("WORKHORSE_STORE_ROOT", store)
+        cfg = TRD._cfg_cert(repoRoot=repo)  # the loop runs on the repo whose risk area covers f.py
+    result, state = _run_once([_finding("Naming")], cfg)
+    if risk_area:
+        read = TRA.R.touched(state["config"]["repoRoot"], ["f.py"])  # as the loop's own readers see it
         assert read["riskAreas"] == "set"
         assert [hit["area"]["name"] for hit in read["touched"]] == ["The reviewed file"]
         assert read["touched"][0]["matched"] == ["f.py"]
-        cfg = TRD._cfg_cert(repoRoot=repo)  # the loop runs on the repo whose risk area covers f.py
-    result, state = _run_once([_finding("Naming")], cfg)
-    assert state["config"].get("repoRoot") == (repo if risk_area else None)
+    else:
+        assert "repoRoot" not in state["config"]
     assert state["terminal"] == "converged"
     row = _row(state, "Naming")
     assert row["disposition"] == "craft"
