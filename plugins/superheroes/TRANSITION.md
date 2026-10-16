@@ -115,6 +115,12 @@ These retirements ship in the same release as the review record, and never apart
 - A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
 - A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
 
+### Configure: cloud builds setting
+
+- New configuration item 15, slug `cloudBuilds` (in `projectConfiguration`), "Cloud builds". It is off by default, and nothing changes for a project while it is off.
+- `set --item cloudBuilds` refuses `true` with the reason `cloud-setup-missing` while the project has no cloud setup on the launching Claude account. The result's `message` carries the words to say to the owner. Switching off keeps the setup.
+- New `lib/cloud_setup.py`. Its `read` answers the setting and the setup record for an account, and `record-check` and `confirm-pass` are the record's only writers. The record lives in the project's store, outside the repository, and holds no secret.
+
 ### Vet slot: builder content in the slot span refuses
 
 - `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.

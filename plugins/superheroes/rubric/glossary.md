@@ -429,3 +429,29 @@ The review panel's test seat. For each changed test it asks whether the test wou
 ### Break-it test
 
 A test the [test role](#test-role) writes for a change that touches a risk area, to try to break the change on a named risky scenario. The review loop runs it in a throwaway copy of the change. A failing run becomes a finding, and the test stays with the change once that finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
+
+## Cloud builds
+
+### Cloud environment
+
+The place on the cloud platform where the owner pastes the [setup text](#setup-text) and the
+[reviewer pass](#reviewer-pass).
+
+### Cloud setup
+
+A project's [cloud environment](#cloud-environment) after a [check session](#check-session) has
+passed. It belongs to the Claude account it was made on.
+
+### Setup text
+
+The block the plugin writes for the owner to paste into the [cloud environment](#cloud-environment).
+It holds no secret.
+
+### Reviewer pass
+
+The sign-in the owner places in the [cloud environment](#cloud-environment) so the independent
+reviewer can run there.
+
+### Check session
+
+The one short cloud session that proves a [cloud setup](#cloud-setup).

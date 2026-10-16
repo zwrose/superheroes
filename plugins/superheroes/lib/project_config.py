@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The fourteen configuration items: one registry, one read contract, one setter per home.
+"""The configuration items: one registry, one read contract, one setter per home.
 
 Stdlib only. Every item's value is read and written only through this module and the
 ``core_md`` writers it routes to."""
@@ -38,6 +38,7 @@ REASON_SET_MISMATCH = "set-read-mismatch"
 REASON_MATERIAL_LINE_IN_CANON = "material-line-in-canon"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
+CLOUD_BUILDS_SLUG = "cloudBuilds"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -169,6 +170,14 @@ ITEMS = (
         "home": HOME_PROJECT_CONFIGURATION,
         "shape": "prose",
         "plugin_default": None,
+    },
+    {
+        "number": 15,
+        "slug": "cloudBuilds",
+        "name": "Cloud builds",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "boolean",
+        "plugin_default": False,
     },
 )
 
@@ -612,7 +621,7 @@ def read(cwd, root=None):
 
 
 def view(cwd, root=None):
-    """Return all fourteen items in registry order for display."""
+    """Return every item in registry order for display."""
     payload = read(cwd, root)
     items = []
     for item_def, item_read in zip(ITEMS, payload["items"]):
@@ -710,7 +719,7 @@ def _set_risk_and_trust(cwd, value, root):
     return write_result
 
 
-def set_item(cwd, slug, value, root=None):
+def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
     """Validate and write one item to its home only."""
     item = _item_by_slug(slug)
     if item is None:
@@ -734,6 +743,20 @@ def set_item(cwd, slug, value, root=None):
         return {"action": "refused", "reason": REASON_PROFILE_UNPARSEABLE}
     if facts.get("behind"):
         return {"action": "behind", "record": facts}
+
+    if slug == CLOUD_BUILDS_SLUG:
+        import cloud_setup
+
+        if project_name is None:
+            project_name = os.path.basename(os.path.abspath(cwd))
+        if value is True:
+            # axis: cloud builds switch on only when the reader finds a ready setup record for this account — see bite-proof record wo_a_cloud-setup_switch-on-guard
+            if cloud_setup.read(cwd, account, root=root).get("ready") is not True:
+                return {
+                    "action": "refused",
+                    "reason": cloud_setup.REASON_MISSING,
+                    "message": cloud_setup.switch_message("refused", project_name),
+                }
 
     if item["home"] == HOME_RISK_AND_TRUST:
         return _set_risk_and_trust(cwd, value, root)
@@ -764,6 +787,9 @@ def set_item(cwd, slug, value, root=None):
             "expected": value,
             "observed": reread.get("raw"),
         }
+    if slug == CLOUD_BUILDS_SLUG:
+        kind = "on" if value else "off"
+        return {**write_result, "message": cloud_setup.switch_message(kind, project_name)}
     return write_result
 
 
@@ -1465,6 +1491,8 @@ def main(argv):
     sp.add_argument("--item", required=True)
     sp.add_argument("--cwd", default=".")
     sp.add_argument("--root", default=None)
+    sp.add_argument("--account", default=None)
+    sp.add_argument("--project-name", default=None)
 
     dp = sub.add_parser("dependencies")
     dp.add_argument("--cwd", default=".")
@@ -1494,7 +1522,14 @@ def main(argv):
         except ValueError:
             out = {"action": "refused", "reason": "input-unparseable"}
         else:
-            out = set_item(args.cwd, args.item, value, root=args.root)
+            account = args.account
+            if args.item == CLOUD_BUILDS_SLUG and account is None:
+                import cloud_setup
+
+                account = cloud_setup.launching_account(cwd=os.path.abspath(args.cwd))
+            out = set_item(
+                args.cwd, args.item, value, root=args.root,
+                account=account, project_name=args.project_name)
     elif args.cmd == "migrate-material-line":
         out = migrate_material_line(
             args.cwd, root=args.root, session=args.session, date=args.date)

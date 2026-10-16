@@ -110,8 +110,8 @@ def _item_by_slug(payload, slug):
 
 
 def test_registry_has_thirteen_items_in_order():
-    assert len(PC.ITEMS) == 14
-    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13]
+    assert len(PC.ITEMS) == 15
+    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",
         "p0Definition",
@@ -127,31 +127,33 @@ def test_registry_has_thirteen_items_in_order():
         "guardianStaleness",
         "keepList",
         "materialConsequenceLine",
+        "cloudBuilds",
     ]
 
 
 def test_exactly_five_plugin_defaults():
-    # axis: exactly five items carry a plugin default — wo_b_1276_default-count
+    # axis: exactly six items carry a plugin default — wo_b_1276_default-count
     defaulted = [item for item in PC.ITEMS if item["plugin_default"] is not None]
-    assert len(defaulted) == 5
+    assert len(defaulted) == 6
     assert {item["slug"] for item in defaulted} == {
         "dial",
         "budgetN",
         "conditionWindows",
         "keepOrRetireReporting",
         "guardianStaleness",
+        "cloudBuilds",
     }
 
 
 def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     got = PC.view(repo, root=store)
-    assert len(got["items"]) == 14
+    assert len(got["items"]) == 15
     assert [item["slug"] for item in got["items"]] == [item["slug"] for item in PC.ITEMS]
     plugin_default = [item for item in got["items"] if item["source"] == "plugin-default"]
     derived = [item for item in got["items"] if item["source"] == "derived"]
     unset = [item for item in got["items"] if item["source"] == "unset"]
-    assert len(plugin_default) == 4
+    assert len(plugin_default) == 5
     assert len(derived) == 1
     assert derived[0]["slug"] == "budgetN"
     assert len(unset) == 9
@@ -403,7 +405,7 @@ def test_cli_view(tmp_path, capsys):
     rc = PC.main(["view", "--cwd", repo, "--root", store])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["items"]) == 14
+    assert len(payload["items"]) == 15
 
 
 def test_cli_get_and_set(tmp_path, capsys, monkeypatch):
