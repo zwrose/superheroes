@@ -15,6 +15,7 @@ from the session's account.
 CLI:
   review_record.py write --account FILE --repo-root DIR
   review_record.py read --pr N [--repo OWNER/NAME]
+  review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
 """
 from __future__ import annotations
 
@@ -33,14 +34,21 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import build_lane  # noqa: E402
+import finding_outcomes  # noqa: E402
+import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
 import store_core  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
 RAW_MARKER = "<!-- superheroes:review-raw-output -->"
+# A part comment holds one slice of a record's JSON text. It must never start with MARKER: a part is not a record.
+PART_MARKER = "<!-- superheroes:review-record-part -->"
+PARTS_SCHEMA = "review-record-parts/1"
+CAP_KINDS = ("rounds", "ceiling")
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
 FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
@@ -54,12 +62,18 @@ RAN_REPORTED_BY_SESSION = "reported-by-session"
 RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
+_RULING = rfs.OUTCOMES[-1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
-# The review lane vocabulary, its one home: the lane matcher below is built from it and the sheet builder
-# validates against it; the sheet schema holds no copy of it (a test pins that).
-LANES = ("full", "light", "micro")
-_LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(LANES) + r")\b[.:]?[ \t]*(.*)$")
+# GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
+_FILES_CEILING = 3000
+# The review lane vocabulary: its one home is lane_call.LANES. The lane matcher below is built from it and the
+# sheet builder validates against this alias of it; the sheet schema holds no copy of it (a test pins that).
+LANES = lane_call.LANES
+_LANE_RE = re.compile(
+    r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
+)
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
+_REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
 
@@ -168,6 +182,33 @@ def _list_comments(pr, repo):
         return None
 
 
+def changed_paths(pr, repo):
+    """Every path the PR changes, as a list, or None when the list cannot be trusted to be complete:
+    a failed call or parse, an entry with no string filename, or GitHub's file ceiling reached.
+    Removed files are kept (a deletion inside a risk area touches it), and so is each renamed
+    file's previous name (a rename out of a risk area still touches it)."""
+    out = _run(["gh", "api", _api(repo, f"pulls/{pr}/files"), "--paginate"])
+    try:
+        files = None if out is None else pr_comment._parse_paginated_arrays(out)
+    except ValueError:
+        return None
+    # axis: a file list that may be cut short is unavailable, never read as the whole change — see bite-proof record wo_a_1795_lane-call
+    if files is None or len(files) >= _FILES_CEILING:
+        return None
+    paths = []
+    for f in files:
+        if not isinstance(f, dict) or not isinstance(f.get("filename"), str):
+            return None
+        paths.append(f["filename"])
+        previous = f.get("previous_filename")
+        if previous is not None and not isinstance(previous, str):
+            return None
+        # axis: a renamed file's previous path counts as changed, so a rename out of an area touches it — see bite-proof record wo_a_1795_lane-call
+        if previous is not None:
+            paths.append(previous)
+    return paths
+
+
 def _send(method, path, body):
     fd, tmp = tempfile.mkstemp(suffix=".md")
     try:
@@ -187,10 +228,30 @@ def _readers(overrides):
     return {"pr_meta": _pr_meta, "issue_body": _issue_body, "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name, "read_text": _read_text,
+            "changed_paths": changed_paths, "decision_sources": finding_outcomes.decision_sources,
             **(overrides or {})}
 
 
 # --- the account ---
+
+def _wider_ok(wider):
+    """``rounds.wider`` is a list of ``{round, why}``: an integer round and a non-blank reason."""
+    return isinstance(wider, list) and all(
+        isinstance(w, dict) and isinstance(w.get("round"), int) and not isinstance(w["round"], bool)
+        and isinstance(w.get("why"), str) and bool(w["why"].strip()) for w in wider)
+
+
+def _step_ok(v):
+    return v is None or (isinstance(v, int) and not isinstance(v, bool))
+
+
+def _makers_for(makers, step):
+    """Families that were makers of what a reviewer at `step` reviewed: a maker with a `fromStep` joined
+    only after earlier steps, so a reviewer before that step is judged against the makers it faced. A
+    reviewer with no step, or a maker with no `fromStep`, counts in full."""
+    return frozenset(m["family"] for m in makers
+                     if m.get("fromStep") is None or step is None or step >= m["fromStep"])
+
 
 def _validate(a):
     def chk(ok, key):
@@ -217,12 +278,14 @@ def _validate(a):
             chk(isinstance(r.get(k), bool), f"reviewers[{i}].{k}")
         chk(sn(r.get("runDir")), f"reviewers[{i}].runDir")
         chk(sn(r.get("commit")), f"reviewers[{i}].commit")
+        chk(_step_ok(r.get("step")), f"reviewers[{i}].step")
         chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
         chk(isinstance(m, dict) and ne(m.get("family")), f"makers[{i}]")
+        chk(_step_ok(m.get("fromStep")), f"makers[{i}].fromStep")
     for i, f in enumerate(lst("findings")):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
@@ -230,19 +293,28 @@ def _validate(a):
         chk(ne(f.get(session_contract.FINDING_KEY_FIELD)) or (ne(f.get("file")) and ne(f.get("title"))),
             f"findings[{i}] identity (needs findingKey, or file and title)")
         chk(sn(f.get("reason")), f"findings[{i}].reason")
+        decided_by = session_contract.decided_by_of(f)
+        chk(decided_by is None or isinstance(decided_by, dict), f"findings[{i}].decidedBy")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
     for k in ("rawFindingsFiles", "checked"):
         chk(all(ne(x) for x in lst(k)), k)
     for i, g in enumerate(lst("goAheads")):
         chk(isinstance(g, dict) and ne(g.get("reviewer")) and g.get("kind") in ("standing-ruling", "owner-words"),
             f"goAheads[{i}]")
+    for i, x in enumerate(lst("refused")):
+        chk(isinstance(x, dict) and ne(x.get("title")) and ne(x.get("reason")), f"refused[{i}] (needs title and reason)")
+    chk(a.get("sheetAnswers") is None or isinstance(a["sheetAnswers"], dict), "sheetAnswers")
+    chk(a.get("baseRef") is None or ne(a["baseRef"]), "baseRef")
     rounds = a.get("rounds", {"count": 0, "cap": None, "stoppedAtCap": False})
     chk(isinstance(rounds, dict) and isinstance(rounds.get("count"), int)
         and (rounds.get("cap") is None or isinstance(rounds["cap"], int))
-        and isinstance(rounds.get("stoppedAtCap"), bool), "rounds")
+        and isinstance(rounds.get("stoppedAtCap"), bool)
+        and rounds.get("capKind", CAP_KINDS[0]) in CAP_KINDS
+        and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
-            "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], **a,
-            "makers": makers or [], "rounds": rounds}
+            "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
+            "sheetAnswers": None, "baseRef": None, **a,
+            "makers": makers or [], "rounds": dict(rounds, capKind=rounds.get("capKind", CAP_KINDS[0]))}
 
 
 # --- code facts ---
@@ -280,6 +352,12 @@ def _lane_call(a, rd, meta):
     return None, None
 
 
+def _lane_reason(text):
+    """A lane call's reason without the punctuation that joined it to the lane word; None when nothing is left."""
+    # axis: leading punctuation is not part of a reason, so the line never reads "because , ..." — see bite-proof record c7l3_wo1_record_writer
+    return _REASON_LEAD_RE.sub("", text or "").strip() or None
+
+
 def _lane(a, rd, meta):
     m = rd["lane_marker"](a.get("repoRoot"))
     hit, source = _lane_call(a, rd, meta)
@@ -287,16 +365,110 @@ def _lane(a, rd, meta):
             and m.get("branch") == m.get("currentBranch") and meta \
             and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
         # The marker decides the value only; a reason is shown with where it came from, never as a fact code holds.
-        if hit and hit.group(2).strip():
-            reason, reason_source = hit.group(2).strip(), source
+        if hit and _lane_reason(hit.group(2)):
+            reason, reason_source = _lane_reason(hit.group(2)), source
         elif a["laneReason"]:
             reason, reason_source = a["laneReason"], SESSION
         else:
             reason, reason_source = None, None
         return {"value": "full", "source": "build lane marker", "reason": reason, "reasonSource": reason_source}
     if hit:
-        return {"value": hit.group(1), "source": source, "reason": hit.group(2).strip() or None}
+        return {"value": hit.group(1), "source": source, "reason": _lane_reason(hit.group(2))}
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
+
+
+BASIS_EVIDENCE_MAX = 10      # matched or unmatchable paths kept per list
+BASIS_AREAS_MAX = 20         # touched areas kept on the record
+BASIS_PATHS_MAX = 40         # matched paths kept across all touched areas together
+BASIS_WHY_MAX = 12           # reason lines kept; the touches ones are the cut ones
+BASIS_TEXT_MAX = 300         # characters kept of any one path, area name or reason line
+
+
+def _clip(text):
+    text = str(text)
+    return text if len(text) <= BASIS_TEXT_MAX else text[:BASIS_TEXT_MAX - 1] + "\u2026"
+
+
+def _bound_basis(basis):
+    """The basis as it goes on the record, bounded in total: at most BASIS_AREAS_MAX touched areas,
+    BASIS_PATHS_MAX matched paths across all of them (BASIS_EVIDENCE_MAX each), BASIS_EVIDENCE_MAX unmatchable
+    paths, BASIS_WHY_MAX reason lines, and BASIS_TEXT_MAX characters of any one string. The counts of
+    everything cut sit beside it (matchedCount, touchedCount, unmatchableCount, whyCount). The floor, the
+    first reason and the lane-defining reasons are unchanged."""
+    cap, budget, touched = BASIS_EVIDENCE_MAX, BASIS_PATHS_MAX, []
+    for hit in basis["touched"][:BASIS_AREAS_MAX]:
+        keep = max(0, min(cap, budget, len(hit["matched"])))
+        budget -= keep
+        item = dict(hit, name=_clip(hit["name"]), matched=[_clip(m) for m in hit["matched"][:keep]])
+        if keep < len(hit["matched"]):
+            item["matchedCount"] = len(hit["matched"])
+        touched.append(item)
+    out = dict(basis, touched=touched)
+    if len(basis["touched"]) > BASIS_AREAS_MAX:
+        out["touchedCount"] = len(basis["touched"])
+        out["matchedTotal"] = sum(len(t["matched"]) for t in basis["touched"])
+    if len(basis["unmatchable"]) > cap:
+        out.update(unmatchable=[_clip(u) for u in basis["unmatchable"][:cap]],
+                   unmatchableCount=len(basis["unmatchable"]))
+    else:
+        out["unmatchable"] = [_clip(u) for u in basis["unmatchable"]]
+    why = list(basis["why"])
+    if len(why) > BASIS_WHY_MAX:
+        # Drop only the touches lines, from the end, so the verdict lines stay; say how many went.
+        drop = len(why) - BASIS_WHY_MAX + 1
+        idx = [i for i, w in enumerate(why) if i and lane_call.is_touches_line(w)][::-1][:drop]
+        if idx:
+            gone = set(sorted(idx)[-drop:])
+            at = min(gone)
+            why = [w for i, w in enumerate(why) if i not in gone]
+            why.insert(at, lane_call.touches_omitted_line(len(gone)))
+            out["whyCount"] = len(basis["why"])
+    out["why"] = [_clip(w) for w in why]
+    return out
+
+
+def _lane_basis(a, rd, lane_value, final_sha):
+    """The risk floor for the PR's changed files, from lane_call.call, with the record's own lane as the
+    proposal. An account that names no repository, files that cannot be read, or a PR head that moved
+    from the recorded final commit while they were read, give the floor full,
+    marked unavailable, never a basis from the ambient project or from a partial list."""
+    repo_root = a.get("repoRoot")
+    # axis: an account that names no repository reads nothing, so no other project's store is read — see bite-proof record wo_c_1795_lane-basis
+    if not repo_root:
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NOT_SET + " the account names no repository, so its risk areas were not read",
+            proposed=lane_value), source="unavailable")
+    paths = rd["changed_paths"](a["pr"], a["repo"])
+    # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
+    after = rd["pr_meta"](a["pr"], a["repo"])
+    head = after.get("head") if isinstance(after, dict) else None
+    moved = isinstance(head, str) and head != final_sha
+    if isinstance(paths, list) and not head:
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read",
+            proposed=lane_value), source="unavailable")
+    if isinstance(paths, list) and moved:
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read",
+            proposed=lane_value), source="unavailable", headMoved=True)
+    if isinstance(paths, list):
+        return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
+                    source="lane rule over the PR's changed files")
+    out = dict(lane_call.unavailable(
+        lane_call.WHY_NO_PATHS + " the PR's changed files could not be read", proposed=lane_value),
+        source="unavailable")
+    if moved:
+        out["headMoved"] = True
+    return out
+
+
+def _canonical_model(vendor, model):
+    """A model as the registry's id: a dispatch spelling (a Claude tier alias, a Cursor id with its effort
+    suffix) resolves to the id the engine record carries; an unrecognised string stays as written."""
+    if not isinstance(vendor, str) or not isinstance(model, str) or model_registry.is_registered(vendor, model):
+        return model
+    parsed = model_registry.parse_dispatch_token(vendor, model)
+    return parsed[0] if parsed else model
 
 
 def _family(vendor, model):
@@ -320,13 +492,18 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
+def _own_word_ok(word):
+    return isinstance(word, dict) and all(isinstance(word.get(k), str) and word[k].strip() for k in ("words", "where"))
+
+
+def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset()):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
     out["findingsCoverage"] = SESSION
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
     target = r["commit"] if named else head
+    credited = None
     if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
         out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
         if r["ran"]:
@@ -340,6 +517,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         where = f"the commit this reviewer was listed for {_short(target)}" if named else "the final commit"
         if isinstance(seen, str) and seen and seen == target and graded and review:
             out.update(ran="engine-record", observation=rec.get("observation"))
+            credited = rec
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
@@ -363,10 +541,42 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
         out["ran"] = "not-run"
+
+    def demote(note):
+        out.pop("observation", None)
+        out.update(ran="not-run", runNote=note)
+        if r["ran"]:
+            dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
+
+    # axis: the credited run is the run the row names; the family is read from the engine record, never from the row — see bite-proof record wo_a_1796_reading-independence
+    if credited is not None:
+        if credited.get("source") != r["vendor"] \
+                or _canonical_model(r["vendor"], credited.get("engineModel")) != _canonical_model(r["vendor"], r["model"]):
+            demote("the run record names a different reviewer than the account row")
+        else:
+            out["family"] = _family(credited["source"], credited["engineModel"])
+    if lane_value != "full":
+        # axis: outside the full lane a reviewer counts only when the engine's own record reads engaged — see bite-proof record wo_a_1796_reading-independence
+        if out["ran"] == "engine-record":
+            obs = out.get("observation")
+            if not isinstance(obs, dict) or obs.get("read") != "engaged":
+                demote("the engine's record of the run does not show that the reviewer read the change")
+        elif out["ran"] == "reported-by-session":
+            demote("no engine record of the run shows that the reviewer read the change")
+        out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
+    # axis: a reviewer from a maker's family counts only with the owner's word; independence is computed here, never taken from the account — see bite-proof record wo_a_1796_reading-independence
+    if out["ran"] != "not-run" and maker_families is None:
+        demote("no maker is named for the step this reviewer reviewed, so independence cannot be shown")
+    elif out["ran"] != "not-run" and maker_families:
+        if out["family"] is None:
+            demote("the reviewer's model family could not be read, so independence cannot be shown")
+        elif out["family"] in maker_families:
+            if _own_word_ok(r.get("ownerWord")):
+                out["notIndependent"] = True
+            else:
+                demote("the reviewer is from a maker's family and no owner's word for this change lets it run")
     out["commit"] = target if named else None
     out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
-    if isinstance(r.get("notIndependent"), bool):
-        out["notIndependent"] = r["notIndependent"]
     if isinstance(r.get("ownerWord"), dict):
         out["ownerWord"] = r["ownerWord"]
     return out
@@ -417,6 +627,21 @@ def _finding_lines(findings):
     return lines
 
 
+def _lane_lines(rec):
+    lane, basis = rec["lane"]["value"], rec["laneBasis"]
+    # axis: a lane below the risk floor is not-reviewed; an unknown lane counts as below — see bite-proof record wo_a_1795_lane-call
+    if basis["floor"] is not None and lane_call.rank(lane) < lane_call.rank(basis["floor"]):
+        # fixed prose: only the lane and floor tokens enter, never the basis's free-text reasons (the Risk floor line holds those)
+        lines = [f"the lane ({lane}) is below the risk floor ({basis['floor']}); the Risk floor line gives why"]
+    else:
+        lines = []
+    # axis: a head read and found moved from the recorded final commit is not-reviewed, whatever the lane — see bite-proof record wo_g_1795_head-moved
+    if basis.get("headMoved"):
+        # fixed prose: no data enters
+        lines.append("the PR head moved while the record was written; this record does not cover the new head")
+    return lines
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -429,6 +654,11 @@ def _status(rec, unread=(), finding_lines=()):
     elif ci["sha"] != fc["sha"]:
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
     lines += finding_lines
+    lines += _lane_lines(rec)
+    # axis: no named maker is not-reviewed, since independence cannot be shown — see bite-proof record wo_a_1796_reading-independence
+    if not rec["makers"]:
+        # fixed prose: no data enters
+        lines.append("no maker is named, so independence cannot be shown")
     lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
               for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
@@ -439,6 +669,31 @@ def _status(rec, unread=(), finding_lines=()):
     elif not any(v["coversFinalCommit"] for v in ran):
         lines.append(f"no planned reviewer's run covers the final commit {s7(fc['sha'])}")
     return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
+
+
+def _recheck_decisions(findings, sources):
+    """Check every cited decision against what is on record now. A ruling whose cited decision is not on record
+    goes to the owner; a finding left for the owner whose cited decision is on record becomes the ruling. A ruling
+    with no cited decision names its basis in prose, which the record cannot check, so it stays as it is. A
+    finding with no reason keeps none (its missing reason still counts against the record).
+    Returns the findings and one entry per change."""
+    out, changes = [], []
+    for f in findings:
+        by, outcome, reason = f.get("decidedBy"), f.get("outcome"), f.get("reason")
+        new = None
+        if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
+            # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
+            ok, text = finding_outcomes.on_record(by, sources())
+            if outcome == _RULING and not ok:
+                new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
+            elif outcome == _LEFT_FOR_OWNER and ok:
+                new, why = _RULING, text
+        if new is None:
+            out.append(f)
+            continue
+        out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason else reason))
+        changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
+    return out, changes
 
 
 def build_record(account, readers):
@@ -453,18 +708,39 @@ def build_record(account, readers):
             dis.append({"fact": fact, "session": session, "code": code})
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
-    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"]) for r in a["reviewers"]]
-    notes, missing = [], []
+    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
+                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
+                 for r in a["reviewers"]]
+    notes, missing, held = [], [], {}
+
+    def sources():
+        # Read once, and only when a cited decision needs it: Canon and residuals as the repository holds them now.
+        if "sources" not in held:
+            try:
+                held["sources"] = rd["decision_sources"](a.get("repoRoot"), a.get("baseRef"), a.get("sheetAnswers"), a["pr"])
+            except Exception:  # noqa: BLE001 — fail toward the owner: no sources means no cited decision is on record
+                held["sources"] = {}
+        return held["sources"]
+
+    def canon_on_record(g):
+        return g.get("kind") != "standing-ruling" or finding_outcomes.on_record(
+            {"kind": "canon", "ref": g["canonId"]}, sources())[0]
+
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
             mine = [g for g in a["goAheads"] if g["reviewer"] == v["name"]]
-            good = next((g for g in mine if _go_ahead_ok(g)), None)
+            complete = [g for g in mine if _go_ahead_ok(g)]
+            # axis: a standing-ruling go-ahead counts only while its Canon entry is on record — see bite-proof record c7l3_wo1_record_writer
+            good = next((g for g in complete if canon_on_record(g)), None)
             if mine and not good:
-                notes.append(f"the go-ahead for {v['name']} is incomplete")
+                notes.append(f"the go-ahead for {v['name']} is incomplete"
+                             + (" (its Canon entry is not on record)" if complete else ""))
             missing.append({"name": v["name"], "goAhead": good})
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
+    findings, rechecks = _recheck_decisions(findings, sources)
+    findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
@@ -473,10 +749,11 @@ def build_record(account, readers):
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
-        "finalCommit": fc,
-        "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
+        "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
+        "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
+        "refused": a["refused"], "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
-        "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
+        "missingReviews": missing, "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
                  "tokens": sum(toks) if toks else None, "source": "engine records",
@@ -634,41 +911,334 @@ def _scrubbed(value):
     return value
 
 
-def render(record):
-    record = _scrubbed(record)
-    r, lane, ci = record, record["lane"], record["ci"]
-    who = []
-    for v in r["reviewers"]:
-        label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
-            v["ran"], "did not run")
-        if v["ran"] != "not-run" and v.get("commit") and v["commit"] != r["finalCommit"]["sha"]:
-            label += f" on {v['commit'][:7]}"
-        word = v.get("ownerWord")
-        who.append(f"- {v['name']}: {label}"
-                   + ("; not independent of the makers" if v.get("notIndependent") else "")
-                   + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
-                      and isinstance(word.get("where"), str) and word["where"] else "")
-                   + f"; findings: {v['findingsCoverage']}")
+def _shed_why_paths(basis):
+    """Step 1: the sampled paths leave the reason lines (``name (a, b, c)`` becomes ``name``)."""
+    names = [t["name"] for t in basis["touched"]]
+    why = [lane_call.why_line_paths_stripped(w, names) for w in basis["why"]]
+    return dict(basis, why=why, whyCount=basis.get("whyCount", len(basis["why"])), basisShed="why-paths")
+
+
+def _shed_matched(basis):
+    """Step 2: the matched path lists go; each area keeps its name and its matchedCount."""
+    touched = [dict(t, matched=[], matchedCount=t.get("matchedCount", len(t["matched"])))
+               for t in basis["touched"]]
+    return dict(basis, touched=touched, basisShed="matched")
+
+
+def _shed_unmatchable(basis):
+    """Step 3: the unmatchable list goes; unmatchableCount stays."""
+    return dict(basis, unmatchable=[],
+                unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
+                basisShed="unmatchable")
+
+
+def _shed_to_floor(basis):
+    """Last resort: the floor, the lane, the first reason line and the counts."""
+    out = {k: basis[k] for k in ("floor", "lane", "proposalTaken", "source") if k in basis}
+    out.update(why=basis["why"][:1], whyCount=basis.get("whyCount", len(basis["why"])),
+               touchedCount=basis.get("touchedCount", len(basis["touched"])),
+               matchedCount=basis["matchedTotal"] if "matchedTotal" in basis
+               else sum(t.get("matchedCount", len(t["matched"])) for t in basis["touched"]),
+               unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
+               basisShed="floor-only")
+    return out
+
+
+_SHED_STEPS = (_shed_why_paths, _shed_matched, _shed_unmatchable, _shed_to_floor)
+
+_KEPT_OBSERVATION = ("read", "toolCalls")
+
+
+def _shed_observation(record):
+    """Reviewer step 1: each observation keeps only read and toolCalls; a row with no dict observation is left as it is."""
+    rows = [dict(v, observation={k: v["observation"][k] for k in _KEPT_OBSERVATION if k in v["observation"]})
+            if isinstance(v.get("observation"), dict) else v for v in record["reviewers"]]
+    return dict(record, reviewers=rows)
+
+
+def _shed_run_dir(record):
+    """Reviewer step 2: each row's non-None runDir becomes None; a row with none is left as it is."""
+    return dict(record, reviewers=[dict(v, runDir=None) if v.get("runDir") is not None else v
+                                   for v in record["reviewers"]])
+
+
+# Only reviewer evidence detail is shed; the status, whatIsMissing, findings' outcome and reason, go-aheads and each
+# row's name, ran, planned, vendor, model, family, commit and coversFinalCommit are never touched.
+_REVIEWER_STEPS = (("observation", _shed_observation), ("runDir", _shed_run_dir))
+_REVIEWER_SHED_WHAT = {"observation": "engine telemetry", "runDir": "run directories"}
+
+
+def _links_raw_output(record):
+    """True when the record links at least one raw-output comment that was posted (not withheld)."""
+    raws = record.get("rawOutputs")
+    return isinstance(raws, list) and any(isinstance(x, dict) and x.get("withheld") is not True for x in raws)
+
+
+def _reviewer_shed_line(record):
+    """The shed line for a record whose reviewerShed lists the applied steps: it names only those steps, and points
+    only at output the record links."""
+    what = " and ".join(_REVIEWER_SHED_WHAT[n] for n in record["reviewerShed"])
+    where = ("the reviewers' findings are in the raw-output comments linked under rawOutputs, and the trimmed "
+             "engine detail is in the engines' own run records"
+             if _links_raw_output(record) else "the engines' own run records hold the full output")
+    return f"Reviewer detail trimmed to fit this comment ({what}); {where}."
+
+
+_ROUND_SUFFIX = re.compile(r"(.*) \(round (\d+)\)", re.S)
+LISTED = "(listed in the full record)"
+_RAN_STATES = ("engine-record", "reported-by-session")
+_ROUNDS_WORD = {"rounds": "round cap", "ceiling": "round ceiling"}
+
+
+def _seat_round(name):
+    """A reviewer row's name as (seat, round): the name without its trailing ` (round <n>)` and the round, or (name, None)."""
+    m = _ROUND_SUFFIX.fullmatch(name) if isinstance(name, str) else None
+    return (m.group(1), int(m.group(2))) if m else (name, None)
+
+
+def _row_bullet(v, final_sha):
+    """The bullet for one reviewer row that carries no round suffix."""
+    label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
+        v["ran"], "did not run")
+    if v["ran"] != "not-run" and v.get("commit") and v["commit"] != final_sha:
+        label += f" on {v['commit'][:7]}"
+    word = v.get("ownerWord")
+    return (f"- {v['name']}: {label}"
+            + ("; not independent of the makers" if v.get("notIndependent") else "")
+            + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
+               and isinstance(word.get("where"), str) and word["where"] else "")
+            + f"; findings: {v['findingsCoverage']}")
+
+
+def _rounds_text(rounds):
+    nums = sorted(set(rounds))
+    return ("round " if len(nums) == 1 else "rounds ") + ", ".join(str(n) for n in nums)
+
+
+def _seat_bullet(seat, rows, final_sha):
+    """One bullet for a seat across its rounds: the rounds it ran in, the rounds it did not, and the rest, said once."""
+    buckets = {}
+    for v, n in rows:
+        state = v["ran"] if v["ran"] in _RAN_STATES else "not-run"
+        commit = v["commit"][:7] if state != "not-run" and v.get("commit") and v["commit"] != final_sha else None
+        buckets.setdefault((state, commit), []).append(n)
+    said = []
+    for state in (*_RAN_STATES, "not-run"):
+        for (s, commit), nums in buckets.items():
+            if s != state:
+                continue
+            where = _rounds_text(nums)
+            text = {"engine-record": f"ran in {where} (engine record)",
+                    "reported-by-session": f"ran in {where} ({SESSION})"}.get(s, f"did not run in {where}")
+            said.append(text + (f" on {commit}" if commit else ""))
+    loose = [(v, n) for v, n in rows if v.get("notIndependent")]
+    if loose:
+        words = list(dict.fromkeys(v["ownerWord"]["where"] for v, _ in loose
+                                   if isinstance(v.get("ownerWord"), dict)
+                                   and isinstance(v["ownerWord"].get("where"), str) and v["ownerWord"]["where"]))
+        said.append(f"not independent of the makers in {_rounds_text([n for _, n in loose])}"
+                    + (f" (owner's word: {', '.join(words)})" if words else ""))
+    coverage = list(dict.fromkeys(v["findingsCoverage"] for v, _ in rows))
+    said.append("findings: " + (coverage[0] if len(coverage) == 1
+                                else "; ".join(f"round {n}: {v['findingsCoverage']}" for v, n in rows)))
+    return f"- {seat}: " + "; ".join(said)
+
+
+def _seat_groups(r):
+    """The reviewer rows grouped by seat: a row named `<seat> (round <n>)` joins its seat's group, in the order
+    the seats first appear; a row with no round suffix is a group of its own (keyed by a one-item tuple)."""
+    seats = {}
+    for i, v in enumerate(r["reviewers"]):
+        seat, n = _seat_round(v["name"])
+        seats.setdefault(seat if n is not None else (i,), []).append((v, n))
+    return seats
+
+
+def _reviewer_bullets(r):
+    """One bullet per seat group; the record's JSON keeps every row."""
+    final_sha = r["finalCommit"]["sha"]
+    return [_row_bullet(rows[0][0], final_sha) if isinstance(key, tuple) else _seat_bullet(key, rows, final_sha)
+            for key, rows in _seat_groups(r).items()]
+
+
+def _plural(n, one, many):
+    return f"{n} {one if n == 1 else many}"
+
+
+def _refused_line(refused, compact):
+    if compact:
+        return f"Not taken into the review: {_plural(len(refused), 'finding', 'findings')} {LISTED}."
+    reasons = {}
+    for x in refused:
+        reason = _clip(x.get("reason"))
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return (f"Not taken into the review: {_plural(len(refused), 'finding', 'findings')} — "
+            + "; ".join(f"{reason}: {count}" for reason, count in reasons.items()) + ".")
+
+
+def _rounds_line(rounds):
+    if not isinstance(rounds, dict):
+        return None
+    cap = rounds.get("cap")
+    if cap is None:
+        return f"Rounds: {rounds.get('count')}."
+    word = _ROUNDS_WORD.get(rounds.get("capKind"), _ROUNDS_WORD["rounds"])
+    return (f"Rounds: {rounds.get('count')} of {cap} ({word})."
+            + (" The loop stopped at its cap." if rounds.get("stoppedAtCap") else ""))
+
+
+def _summary(r, level):
+    """The summary text. Level 0 lists everything; level 1 turns each unbounded list (what is left, who ran,
+    which findings wait, which were not taken) into a count; level 2 also turns the per-seat reviewer bullets
+    into one count. The record's JSON always holds the full lists."""
+    lane, ci, compact = r["lane"], r["ci"], level >= 1
+    left = r["leftForOwner"]
     waits = []
-    if r["leftForOwner"]:
-        waits.append("findings left for the owner (" + ", ".join(r["leftForOwner"]) + ") wait for the owner's decision")
+    if left:
+        waits.append((f"{_plural(len(left), 'finding', 'findings')} left for the owner {LISTED}" if compact
+                      else "findings left for the owner (" + ", ".join(left) + ")")
+                     + " wait for the owner's decision")
     if r["parked"]:
         waits.append("a review with no go-ahead is parked until the owner decides")
-    summary = "\n".join([
-        f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
-        + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
-        ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner.",
-        f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
-        + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
+    wider = r["rounds"].get("wider") if isinstance(r.get("rounds"), dict) else None
+    wider_lines = [f"Round {w['round']} looked wider than the last fixes: {w['why']}"
+                   for w in wider or [] if isinstance(w, dict)]
+    waits_text = ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner."
+    checked = list(r["checked"][:2])
+    missing = r["whatIsMissing"]
+    if compact:
+        ran = sum(1 for v in r["reviewers"] if v["ran"] != "not-run")
+        checked = checked[:1] + ([f"Reviewers that ran: {_plural(ran, 'reviewer', 'reviewers')} {LISTED}"]
+                                 if len(checked) > 1 else [])
+        left_text = f"{_plural(len(missing), 'item', 'items')} {LISTED}" if missing else "nothing"
+    else:
+        left_text = "; ".join(missing) or "nothing"
+    reason = lane.get("reason")
+    if compact and reason:
+        reason = _clip(reason)
+    floor_line = (f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".")
+    if level >= 2:
+        groups = _seat_groups(r)
+        who = [f"Reviewers: {_plural(len(r['reviewers']), 'row', 'rows')} across "
+               f"{_plural(len(groups), 'seat', 'seats')} {LISTED}."]
+    else:
+        who = ["Reviewers:", *_reviewer_bullets(r)]
+    rounds_line = _rounds_line(r.get("rounds"))
+    refused = r.get("refused") or []
+    lines = [
+        f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
+        waits_text,
+        f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
+        + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
+        floor_line,
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
-        "Reviewers:", *who])
-    _assert_no_bug_free_claim(summary)
-    body = (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
-            f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
-    if len(body) > MAX_BODY_CHARS:
-        raise Refusal("review-record-too-large", f"{len(body)} characters")
-    return body
+        *([rounds_line] if rounds_line else []),
+        *([_refused_line(refused, compact)] if refused else []),
+        *who,
+        # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
+        *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
+        *wider_lines]
+    # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
+    # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
+    # block is. Every other line is still checked.
+    # The wider lines carry the driver's own reason text, literal data like the floor line.
+    _assert_no_bug_free_claim("\n".join(l for l in lines if l is not floor_line and l not in wider_lines))
+    return "\n".join(lines)
+
+
+def _record_json(r):
+    return json.dumps(r, sort_keys=True, separators=(",", ":"))
+
+
+def _part_body(piece):
+    fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", piece)), default=0) + 1)
+    return f"{PART_MARKER}\n{fence}json\n{piece}\n{fence}"
+
+
+def _part_bodies(text):
+    """The compact JSON text as part-comment bodies, each at most MAX_BODY_CHARS, in order."""
+    bodies, at = [], 0
+    while at < len(text):
+        size = MAX_BODY_CHARS - 200
+        while True:
+            piece = text[at:at + size]
+            body = _part_body(piece)
+            if len(body) <= MAX_BODY_CHARS:
+                break
+            # the fence grows with the piece's longest backtick run, so the overflow can exceed the piece:
+            # never step below half, so the size stays positive and the loop advances
+            size = max(size - (len(body) - MAX_BODY_CHARS), size // 2, 1)
+        bodies.append(body)
+        at += len(piece)
+    return bodies
+
+
+class _Plan:
+    """What a record posts as: `parts` (the part-comment bodies, empty when the record fits one comment) and
+    `head(part_ids)`, the head comment's body once the parts' comment ids are known."""
+
+    def __init__(self, parts, head):
+        self.parts, self.head = parts, head
+
+
+def render_plan(record):
+    r = _scrubbed(record)
+
+    def single(r):
+        return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
+                f"{_record_json(r)}\n```\n</details>")
+
+    # The size bound is on what is posted (the JSON-escaped body), so it is measured here: shed the lane
+    # basis's path evidence in a fixed order until the body fits. The floor, lane and proposalTaken never change.
+    body = single(r)
+    for step in _SHED_STEPS:
+        if len(body) <= MAX_BODY_CHARS:
+            break
+        r = dict(r, laneBasis=step(r["laneBasis"]))
+        body = single(r)
+    # Then, still over the cap, the reviewers' evidence detail, one step at a time, each said on the record.
+    # axis: the reviewer steps run while the body is over the cap — see bite-proof record wo_d_1795_reviewer-shed
+    # A step counts as applied, and is named, only when it changed a row; one that changed nothing is not listed.
+    for name, step in _REVIEWER_STEPS:
+        if len(body) <= MAX_BODY_CHARS:
+            break
+        shed = step(r)
+        if shed["reviewers"] == r["reviewers"]:
+            continue
+        r = dict(shed, reviewerShed=[*r.get("reviewerShed", []), name])
+        body = single(r)
+    if len(body) <= MAX_BODY_CHARS:
+        return _Plan([], lambda part_ids=None: body)
+    # Still over the cap after every step: the JSON text goes to part comments, never cut and never refused.
+    text = _record_json(r)
+    parts = _part_bodies(text)
+    digest, chars = hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text)
+
+    def head(part_ids):
+        index = json.dumps({"schema": PARTS_SCHEMA, "parts": list(part_ids), "sha256": digest, "chars": chars},
+                           sort_keys=True, separators=(",", ":"))
+        note = (f"The full record is in {_plural(len(part_ids), 'part comment', 'part comments')} posted just before "
+                f"this one (comment ids {', '.join(str(i) for i in part_ids)}); the block below names them and "
+                "carries the hash that checks them.")
+        # A head over the cap takes the compact summary, then the one-count reviewer line; the full lists
+        # stay in the record's parts.
+        for level in (0, 1, 2):
+            out = (f"{MARKER}\n{_summary(r, level)}\n\n{note}\n\n<details><summary>Full record (in parts)</summary>"
+                   f"\n\n```json\n{index}\n```\n</details>")
+            if len(out) <= MAX_BODY_CHARS:
+                return out
+        # Defensive: a head that cannot fit even with the compact summary is refused before anything is posted.
+        raise Refusal("review-record-too-large", f"the record's head comment alone is {len(out)} characters")
+    head([10 ** 15] * len(parts))  # the head must fit before any comment is created
+    return _Plan(parts, head)
+
+
+def render(record, part_ids=None):
+    """The record's comment body: the whole record when it fits one comment, else the head comment that names its
+    parts (with `part_ids`, or stand-in ids when none are given)."""
+    plan = render_plan(record)
+    return plan.head(part_ids if part_ids is not None else [10 ** 15] * len(plan.parts))
 
 
 def render_raw(name, text):
@@ -691,19 +1261,73 @@ def render_raw(name, text):
     return body, False
 
 
-def _parse_body(body):
+def _json_block(body):
+    """The JSON object in a comment's closing details block, or None. The JSON text holds no raw newline, so the
+    last json fence is the block's own, whatever text the summary above it carries."""
     try:
-        rec = json.loads(body[body.index("```json\n") + 8:body.rindex("\n```\n</details>")])
+        obj = json.loads(body[body.rindex("```json\n") + 8:body.rindex("\n```\n</details>")])
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _part_slice(body):
+    """The slice of JSON text in a part comment, or None when the comment is not a well-formed part."""
+    if not isinstance(body, str) or not body.startswith(PART_MARKER + "\n"):
+        return None
+    rest = body[len(PART_MARKER) + 1:]
+    first, _, tail = rest.partition("\n")
+    opened = re.fullmatch(r"(`{3,})json", first)
+    if not opened or not tail.endswith("\n" + opened.group(1)):
+        return None
+    return tail[:len(tail) - len(opened.group(1)) - 1]
+
+
+def _resolve_parts(index, by_id):
+    """The record a parts head names: its part comments fetched by id, their slices joined in the listed order, and
+    the text checked against the head's length and hash before it is parsed. None when any of that fails."""
+    ids, digest, chars = index.get("parts"), index.get("sha256"), index.get("chars")
+    if not (isinstance(ids, list) and ids and isinstance(digest, str) and isinstance(chars, int)
+            and not isinstance(chars, bool) and by_id):
+        return None
+    pieces = []
+    for pid in ids:
+        piece = _part_slice((by_id.get(pid) or {}).get("body")) if not isinstance(pid, bool) else None
+        if piece is None:
+            return None
+        pieces.append(piece)
+    text = "".join(pieces)
+    # axis: the joined parts must hash to what the head recorded, so an altered or swapped part is unreadable — see bite-proof record c7l3_wo1_record_writer
+    if len(text) != chars or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+        return None
+    try:
+        rec = json.loads(text)
     except ValueError:
         return None
     return rec if isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA else None
 
 
-def _marker_comments(rd, pr, repo):
-    """The record comments on the PR, oldest first (comment ids only grow)."""
+def _parse_body(body, by_id=None):
+    """The record in a record comment, or None: a whole record is read from the comment itself, a parts head from
+    the part comments `by_id` (comment id to comment) holds."""
+    obj = _json_block(body)
+    if obj is None:
+        return None
+    if obj.get("schema") == RECORD_SCHEMA:
+        return obj
+    return _resolve_parts(obj, by_id) if obj.get("schema") == PARTS_SCHEMA else None
+
+
+def _comments(rd, pr, repo):
     comments = rd["list_comments"](pr, repo)
     if comments is None:
         raise Refusal("review-record-gh-failed", "the PR comments could not be listed")
+    return comments
+
+
+def _marker_comments(comments):
+    """The record comments among a PR's comments, oldest first (comment ids only grow)."""
+    # axis: a part comment is never a record, so it is never the latest record — see bite-proof record c7l3_wo1_record_writer
     return sorted((c for c in comments if str(c.get("body", "")).startswith(MARKER)), key=lambda c: c["id"])
 
 
@@ -740,11 +1364,13 @@ def write(account_path, repo_root, readers=None):
                 texts[path] = raw_reader(path)
             return texts[path]
         rd = dict(rd, read_text=read_text)
-        found = _marker_comments(rd, pr, repo)
+        comments = _comments(rd, pr, repo)
+        by_id = {c["id"]: c for c in comments}
+        found = _marker_comments(comments)
         latest = found[-1] if found else None
         prior = None
         if latest:
-            prior = _parse_body(latest["body"])
+            prior = _parse_body(latest["body"], by_id)
             if prior is None:
                 raise Refusal("review-record-unreadable", latest.get("url") or "the existing record")
         missing = _unaccounted(prior, a["findings"])
@@ -755,9 +1381,10 @@ def write(account_path, repo_root, readers=None):
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
         previous = {"id": latest["id"], "url": latest.get("url")} if latest else None
-        # Refuse here, before any comment is created, if the record cannot be posted.
-        render(dict(record, previousRecord=previous and {"id": 10 ** 15, "url": "u" * 120},
-                    rawOutputs=[{"file": n, "id": 10 ** 15, "url": "u" * 120, "withheld": w} for n, _, w in raws]))
+        # Refuse here, before any comment is created, if the record cannot be posted: the head comment, sized with
+        # stand-in comment ids, must fit.
+        render_plan(dict(record, previousRecord=previous and {"id": 10 ** 15, "url": "u" * 120},
+                         rawOutputs=[{"file": n, "id": 10 ** 15, "url": "u" * 120, "withheld": w} for n, _, w in raws]))
         links = []
         for name, body, withheld in raws:
             sent = rd["create_comment"](pr, repo, body)
@@ -765,10 +1392,18 @@ def write(account_path, repo_root, readers=None):
                 raise Refusal("review-record-gh-failed", f"the raw output comment for {name} could not be written")
             links.append({"file": name, "id": sent["id"], "url": sent.get("url"), "withheld": withheld})
         record.update(rawOutputs=links, previousRecord=previous)
-        sent = rd["create_comment"](pr, repo, render(record))
+        plan = render_plan(record)
+        # The parts go up before the head: a write that stops part-way leaves parts no head names, never a half record.
+        part_ids = []
+        for n, body in enumerate(plan.parts, 1):
+            sent = rd["create_comment"](pr, repo, body)
+            if sent is None:
+                raise Refusal("review-record-gh-failed", f"part {n} of {len(plan.parts)} of the record could not be written")
+            part_ids.append(sent["id"])
+        sent = rd["create_comment"](pr, repo, plan.head(part_ids))
         if sent is None:
             raise Refusal("review-record-gh-failed", "the record comment could not be written")
-        return {"ok": True, "action": "created", "url": sent.get("url"),
+        return {"ok": True, "action": "created", "url": sent.get("url"), "parts": len(part_ids),
                 "status": record["status"], "parked": record["parked"], "whatIsMissing": record["whatIsMissing"]}
     return _guarded(go)
 
@@ -776,15 +1411,77 @@ def write(account_path, repo_root, readers=None):
 def read(pr, repo=None, readers=None):
     def go():
         rd = _readers(readers)
-        found = _marker_comments(rd, pr, repo)
+        comments = _comments(rd, pr, repo)
+        found = _marker_comments(comments)
         if not found:
             raise Refusal("review-record-missing", f"no review record on PR {pr}")
         latest = found[-1]
-        rec = _parse_body(latest["body"])
+        rec = _parse_body(latest["body"], {c["id"]: c for c in comments})
         if rec is None:
             raise Refusal("review-record-unreadable", latest.get("url") or "the existing record")
         return {"ok": True, "url": latest.get("url"), **rec, "earlierRecords": [c.get("url") for c in found[:-1]]}
     return _guarded(go)
+
+
+def _shows_reading(run):
+    obs = run.get("observation") if isinstance(run, dict) else None
+    # the record writer credits a run only when it is a graded review: hold the reading to the same rule
+    return (isinstance(run, dict) and run.get("graded") is True
+            and run.get("runKind") == session_contract.RUN_KIND_REVIEW
+            and isinstance(obs, dict) and obs.get("read") == "engaged")
+
+
+def _move_up_blocker(seat_map, maker_families, lane_basis=None):
+    """The first reason a seat map does not let a second no-reading review move up to the full lane, else None.
+    The panel it must hold is the one the lane basis calls for; with no basis, the full risky panel."""
+    roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
+    if not isinstance(roster, list) or not roster:
+        return "the seat map has no roster"
+    # axis: a map composed for fewer seats than the lane basis calls for cannot show the whole panel independent, so it parks — see bite-proof record wo_a_1797_roster
+    missing = [n for n in seat_map_module.roster_for(lane_basis) if n not in roster]
+    if missing:
+        return "the seat map's roster omits a panel seat: " + ", ".join(missing)
+    seats = seat_map.get("seats")
+    if not isinstance(seats, dict) or not all(isinstance(seats.get(n), dict) for n in roster):
+        return "the seat map has no entry for a roster seat"
+    # axis: a roster seat that is unfilled, or whose family is a maker's, cannot be shown independent, so the lane is parked, never moved up — see bite-proof record wo_a_1796_reading-independence
+    if any(seat_map_module.is_unfilled(seats[n]) for n in roster):
+        return "a roster seat in the seat map is unfilled"
+    if not all(isinstance(seats[n].get("family"), str) and seats[n]["family"] for n in roster):
+        return "a roster seat in the seat map names no family"
+    if not maker_families:
+        return "no maker is named, so independence cannot be shown"
+    if any(seats[n]["family"] in maker_families for n in roster):
+        return "a roster seat in the seat map is from a maker's family"
+    if not all(isinstance(seats[n].get(k), str) and seats[n][k] for n in roster for k in ("vendor", "model")):
+        return "a roster seat in the seat map names no vendor or model"
+    return None
+
+
+def reading_next(runs, seat_map, maker_families, lane_basis=None):
+    """What follows a review whose reading is not shown: accept, rerun, move-up or park. Pure: no model call, no write.
+    The lane basis is the one given, else the one the seat map carries from its compose."""
+    runs = list(runs)[:2]
+    if any(_shows_reading(run) for run in runs):
+        return {"next": "accept", "reason": "the engine's record shows that the reviewer read the change"}
+    if not runs:
+        return {"next": "park", "reason": "no run was given, so no reading can be shown"}
+    if len(runs) < 2:
+        return {"next": "rerun", "reason": "the one run does not show that the reviewer read the change"}
+    if lane_basis is None and isinstance(seat_map, dict):
+        lane_basis = seat_map.get("laneBasis")
+    blocker = _move_up_blocker(seat_map, frozenset(maker_families), lane_basis)
+    if blocker:
+        return {"next": "park", "reason": blocker}
+    return {"next": "move-up", "reason": "two runs do not show a reading and the seat map holds independent seats"}
+
+
+def _read_seat_map(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (TypeError, OSError, ValueError):
+        return None
 
 
 def main(argv=None):
@@ -796,7 +1493,15 @@ def main(argv=None):
     r = sub.add_parser("read")
     r.add_argument("--pr", type=int, required=True)
     r.add_argument("--repo", default=None)
+    n = sub.add_parser("reading-next")
+    n.add_argument("--run-dir", action="append", default=[], dest="run_dirs")
+    n.add_argument("--seat-map", default=None, dest="seat_map")
+    n.add_argument("--maker-family", action="append", default=[], dest="maker_families")
     args = parser.parse_args(argv)
+    if args.command == "reading-next":
+        runs = [_engine_run(d)[0] for d in dict.fromkeys(os.path.realpath(d) for d in args.run_dirs)]
+        print(json.dumps(reading_next(runs, _read_seat_map(args.seat_map), args.maker_families)))
+        return 0
     result = write(args.account, args.repo_root) if args.command == "write" else read(args.pr, args.repo)
     print(json.dumps(result))
     return 0 if result.get("ok") else 1

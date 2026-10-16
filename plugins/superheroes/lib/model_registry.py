@@ -136,7 +136,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     },
     "synthesis": {
         "claude": ("opus-5.5", "high"),
-        "codex": None,
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": None,
     },
     "mechanical": {
@@ -213,7 +213,7 @@ _ROLE_META: dict[str, dict] = {
         "model_tier_role": True,
         "engine_pref_key": None,
         "codex_kind": None,
-        "read_write": None,
+        "read_write": "read",
         "pin_eligible": False,
         "owner_tunable": True,
     },

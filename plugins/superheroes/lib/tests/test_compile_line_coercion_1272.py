@@ -31,6 +31,7 @@ _FINDING = {
     "title": "bug",
     "severity": "Important",
     "file": "f.py",
+    "consequence": "a reviewer-found defect stays in the change",
 }
 
 

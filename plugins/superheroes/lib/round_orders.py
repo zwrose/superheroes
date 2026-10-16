@@ -28,6 +28,10 @@ refusal. A successful render contains no literal ``{{...}}`` anywhere.
   * ``ratified_residuals`` — resolved residual prose (may be empty string)
   * ``residuals_provenance`` — one line stating which calibration mode produced the list
   * ``residuals_read_failure`` — unreadable/absent reason, or None when the read succeeded
+  * ``threat_model`` / ``threat_model_read_failure`` — the project's threat model prose and its
+    failure reason (optional keys: absent renders an explicit "could not be read" line, never no block)
+  * ``standing_rulings`` / ``standing_rulings_read_failure`` — the live out-of-scope rulings
+    (``[{"findingKey", "reason"}]``) and the rulings-log fault (same optional-key rule)
   * ``payload`` — the phase payload dict from the driver
   * ``host_seat`` — bool; host seats write payload-only, engine seats write the full envelope
 
@@ -215,6 +219,92 @@ def _format_residual_block(context: dict) -> str:
         lines.append("")
     lines.append("No ratified residuals are recorded for this project at the review base.")
     return "\n".join(lines) + "\n"
+
+
+def escape_placeholder_syntax(text):
+    """Escape ``{{`` so quoted owner data cannot inject order placeholders during render.
+
+    Fixed-point: each pass strictly increases length and strictly decreases ``{{`` count, so the
+    loop terminates on any finite input. The one home — the driver's guidance path imports it."""
+    while "{{" in text:
+        text = text.replace("{{", "{ {")
+    return text
+
+
+THREAT_MODEL_HEADING = "## Project threat model (project calibration, quoted data)"
+STANDING_RULINGS_HEADING = "## Standing rulings (recorded this session, quoted data)"
+THREAT_MODEL_CORE_UNRESOLVED = "core calibration not resolved"
+
+
+def format_threat_model_block(context: dict) -> str:
+    """The project's threat model as quoted data — appended to every order, never absent: an
+    unread, unresolved, or empty threat model renders an explicit line in place of the text."""
+    lines = [THREAT_MODEL_HEADING, ""]
+    failure = context.get("threat_model_read_failure")
+    text = context.get("threat_model")
+    if isinstance(failure, str) and failure:
+        lines.append("The project's threat model could not be read: %s." % failure)
+    elif not isinstance(text, str):
+        lines.append("The project's threat model could not be read: not supplied to the renderer.")
+    elif not text.strip():
+        lines.append("No threat model is recorded for this project.")
+    else:
+        lines.extend(["-----", escape_placeholder_syntax(text.strip()), "-----"])
+    return "\n".join(lines) + "\n"
+
+
+def format_rulings_block(context: dict) -> str:
+    """The session's live out-of-scope rulings as quoted data — appended to every order, never
+    absent. Each row is ``{"findingKey", "reason"}``; keys and reasons are owner prose."""
+    lines = [STANDING_RULINGS_HEADING, ""]
+    failure = context.get("standing_rulings_read_failure")
+    rows = context.get("standing_rulings")
+    if isinstance(failure, str) and failure:
+        lines.append("Standing rulings could not be read: %s." % failure)
+    elif not isinstance(rows, list):
+        lines.append("Standing rulings could not be read: not supplied to the renderer.")
+    elif not rows:
+        lines.append("No standing rulings are recorded for this session.")
+    else:
+        lines.extend([
+            "Each finding below was ruled out of scope by the session's owner or advisor, with "
+            "the reason given. Do not raise it again, under its own title or any other, unless it "
+            "is now Critical: a finding that is now Critical is always reported.",
+            "",
+        ])
+        for row in rows:
+            key = row.get("findingKey") if isinstance(row, dict) else None
+            reason = row.get("reason") if isinstance(row, dict) else None
+            key = " ".join(key.split()) if isinstance(key, str) else ""
+            reason = " ".join(reason.split()) if isinstance(reason, str) else ""
+            lines.append(escape_placeholder_syntax(
+                "- %s: out of scope — %s" % (key, reason or "(no reason recorded)")))
+    return "\n".join(lines) + "\n"
+
+
+def resolve_order_threat_model(core_path) -> tuple[str, str | None]:
+    """``(threat_model_text, failure_reason)`` read from the resolved core.md path. Never raises.
+
+    Reuses ``core_md.parse_core`` (no second parser). A failure reason is never an empty-text
+    success: an unresolved, unreadable, or refused core.md reads as a failure, not as 'none'."""
+    try:
+        if not isinstance(core_path, str) or not core_path:
+            return "", THREAT_MODEL_CORE_UNRESOLVED
+        try:
+            with open(core_path, encoding="utf-8") as fh:
+                raw = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            return "", "core calibration unreadable (%s)" % type(exc).__name__
+        try:
+            facts = core_md.parse_core(raw)
+        except Exception as exc:  # noqa: BLE001 — a refused parse is a failure line, not a crash
+            return "", "core calibration refused (%s)" % type(exc).__name__
+        if facts is None:
+            return "", "core calibration refused (json block missing or corrupt)"
+        text = facts.get("threatModel")
+        return (text.strip() if isinstance(text, str) else ""), None
+    except Exception as exc:  # noqa: BLE001
+        return "", "threat-model-read-failed:%s" % exc
 
 
 _RESULT_CHANNEL_NEUTRAL_DELIVERY = (
@@ -496,7 +586,9 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if _PLACEHOLDER_RE.search(body):
             return _refuse("unknown-placeholder-remaining")
 
-        blocks = [body.rstrip(), _format_residual_block(context).rstrip()]
+        blocks = [body.rstrip(), _format_residual_block(context).rstrip(),
+                  format_threat_model_block(context).rstrip(),
+                  format_rulings_block(context).rstrip()]
         if phase != round_phases.P_FIXER or context.get("host_seat"):
             contract_block, creason = _format_payload_contract(phase)
             if creason:
