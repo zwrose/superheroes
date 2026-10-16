@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import select
 import shlex
 import signal
 import subprocess
@@ -1747,6 +1748,92 @@ def test_a_sigterm_keeps_the_bytes_the_child_wrote_after_the_read_that_saw_the_s
     assert result["rc"] is not None
 
 
+# The one bound on waiting for a killed group's members to exit. SIGKILL cannot be caught or
+# blocked, but the kernel delivers it asynchronously, so a member the launcher's group kill reached
+# may still be finishing its exit when the call returns; this bounds that. A member still running
+# at the bound was never killed and fails the test. A green run waits only for the kernel.
+_GROUP_EXIT_BOUND_SECONDS = 10
+
+
+def _members_of_group(pgid):
+    """Every pid in process group `pgid`, zombies included."""
+    if os.path.isdir("/proc/self"):
+        pids = []
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                with open("/proc/%s/stat" % name) as fh:
+                    stat = fh.read()
+            except OSError:
+                continue  # the process went away between the listing and the read
+            fields = stat[stat.rfind(")") + 2:].split()  # state, ppid, pgrp, ...
+            if len(fields) > 2 and int(fields[2]) == pgid:
+                pids.append(int(name))
+        return pids
+    out = subprocess.run(
+        ["ps", "-A", "-o", "pid=,pgid="], capture_output=True, text=True, check=True,
+    ).stdout
+    rows = (line.split() for line in out.splitlines() if line.strip())
+    return [int(pid) for pid, group in rows if int(group) == pgid]
+
+
+def _in_group(pid, pgid):
+    try:
+        return os.getpgid(pid) == pgid
+    except ProcessLookupError:
+        return False
+
+
+def _exits_by(pid, pgid, deadline):
+    """True once `pid` has exited (a zombie has), False when it is still running at `deadline`.
+
+    It waits on the kernel's own exit event for the pid, never on a sleep. The membership check
+    runs after the handle is held, so a pid reaped and reused by an unrelated process reads as an
+    exited member.
+    """
+    if hasattr(os, "pidfd_open"):
+        try:
+            handle = os.pidfd_open(pid)
+        except ProcessLookupError:
+            return True
+        try:
+            if not _in_group(pid, pgid):
+                return True
+            ready, _, _ = select.select([handle], [], [], max(0, deadline - time.monotonic()))
+            return bool(ready)
+        finally:
+            os.close(handle)
+    queue = select.kqueue()
+    try:
+        exit_event = select.kevent(
+            pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        try:
+            queue.control([exit_event], 0, 0)
+        except ProcessLookupError:
+            return True  # gone, or already a zombie, which kqueue does not attach to
+        if not _in_group(pid, pgid):
+            return True
+        return bool(queue.control(None, 1, max(0, deadline - time.monotonic())))
+    finally:
+        queue.close()
+
+
+def _group_members_still_running(pgid):
+    """The members of group `pgid` still running once each has had the bound to exit.
+
+    A killed member is not required to be reaped: an orphaned grandchild is its init's to reap,
+    which happens whenever init gets to it, and never in a container whose pid 1 does not reap. A
+    zombie is a process that has ended, so it counts as ended here.
+    """
+    if not hasattr(os, "pidfd_open") and not hasattr(select, "kqueue"):
+        pytest.skip("no process-exit event (os.pidfd_open or select.kqueue) on this host")
+    deadline = time.monotonic() + _GROUP_EXIT_BOUND_SECONDS
+    return [pid for pid in _members_of_group(pgid) if not _exits_by(pid, pgid, deadline)]
+
+
 def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(
     tmp_path, monkeypatch, terminal,
 ):
@@ -1768,10 +1855,10 @@ def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(
     result = L.default_cloud_spawn(
         ["sh", "-c", "sleep 30"], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 20,
     )
+    monkeypatch.undo()  # the membership read may run `ps`, which must not send a SIGTERM
     assert result["readError"] == "_LauncherTerminated"
     assert result["rc"] is not None
-    with pytest.raises(ProcessLookupError):
-        _os.killpg(started[0].pid, 0)
+    assert _group_members_still_running(started[0].pid) == []
     assert _signal.getsignal(_signal.SIGTERM) is before
 
 
@@ -1800,8 +1887,7 @@ def test_a_sigterm_landing_during_the_cleanup_does_not_cut_the_group_kill_short(
     assert len(signalled) == 1
     assert result["timedOut"] is True
     assert result["rc"] is not None
-    with pytest.raises(ProcessLookupError):
-        _os.killpg(signalled[0], 0)
+    assert _group_members_still_running(signalled[0]) == []
     assert result["readError"] == "_LauncherTerminated"
     assert _signal.getsignal(_signal.SIGTERM) is before
 
