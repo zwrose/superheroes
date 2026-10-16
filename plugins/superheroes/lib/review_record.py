@@ -16,6 +16,9 @@ CLI:
   review_record.py write --account FILE --repo-root DIR
   review_record.py read --pr N [--repo OWNER/NAME]
   review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
+
+In a cloud session (CLAUDE_CODE_REMOTE is "true") the repo, PR and issue reads go through `gh api` REST, and the
+closing issue comes from the first line of the PR body.
 """
 from __future__ import annotations
 
@@ -34,6 +37,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import build_lane  # noqa: E402
+import cloud_pass  # noqa: E402
 import finding_outcomes  # noqa: E402
 import lane_call  # noqa: E402
 import model_registry  # noqa: E402
@@ -73,6 +77,8 @@ _LANE_RE = re.compile(
     r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
+_CLOSES_RE = re.compile(r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w):?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)",
+                        re.IGNORECASE)
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -139,6 +145,39 @@ def _pr_meta(pr, repo):
 
 def _issue_body(n, repo):
     d = _gh_json("issue", "view", str(n), "--json", "body", *(["--repo", repo] if repo else []))
+    return d.get("body") if isinstance(d, dict) else None
+
+
+def _repo_name_rest(repo_root):
+    out = _run(["gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name"], cwd=repo_root)
+    name = None if out is None else out.strip()
+    return name if name and _REPO_RE.fullmatch(name) else None
+
+
+def _closing_issues(body, repo):
+    """The issue numbers the PR body's first line closes, in order, duplicates removed; anything else reads as none."""
+    if not isinstance(body, str):
+        return []
+    first = body.split("\n", 1)[0].removesuffix("\r")
+    found = []
+    for m in _CLOSES_RE.finditer(first):
+        n = int(m.group(2))
+        if n > 0 and n not in found and (m.group(1) is None or m.group(1).lower() == (repo or "").lower()):
+            found.append(n)
+    return found
+
+
+def _pr_meta_rest(pr, repo):
+    d = _gh_json("api", _api(repo, f"pulls/{pr}"))
+    try:
+        body = d.get("body") or ""
+        return {"head": d["head"]["sha"], "body": body, "issues": _closing_issues(body, repo)}
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def _issue_body_rest(n, repo):
+    d = _gh_json("api", _api(repo, f"issues/{n}"))
     return d.get("body") if isinstance(d, dict) else None
 
 
@@ -225,9 +264,12 @@ def _create_comment(pr, repo, body):
 
 
 def _readers(overrides):
-    return {"pr_meta": _pr_meta, "issue_body": _issue_body, "check_data": _check_data,
+    cloud = cloud_pass._is_cloud(os.environ)
+    return {"pr_meta": _pr_meta_rest if cloud else _pr_meta, "issue_body": _issue_body_rest if cloud else _issue_body,
+            "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
-            "create_comment": _create_comment, "repo_name": _repo_name, "read_text": _read_text,
+            "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
+            "read_text": _read_text,
             "changed_paths": changed_paths, "decision_sources": finding_outcomes.decision_sources,
             **(overrides or {})}
 

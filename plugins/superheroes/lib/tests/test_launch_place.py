@@ -418,11 +418,7 @@ _SPECS_LEGS = [
     ("E13-location-not-a-string", dict(policy=dict(POLICY_OK, location=7)), [SPECS]),
     ("E13-location-absent",
      dict(policy={k: v for k, v in POLICY_OK.items() if k != "location"}), [SPECS]),
-    ("E14-mode-global", dict(mode=mode_registry.GLOBAL), [SPECS]),
-    ("E14-mode-absent", dict(mode=None), [SPECS]),
-    ("E14-mode-too-new",
-     dict(mode=None, registry_text=json.dumps({"schemaVersion": 99, "storageMode": "in-repo"})),
-     [SPECS]),
+    ("E14-mode-global-with-store-spec", dict(mode=mode_registry.GLOBAL, spec=True), [SPECS]),
     ("E15-spec-in-the-store", dict(spec=True), [SPECS]),
 ]
 
@@ -443,9 +439,20 @@ def test_specs_leg_visibility_must_be_committed(tmp_path):
         assert LP.machine_needs(repo, {}, root=store) == [SPECS], visibility
 
 
-def test_specs_leg_mode_must_be_in_repo(tmp_path):
-    repo, store = _world(tmp_path, mode=mode_registry.GLOBAL)
-    assert LP.machine_needs(repo, {}, root=store) == [SPECS]
+def test_specs_in_the_repository_whatever_the_storage_mode(tmp_path):
+    # axis: the storage mode does not decide where the specs are; a global, absent or too-new mode
+    # with a committed policy and no store spec is in the repository
+    worlds = (
+        dict(mode=mode_registry.GLOBAL),
+        dict(mode=None),
+        dict(mode=None,
+             registry_text=json.dumps({"schemaVersion": 99, "storageMode": "in-repo"})),
+    )
+    for index, world in enumerate(worlds):
+        repo, store = _world(_sub(tmp_path, str(index)), **world)
+        before = _tree(store)
+        assert LP.machine_needs(repo, {}, root=store) == [], world
+        assert _tree(store) == before, world
 
 
 def test_specs_leg_store_must_hold_no_spec(tmp_path):
