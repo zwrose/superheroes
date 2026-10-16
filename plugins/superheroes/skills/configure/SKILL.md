@@ -56,6 +56,10 @@ Then run the matching path:
 - **`fix`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/fix.md`.
 - **`view`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/view-and-tune.md`.
 
+**Cloud builds are set up in a sitting of their own.** When the owner asks to set up cloud builds,
+says "check again" after a cloud check, or asks for "setup text", follow
+`${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/set-up.md` § 6, whichever path the project routed to.
+
 A run that only views an up-to-date project changes nothing. A provisional calibration
 is confirmed only when the owner explicitly confirms it on the fix path — never by viewing.
 

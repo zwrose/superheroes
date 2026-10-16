@@ -749,6 +749,10 @@ def claude_builder_argv(token, session_id, prompt):
 REFUSAL_CLOUD_ENVIRONMENT_INVALID = "cloud-environment-invalid"
 REFUSAL_CLOUD_SESSION_NAME_INVALID = "cloud-session-name-invalid"
 CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
+# Where Claude Code keeps the picked cloud environment in its settings: `remote.defaultEnvironmentId`.
+# The one home for the spelling; the launch argv writes it and the setup reader reads it.
+CLOUD_SETTINGS_SECTION = "remote"
+CLOUD_SETTINGS_ENVIRONMENT_KEY = "defaultEnvironmentId"
 _CLOUD_SESSION_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
@@ -778,7 +782,7 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
             "detail": "1 to 64 characters from letters, digits, '.', '_' and '-'",
         }
     settings = json.dumps(
-        {"remote": {"defaultEnvironmentId": environment_id}}, separators=(",", ":"),
+        {CLOUD_SETTINGS_SECTION: {CLOUD_SETTINGS_ENVIRONMENT_KEY: environment_id}}, separators=(",", ":"),
     )
     argv = [CLAUDE_EXECUTABLE, "--cloud", prompt, "--settings", settings, "--model", token]
     if isinstance(effort, str) and effort:
