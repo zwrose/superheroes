@@ -147,6 +147,12 @@ These retirements ship in the same release as the review record, and never apart
 - A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
 - `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON fields `report` and `lanes`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message. `still` reads the launch ledger and the cloud's readiness each time and saves nothing. When the ledger cannot be read, `still` refuses with `still-ledger-unreadable` (exit 1).
 
+### Stack layers build in the cloud
+
+- A launch premise carrying `stack` no longer adds a need only the owner's machine has. A stack layer goes to the cloud when the cloud is ready and nothing else needs the owner's machine, and the launch report lists it under "In the cloud". The phone simulator, judged needs, and a Canon or specs kept outside the repository still keep a build on the owner's machine.
+- A cloud builder of a stack layer branches at the layer below's head, brings the layers below forward with a `--no-ff` merge, and opens its pull request through `gh api` REST with the layer below's branch as its base. It does not link the stack; its build record lists the link as owed (`skills/workhorse/reference/cloud.md` § Workspace).
+- The advisor links a cloud-built layer at its handback with `gh stack link` (pull request numbers only), confirms membership with `stack_check.py list`, and records the layer's position in the vet receipt (`skills/showrunner/reference/orchestration.md` § Cloud lanes).
+
 ### Workhorse: building in a cloud session
 
 - A builder in a cloud session finds every cloud-path step in the new `skills/workhorse/reference/cloud.md`, reached by a one-line pointer from the charter's sections 1, 2, 3, 10, 11 and 12. Every step names a `cloud_builder.py` verb or a plain `git` or `gh api` command.

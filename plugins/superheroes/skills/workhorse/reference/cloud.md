@@ -65,6 +65,36 @@ history. There is no app to bring up on the owner's machine and no slot.
 after. The pushed branch is the only work the advisor can recover if the session stops. Never
 force-push.
 
+**A stack layer.** A layer of a stack builds in a cloud session like any other build, and none of
+its steps uses GitHub's GraphQL interface. The launch's base commit is the head of the layer below,
+which the launcher checked on the owner's machine before launch. The order names the layer below's
+branch.
+
+1. **Branch.** On a launch with no `Adopts branch:` line, intake leaves the clone at the base
+   commit: create the build branch there. On an adoption, intake leaves the clone on the adopted
+   branch: continue it and create no branch (§ Intake, step 5). Then run
+   `git fetch origin <lower branch>` and check that `git rev-parse FETCH_HEAD` equals the base
+   commit. This needs no pull request on the layer below. When the two differ, the layer below moved
+   after the launch: bring it forward as step 2 says.
+2. **Bring the layers below forward.** Run `git fetch origin <lower branch>`, merge with
+   `git merge --no-ff FETCH_HEAD`, and push plainly. Never rebase and never force-push. Before
+   handback, fetch again and run `git merge-base --is-ancestor FETCH_HEAD HEAD`, which confirms the
+   build holds the layer below's current head.
+3. **Open the pull request with the layer below's branch as its base**, through REST:
+   `gh api -X POST repos/<o>/<r>/pulls -f head=<branch> -f base=<lower branch> -f title=<title> -F body=@<body.md>`,
+   or through the session's GitHub tools with the same base. Check `base.ref` in the result. An
+   adopted layer that already has an open pull request keeps it: find it with
+   `cloud_builder.py pr-json --repo <o>/<r> --branch <branch> --out <file>`, and open none.
+4. **Leave the link to the advisor.** `gh stack link` and the membership read use GraphQL, so the
+   builder neither links nor quotes its `stackEntry` position. Its build record lists the link as a
+   follow-up for the advisor, keyed like the rest, with the stack number and position the order
+   claims, marked unverified. The advisor links at handback
+   (`skills/showrunner/reference/orchestration.md` § Cloud lanes).
+
+The same steps hold for an upper layer launched before its stack exists, with no `stack` in its
+premise. Its link waits until every layer from the bottom through it has a pull request
+(`rubric/native-stacks.md` § Each layer is a sub-issue, item 4).
+
 ## Preflight
 
 No owner prompt is possible, so every probe must pass on its own.
@@ -94,8 +124,8 @@ go through GraphQL. Use these in their place:
 
 Writes go one per call: one comment, one edit.
 
-**Stack link and stack check** read GraphQL too. A cloud builder of a stack layer does not link or
-check its stack. It says in its handback that the link is owed to the advisor.
+**Stack link and stack check** read GraphQL too. A cloud builder of a stack layer does neither;
+§ Workspace, "A stack layer", says what it does in their place.
 
 ## Asking the advisor: the builder note
 
@@ -155,6 +185,7 @@ Claim verification only with green CI on the same PR head.
 Everything the vet needs is on the PR before handback: the review record, the receipts,
 the dispositions. Nothing lives only on the cloud machine. Open the PR through the GitHub channel
 from § Preflight. Verify the remote head through `cloud_builder.py pr-json`, not `gh pr view`.
+A stack layer's build record lists the stack link owed to the advisor (§ Workspace).
 
 ## The gh calls on a cloud build's path
 
@@ -169,6 +200,7 @@ off a cloud build's path:
 | `lib/vet_slot.py handback`, `--pr <n> --repo <owner/name>` | `gh pr view` | `--body-file <body.md>` on the body read through `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
 | `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
+| `rubric/native-stacks.md`, linking a layer | `gh stack link` | the advisor's, at handback: § Workspace, "A stack layer" |
 | `lib/pr_comment.py`, `lib/cloud_builder.py` | `gh api` (REST) | works |
 | `lib/preflight_probe.py`, `gh_auth_probe` REST fallback | `gh api repos/<o>/<r>` | works |
 | `lib/launcher.py`, `lib/wave_watch.py` | `gh pr list`, `gh pr view` | the advisor's, not a builder's path |

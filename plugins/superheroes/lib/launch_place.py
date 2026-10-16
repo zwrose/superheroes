@@ -88,7 +88,6 @@ _CHECK_AGAIN_ONLY = 'Say "check again" and I\'ll run the check again.'
 _CHECK_AGAIN_SUFFIX = ' Then say "check again".'
 
 _PHONE_SIMULATOR = "the phone simulator"
-_STACK_INTERFACE = "GitHub's stack interface"
 _CANON_AND_SPECS = "this project's Canon and specs"
 _CANON_ONLY = "this project's Canon"
 _SPECS_ONLY = "this project's specs"
@@ -139,7 +138,7 @@ def _specs_outside(cwd, root):
 
 def machine_needs(cwd, premise, *, root=None):
     """What only the owner's machine has, for this build: the advisor's judgment from the order,
-    the phone simulator, GitHub's stack interface, and a Canon or specs kept outside the repository.
+    the phone simulator, and a Canon or specs kept outside the repository.
     De-duplicated, in that order. Read-only."""
     found = []
 
@@ -153,8 +152,6 @@ def machine_needs(cwd, premise, *, root=None):
             add(need)
     if premise.get("iphoneCheck") is True:
         add(_PHONE_SIMULATOR)
-    if "stack" in premise:
-        add(_STACK_INTERFACE)
     try:
         canon = _canon_outside(cwd, root)
         specs = _specs_outside(cwd, root)
