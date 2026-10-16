@@ -93,6 +93,31 @@ def test_classification_follows_a_symlinked_store_root(tmp_path):
     assert cp.is_calibration_path(str(link / "projects/k/reviews/x.json")) is False
 
 
+def test_classification_follows_a_symlink_to_an_intermediate_directory(tmp_path):
+    # axis: a link whose own name looks like no calibration location is classified by where it
+    # resolves (the realpath step), not by its lexical path — see bite-proof record c8c_wo_b.md
+    key_dir = tmp_path / "store" / "projects" / "k"
+    (key_dir / "reviews").mkdir(parents=True)
+    (key_dir / "registry.json").write_text("{}\n")
+    (key_dir / "reviews" / "x.json").write_text("{}\n")
+    alias = tmp_path / "alias"
+    os.symlink(key_dir, alias)
+    # The rule (module docstring): `<root>/projects/<key>/registry.json` is a calibration file and
+    # `<root>/projects/<key>/reviews/x.json` is not; the alias resolves to `projects/k`.
+    assert cp.is_calibration_path(str(alias / "registry.json")) is True
+    assert cp.is_calibration_path(str(alias / "reviews" / "x.json")) is False
+
+
+def test_classification_collapses_a_dotdot_alias_back_to_the_calibration_file(tmp_path):
+    # axis: `..` segments are collapsed before the layout rule reads the path — see bite-proof
+    # record c8c_wo_b.md
+    key_dir = tmp_path / "store" / "projects" / "k"
+    key_dir.mkdir(parents=True)
+    (key_dir / "registry.json").write_text("{}\n")
+    path = os.path.join(str(tmp_path), "store", "projects", "k", "..", "k", "registry.json")
+    assert cp.is_calibration_path(path) is True
+
+
 def test_classification_sees_a_symlink_standing_where_a_calibration_file_belongs(tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("keep\n")
@@ -223,6 +248,33 @@ def test_atomic_write_refuses_a_self_linked_calibration_path(tmp_path, monkeypat
     _cloud(monkeypatch)
     with pytest.raises(sc.CalibrationWriteRefused):
         sc.atomic_write(str(store / "registry.json"), "after\n")
+
+
+def test_atomic_write_encodes_utf8_when_the_default_text_encoding_is_not(tmp_path, monkeypatch):
+    # axis: atomic_write names its own encoding, so the bytes on disk are UTF-8 whatever the
+    # default text encoding is — see bite-proof record c8c_wo_b.md
+    _cloud(monkeypatch, None)
+    real_os = os
+    calls = []
+
+    class _LatinDefaultOs:
+        """store_core's `os`, except `os.fdopen` opens text with latin-1 unless the caller named an
+        encoding: the same effect as a latin-1 locale, whatever this machine's locale is."""
+
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+        def fdopen(self, fd, mode="r", *args, **kwargs):
+            if "b" not in mode:
+                kwargs.setdefault("encoding", "latin-1")
+            calls.append(kwargs["encoding"] if "encoding" in kwargs else None)
+            return real_os.fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(sc, "os", _LatinDefaultOs())
+    path = tmp_path / "x.txt"
+    sc.atomic_write(str(path), "café — ok\n")
+    assert calls == ["utf-8"]
+    assert path.read_bytes() == "café — ok\n".encode("utf-8")
 
 
 def test_atomic_write_writes_text_as_utf8(tmp_path, monkeypatch):

@@ -9,6 +9,7 @@
 - [iPhone lanes: launching and reaping their phones](#iphone-lanes-launching-and-reaping-their-phones)
 - [Liveness sweep and wave watch](#liveness-sweep-and-wave-watch)
 - [Lapsed-pass parks and the send-back](#lapsed-pass-parks-and-the-send-back)
+- [Acting on the builders' account](#acting-on-the-builders-account)
 - [Adoption mechanics](#adoption-mechanics)
 
 # Orchestration — launcher, ledger, and wave mechanics
@@ -317,6 +318,46 @@ has the builder's side).
 - `notRenewed`: wait for the confirmation.
 - `uncertain`: a send-back whose delivery was never confirmed. Tell the owner which PR still waits on
   it and that it needs their word before any resend. A newer park comment re-arms it.
+
+## Acting on the builders' account
+
+The builders can run on a different Claude account from the advisor; the launch names it by its
+config dir. A session on one account cannot read, message, stop or archive a session on another, so
+**an action scoped to the builders' account goes through a session on that account**. Never hand
+such a step to the owner first.
+
+- **A message to a cloud session** goes through the relay, as
+  `skills/showrunner/reference/wave-watch.md` § Answering a builder note sends one.
+- **Archiving a finished cloud lane** is the cleanup in
+  `skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane: the relay
+  carries the archive request, and the builder archives its own session with the tool it has.
+  Confirm the archive from the session list. Never assume it.
+- **Anything else** (reading a session's state or permission mode, listing sessions, messaging or
+  stopping a background session) goes to a one-off helper: a named background session started on
+  that account for this one job.
+
+**Starting the helper.** Start it from the repository root, which that account already trusts (a
+session started in a folder it does not trust stops at the trust prompt and never runs). Pin that
+account's config dir, and run it on the small model:
+
+    CLAUDE_CONFIG_DIR=<the builders' config dir> claude --bg -n <name> --model haiku --effort low "<prompt>"
+
+Name it for its job, and put the account in the name, as the relay's name does.
+
+**The helper's prompt** names exactly the sessions it may act on and a never-touch list: the relay,
+every live builder, and every session the job does not name. It says which action to take on each
+(read, message, stop or archive), and that it never deletes a session. It asks for one result line
+per named session, sent back to the advisor session by `SendMessage`. When it cannot do a step, it
+lists its own tools instead.
+
+When the helper reports that it cannot do a step, hand that step to the owner, naming the tools it
+listed. Deleting a session needs the owner's word every time.
+
+**What each kind of session can do.** A background helper has no tool that archives a session:
+its CLI can stop, attach and delete sessions, but not archive one. A cloud session's own tools
+can include one that archives a session by its id; a builder without one says so on its issue, as
+the builder's cloud reference says. Confirm every archive from the session list, and
+report one that is not confirmed as the cleanup's steps say.
 
 ## Adoption mechanics
 

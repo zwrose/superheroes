@@ -249,8 +249,7 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    same-account id has no check, so record `uncertain`. Then go on. A `pending` or `uncertain` request is never sent a second time.
 3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other
    outcome, tell the owner that the archive request to that build's session could not be confirmed
-   and that its session stays listed. Ask nothing of the owner: the only step the owner is ever asked
-   for is the one tap on the archive prompt.
+   and that its session stays listed. Ask nothing more of the owner than the `ownerMessage` asks.
 4. **The branch.** Run `cloud_cleanup.py branch --repo-root <root> --repo <owner/name> --pr <number>
    --launch-id <the plan's launchId>`.
    GitHub deletes the pull request's branch when the repository deletes merged branches; otherwise
@@ -258,7 +257,7 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    `already: "absent"` when the branch was already gone. The step reports what a re-read of the branch shows, never
    what the delete call returned. A refusal (`branch-moved`, `branch-in-use`, `default-branch`,
    `head-repo-foreign`, `delete-unconfirmed`, `delete-outcome-unknown`) is reported to the owner, never worked around.
-5. **What is left.** The session, until the owner taps Allow, and the lane's record. The branch is
+5. **What is left.** The session, until it is archived as the `ownerMessage` says, and the lane's record. The branch is
    gone, and a cloud launch made no checkout or worktree to remove.
 
 If the owner never answers the archive prompt, the session stays listed and the advisor carries on; nothing reminds the owner.

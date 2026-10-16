@@ -64,7 +64,7 @@ _SETUP_MESSAGE = (
     "every build names this environment itself.\n"
     "2. Paste the setup text into it. I've written it below.\n"
     "3. Sign in once to the reviewer on your machine, with a sign-in kept apart from your main one. "
-    "The pass is made from it. You only do this the first time on this account, and I'll walk you "
+    "The pass is made from it. You only do this the first time on this machine, and I'll walk you "
     "through it.\n"
     "4. Paste the reviewer pass into the environment. Run the pass command on your machine and it "
     "puts the pass on your clipboard.\n"
@@ -125,7 +125,7 @@ _PARTS = (
      "paste a fresh pass into the environment"),
     ("record", "The check passed, but I could not finish saving the result on this machine.",
      "tell me so I can look at the store"),
-    ("setting", "I could not switch cloud builds off.", "switch them off in configure"),
+    ("setting", "I could not switch cloud builds off.", cloud_setup.SWITCH_OFF_FIX),
 )
 _SWITCHED_OFF = " They were on for this project, so I've switched them off."
 
@@ -149,8 +149,7 @@ _UNREAD = (
 _UNREAD_STILL_ON = (
     "**The check did not report back.** I could not read a result from the check session.\n"
     "\n"
-    "Cloud builds are still on: I could not switch them off. Switch them off in configure, then "
-    "say \"check again\" and I'll run it once more."
+    + cloud_setup.STILL_ON_REPAIR + ", then say \"check again\" and I'll run it once more."
 )
 
 _CHECK_SESSION_PREFIX = "cloud-check-"
@@ -385,14 +384,7 @@ def _readable(obj, nonce):
             and isinstance(confirmation.get("reviewerAnswered"), bool))
 
 
-def _lapses_ok(lapses, today):
-    # axis: the date's format is the record owner's rule, not a second copy
-    if not cloud_setup._date_ok(lapses):
-        return False
-    try:
-        return datetime.date.fromisoformat(lapses) >= today
-    except ValueError:
-        return False
+_lapses_ok = cloud_setup._lapses_ok
 
 
 def _judge_parts(obj, environment, cwd, root, today):

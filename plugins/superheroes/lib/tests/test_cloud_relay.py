@@ -363,6 +363,39 @@ def test_leading_whitespace_before_the_header_still_attributes_the_send(world):
     assert out["reason"] == "relay-text-mismatch"  # attributed, but not the exact text
 
 
+def test_a_send_quoting_this_messages_header_mid_text_is_not_its_send(world):
+    # axis: a send is this message's only when its header line is at the start, not quoted mid-text — see bite-proof record c8c_wo_a.md
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION, "Note first.\n" + msg["forward"],
+                                     "2026-10-12T10:00:00.000Z"))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-silent"
+    assert "firstDifference" not in out
+
+
+def test_a_send_opening_with_the_header_minus_its_colon_is_not_this_messages_send(world):
+    # axis: the header line's final colon is part of the match, so a send without it is not attributed — see bite-proof record c8c_wo_a.md
+    msg = _composed(world)
+    header = cr.FORWARD_HEADER % msg["msgId"]
+    assert header.endswith(":")
+    _write_record(world, _send_lines("toolu_1", SESSION, header[:-1] + "\n\nbody",
+                                     "2026-10-12T10:00:00.000Z"))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-silent"
+    assert "firstDifference" not in out
+
+
+def test_a_send_whose_header_line_carries_more_text_is_attributed_and_a_mismatch(world):
+    # axis: a send opening with the complete header line is attributed even with more text after it on that line, so it is a mismatch and never silent — see bite-proof record c8c_wo_a.md
+    msg = _composed(world)
+    header = cr.FORWARD_HEADER % msg["msgId"]
+    _write_record(world, _send_lines("toolu_1", SESSION, header + " extra\n\nbody",
+                                     "2026-10-12T10:00:00.000Z"))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-text-mismatch"
+    assert "firstDifference" in out
+
+
 def test_results_and_calls_need_their_ids(world):
     # E9: a call without an id, or a result without its call's id, confirms nothing.
     msg = _composed(world)

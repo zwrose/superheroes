@@ -182,14 +182,18 @@ def test_ensure_history_gets_the_callers_short_wait_exactly_with_no_floor(tmp_pa
 
 
 class _ClockShim:
-    """engine_dispatch's `time` module with a monotonic clock a test can push forward by hand;
-    sleeping does not wait, and every other name is the real `time`'s."""
+    """engine_dispatch's `time` module with a monotonic clock that sits at a fixed base and moves
+    only when a test pushes `offset` forward; sleeping neither waits nor advances it (the wait
+    loop takes each slice's deadline fresh after its sleep, so a sleep cannot change a slice),
+    and every other name is the real `time`'s."""
+
+    _BASE = 1000.0
 
     def __init__(self):
         self.offset = 0.0
 
     def monotonic(self):
-        return time.monotonic() + self.offset
+        return self._BASE + self.offset
 
     def sleep(self, _seconds):
         pass
@@ -237,6 +241,7 @@ def test_history_time_is_charged_to_the_first_wait_slice_only(tmp_path, monkeypa
     assert res["cloudHistory"]["ok"] is True
     assert len(slices) == 3
     full = engine_dispatch.MAX_SYNC_WAIT
-    assert abs(slices[0] - (full - 100)) < 5, slices
-    assert abs(slices[1] - full) < 5, slices
-    assert abs(slices[2] - full) < 5, slices
+    # axis: with a fixed clock the slices are exact — a history charge of 99 s or 101 s, or a charge
+    # that leaks into a later slice, fails; the old `< 5` tolerance passed a 1 s error — see
+    # bite-proof record c8c_wo_b.md
+    assert slices == [full - 100, full, full], slices
