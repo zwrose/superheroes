@@ -4476,8 +4476,8 @@ def _drop_spent_out_of_scope_rows(state, rows):
                   in session_contract.disposition_family_snapshot(held_row).items()
                   if name not in ("disposition", "dispositionRound")}
         recovered = _follow_up_of(_live_out_of_scope_ruling_for_key(state, key))
-        if recovered and not fields.get("followUp"):
-            fields["followUp"] = recovered
+        if recovered and not _follow_up_of(fields):
+            session_contract.copy_follow_up_field({"followUp": recovered}, fields)
         reason = (
             "out of scope; already offered to a fixer in round %s and not offered again while it "
             "stays out of scope" % offered_round)
