@@ -96,6 +96,7 @@ def _staged_state(findings, cfg=None):
 
 @pytest.mark.parametrize("risk_area", [False, True], ids=["no-risk-area", "risk-area-covers-file"])
 def test_t1_code_quality_minor_left_at_convergence_is_craft(risk_area, tmp_path, sources_calls):
+    cfg = TRD._cfg_cert()
     if risk_area:
         area = dict(TRA.PAYMENTS, name="The reviewed file", covers=["f.py"])
         repo, store = TRA._repo(tmp_path, [area])
@@ -103,7 +104,9 @@ def test_t1_code_quality_minor_left_at_convergence_is_craft(risk_area, tmp_path,
         assert read["riskAreas"] == "set"
         assert [hit["area"]["name"] for hit in read["touched"]] == ["The reviewed file"]
         assert read["touched"][0]["matched"] == ["f.py"]
-    result, state = _run_once([_finding("Naming")], TRD._cfg_cert())
+        cfg = TRD._cfg_cert(repoRoot=repo)  # the loop runs on the repo whose risk area covers f.py
+    result, state = _run_once([_finding("Naming")], cfg)
+    assert state["config"].get("repoRoot") == (repo if risk_area else None)
     assert state["terminal"] == "converged"
     row = _row(state, "Naming")
     assert row["disposition"] == "craft"
