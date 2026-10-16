@@ -10,7 +10,7 @@ approved: "2026-10-10"
 gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-09"
-updated: "2026-10-10"
+updated: "2026-10-16"
 ---
 # Risk-calibrated review that learns
 
@@ -137,11 +137,11 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* No review runs both a test reviewer and the test role. (source: Canon 2026-10-08-d6064e1d-17)
 
 **FR-22.** The test role shall keep the test reviewer's duties that this spec does not drop. (source: vet round 1; craft, for your veto)
-  - *Acceptance (rule):* The test role asks, of each changed test, whether the test would fail if the code under test were wrong [cite: plugins/superheroes/agents/test-reviewer.md § Mutation-survival lens]. (source: vet round 1)
+  - *Acceptance (rule):* The test role asks, of each changed test, whether the test would fail if the code under test were wrong [cite: plugins/superheroes/agents/test-role.md § Priority Categories]. (source: vet round 1)
   - *Acceptance (rule):* When an intentional edit leaves a test file holding tests that cannot fail, the test role raises a finding that names them [cite: docs/superheroes/verification-strategy-for-the-superheroes-repo-c629cd/spec.md § FR-18f]. (source: vet round 1)
   - *Acceptance (rule):* FR-29 names the two duties this spec drops. (source: Canon 2026-10-08-d6064e1d-17)
 
-**FR-23.** Where a change touches a risk area, the test role shall write and run break-it tests on that area. (source: Canon 2026-10-08-d6064e1d-17; board · 4 Risk and trust)
+**FR-23.** Where a change touches a risk area, the test role shall write and run break-it tests on the touched areas: at most three per review, and at least one per touched area while under that cap. A change touching more than three risk areas can leave one or more of them without a break-it test. (source: Canon 2026-10-08-d6064e1d-17; board · 4 Risk and trust; amendment 2026-10-16)
   - *Acceptance (Given-When-Then):* Given a full-lane change that touches a risk area, when the test role reviews it, then the role runs at least one test it wrote that tries to break the change on a named risky scenario. (source: Canon 2026-10-08-d6064e1d-15; craft, for your veto)
 
 **FR-24.** When a break-it test fails, the plugin shall treat the failure as a finding and keep the test with the change once the finding is fixed. (source: board · 3 Big PR sheet)
@@ -206,7 +206,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* A decision about one PR is on record in that PR's saved sheet answers. (source: Canon 2026-10-10-d6064e1d-10)
   - *Acceptance (rule):* A decision that sets a rule for later work is on record in Canon. (source: Canon 2026-10-10-d6064e1d-10)
 
-**FR-41.** The plugin shall keep everything the review did not show the owner retrievable. (source: Canon 2026-10-10-d6064e1d-16)
+**FR-41.** The plugin shall keep everything the review did not show the owner retrievable, except a raw reviewer output withheld because it holds a secret-shaped value; that output's findings stay in the record. (source: Canon 2026-10-10-d6064e1d-16; Canon 2026-10-10-dcc2b5e5-9; amendment 2026-10-16)
   - *Acceptance (Given-When-Then):* Given a bug found after merge, when the advisor looks up the PR's review, then every craft decision and every finding shown wrong is still readable. (source: Canon 2026-10-10-d6064e1d-16)
 
 ### Part D · The owner's decisions: the index, the PR sheets and the walk
@@ -215,7 +215,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* Batch 1 holds what blocks work. Batch 2 holds decisions not tied to one PR. Batch 3 holds one sheet per PR. (source: Canon 2026-10-09-d6064e1d-6)
 
 **FR-43.** The plugin shall put each batch-1 question both in the chat and at the top of the index, with the chat linking to the index. (source: Canon 2026-10-09-d6064e1d-6; board · 1 The index)
-  - *Acceptance (rule):* The first answer given, in either place, is the answer. (source: Canon 2026-10-09-d6064e1d-6)
+  - *Acceptance (rule):* The first answer the advisor reads, in either place, is the answer. (source: Canon 2026-10-09-d6064e1d-6; amendment 2026-10-16)
   - *Acceptance (rule):* Where pictures bear on a batch-1 question, the index shows them with the question. (source: Canon 2026-10-09-d6064e1d-6; Canon 2026-10-05-3dbeb858-24)
 
 **FR-44.** When a batch-1 question is answered, the plugin shall remove it from the index. (source: Canon 2026-10-09-d6064e1d-9)
@@ -479,6 +479,7 @@ Scheduling the amendments to the approved specs is the advisor's. (source: Canon
 
 ## Amendments
 
+- **2026-10-16 (owner-stamped, substantive; the closure re-read of epic #1708):** the spec is brought to what shipped in three places, on the owner's ruling "136 a" (collector #695 item 136, 2026-10-16, advisor chat). (1) FR-41 names the one exception Canon 2026-10-10-dcc2b5e5-9 already ruled: raw reviewer output that holds a secret-shaped value is withheld, and its findings stay in the record. (2) FR-43's first acceptance counts the first answer the advisor reads, not the first given, so an answer changed on the index before the advisor reads it counts in its changed form. (3) FR-23 states the shipped cap of three break-it tests per review, and its consequence: a change touching more than three risk areas can leave one or more without a break-it test. The owner declined full per-area coverage for now, with a revisit trigger on the revisit-trigger registry (#695, comment 5390039732). Mechanical, in the same entry: the frontmatter date; FR-22's first acceptance now cites the test role's mutation-survival question (the test reviewer it cited retired with FR-21). Citations to parts this spec retired (FR-5, FR-18, FR-21) name what was retired and are kept as written. Sections touched: Part B (FR-22, FR-23), Part C (FR-41), Part D (FR-43), Amendments; the coverage map (FR-43 row 1). Every child has merged, so no build needed a notice; the coverage map still allocates every acceptance criterion (re-checked 2026-10-16).
 - **2026-10-13 (owner-stamped, substantive):** a merge verdict survives a head move that carries no material consequence; only a material change republishes the sheet unsigned. The owner's words, in the advisor's chat on 2026-10-13: "the only time a re-sign should be needed is a material change to the PR" and "merge trains are impossible to authorize as a batch with this logic". Canon 2026-10-13-dcc2b5e5-2 replaces the head-move clause of Canon 2026-10-09-d6064e1d-7. The new child C12 (#1856) builds it. Sections touched: When things go wrong (UFR-6), What this spec changes elsewhere (the forward doctrine spec's FR-F1 line), Amendments; the register (R8) and the coverage map (UFR-6 rows).
 
 ## Coverage

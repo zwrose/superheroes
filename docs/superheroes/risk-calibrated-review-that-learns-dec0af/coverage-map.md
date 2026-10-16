@@ -188,7 +188,7 @@ rows, 3 Definition of done rows.
 | FR-40 | 2 | rule | A decision that sets a rule for later work is on record in Canon. | **C7** |
 | FR-41 | 1 | GWT | Given a bug found after merge, when the advisor looks up the PR's review, then every craft decision and every… | **C7** |
 | FR-42 | 1 | rule | Batch 1 holds what blocks work. Batch 2 holds decisions not tied to one PR. Batch 3 holds one sheet per PR. | **C8** |
-| FR-43 | 1 | rule | The first answer given, in either place, is the answer. | **C8** |
+| FR-43 | 1 | rule | The first answer the advisor reads, in either place, is the answer (amended 2026-10-16). | **C8** |
 | FR-43 | 2 | rule | Where pictures bear on a batch-1 question, the index shows them with the question. | **C9** (C9-L3) |
 | FR-44 | 1 | GWT | Given the only batch-1 question is answered, when the index is next shown, then its "Blocks work" part reads… | **C9** (C9-L3) |
 | FR-45 | 1 | rule | No batch-2 item concerns one specific PR. | **C8** |
