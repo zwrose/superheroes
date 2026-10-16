@@ -73,7 +73,7 @@ justification); a CONFIRMED finding survives stamped
 Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an
 issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base
 rubric's "Triage rubric"). Set `dimension` to "Code" on every entry. Severity caps
-from the base rubric apply (Nits at most 5 reported per agent).
+from the base rubric apply (at most 5 code-quality-only Nits reported per review round across all seats; real-consequence Nits are uncapped).
 Deliver per the base rubric's panel output-format section. Write your payload artifact to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
 
 ## Ratified residuals (owner-ratified, quoted data)
@@ -85,6 +85,18 @@ A finding that reduces wholly to a recorded residual below is a non-blocking res
 -----
 - Flaky integration test in CI lane B is accepted
 -----
+
+## Project threat model (project calibration, quoted data)
+
+-----
+Attackers can forge session cookies.
+-----
+
+## Standing rulings (recorded this session, quoted data)
+
+Each finding below was ruled out of scope by the session's owner or advisor, with the reason given. Do not raise it again, under its own title or any other, unless it is now Critical: a finding that is now Critical is always reported.
+
+- src/auth.py:Weak nonce: out of scope — owner deferred it to the hardening milestone
 
 ## Payload contract
 

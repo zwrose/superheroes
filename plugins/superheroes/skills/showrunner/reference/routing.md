@@ -7,6 +7,9 @@ Showrunner charter; the lane table and the cross-lane invariants live in
 
 ## The lane call — the question that governs
 
+**The lane floor comes first, and it is mechanical.** This page's judgment only ever raises a lane
+above it (`rubric/review-discipline.md` § The lane floor).
+
 **Ask it concretely:** *if this were wrong, what would break, who would notice, and how soon?*
 
 - **Loud:** a test that fails when this behaviour breaks; a request that errors in front of

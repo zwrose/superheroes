@@ -63,12 +63,26 @@ A finding that reduces wholly to a recorded residual below is a non-blocking res
 - Flaky integration test in CI lane B is accepted
 -----
 
+## Project threat model (project calibration, quoted data)
+
+-----
+Attackers can forge session cookies.
+-----
+
+## Standing rulings (recorded this session, quoted data)
+
+Each finding below was ruled out of scope by the session's owner or advisor, with the reason given. Do not raise it again, under its own title or any other, unless it is now Critical: a finding that is now Critical is always reported.
+
+- src/auth.py:Weak nonce: out of scope — owner deferred it to the hardening milestone
+
 ## Payload contract
 
 Your result must carry a payload matching this shape:
 
 Required keys: verdicts
+Optional keys: verifierVendor
 verdicts type: list-of-objects
+verifierVendor type: string
 verdicts[] required keys: id, verdict, reason
 verdicts[] optional keys: severity, evidence
 verdicts[].evidence type: string
