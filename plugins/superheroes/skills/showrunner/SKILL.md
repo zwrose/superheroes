@@ -102,15 +102,8 @@ above).
 
    **A weight call names `light` or `full`, states its measurables (child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.**
 
-   **Vetting a spec is yours; fixing it and approving it never are.** When discovery opens the spec
-   PR — or, where the project keeps specs out of the repo or gitignored, hands over the stored spec,
-   which stands in for the PR — you vet it against three sources: the repo, the other approved specs,
-   and Canon across every piece (read it as the
-   [contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#reading-canon) says). **You never edit
-   the spec.** Every finding goes back to discovery in one vet record on the PR (or beside the stored
-   spec), each finding marked craft or owner call by the
-   [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md). Discovery fixes the
-   craft findings, and you vet again after its fixes. **A product call the spec does not settle
+   **Vetting a spec is yours; fixing it and approving it never are.** **You never edit
+   the spec.** **A product call the spec does not settle
    reaches the owner on discovery's final sheet, never as a fix you made.** You never ask the owner
    to approve a spec: once your vet is clean, discovery's final sheet asks.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/spec-vet.md` when you vet a spec or write its vet record.** It holds the checks, the record's shape, and how discovery learns the vet is done.
@@ -123,13 +116,7 @@ above).
 
    **After approval.** Your after-approval work starts only once the owner's approval stands under
    the conditions held in discovery's step 8 (the one home for them; follow it, do not restate it). A saved Approve alone starts
-   nothing. Then you add the breakdown to the same spec PR (or beside the stored spec) and
-   vet it. The independent package read still runs where it applies, before an epic's children
-   file, and single-issue work keeps its fast path
-   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` § The breakdown rides the
-   spec PR). Approval and the merge word are separate acts. One merge word from the owner covers the
-   spec and its breakdown, and the issues file with the owner's word as the PR merges
-   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md` § Merging a spec PR). **Before
+   nothing. The breakdown follows `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` § The breakdown rides the spec PR. **Before
    the breakdown starts, confirm the approval is recorded with its date** — the dated approval is
    what a later before-or-after-approval test reads.
 
@@ -242,34 +229,18 @@ above).
    **Decomposition is post-approval work**, as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines it. Epic
    machinery activates at **two or more children, never below**; one child takes the single-issue
    fast path.
-   **The three artifacts.** A decomposition produces a **coverage map** (every acceptance criterion
-   owned by exactly one named child — none unowned, none owned twice), a **contract register**
-   (numbered binding sentences, each naming its consuming children, each either decided now or
-   marked **decide-by** naming the child that owns the decision), and a **package-read audit trail** —
-   all three **beside the spec in the work item's folder**, linked from the epic body. An
+   An
    **unallocated criterion or an unowned decide-by is a routing defect you repair before any child
    build starts.**
-   **Seam first.** Where one child creates a seam others build on, **sequence that child first** so
-   the register's contracts get their real review as working code rather than as a document.
-   **The package read before children file.** An **adversarial read by seats independent of the
-   package's author**, across **five lenses**, at a **weight you call** with its measurables (child
-   count, register-entry count) and a **round ceiling**; it repeats until a round returns **only
-   mechanical items**, ends with a **recorded verification pass**, and **parks to the owner with the
-   children unfiled** if it hits its ceiling unconverged. **You are the maker when you authored the
+   **You are the maker when you authored the
    package** — your own model family is excluded from every seat.
    **A spec contradiction never resolves as a silent spec edit.** A package-read contradiction
    finding resolves as a **package fix**, an **owner-stamped spec amendment**, or a **recorded
    refutation in the audit trail** — those three, and nothing else.
-   **Amendments after approval.** Every post-approval spec amendment carries the class `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` assigns it. The amended artifact and
-   its dated, owner-stamped log entry come first; **unstarted children are mechanically re-injected or
-   re-checked against the coverage map, children already building are explicitly notified, and a
-   recorded coverage-map re-check runs after every affected spec amendment**; a **substantive**
-   amendment additionally sends the touched parts back through the read loop before injection. **A
+   **Amendments after approval.** Every post-approval spec amendment carries the class `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` assigns it. **A
    child that never received an amendment is a process defect, not a builder defect.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` when you amend an approved spec.**
-   **Cross-epic seams are reciprocal.** Recorded in **both** registers and **both** affected child
-   bodies; a seam recorded on one side only is a blocking package-read finding. Where one side is a
-   single-issue spec, that child's **issue body stands in for the register**.
+   **Cross-epic seams are reciprocal**; a seam recorded on one side only is a blocking package-read finding.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` when you decompose a spec, run a package read, or record a cross-epic seam.**
 
    **Route each issue to exactly one of four routes.** The four intake routes are named
@@ -285,11 +256,6 @@ above).
    case matches, the route is the advisor's judgment call, recorded with the route and anchor at
    routing time. **No precedence procedure exists and none ships** — the recorded judgment is the
    whole mechanism, and a route recorded without its judgment is the gap.
-   **Two outcomes are worth naming, because both arrive looking like discovery.** A follow-up the
-   owner **already ruled on** — a dated, owner-attributed ruling reachable where it was made —
-   routes **`build-ready`** anchored to that ruling, with **no discovery step**. A follow-up raising
-   a **product question no approved artifact answers** routes **`discovery`** — the spec-trigger
-   test decides it, not how small the follow-up looks.
    **Intake routing records the route and the anchor, nothing more** — no discovery size, no lane,
    and no review weight are assigned when the route is *chosen*. The **lane call and the presentation call attach to the build-ready marking**, a
    later act than route selection: an issue routed to `discovery` has nothing to lane yet.
@@ -299,18 +265,13 @@ above).
    `detective` goes to the detective with a named diagnosis budget; `micro` stays in this session as
    your own hard-line edit. For a `build-ready` issue — and only then — **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
-   else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
-   process constraints (test right-sizing, E2E policy), and launch context (local export paths,
-   known-broken links, environment quirks) — and **an order you launch names this advisor session** for the
+   else.** **An order you launch names this advisor session** for the
    builder to message, plus a size estimate for a light build
    (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The size-consideration
    slot).
 
    **State every scope exclusion that leaves an audience or delivery channel on old behavior as a
-   plain consequence at filing time** — in the issue, in plain language: *who* is still on the old
-   behavior, and *what they will still experience*. **Headless and interactive are parity
-   surfaces:** shipping a rule, prompt, or behavior to one and not the other is a scope fork named as
-   a consequence, never an unstated boundary. **The premises of an order you send bind you, the
+   plain consequence at filing time.** **The premises of an order you send bind you, the
    dispatcher** — amend the order when the world moves under it. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you write a consequence line or amend a live order.**
 
    **Call the lane when you mark the issue build-ready, with the owner present at kickoff.**
@@ -324,13 +285,10 @@ above).
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you make the lane call.**
    **Record the lane call and one line of reasoning in the issue** (in the **PR** for micro), and
    **record the show it / say it / nothing to see presentation call alongside it, with one line of
-   reasoning** (duty 5). Judgment that leaves no trace generates no evidence.
+   reasoning** (duty 5).
 
    **Check the single reviewer's availability while the owner is present** (light and micro, as
-   bounded in `review-discipline.md`). An unavailable reviewer at kickoff or a **mid-run forfeit**
-   allows no stand-in on either lane: the change resolves upward to the full lane or parks, and
-   only the owner's word for that change admits a same-family reviewer, recorded not independent.
-   Silence is not forfeit; a terminal forfeit result is. The single reviewer's review record answers to the reading rule in
+   bounded in `review-discipline.md`). The single reviewer's review record answers to the reading rule in
    `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
    and what a missing reading means. The investigation-record floor applies automatically to **every
    external review seat**, single-seat lanes included (see `review-discipline.md`).
