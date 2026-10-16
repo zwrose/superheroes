@@ -310,7 +310,7 @@ REFUSALS = {
     "invalid JSON": (lambda: "{not json", "not valid JSON"),
     "top level not an object": (lambda: "[1, 2]", "The data file must be object."),
     "wrong schema": (_mutated(lambda s: _set(s, "superheroes-sheet/2", "schema")), 'Schema must be "superheroes-sheet/1".'),
-    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain."),
+    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain, pr, stack, index."),
     "empty title": (_mutated(lambda s: _set(s, "", "title")), "Title must not be empty."),
     "empty cards": (_mutated(lambda s: _set(s, [], "cards")), "Cards must not be empty."),
     "missing section title": (_mutated(lambda s: _drop(s, "cards", 1, "context", 0, "title")), "Cards[1].context[0] has no title."),
@@ -400,7 +400,7 @@ def test_prose_script_carries_no_provenance():
         assert not re.search(pattern, source), "sheet_prose.py matches %s" % pattern
 
 
-# Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the four cross-field rules the schema description lists (or about a valid sheet).
+# Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the cross-field rules the schema description lists (or about a valid sheet).
 def test_cross_field_rules_agree_between_page_and_prose():
     import importlib.util
     from test_review_template import _run_check_sheet
@@ -414,12 +414,21 @@ def test_cross_field_rules_agree_between_page_and_prose():
         mutate(sheet)
         return sheet
 
+    def mutated_stack(mutate):
+        sheet = _pr_kind_sheet("stack")
+        mutate(sheet)
+        return sheet
+
     fixtures = [
         ("valid", _valid_sheet(), False),
         ("duplicate card id", mutated(lambda s: s["cards"][1].update(id="card-0")), True),
         ("duplicate option id", mutated(lambda s: s["cards"][0]["options"][1].update(id="yes")), True),
         ("unsettled names a missing card", mutated(lambda s: s["remainder"].update(unsettled=["no-such-card"])), True),
         ("recommendation names a missing option", mutated(lambda s: s["cards"][0]["recommendation"].update(optionId="maybe")), True),
+        ("valid index", _index_sheet([_row(4, "ready"), _row(5, "needs-you")]), False),
+        ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
+        ("valid stack with a walk", _pr_kind_sheet("stack"), False),
+        ("two walk stops share an id", mutated_stack(lambda s: s["prSheet"]["walk"]["stops"][1].update(id="schema")), True),
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -819,3 +828,543 @@ def test_final_sheet_wording_is_the_same_on_the_page_and_in_the_prose(tmp_path, 
         assert len(items) == len(declined)
     else:
         assert seen["history"]["paragraphs"][1] == after("**Declined findings.** ")
+
+
+def _pr_kind_sheet(kind):
+    """A valid pr sheet, or a valid stack sheet, with one card whose options all say sendsBack."""
+    body = {
+        "number": 1724,
+        "commit": "662d4487",
+        "whatChanged": {
+            "summary": "Adds a sheet for one PR.",
+            "reviewers": [{"name": "reviewer-one", "family": "claude", "ran": "engine-record", "notIndependent": False}],
+            "caught": [],
+            "rounds": 2,
+            "stoppedAtCap": False,
+            "ci": {"state": "green", "commit": None},
+            "lane": None,
+            "laneReason": None,
+        },
+        "craft": [],
+        "alreadyDecided": [],
+        "history": ["2 rounds ran."],
+        "walk": {"open": {"label": "Open it"}, "picturesFrom": "the advisor's account", "stops": [
+            {"id": "schema", "key": "schema-0123456789ab", "title": "The schema", "pr": 1724, "group": "Stops", "kind": "look", "steps": [], "expect": "A table.", "pictures": []}]},
+    }
+    if kind == "stack":
+        body["walk"]["stops"].append({"id": "builder", "key": "builder-0123456789ab", "title": "The builder", "pr": 1725, "group": "Stops", "kind": "look", "steps": [],
+                                      "expect": "A script.", "pictures": []})
+        body["prs"] = [{"number": 1724, "title": "The schema", "commit": "662d4487"},
+                       {"number": 1725, "title": "The builder", "commit": "abcdef0"}]
+    card = _card("leftover", options=[{"id": "keep-it", "label": "Keep it", "consequence": "Ships.", "sendsBack": False}])
+    return {"schema": "superheroes-sheet/1", "kind": kind, "title": "PR 1724", "prSheet": body, "cards": [card]}
+
+
+# Bites on: the renderer refusing a pr or stack sheet instead of printing its prose, or printing it to stderr, or exiting non-zero.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_renders_a_pr_sheet(tmp_path, kind):
+    path = tmp_path / "sheet.json"
+    path.write_text(json.dumps(_pr_kind_sheet(kind)), encoding="utf-8")
+    result = _run(path)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.startswith("**PR 1724**: 1 item for you.\n")
+    assert "1. **Is this what you meant?**" in result.stdout
+
+
+PR_WORDS = WORDS["pr"]
+PR_ANSWER_WORDS = WORDS["prAnswers"]
+SAMPLE_PR = PLUGIN / "theme" / "sample-pr-sheet.json"
+SAMPLE_STACK = PLUGIN / "theme" / "sample-stack-sheet.json"
+SAMPLES = {"pr": SAMPLE_PR, "stack": SAMPLE_STACK}
+COMMIT_RULE = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["$defs"]["commit"]["description"]
+
+
+def _sample(kind):
+    return json.loads(SAMPLES[kind].read_text(encoding="utf-8"))
+
+
+def _prose_of(tmp_path, sheet):
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    return result.stdout
+
+
+def _chat_verdict(kind, merge, roster=None):
+    """The chat instruction, its choices read from the schema's verdictsByKind roster in button order."""
+    roster = roster or json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["$defs"]["verdictsByKind"]["properties"][kind]["enum"]
+    labels = {"merge": merge, "not-yet": PR_WORDS["notYetLabel"]}
+    return PR_WORDS["verdictInChat"].replace("{choices}", " or ".join(labels[v] for v in roster)).replace("{merge}", merge)
+
+
+def _reviewers_line(reviewers):
+    named = []
+    for reviewer in reviewers:
+        notes = [reviewer["family"] or PR_WORDS["familyUnknown"]] + ([PR_WORDS["notIndependentMark"]] if reviewer.get("notIndependent") else [])
+        named.append("%s (%s)" % (reviewer["name"], ", ".join(notes)))
+    return PR_WORDS["reviewedBy"].replace("{reviewers}", "; ".join(named))
+
+
+def _pr_markers(sheet):
+    """Every line the sheet's prose must carry, each read from the data file or the words file, in the order it must come."""
+    part, facts, stack = sheet["prSheet"], sheet["prSheet"]["whatChanged"], sheet["kind"] == "stack"
+    merge = (PR_WORDS["mergeStackLabel"] if stack else PR_WORDS["mergeLabel"]).replace("{number}", str(part["number"]))
+    count = "1 item" if len(sheet["cards"]) == 1 else "%d items" % len(sheet["cards"])
+    markers = ["**%s**: %s for you." % (sheet["title"], count),
+               "**%s**" % PR_WORDS["whatChangedHeading"], facts["summary"], _reviewers_line(facts["reviewers"]),
+               "**%s**" % PR_WORDS["caughtHeading"]]
+    markers += ["- " + line for line in facts["caught"]]
+    markers.append(PR_WORDS["roundsLine"].replace("{rounds}", "%d rounds" % facts["rounds"]))
+    markers += [PR_WORDS["historyCap"]] if facts["stoppedAtCap"] else []
+    markers += [PR_WORDS["ciLine"].replace("{state}", facts["ci"]["state"]).replace("{commit}", facts["ci"]["commit"][:7]),
+                PR_WORDS["laneLine"].replace("{lane}", facts["lane"]).replace("{reason}", facts["laneReason"]),
+                PR_WORDS["describesCommit"].replace("{commit}", part["commit"][:7]), "**%s**" % PR_WORDS["walkHeading"]]
+    walk = part["walk"]
+    markers += [walk["open"]["label"], PR_WORDS["advisorWalked"].replace("{from}", walk["picturesFrom"])]
+    markers += ["%d. %s%s" % (number, "#%d " % stop["pr"] if stack else "", stop["title"]) for number, stop in enumerate(walk["stops"], 1)]
+    markers.append("**%s**" % PR_WORDS["acceptingHeading"])
+    markers += ["%d. **%s**" % (number, card["question"]) for number, card in enumerate(sheet["cards"], 1)]
+    entry = lambda e: "%s%s — %s" % ("#%d: " % e["pr"] if stack and "pr" in e else "", e["title"], e["detail"])
+    folded = [(PR_WORDS["craftHeading"], [entry(e) for e in part["craft"]]),
+              (PR_WORDS["decidedHeading"], [entry(e) for e in part["alreadyDecided"]]),
+              (PR_WORDS["reviewHeading"], list(part["history"]))]
+    if stack:
+        folded.append((PR_WORDS["prsHeading"], ["#%d %s · %s" % (p["number"], p["title"], p["commit"][:7]) for p in part["prs"]]))
+    for heading, entries in folded:
+        markers += ["**%s (%d)**" % (heading, len(entries))] + ["- " + entry for entry in entries]
+    markers += ["**%s**" % PR_WORDS["verdictHeading"], _chat_verdict(sheet["kind"], merge)]
+    return markers
+
+
+# Bites on: the prose for a pr or stack sheet leaving out a fact of the data file, changing a word of the words file, or printing a part out of the page's order.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_prints_a_pr_sheet_in_the_pages_order_with_the_data_files_facts(tmp_path, kind):
+    sheet = _sample(kind)
+    out = _prose_of(tmp_path, sheet)
+    position = 0
+    for marker in _pr_markers(sheet):
+        found = out.find(marker, position)
+        assert found >= 0, "%r is missing, or comes out of order, after position %d" % (marker, position)
+        position = found + len(marker)
+    assert out.count("**%s**" % PR_WORDS["verdictHeading"]) == 1
+    assert out.endswith(_chat_verdict(kind, "Merge%s #%d" % (" stack" if kind == "stack" else "", sheet["prSheet"]["number"])) + "\n")
+
+    assert "Answer Merge%s #%d or Not yet here" % (" stack" if kind == "stack" else "", sheet["prSheet"]["number"]) in out
+
+
+# Bites on: the chat instruction fixing its own pair of verdict choices instead of reading the schema's verdictsByKind roster.
+def test_prose_offers_the_chat_verdicts_the_schemas_roster_lists(tmp_path, monkeypatch, capsys):
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    schema["$defs"]["verdictsByKind"]["properties"]["pr"]["enum"] = ["not-yet", "merge"]
+    planted = tmp_path / "planted.schema.json"
+    planted.write_text(json.dumps(schema), encoding="utf-8")
+    module = _load_prose_module()
+    monkeypatch.setattr(module, "SCHEMA", planted)
+    assert module.main(["render", "--sheet", str(SAMPLES["pr"])]) == 0
+    assert "Answer Not yet or Merge #" in capsys.readouterr().out
+
+
+def test_prose_verdict_line_is_the_words_file_line_with_the_merge_word_filled(tmp_path):
+    # Axis: the merge word is Merge #<number> on a pr sheet and Merge stack #<number> on a stack sheet, in both places the line names it.
+    assert "Answer Merge #214 or Not yet here in the chat, then say you're done. Merge #214 counts only once every item above is accepted;" in _prose_of(tmp_path, _sample("pr"))
+    assert "Answer Merge stack #4 or Not yet here in the chat, then say you're done. Merge stack #4 counts only once" in _prose_of(tmp_path, _sample("stack"))
+
+
+def test_prose_says_the_pr_moved_between_what_changed_and_the_walk(tmp_path):
+    # Axis: a sheet with a previousCommit prints the changed heading and its paragraph, with the first 7 of that commit, after What changed and before the walk.
+    sheet = _sample("pr")
+    sheet["prSheet"]["previousCommit"] = "0123456789abcdef"
+    out = _prose_of(tmp_path, sheet)
+    paragraph = PR_WORDS["changed"].replace("{previous}", "0123456")
+    heading = "**%s**" % PR_WORDS["changedHeading"]
+    assert out.index("Describes commit") < out.index(heading) < out.index(paragraph) < out.index("**%s**" % PR_WORDS["walkHeading"])
+    assert "0123456789" not in out
+    assert PR_WORDS["changedHeading"] not in _prose_of(tmp_path, _sample("pr"))
+
+
+CARRIED = {"sheets": ["a" * 64], "date": "2026-09-30", "moved": "the branch was brought current with main", "whyNotMaterial": "main added only a README line"}
+
+
+def _carried(sheet):
+    sheet["prSheet"]["previousCommit"] = "0123456789abcdef"
+    sheet["prSheet"]["carriedForward"] = dict(CARRIED)
+    return sheet
+
+
+# Bites on: the chat prose drawing the changed heading and text for a carried sheet, or drawing the carried text without filling its date, commit, what moved or why.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_shows_the_carried_text_in_place_of_the_changed_text(tmp_path, kind):
+    # Axis: a sheet with carriedForward prints the carried heading and text (date, first 7 of previousCommit, moved, why) after What changed and before the walk, and prints no changed heading or text.
+    out = _prose_of(tmp_path, _carried(_sample(kind)))
+    paragraph = PR_WORDS["carried"].replace("{date}", "2026-09-30").replace("{previous}", "0123456").replace("{moved}", CARRIED["moved"]).replace("{why}", CARRIED["whyNotMaterial"])
+    heading = "**%s**" % PR_WORDS["carriedHeading"]
+    assert out.index("Describes commit") < out.index(heading) < out.index(paragraph) < out.index("**%s**" % PR_WORDS["walkHeading"])
+    assert "{" not in paragraph
+    assert PR_WORDS["changedHeading"] not in out
+    assert PR_WORDS["changed"].split("{previous}")[0] not in out
+
+
+# Bites on: the changed text being replaced for every republish, so a material move (previousCommit alone) loses its heading.
+def test_prose_still_shows_the_changed_text_for_a_material_republish(tmp_path):
+    # Axis: previousCommit without carriedForward prints the changed heading and text and none of the carried words.
+    sheet = _sample("pr")
+    sheet["prSheet"]["previousCommit"] = "0123456789abcdef"
+    out = _prose_of(tmp_path, sheet)
+    assert "**%s**" % PR_WORDS["changedHeading"] in out
+    assert PR_WORDS["changed"].replace("{previous}", "0123456") in out
+    assert PR_WORDS["carriedHeading"] not in out
+
+
+# Bites on: a pr or stack card offering the discovery answers (Aligned) instead of the PR answers (Accept), or a discovery sheet offering Accept.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_offers_a_pr_card_the_pr_answers(tmp_path, kind):
+    sheet = _sample(kind)
+    out = _prose_of(tmp_path, sheet)
+    labels = PR_ANSWER_WORDS["labels"]
+    for card in sheet["cards"]:
+        offered = ("a, b, c, or %s" % labels["something-else"]) if len(card["options"]) == 3 else (
+            "a, b, or %s" % labels["something-else"] if card["options"] else "%s or %s" % (labels["accept"], labels["discuss"]))
+        assert "   - Answer: %s\n" % offered in out, card["id"]
+    assert "Aligned" not in out
+    discovery = _prose_of(tmp_path, json.loads(SAMPLE.read_text(encoding="utf-8")))
+    assert "Accept" not in discovery
+    assert "Aligned" in discovery
+
+
+def test_prose_offers_a_pr_card_without_options_accept_or_discuss(tmp_path):
+    # Axis: a pr card with no options is offered exactly the words' accept and discuss labels, not the discovery pair.
+    out = _prose_of(tmp_path, _sample("pr"))
+    assert "   - Answer: Accept or Discuss\n" in out
+    assert "Aligned or Discuss" not in out
+
+
+def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_path):
+    # Axis: with zero cards the accepting heading is followed by the nothing-to-accept line, no item is numbered, and the verdict line is still printed.
+    for kind in ("pr", "stack"):
+        sheet = _sample(kind)
+        sheet["cards"] = []
+        out = _prose_of(tmp_path, sheet)
+        assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], PR_WORDS["nothingToAccept"]) in out, kind
+        assert not re.search(r"^1\. ", out[out.index("**%s**" % PR_WORDS["acceptingHeading"]):], re.M), kind
+        assert out.index(PR_WORDS["nothingToAccept"]) < out.index("**%s**" % PR_WORDS["verdictHeading"]) < out.index("Answer Merge"), kind
+
+
+def test_prose_leaves_out_each_empty_part(tmp_path):
+    # Axis: an empty caught list, walk, craft list, decided list and history leave out their headings; a stack still lists its PRs.
+    for kind in ("pr", "stack"):
+        sheet = _sample(kind)
+        part = sheet["prSheet"]
+        part["whatChanged"]["caught"], part["craft"], part["alreadyDecided"], part["history"] = [], [], [], []
+        del part["walk"]
+        out = _prose_of(tmp_path, sheet)
+        for heading in ("caughtHeading", "walkHeading", "craftHeading", "decidedHeading", "reviewHeading"):
+            assert PR_WORDS[heading] not in out, (kind, heading)
+        assert (PR_WORDS["prsHeading"] in out) == (kind == "stack")
+        assert "**%s**" % PR_WORDS["whatChangedHeading"] in out and "**%s**" % PR_WORDS["verdictHeading"] in out
+
+
+def test_prose_names_a_reviewer_with_no_family_as_family_unknown(tmp_path):
+    # Axis: a null family reads as the words' family-unknown note, and a reviewer that is not independent adds its mark after it.
+    sheet = _sample("pr")
+    sheet["prSheet"]["whatChanged"]["reviewers"] = [{"name": "code-reviewer", "family": None, "ran": "engine-record"},
+                                                    {"name": "design-reviewer", "family": None, "ran": "engine-record", "notIndependent": True}]
+    out = _prose_of(tmp_path, sheet)
+    assert "Reviewed by code-reviewer (%s); design-reviewer (%s, %s)." % (
+        PR_WORDS["familyUnknown"], PR_WORDS["familyUnknown"], PR_WORDS["notIndependentMark"]) in out
+
+
+def test_prose_shows_checks_on_no_commit_and_no_lane_as_the_page_does(tmp_path):
+    # Axis: checks on no commit print their state alone, a null lane prints no lane line, and a lane with no reason prints without its colon.
+    sheet = _sample("pr")
+    facts = sheet["prSheet"]["whatChanged"]
+    facts["ci"], facts["lane"], facts["laneReason"] = {"state": "none ran", "commit": None}, None, None
+    out = _prose_of(tmp_path, sheet)
+    assert "\nnone ran\n" in out and " lane" not in out and "CI " not in out
+    facts["lane"] = "light"
+    assert "\nlight lane\n" in _prose_of(tmp_path, sheet)
+
+
+def test_prose_escapes_markdown_in_a_pr_sheets_text(tmp_path):
+    # Axis: every string of a pr sheet's data file is escaped so it prints as typed.
+    sheet = _sample("pr")
+    sheet["prSheet"]["whatChanged"]["summary"] = "Adds *bold* and `code`"
+    sheet["prSheet"]["craft"][0]["title"] = "A_b_c"
+    sheet["prSheet"]["walk"]["stops"][0]["title"] = "[link](x)"
+    out = _prose_of(tmp_path, sheet)
+    assert "Adds \\*bold\\* and \\`code\\`" in out and "A\\_b\\_c — " in out and "1. \\[link\\](x)" in out
+
+
+# Bites on: the CLI refusing a pr sheet, or printing nothing for it.
+def test_cli_exits_zero_and_prints_the_prose_for_a_pr_sheet():
+    for kind in ("pr", "stack"):
+        result = _run(SAMPLES[kind])
+        assert result.returncode == 0 and result.stderr == "", kind
+        assert result.stdout.startswith("**%s**: " % _sample(kind)["title"]), kind
+        assert result.stdout.endswith("\n") and not result.stdout.endswith("\n\n"), kind
+
+
+# Bites on: a refusal for a malformed commit that is worded as the id rule, which names the wrong rule.
+def test_a_malformed_commit_is_refused_by_the_commit_rule_not_the_id_rule(tmp_path):
+    sheet = _sample("pr")
+    sheet["prSheet"]["commit"] = "NOT-A-COMMIT"
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == 'PrSheet.commit has the value "NOT-A-COMMIT", which does not fit its rule: %s\n' % COMMIT_RULE
+    assert "lowercase id" not in result.stderr
+
+
+def test_a_malformed_card_id_keeps_the_id_wording(tmp_path):
+    # Axis: a card id that breaks the schema's own id rule is still refused as an id.
+    sheet = _sample("pr")
+    sheet["cards"][0]["id"] = "Bad Id"
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == 'Cards[0].id ("Bad Id") is not a lowercase id of letters, digits and hyphens.\n'
+
+
+def test_a_pattern_with_no_description_is_named_by_the_pattern(tmp_path, monkeypatch, capsys):
+    # Axis: a pattern that is not the id rule and whose node has no description is worded "it must match the pattern <pattern>".
+    schema = _planted_schema(lambda planted: planted["$defs"]["commit"].pop("description"))
+    planted = tmp_path / "planted.schema.json"
+    planted.write_text(json.dumps(schema), encoding="utf-8")
+    sheet = _sample("pr")
+    sheet["prSheet"]["commit"] = "xyz"
+    (tmp_path / "sheet.json").write_text(json.dumps(sheet), encoding="utf-8")
+    module = _load_prose_module()
+    monkeypatch.setattr(module, "SCHEMA", planted)
+    assert module.main(["render", "--sheet", str(tmp_path / "sheet.json")]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == 'PrSheet.commit has the value "xyz", which does not fit its rule: it must match the pattern ^[0-9a-f]{7,40}$\n'
+
+
+def test_a_data_file_that_fails_the_check_is_still_refused_before_rendering(tmp_path):
+    # Axis: a pr sheet that breaks a rule of the schema prints nothing on stdout and the problem on stderr, with exit 1.
+    sheet = _sample("pr")
+    del sheet["prSheet"]["history"]
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == "PrSheet has no history.\n"
+
+
+FIXTURES = PLUGIN / "lib" / "tests" / "fixtures" / "pr_sheet"
+WALK_INPUT = json.loads((FIXTURES / "input-walk.json").read_text(encoding="utf-8"))["walk"]
+# The sheet paths the builder gives the fixture's pictures (named by content), and the one picture it has no file for.
+WALK_PICTURE_PATHS = {"The empty cart": "pictures/228215e2dae3.png", "The paid order": "pictures/b601e7730818.png",
+                      "The gave-up screen": "pictures/33a85956073b.png"}
+
+
+def _expected_walk_prose():
+    """The walk part as the page's words and the walk fixture give it; the layout (numbering, lettering, indent, order) is spelled out here."""
+    labels = PR_WORDS["walkAnswers"]["labels"]
+    offered = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["$defs"]["walkAnswersByKind"]["properties"]
+    opened = WALK_INPUT["open"]
+    lines = ["**%s**" % PR_WORDS["walkHeading"], "", "%s — %s — %s" % (opened["label"], opened["url"], opened["detail"]), WALK_INPUT["note"],
+             PR_WORDS["advisorWalked"].replace("{from}", WALK_INPUT["picturesFrom"]), ""]
+    number, group = 0, None
+    for stop in WALK_INPUT["stops"]:
+        if stop["group"] != group:
+            lines += ([""] if group is not None else []) + ["*%s*" % stop["group"], ""]
+            group = stop["group"]
+        number += 1
+        lines.append("%d. %s (%s)%s" % (number, stop["title"], stop["id"], " · " + PR_WORDS["optionalBadge"] if stop.get("optional") else ""))
+        lines += ["   %s. %s" % (chr(97 + n), step) for n, step in enumerate(stop.get("steps", []))]
+        lines.append("   %s %s" % (PR_WORDS["expectLabel" if stop["kind"] == "try" else "lookForLabel"], stop["expect"]))
+        for picture in stop.get("pictures", []):
+            if picture["path"].endswith("no-such-picture.png"):
+                lines.append("   " + PR_WORDS["pictureMissing"].replace("{alt}", picture["alt"]))
+            else:
+                lines.append("   Picture: %s (%s)" % (picture.get("caption", picture["alt"]), WALK_PICTURE_PATHS[picture["alt"]]))
+        if "notWalked" in stop:
+            lines.append("   " + PR_WORDS["notWalkedByAdvisor"].replace("{reason}", stop["notWalked"]))
+        lines += ["   Answers: " + " / ".join("%s %s" % (stop["id"], labels[a]) for a in offered[stop["kind"]]["enum"]),
+                  "   On Problem: " + " / ".join("%s %s" % (stop["id"], fix["label"]) for fix in PR_WORDS["walkFixes"])]
+    return "\n".join(lines) + "\n\n"
+
+
+def _walk_sheet(tmp_path):
+    """The data file the builder makes from the full walk fixture, with its pictures copied beside it."""
+    out = tmp_path / "sheet.json"
+    built = subprocess.run([sys.executable, "-B", str(PLUGIN / "lib" / "pr_sheet.py"), "build", "--record", str(FIXTURES / "record-big.json"),
+                            "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)], capture_output=True, text=True)
+    assert built.returncode == 0, built.stdout
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+# Bites on: the walk prose dropping a stop's steps, expectation, picture caption, missing-picture line, not-walked line, optional mark, answers or fix choices, or leaving a picture's sheet path out (a look-only stop is unreviewable without it).
+def test_prose_prints_the_walk_with_its_stops_in_groups(tmp_path):
+    out = _prose_of(tmp_path, _walk_sheet(tmp_path))
+    block = out[out.index("**%s**" % PR_WORDS["walkHeading"]):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
+    assert block == _expected_walk_prose()
+    assert re.findall(r"pictures/\w+\.png", out) == ["pictures/228215e2dae3.png", "pictures/b601e7730818.png", "pictures/33a85956073b.png"]
+    assert re.findall(r"https?://\S+", out) == ["https://shop.example.test"]
+
+
+# Bites on: the chat walk leaving a stop's id off its title line, or offering answers a typed reply cannot tie to a stop.
+def test_prose_shows_each_stops_id_on_its_title_line_and_offers_id_prefixed_answers(tmp_path):
+    # Axis: a try stop and a look stop each show "(<id>)" on the title line, and every answer and every fix choice is offered as "<id> <label>".
+    out = _prose_of(tmp_path, _walk_sheet(tmp_path))
+    assert "1. Pay with a card that fails once (p1)\n" in out and "5. The gave-up screen (f1)\n" in out
+    assert "   Answers: p1 Works / p1 Problem / p1 Skip\n   On Problem: p1 Fix before merge / p1 Fix in a follow-up\n" in out
+    assert "   Answers: f1 Looks right / f1 Problem / f1 Skip\n   On Problem: f1 Fix before merge / f1 Fix in a follow-up\n" in out
+    assert "3. Pay with a second card (p3) · Optional\n" in out
+
+
+# Bites on: the chat walk regrouping stops by first appearance, so a group listed apart is printed in one place and the stops lose their declared order.
+def test_prose_prints_the_stops_in_declared_order_with_a_group_label_wherever_the_group_changes(tmp_path):
+    # Axis: groups A, B, A, A, B print A's label twice, in place, and the stops keep their declared numbering.
+    sheet = _walk_sheet(tmp_path)
+    for stop, group in zip(sheet["prSheet"]["walk"]["stops"], "ABAAB"):
+        stop["group"] = group
+    out = _prose_of(tmp_path, sheet)
+    block = out[out.index("**%s**" % PR_WORDS["walkHeading"]):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
+    seen = []
+    for line in block.splitlines():
+        title = re.match(r"(\d+)\. .* \((\w+)\)", line)
+        label = re.fullmatch(r"\*([^*]+)\*", line)
+        if label:
+            seen.append(label.group(1))
+        elif title:
+            seen.append("%s:%s" % title.groups())
+    assert seen == ["A", "1:p1", "B", "2:p2", "A", "3:p3", "4:p4", "B", "5:f1"]
+
+
+def test_prose_of_a_stack_walk_numbers_the_stops_and_names_their_prs(tmp_path):
+    # Axis: on a stack each numbered stop is prefixed with its PR, numbered across the whole walk.
+    out = _prose_of(tmp_path, _sample("stack"))
+    assert "1. #5 The gift-card table (gift-card-table)\n" in out and "2. #6 Spending a card at checkout (checkout-redeem)\n" in out
+    assert "Look for: The new table in the admin view.\n" in out and "   Answers: gift-card-table Looks right / gift-card-table Problem / gift-card-table Skip\n" in out
+
+
+def test_prose_of_a_sheet_with_no_walk_has_no_walk_part(tmp_path):
+    # Axis: a pr sheet whose data file has no walk prints no walk heading and nothing of one.
+    sheet = _sample("pr")
+    del sheet["prSheet"]["walk"]
+    out = _prose_of(tmp_path, sheet)
+    assert PR_WORDS["walkHeading"] not in out and "Answers:" not in out and "On Problem:" not in out
+
+
+def test_a_stacks_craft_and_decided_entries_name_their_pr_and_a_pr_sheets_do_not(tmp_path):
+    # Axis: on a stack an entry that carries a pr is prefixed with that PR, and on a pr sheet no entry is.
+    stack = _sample("stack")
+    out = _prose_of(tmp_path, stack)
+    for entry in stack["prSheet"]["craft"] + stack["prSheet"]["alreadyDecided"]:
+        assert "- #%d: %s — %s\n" % (entry["pr"], entry["title"], entry["detail"]) in out
+    single = _sample("pr")
+    out = _prose_of(tmp_path, single)
+    for entry in single["prSheet"]["craft"] + single["prSheet"]["alreadyDecided"]:
+        assert "- %s — %s\n" % (entry["title"], entry["detail"]) in out
+    assert "#214: " not in out
+
+
+# --- the index ---
+
+INDEX_WORDS = WORDS["index"]
+
+
+def _row(number, state, accepted=0, total=0, walked=0, walk_total=0, merges_at=None, kind="pr", title=None, caption=None):
+    return {"number": number, "kind": kind, "title": title or "Title %d" % number, "link": "https://sheets.example.test/%d" % number,
+            "state": state, "accepted": accepted, "total": total, "walked": walked, "walkTotal": walk_total, "mergesAt": merges_at,
+            "caption": caption or "Caption of %d" % number}
+
+
+def _index_sheet(rows, cards=None):
+    options = [{"id": "keep-visible", "label": "Keep them visible", "consequence": "Support can look up an old order."},
+               {"id": "hide-them", "label": "Hide them", "consequence": "A refund needs an engineer."}]
+    cards = [_card("old-orders", callKind=INDEX_WORDS["questionKind"], warning=True, question="Should old orders stay visible?",
+                   options=options)] if cards is None else cards
+    return {"schema": "superheroes-sheet/1", "kind": "index", "title": INDEX_WORDS["title"], "index": {"rows": rows}, "cards": cards}
+
+
+ROWS = [_row(211, "needs-you", merges_at=1, caption="Nothing to accept · merges first"),
+        _row(214, "needs-you", 0, 2, 1, 4, merges_at=2, title="Retry a failed payment", caption="0 of 2 accepted · 1 of 4 walked · merges second"),
+        _row(300, "needs-you", 1, 3, merges_at=11, caption="1 of 3 accepted · merges at place 11"),
+        _row(219, "being-fixed", title="Order export", caption="Nothing to accept · Going back for a fix · a new sheet comes after it"),
+        _row(4, "ready", 2, 2, kind="stack", title="Gift cards", caption="2 of 2 accepted · Merge verdict given")]
+
+
+# Bites on: the index prose dropping its title line, a question (with its pick answers), the first-answer line, a group heading, a row's name, caption or link, or the done line; or printing the groups out of order.
+def test_prose_renders_an_index(tmp_path):
+    out = _prose_of(tmp_path, _index_sheet(ROWS))
+    assert out == "\n".join([
+        "**Waiting on you**: 1 question.",
+        "",
+        "**Blocks work**",
+        "",
+        "1. **Should old orders stay visible?**",
+        "   - Kind of call: Blocks work (warning)",
+        "   - Where it stands:",
+        "     It reads one way.",
+        "   - Options:",
+        "     - a. Keep them visible: Support can look up an old order.",
+        "     - b. Hide them: A refund needs an engineer.",
+        "   - Answer: a, b, or Something else",
+        "",
+        "Answer here or in the chat; whichever comes first counts. When the chat and the index disagree, the advisor asks.",
+        "",
+        "**Needs you**",
+        "",
+        "- #211 · Title 211 — Nothing to accept · merges first — https://sheets.example.test/211",
+        "- #214 · Retry a failed payment — 0 of 2 accepted · 1 of 4 walked · merges second — https://sheets.example.test/214",
+        "- #300 · Title 300 — 1 of 3 accepted · merges at place 11 — https://sheets.example.test/300",
+        "",
+        "**Being fixed**",
+        "",
+        "- #219 · Order export — Nothing to accept · Going back for a fix · a new sheet comes after it — https://sheets.example.test/219",
+        "",
+        "**Ready**",
+        "",
+        "- Stack #4 · Gift cards — 2 of 2 accepted · Merge verdict given — https://sheets.example.test/4",
+        "",
+        'When every sheet you meant to answer is saved, say "done" in the chat.',
+        ""])
+
+
+# Bites on: the nothing-blocking line missing when no question is left, an empty group's heading printed, the title line's count, or the index failing the prose renderer.
+def test_prose_of_an_index_with_no_question_and_no_row_to_answer(tmp_path):
+    out = _prose_of(tmp_path, _index_sheet([_row(4, "ready")], cards=[]))
+    assert out.startswith("**Waiting on you**: Nothing needs you.\n\n**Blocks work**\n\nNothing is blocking work right now.\n\n")
+    assert "**Ready**" in out and "**Needs you**" not in out and "**Being fixed**" not in out
+    out = _prose_of(tmp_path, _index_sheet([_row(4, "needs-you"), _row(5, "needs-you"), _row(6, "ready")], cards=[]))
+    assert out.startswith("**Waiting on you**: 2 need you.\n")
+    assert _prose_of(tmp_path, _index_sheet([], cards=[])).endswith(INDEX_WORDS["done"] + "\n")
+
+
+# Bites on: the prose composing a caption of its own instead of printing the row's caption as it is (the chat then disagrees with the page and the builder), including on a row whose merge place is a whole number written as a float.
+def test_the_prose_prints_each_rows_caption_as_it_is(tmp_path):
+    rows = [_row(1, "needs-you", merges_at=1.0, caption="Whatever the builder wrote · verbatim"), _row(2, "ready", 3, 3, caption="Another line")]
+    out = _prose_of(tmp_path, _index_sheet(rows))
+    assert "- #1 · Title 1 — Whatever the builder wrote · verbatim — https://sheets.example.test/1\n" in out
+    assert "- #2 · Title 2 — Another line — https://sheets.example.test/2\n" in out
+
+
+def test_the_index_title_line_counts_the_questions():
+    # Axis: the title line counts the questions while any are left: one question, or N questions.
+    module = _load_prose_module()
+    one = _card("one", options=[{"id": "a", "label": "A", "consequence": "A."}])
+    assert module.render(_index_sheet([], cards=[one])).startswith("**Waiting on you**: 1 question.\n")
+    assert module.render(_index_sheet([], cards=[one, dict(one, id="two")])).startswith("**Waiting on you**: 2 questions.\n")
+
+
+# Bites on: the renderer's check letting two index rows share a number.
+def test_repeated_index_row_numbers_are_refused(tmp_path):
+    result = _render(tmp_path, _index_sheet([_row(4, "ready"), _row(5, "ready"), _row(4, "needs-you")]))
+    assert result.returncode == 1 and result.stdout == "" and result.stderr == "Index row number 4 is used more than once.\n"
+
+
+# Bites on: the stored-document check restating the schema's conditional rules (a fix off a Problem, a Merge with no covers, an answer's option) instead of reading $defs, so a schema change moves the page and not the index.
+@pytest.mark.parametrize("name, document, fits", [
+    ("answer", {"answer": "option", "optionId": "keep-it", "note": ""}, True),
+    ("answer", {"answer": "option", "optionId": None, "note": ""}, False),
+    ("answer", {"answer": "accept", "optionId": "keep-it", "note": ""}, False),
+    ("answer", {"answer": "accept", "optionId": None, "note": "", "revision": "0123456789abcdef"}, True),
+    ("answer", {"answer": "accept", "optionId": None, "note": "", "revision": "XYZ"}, False),
+    ("walkAnswer", {"answer": "problem", "fix": "x", "note": "", "shots": []}, True),
+    ("walkAnswer", {"answer": "works", "fix": "x", "note": "", "shots": []}, False),
+    ("verdict", {"verdict": "merge", "note": "", "sheet": "a" * 64}, False),
+    ("verdict", {"verdict": "merge", "note": "", "sheet": "a" * 64, "covers": ["answers/a@0123456789abcdef"]}, True),
+    ("verdict", {"verdict": "not-yet", "note": "", "sheet": "a" * 64}, True),
+], ids=lambda value: value if isinstance(value, str) and len(value) < 12 else None)
+def test_a_stored_document_fits_when_its_schema_definition_says_so(name, document, fits):
+    assert _load_prose_module().fits_definition(name, document) is fits

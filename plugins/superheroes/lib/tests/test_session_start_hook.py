@@ -13,6 +13,13 @@ _HOOK_PATH = os.path.join(_PLUGIN, "hooks", "session_start.py")
 _LIB = os.path.join(_PLUGIN, "lib")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config_dir(tmp_path, monkeypatch):
+    # The hook runs the real reaper: it must never see the owner's config directory.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "isolated-config"))
+    monkeypatch.setenv("HOME", str(tmp_path / "isolated-home"))
+
+
 def _load_hook(module_name="session_start_under_test"):
     spec = importlib.util.spec_from_file_location(module_name, _HOOK_PATH)
     mod = importlib.util.module_from_spec(spec)
@@ -167,15 +174,18 @@ def test_host_flag_reaches_bootstrap(monkeypatch, capsys):
 
     seen = []
 
-    def capture(_cwd, _transcript, _root, host, source=None):
+    def capture(_cwd, _transcript, _root, host, source=None, session_id=None):
         seen.append(host)
+        sids.append(session_id)
         return "## stub context"
 
+    sids = []
     monkeypatch.setattr(session_context, "assemble", capture)
     monkeypatch.setattr(sys, "argv", ["session_start.py", "--host", "codex"])
-    _stdin(monkeypatch, {"source": "startup", "cwd": "/tmp"})
+    _stdin(monkeypatch, {"source": "startup", "cwd": "/tmp", "session_id": "sid-1"})
     assert mod.main() == 0
     assert seen == ["codex"]
+    assert sids == ["sid-1"]
 
 
 def _write_charter_transcript(path, charter):
@@ -301,3 +311,41 @@ def test_host_model_skipped_when_claude_env_file_unset(tmp_path, monkeypatch, ca
     assert _run_startup(monkeypatch, capsys, {"model": "claude-opus-5"}) == 0
     assert not env_file.exists()
     _context_from_stdout(capsys)
+
+
+def _old_notes(tmp_path, config_dir, name):
+    path = tmp_path / config_dir / "superheroes" / "checkpoints" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("notes", encoding="utf-8")
+    os.utime(path, (1, 1))
+    return path
+
+
+def test_session_start_reaps_stale_notes_with_the_payload_session_id_and_cwd(tmp_path, monkeypatch, capsys):
+    # Axis: reaping runs once per SessionStart, with the payload's id (kept) and cwd (resolves a relative config dir).
+    mod = _load_hook("session_start_reaps")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relcfg")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+    stale = _old_notes(tmp_path, "relcfg", "old-session.md")
+    current = _old_notes(tmp_path, "relcfg", "sess-now.md")
+    _stdin(monkeypatch, {"source": "resume", "cwd": str(tmp_path), "session_id": "sess-now"})
+    assert mod.main() == 0
+    assert not stale.exists()
+    assert current.exists()
+    assert len(_stdout_lines(capsys)) == 1
+
+
+def test_session_start_reap_failure_is_swallowed(monkeypatch, capsys):
+    # Axis: a reap that raises must not affect the exit code or the stdout envelope.
+    mod = _load_hook("session_start_reap_fail")
+    import compaction_directive
+
+    monkeypatch.setattr(
+        compaction_directive,
+        "reap",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("reap failed")),
+    )
+    _stdin(monkeypatch, {"source": "startup", "cwd": "/tmp", "session_id": "sess-now"})
+    assert mod.main() == 0
+    assert len(_stdout_lines(capsys)) == 1
