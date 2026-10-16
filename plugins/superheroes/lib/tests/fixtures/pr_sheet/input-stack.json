@@ -1,0 +1,27 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "stack",
+  "number": 4,
+  "title": "Gift cards",
+  "summary": "Customers can buy a gift card, spend it at checkout and see what is left on it.",
+  "prs": [
+    {"number": 5, "title": "Add the gift-card table"},
+    {"number": 6, "title": "Redeem a gift card at checkout"},
+    {"number": 7, "title": "Show the gift-card balance"}
+  ],
+  "leftovers": {
+    "6:H1": {
+      "recommendation": {"text": "Fix it before merge", "reason": "A surprise second payment loses the sale.", "optionId": "fix-before-merge"}
+    }
+  },
+  "walk": {
+    "open": {"label": "Open the test shop"},
+    "picturesFrom": "the advisor's own test shop",
+    "stops": [
+      {"id": "gift-card-table", "title": "The gift-card table", "pr": 5, "group": "Gift cards", "kind": "look",
+       "expect": "The new table in the admin view.", "pictures": []},
+      {"id": "checkout-redeem", "title": "Spending a card at checkout", "pr": 6, "group": "Gift cards", "kind": "try",
+       "steps": ["Pay with a gift card"], "expect": "The balance drops by the price.", "pictures": []}
+    ]
+  }
+}
