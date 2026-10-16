@@ -403,3 +403,90 @@ def test_the_raised_closure_withholds_credit_from_every_key_the_panel_raised_aga
     state, compiled, raw, credited_key = case()
     RD._credit_fixes_not_reraised(state, compiled, raw)
     assert not _credited(state, credited_key)
+
+
+def _reopened_after_fixed(marker_offset=0, extra_marks=()):
+    """A round-2 state whose finding was fixed and audited (a `fixed` disposition newer than its
+    raise), then reopened by an owner ruling: its marker sits `marker_offset` from that disposition's
+    seq, or is absent when `marker_offset` is None. The round-1 fix report is on record, so only a
+    silent complete panel is missing."""
+    state = _round_one_state(_finding())
+    _fix(state)
+    RD._record_disposition(state, _key(), "fixed", 1, dispositionReceipt={"headSha": "abc"})
+    seq = state["dispositionSeqCounter"]
+    marks = {} if marker_offset is None else {_key(): seq + marker_offset}
+    marks.update({k: seq for k in extra_marks})
+    state["restagedAfterDispositionSeq"] = marks
+    return state
+
+
+def test_a_fixed_disposition_a_ruling_reopened_is_credited_by_a_later_silent_panel_and_its_marker_goes():
+    """axis: RESTAGE — an old `fixed` the reopening marker invalidates does not count as a current
+    disposition, so the retry's fix is credited and the marker is superseded by the fresh `fixed`."""
+    state = _reopened_after_fixed()
+    assert RD._disposition_is_current(_ledger(state)[_key()])
+    assert RD._restaged_after(state, _key(), _ledger(state)[_key()])
+    _panel(state)
+    assert _credited(state, _key())
+    assert _key() not in state["restagedAfterDispositionSeq"]
+
+
+def test_credit_supersedes_the_markers_of_the_keys_ruling_closure_and_no_others():
+    """axis: RESTAGE — a lineage member's reopening is superseded with the key's own; an unrelated
+    key's marker stays."""
+    state = _reopened_after_fixed(extra_marks=("f.py::reworded@L9", "f.py::unrelated@L8"))
+    state["findingLineage"] = {"f.py::reworded@L9": _key()}
+    _panel(state)
+    assert _credited(state, _key())
+    assert set(state["restagedAfterDispositionSeq"]) == {"f.py::unrelated@L8"}
+
+
+@pytest.mark.parametrize("marker_offset", [None, -1])
+def test_a_disposition_no_ruling_reopened_is_left_as_it_is_with_its_marker(marker_offset):
+    """Control: no marker, or a marker older than the disposition, leaves the current `fixed` alone."""
+    state = _reopened_after_fixed(marker_offset)
+    before = dict(_ledger(state)[_key()])
+    marks = dict(state["restagedAfterDispositionSeq"])
+    assert RD._disposition_is_current(before)
+    assert not RD._restaged_after(state, _key(), before)
+    _panel(state)
+    assert _ledger(state)[_key()] == before
+    assert before["dispositionReceipt"] == {"headSha": "abc"}
+    assert state["restagedAfterDispositionSeq"] == marks
+
+
+def test_a_guided_fix_audited_then_restaged_and_retried_is_credited_by_a_silent_full_panel(monkeypatch):
+    """axis: RESTAGE — the reviewer's scenario through run_loop: guidance arrives during the first fix,
+    the fix is audited discharged, the finding is restaged, the retry reports fixes, and a complete
+    silent full panel follows: the finding ends `fixed`, not left for the owner."""
+    box = {}
+    real_new_state = RD.new_state
+
+    def capture(*args, **kwargs):
+        box["state"] = real_new_state(*args, **kwargs)
+        return box["state"]
+
+    monkeypatch.setattr(RD, "new_state", capture)
+
+    def reviewer(dim, tier, rnd, ctx):
+        return [_finding()] if rnd == 1 and dim == "code-reviewer" else []
+
+    def fix_step(batch, rnd, payload):
+        if rnd == 1:  # guidance arrives while the first fix is out; that fix is audited
+            state = box["state"]
+            state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_FIXER,
+                                    "attempt": 0, "id": _key(), "findingKey": _key(),
+                                    "ruling": "guidance", "reason": "because", "by": "owner",
+                                    "file": "f.py", "line": 1, "guidance": "G1"}]
+            return {"fixes": [{"file": "f.py", "summary": "first try"}], "headDiff": TRD.HEAD,
+                    "changedSubjects": ["Code"]}
+        return {"fixes": [{"file": "f.py", "summary": "retry"}], "changedSubjects": ["Code"]}
+
+    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step)
+    seams["panel_diff"] = lambda config, head: (TRD.HEAD, None)
+    _, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    assert state is box["state"]
+    row = _ledger(state)[_key()]
+    assert state["terminal"] == "converged", (state.get("terminal"), state.get("certification"), row)
+    assert row["disposition"] == "fixed" and row["dispositionReceipt"]["kind"] == SC.FULL_PANEL_NOT_RERAISED, row
+    assert "settledReason" not in row

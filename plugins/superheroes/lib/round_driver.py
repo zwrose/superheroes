@@ -3134,9 +3134,11 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     """A finding a fixer reported fixed, that this complete full panel did not raise again, is
     `fixed` — provided the fix report came after the finding's latest raise. Called before the
     panel's findings are staged, so the end-of-loop settle never counts it a leftover. A finding
-    that already has a current disposition, was merged into another, or holds an out-of-scope
-    ruling is left as it is. A finding the panel raised but compilation dropped (`panel_raw`), and a
-    finding whose merged-in group has any member raised, count as raised: silence is the only credit."""
+    that already has a current disposition (one no ruling reopened), was merged into another, or
+    holds an out-of-scope ruling is left as it is. A finding the panel raised but compilation
+    dropped (`panel_raw`), and a finding whose merged-in group has any member raised, count as
+    raised: silence is the only credit. Crediting a finding supersedes the reopening markers of its
+    ruling closure."""
     ledger_by_key, fault = _disposition_ledger_by_key(state)
     if fault is not None:
         return
@@ -3177,11 +3179,12 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     if not reported:
         return
     receipt = {"kind": FULL_PANEL_NOT_RERAISED, "panelRound": state["round"]}
+    superseded = set()
     for key, entry in list(ledger_by_key.items()):
         if (not isinstance(entry, dict) or key in raised_now or ledger_reps.get(key) in raised_now
                 or entry.get(session_contract.MERGED_INTO_FIELD)
                 or entry.get("disposition") == "out-of-scope"
-                or _disposition_is_current(entry)):
+                or (_disposition_is_current(entry) and not _restaged_after(state, key, entry))):
             continue
         raised_round = entry.get(session_contract.RAISED_ROUND_FIELD)
         if isinstance(raised_round, bool) or not isinstance(raised_round, int):
@@ -3190,6 +3193,12 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
         if any(raised_round <= fix_round < state["round"] and key in keys
                for fix_round, keys in reported.items()):
             _record_disposition(state, key, "fixed", state["round"], dispositionReceipt=receipt)
+            superseded |= _ruling_closure(state, ledger_by_key, key) - raised_now
+    # The fresh `fixed` is what a ruling's reopening marker was waiting for, on the key and its closure.
+    # Popped after the loop so one credit never changes what a later key in the same pass reads.
+    reopened = state.get("restagedAfterDispositionSeq")
+    for member in superseded if reopened else ():
+        reopened.pop(member, None)
 
 
 def _fold_panel(state, config, artifact, session_dir=None):
