@@ -136,6 +136,12 @@ These retirements ship in the same release as the review record, and never apart
 - `cloud_pass.py make` takes `--environment <id>` and then adds a fifth line to its block, `SUPERHEROES_CLOUD_ENVIRONMENT`, naming the environment. The check passes only when the session reports that same id, because a cloud launch naming an id that matches no environment lands in the account's default environment without an error. A pass block made without `--environment` fails the check.
 - The setup text ends with its tool-steps marker line, a log line and `exit 0`. A project's own install steps go directly under the marker line.
 
+### Showrunner: where builds run
+
+- Once cloud builds are switched on, the launcher decides where each build runs: the setting gives the default, and a launch word overrides it for one build.
+- A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
+- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON fields `report` and `lanes`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message. `still` reads the launch ledger and the cloud's readiness each time and saves nothing. When the ledger cannot be read, `still` refuses with `still-ledger-unreadable` (exit 1).
+
 ### Vet slot: builder content in the slot span refuses
 
 - `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.

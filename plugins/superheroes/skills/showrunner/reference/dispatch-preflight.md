@@ -36,3 +36,49 @@ worktree path (`launch-worktree-collision`).
 
 Check 6's "(see below)" refers to the owner-involvement taxonomy in the Showrunner charter's duty
 9 (dispatch and preflight), not to anything in this file.
+
+## Where a build runs
+
+### The place call
+
+For every launch, the launcher decides where each build runs.
+
+- The project's cloud builds setting sets the default.
+- The owner's [launch word](../../../rubric/glossary.md#launch-word) for one build overrides that default. "This one local" keeps the build on the owner's machine, and a word naming the cloud sends it to the cloud. The word reaches the launcher as `--place local` or `--place cloud`.
+- A build pointed at the cloud runs on the owner's machine when it needs something only that machine has, or when the cloud is not ready. A build is never held and never dropped.
+
+### The needs you check for
+
+Before a launch, judge from the build's order whether it needs anything only the owner's machine has. Write that into the premise as `needs`, a list of plain phrases. The launcher adds three needs by itself:
+
+- **The phone simulator**, for a premise asking for the iPhone check.
+- **GitHub's stack interface**, for every layer of a stack (a premise with `stack`). The cloud blocks GitHub's GraphQL interface: there, `gh pr` and `gh issue` fail while `gh api` REST calls work. Reading and linking a stack's layers uses GraphQL.
+- **This project's Canon and specs**, when they are kept outside the repository.
+
+### How each check reads for a cloud launch
+
+- `engine-auth`: unchanged. It probes this machine's engines. Whether the cloud can run the reviewer is the launcher's readiness check, not this one.
+- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. When the launcher's own cloud base check refuses with `launch-cloud-base-not-on-remote` or `launch-cloud-base-remote-unchecked`, the build is not a no-go: it falls back to the owner's machine (`fellBack: true`), and the place call records why. `launch-cloud-base-remote-unchecked` reads as an unreachable cloud, and `launch-cloud-base-not-on-remote` as a build that needs its base commit, which only this machine has.
+- `disjoint-surfaces`: unchanged. A cloud lane takes no slot.
+- `workspace-isolation`: a cloud launch makes no worktree on this machine. The cloud session works in its own copy of the repository, so the check passes with that reason.
+- `standing-rulings`: unchanged. The launcher establishes them.
+- `owner-capability`: a capability only the owner's machine has is a need. Write it into `needs` so the build runs on the owner's machine. A cloud build cannot reach it.
+- `grant-state`: unchanged.
+
+### After the launch: the launch report
+
+Once every launch in the batch has returned, run `lib/launcher.py report --repo-root <root> --batch <id>`. When the JSON field `report` is not null, show the owner that field exactly as printed. See [launch report](../../../rubric/glossary.md#launch-report).
+
+- It lists every launched build under "In the cloud" or "On your machine".
+- Each build that the setting or a launch word pointed at the cloud, but that ran on the owner's machine, carries its reason and its fix. The fix is printed once per reason.
+
+### Until the cloud is fixed: the "Still on your machine" line
+
+`still` works the reason out each time it runs, from the launch ledger and the cloud's readiness at that moment; nothing is saved. Before **every** later message to the owner, run `lib/launcher.py still --repo-root <root>`. While its JSON field `line` is not null, open the message with that line. Never write the line by hand.
+
+How it knows the reason is fixed:
+
+- A reason that came from the cloud builds setting stops once the setting reads switched off. A reason that came from a launch word follows the rules below.
+- A reason this machine can read again stops once that condition reads true again. These are no cloud setup, a lapsed reviewer pass, a calibration mismatch, and a version mismatch read from the setup record.
+- Any other reason stops only once a check made on a later day has passed and the cloud reads ready. These are no reviewer pass, an unreachable cloud, and a version a builder reported.
+- It also clears once any build in a later launch goes to the cloud.

@@ -254,6 +254,17 @@ A lane of the launch ledger whose builder is a [cloud builder](#cloud-builder). 
 and counts it and gives it the same terminal outcomes as any lane, and every listing of lanes marks
 it with the word "cloud".
 
+### Launch report
+
+The advisor's message after a launch that says which build went where: each build "In the cloud" or
+"On your machine", with the reason and its fix for any build pointed at the cloud that ran on the
+owner's machine.
+
+### Launch word
+
+What the owner says at a launch to name where one build runs, "this one local" or the cloud. It
+overrides the project's cloud builds setting for that build.
+
 ## Backlog fold-in
 
 ### Fold-in rules
