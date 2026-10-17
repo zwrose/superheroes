@@ -72,7 +72,7 @@ def test_a_fixed_check_at_the_final_head_marks_the_carried_finding_fixed_and_the
                                            ("unsettled", "the check could not settle it: ")])
 def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, said):
     # Axis: a check that did not find it fixed keeps it left for the owner, with the check's evidence in the reason.
-    rec = build([entry(settled=settled, commit=None, checkedHead=None, evidence="still reads past the end")])
+    rec = build([entry(settled=settled, commit=None, checkedHead=HEAD, evidence="still reads past the end")])
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
     assert f["reason"] == ("waits for the owner; a check against the final commit kept it for the owner: "
@@ -86,6 +86,23 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
     leftovers = {"f-1": {"why": "the check found it open", "context": "the index is read unchecked", "options": "none"}}
     sheet = pr_sheet.build([rec], {**advisor, "leftovers": leftovers}, WORDS)
     assert len([c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]) == 1
+
+
+@pytest.mark.parametrize("settled, said", [("applies", "the check found it still applies: "),
+                                           ("unsettled", "the check could not settle it: ")])
+@pytest.mark.parametrize("seen, clause", [
+    pytest.param(THIRD, f"a check on {THIRD[:7]} (not the final commit {HEAD[:7]})", id="older-checked-head"),
+    pytest.param(None, "a check on no named commit", id="no-checked-head"),
+])
+def test_a_kept_reason_names_the_commit_the_check_was_made_on(settled, said, seen, clause):
+    # Axis: an applies or unsettled check made on another commit, or none, never reads as a check on the final commit.
+    rec = build([entry(settled=settled, commit=None, checkedHead=seen, evidence="still reads past the end")])
+    f = the_finding(rec)
+    assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
+    assert f["reason"] == f"waits for the owner; {clause} kept it for the owner: {said}still reads past the end"
+    assert "against the final commit" not in f["reason"]
+    (row,) = rec["carriedRechecks"]
+    assert (row["result"], row["checkedHead"]) == ("kept", seen)
 
 
 @pytest.mark.parametrize("checks, prior, kw, why", [
@@ -145,6 +162,8 @@ Y = dict(X, id="f-2", title="Another")
     pytest.param([entry(commit="")], None, "carriedChecks[0].commit", id="fixed-with-empty-commit"),
     pytest.param([entry(evidence="")], None, "carriedChecks[0].evidence", id="empty-evidence"),
     pytest.param([entry(evidence=None)], None, "carriedChecks[0].evidence", id="no-evidence"),
+    pytest.param([entry(evidence="   ")], None, "carriedChecks[0].evidence", id="spaces-evidence"),
+    pytest.param([entry(evidence="\n\t")], None, "carriedChecks[0].evidence", id="newline-tab-evidence"),
     pytest.param([entry(settled="applies", commit=5)], None, "carriedChecks[0].commit", id="commit-not-a-string"),
     pytest.param([entry(key="")], None, "carriedChecks[0].key", id="empty-key"),
     pytest.param(["f-1"], None, "carriedChecks[0].key", id="entry-not-an-object"),
@@ -216,21 +235,30 @@ def test_extras_carried_checks_must_be_a_list(tmp_path):
 
 # --- the default reader, against the real binary ---
 
-PINNED = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+def _pinned():
+    """The environment handed to git: the live one with every GIT_* variable removed (inherited GIT_DIR and
+    GIT_WORK_TREE override `git -C`), then the two pinned settings."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return {**env, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 def _git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=PINNED).stdout.strip()
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=_pinned()).stdout.strip()
+
+
+def _two_commits(repo):
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True, env=_pinned())
+    shas = []
+    for n in "ab":
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", n)
+        shas.append(_git(repo, "rev-parse", "HEAD"))
+    return shas
 
 
 def test_the_default_reader_tells_an_ancestor_from_a_non_ancestor_from_an_error(tmp_path):
     # Axis: exit 0 is True, exit 1 is False, and every error (unknown sha, missing repo) is None, never False.
     repo = tmp_path / "repo"
-    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True, env=PINNED)
-    shas = []
-    for n in "ab":
-        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", n)
-        shas.append(_git(repo, "rev-parse", "HEAD"))
+    shas = _two_commits(repo)
     a, b = shas
     assert rr._is_ancestor(str(repo), a, b) is True
     assert rr._is_ancestor(str(repo), b, a) is False
@@ -238,3 +266,19 @@ def test_the_default_reader_tells_an_ancestor_from_a_non_ancestor_from_an_error(
     assert rr._is_ancestor(str(tmp_path / "missing"), a, b) is None
     assert rr._is_ancestor(None, a, b) is None
     assert rr._is_ancestor(str(repo), "--all", b) is None
+
+
+def test_inherited_git_routing_does_not_reach_the_helper_commits(tmp_path, monkeypatch):
+    # Axis: an inherited GIT_DIR/GIT_WORK_TREE aimed at another repository is not passed to git, so the helper's commits land in its own repo.
+    sentinel = tmp_path / "sentinel"
+    subprocess.run(["git", "init", "-q", str(sentinel)], check=True, capture_output=True, env=_pinned())
+    head_file = sentinel / ".git" / "HEAD"
+    before = head_file.read_bytes()
+    monkeypatch.setenv("GIT_DIR", str(sentinel / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(sentinel))
+    assert {"GIT_DIR", "GIT_WORK_TREE"} <= os.environ.keys() and not {"GIT_DIR", "GIT_WORK_TREE"} & _pinned().keys()
+    repo = tmp_path / "repo"
+    a, b = _two_commits(repo)
+    assert head_file.read_bytes() == before
+    assert not list((sentinel / ".git" / "refs" / "heads").iterdir())
+    assert _git(repo, "rev-list", "--count", b) == "2" and a != b

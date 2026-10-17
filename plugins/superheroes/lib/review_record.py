@@ -372,7 +372,7 @@ def _validate(a):
         where = f"carriedChecks[{i}]"
         chk(isinstance(c, dict) and ne(c.get("key")), f"{where}.key")
         chk(c.get("settled") in CARRIED_SETTLED, f"{where}.settled (allowed: {', '.join(CARRIED_SETTLED)})")
-        chk(ne(c.get("evidence")), f"{where}.evidence")
+        chk(isinstance(c.get("evidence"), str) and bool(c["evidence"].strip()), f"{where}.evidence")
         for k in ("commit", "checkedHead"):
             chk(ne(c.get(k)) or (c.get(k) is None and c["settled"] != CARRIED_SETTLED[0]), f"{where}.{k}")
         hit = {j for j, f in enumerate(a["findings"]) if c["key"] in (_key(f), f["id"])}
@@ -812,7 +812,14 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
                       f"(checked against the final commit {shown} when this record was written)")
             out.append(dict(f, outcome="fixed", reason=f"{reason}; earlier: {old}" if old else reason))
         elif result == "kept":
-            kept = f"a check against the final commit kept it for the owner: {why}"
+            # a fixed entry's own reason already names the head it was checked on; applies/unsettled name it here
+            if settled == "fixed" or (seen is not None and seen == head):
+                on = "a check against the final commit"
+            elif seen is None:
+                on = "a check on no named commit"
+            else:
+                on = f"a check on {seen[:7]} (not the final commit {shown})"
+            kept = f"{on} kept it for the owner: {why}"
             out.append(dict(f, reason=f"{old}; {kept}" if old else kept))
         else:
             out.append(f)

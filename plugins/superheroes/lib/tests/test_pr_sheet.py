@@ -727,6 +727,15 @@ def test_a_leftover_without_its_spine_is_refused_naming_the_finding(edit, text):
     assert any(text in p for p in problems_of(records, advisor))
 
 
+@pytest.mark.parametrize("field", ["why", "context", "ifLeft"])
+@pytest.mark.parametrize("blank", ["", "   ", None], ids=["empty", "spaces", "none"])
+def test_a_blank_leftover_text_is_refused_naming_the_field(field, blank):
+    # Axis: a present but blank why, context or ifLeft is refused as a non-empty-string problem, never rendered as an empty paragraph.
+    records, advisor = bundle(BIG)
+    advisor["leftovers"]["F7"][field] = blank
+    assert f"leftovers F7: {field} must be a non-empty string" in problems_of(records, advisor)
+
+
 def test_an_object_form_leftover_carries_the_advisors_consequences():
     # Axis: an object-form entry's card has the advisor's three consequences and none of the words file's generic ones, with the words' ids, labels and sendsBack.
     card = next(c for c in leftover_cards(built(BIG)) if c["question"] == "A payment that fails three times ends with no email")
