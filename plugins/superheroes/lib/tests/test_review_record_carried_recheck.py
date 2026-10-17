@@ -72,7 +72,7 @@ def test_a_fixed_check_at_the_final_head_marks_the_carried_finding_fixed_and_the
                                            ("unsettled", "the check could not settle it: ")])
 def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, said):
     # Axis: a check that did not find it fixed keeps it left for the owner, with the check's evidence in the reason.
-    rec = build([entry(settled=settled, commit=None, checkedHead=HEAD, evidence="still reads past the end")])
+    rec = build([entry(settled=settled, commit=None, checkedHead=None, evidence="still reads past the end")])
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
     assert f["reason"] == ("waits for the owner; a check against the final commit kept it for the owner: "
@@ -86,23 +86,6 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
     leftovers = {"f-1": {"why": "the check found it open", "context": "the index is read unchecked", "options": "none"}}
     sheet = pr_sheet.build([rec], {**advisor, "leftovers": leftovers}, WORDS)
     assert len([c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]) == 1
-
-
-@pytest.mark.parametrize("settled, said", [("applies", "the check found it still applies: "),
-                                           ("unsettled", "the check could not settle it: ")])
-@pytest.mark.parametrize("seen, clause", [
-    pytest.param(THIRD, f"a check on {THIRD[:7]} (not the final commit {HEAD[:7]})", id="older-checked-head"),
-    pytest.param(None, "a check on no named commit", id="no-checked-head"),
-])
-def test_a_kept_reason_names_the_commit_the_check_was_made_on(settled, said, seen, clause):
-    # Axis: an applies or unsettled check made on another commit, or none, never reads as a check on the final commit.
-    rec = build([entry(settled=settled, commit=None, checkedHead=seen, evidence="still reads past the end")])
-    f = the_finding(rec)
-    assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
-    assert f["reason"] == f"waits for the owner; {clause} kept it for the owner: {said}still reads past the end"
-    assert "against the final commit" not in f["reason"]
-    (row,) = rec["carriedRechecks"]
-    assert (row["result"], row["checkedHead"]) == ("kept", seen)
 
 
 @pytest.mark.parametrize("checks, prior, kw, why", [

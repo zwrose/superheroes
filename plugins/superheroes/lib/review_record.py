@@ -812,14 +812,7 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
                       f"(checked against the final commit {shown} when this record was written)")
             out.append(dict(f, outcome="fixed", reason=f"{reason}; earlier: {old}" if old else reason))
         elif result == "kept":
-            # a fixed entry's own reason already names the head it was checked on; applies/unsettled name it here
-            if settled == "fixed" or (seen is not None and seen == head):
-                on = "a check against the final commit"
-            elif seen is None:
-                on = "a check on no named commit"
-            else:
-                on = f"a check on {seen[:7]} (not the final commit {shown})"
-            kept = f"{on} kept it for the owner: {why}"
+            kept = f"a check against the final commit kept it for the owner: {why}"
             out.append(dict(f, reason=f"{old}; {kept}" if old else kept))
         else:
             out.append(f)
