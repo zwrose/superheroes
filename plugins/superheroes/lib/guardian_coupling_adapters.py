@@ -400,6 +400,63 @@ def depcruise_parsed_modules(payload):
     return out
 
 
+def _dep_key(dep):
+    """Identity of one dependency edge: its resolved path, else the raw module specifier."""
+    resolved = dep.get("resolved")
+    return resolved if resolved is not None else dep.get("module")
+
+
+def merge_depcruise_payloads(payloads):
+    """Merge per-batch depcruise payloads into one report payload.
+
+    ``modules`` merge by ``source`` in first-seen order: a module can be an operand in one
+    batch and a dependency-only stub (``dependencies: []``) in another, so the merged
+    ``dependencies`` are the union across batches deduplicated by ``resolved`` (else
+    ``module``), and the other module fields come from the first entry that has a non-empty
+    ``dependencies`` list, else the first. ``summary.violations`` are concatenated and
+    deduplicated; ``summary.environment`` comes from the first payload. A single payload
+    passes through unchanged. Callers hand in schema-validated payloads.
+    """
+    payloads = list(payloads)
+    if len(payloads) == 1:
+        return payloads[0]
+    entries = {}
+    for payload in payloads:
+        for mod in payload.get("modules") or []:
+            entries.setdefault(mod["source"], []).append(mod)
+    modules = []
+    for source, group in entries.items():
+        base = next((m for m in group if m.get("dependencies")), group[0])
+        deps = []
+        seen = set()
+        for mod in group:
+            for dep in mod.get("dependencies") or []:
+                key = _dep_key(dep)
+                if key in seen:
+                    continue
+                seen.add(key)
+                deps.append(dep)
+        merged = dict(base)
+        merged["dependencies"] = deps
+        modules.append(merged)
+    violations = []
+    seen_violations = set()
+    for payload in payloads:
+        for violation in (payload.get("summary") or {}).get("violations") or []:
+            key = json.dumps(violation, sort_keys=True, default=str)
+            if key in seen_violations:
+                continue
+            seen_violations.add(key)
+            violations.append(violation)
+    first = payloads[0]
+    summary = dict(first.get("summary") or {})
+    summary["violations"] = violations
+    merged_payload = dict(first)
+    merged_payload["modules"] = modules
+    merged_payload["summary"] = summary
+    return merged_payload
+
+
 def depcruise_violations(payload):
     """Declared-rule violations the tool itself reported."""
     summary = (payload or {}).get("summary") or {}

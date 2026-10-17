@@ -2605,15 +2605,184 @@ def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, m
     assert out["digest"] is None
     reason = out.get("reason") or ""
     assert (
-        "tracked-file operand payload is %d bytes across %d files"
-        % (operand_bytes, len(js_targets))) in reason
-    assert "derived %d-byte operand budget" % budget in reason
-    assert "platform ARG_MAX %d" % guardian_census.platform_arg_max_bytes() in reason
-    assert "remedy: batch the depcruise into budget-sized runs" in reason
-    assert "not measured" in reason
+        "1 tracked file(s) each exceed the derived %d-byte operand budget "
+        "(platform ARG_MAX %d after child env and fixed argv); not measured"
+        % (budget, guardian_census.platform_arg_max_bytes())) in reason
     depcruise_calls = [
         a for a in calls if a and a[0] == adapters.DEPCRUISE_BIN]
     assert not depcruise_calls, "depcruise must not run when operand budget exceeded"
+
+
+def test_budget_zero_env_failure_degrades_without_invoking_depcruise(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    tracked = ["src/app.ts"]
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (0, True))
+    calls = []
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        return (0, dc_report(extra_sources=tracked), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert "child-env measurement failed" in (out.get("reason") or "")
+    assert not calls
+
+
+# --------------------------------------------------------------------------------------
+# batched depcruise runs (#1754 F4)
+# --------------------------------------------------------------------------------------
+
+def _batch_operands_of(argv):
+    return argv[argv.index("--") + 1:]
+
+
+def _call_operand_bytes(argv):
+    return sum(len(op.encode("utf-8")) for op in _batch_operands_of(argv))
+
+
+def _graph_handler(repo, graph, calls):
+    """A fake depcruise over ``graph`` ({rel: [rel deps]}) at ``--max-depth 1``.
+
+    Operands report their dependencies; a dependency that is not an operand of this run
+    appears as a dependency-only stub (``dependencies: []``), as the real tool does.
+    """
+    repo_real = os.path.realpath(repo)
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        operands = [os.path.relpath(op, repo_real) for op in _batch_operands_of(argv)]
+        edges = [(src, dst) for src in operands for dst in graph.get(src, [])]
+        return (0, dc_report(edges=edges, extra_sources=operands), "")
+    return handler
+
+
+def _write_graph_repo(tmp_path, names):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"batched"}\n')
+    for name in names:
+        write(repo, name, "export const x = 1;\n")
+    return repo, ["package.json"] + list(names)
+
+
+def _force_budget(monkeypatch, budget):
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (budget, False))
+
+
+def test_batched_collect_matches_single_run_and_respects_budget(tmp_path, monkeypatch):
+    names = ["src/f%02d.ts" % i for i in range(6)]
+    graph = {names[i]: [names[(i + 1) % 6]] for i in range(6)}
+    repo, tracked = _write_graph_repo(tmp_path, names)
+
+    single_calls = []
+    single = lens().collect(ctx(repo, tmp_path, run=make_run(
+        _graph_handler(repo, graph, single_calls), tracked=tracked)))
+    assert st(single) == "collected", single.get("reason")
+    assert len(single_calls) == 1
+    assert single["digest"]["ecosystems"]["js"]["batchCount"] == 1
+
+    per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+    budget = 2 * per_file
+    _force_budget(monkeypatch, budget)
+    calls = []
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(
+        _graph_handler(repo, graph, calls), tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    assert len(calls) >= 3
+    for argv in calls:
+        assert _call_operand_bytes(argv) <= budget
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["batchCount"] == len(calls)
+    assert js["operandCount"] == 6
+    assert js["operandPayloadBytes"] == 6 * per_file
+    assert out["digest"]["counters"]["edges"] == single["digest"]["counters"]["edges"]
+    assert single["digest"]["counters"]["edges"] == 6
+    assert js["modulesParsed"] == single["digest"]["ecosystems"]["js"]["modulesParsed"]
+
+
+def test_argv_operand_bytes_stay_flat_as_file_count_grows(tmp_path, monkeypatch):
+    results = {}
+    for count in (10, 200):
+        sub = tmp_path / ("n%d" % count)
+        sub.mkdir()
+        names = ["src/f%03d.ts" % i for i in range(count)]
+        repo, tracked = _write_graph_repo(sub, names)
+        per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+        budget = 4 * per_file
+        _force_budget(monkeypatch, budget)
+        calls = []
+        out = lens().collect(ctx(repo, sub, run=make_run(
+            _graph_handler(repo, {}, calls), tracked=tracked)))
+        assert st(out) == "collected", out.get("reason")
+        biggest = max(_call_operand_bytes(argv) for argv in calls)
+        assert biggest <= budget
+        results[count] = (biggest, len(calls))
+    assert results[10][1] >= 3
+    assert results[200][1] > results[10][1]
+
+
+def test_cross_batch_edge_survives_the_merge_once(tmp_path, monkeypatch):
+    names = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]
+    graph = {"src/a.ts": ["src/c.ts"], "src/c.ts": ["src/d.ts"]}
+    repo, tracked = _write_graph_repo(tmp_path, names)
+    per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+    _force_budget(monkeypatch, 2 * per_file)
+    calls = []
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(
+        _graph_handler(repo, graph, calls), tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    assert [sorted(os.path.basename(o) for o in _batch_operands_of(a)) for a in calls] == [
+        ["a.ts", "b.ts"], ["c.ts", "d.ts"]]
+    assert out["digest"]["counters"]["edges"] == 2
+
+
+def _payload(edges=(), sources=(), violations=()):
+    return json.loads(dc_report(edges=edges, extra_sources=sources, violations=violations))
+
+
+def test_merge_depcruise_payloads_unions_dependencies_and_dedups_violations():
+    first = _payload(
+        edges=[("a", "c"), ("a", "x")], sources=["a", "b"],
+        violations=[("a", "c", "no-cross")])
+    second = _payload(
+        edges=[("c", "d"), ("a", "c")], sources=["c"],
+        violations=[("a", "c", "no-cross"), ("c", "d", "no-cross")])
+    merged = adapters.merge_depcruise_payloads([first, second])
+    by_source = {m["source"]: m for m in merged["modules"]}
+    assert sorted(by_source) == ["a", "b", "c", "d", "x"]
+    assert [m["source"] for m in merged["modules"]][:2] == ["a", "b"]
+    assert [d["resolved"] for d in by_source["a"]["dependencies"]] == ["c", "x"]
+    assert [d["resolved"] for d in by_source["c"]["dependencies"]] == ["d"]
+    assert len(merged["summary"]["violations"]) == 2
+    assert merged["summary"]["environment"] == first["summary"]["environment"]
+    assert adapters.depcruise_violations(merged) == [
+        {"from": "a", "to": "c", "rule": "no-cross"},
+        {"from": "c", "to": "d", "rule": "no-cross"}]
+    only = _payload(edges=[("a", "b")])
+    assert adapters.merge_depcruise_payloads([only]) is only
+
+
+def test_failing_second_batch_fails_js_without_a_partial_digest(tmp_path, monkeypatch):
+    names = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]
+    repo, tracked = _write_graph_repo(tmp_path, names)
+    per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+    _force_budget(monkeypatch, 2 * per_file)
+    calls = []
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        if len(calls) == 2:
+            return (1, "", "boom: second batch died")
+        return (0, dc_report(extra_sources=["src/a.ts", "src/b.ts"]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    assert len(calls) == 2
+    assert "boom: second batch died" in (out.get("reason") or "")
 
 
 def test_js_collected_section_records_operand_payload_and_argv_budget(tmp_path):
