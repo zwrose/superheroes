@@ -70,6 +70,7 @@ from a prior partial adoption, end with a one-line report. When `upToDate: true`
 state still lists `outstanding: <deferred checklist item> (lane <id>)` for a deferred step-4
 item or a live old-root inventory entry, do not stop — run step 7 for each outstanding item
 first, record each done (remove its `outstanding:` line), and only then report up to date.
+An `owed:` line (step 6) never holds that report; name each one still owed in it.
 Read TRANSITION's section
 for **every** version listed in `transitionSections` (each patch in range counts) from the
 new root (`toRoot`). Read `unresolvedGaps` from `plan`: every entry is **unresolved** and
@@ -137,20 +138,24 @@ First list every live process and run still tied to the **old** root: builders l
 it, dispatch run directories it opened, watch loops armed from it.
 
 Then run each item of TRANSITION's "Before you upgrade" and one-time steps for every
-version in range — done, or not applicable with the reason. An item that stops, folds, or
+version in range — done, or not applicable with the reason. `plan` lists each "Before you
+upgrade" item in its section's `upgradeSteps` with a `when`: `before-switching` or
+`after-switching` (an item with no marker reads `before-switching`). An `after-switching`
+item is **owed**, not run here and never a hold: it waits for the switch, step 6 records it,
+and step 8 names it. An item that stops, folds, or
 cleans up a process or run is checked against the inventory first and **deferred** when it
 belongs to a live old-root lane (step 7 decides when it runs). An item that needs the owner
 (a sign-in, a configure choice, a permission, a waiver) is **owner input** — never silently
-skipped. When any checklist item is owner input, stop after step 4: brief the owner at
-step 8 with those items as numbered decisions, and do not run steps 5–7 until each is
-resolved; then resume adoption from step 5.
+skipped. When any `before-switching` checklist item is owner input, stop after step 4: brief
+the owner at step 8 with those items as numbered decisions, and do not run steps 5–7 until
+each is resolved; then resume adoption from step 5.
 
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
-(why), deferred (which lane), or owner input.
+(why), deferred (which lane), owner input, or owed (after switching).
 
 ## Step 5 — Switch the plugin root
 
-Skip this step while step 4 left any owner-input checklist item unresolved, or step 1 left
+Skip this step while step 4 left any `before-switching` owner-input item unresolved, or step 1 left
 any **unresolved** entry in `unresolvedGaps` or any CHANGELOG-derived **unresolved** version.
 **No TRANSITION section (no consumer-visible change recorded)** after a readable CHANGELOG
 review is not a gap — it does not hold step 5 once step 4 is clear. When step 1 left any
@@ -204,10 +209,12 @@ injection on the next adoption and after compaction. New lanes must not wait on 
 old-root lanes — write the taken-up line once probes pass. In the **same** durable record,
 also write one `outstanding: <deferred checklist item> (lane <id>)` line per step-4 deferred
 item and per old-root inventory entry still live; a later invocation that finds outstanding
-lines runs step 7 for them before treating adoption as finished.
+lines runs step 7 for them before treating adoption as finished. Next to the taken-up line,
+write one `owed: <after-switching checklist item> (<version>)` line per step-4 owed item, so
+it survives compaction; remove each line once the item is done or the owner rules it away.
 
 **Output:** one probe result per engine, any retired owner words, any held ledger kinds, the
-taken-up line when written, each `outstanding:` line recorded, — or the failure that blocked
+taken-up line when written, each `outstanding:` and `owed:` line recorded, — or the failure that blocked
 the taken-up line.
 
 ## Step 7 — Handle old-root processes
@@ -232,7 +239,9 @@ In chat, plain language: what changed that the owner will notice; what this seat
 its own practice; checklist items done; **inputs needed** — each as a numbered decision with
 its context, options, consequences, and a recommendation per
 `skills/showrunner/reference/owner-decisions.md` (read that page; do not restate its spine);
-and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
+**owed** — each after-switching item from step 4, the owner's ones as numbered decisions in
+that same shape, stating that the seat already runs the new version when step 6 wrote the
+taken-up line, and otherwise that each comes due once adoption completes; and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
 TRANSITION gaps from step 1, and any **no TRANSITION section (no consumer-visible change
 recorded)** entries named for awareness).
 
