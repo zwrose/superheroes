@@ -85,7 +85,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         try:
-            sheet = json.loads(pathlib.Path(args.sheet).read_text(encoding="utf-8"))
+            sheet = json.loads(pathlib.Path(args.sheet).read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as err:
             raise Refusal(["cannot read the data file %s: %s" % (args.sheet, err)])
         title = title_for(sheet, args.project, args.slug)

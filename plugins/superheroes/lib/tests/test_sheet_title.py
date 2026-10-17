@@ -86,6 +86,18 @@ def test_only_the_title_moves(tmp_path, capsys):
     assert staged.replace("<title>superheroes PR #1900 review sheet</title>", "<title>Review sheet</title>") == TEMPLATE_TEXT
 
 
+# Bites on: a byte-order mark the page accepts making the staging step refuse the sheet, or the step rewriting it.
+def test_bom_prefixed_sheet_is_staged_untouched(tmp_path, capsys):
+    sheet_path, out = tmp_path / "sheet.json", tmp_path / "review-template.html"
+    sheet_path.write_bytes(b"\xef\xbb\xbf" + json.dumps(_pr_sheet()).encode("utf-8"))
+    before = sheet_path.read_bytes()
+    code = sheet_title.main(["stage", "--sheet", str(sheet_path), "--project", "superheroes", "--out", str(out)])
+    capsys.readouterr()
+    assert code == 0
+    assert _page_title(out) == "superheroes PR #1900 review sheet"
+    assert sheet_path.read_bytes() == before
+
+
 @pytest.mark.parametrize("sheet, extra, problem", [
     ("remainder", [], "needs --slug"),
     ("odd", [], "not a sheet kind"),
