@@ -3741,6 +3741,12 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
+    # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors
+    if not state["_verified"]:
+        _decision(state, "synthesis-no-survivors",
+                  "verification left no findings, so no grouping seat was dispatched")
+        _fold_synthesis(state, config, {"grouping": []})
+        return
     if _nonpanel_unseatable(state, session_dir, P_SYNTHESIS):
         # No grouping seat outside the makers' families on a proven synthesis cell: no order is
         # emitted and the round folds exactly as an empty grouping would — every verified finding
