@@ -202,6 +202,20 @@ iPhone check (a check on a simulated iPhone, a phone the Mac imitates in softwar
 means no phone. The launcher records `iphoneCheck` on the launch record and, when it made a phone,
 the phone's ID as `iphoneId`. The premise names no place to check.
 
+**Sizes.** Add `"iphoneModels"` beside `"iphoneCheck": true` when the issue names the sizes to check.
+It is a non-empty list of distinct simulator device-type names, such as `"iPhone 17"` and
+`"iPhone 17e"`. Without `"iphoneCheck": true`, or when it is not such a list, the premise is
+invalid (`premise-iphone-models-invalid`). Before it makes anything, the launcher reads
+`xcrun simctl list devicetypes -j` and maps each name to that inventory's identifier. A name the
+inventory lacks refuses `iphone-model-unknown` (`unknownModels` lists it), and an unreadable
+inventory refuses `iphone-models-unreadable`, both at stage `iphone-models`. A refusal leaves no
+worktree, no phone and no child. Otherwise the launcher makes one phone per name, in order, named
+`superheroes-<launchId>-<n>`. The record keeps `iphoneId` (the first phone) and adds `iphoneIds`
+(every phone made). A create that fails is skipped, so that size has no phone. The builder gets
+`SUPERHEROES_IPHONE_ID` (the first phone, or `none`) and `SUPERHEROES_IPHONE_IDS` (every phone,
+comma-joined, the first being `SUPERHEROES_IPHONE_ID`), the second only when at least one phone was
+made. Without `iphoneModels`, the launch makes one iPhone 17 as before.
+
 The plugin's `iphone_allow.py` hook approves the pilot's plain `iphone_check.py` calls, so an iPhone
 lane does not park on their permission prompt (Claude Code only).
 
@@ -211,8 +225,8 @@ recorded), run
 Record the outcome first: the reap refuses, deleting nothing, while any launch for the issue is
 still live (`reap-lane-not-terminal:<launchId>`). It deletes every phone the lane's launch records
 name, relaunched and failed launches included. A phone already gone reads `already-gone` and counts
-as gone. The `phones` verb, with the same flags, lists them first (`phones[].launchId`,
-`phones[].iphoneId`, `liveLaunches`).
+as gone. The `phones` verb, with the same flags, lists them first (one `phones[]` entry per phone:
+`phones[].launchId`, `phones[].iphoneId`, `liveLaunches`).
 
 **What it never touches.** It deletes only the phones the lane's records name. `xcrun simctl delete`
 removes a booted phone without shutting it down. The reap never quits Device Hub, never shuts down
@@ -220,8 +234,8 @@ or erases a phone, and leaves every other phone running. A phone a launcher cras
 (named `superheroes-<launchId>`) is on no record, so the reap cannot find it. A person removes it by
 hand.
 
-**The reap record.** The reap writes one `evidence` amendment with value `reap` on each launch that
-names a phone: `reap: phone <udid> deleted | already gone | left running: <detail>`. That is where
+**The reap record.** The reap writes one `evidence` amendment with value `reap` for each phone a
+launch names: `reap: phone <udid> deleted | already gone | left running: <detail>`. That is where
 the lane's outcome already lives. Its output lists `leftRunning`. It exits 0 only when every phone
 is gone and recorded.
 
