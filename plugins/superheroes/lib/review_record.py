@@ -115,6 +115,39 @@ def _gh_json(*args):
         return None
 
 
+# GitHub serves at most 100 rows a page; a page with fewer ends the list.
+_PAGE_ROWS = 100
+# A bound on a read that never ends: a list this long fails the read, never returns what was read so far.
+_MAX_PAGES = 1000
+
+
+def _read_pages(path, key=None):
+    """Every row of a GitHub REST list, or None when any page cannot be read.
+
+    It asks for each page by number on the same repos/... path. gh's --paginate follows GitHub's Link
+    URLs instead, which name repositories/{id}, and the cloud session's proxy refuses those (#1890).
+    `key` names the list inside a page that is an object (check runs); otherwise the page is the list."""
+    sep = "&" if "?" in path else "?"
+    rows = []
+    for number in range(1, _MAX_PAGES + 1):
+        out = _run(["gh", "api", f"{path}{sep}per_page={_PAGE_ROWS}&page={number}"])
+        try:
+            page = None if out is None else json.loads(out)
+        except ValueError:
+            page = None
+        if key is not None:
+            page = page.get(key) if isinstance(page, dict) else None
+        # axis: a page that cannot be read, or is not a list, fails the whole read, never a partial list — see bite-proof record wo1_1890_page_by_number
+        if not isinstance(page, list):
+            return None
+        rows.extend(page)
+        # axis: the first page with fewer than a full page's rows (an empty one included) ends the read — see bite-proof record wo1_1890_page_by_number
+        if len(page) < _PAGE_ROWS:
+            return rows
+    # axis: a list that never ends fails the read, never returns what was read so far — see bite-proof record wo1_1890_page_by_number
+    return None
+
+
 def _repo_name(repo_root):
     out = _run(["gh", "repo", "view", "--json", "nameWithOwner"], cwd=repo_root)
     try:
@@ -189,14 +222,11 @@ def _issue_body_rest(n, repo):
 
 def _check_data(sha, repo):
     base = _api(repo, f"commits/{sha}")
-    out = _run(["gh", "api", base + "/check-runs?per_page=100", "--paginate"])
+    # Every page, merged: a failed page read leaves CI unavailable, never green on a partial read.
+    rows = _read_pages(base + "/check-runs", key="check_runs")
     status = _gh_json("api", base + "/status")
-    try:
-        # Every page, merged: a failed page read leaves CI unavailable, never green on a partial read.
-        runs = {"check_runs": [r for page in pr_comment._parse_paginated_arrays(out) for r in page["check_runs"]]}
-    except (ValueError, KeyError, TypeError):
-        return None
-    return (runs, status) if isinstance(status, dict) else None
+    runs = None if rows is None else {"check_runs": rows}
+    return (runs, status) if runs is not None and isinstance(status, dict) else None
 
 
 def _lane_marker(repo_root):
@@ -218,11 +248,11 @@ def _engine_run(run_dir):
 
 
 def _list_comments(pr, repo):
-    out = _run(["gh", "api", _api(repo, f"issues/{pr}/comments"), "--paginate"])
+    rows = _read_pages(_api(repo, f"issues/{pr}/comments"))
     try:
-        return None if out is None else [
+        return None if rows is None else [
             {"id": c["id"], "author": c["user"]["login"], "body": c["body"], "url": c["html_url"]}
-            for c in pr_comment._parse_paginated_arrays(out)]
+            for c in rows]
     except (ValueError, KeyError, TypeError):
         return None
 
@@ -232,11 +262,7 @@ def changed_paths(pr, repo):
     a failed call or parse, an entry with no string filename, or GitHub's file ceiling reached.
     Removed files are kept (a deletion inside a risk area touches it), and so is each renamed
     file's previous name (a rename out of a risk area still touches it)."""
-    out = _run(["gh", "api", _api(repo, f"pulls/{pr}/files"), "--paginate"])
-    try:
-        files = None if out is None else pr_comment._parse_paginated_arrays(out)
-    except ValueError:
-        return None
+    files = _read_pages(_api(repo, f"pulls/{pr}/files"))
     # axis: a file list that may be cut short is unavailable, never read as the whole change — see bite-proof record wo_a_1795_lane-call
     if files is None or len(files) >= _FILES_CEILING:
         return None

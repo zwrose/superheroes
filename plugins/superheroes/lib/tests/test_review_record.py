@@ -4,6 +4,7 @@ import shutil
 import string
 import subprocess
 import sys
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -492,29 +493,46 @@ def test_every_reviewers_findings_coverage_is_marked_as_reported_by_the_session(
     assert "findings: reported by the session" in rr.render(rec)
 
 
+def cloud_proxy(routes, seen=None, override=None):
+    """A stand-in for rr._run that answers as the cloud session's GitHub proxy does (#1890): any argv with
+    --paginate, or naming repositories/, is refused (None); repos/... ?per_page=N&page=M is served as the M-th
+    slice of the route's rows, [] past the end. routes maps a path to (rows, key): with a key the slice is
+    wrapped as {"total_count": n, key: slice}. override maps a page number to the text served for it
+    (None is a failed read); /status is served as NO_STATUS."""
+    def run(argv, cwd=None):
+        if seen is not None:
+            seen.append(list(argv))
+        if "--paginate" in argv or any("repositories/" in a for a in argv):
+            return None
+        path, _, query = argv[2].partition("?")
+        if path.endswith("/status"):
+            return json.dumps(NO_STATUS)
+        q = parse_qs(query)
+        number, size = int(q.get("page", ["1"])[0]), int(q.get("per_page", ["30"])[0])
+        if override and number in override:
+            return override[number]
+        if path not in routes:
+            return None
+        rows, key = routes[path]
+        piece = rows[(number - 1) * size:number * size]
+        return json.dumps(piece if key is None else {"total_count": len(rows), key: piece})
+    return run
+
+
 def test_check_runs_are_read_across_every_page_and_a_failed_page_is_unavailable(monkeypatch):
     # axis: CI pagination; a failing check on a later page hidden behind a green first page
-    page1 = json.dumps({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "success"}]})
-    page2 = json.dumps({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "failure"}]})
-    status = json.dumps(NO_STATUS)
-
+    ok, bad = {"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}
+    path = f"repos/o/r/commits/{HEAD}/check-runs"
     seen = []
-
-    def reader(out):
-        # Without --paginate the command returns page one only, as gh does.
-        def run(argv):
-            seen.append(list(argv))
-            if argv[2].endswith("/status"):
-                return status
-            return out if "--paginate" in argv else page1
-        return run
-    monkeypatch.setattr(rr, "_run", reader(page1 + page2))
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs")}, seen))
     runs, st = rr._check_data(HEAD, "o/r")
-    assert len(runs["check_runs"]) == 2 and rr.ci_state(runs, st) == "red"
-    assert any("--paginate" in argv and "/check-runs" in argv[2] for argv in seen)
-    monkeypatch.setattr(rr, "_run", reader(page1 + "{broken"))
+    assert len(runs["check_runs"]) == 101 and rr.ci_state(runs, st) == "red"
+    # each page is asked for by number on the same repos/... path; --paginate is never passed
+    assert [a[2] for a in seen if "/check-runs" in a[2]] == [f"{path}?per_page=100&page=1", f"{path}?per_page=100&page=2"]
+    assert not any("--paginate" in argv for argv in seen)
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs")}, override={2: "{broken"}))
     assert rr._check_data(HEAD, "o/r") is None
-    monkeypatch.setattr(rr, "_run", reader(None))
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs")}, override={2: None}))
     assert rr._check_data(HEAD, "o/r") is None
 
 
@@ -1039,12 +1057,16 @@ a = sys.argv[1:]
 state = {str(state)!r}
 head = {head!r}
 s = json.load(open(state))
+if "--paginate" in a:
+    sys.exit(3)
 if a[:2] == ["repo", "view"]:
     print(json.dumps({{"nameWithOwner": "o/r"}}))
 elif a[:2] == ["pr", "view"]:
     print(json.dumps({{"headRefOid": head, "body": "", "closingIssuesReferences": []}}))
-elif a[0] == "api" and a[1].endswith("/check-runs?per_page=100"):
-    print(json.dumps({{"total_count": 1, "check_runs": [{{"name": "v", "status": "completed", "conclusion": "success"}}]}}))
+elif a[0] == "api" and "/check-runs?per_page=100&page=" in a[1]:
+    page = int(a[1].rsplit("page=", 1)[1])
+    rows = [{{"name": "v", "status": "completed", "conclusion": "success"}}] if page == 1 else []
+    print(json.dumps({{"total_count": 1, "check_runs": rows}}))
 elif a[0] == "api" and a[1].endswith("/status"):
     print(json.dumps({{"state": "pending", "total_count": 0, "statuses": []}}))
 elif a[0] == "api" and "-X" in a:
@@ -1053,8 +1075,9 @@ elif a[0] == "api" and "-X" in a:
     s["comments"].append({{"id": n, "user": {{"login": "bot"}}, "body": body, "html_url": "http://c/%d" % n}})
     json.dump(s, open(state, "w"))
     print(json.dumps({{"id": n, "html_url": "http://c/%d" % n}}))
-elif a[0] == "api" and a[1].endswith("/comments"):
-    print(json.dumps(s["comments"]))
+elif a[0] == "api" and "/comments?per_page=100&page=" in a[1]:
+    page = int(a[1].rsplit("page=", 1)[1])
+    print(json.dumps(s["comments"][(page - 1) * 100:page * 100]))
 else:
     sys.exit(2)
 """)
@@ -1111,6 +1134,8 @@ checkout = {str(checkout)!r}
 with open({str(argv_log)!r}, "a") as log:
     log.write(json.dumps(a) + "\\n")
 s = json.load(open(state))
+if "--paginate" in a:
+    sys.exit(3)
 if a == ["api", "repos/{{owner}}/{{repo}}", "--jq", ".full_name"]:
     if os.path.realpath(os.getcwd()) != os.path.realpath(checkout):
         sys.exit(2)
@@ -1119,8 +1144,10 @@ elif a == ["api", "repos/o/r/pulls/7"]:
     print(json.dumps({{"head": {{"sha": head}}, "body": "Closes #9.\\nmore"}}))
 elif a == ["api", "repos/o/r/issues/9"]:
     print(json.dumps({{"body": "intro\\n**Lane call:** light because small\\n"}}))
-elif a[0] == "api" and a[1].endswith("/check-runs?per_page=100"):
-    print(json.dumps({{"total_count": 1, "check_runs": [{{"name": "v", "status": "completed", "conclusion": "success"}}]}}))
+elif a[0] == "api" and "/check-runs?per_page=100&page=" in a[1]:
+    page = int(a[1].rsplit("page=", 1)[1])
+    rows = [{{"name": "v", "status": "completed", "conclusion": "success"}}] if page == 1 else []
+    print(json.dumps({{"total_count": 1, "check_runs": rows}}))
 elif a[0] == "api" and a[1].endswith("/status"):
     print(json.dumps({{"state": "pending", "total_count": 0, "statuses": []}}))
 elif a[0] == "api" and "-X" in a:
@@ -1129,8 +1156,9 @@ elif a[0] == "api" and "-X" in a:
     s["comments"].append({{"id": n, "user": {{"login": "bot"}}, "body": body, "html_url": "http://c/%d" % n}})
     json.dump(s, open(state, "w"))
     print(json.dumps({{"id": n, "html_url": "http://c/%d" % n}}))
-elif a[0] == "api" and a[1].endswith("/comments"):
-    print(json.dumps(s["comments"]))
+elif a[0] == "api" and "/comments?per_page=100&page=" in a[1]:
+    page = int(a[1].rsplit("page=", 1)[1])
+    print(json.dumps(s["comments"][(page - 1) * 100:page * 100]))
 else:
     sys.exit(2)
 """)
@@ -1553,13 +1581,22 @@ def risk_repo(tmp_path, areas=(PAYMENTS,)):
 
 
 def gh_files(*entries):
-    """What gh api --paginate prints for the PR files endpoint: one JSON array per page."""
-    return "".join(json.dumps(list(entries[i:i + 100])) for i in range(0, len(entries), 100))
+    """The PR files endpoint's rows, served by canned_gh one page of 100 at a time."""
+    return list(entries)
 
 
 def canned_gh(monkeypatch, out):
+    """Stub rr._run. A list is the PR's files, served page by page as the cloud proxy does; any other value
+    (None, text) is the one answer given to every call."""
     calls = []
-    monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or out)
+    if isinstance(out, list):
+        # the endpoint is served under either repo spelling: o/r when the caller names the repo, {owner}/{repo}
+        # when it leaves gh to fill the current one in (the record path, changed_paths(7, None))
+        serve = cloud_proxy({"repos/o/r/pulls/7/files": (out, None),
+                             "repos/{owner}/{repo}/pulls/7/files": (out, None)})
+        monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or serve(argv))
+    else:
+        monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or out)
     return calls
 
 
@@ -1733,7 +1770,7 @@ def test_e10_an_entry_with_no_string_filename_makes_the_files_unavailable(monkey
         assert rr.changed_paths(7, "o/r") is None
     calls = canned_gh(monkeypatch, gh_files({"filename": "a.py"}))
     assert rr.changed_paths(7, "o/r") == ["a.py"]
-    assert calls == [["gh", "api", "repos/o/r/pulls/7/files", "--paginate"]]
+    assert calls == [["gh", "api", "repos/o/r/pulls/7/files?per_page=100&page=1"]]
 
 
 def test_e10_3000_entries_is_the_ceiling_and_makes_the_files_unavailable(tmp_path, monkeypatch):
@@ -2542,3 +2579,149 @@ def test_reading_next_reads_the_lane_basis_the_seat_map_carries_unless_one_is_gi
 def test_a_full_roster_still_moves_up_under_either_basis():
     for basis in (None, NO_FLOOR_BASIS, RISKY_BASIS):
         assert rr._move_up_blocker(SEAT_MAP, frozenset(["anthropic"]), basis) is None, basis
+
+
+# --- the GitHub reads page by number (#1890): the cloud proxy refuses --paginate's repositories/{id} hops ---
+
+def api_comment(n, body=None):
+    return {"id": n, "user": {"login": "bot"}, "body": body if body is not None else f"chat {n}",
+            "html_url": f"http://c/{n}"}
+
+
+def pages_asked(seen, tail):
+    """The page numbers requested for the endpoint ending in `tail`, in order."""
+    return [int(a[2].rsplit("page=", 1)[1]) for a in seen if a[2].split("?")[0].endswith(tail)]
+
+
+def test_cloud_cli_read_pages_the_comments_by_number_and_finds_the_latest_record_on_page_three(tmp_path):
+    # axis: the CLI read in a cloud session; a PR with over 100 comments read through --paginate, which the proxy refuses
+    comments = [api_comment(n) for n in range(1, 261)]
+    comments[4] = api_comment(5, rr.render(build(account(sessionId="early"))))
+    comments[254] = api_comment(255, rr.render(build(account(sessionId="late"))))
+    state, argv_log = tmp_path / "gh-state.json", tmp_path / "gh-argv.log"
+    state.write_text(json.dumps(comments))
+    gh_dir = tmp_path / "bin"
+    gh_dir.mkdir()
+    gh = gh_dir / "gh"
+    gh.write_text(f"""#!{sys.executable}
+import json, sys
+a = sys.argv[1:]
+with open({str(argv_log)!r}, "a") as log:
+    log.write(json.dumps(a) + "\\n")
+if "--paginate" in a or any("repositories/" in x for x in a):
+    sys.exit(3)
+if a[0] == "api" and a[1].startswith("repos/o/r/issues/7/comments?per_page=100&page="):
+    page = int(a[1].rsplit("page=", 1)[1])
+    print(json.dumps(json.load(open({str(state)!r}))[(page - 1) * 100:page * 100]))
+else:
+    sys.exit(2)
+""")
+    gh.chmod(0o755)
+    env = {"PATH": f"{gh_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_CODE_REMOTE": "true"}
+    proc = subprocess.run([sys.executable, "-B", rr.__file__, "read", "--pr", "7", "--repo", "o/r"],
+                          capture_output=True, text=True, env=env, cwd=str(tmp_path))
+    got = json.loads(proc.stdout)
+    assert proc.returncode == 0 and got["ok"], (proc.stdout, proc.stderr)
+    assert got["url"] == "http://c/255" and got["earlierRecords"] == ["http://c/5"]
+    calls = [json.loads(line) for line in argv_log.read_text().splitlines()]
+    assert not [c for c in calls if "--paginate" in c], calls
+    assert [c[1] for c in calls] == [f"repos/o/r/issues/7/comments?per_page=100&page={n}" for n in (1, 2, 3)]
+
+
+def test_cloud_check_runs_are_read_page_by_number_and_a_failure_on_page_three_makes_ci_red(monkeypatch):
+    # axis: CI pagination under the cloud proxy; a failing check on page three hidden by --paginate being refused or by a first-page read
+    path = f"repos/o/r/commits/{HEAD}/check-runs"
+    rows = [{"name": f"c{i}", "status": "completed", "conclusion": "success"} for i in range(249)]
+    rows.append({"name": "last", "status": "completed", "conclusion": "failure"})
+    seen = []
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: (rows, "check_runs")}, seen))
+    runs, st = rr._check_data(HEAD, "o/r")
+    assert runs["check_runs"] == rows and rr.ci_state(runs, st) == "red"
+    assert pages_asked(seen, "/check-runs") == [1, 2, 3]
+
+
+def test_cloud_changed_paths_are_read_page_by_number_in_order(monkeypatch):
+    # axis: the PR file list under the cloud proxy; a list over 100 files refused or cut to its first page
+    files = [{"filename": f"src/f{i:03d}.py", "status": "added"} for i in range(250)]
+    seen = []
+    monkeypatch.setattr(rr, "_run", cloud_proxy({"repos/o/r/pulls/7/files": (files, None)}, seen))
+    assert rr.changed_paths(7, "o/r") == [f["filename"] for f in files]
+    assert pages_asked(seen, "/files") == [1, 2, 3]
+
+
+@pytest.mark.parametrize("count, pages", [(100, [1, 2]), (200, [1, 2, 3])])
+def test_a_full_last_page_is_followed_by_an_empty_page_that_ends_the_read(monkeypatch, count, pages):
+    # axis: the end of a list; a list of exactly 100 or 200 rows treated as unfinished (failing) or read past the empty page
+    comments = [api_comment(n) for n in range(count)]
+    seen = []
+    monkeypatch.setattr(rr, "_run", cloud_proxy({"repos/o/r/issues/7/comments": (comments, None)}, seen))
+    got = rr._list_comments(7, "o/r")
+    assert [c["id"] for c in got] == list(range(count))
+    assert pages_asked(seen, "/comments") == pages
+
+
+def three_readers_routes(rows=250):
+    ok = {"status": "completed", "conclusion": "success"}
+    return {"repos/o/r/issues/7/comments": ([api_comment(n) for n in range(rows)], None),
+            "repos/o/r/pulls/7/files": ([{"filename": f"f{n}"} for n in range(rows)], None),
+            f"repos/o/r/commits/{HEAD}/check-runs": ([ok] * rows, "check_runs")}
+
+
+def test_a_page_that_fails_makes_the_whole_read_unavailable_for_every_reader(monkeypatch):
+    # axis: the complete-or-absent list; a failed page returning the rows read so far as if they were the whole list
+    routes = three_readers_routes()
+    for failed in (1, 2, 3):
+        monkeypatch.setattr(rr, "_run", cloud_proxy(routes, override={failed: None}))
+        assert rr._list_comments(7, "o/r") is None
+        assert rr.changed_paths(7, "o/r") is None
+        assert rr._check_data(HEAD, "o/r") is None
+        got = rr.read(7, "o/r")
+        assert got["ok"] is False and got["reason"] == "review-record-gh-failed"
+    monkeypatch.setattr(rr, "_run", cloud_proxy(routes))
+    assert len(rr._list_comments(7, "o/r")) == 250 and len(rr.changed_paths(7, "o/r")) == 250
+    assert len(rr._check_data(HEAD, "o/r")[0]["check_runs"]) == 250
+
+
+def test_a_page_that_is_not_json_or_not_a_list_makes_the_read_unavailable(monkeypatch):
+    # axis: page shape; a page that is not JSON, or an object where a list belongs, skipped as an empty page that ends the read
+    routes = three_readers_routes(150)
+    for page in (1, 2):
+        for text in ("not json", "{broken", '{"message": "Not Found"}', "null", '"x"'):
+            monkeypatch.setattr(rr, "_run", cloud_proxy(routes, override={page: text}))
+            assert rr._list_comments(7, "o/r") is None, (page, text)
+            assert rr.changed_paths(7, "o/r") is None, (page, text)
+            assert rr._check_data(HEAD, "o/r") is None, (page, text)
+    # check runs: a page must be an object holding a list under check_runs
+    for text in ('{"total_count": 0}', '{"total_count": 1, "check_runs": "x"}', '{"check_runs": {"a": 1}}', "[]"):
+        monkeypatch.setattr(rr, "_run", cloud_proxy(routes, override={1: text}))
+        assert rr._check_data(HEAD, "o/r") is None, text
+    monkeypatch.setattr(rr, "_run", cloud_proxy(routes, override={2: '{"check_runs": 5}'}))
+    assert rr._check_data(HEAD, "o/r") is None
+    # comments and files: an object where the list belongs
+    monkeypatch.setattr(rr, "_run", cloud_proxy(routes, override={2: '{"check_runs": []}'}))
+    assert rr._list_comments(7, "o/r") is None and rr.changed_paths(7, "o/r") is None
+
+
+def test_a_list_that_never_ends_fails_the_read_after_the_page_cap(monkeypatch):
+    # axis: the page cap; a list that never ends returning the rows read so far, or being asked for without end
+    assert rr._MAX_PAGES == 1000 and rr._PAGE_ROWS == 100
+    monkeypatch.setattr(rr, "_MAX_PAGES", 4)
+    seen = []
+
+    def endless(argv, cwd=None):
+        seen.append(list(argv))
+        return json.dumps([{"filename": "f"}] * 100)
+    monkeypatch.setattr(rr, "_run", endless)
+    assert rr._read_pages("repos/o/r/pulls/7/files") is None
+    assert len(seen) == 4
+    assert rr.changed_paths(7, "o/r") is None
+
+
+def test_the_page_query_joins_a_path_that_already_has_one_with_an_ampersand(monkeypatch):
+    # axis: the page request's query; a second ? appended to a path that already carries a query
+    seen = []
+    monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: seen.append(list(argv)) or "[]")
+    assert rr._read_pages("repos/o/r/x?state=open") == []
+    assert rr._read_pages("repos/o/r/y") == []
+    assert seen == [["gh", "api", "repos/o/r/x?state=open&per_page=100&page=1"],
+                    ["gh", "api", "repos/o/r/y?per_page=100&page=1"]]
