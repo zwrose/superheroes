@@ -370,14 +370,27 @@ def test_unknown_model_takes_the_one_family_of_its_vendor(monkeypatch):
     assert rr._family("claude", "opus-9") is None
 
 
-def test_unparseable_prior_refuses_without_writing(tmp_path):
-    # axis: hand-edited record; an unreadable latest record written past
+def test_an_unparseable_prior_is_superseded_and_named_never_blocking(tmp_path):
+    # axis: an unreadable latest record blocking every later write, or superseded without being named for the vet
     fake = Fake()
     fake.comments = [{"id": 1, "author": "a", "body": rr.MARKER + "\nhand edited", "url": "u1"}]
-    out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-unreadable")
     assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
-    assert len(fake.comments) == 1 and fake.writes == []
+    out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
+    assert out["ok"]
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["ok"] and rec["earlierRecordUnreadable"] == {"id": 1, "url": "u1"}
+    assert rec["previousRecord"]["id"] == 1 and rec["earlierRecords"] == ["u1"]
+    assert "The earlier record (u1) could not be read" in fake.marked()[-1]["body"]
+
+
+def test_a_readable_prior_names_no_unreadable_record(tmp_path):
+    # axis: the unreadable-earlier note shown when the earlier record read fine
+    fake = Fake()
+    send(tmp_path, fake)
+    send(tmp_path, fake)
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["ok"] and rec["earlierRecordUnreadable"] is None
+    assert "could not be read" not in fake.marked()[-1]["body"]
 
 
 def test_read_with_no_record_is_missing():

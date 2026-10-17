@@ -78,7 +78,7 @@ These retirements ship in the same release as the review record, and never apart
 ### Review: damaged sessions, long records and the loop's tooling
 
 - A damaged review session repairs itself from its mirror and continues.
-- A long review record posts as several comments and reads back whole.
+- A long review record posts as several comments and reads back whole. A host's attribution footer after a part is ignored. A record whose text changed in transit but still parses is read, and carries `transitDamage`. A record that cannot be parsed no longer blocks the next write: the new record names it under `earlierRecordUnreadable`, and the vet reads that record's comments directly.
 - A session submitted by hand gets a review record too.
 - A fix that a later full panel did not raise again reads as fixed.
 - The review record re-checks the decisions it cites when it is written, and names the sheet part of each finding.

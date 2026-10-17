@@ -182,23 +182,40 @@ def two_part_record(tmp_path):
     return fake
 
 
-def test_edge1_a_deleted_part_makes_the_record_unreadable(tmp_path):
-    # axis: a missing part; a record read from the parts that are left
+def test_edge1_a_deleted_part_makes_the_record_unreadable_and_the_next_write_supersedes_it(tmp_path):
+    # axis: a missing part; a record read from the parts that are left, or a later write blocked by it
     fake = two_part_record(tmp_path)
     fake.comments.remove(parts_of(fake)[0])
-    for out in (rr.read(7, readers=fake.readers()),
-                rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())):
-        assert (out["ok"], out["reason"]) == (False, "review-record-unreadable")
+    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+    assert rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())["ok"]
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["ok"] and rec["earlierRecordUnreadable"] and len(rec["findings"]) == 40
 
 
-def test_edge2_a_corrupted_part_fails_the_hash_check(tmp_path):
-    # axis: the parts hash; text changed inside a part, same length and still JSON, read as the record
+def test_edge2_a_part_changed_in_transit_is_read_and_reported(tmp_path):
+    # axis: the parts hash; text changed inside a part that still parses, read silently as clean, or refused outright
     fake = two_part_record(tmp_path)
     part = parts_of(fake)[0]
     assert "reads the saved" in part["body"]
     part["body"] = part["body"].replace("reads the saved", "reads the SAVED", 1)
     out = rr.read(7, readers=fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-unreadable")
+    assert out["ok"] and out["transitDamage"]["hashMatches"] is False
+    assert out["transitDamage"]["recordedChars"] == out["transitDamage"]["foundChars"]
+
+
+def test_an_undamaged_parts_record_reports_no_transit_damage(tmp_path):
+    # axis: a clean record flagged as changed in transit
+    fake = two_part_record(tmp_path)
+    assert "transitDamage" not in rr.read(7, readers=fake.readers())
+
+
+def test_backticks_added_in_transit_are_read_and_reported_with_both_lengths(tmp_path):
+    # axis: the #1888 shape: stray backticks added inside a part's JSON strings plus the footer, refused outright
+    fake = two_part_record(tmp_path)
+    part = parts_of(fake)[0]
+    part["body"] = part["body"].replace("reads the saved", "reads`` the saved", 1) + CLOUD_FOOTER
+    out = rr.read(7, readers=fake.readers())
+    assert out["ok"] and out["transitDamage"]["foundChars"] == out["transitDamage"]["recordedChars"] + 2
 
 
 def test_edge2_a_part_that_is_cut_short_fails_the_length_check(tmp_path):
@@ -267,12 +284,12 @@ def test_a_part_with_other_text_after_its_fence_stays_unreadable(tmp_path, trail
     assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
 
 
-def test_a_footer_does_not_excuse_a_changed_part(tmp_path):
-    # axis: the hash still binds a footed part; text changed inside it read as the record
+def test_a_footer_does_not_hide_a_changed_part(tmp_path):
+    # axis: the hash still checks a footed part; text changed inside it read as clean
     fake = two_part_record(tmp_path)
     part = parts_of(fake)[0]
     part["body"] = part["body"].replace("reads the saved", "reads the SAVED", 1) + CLOUD_FOOTER
-    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+    assert rr.read(7, readers=fake.readers())["transitDamage"]["hashMatches"] is False
 
 
 def test_edge5_a_failing_create_while_posting_parts_posts_no_head(tmp_path):

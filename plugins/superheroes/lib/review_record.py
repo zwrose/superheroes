@@ -6,6 +6,8 @@ file, and never edits a comment. The record links the record before it (previous
 comment (rawOutputs), so everything stays retrievable. The one thing a write reads from an earlier
 record is the identity key of each finding in the latest one (_unaccounted): every such key must
 appear in the new account's findings with an outcome, or the write refuses before anything is posted.
+An earlier record that cannot be parsed never blocks a write: the new record names it
+(earlierRecordUnreadable) for the vet to read directly.
 
 build_record() is the only place a status, a reviewer's ran-state or a code fact is decided;
 write() is the only path that posts, and read() does I/O only. Facts that code holds (lane, final
@@ -807,6 +809,7 @@ def build_record(account, readers):
         "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
                     "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
         "previousRecord": None,
+        "earlierRecordUnreadable": None,
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     rec["status"], rec["parked"], lines = _status(
@@ -1180,6 +1183,9 @@ def _summary(r, level):
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
         *([_refused_line(refused, compact)] if refused else []),
+        *([f"The earlier record ({r['earlierRecordUnreadable'].get('url') or r['earlierRecordUnreadable'].get('id')}) "
+           "could not be read, so its findings were not checked against this one; the vet reads it directly."]
+          if r.get("earlierRecordUnreadable") else []),
         *who,
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
@@ -1355,14 +1361,17 @@ def _resolve_parts(index, by_id):
             return None
         pieces.append(piece)
     text = "".join(pieces)
-    # axis: the joined parts must hash to what the head recorded, so an altered or swapped part is unreadable — see bite-proof record c7l3_wo1_record_writer
-    if len(text) != chars or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
-        return None
     try:
         rec = json.loads(text)
     except ValueError:
         return None
-    return rec if isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA else None
+    if not (isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA):
+        return None
+    # axis: parts changed in transit that still parse as a record are read and reported, never refused; the length
+    # and hash say only that something changed, so the reader names it for the vet instead of hiding the record
+    if len(text) != chars or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+        rec = dict(rec, transitDamage={"recordedChars": chars, "foundChars": len(text), "hashMatches": False})
+    return rec
 
 
 def _parse_body(body, by_id=None):
@@ -1426,16 +1435,19 @@ def write(account_path, repo_root, readers=None):
         by_id = {c["id"]: c for c in comments}
         found = _marker_comments(comments)
         latest = found[-1] if found else None
-        prior = None
+        prior, earlier_unreadable = None, None
         if latest:
             prior = _parse_body(latest["body"], by_id)
             if prior is None:
-                raise Refusal("review-record-unreadable", latest.get("url") or "the existing record")
+                # axis: an unreadable earlier record never blocks a new one; the new record names it, so the vet
+                # reads that record's comments directly and checks nothing it listed went missing
+                earlier_unreadable = {"id": latest["id"], "url": latest.get("url")}
         missing = _unaccounted(prior, a["findings"])
         if missing:
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         record = build_record(a, rd)
+        record["earlierRecordUnreadable"] = earlier_unreadable
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
         previous = {"id": latest["id"], "url": latest.get("url")} if latest else None
