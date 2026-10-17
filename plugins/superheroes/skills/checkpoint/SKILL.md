@@ -241,7 +241,9 @@ host without mods, compaction runs when the owner pastes the `/compact` line; th
 hook prints the session's directive (charter or generic) plus the checkpoint notes, unless
 the mod already delivered, and on the next SessionStart with `source: compact` the
 recovery hook re-injects a pointer to re-read the charter skill from disk. Nothing in this
-skill triggers compaction programmatically.
+skill triggers compaction programmatically. Where the mod is present, the session resumes on
+its own after the mod's compaction or a manual `/compact`: the mod submits one prompt telling
+it to re-read its resume point and continue (the text lives in `hooks/mod/resume.ts`).
 
 ## Common mistakes
 

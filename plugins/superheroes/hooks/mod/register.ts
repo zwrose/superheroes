@@ -3,7 +3,8 @@
 // (layer 1), and runs the automatic checkpoint: at the trigger it runs
 // /superheroes:checkpoint, and once the notes file changed it compacts (layer 2;
 // the decisions are ./decide), only in an attended session: an interactive one, or one
-// with the desktop app on the surface roster. Every hook here fails open — on any error the event
+// with the desktop app on the surface roster. After its own compaction or a manual /compact it
+// submits the resume prompt (./resume), so the session carries on (#1891). Every hook here fails open — on any error the event
 // goes on unchanged (`next(e)` once), no delivered-marker is written, and the
 // PreCompact command hook steers in its place.
 //
@@ -22,6 +23,7 @@ import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
 import { DESKTOP_SURFACE, decide, effectiveTrigger, isAttended, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
 import type { Settings } from './decide'
+import { RESUME_PROMPT, resumesAfter } from './resume'
 
 const MANIFEST = '.claude-plugin/plugin.json'
 
@@ -49,6 +51,10 @@ let isStarting = false
 // Counts the session's own compactions that succeeded, bumped by the `session.compact` hook.
 // A plain variable: a rejected state write cannot hide a compaction from it.
 let compactionsDone = 0
+
+// True from a resume prompt's submission until it has entered (or failed): a second
+// compaction meanwhile submits no second one.
+let isResumePending = false
 
 const note = ($: EngineInterface, text: string): void => {
   try {
@@ -358,6 +364,27 @@ async function unmarkLater($: EngineInterface, attempt: { sessionId: string; sin
   }
 }
 
+// After a completed compaction of the mod's own or a manual /compact, tells the session to carry
+// on (#1891): one prompt per compaction, its own turn once the session is idle. Not awaited: the
+// submission settles when the prompt enters, which must not hold the compaction. Fails open.
+function submitResume($: EngineInterface): void {
+  if (isResumePending) {
+    return
+  }
+  isResumePending = true
+  try {
+    $.prompt
+      .submit({ text: RESUME_PROMPT })
+      .catch(error => note($, `resume prompt: ${String(error)}`))
+      .finally(() => {
+        isResumePending = false
+      })
+  } catch (error) {
+    isResumePending = false
+    note($, `resume prompt: ${String(error)}`)
+  }
+}
+
 // The fill is about to drop: a Snooze and the band belong to the old fill.
 async function forgetFill($: EngineInterface): Promise<void> {
   try {
@@ -580,6 +607,9 @@ export const register: Register = (on, options) => {
         }
       } catch (error) {
         note($, `session.compact state: ${String(error)}`)
+      }
+      if (resumesAfter(e.trigger)) {
+        submitResume($)
       }
     }
 
