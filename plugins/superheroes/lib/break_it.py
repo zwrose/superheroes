@@ -248,15 +248,36 @@ def _is_python_program(program):
     return bool(_PYTHON_PROGRAM.match(os.path.basename(program)))
 
 
-_ENV_OPERAND_OPTIONS = frozenset(["-u", "--unset", "-C", "--chdir", "-S", "--split-string"])
+_ENV_OPERAND_OPTIONS = frozenset(["-u", "--unset", "-C", "--chdir"])
+_ENV_SPLIT_OPTIONS = ("-S", "--split-string")
+
+
+def _env_split_words(tok, tokens, i):
+    """The words an env ``-S``/``--split-string`` option at ``tokens[i]`` splices into the command,
+    and how many tokens it consumed, or ``None`` when ``tok`` is no split-string option or its
+    operand cannot be split."""
+    if tok in _ENV_SPLIT_OPTIONS:
+        if i + 1 >= len(tokens) or _is_separator(tokens[i + 1]):
+            return None
+        operand, used = tokens[i + 1], 2
+    elif tok.startswith("--split-string="):
+        operand, used = tok[len("--split-string="):], 1
+    elif tok.startswith("-S"):
+        operand, used = tok[2:], 1
+    else:
+        return None
+    try:
+        return shlex.split(operand), used
+    except ValueError:
+        return None
 
 
 def _strip_comments(text):
     """``text`` with each unquoted shell comment removed up to (not including) its newline, so the
-    newline stays a command boundary."""
+    newline stays a command boundary. An unquoted ``#`` starts a comment wherever it falls, as the
+    resolver's lexer always treated it."""
     out = []
     quote = None
-    prev = "\n"
     i = 0
     while i < len(text):
         c = text[i]
@@ -273,13 +294,11 @@ def _strip_comments(text):
             c = text[i]
         elif c in "'\"":
             quote = c
-        elif c == "#" and (prev.isspace() or prev in ";&|()"):
+        elif c == "#":
             while i < len(text) and text[i] != "\n":
                 i += 1
-            prev = "\n"
             continue
         out.append(c)
-        prev = c
         i += 1
     return "".join(out)
 
@@ -307,7 +326,10 @@ def project_interpreter(verify_command):
     at_command = True
     after_env = False
     skip_operand = False
-    for i, tok in enumerate(tokens):
+    i = -1
+    while i + 1 < len(tokens):
+        i += 1
+        tok = tokens[i]
         if _is_separator(tok):
             at_command = True
             after_env = False
@@ -320,7 +342,14 @@ def project_interpreter(verify_command):
             skip_operand = False
             continue
         if after_env and tok.startswith("-"):
-            skip_operand = tok in _ENV_OPERAND_OPTIONS
+            # axis: an env split-string operand is spliced back in as words, so the python it names is still the launcher
+            split = _env_split_words(tok, tokens, i)
+            if split is not None:
+                words, used = split
+                tokens[i:i + used] = words
+                i -= 1
+                continue
+            skip_operand = tok in _ENV_OPERAND_OPTIONS or tok in _ENV_SPLIT_OPTIONS
             continue
         if os.path.basename(tok) == "env":
             after_env = True
