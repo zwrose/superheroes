@@ -45,16 +45,25 @@ from capture_goldens import normalize  # noqa: E402
 #   fixContexts — the harness cites file/line for mechanical_compile scope; fix-context shape + fix
 #                 count follow the delta schedule
 #   fixResults  — fix-round numbering follows the driver's delta legs, not the JS round numbers
+#   no-survivor synthesis (tokenTotal, telemetry on telemetry_failure) — a round whose verification
+#                 leaves no survivors dispatches no synthesis seat, so the synthesis token leaf is absent
 _SEEN = ("driver scoped-finder delta scans + re-armed confirmation panels replace the JS "
          "per-dimension intermediate/confirmation seat schedule")
 _TOK = "the delta schedule dispatches a different set of reviewer leaves than the JS roster schedule"
 _TELEM = "expectedLeaves / dimensionCounts / roundCount follow the driver's delta-round seats, not the JS schedule"
 _FIXCTX = "harness cites file/line for mechanical_compile scope; fix-context shape + count follow the delta schedule"
 _FIXRES = "fix-round numbering follows the driver's delta legs, not the JS round numbers"
+_NO_SURVIVOR_SYNTH = ("a round whose verification leaves no survivors dispatches no synthesis seat, "
+                      "so the synthesis token leaf is absent")
 
 ALLOWLIST: dict[str, dict[str, str]] = {
-    "telemetry_failure.golden.json": {},
-    "telemetry_failure.fail-telemetry.golden.json": {},
+    "telemetry_failure.golden.json": {
+        "tokenTotal": _NO_SURVIVOR_SYNTH,
+        "telemetry": _NO_SURVIVOR_SYNTH,
+    },
+    "telemetry_failure.fail-telemetry.golden.json": {
+        "tokenTotal": _NO_SURVIVOR_SYNTH,
+    },
     "plan_120_replay.golden.json": {
         "roundCount": "audited-chain certifies after delta rounds; the JS shell reached the confirmation panel at a later round",
         "seen": _SEEN,
