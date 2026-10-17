@@ -1590,7 +1590,10 @@ def canned_gh(monkeypatch, out):
     (None, text) is the one answer given to every call."""
     calls = []
     if isinstance(out, list):
-        serve = cloud_proxy({"repos/o/r/pulls/7/files": (out, None)})
+        # the endpoint is served under either repo spelling: o/r when the caller names the repo, {owner}/{repo}
+        # when it leaves gh to fill the current one in (the record path, changed_paths(7, None))
+        serve = cloud_proxy({"repos/o/r/pulls/7/files": (out, None),
+                             "repos/{owner}/{repo}/pulls/7/files": (out, None)})
         monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or serve(argv))
     else:
         monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or out)
