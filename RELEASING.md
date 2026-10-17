@@ -30,7 +30,8 @@ release, whatever its type.
 
 - **Land a pre-release doc pass before the release PR is clickable.** Move
   `plugins/superheroes/TRANSITION.md`'s `## Unreleased` section (it exists only between releases)
-  under the version being cut, with its Before-you-upgrade lines, and add the cut row to
+  under the version being cut, with its Before-you-upgrade lines (each opening with its
+  before- or after-switching marker, per `TRANSITION.md`'s header), and add the cut row to
   [`ROADMAP.md`](ROADMAP.md) § The cut record. A release PR merged before the doc pass ships
   stale upgrade notes.
 - **After any docs-only merge, freshen the open release PR with `gh pr update-branch`.** The
