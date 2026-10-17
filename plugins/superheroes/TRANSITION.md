@@ -9,13 +9,21 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+## 0.43.0
+
 ### Before you upgrade
 
-- After upgrading, run configure once. `rubric-version` moves from 11 to 13, so each project's review profile reads as behind until configure refreshes it.
-- After upgrading, the owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets.
-- The project keeps working before the sitting. Until then, every change whose risk is unclear goes to the full lane, and every leftover with a real consequence comes to the owner.
-- After upgrading, record the project's adoption day once: `lib/review_learning.py adopt --cwd <project> --date <today, UTC>`. Review escapes and the reviewer seats' records count only from that day.
-- The earlier plugin version is not kept runnable after this release. Downgrading under these changes is not supported.
+Check these in a consuming project when it adopts 0.43.0. Each step names the note it comes from.
+
+- **Finish or abandon every review session opened under 0.42.0.** The certificate machinery retired with this release, and no way back is kept. A review in flight either finishes on 0.42.0 before you upgrade, or restarts once on 0.43.0: its first driver command answers `session-from-earlier-version`, and you run Setup again into a fresh session folder. An engine review run opened before the upgrade reads its result schema as changed, so re-dispatch it. See [Review: what retires](#review-what-retires) and [Review record](#review-record).
+- **The earlier plugin version is not kept runnable after this release.** Downgrading under these changes is not supported. See [Review: what retires](#review-what-retires).
+- **After upgrading, run configure once.** `rubric-version` moves from 11 to 13, so each project's review profile reads as behind until configure refreshes it.
+- **Do the Risk and trust sitting right after adopting.** The owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets. The project keeps working before the sitting, but until then every change's risk is unclear: every change gets the full lane, the micro lane is unavailable, and every leftover with a real consequence comes to the owner. The sitting lives in configure (view-and-tune's "Set up Risk and trust"). See [Configure: Risk and trust](#configure-risk-and-trust), [Review: the lane follows Risk and trust](#review-the-lane-follows-risk-and-trust) and [Review record](#review-record).
+- **After upgrading, record the project's adoption day once:** `lib/review_learning.py adopt --cwd <project> --date <today, UTC>`. Review escapes and the reviewer seats' records count only from that day. See [Review: learning from escapes](#review-learning-from-escapes).
+- **Cloud builds are optional.** Nothing changes for a project until the owner opts in through the setup sitting ("set up cloud builds" with the advisor) and switches on configure's Cloud builds item. Once, on each account the builders run on, open Claude Code in the repository root and accept the trust prompt, so the advisor's relay can answer cloud builders. Before the first cloud lane enters a batch, re-arm any watch loop or sweep that was armed from an older build. If the repository's ruleset has extra approval for unattributed changes on, a cloud-built pull request can be refused at merge, and neither the owner nor the advisor can give the approval it asks for, because the pull request is opened under the owner's name. Turning that option off clears it (`skills/showrunner/reference/merge-train.md` § When the repository refuses a cloud-built merge). See [Configure: cloud builds setting](#configure-cloud-builds-setting), [Cloud builds: the setup sitting](#cloud-builds-the-setup-sitting), [Showrunner: answering a cloud builder through the relay](#showrunner-answering-a-cloud-builder-through-the-relay) and [Launch ledger: cloud lanes](#launch-ledger-cloud-lanes).
+- **Update a project's own scripts or checks that call these.** A check that looks for the certificate's files or words now looks for the review record ([Review: what retires](#review-what-retires)). Findings built by hand now carry `consequence` and `consequenceKind`, and a caller that wants an unfixed finding settled as `ruling` supplies `decidedBy` ([Review record](#review-record)). A reader that matches the wave watch's two older event classes now takes `ATTENTION_EVENTS` into account ([Showrunner: builder notes in the wave watch](#showrunner-builder-notes-in-the-wave-watch)). `project_config.py --item threatModel` is now `--item riskAndTrust` ([Configure: Risk and trust](#configure-risk-and-trust)). A `shot` call passing `--page` or `--where` now takes `--run-dir` and `--token` ([Pilot: iPhone screenshot labels](#pilot-iphone-screenshot-labels)).
+- **If the advisor logged go-words or collector dispositions into Canon from a project memory, drop that memory.** The Canon write helper now refuses them and names where each belongs. See [Canon: the write helper and the chat-ruling record](#canon-the-write-helper-and-the-chat-ruling-record).
+- **On an open PR whose body keeps a DoD table or another marked section between the `advisor-vet` and `build-record` markers, move it below the build-record marker.** Until then the advisor's slot write refuses. See [Vet slot: builder content in the slot span refuses](#vet-slot-builder-content-in-the-slot-span-refuses).
 
 ### Review record
 
@@ -70,7 +78,7 @@ These retirements ship in the same release as the review record, and never apart
 ### Review: damaged sessions, long records and the loop's tooling
 
 - A damaged review session repairs itself from its mirror and continues.
-- A long review record posts as several comments and reads back whole.
+- A long review record posts as several comments and reads back whole. A host's attribution footer after a part is ignored. A record whose text changed in transit but still parses is read, and carries `transitDamage`. A record that cannot be parsed no longer blocks the next write. Every new record lists each earlier record that could not be parsed or was changed in transit under `earlierRecordsNotChecked`, and the vet reads those comments directly.
 - A session submitted by hand gets a review record too.
 - A fix that a later full panel did not raise again reads as fixed.
 - The review record re-checks the decisions it cites when it is written, and names the sheet part of each finding.

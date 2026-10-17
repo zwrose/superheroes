@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.43.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.42.0...superheroes-v0.43.0) (2026-10-17)
+
+
+### Features
+
+* **superheroes:** a damaged review session repairs and carries on, and the loop's tooling folds (review C7, layer 3b) ([#1879](https://github.com/zwrose/superheroes/issues/1879)) ([458cc40](https://github.com/zwrose/superheroes/commit/458cc409ac56bcf2b23a04bd8dfe0a33d805deb9))
+* **superheroes:** a fix changes only what its finding needs, and each round says what it looked at ([#1877](https://github.com/zwrose/superheroes/issues/1877)) ([5ceb301](https://github.com/zwrose/superheroes/commit/5ceb301ea23d30f370a61b4ffc054c5392c74e4d))
+* **superheroes:** a long review record posts whole, and the writer re-checks what it records (review C7, layer 3a) ([#1878](https://github.com/zwrose/superheroes/issues/1878)) ([b01150e](https://github.com/zwrose/superheroes/commit/b01150ec1d4bfaf617ef3c53fbf6657d49e39cc0))
+* **superheroes:** a merge verdict survives a head move that isn't material ([#1864](https://github.com/zwrose/superheroes/issues/1864)) ([87d2639](https://github.com/zwrose/superheroes/commit/87d26397646603d17c1e32b29e56c1efdc03fc36))
+* **superheroes:** a mod steers every compaction with the session's directive and notes ([#1814](https://github.com/zwrose/superheroes/issues/1814) L1b) ([#1821](https://github.com/zwrose/superheroes/issues/1821)) ([59dc3a4](https://github.com/zwrose/superheroes/commit/59dc3a45f24d30efbccb573ef3829d19b3361f64))
+* **superheroes:** a ruling given while a fix is pending reaches the next fix ([#1876](https://github.com/zwrose/superheroes/issues/1876)) ([78ecf4c](https://github.com/zwrose/superheroes/commit/78ecf4ca633383e7d96b1d304bc4bb3e5ba2f0d7))
+* **superheroes:** an owner ruling keeps binding a finding after a later round rewords it ([#1874](https://github.com/zwrose/superheroes/issues/1874)) ([8e84b3e](https://github.com/zwrose/superheroes/commit/8e84b3e7a03d67c29f99f2a2430803db164c1aed))
+* **superheroes:** automatic checkpoint at 500K with a heads-up band and settings ([#1814](https://github.com/zwrose/superheroes/issues/1814) L2) ([#1832](https://github.com/zwrose/superheroes/issues/1832)) ([43f2c71](https://github.com/zwrose/superheroes/commit/43f2c715d870cc93e8af4c46bf1bfeefed500f53))
+* **superheroes:** break_it runs a break-it test in a throwaway copy and checks it was kept ([#1813](https://github.com/zwrose/superheroes/issues/1813)) ([bc2417b](https://github.com/zwrose/superheroes/commit/bc2417b7b07049d5fa23e0cb34dea95f0128730f))
+* **superheroes:** calibration changes only on the owner's yes, and seat tallies count from the adoption day ([#1859](https://github.com/zwrose/superheroes/issues/1859)) ([412b136](https://github.com/zwrose/superheroes/commit/412b136470a7c944637b2b78efa2551fb0cb948c))
+* **superheroes:** catch a malformed follow-ups marker at handback ([#1737](https://github.com/zwrose/superheroes/issues/1737)) ([8d29556](https://github.com/zwrose/superheroes/commit/8d2955629017ae0e2ffc080da6f1a607aa514614))
+* **superheroes:** checkpoint notes upkeep — presence on /clear, unmark after a failed compaction, reaping ([#1814](https://github.com/zwrose/superheroes/issues/1814) L4) ([#1839](https://github.com/zwrose/superheroes/issues/1839)) ([7afe77c](https://github.com/zwrose/superheroes/commit/7afe77c903270362c1c59ab9359afd42d601dc13))
+* **superheroes:** clean up a finished cloud lane ([#1863](https://github.com/zwrose/superheroes/issues/1863)) ([bd3cabc](https://github.com/zwrose/superheroes/commit/bd3cabc3712a21a75a5da0e5ce3894da12dbad96))
+* **superheroes:** cloud builders start headless; cloud setup and builder doctrine (C8b) ([#1875](https://github.com/zwrose/superheroes/issues/1875)) ([e8f2fbf](https://github.com/zwrose/superheroes/commit/e8f2fbffbd28459ce5957e9e3f99d7929610e7e9))
+* **superheroes:** cloud C8c, acting on the builders account through the relay, plus the vet 497 and 500 folds ([#1880](https://github.com/zwrose/superheroes/issues/1880)) ([06269f3](https://github.com/zwrose/superheroes/commit/06269f3d0dfc22670ac34a62745f2cae0e2830f8))
+* **superheroes:** compaction directives for every session, steered in plain text ([#1814](https://github.com/zwrose/superheroes/issues/1814) L1a) ([#1818](https://github.com/zwrose/superheroes/issues/1818)) ([f72f971](https://github.com/zwrose/superheroes/commit/f72f971e2a146f949870dbc7b641593b03d60e32))
+* **superheroes:** configure's Risk and trust item, its one reader and the setup sitting ([#1781](https://github.com/zwrose/superheroes/issues/1781)) ([9713f40](https://github.com/zwrose/superheroes/commit/9713f40df1a8832ee23124efef5685f24541049a))
+* **superheroes:** every review finding states its consequence and ends with an outcome ([#1872](https://github.com/zwrose/superheroes/issues/1872)) ([00c1f0a](https://github.com/zwrose/superheroes/commit/00c1f0aed84894f88e0f61a6756cd8a65c15c335))
+* **superheroes:** launch starts a builder in a cloud session ([#1762](https://github.com/zwrose/superheroes/issues/1762)) ([8c6a011](https://github.com/zwrose/superheroes/commit/8c6a011463dfab23557b7a0514968d2162b3ba83))
+* **superheroes:** non-panel review results count only from the vendor their order named, outside every maker family ([#1865](https://github.com/zwrose/superheroes/issues/1865)) ([3c0eba3](https://github.com/zwrose/superheroes/commit/3c0eba3cb91c3e0aa93b98832706c7ec1222fc71))
+* **superheroes:** non-panel seats, synthesis included, sit only on a cell proved live for their phase ([#1867](https://github.com/zwrose/superheroes/issues/1867)) ([6127664](https://github.com/zwrose/superheroes/commit/61276643a5217177a7057013c8d8e3167ae85ab9))
+* **superheroes:** record and watch a cloud lane on the launch ledger ([#1758](https://github.com/zwrose/superheroes/issues/1758)) ([d33598d](https://github.com/zwrose/superheroes/commit/d33598dc9407e7a8553a2df17666544c13fd9b7e))
+* **superheroes:** relaunch a cloud lane refused for a version mismatch, and the resume table's cloud rows ([#1841](https://github.com/zwrose/superheroes/issues/1841)) ([8a45b98](https://github.com/zwrose/superheroes/commit/8a45b98ab4b30be8f79870ebfa052a9bb41096c4))
+* **superheroes:** repair a never-started lane under the ledger lock, and read the ledger before naming a remedy ([#1830](https://github.com/zwrose/superheroes/issues/1830)) ([cb67dfb](https://github.com/zwrose/superheroes/commit/cb67dfbc4ec3b5c239ddd4be86bc6752ba816190))
+* **superheroes:** retire the certificate gate and the exact-head evidence chain ([#1761](https://github.com/zwrose/superheroes/issues/1761)) ([ad5c217](https://github.com/zwrose/superheroes/commit/ad5c21758ac43054ed70f4c54df22532b498e07b))
+* **superheroes:** retire the planted-bug review control ([#1765](https://github.com/zwrose/superheroes/issues/1765)) ([e423b57](https://github.com/zwrose/superheroes/commit/e423b5705aef66f819ea17babd14545f651b450c))
+* **superheroes:** route each build to the cloud or the owner's machine ([#1783](https://github.com/zwrose/superheroes/issues/1783)) ([736a7d6](https://github.com/zwrose/superheroes/commit/736a7d6359fca31ef6a837ee99cf39d4ecf7b012))
+* **superheroes:** stack layers build in the cloud ([#1845](https://github.com/zwrose/superheroes/issues/1845)) ([a14e2a3](https://github.com/zwrose/superheroes/commit/a14e2a3dcaf8f3cb85cdbbfc06c0e708809546c6))
+* **superheroes:** tell the owner of a lapsed-pass park and send it back for review once renewed ([#1811](https://github.com/zwrose/superheroes/issues/1811)) ([29e3bca](https://github.com/zwrose/superheroes/commit/29e3bca5bb366f2a3a292e89038e61eac9c89b9d))
+* **superheroes:** the advisor answers a cloud builder's note through a relay ([#1807](https://github.com/zwrose/superheroes/issues/1807)) ([e5d4ed5](https://github.com/zwrose/superheroes/commit/e5d4ed5a1f029c30b88b099f311d39e2e907e2ae))
+* **superheroes:** the advisor recovers a stopped cloud builder from its pushed work ([#1837](https://github.com/zwrose/superheroes/issues/1837)) ([0ab8f97](https://github.com/zwrose/superheroes/commit/0ab8f973424d931c2cc878341346d003d8306ddd))
+* **superheroes:** the advisor's vet reads the review record ([#1760](https://github.com/zwrose/superheroes/issues/1760)) ([07f2042](https://github.com/zwrose/superheroes/commit/07f2042dbe79285c5462581bdb5e398423560e75))
+* **superheroes:** the auto-checkpoint works in the desktop app ([#1846](https://github.com/zwrose/superheroes/issues/1846)) ([8706b5d](https://github.com/zwrose/superheroes/commit/8706b5d4792b0ea1282256b8f38260b089d43534))
+* **superheroes:** the cloud builder's machine side (intake, history, GitHub probe, pass scrub, calibration guard) ([#1779](https://github.com/zwrose/superheroes/issues/1779)) ([c4fa00d](https://github.com/zwrose/superheroes/commit/c4fa00d2a91fa6f2360c16f53f02232e0d89bda2))
+* **superheroes:** the cloud setup sitting's library and its check session ([#1773](https://github.com/zwrose/superheroes/issues/1773)) ([5adaecf](https://github.com/zwrose/superheroes/commit/5adaecf4b5c6605253ce42f78fdcdf3be726dff4))
+* **superheroes:** the cloud setup sitting's skill text and the environment-pick reader ([#1780](https://github.com/zwrose/superheroes/issues/1780)) ([3d51b78](https://github.com/zwrose/superheroes/commit/3d51b782a4e2f1bfda9162d24a252f1c13c588c0))
+* **superheroes:** the cloud-builds setting and the setup record ([#1753](https://github.com/zwrose/superheroes/issues/1753)) ([ad18a08](https://github.com/zwrose/superheroes/commit/ad18a0868449888dea9bdb3eac9705a0fb8b8711))
+* **superheroes:** the full review lane writes the review record from its session ([#1756](https://github.com/zwrose/superheroes/issues/1756)) ([ab05967](https://github.com/zwrose/superheroes/commit/ab059678eea2f8a22ae78f57373938bddc08c4b4))
+* **superheroes:** the index — what blocks work, and every PR under Needs you, Being fixed or Ready (review C9, layer 3) ([#1843](https://github.com/zwrose/superheroes/issues/1843)) ([aefc716](https://github.com/zwrose/superheroes/commit/aefc71648b845bd4038956fa4b3fb6d9f0851985))
+* **superheroes:** the lane floor follows Risk and trust (review C5 L1) ([#1802](https://github.com/zwrose/superheroes/issues/1802)) ([bfedd2e](https://github.com/zwrose/superheroes/commit/bfedd2e2d89280a1332d4deee3b6c234acb48475))
+* **superheroes:** the launch report and the "Still on your machine" line ([#1788](https://github.com/zwrose/superheroes/issues/1788)) ([cc86878](https://github.com/zwrose/superheroes/commit/cc868787a523fb023479de2369603b21b142c16d))
+* **superheroes:** the learning-from-escapes doctrine (review C10, layer 2) ([#1870](https://github.com/zwrose/superheroes/issues/1870)) ([6ed2d9a](https://github.com/zwrose/superheroes/commit/6ed2d9a492309a1967dce3c61c74513e1d6cae83))
+* **superheroes:** the owner's decisions come in three batches, and the merge word is a saved Merge verdict plus done ([#1803](https://github.com/zwrose/superheroes/issues/1803)) ([ccac503](https://github.com/zwrose/superheroes/commit/ccac50335f2f987754df0301662a7ecc95cd4d5e))
+* **superheroes:** the PR sheet kinds and the PR sheet builder ([#1805](https://github.com/zwrose/superheroes/issues/1805)) ([e4d7962](https://github.com/zwrose/superheroes/commit/e4d796278d9ef34b3528c5544d3f3e9dd479c890))
+* **superheroes:** the PR sheet's walk and its pictures ([#1835](https://github.com/zwrose/superheroes/issues/1835)) ([9a83d36](https://github.com/zwrose/superheroes/commit/9a83d36f298f1754d4cccf119537115eedda1f32))
+* **superheroes:** the review doctrine requires the review record ([#1772](https://github.com/zwrose/superheroes/issues/1772)) ([6b3b302](https://github.com/zwrose/superheroes/commit/6b3b30284bb855ee311133a1d445816e2011af0d))
+* **superheroes:** the review loop runs break-it tests before compile and keeps them ([#1819](https://github.com/zwrose/superheroes/issues/1819)) ([c57525c](https://github.com/zwrose/superheroes/commit/c57525ccdf9fc13a7fe53818e36e3277ba58e3f0))
+* **superheroes:** the review page draws the PR sheet and its merge verdict ([#1825](https://github.com/zwrose/superheroes/issues/1825)) ([1b599a7](https://github.com/zwrose/superheroes/commit/1b599a76d1461903b41a8b683244b4e48f479e58))
+* **superheroes:** the review panel follows the lane call; every seat order carries its brief, the threat model and the rulings ([#1840](https://github.com/zwrose/superheroes/issues/1840)) ([262f453](https://github.com/zwrose/superheroes/commit/262f4534fa853c44e7a32efa2452f9d35faee658))
+* **superheroes:** the review record writer, its findings contract, and the light, micro and review-only exits ([#1730](https://github.com/zwrose/superheroes/issues/1730)) ([ccfbb71](https://github.com/zwrose/superheroes/commit/ccfbb71e0119076c065719f261a185eeaee3c11a))
+* **superheroes:** the setup text and the reviewer-pass command ([#1755](https://github.com/zwrose/superheroes/issues/1755)) ([c68a63a](https://github.com/zwrose/superheroes/commit/c68a63a2536d285f3288e35d4f2b64744051bcee))
+* **superheroes:** the successor launch names the branch it adopts, and the cloud builder continues it ([#1836](https://github.com/zwrose/superheroes/issues/1836)) ([e73e3d0](https://github.com/zwrose/superheroes/commit/e73e3d0f0f048ee8efbaa5f431fb97df43d0592c))
+* **superheroes:** the test role replaces the test reviewer (review C6, layer 1) ([#1809](https://github.com/zwrose/superheroes/issues/1809)) ([c5e88d9](https://github.com/zwrose/superheroes/commit/c5e88d909677db66491025a23f4eda9a1fccc262))
+* **superheroes:** the wave watch wakes the advisor on a cloud builder's note ([#1789](https://github.com/zwrose/superheroes/issues/1789)) ([2e46c22](https://github.com/zwrose/superheroes/commit/2e46c22c1d7d48f5c877dc7d677dfae48e3c1093))
+* **superheroes:** the workhorse charter's cloud-path doctrine ([#1782](https://github.com/zwrose/superheroes/issues/1782)) ([eb2571a](https://github.com/zwrose/superheroes/commit/eb2571a66e867b0d019ed70e28a324d9d05f34a6))
+
+
+### Bug Fixes
+
+* **superheroes:** a Canon write helper refuses go-words and dispositions, and chat rulings get a standard collector record ([#1823](https://github.com/zwrose/superheroes/issues/1823)) ([6d13033](https://github.com/zwrose/superheroes/commit/6d130330d6b28b7c92da95d05e8935f2f74c5eb8))
+* **superheroes:** close the iPhone check's seven field gaps from the first real run ([#1739](https://github.com/zwrose/superheroes/issues/1739)) ([ef8e6d3](https://github.com/zwrose/superheroes/commit/ef8e6d3c049222c26513df581d34f13770b31638))
+* **superheroes:** cloud C8a — folded lower-layer cleanup fixes ([#1873](https://github.com/zwrose/superheroes/issues/1873)) ([ea6cf71](https://github.com/zwrose/superheroes/commit/ea6cf71d1e11014132b41a9d7db6b15edb6c593a))
+* **superheroes:** drive restarts the phone's typing helper instead of silently dropping keystrokes ([#1738](https://github.com/zwrose/superheroes/issues/1738)) ([4e505f3](https://github.com/zwrose/superheroes/commit/4e505f3a4865278a8920e93f7ff1fd047f9723a9))
+* **superheroes:** every reviewer independent of every maker, and the single reviewer's reading ([#1826](https://github.com/zwrose/superheroes/issues/1826)) ([d087d8f](https://github.com/zwrose/superheroes/commit/d087d8ff3e40d259f29b6c0e22cd6536f0f10217))
+* **superheroes:** iPhone screenshot labels come from the phone, never from typed text ([#1733](https://github.com/zwrose/superheroes/issues/1733)) ([b19bbf0](https://github.com/zwrose/superheroes/commit/b19bbf0eaaf106957f588a517d47e6e2b3c2c54e))
+* **superheroes:** make the launcher SIGTERM process-group tests deterministic ([#1886](https://github.com/zwrose/superheroes/issues/1886)) ([4970986](https://github.com/zwrose/superheroes/commit/4970986a60ddfa0d60cc64354e0fdb143217b702))
+* **superheroes:** remove the plugin's dependence on Claude Design ([#1731](https://github.com/zwrose/superheroes/issues/1731)) ([36e5d39](https://github.com/zwrose/superheroes/commit/36e5d398aa7cedc35f0d6a16b6c2b5f741289ca7))
+* **superheroes:** review records survive damage in transit and never block the next one ([#1889](https://github.com/zwrose/superheroes/issues/1889)) ([998fe0d](https://github.com/zwrose/superheroes/commit/998fe0deb424a4c72109acfc2013e5737da9569c))
+* **superheroes:** the advisor's slot write refuses instead of deleting builder content in its span ([#1810](https://github.com/zwrose/superheroes/issues/1810)) ([31563c6](https://github.com/zwrose/superheroes/commit/31563c6baae2e0af737395db45d7f960ca45dbeb))
+* **superheroes:** the showrunner charter loads in one Read again (C11) ([#1882](https://github.com/zwrose/superheroes/issues/1882)) ([0935e31](https://github.com/zwrose/superheroes/commit/0935e316d0c4381a7760c1896e246fc7b7026722))
+* **superheroes:** the walk's open Minors — screenshot guard and retry, stop order and ids, schema-offered answers (review C9, layer 4) ([#1850](https://github.com/zwrose/superheroes/issues/1850)) ([72a6a03](https://github.com/zwrose/superheroes/commit/72a6a038c27a38c3e8acf3e29cb77cf89ade0e0e))
+* **superheroes:** wait on the engine-started event in the rotation e2e test ([#1793](https://github.com/zwrose/superheroes/issues/1793)) ([50b993e](https://github.com/zwrose/superheroes/commit/50b993e0459f7c21690932bc1cea4df4c1a58e1f))
+
+
+### Chores
+
+* **superheroes:** retire session moves and restart in-flight reviews at upgrade ([#1767](https://github.com/zwrose/superheroes/issues/1767)) ([2214f99](https://github.com/zwrose/superheroes/commit/2214f999df55736c427be0893d80396369efe5ea))
+* **superheroes:** retire the certificate parts' records and write the release notes ([#1774](https://github.com/zwrose/superheroes/issues/1774)) ([e26b430](https://github.com/zwrose/superheroes/commit/e26b430f89141a7e61802bbc820c78bd385e6381))
+
 ## [0.42.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.41.0...superheroes-v0.42.0) (2026-10-09)
 
 

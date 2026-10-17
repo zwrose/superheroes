@@ -29,7 +29,8 @@ _FIXED_WRITTEN_AT = "2026-01-01T00:00:00Z"
 _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha", "ci.source", "missingReviews",
                   "goAhead", "parked", "findings", "title", "body", "consequence", "outcome", "reason",
                   "leftForOwner", "status", "whatIsMissing")
-_ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling"})
+# transitDamage is added by `read` when parts changed in transit, never by the writer
+_ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
                "outcome": "findings", "reason": "findings"}

@@ -105,7 +105,7 @@ still produced by The Architect.
   review, and the spec checks discovery runs on a spec
   (`skills/architect-discovery/reference/spec-checks.md`). The **spec checks' reviewer labels
   its findings with six doc-native lenses** (Clarity, Verifiability, Failure-Mode, Coherence,
-  Safety & access, Grounding) while `review-code` runs its five code reviewers — the honest doc-native identities that
+  Safety & access, Grounding) while `review-code` composes its panel from its five code reviewers by the lane call — the honest doc-native identities that
   replaced the "five code costumes" (#514 D1). (#34 proposed merging the code and test seats
   as the weakest, on ~70% zero-finding early small-N data; at N=37 those are the two
   strongest seats — Verifiability has the most blocking findings of any seat — and the
@@ -608,12 +608,17 @@ selected *below* the host, at the dispatch leaf.
 
 Two postures are held strictly separate, mirroring `model_tier`:
 - **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled
-  engine silently degrades to **the host model** — the same posture `model_tier` documents for a bad
+  engine silently degrades to **the host model** (a review seat excepted: no host model stands in
+  for a reviewer when the host's family is a maker's, below) — the same posture `model_tier` documents for a bad
   tier ("a wrong/absent tier is a cost concern, never a safety one"). No run hangs or
   hard-fails on engine choice.
 - **A completed external *result* fails closed.** A build or fix that fails or can't run
-  verify stops; an unauditable run stops; an unreadable or incomplete review is re-run
-  on the host model, never accepted as green. A review seat that returns a well-formed empty result
+  verify stops; an unauditable run stops; an unreadable or incomplete review is never accepted as
+  green. A full-lane panel seat is re-run on another live reviewer outside every maker's family, never
+  on the host model when the host's family is a maker's (with none live, the seat counts as not run).
+  On a single-reviewer lane (light, micro) nothing stands in: without the owner's word for that
+  change, the review did not happen, and the change goes up to the full lane or parks
+  (`rubric/review-discipline.md`). A review seat that returns a well-formed empty result
   **without a verifiable investigation record** is incomplete, not clean — a named **vacuous**
   forfeit on the same fall-open path (`review-code` reference: `auto-fix-loop.md`, `round-driver.md`).
   Engine telemetry corroborates engagement but never substitutes for that record. This reuses the
@@ -703,15 +708,16 @@ per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The s
 **bars the maker's model family from rotation onto every panel seat** — all five lens seats and the
 `grounding-seat` (#670, owner-ratified 2026-07-26), including seats that are neither
 strong-tier nor critical (closing the `test-reviewer` hole after #651 unified cursor's
-first-party models under one `xai` family). An owner pin can still seat the maker family on a
-panel seat; `verify()` then flags a `maker-family` violation and records a
-`pin-breaks-constraint` degradation naming the seat. Where an alternative family is live, the maker
-family simply never seats through rotation. Where **no** alternative family is live, the seat still fills
-with the maker family and the map records a disclosed `same-family` degradation, which
-rides the certification shape (`-degraded`) alongside `independenceDegraded` and
-`baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
-`verify()` treats a maker-family seat as a **violation** when an alternative family was
-reachable, and as **not** a violation when unavoidable (the degradation path); unusable
+first-party models under one `xai` family). A pin cannot seat the maker family on a panel
+seat: the seat is recorded unfilled, with a `pin-breaks-constraint` degradation naming it. Where an
+alternative family is live, the maker family never seats through rotation. Where **no** reviewer
+outside the makers' families is live for a seat, the seat is recorded **`unfilled`** (a
+`seat-unfilled` degradation) and counts as not run; nothing stands in for it. Only the owner's
+word, for that one change, lets a reviewer from a maker's family run, and the review record then
+says the review was not independent (`rubric/review-discipline.md`). For a hand-built or replayed
+map that does seat the maker, `verify()` treats a maker-family seat as a **violation** when an
+alternative family was reachable, and as **not** a violation when unavoidable (a disclosed
+`same-family` degradation); unusable
 liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
 degradations list, or malformed vendor names on **any** receipt; a `liveCellsSource`
 that is present but not a member of the closed vocabulary (`probed`, `synthesized`,
@@ -786,7 +792,10 @@ under `SUPERHEROES_WORKTREES_ROOT` when set and `~/.superheroes-worktrees` other
 its path and the builder's session id on the `reserved` record, and starts the session with that
 worktree as its working directory, never the primary checkout. A target path that already exists on disk, or that git
 still registers, is a **collision**: the launch refuses (`launch-worktree-collision`) rather than
-reuse a checkout another build may be holding. The `own-worktree` standing ruling stays in the
+reuse a checkout another build may be holding. A **cloud launch** (`--place cloud`) is the
+exception: it makes no worktree and records neither field on `reserved`; its record carries
+`place: "cloud"`, and its `started` record names the cloud session (`cloudSessionName`, and
+`cloudSessionId` when the launch reports the session's id). The `own-worktree` standing ruling stays in the
 composed prompt as defense in depth — a builder that never sees the primary checkout cannot
 violate it. That record carries the mechanical park/refusal accounting
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
@@ -913,8 +922,8 @@ PR-body markers from the retired execution spine survive independently of it:
 
   **Lifecycle — and why nothing flags their absence.** `advisor-vet` **is** a builder obligation
   (the §11 skeleton stamps it); the other two are not, and **none of the three is a review-seat
-  check**: a build's pre-handback `review-code` runs in
-  **branch mode**, before any PR body or vet exists, so a missing vet-receipt marker at review time is
+  check**: a build's pre-handback `review-code` runs before any vet exists (in PR mode on the
+  draft PR a full-lane build opens first), so a missing vet-receipt marker at review time is
   the **normal** state and must never be emitted as a finding. (The §11 drift test enumerates this
   section's marker inventory and holds this family **out** of the copy-holders for exactly that reason —
   a docs-consistency check, not a consumer of these markers at review time.) Their absence becomes meaningful only
@@ -969,10 +978,12 @@ No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step
 existing *PR-body honesty check (PR mode only)* — already PR-gated, already reads the
 `superheroes:dod-table` marker, already emits an **Important** / `tradeoff` /
 author-resolved finding. The floor is the **same check emitting the same finding shape**.
-Step 8 catches the floor on any review of an **existing** PR; a build's pre-handback
-`review-code` run happens **before** the PR is opened, so it runs in **branch mode** and
-skips step 8 — the **advisor's vet** is the ratified independent checker for the
-principle in every case (do not re-order the build or add a new body-aware pass here).
+Step 8 catches the floor on a read-only review (`--review-only`) of an **existing** PR. A
+full-lane build's pre-handback `review-code` run now runs in PR mode on the draft PR the builder
+opens first and writes its review record against it (workhorse charter §10), but it runs the
+driver-owned auto-fix loop, which does not run step 8 today
+(`skills/review-code/reference/auto-fix-loop.md`). So the **advisor's vet** is the ratified
+independent checker for the principle in every case (do not add a new body-aware pass here).
 
 The principle-level checker is the **advisor's vet**, not step 8 — step 8 runs in the same
 session that wrote the body, so it is the author checking whether the author forgot: fine
@@ -1082,8 +1093,9 @@ section; (6) the spine's own waiver sentence is not separately pinned. The waive
 copy-holders are the **showrunner** charter only, because micro is the showrunner's lane.
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
-`agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
-six, including `grounding-reviewer`. The one dispatching leg, the **code leg**, runs a
+`agents/*-reviewer` files plus `agents/test-role.md` (the one panel seat not named `-reviewer`)
+is the single home of the **sanctioned reviewer universe** — now six, including
+`grounding-reviewer`. The one dispatching leg, the **code leg**, runs a
 **sanctioned subset** of that universe, not the whole of it: its roster homes in
 `round_driver.DIMENSIONS` and the same roster re-keyed as `round_driver.AGENT_SUFFIX`, and is the
 five code reviewers. `grounding-reviewer` stays a **spec-only** agent — the doc-provenance seat
@@ -1344,7 +1356,8 @@ zero reconstruction, show the after-state — live in the **Showrunner charter**
 (`skills/showrunner/SKILL.md`); the default perceivability list lives in
 `skills/showrunner/reference/perceivability.md` — cite those homes, do not restate them here.
 The shape in which open owner decisions are delivered — the owner-needed filter with stated
-grounds, the per-item spine, follow-up economics, and the two-batch delivery mechanics — lives in
+grounds, the per-item spine, follow-up economics, and the three-batch delivery mechanics (what
+blocks work, then decisions not tied to one PR, then one sheet per PR) — lives in
 `skills/showrunner/reference/owner-decisions.md`; this section cites that home rather than
 restating it.
 
@@ -1408,7 +1421,10 @@ only** (the existing identity rule) — was written within `LIVENESS_QUIET_WINDO
 `lib/wave_watch.py`). A lane whose transcript file does not exist yet gets the same window from its
 recorded start. No per-lane promise exists. A Codex-hosted builder has no Claude session
 transcript, so it would alert `lane-stale` (fail toward alert) where a stamp used to vouch for it;
-today's launcher spawns only `claude -p` builders.
+today's launcher spawns only `claude -p` builders. A **cloud lane** is the exception to the rule:
+it has no local leader pid, transcript or heartbeat to read, so the wave watch judges it by its
+GitHub activity instead, and the sweep classes it `nonterminal` with `cloud-lane-no-heartbeat`
+without reading a heartbeat file (`lib/wave_watch.py`, `lib/heartbeat.py`).
 
 **Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or
 **future-dated** heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger

@@ -182,23 +182,61 @@ def two_part_record(tmp_path):
     return fake
 
 
-def test_edge1_a_deleted_part_makes_the_record_unreadable(tmp_path):
-    # axis: a missing part; a record read from the parts that are left
+def test_edge1_a_deleted_part_makes_the_record_unreadable_and_the_next_write_supersedes_it(tmp_path):
+    # axis: a missing part; a record read from the parts that are left, or a later write blocked by it
     fake = two_part_record(tmp_path)
     fake.comments.remove(parts_of(fake)[0])
-    for out in (rr.read(7, readers=fake.readers()),
-                rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())):
-        assert (out["ok"], out["reason"]) == (False, "review-record-unreadable")
+    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+    assert rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())["ok"]
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["ok"] and [e["why"] for e in rec["earlierRecordsNotChecked"]] == ["unreadable"] and len(rec["findings"]) == 40
 
 
-def test_edge2_a_corrupted_part_fails_the_hash_check(tmp_path):
-    # axis: the parts hash; text changed inside a part, same length and still JSON, read as the record
+def test_edge2_a_part_changed_in_transit_is_read_and_reported(tmp_path):
+    # axis: the parts hash; text changed inside a part that still parses, read silently as clean, or refused outright
     fake = two_part_record(tmp_path)
     part = parts_of(fake)[0]
     assert "reads the saved" in part["body"]
     part["body"] = part["body"].replace("reads the saved", "reads the SAVED", 1)
     out = rr.read(7, readers=fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-unreadable")
+    assert out["ok"] and out["transitDamage"]["hashMatches"] is False
+    assert out["transitDamage"]["recordedChars"] == out["transitDamage"]["foundChars"]
+
+
+def test_a_record_written_after_a_damaged_one_lists_it_for_the_vet(tmp_path):
+    # axis: a damaged but readable predecessor (a finding could have been lost in transit) hidden by the next write
+    fake = two_part_record(tmp_path)
+    part = parts_of(fake)[0]
+    part["body"] = part["body"].replace("reads the saved", "reads the SAVED", 1)
+    damaged = fake.marked()[0]
+    assert rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())["ok"]
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["earlierRecordsNotChecked"] == [{"id": damaged["id"], "url": damaged["url"], "why": "changed in transit"}]
+    assert "transitDamage" not in rec
+
+
+@pytest.mark.parametrize("ids", [[{}], [[]], ["1"], [True]])
+def test_part_ids_that_are_not_comment_ids_are_unreadable_and_superseded(tmp_path, ids):
+    # axis: a part id that cannot be looked up raising instead of reading unreadable, so every later write fails
+    fake = two_part_record(tmp_path)
+    _set_index(fake.marked()[0], parts=ids)
+    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+    assert rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())["ok"]
+
+
+def test_an_undamaged_parts_record_reports_no_transit_damage(tmp_path):
+    # axis: a clean record flagged as changed in transit
+    fake = two_part_record(tmp_path)
+    assert "transitDamage" not in rr.read(7, readers=fake.readers())
+
+
+def test_backticks_added_in_transit_are_read_and_reported_with_both_lengths(tmp_path):
+    # axis: the #1888 shape: stray backticks added inside a part's JSON strings plus the footer, refused outright
+    fake = two_part_record(tmp_path)
+    part = parts_of(fake)[0]
+    part["body"] = part["body"].replace("reads the saved", "reads`` the saved", 1) + CLOUD_FOOTER
+    out = rr.read(7, readers=fake.readers())
+    assert out["ok"] and out["transitDamage"]["foundChars"] == out["transitDamage"]["recordedChars"] + 2
 
 
 def test_edge2_a_part_that_is_cut_short_fails_the_length_check(tmp_path):
@@ -208,6 +246,33 @@ def test_edge2_a_part_that_is_cut_short_fails_the_length_check(tmp_path):
     fence = part["body"].rindex("\n```")
     part["body"] = part["body"][:fence - 5] + part["body"][fence:]
     assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+
+
+def _set_index(head, **over):
+    good = head["body"]
+    start, end = good.rindex("```json\n") + 8, good.rindex("\n```\n</details>")
+    index = dict(json.loads(good[start:end]), **over)
+    head["body"] = good[:start] + json.dumps(index) + good[end:]
+
+
+@pytest.mark.parametrize("over", [{"sha256": ""}, {"sha256": "not-a-hash"}, {"sha256": "A" * 64}, {"chars": -1},
+                                  {"chars": True}, {"chars": 1.5}])
+def test_edge3_an_index_with_a_malformed_hash_or_length_is_unreadable_with_good_parts(tmp_path, over):
+    # axis: the forgiving read admitting a malformed index as transit damage when the parts themselves are fine
+    fake = two_part_record(tmp_path)
+    _set_index(fake.marked()[0], **over)
+    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+
+
+def test_a_length_that_differs_while_the_hash_matches_reports_the_hash_as_matching(tmp_path):
+    # axis: transitDamage reporting a hash mismatch when only the recorded length differs
+    fake = two_part_record(tmp_path)
+    head = fake.marked()[0]
+    good = json.loads(head["body"][head["body"].rindex("```json\n") + 8:head["body"].rindex("\n```\n</details>")])
+    _set_index(head, chars=good["chars"] + 3)
+    out = rr.read(7, readers=fake.readers())
+    assert out["ok"] and out["transitDamage"] == {"recordedChars": good["chars"] + 3, "foundChars": good["chars"],
+                                                  "hashMatches": True}
 
 
 def test_edge3_a_parts_head_with_a_malformed_index_is_unreadable(tmp_path):
@@ -241,6 +306,38 @@ def test_edge4_a_part_comment_is_never_the_latest_record(tmp_path):
     out = rr.read(7, readers=fake.readers())
     assert out["ok"] and out["url"] == head["url"] and out["earlierRecords"] == []
     assert rr.write(put(tmp_path, account(findings=many_findings(40, 4000))), str(tmp_path), fake.readers())["ok"]
+
+
+CLOUD_FOOTER = "\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_"
+
+
+@pytest.mark.parametrize("footer", [CLOUD_FOOTER, CLOUD_FOOTER + "\n"])
+def test_parts_and_head_with_a_host_appended_footer_read_back_whole_and_the_next_write_runs(tmp_path, footer):
+    # axis: a cloud session's attribution footer after each part's closing fence making the record unreadable
+    fake = two_part_record(tmp_path)
+    for c in parts_of(fake) + fake.marked():
+        c["body"] += footer
+    found = many_findings(40, 4000)
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["ok"] and [f["body"] for f in rec["findings"]] == [f["body"] for f in found]
+    assert rr.write(put(tmp_path, account(findings=found)), str(tmp_path), fake.readers())["ok"]
+
+
+@pytest.mark.parametrize("trailer", ["\nextra", "\n\n---\nsee ```json", "\n\nnot a footer", "\n\n---\nextra",
+                                     CLOUD_FOOTER + "\nEXTRA", "\n\n---\n_Generated by x_\n```json\n{}\n```"])
+def test_a_part_with_other_text_after_its_fence_stays_unreadable(tmp_path, trailer):
+    # axis: the footer allowance; any trailing text other than a plain footer read as a well-formed part
+    fake = two_part_record(tmp_path)
+    parts_of(fake)[0]["body"] += trailer
+    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+
+
+def test_a_footer_does_not_hide_a_changed_part(tmp_path):
+    # axis: the hash still checks a footed part; text changed inside it read as clean
+    fake = two_part_record(tmp_path)
+    part = parts_of(fake)[0]
+    part["body"] = part["body"].replace("reads the saved", "reads the SAVED", 1) + CLOUD_FOOTER
+    assert rr.read(7, readers=fake.readers())["transitDamage"]["hashMatches"] is False
 
 
 def test_edge5_a_failing_create_while_posting_parts_posts_no_head(tmp_path):

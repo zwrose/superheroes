@@ -1,6 +1,6 @@
 {
   "name": "superheroes",
-  "version": "0.42.0",
+  "version": "0.43.0",
   "types": "./types/index.d.ts",
   "userConfig": {
     "autoCheckpointTokens": {
@@ -24,7 +24,11 @@
       "title": "Auto-checkpoint mode",
       "description": "auto: checkpoint and compact on its own; click-only: only when you press Now on the band; off: never.",
       "default": "auto",
-      "options": ["auto", "click-only", "off"]
+      "options": [
+        "auto",
+        "click-only",
+        "off"
+      ]
     }
   },
   "description": "The discipline layer around AI build sessions: Showrunner (advisor), Workhorse (builder), Detective (observe-only diagnosis), The Architect (spec), Review Crew (cross-vendor review), Test-Pilot (browser evidence), Guardian (repo-health sweeps) — one plugin.",
