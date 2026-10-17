@@ -783,7 +783,9 @@ the advisor stops for its rulings before it delivers batch 2.**
 **Batch 1 goes in the chat and at the top of the index**, and the chat message links to the index.
 The index and the PR sheets are published on the plugin's shared review template. Their data shape,
 and the shape of the advisor's input to a sheet, are the template's, in
-[the review template](../../../theme/review-template.md); this file restates none of it.
+[the review template](../../../theme/review-template.md); this file restates none of it. A PR sheet's
+leftover carries this file's per-item spine, written by the advisor in its sheet input as
+[the review template](../../../theme/review-template.md) § The items says.
 
 **The first answer the advisor reads counts.** The first answer the advisor reads to a batch-1
 question, in the chat or on the index, is the answer, and it counts at once. A batch-1 answer on the
