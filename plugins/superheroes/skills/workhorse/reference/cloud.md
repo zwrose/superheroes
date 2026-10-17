@@ -137,7 +137,7 @@ go through GraphQL. Use these in their place:
 | `gh pr list --head` and `gh pr view --json …` | `cloud_builder.py pr-json --repo <o>/<r> --branch <b> --out <file>` (same field names) |
 | `gh repo view --json nameWithOwner` | `cloud_builder.py repo-json --repo <o>/<r>` |
 | a PR body | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
-| an issue and its comments | `gh api repos/<o>/<r>/issues/<n>` and `gh api --paginate repos/<o>/<r>/issues/<n>/comments` (every page, so a late advisor reply is seen) |
+| an issue and its comments | `gh api repos/<o>/<r>/issues/<n>` and `gh api "repos/<o>/<r>/issues/<n>/comments?per_page=100&page=<N>"` for N = 1, 2, … until a page holds fewer than 100 rows (an empty page ends it); a page that fails fails the read (every page, so a late advisor reply is seen) |
 
 Writes go one per call: one comment, one edit.
 
