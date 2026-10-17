@@ -3286,7 +3286,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
-    intercepted, runs, exempt = break_it.intercept(break_it_raw, repo_root, head)
+    # axis: a break-it python run executes under the project's own interpreter launcher read from the verify command, never a PATH python — see bite-proof record wo_3_1910_break_it_interpreter
+    intercepted, runs, exempt = break_it.intercept(
+        break_it_raw, repo_root, head,
+        interpreter=break_it.project_interpreter(config.get("verifyCommand")))
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
     # test role's first finding, so the original order holds.
     break_it_ids = {id(g) for g in break_it_raw}
@@ -6744,7 +6747,8 @@ def _break_it_kept_step(state, config):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
                          "reason": disposition})
             continue
-        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
+                                  interpreter=break_it.project_interpreter(config.get("verifyCommand")))
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}
         rows.append(row)

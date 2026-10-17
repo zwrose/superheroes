@@ -680,7 +680,7 @@ These are the base rubric's binding verification rules, restated in every subage
 
 ## Break-it tests
 
-On a full panel, the driver runs each break-it test the test role wrote before it compiles the round's findings. Each one runs in a throwaway detached copy of the reviewed head (`lib/break_it.py`), and the command and output are recorded under the test role's name in the round record's `breakItRuns`. A test that passes means the change held, and the finding is dropped. A test that fails, or could not run, stays a finding. The fixer keeps the test in the change. Before the loop certifies `converged`, it checks that each fixed break-it finding's test is in the final diff with its exact bytes and passes at the final head (`breakItKept`); otherwise it parks with certification withheld. The test role never writes into the repository.
+On a full panel, the driver runs each break-it test the test role wrote before it compiles the round's findings. Each one runs in a throwaway detached copy of the reviewed head (`lib/break_it.py`), and the command and output are recorded under the test role's name in the round record's `breakItRuns`. A test that passes means the change held, and the finding is dropped. A test that fails, or could not run, stays a finding. The fixer keeps the test in the change. Before the loop certifies `converged`, it checks that each fixed break-it finding's test is in the final diff with its exact bytes and passes at the final head (`breakItKept`); otherwise it parks with certification withheld. The test role never writes into the repository. A test whose command runs Python runs under the project's interpreter launcher read from the verify command, and is recorded not-run when none is found or it does not start.
 
 ---
 
