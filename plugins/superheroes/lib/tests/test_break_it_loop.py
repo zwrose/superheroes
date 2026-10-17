@@ -102,7 +102,8 @@ class World:
             {"repoRoot": str(self.repo), "headSha": self.head}))
         self.config = {"leg": "code", "vendors": ["claude", "codex"], "diff": self.diff,
                        "fixerVendor": "claude", "repoRoot": str(self.repo),
-                       "baseRef": self.base, "headSha": self.head}
+                       "baseRef": self.base, "headSha": self.head,
+                       "verifyCommand": "%s -c pass" % PY}
         self.state = RD.new_state(self.config)
         self.state["reviewedDiff"] = self.diff
 

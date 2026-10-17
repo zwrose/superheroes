@@ -48,7 +48,10 @@ BLOCK_TEMPLATE = "\n".join([
 RUN_RULES = (
     "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
     "files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
-    "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run.")
+    "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run. A `run` "
+    "whose program is `python` or `python3` (or another Python interpreter path) runs under the "
+    "project's own interpreter launcher, the one its verify command uses, and is not run when that "
+    "launcher cannot be found.")
 
 _TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
 _HEADER = _TEMPLATE_LINES[0]
@@ -60,6 +63,10 @@ _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
 _SHELL_PROGRAMS = frozenset(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "busybox"])
 _REGULAR_MODES = ("100644", "100755")
+_PYTHON_PROGRAM = re.compile(r"^python(\d+(\.\d+)?)?$")
+_SEPARATOR_CHARS = frozenset(";&|()")
+_COMMAND_WORDS = frozenset(["if", "then", "else", "elif", "do", "while", "until", "!", "{"])
+_UNSET = object()
 _TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
 _DRAIN_JOIN = 5
 _TERM_GRACE = 5
@@ -237,13 +244,56 @@ def parse_command(run):
     return tokens, env, None
 
 
-def _record(head, block, outcome, reason=None, exit_code=None, output=""):
+def _is_python_program(program):
+    return bool(_PYTHON_PROGRAM.match(os.path.basename(program)))
+
+
+def _is_separator(token):
+    return bool(token) and all(c in _SEPARATOR_CHARS for c in token)
+
+
+def project_interpreter(verify_command):
+    """The Python launcher token the project's verify command runs, or ``None``. Reads the command
+    text only and never executes anything. A launcher is the program at a command position when it
+    is a ``python`` interpreter, or a path given a ``-m`` or ``.py`` argument (a launcher script
+    such as ``scripts/pinned-python``); a bare generic runner such as ``uv run`` or ``make`` is not."""
+    if not isinstance(verify_command, str) or verify_command.strip() in ("", "none"):
+        return None
+    try:
+        lexer = shlex.shlex(verify_command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    at_command = True
+    for i, tok in enumerate(tokens):
+        if _is_separator(tok):
+            at_command = True
+            continue
+        if not at_command:
+            continue
+        if tok in _COMMAND_WORDS or _ENV_TOKEN.match(tok):
+            continue
+        at_command = False
+        if _is_python_program(tok):
+            return tok
+        if "/" in tok:
+            for arg in tokens[i + 1:]:
+                if _is_separator(arg):
+                    break
+                if arg == "-m" or arg.endswith(".py"):
+                    return tok
+    return None
+
+
+def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None):
     block = block if isinstance(block, dict) else {}
     # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
     output = readout.scrub(output)[0] if output else ""
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
-            "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output}
+            "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
+            "interpreter": interpreter}
 
 
 def _git(repo_root, *args):
@@ -433,9 +483,29 @@ def _already_kept(copy, rel, sha):
     return hashlib.sha256(data).hexdigest() == sha
 
 
-def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
+def _probe_interpreter(interpreter, copy, env, timeout):
+    """``(True, "")`` when ``interpreter -c pass`` starts and exits 0 in ``copy``, else ``(False, output tail)``."""
+    try:
+        proc = subprocess.Popen([interpreter, "-c", "pass"], cwd=copy, env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError as exc:
+        return False, str(exc)[-OUTPUT_TAIL_BYTES:]
+    try:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc.pid)
+            out, _ = proc.communicate()
+            return False, _tail_text(out[-OUTPUT_TAIL_BYTES:], True) or "timed out"
+        return proc.returncode == 0, _tail_text(out[-OUTPUT_TAIL_BYTES:], True)
+    finally:
+        _kill_group(proc.pid)
+
+
+def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, interpreter=None):
     def rec(outcome, reason=None, exit_code=None, output=""):
-        return _record(head, block, outcome, reason, exit_code, output)
+        return _record(head, block, outcome, reason, exit_code, output, interpreter)
 
     try:
         # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
@@ -461,6 +531,14 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         if refusal:
             return rec(OUTCOME_NOT_RUN, refusal)
     token = uuid.uuid4().hex
+    if interpreter:
+        # axis: a launcher that cannot start reads not-run, never a failed test — see bite-proof record wo_3_1910_break_it_interpreter
+        ready, tail = _probe_interpreter(
+            interpreter, copy, _clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root), timeout)
+        _kill_tagged(token)
+        _kill_in_dir(copy)
+        if not ready:
+            return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail)
     status_r, status_w = os.pipe()
     try:
         # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
@@ -511,12 +589,23 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     return rec(OUTCOME_PASSED if code == 0 else OUTCOME_FAILED, exit_code=code, output=output)
 
 
-def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
-    """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record."""
+def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, interpreter=_UNSET):
+    """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record.
+    Given ``interpreter`` (the project's launcher, or ``None`` when it could not be resolved), a
+    command whose program is a Python interpreter runs under that launcher, and is not run when
+    there is none or it does not start. Left ``_UNSET``, the command runs as written."""
     block = dict(block) if isinstance(block, dict) else {}
     argv, env, refusal = parse_command(block.get("run"))
     if refusal:
         return _record(head, block, OUTCOME_NOT_RUN, refusal)
+    substituted = None
+    if interpreter is not _UNSET and _is_python_program(argv[0]):
+        # axis: no launcher means not-run, never a PATH python the project does not use — see bite-proof record wo_3_1910_break_it_interpreter
+        if not interpreter:
+            return _record(head, block, OUTCOME_NOT_RUN, "interpreter-unresolved")
+        # axis: a python run executes under the supplied launcher — see bite-proof record wo_3_1910_break_it_interpreter
+        substituted = interpreter
+        argv = [interpreter] + argv[1:]
     if (not isinstance(head, str) or not head or head.startswith("-")
             or not isinstance(repo_root, str) or not repo_root):
         return _record(head, block, OUTCOME_NOT_RUN, "head-unresolved")
@@ -525,9 +614,10 @@ def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
     d = tempfile.mkdtemp(prefix="break-it-")
     copy = os.path.join(d, "copy")
     try:
-        result = _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write)
+        result = _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, substituted)
     except Exception as exc:  # the caller decides from the record; nothing is raised
-        result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+        result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:],
+                         interpreter=substituted)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return result
@@ -537,7 +627,9 @@ def _not_run(head, block, reason):
     return _record(head, block, OUTCOME_NOT_RUN, reason)
 
 
-def _safe_run(runner, repo_root, head, block, **kwargs):
+def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, **kwargs):
+    if interpreter is not _UNSET:
+        kwargs["interpreter"] = interpreter
     try:
         got = runner(repo_root, head, block, **kwargs)
     except Exception:  # the caller decides from the record; nothing is raised
@@ -548,7 +640,7 @@ def _safe_run(runner, repo_root, head, block, **kwargs):
     return got
 
 
-def intercept(findings, repo_root, head, *, runner=run_one):
+def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET):
     """Run every break-it finding (each run is bounded by its timeout; how many to write is the test
     role's policy, stated in its agent file) and fold the results in. Returns ``(kept, runs, exempt_ids)``:
     ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
@@ -575,7 +667,7 @@ def intercept(findings, repo_root, head, *, runner=run_one):
         elif block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
-            record = _safe_run(runner, repo_root, head, block)
+            record = _safe_run(runner, repo_root, head, block, interpreter)
         runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
         # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
         if record["outcome"] == OUTCOME_PASSED:
@@ -594,7 +686,7 @@ def _coerce_line(value):
     return coerce_line(value)
 
 
-def check_kept(repo_root, base, head, record, *, runner=run_one):
+def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET):
     """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
     Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
     record = record if isinstance(record, dict) else {}
@@ -634,7 +726,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one):
         return res(KEPT_CHANGED, "sha256-differs")
     run = _safe_run(runner, repo_root, head,
                     {"path": path, "run": record["command"], "content": "",
-                     "sha256": record["sha256"]}, write=False)
+                     "sha256": record["sha256"]}, interpreter, write=False)
     if run["outcome"] == OUTCOME_PASSED:
         return res(KEPT, run=run)
     return res(KEPT_FAILING, run.get("reason"), run)
