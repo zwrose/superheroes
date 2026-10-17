@@ -171,6 +171,22 @@ def test_everything_else_gets_no_decision(command):
     assert _decide(_payload(command)) is False
 
 
+# The hook's own set, plus the seven characters it must refuse: parametrizing over the hook's set alone
+# would drop a character's row the moment it left the set, so removing it could never turn a row red.
+_REFUSED_UNDER_TEST = sorted(hook._REFUSED_CHARS | set("#$`\\\n\r\0"))
+
+
+@pytest.mark.parametrize("char", _REFUSED_UNDER_TEST, ids=lambda c: f"U+{ord(c):04X}")
+def test_each_refused_character_alone_gets_no_decision(char):
+    # axis: each refused character is refused on its own — carried inside a single-quoted word of an
+    # otherwise-approvable `open`, so no operator, verb, or arity check can reject the command instead
+    def command(c):
+        return f"python3 -B {ROOT_SCRIPT} open --phone X --url 'http://h/a{c}b' --run-dir /tmp/r"
+
+    assert _decide(_payload(command(""))) is True, "isolation guard: the command without the character is approvable"
+    assert _decide(_payload(command(char))) is False
+
+
 def test_other_root_gets_no_decision():
     # axis: rule 6, the root comparison — another root's lib/iphone_check.py is not this plugin's
     assert _decide(_payload(f"python3 -B {_OTHER_ROOT_SCRIPT} preflight")) is False
