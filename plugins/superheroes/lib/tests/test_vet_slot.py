@@ -13,7 +13,7 @@ import vet_slot as vs
 REPO = "owner/example"
 PR = 42
 VIEW = ("gh", "pr", "view", "42", "-R", REPO, "--json", "body")
-COMMENTS = ("gh", "api", "repos/owner/example/issues/42/comments", "--paginate", "--slurp")
+COMMENTS = ("gh", "api", "repos/owner/example/issues/42/comments?per_page=100&page=1")
 USER = ("gh", "api", "user", "-q", ".login")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "vet_slot")
 
@@ -85,11 +85,13 @@ def _comment(body, created="2026-09-25T10:00:00Z", cid=1, login="advisor"):
 
 
 def _pages(*pages):
-    return json.dumps([list(p) for p in pages])
+    """The comment rows of every page, flat: the fake serves them 100 a page, by page number."""
+    return json.dumps([c for p in pages for c in p])
 
 
 class FakeGh:
-    """Keyed on argv; body reads are served in order (first read, re-read, readback)."""
+    """Keyed on argv; body reads are served in order (first read, re-read, readback). The comments are
+    served 100 a page, by page number; a `comments_out` that is not a JSON list is served as it is."""
 
     def __init__(self, bodies, comments_out, edit_rc=0, view_rc=0, comments_rc=0, view_raw=None):
         self.bodies = list(bodies)
@@ -114,8 +116,15 @@ class FakeGh:
             return SimpleNamespace(returncode=0, stdout=json.dumps({"body": body}), stderr="")
         if key == USER:
             return SimpleNamespace(returncode=0, stdout="advisor\n", stderr="")
-        if key == COMMENTS:
-            return SimpleNamespace(returncode=self.comments_rc, stdout=self.comments_out, stderr="")
+        if key[:2] == ("gh", "api") and key[2].startswith(COMMENTS[2].split("?")[0] + "?per_page=100&page="):
+            assert "--paginate" not in key
+            number = int(key[2].rsplit("page=", 1)[1])
+            try:
+                rows = json.loads(self.comments_out)
+            except ValueError:
+                rows = None
+            out = json.dumps(rows[(number - 1) * 100:number * 100]) if isinstance(rows, list) else self.comments_out
+            return SimpleNamespace(returncode=self.comments_rc, stdout=out, stderr="")
         if argv[:6] == ["gh", "pr", "edit", "42", "-R", REPO] and argv[6] == "--body-file":
             with open(argv[7], encoding="utf-8") as handle:
                 self.edited.append(handle.read())
@@ -622,12 +631,12 @@ def test_check_no_receipt_with_followups_is_receipt_missing():
 
 
 @pytest.mark.parametrize("comments_out,detail", [
-    ("not json", "comments: bad JSON"),
-    (json.dumps({"a": 1}), "comments: pages are not lists"),
-    (json.dumps([{"body": "x", "created_at": "t"}]), "comments: pages are not lists"),
-    (json.dumps([[{"body": 1, "created_at": "t"}]]), "comments: a comment lacks"),
-    (json.dumps([[{"body": "x"}]]), "comments: a comment lacks"),
-    (json.dumps([["a string comment"]]), "comments: a comment lacks"),
+    ("not json", "comments: a page could not be read"),
+    (json.dumps({"a": 1}), "comments: a page could not be read"),
+    (json.dumps([{"body": "x", "created_at": "t"}]), "comments: a comment lacks"),
+    (json.dumps([{"body": 1, "created_at": "t"}]), "comments: a comment lacks"),
+    (json.dumps([{"body": "x"}]), "comments: a comment lacks"),
+    (json.dumps(["a string comment"]), "comments: a comment lacks"),
 ])
 def test_bad_comments_shape_is_read_failed(comments_out, detail, slot_file):
     fake = FakeGh([BODY], comments_out)
@@ -641,18 +650,20 @@ def test_comments_nonzero_exit_is_read_failed(slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), comments_rc=1)
     result = _write(fake, slot_file)
     assert result["reason"] == "read-failed"
-    assert "comments: exit 1" in result["detail"]
+    assert "comments: a page could not be read" in result["detail"]
     assert fake.edit_calls() == []
 
 
 def test_receipt_on_page_two_is_newest_and_selected():
     stale = _receipt_marker("<!-- superheroes:dispositions FU1 -->\n")
     pages = _pages(
-        [_comment(stale, "2026-09-25T09:00:00Z", 1), _comment("chatter", "2026-09-25T12:00:00Z", 2)],
+        [_comment(stale, "2026-09-25T09:00:00Z", 1), _comment("chatter", "2026-09-25T12:00:00Z", 2)]
+        + [_comment("chatter", "2026-09-25T12:00:00Z", n) for n in range(10, 108)],  # fills page one to 100 rows
         [_comment("﻿  " + RECEIPT, "2026-09-25T11:00:00Z", 3)],
     )
     fake = FakeGh([BODY], pages)
     result = vs.run_verb("check", PR, REPO, run=fake)
+    assert [c[2].rsplit("page=", 1)[1] for c in fake.calls if "/comments?" in c[2]] == ["1", "2"]
     assert result["ok"] is True
     assert result["receipt"] == "https://x/c/3"
 

@@ -127,14 +127,6 @@ def test_scrub_negative_benign_text_unchanged():
     assert pc.scrub(benign) == benign
 
 
-# Fix 3: paginated gh output parser.
-def test_parse_paginated_arrays_handles_concatenated_pages():
-    text = '[{"id": 1}, {"id": 2}]\n[{"id": 3}]'
-    assert pc._parse_paginated_arrays(text) == [{"id": 1}, {"id": 2}, {"id": 3}]
-    assert pc._parse_paginated_arrays("[]") == []
-    assert pc._parse_paginated_arrays("") == []
-
-
 # Fix 6: scrub is idempotent.
 def test_scrub_is_idempotent():
     s = "Authorization: Bearer abc123def456\nplain text"
