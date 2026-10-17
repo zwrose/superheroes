@@ -146,16 +146,20 @@ browser MCP. Every verb prints one JSON object and exits 0 when its `ok` is
 true. Every verb that touches the phone takes `--timeout <seconds>`.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-python3 -B "$ROOT_DIR/lib/iphone_check.py" preflight [--issue-names-check]
-python3 -B "$ROOT_DIR/lib/iphone_check.py" boot --phone <id>
-python3 -B "$ROOT_DIR/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
-python3 -B "$ROOT_DIR/lib/iphone_check.py" drive --phone <id> -- type hello
-python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --run-dir <dir> --token <token>
-python3 -B "$ROOT_DIR/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
-python3 -B "$ROOT_DIR/lib/iphone_check.py" judge < step.json
-python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
+python3 -B "<plugin root>/lib/iphone_check.py" preflight [--issue-names-check]
+python3 -B "<plugin root>/lib/iphone_check.py" boot --phone <id>
+python3 -B "<plugin root>/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
+python3 -B "<plugin root>/lib/iphone_check.py" drive --phone <id> -- type hello
+python3 -B "<plugin root>/lib/iphone_check.py" shot --phone <id> --out <png> --run-dir <dir> --token <token>
+python3 -B "<plugin root>/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
+python3 -B "<plugin root>/lib/iphone_check.py" judge < step.json
+python3 -B "<plugin root>/lib/iphone_check.py" render --in check.json
 ```
+
+`<plugin root>` is the absolute path the session states. Issue each call on its own, with the
+absolute plugin root written out: no variables, no `cd … &&`, no chaining, and no redirect except
+`judge < <file>`. That is the one shape the plugin's hook approves without a prompt. Any other shape
+still works, but it may stop on a permission prompt a headless lane cannot answer.
 
 - **When it applies.** The check applies when `SUPERHEROES_IPHONE_ID` or
   `SUPERHEROES_DEVICE_HUB` is in your environment (the launcher sets both for
