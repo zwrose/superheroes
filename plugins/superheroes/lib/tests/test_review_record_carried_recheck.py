@@ -79,7 +79,12 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
                            + said + "still reads past the end")
     (row,) = rec["carriedRechecks"]
     assert (row["result"], row["settled"], row["why"]) == ("kept", settled, said + "still reads past the end")
-    sheet = pr_sheet.build([rec], {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S"}, WORDS)
+    advisor = {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S"}
+    with pytest.raises(pr_sheet.Refusal) as refused:
+        pr_sheet.build([rec], advisor, WORDS)
+    assert any(X["title"] in p or "f-1" in p for p in refused.value.problems)
+    leftovers = {"f-1": {"why": "the check found it open", "context": "the index is read unchecked", "options": "none"}}
+    sheet = pr_sheet.build([rec], {**advisor, "leftovers": leftovers}, WORDS)
     assert len([c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]) == 1
 
 
