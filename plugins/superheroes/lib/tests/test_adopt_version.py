@@ -442,3 +442,59 @@ def test_read_only_snapshot(capsys, tmp_path):
     )
     assert code == 0
     assert snap(cache) == before
+
+
+def _steps_plan(capsys, tmp_path, transition):
+    cache = tmp_path / "cache"
+    _mkver(cache, "1.0.0")
+    _mkver(cache, "1.1.0")
+    (cache / "1.1.0" / "TRANSITION.md").write_text(transition)
+    code, data = _plan(
+        capsys, "--role", "showrunner", "--from", "1.0.0", "--to", "1.1.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0 and data["ok"] is True
+    return data["transitionSections"][0]["upgradeSteps"]
+
+
+def test_upgrade_steps_report_their_markers(capsys, tmp_path):
+    steps = _steps_plan(capsys, tmp_path, """\
+## 1.1.0
+### Before you upgrade
+Intro line, not a step.
+- **Before switching.** Finish the old review.
+- **After switching.** Do the sitting
+  right after adopting.
+- **After switching:** Run configure once.
+### Other
+- **After switching.** Not an upgrade step.
+## 1.0.0
+""")
+    assert [(s["line"], s["marked"], s["when"]) for s in steps] == [
+        (4, True, "before-switching"),
+        (5, True, "after-switching"),
+        (7, True, "after-switching"),
+    ]
+    assert steps[1]["text"] == "**After switching.** Do the sitting right after adopting."
+
+
+def test_unmarked_or_malformed_step_is_before_switching(capsys, tmp_path):
+    steps = _steps_plan(capsys, tmp_path, """\
+## 1.1.0
+#### Before you upgrade
+- **Do the sitting right after adopting.** The release says after, but no marker.
+- **after switching.** Wrong case.
+- Do this, **After switching.**
+- **After switchingly.** Not the marker word.
+```
+- **After switching.** Inside a fence.
+```
+## 1.0.0
+""")
+    assert len(steps) == 4
+    assert all(s["marked"] is False and s["when"] == "before-switching" for s in steps)
+
+
+def test_section_without_upgrade_list_has_no_steps(capsys, tmp_path):
+    steps = _steps_plan(capsys, tmp_path, "## 1.1.0\n### Other\n- **After switching.** x\n")
+    assert steps == []

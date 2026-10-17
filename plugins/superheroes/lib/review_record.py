@@ -42,6 +42,7 @@ if _LIB_DIR not in sys.path:
 import build_lane  # noqa: E402
 import cloud_pass  # noqa: E402
 import finding_outcomes  # noqa: E402
+import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
@@ -113,6 +114,11 @@ def _gh_json(*args):
         return None if out is None else json.loads(out)
     except ValueError:
         return None
+
+
+def _read_pages(path, key=None):
+    """Every row of a GitHub REST list by page number (gh_pages.read), or None."""
+    return gh_pages.read(lambda endpoint: _run(["gh", "api", endpoint]), path, key=key)
 
 
 def _repo_name(repo_root):
@@ -189,14 +195,11 @@ def _issue_body_rest(n, repo):
 
 def _check_data(sha, repo):
     base = _api(repo, f"commits/{sha}")
-    out = _run(["gh", "api", base + "/check-runs?per_page=100", "--paginate"])
+    # Every page, merged: a failed page read leaves CI unavailable, never green on a partial read.
+    rows = _read_pages(base + "/check-runs", key="check_runs")
     status = _gh_json("api", base + "/status")
-    try:
-        # Every page, merged: a failed page read leaves CI unavailable, never green on a partial read.
-        runs = {"check_runs": [r for page in pr_comment._parse_paginated_arrays(out) for r in page["check_runs"]]}
-    except (ValueError, KeyError, TypeError):
-        return None
-    return (runs, status) if isinstance(status, dict) else None
+    runs = None if rows is None else {"check_runs": rows}
+    return (runs, status) if runs is not None and isinstance(status, dict) else None
 
 
 def _lane_marker(repo_root):
@@ -218,11 +221,11 @@ def _engine_run(run_dir):
 
 
 def _list_comments(pr, repo):
-    out = _run(["gh", "api", _api(repo, f"issues/{pr}/comments"), "--paginate"])
+    rows = _read_pages(_api(repo, f"issues/{pr}/comments"))
     try:
-        return None if out is None else [
+        return None if rows is None else [
             {"id": c["id"], "author": c["user"]["login"], "body": c["body"], "url": c["html_url"]}
-            for c in pr_comment._parse_paginated_arrays(out)]
+            for c in rows]
     except (ValueError, KeyError, TypeError):
         return None
 
@@ -232,11 +235,7 @@ def changed_paths(pr, repo):
     a failed call or parse, an entry with no string filename, or GitHub's file ceiling reached.
     Removed files are kept (a deletion inside a risk area touches it), and so is each renamed
     file's previous name (a rename out of a risk area still touches it)."""
-    out = _run(["gh", "api", _api(repo, f"pulls/{pr}/files"), "--paginate"])
-    try:
-        files = None if out is None else pr_comment._parse_paginated_arrays(out)
-    except ValueError:
-        return None
+    files = _read_pages(_api(repo, f"pulls/{pr}/files"))
     # axis: a file list that may be cut short is unavailable, never read as the whole change — see bite-proof record wo_a_1795_lane-call
     if files is None or len(files) >= _FILES_CEILING:
         return None
