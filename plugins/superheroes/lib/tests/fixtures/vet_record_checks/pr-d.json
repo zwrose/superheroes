@@ -30,6 +30,7 @@
       "unit": "reviewer-minutes"
     },
     "decisionRechecks": [],
+    "earlierRecordsNotChecked": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
       "source": "GitHub PR"
