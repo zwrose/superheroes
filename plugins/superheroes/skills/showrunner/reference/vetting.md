@@ -193,8 +193,9 @@ iPhone, a phone the Mac imitates in software), or the issue's done-definition na
 - (b) its `phone` is not among the phones on the record of the launch the builder runs under
   (`iphoneIds`, or `iphoneId` on a record without it). That is the launch that delivered the PR,
   normally the lane's latest started launch; the builder's heartbeat is filed under that launch id.
-  List each launch's `launchId` and `iphoneIds` with
-  `python3 -B <plugin root>/lib/iphone_reap.py phones --repo-root <repo> --issue <n>`.
+  `python3 -B <plugin root>/lib/iphone_reap.py phones --repo-root <repo> --issue <n>` lists one
+  `phones[]` entry per phone (`launchId`, `iphoneId`). The delivering launch's phones are the
+  `iphoneId` values of the entries whose `launchId` is that launch's.
   A phone from an earlier launch of the same lane is still not on the record;
 - (c) it has no `where` label;
 - (d) its `where` disagrees with its reading (for example `installed` on a piece whose reading says
