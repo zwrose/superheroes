@@ -13,7 +13,6 @@
 - [Sequential orders need a commit between them](#sequential-orders-need-a-commit-between-them)
 - [iPhone evidence](#iphone-evidence)
 - [A new refusal needs a healthy-case check](#a-new-refusal-needs-a-healthy-case-check)
-- [A test that guards prose clears two bars first](#a-test-that-guards-prose-clears-two-bars-first)
 - [A pending spec gate is not an unreviewed spec](#a-pending-spec-gate-is-not-an-unreviewed-spec)
 - [Vet-time escalation](#vet-time-escalation)
 - [Timing follows the show-it level](#timing-follows-the-show-it-level)
@@ -277,8 +276,6 @@ At a vet where a sibling build covers the same scope, run the sibling's healthy-
 this tree. For a lone build, write one healthy-case probe per new refusal and run it. A
 refusal-leg bite-proof shows the refusal fires on bad input; it cannot see the same refusal firing
 on good input, so over-refusal ships unseen.
-
-## A test that guards prose clears two bars first
 
 Before you order a test that guards a prose line, check it against the pin rule and
 Named-failure-first (`rubric/review-discipline.md`). A line that fails either bar gets no test;

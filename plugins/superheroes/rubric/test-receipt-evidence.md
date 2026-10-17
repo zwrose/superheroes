@@ -15,11 +15,9 @@ head sha (with evidence it runs the claimed tests) or the build's **ordered suit
 command, raw output, and successful exit/pass summary. A failed, cancelled, or skipped CI run — or a
 suite run ending in failures — does not ground the claim.
 
-## A local pass the CI runner cannot reproduce
-
-A test that commits in a temporary git repository sets the identity inline
-(`-c user.name=… -c user.email=…`). A CI runner has no git identity, so a test that leans on yours
-passes locally and fails in CI.
+A local pass grounds nothing the CI runner cannot reproduce. A test that commits in a temporary git
+repository sets the identity inline (`-c user.name=… -c user.email=…`): a CI runner has no git
+identity, so a test that leans on yours passes locally and fails in CI.
 
 ## Structured gate receipts
 
