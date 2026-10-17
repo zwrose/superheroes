@@ -248,6 +248,42 @@ def _is_python_program(program):
     return bool(_PYTHON_PROGRAM.match(os.path.basename(program)))
 
 
+_ENV_OPERAND_OPTIONS = frozenset(["-u", "--unset", "-C", "--chdir", "-S", "--split-string"])
+
+
+def _strip_comments(text):
+    """``text`` with each unquoted shell comment removed up to (not including) its newline, so the
+    newline stays a command boundary."""
+    out = []
+    quote = None
+    prev = "\n"
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < len(text):
+                out.append(c)
+                i += 1
+                c = text[i]
+            elif c == quote:
+                quote = None
+        elif c == "\\" and i + 1 < len(text):
+            out.append(c)
+            i += 1
+            c = text[i]
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (prev.isspace() or prev in ";&|()"):
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            prev = "\n"
+            continue
+        out.append(c)
+        prev = c
+        i += 1
+    return "".join(out)
+
+
 def _is_separator(token):
     return bool(token) and all(c in _SEPARATOR_CHARS for c in token)
 
@@ -261,23 +297,30 @@ def project_interpreter(verify_command):
         return None
     try:
         # axis: an unquoted newline is a command boundary, so it is a separator token, never whitespace
-        lexer = shlex.shlex(verify_command, posix=True, punctuation_chars=";&|()<>\n")
+        lexer = shlex.shlex(_strip_comments(verify_command), posix=True, punctuation_chars=";&|()<>\n")
         lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
+        lexer.commenters = ""
         tokens = list(lexer)
     except ValueError:
         return None
     at_command = True
     after_env = False
+    skip_operand = False
     for i, tok in enumerate(tokens):
         if _is_separator(tok):
             at_command = True
             after_env = False
+            skip_operand = False
             continue
         if not at_command:
             continue
-        # axis: an absolute env wrapper is skipped (with its options) so the python it launches is the launcher, never the wrapper
+        # axis: an absolute env wrapper is skipped (with its options and their operands) so the python it launches is the launcher, never the wrapper
+        if skip_operand:
+            skip_operand = False
+            continue
         if after_env and tok.startswith("-"):
+            skip_operand = tok in _ENV_OPERAND_OPTIONS
             continue
         if os.path.basename(tok) == "env":
             after_env = True
@@ -506,7 +549,11 @@ def _probe_interpreter(interpreter, copy, env, timeout):
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_group(proc.pid)
-            out, _ = proc.communicate()
+            # axis: a detached helper can hold the pipe open past the group kill, so the drain is bounded and never waits for EOF; the caller's sweeps close it
+            try:
+                out, _ = proc.communicate(timeout=_DRAIN_JOIN)
+            except subprocess.TimeoutExpired:
+                out = b""
             return False, _tail_text(out[-OUTPUT_TAIL_BYTES:], True) or "timed out"
         return proc.returncode == 0, _tail_text(out[-OUTPUT_TAIL_BYTES:], True)
     finally:
