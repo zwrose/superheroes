@@ -7,5 +7,17 @@
   "prs": [
     {"number": 241, "title": "Save a card"},
     {"number": 242, "title": "Remove a saved card"}
-  ]
+  ],
+  "leftovers": {
+    "241:cards/kept-after-close": {
+      "why": "How long a closed account's card stays on file is a privacy promise to your customers, and only you can set it.",
+      "context": "When an account is closed, its saved cards are not removed from the shop's records.",
+      "options": "none"
+    },
+    "242:cards/kept-after-close": {
+      "why": "How long a closed account's card stays on file is a privacy promise to your customers, and only you can set it.",
+      "context": "When an account is closed, its saved cards are not removed from the shop's records.",
+      "options": "none"
+    }
+  }
 }
