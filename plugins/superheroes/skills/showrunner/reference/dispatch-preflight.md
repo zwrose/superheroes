@@ -75,7 +75,7 @@ For every launch, the launcher decides where each build runs.
 
 - The project's cloud builds setting sets the default.
 - The owner's [launch word](../../../rubric/glossary.md#launch-word) for one build overrides that default. "This one local" keeps the build on the owner's machine, and a word naming the cloud sends it to the cloud. The word reaches the launcher as `--place local` or `--place cloud`.
-- A build pointed at the cloud runs on the owner's machine when it needs something only that machine has, or when the cloud is not ready. A build is never held and never dropped.
+- A build pointed at the cloud runs on the owner's machine when it needs something only that machine has, or when the cloud is not ready. A build is never held and never dropped. The one exception is a cloud launch whose checkout is off its base: it stops with a `launch-cloud-checkout-*` refusal for the owner rather than moving to the owner's machine (see `orchestration.md`).
 
 ### The needs you check for
 
@@ -87,7 +87,7 @@ Before a launch, judge from the build's order whether it needs anything only the
 ### How each check reads for a cloud launch
 
 - `engine-auth`: unchanged. It probes this machine's engines. Whether the cloud can run the reviewer is the launcher's readiness check, not this one.
-- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. When the launcher's own cloud base check refuses with `launch-cloud-base-not-on-remote` or `launch-cloud-base-remote-unchecked`, the build is not a no-go: it falls back to the owner's machine (`fellBack: true`), and the place call records why. `launch-cloud-base-remote-unchecked` reads as an unreachable cloud, and `launch-cloud-base-not-on-remote` as a build that needs its base commit, which only this machine has.
+- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. When the launcher's own cloud base check refuses with `launch-cloud-base-not-on-remote` or `launch-cloud-base-remote-unchecked`, the build is not a no-go: it falls back to the owner's machine (`fellBack: true`), and the place call records why. `launch-cloud-base-remote-unchecked` reads as an unreachable cloud, and `launch-cloud-base-not-on-remote` as a build that needs its base commit, which only this machine has. The launcher also checks that this checkout is on a branch whose local head and whose tip on the remote are both the `baseCommit`; when it is not, the launch refuses with a `launch-cloud-checkout-*` reason and does not fall back.
 - `disjoint-surfaces`: unchanged. A cloud lane takes no slot.
 - `workspace-isolation`: a cloud launch makes no worktree on this machine. The cloud session works in its own copy of the repository, so the check passes with that reason.
 - `standing-rulings`: unchanged. The launcher establishes them.
