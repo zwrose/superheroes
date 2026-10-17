@@ -839,14 +839,15 @@ def test_w9_the_stored_key_is_compared_not_one_recomputed_from_redacted_text(tmp
 
 
 @pytest.mark.parametrize("bad", [{"a": 1}, "x", None, [1], [None]])
-def test_w10_a_malformed_earlier_findings_list_is_unreadable(tmp_path, bad):
-    # axis: malformed prior; a findings field that is not a list of objects read as having no findings
+def test_w10_a_malformed_earlier_findings_list_is_superseded_and_named(tmp_path, bad):
+    # axis: malformed prior; a findings field that is not a list of objects read as having no findings, or blocking every later write
     fake = Fake()
     rec = build(account())
     rec["findings"] = bad
     fake.comments = [{"id": 1, "author": "a", "body": rr.render(rec), "url": "u1"}]
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-unreadable") and len(fake.comments) == 1
+    assert out["ok"] and len(fake.marked()) == 2
+    assert rr.read(7, readers=fake.readers())["earlierRecordUnreadable"] == {"id": 1, "url": "u1"}
 
 
 MAKERS = [{"family": "anthropic", "source": "builder"}]

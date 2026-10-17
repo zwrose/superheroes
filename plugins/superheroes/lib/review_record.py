@@ -1438,6 +1438,9 @@ def write(account_path, repo_root, readers=None):
         prior, earlier_unreadable = None, None
         if latest:
             prior = _parse_body(latest["body"], by_id)
+            earlier = prior.get("findings") if prior is not None else None
+            if prior is not None and not (isinstance(earlier, list) and all(isinstance(i, dict) for i in earlier)):
+                prior = None  # a record whose findings list is malformed is as unreadable as one that does not parse
             if prior is None:
                 # axis: an unreadable earlier record never blocks a new one; the new record names it, so the vet
                 # reads that record's comments directly and checks nothing it listed went missing
