@@ -88,7 +88,6 @@ def test_only_the_title_moves(tmp_path, capsys):
 
 @pytest.mark.parametrize("sheet, extra, problem", [
     ("remainder", [], "needs --slug"),
-    ("pr", ["--slug", "x"], "--slug is only for"),
     ("odd", [], "not a sheet kind"),
 ])
 def test_refusals_write_nothing(tmp_path, capsys, sheet, extra, problem):
@@ -99,9 +98,9 @@ def test_refusals_write_nothing(tmp_path, capsys, sheet, extra, problem):
     assert not out.exists()
 
 
-def test_project_name_carries_no_owner():
+def test_empty_project_name_is_refused():
     with pytest.raises(sheet_title.Refusal):
-        sheet_title.title_for(_pr_sheet(), "zwrose/superheroes")
+        sheet_title.title_for(_pr_sheet(), " ")
 
 
 def test_title_is_escaped_for_the_page():

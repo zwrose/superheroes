@@ -14,7 +14,7 @@ part of owner/name):
   stack                    "<project> stack PR #<bottom>–#<top> review sheet", from prSheet.prs, bottom PR first
   index                    "<project> open decisions review sheet"
   plain, remainder, final  "<project> <work-item slug> review sheet", the slug from --slug
---slug is required for those three kinds and refused for the others.
+--slug is required for those three kinds.
 
 Only the page's <title> changes. The data file is read, never written, so the sheet's digest, its
 answers and its verdict are the same as for the unchanged template, and the app bar still shows the
@@ -46,15 +46,13 @@ def _number(value, where):
 
 def title_for(sheet, project, slug=None):
     """The artifact title of a sheet, from its data file, the project's name and, for a discovery sheet, its slug."""
-    if not isinstance(project, str) or not project.strip() or "/" in project:
-        raise Refusal(["the project name must be the repository's name, without its owner"])
+    if not isinstance(project, str) or not project.strip():
+        raise Refusal(["the project name is empty"])
     kind = sheet.get("kind") if isinstance(sheet, dict) else None
     if kind not in ("pr", "stack", "index", *_SLUG_KINDS):
         raise Refusal(["the data file's kind is not a sheet kind: %r" % (kind,)])
     if kind in _SLUG_KINDS and (not isinstance(slug, str) or not slug.strip()):
         raise Refusal(["a %s sheet needs --slug, its work item's slug" % kind])
-    if kind not in _SLUG_KINDS and slug is not None:
-        raise Refusal(["--slug is only for a plain, remainder or final sheet, not a %s sheet" % kind])
     pr_sheet = sheet.get("prSheet") if isinstance(sheet.get("prSheet"), dict) else {}
     if kind == "pr":
         return "%s PR #%d review sheet" % (project, _number(pr_sheet.get("number"), "prSheet.number"))
