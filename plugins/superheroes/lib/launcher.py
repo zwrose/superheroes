@@ -2591,21 +2591,21 @@ def _cloud_checkout_refusal(repo_root, base, env):
         "checkoutHead": head,
         "baseCommit": base,
     }
-    # axis: a branch or HEAD that could not be read refuses, a detached HEAD included
+    # axis: a branch or HEAD that could not be read refuses, a detached HEAD included — see bite-proof record i1900_cloud_checkout
     if branch is None or head is None:
         return "launch-cloud-checkout-unreadable", detail
-    # axis: a checkout whose HEAD is not the base refuses, and the remote is not asked
+    # axis: a checkout whose HEAD is not the base refuses, and the remote is not asked — see bite-proof record i1900_cloud_checkout
     if head != base:
         return "launch-cloud-checkout-off-base", detail
     tip, why = _remote_branch_head_fn(repo_root, branch, env)
     detail["remoteBranchHead"] = tip
-    # axis: a remote branch tip that could not be read refuses
+    # axis: a remote branch tip that could not be read refuses — see bite-proof record i1900_cloud_checkout
     if why == "unchecked":
         return "launch-cloud-checkout-remote-unchecked", detail
-    # axis: a branch the remote lacks refuses
+    # axis: a branch the remote lacks refuses — see bite-proof record i1900_cloud_checkout
     if why == "absent":
         return "launch-cloud-checkout-branch-not-on-remote", detail
-    # axis: a remote branch tip that is not the base refuses
+    # axis: a remote branch tip that is not the base refuses — see bite-proof record i1900_cloud_checkout
     if tip != base:
         return "launch-cloud-checkout-off-base", detail
     return None
