@@ -4,6 +4,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 
 import { CHECKPOINT_INFO } from './checkpoint-block'
 import { SNOOZE_STEP_TOKENS } from './decide'
+import { RESUME_PROMPT } from './resume'
 
 const THRESHOLD = 167000
 
@@ -112,6 +113,8 @@ type Rig = {
   denied: number
   // what `session.surfaces` answers (null: the read fails)
   surfaces: readonly string[] | null
+  // the prompts the mod submitted, in order
+  prompts: string[]
 }
 
 // Registers the world beneath the mod: the CLI stub on `process.run`, the file
@@ -136,6 +139,10 @@ function rig(
     isCompactCommandCompacting?: boolean
     // the clock reading the session.compact handler moves to before it fails or resolves
     compactAt?: number
+    // `$.prompt.submit` rejects
+    isSubmitBroken?: boolean
+    // `$.prompt.submit` settles only when this does: the prompt has not entered yet
+    submitEnters?: Promise<void>
   } = {},
 ): Rig {
   const r: Rig = {
@@ -159,6 +166,7 @@ function rig(
     compactAttempts: 0,
     denied: 0,
     surfaces: [],
+    prompts: [],
   }
 
   on('session.id', () =>
@@ -282,6 +290,15 @@ function rig(
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.attach', (_$, e) => ({ clientId: e.clientId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('prompt.submit', async (_$, e) => {
+    r.prompts.push(e.text)
+    if (options.isSubmitBroken) {
+      throw new Error('the prompt box is gone')
+    }
+    await options.submitEnters
+
+    return { text: e.text }
+  })
   on('classic.SessionStart', () => ({}))
 
   return r
@@ -1807,3 +1824,72 @@ test(
     expect(r.commands).toEqual([COMMAND])
   },
 )
+
+// #1891: a completed compaction of the mod's own or a manual /compact submits the agreed resume prompt.
+for (const trigger of ['plugin', 'manual'] as const) {
+  test(`a completed ${trigger} compaction submits the resume prompt exactly once`, async ($, on) => {
+    const r = rig(on, () => steer)
+
+    const res = await compact($, { trigger: trigger as SessionCompactInput['trigger'] })
+    await r.clock.settle()
+
+    expect(res).toEqual({ messages: SUMMARY })
+    expect(r.prompts).toEqual([RESUME_PROMPT])
+  })
+}
+
+const silent: [string, Partial<SessionCompactInput>, Options][] = [
+  ["the harness's own mid-turn (auto)", { trigger: 'auto' }, {}],
+  ['a precompute', { trigger: 'precompute' as SessionCompactInput['trigger'] }, {}],
+  ["a subagent's", { agentId: 'agent-7' }, {}],
+  ['a skipped', {}, { compactSkip: 'vetoed by a hook' }],
+]
+
+for (const [label, input, options] of silent) {
+  test(`${label} compaction submits no resume prompt`, async ($, on) => {
+    const r = rig(on, () => steer, options)
+
+    await compact($, input)
+    await r.clock.settle()
+
+    expect(r.seen).toHaveLength(1)
+    expect(r.prompts).toEqual([])
+  })
+}
+
+test('a compaction that throws submits no resume prompt', async ($, on) => {
+  const r = rig(on, () => steer, { compactFailures: 1 })
+
+  await expect(compact($)).rejects.toThrow()
+  await r.clock.settle()
+
+  expect(r.prompts).toEqual([])
+})
+
+test("a failing resume submit leaves the compaction's result unchanged, and the next compaction submits again", async ($, on) => {
+  const r = rig(on, () => steer, { isSubmitBroken: true })
+
+  expect(await compact($)).toEqual({ messages: SUMMARY })
+  await r.clock.settle()
+  expect(await compact($)).toEqual({ messages: SUMMARY })
+  await r.clock.settle()
+
+  expect(r.prompts).toEqual([RESUME_PROMPT, RESUME_PROMPT])
+})
+
+test('a second compaction before the resume prompt enters submits nothing extra', async ($, on) => {
+  let enter = () => {}
+  const r = rig(on, () => steer, { submitEnters: new Promise<void>(resolve => { enter = resolve }) })
+
+  await compact($, { trigger: 'plugin' as SessionCompactInput['trigger'] })
+  await compact($)
+  await r.clock.settle()
+  expect(r.prompts).toEqual([RESUME_PROMPT])
+
+  // once it has entered, the next compaction gets its own
+  enter()
+  await r.clock.settle()
+  await compact($)
+  await r.clock.settle()
+  expect(r.prompts).toEqual([RESUME_PROMPT, RESUME_PROMPT])
+})
