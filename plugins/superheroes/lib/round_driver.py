@@ -7856,7 +7856,35 @@ def _ruling_ledger_precondition_refusal(session_dir, state, pending):
     return None
 
 
+def _ensure_landing_folders(session_dir, pending):
+    """Make the landing folders a pending step's seat or command will write into.
+
+    Invariant: whenever the driver hands a caller a pending step whose phase is a seat dispatch
+    (`dispatch-*`) or `run-verify`, `round-<N>/landing/<phase>/` already exists; and when the payload
+    advertises a verify gate (`payload["verify"]["landingPath"]`) that the driver itself made, that
+    path's parent folder exists too. An empty folder carries no claim — the landing readers read an
+    empty or missing folder as nothing landed — so this changes no state and no journal. A terminal or
+    judgment pending, or one whose round is not a plain int, makes no folder. An `OSError` propagates:
+    a session folder that cannot be written fails loudly, as every other session write does."""
+    rnd = pending.get("round")
+    if isinstance(rnd, bool) or not isinstance(rnd, int):
+        return
+    phase = pending.get("phase")
+    if isinstance(phase, str) and (phase.startswith("dispatch-") or phase == P_VERIFY):
+        os.makedirs(round_records.landing_dir(session_dir, rnd, phase), exist_ok=True)
+    payload = pending.get("payload")
+    verify = payload.get("verify") if isinstance(payload, dict) else None
+    landing_path = verify.get("landingPath") if isinstance(verify, dict) else None
+    verify_round = verify.get("round") if isinstance(verify, dict) else None
+    if (isinstance(landing_path, str) and landing_path
+            and isinstance(verify_round, int) and not isinstance(verify_round, bool)):
+        parent = os.path.dirname(landing_path)
+        if parent == round_records.landing_dir(session_dir, verify_round, P_VERIFY):
+            os.makedirs(parent, exist_ok=True)
+
+
 def _next_response(session_dir, state, pending, cmd):
+    _ensure_landing_folders(session_dir, pending)
     expected_hash = state_hash(state)
     return {
         "ok": True,

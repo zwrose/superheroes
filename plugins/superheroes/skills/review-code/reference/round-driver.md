@@ -191,6 +191,8 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
 
+The driver creates `$SESSION_DIR/round-N/landing/<phase>/` before it hands back any seat-dispatch or `run-verify` step, so a seat or a hand-run command never writes into a missing folder.
+
 **Dispatch manifest before `advance`.** On the durable-record path at state v5, `$SESSION_DIR/round-<N>/landing/<phase>/_dispatch.a<K>.json` is **not** a provenance source — `advance` reads it only to disclose `dispatchManifestIgnored`; provenance is the runner record on each stored envelope (`executionEvidence.source`). A finished session of an earlier state version (2–4) never takes `record-result`/`advance` (`legacy-session-use-next-submit`); an unfinished one is refused before any command reads it (`session-from-earlier-version`, see Transition below). **Orchestrator-fulfilled phases** (`run-verify`) emit no manifest.
 
 No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not pass
