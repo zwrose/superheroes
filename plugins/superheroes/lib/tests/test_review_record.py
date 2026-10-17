@@ -378,9 +378,11 @@ def test_an_unparseable_prior_is_superseded_and_named_never_blocking(tmp_path):
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
     assert out["ok"]
     rec = rr.read(7, readers=fake.readers())
-    assert rec["ok"] and rec["earlierRecordUnreadable"] == {"id": 1, "url": "u1"}
+    assert rec["ok"] and rec["earlierRecordsNotChecked"] == [{"id": 1, "url": "u1", "why": "unreadable"}]
     assert rec["previousRecord"]["id"] == 1 and rec["earlierRecords"] == ["u1"]
-    assert "The earlier record (u1) could not be read" in fake.marked()[-1]["body"]
+    assert "Earlier records not checked by code, which the vet reads directly: u1 (unreadable)." in fake.marked()[-1]["body"]
+    send(tmp_path, fake)  # a further write still lists the unreadable record
+    assert rr.read(7, readers=fake.readers())["earlierRecordsNotChecked"] == [{"id": 1, "url": "u1", "why": "unreadable"}]
 
 
 def test_a_readable_prior_names_no_unreadable_record(tmp_path):
@@ -389,8 +391,8 @@ def test_a_readable_prior_names_no_unreadable_record(tmp_path):
     send(tmp_path, fake)
     send(tmp_path, fake)
     rec = rr.read(7, readers=fake.readers())
-    assert rec["ok"] and rec["earlierRecordUnreadable"] is None
-    assert "could not be read" not in fake.marked()[-1]["body"]
+    assert rec["ok"] and rec["earlierRecordsNotChecked"] == []
+    assert "not checked by code" not in fake.marked()[-1]["body"]
 
 
 def test_read_with_no_record_is_missing():
@@ -847,7 +849,7 @@ def test_w10_a_malformed_earlier_findings_list_is_superseded_and_named(tmp_path,
     fake.comments = [{"id": 1, "author": "a", "body": rr.render(rec), "url": "u1"}]
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
     assert out["ok"] and len(fake.marked()) == 2
-    assert rr.read(7, readers=fake.readers())["earlierRecordUnreadable"] == {"id": 1, "url": "u1"}
+    assert rr.read(7, readers=fake.readers())["earlierRecordsNotChecked"] == [{"id": 1, "url": "u1", "why": "unreadable"}]
 
 
 MAKERS = [{"family": "anthropic", "source": "builder"}]

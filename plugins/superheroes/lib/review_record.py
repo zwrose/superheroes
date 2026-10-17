@@ -6,8 +6,9 @@ file, and never edits a comment. The record links the record before it (previous
 comment (rawOutputs), so everything stays retrievable. The one thing a write reads from an earlier
 record is the identity key of each finding in the latest one (_unaccounted): every such key must
 appear in the new account's findings with an outcome, or the write refuses before anything is posted.
-An earlier record that cannot be parsed never blocks a write: the new record names it
-(earlierRecordUnreadable) for the vet to read directly.
+An earlier record that cannot be parsed never blocks a write. Every earlier record that could not be
+parsed or was changed in transit is listed on each new record (earlierRecordsNotChecked), so the vet
+reads those directly however many records came after them.
 
 build_record() is the only place a status, a reviewer's ran-state or a code fact is decided;
 write() is the only path that posts, and read() does I/O only. Facts that code holds (lane, final
@@ -809,7 +810,7 @@ def build_record(account, readers):
         "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
                     "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
         "previousRecord": None,
-        "earlierRecordUnreadable": None,
+        "earlierRecordsNotChecked": [],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     rec["status"], rec["parked"], lines = _status(
@@ -1135,6 +1136,19 @@ def _rounds_line(rounds):
             + (" The loop stopped at its cap." if rounds.get("stoppedAtCap") else ""))
 
 
+def _not_checked_line(entries, compact):
+    if compact:
+        return (f"{_plural(len(entries), 'earlier record', 'earlier records')} could not be checked by code "
+                f"{LISTED}; the vet reads them directly.")
+    named = "; ".join(f"{e.get('url') or e.get('id')} ({e.get('why')})" for e in entries)
+    return f"Earlier records not checked by code, which the vet reads directly: {named}."
+
+
+def _findings_listed(rec):
+    earlier = rec.get("findings")
+    return isinstance(earlier, list) and all(isinstance(i, dict) for i in earlier)
+
+
 def _summary(r, level):
     """The summary text. Level 0 lists everything; level 1 turns each unbounded list (what is left, who ran,
     which findings wait, which were not taken) into a count; level 2 also turns the per-seat reviewer bullets
@@ -1183,9 +1197,7 @@ def _summary(r, level):
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
         *([_refused_line(refused, compact)] if refused else []),
-        *([f"The earlier record ({r['earlierRecordUnreadable'].get('url') or r['earlierRecordUnreadable'].get('id')}) "
-           "could not be read, so its findings were not checked against this one; the vet reads it directly."]
-          if r.get("earlierRecordUnreadable") else []),
+        *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
         *who,
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
@@ -1349,10 +1361,13 @@ def _part_slice(body):
 
 def _resolve_parts(index, by_id):
     """The record a parts head names: its part comments fetched by id, their slices joined in the listed order, and
-    the text checked against the head's length and hash before it is parsed. None when any of that fails."""
+    the text checked against the head's length and hash. None when a part is missing or malformed, the index is
+    malformed, or the text does not parse as a record; a record whose length or hash differs is read and marked."""
     ids, digest, chars = index.get("parts"), index.get("sha256"), index.get("chars")
-    if not (isinstance(ids, list) and ids and isinstance(digest, str) and isinstance(chars, int)
-            and not isinstance(chars, bool) and by_id):
+    # axis: a malformed index (no parts, a hash that is not 64 hex digits, a negative or non-integer length) refuses
+    if not (isinstance(ids, list) and ids and all(isinstance(i, int) and not isinstance(i, bool) for i in ids)
+            and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)
+            and isinstance(chars, int) and not isinstance(chars, bool) and chars >= 0 and by_id):
         return None
     pieces = []
     for pid in ids:
@@ -1369,8 +1384,9 @@ def _resolve_parts(index, by_id):
         return None
     # axis: parts changed in transit that still parse as a record are read and reported, never refused; the length
     # and hash say only that something changed, so the reader names it for the vet instead of hiding the record
-    if len(text) != chars or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
-        rec = dict(rec, transitDamage={"recordedChars": chars, "foundChars": len(text), "hashMatches": False})
+    hash_matches = hashlib.sha256(text.encode("utf-8")).hexdigest() == digest
+    if len(text) != chars or not hash_matches:
+        rec = dict(rec, transitDamage={"recordedChars": chars, "foundChars": len(text), "hashMatches": hash_matches})
     return rec
 
 
@@ -1435,22 +1451,25 @@ def write(account_path, repo_root, readers=None):
         by_id = {c["id"]: c for c in comments}
         found = _marker_comments(comments)
         latest = found[-1] if found else None
-        prior, earlier_unreadable = None, None
-        if latest:
-            prior = _parse_body(latest["body"], by_id)
-            earlier = prior.get("findings") if prior is not None else None
-            if prior is not None and not (isinstance(earlier, list) and all(isinstance(i, dict) for i in earlier)):
-                prior = None  # a record whose findings list is malformed is as unreadable as one that does not parse
-            if prior is None:
-                # axis: an unreadable earlier record never blocks a new one; the new record names it, so the vet
-                # reads that record's comments directly and checks nothing it listed went missing
-                earlier_unreadable = {"id": latest["id"], "url": latest.get("url")}
+        prior, not_checked = None, []
+        for c in found:
+            parsed = _parse_body(c["body"], by_id)
+            # a record whose findings list is malformed is as unreadable as one that does not parse
+            usable = parsed if parsed is not None and _findings_listed(parsed) else None
+            # axis: every earlier record code could not check (unreadable, or changed in transit) is listed on each
+            # new record, so a later write never hides it from the vet, who reads only the latest record
+            if usable is None or usable.get("transitDamage"):
+                not_checked.append({"id": c["id"], "url": c.get("url"),
+                                    "why": "unreadable" if usable is None else "changed in transit"})
+            if c is latest:
+                # axis: an unreadable earlier record never blocks a new one; it is listed instead
+                prior = usable
         missing = _unaccounted(prior, a["findings"])
         if missing:
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         record = build_record(a, rd)
-        record["earlierRecordUnreadable"] = earlier_unreadable
+        record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
         previous = {"id": latest["id"], "url": latest.get("url")} if latest else None

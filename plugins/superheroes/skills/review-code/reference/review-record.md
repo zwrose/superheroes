@@ -117,7 +117,7 @@ Refusals, before anything is posted:
 
 ## When it refuses
 
-- `review-record-unreadable` (from `read`): the latest record could not be parsed. Write the next record as usual: an unreadable earlier record never blocks a write, and the new record names it under `earlierRecordUnreadable`. Never delete or overwrite a record by hand.
+- `review-record-unreadable` (from `read`): the latest record could not be parsed. Write the next record as usual: an unreadable earlier record never blocks a write. Every new record lists, under `earlierRecordsNotChecked`, each earlier record that could not be parsed or was changed in transit, so a later write never hides one. Never delete or overwrite a record by hand.
 - `review-record-unaccounted`: relist each named earlier finding in the account and write again.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
 - `review-record-too-large`: a raw output file is over GitHub's limit (split it), or the summary alone cannot fit one comment (shorten the account's long names or lists); then write again. A long record is not refused for its length: it posts in parts.
