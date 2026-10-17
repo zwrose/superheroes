@@ -195,14 +195,17 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a live
   handback-receipt refusal (none possible while dark and unwired). On firing, a retirement proposal
   to the owner at a gardening pass. An absent, unreadable, or short-of-window record reads
-  unmeasured, never zero.
+  unmeasured, never zero. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1908 (owner ruling 2026-10-17, gardening pass 4).
 - **Notes.** harness-limit — the host PreToolUse chain does not arm this hook;
   review-before-handback is held in charter prose until K1 lands.
 - **Retirement — the refusing behaviour.** Retired the refusal the hook called into: the handback gate
   now allows every command (see D6). The hook file stays, unwired. Receipt: PR #1761 (issue #1719).
+- **Retirement — the hook.** Deleted `hooks/handback_receipt_gate.py` and its test; it was never
+  wired into `hooks/hooks.json`, and `test_hook_wiring.py` still pins the Bash PreToolUse chain to
+  the worktree guard and the timeout floor. Receipt: issue #1908.
 
 #### A4 — Bash timeout hook
 
@@ -606,15 +609,17 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite
   `handback_gate.py` or the handback refusal class after K1 retires. On firing, a proposal to the
-  owner at a gardening pass.
+  owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1908 (owner ruling 2026-10-17, gardening pass 4).
 - **Notes.** harness-limit — a Claude-host Bash tripwire with no wired reader; #954 audit recommends
   retire and the driver mandate (#1095) already holds the same line.
 - **Retirement — the refusing half.** Retired all refusal logic in `handback_gate.py`: the module now
   allows every command and reads no receipt, so nothing refuses a handback for lacking a certificate;
   the review record replaces it as the account of a review. Receipt: PR #1761 (issue #1719).
+- **Retirement — the module.** Deleted `lib/handback_gate.py` and its test; the tests that borrowed
+  it as a sample module now use `lib/build_lane.py`. Receipt: issue #1908.
 - **This project's arming record for driver-or-park.** The flip arms when the milestone *Review panels
   can't silently degrade* closes, which is the owner's judgment that its exit condition is met; the
   release that carries the flip stamps the close.

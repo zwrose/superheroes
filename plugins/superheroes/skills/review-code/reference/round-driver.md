@@ -143,8 +143,7 @@ orchestrator doctrine; the driver only validates the reason against `CHECKPOINT_
 allowed — each write supersedes the previous interim. The write-once rule applies only to terminal
 receipts, not interim supersession.
 
-**Not handback evidence.** `handback_gate` refuses an interim receipt at the receipt-binding check
-with `receipt-interim-not-handback-evidence` — progress evidence for the operator, not valid
+**Not handback evidence.** An interim receipt is progress evidence for the operator, not valid
 handback.
 
 ## Durable-record path
@@ -1045,16 +1044,12 @@ complete, and do not extend it into a second enumeration that would drift.
 
 ### Handback scope markers (Claude host, Bash tool)
 
-`lib/handback_gate.py` parses `gh pr ready`, `gh pr create` and the GraphQL ready call, resolves
-the pull request each one names, and reads the worktree's scope markers: `build-lane.json`
-(written by `lib/build_lane.py` `declare`, from the workhorse charter's full-lane intake step) and
-`review-session.json` (written on the driver's first fresh `next`). Both markers carry a `branch`
-field, and a marker whose `branch` differs from the worktree's current branch is stale. The
-module's decision function allows every command in every worktree state and reads no review file.
-A hook script, `hooks/handback_receipt_gate.py`, calls it, and no hook configuration registers
-that script. No automated check stands at handback; the rule for a PR handed
-back without a review record is `rubric/review-discipline.md` § The driver mandate — the review
-record.
+Two scope markers sit in the worktree's sidecar directory: `build-lane.json` (written by
+`lib/build_lane.py` `declare`, from the workhorse charter's full-lane intake step) and
+`review-session.json` (written on the driver's first fresh `next`). Both carry a `branch` field.
+`lib/review_record.py` reads `build-lane.json` for the lane its record states; no shipped module
+reads `review-session.json`. No automated check refuses a handback; the rule for a PR handed back
+without a review record is `rubric/review-discipline.md` § The driver mandate — the review record.
 
 ## Certification shapes
 
