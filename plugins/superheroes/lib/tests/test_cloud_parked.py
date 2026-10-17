@@ -48,7 +48,7 @@ RENEW_WORDS = ("renew", "fresh pass", "new pass")
 
 
 class Gh:
-    """Fake `gh api`: answers keyed by the endpoint, comments as concatenated pages like --paginate."""
+    """Fake `gh api`: answers keyed by the endpoint; comments are served 100 a page, by page number."""
 
     def __init__(self):
         self.comments, self.pulls, self.broken, self.calls = {}, {}, set(), []
@@ -56,7 +56,8 @@ class Gh:
 
     def __call__(self, argv, **_kw):
         self.calls.append(tuple(argv))
-        path = argv[-1]
+        assert "--paginate" not in argv, argv
+        path, _, page = argv[-1].partition("?per_page=100&page=")
         if path in self.broken:
             return SimpleNamespace(returncode=1, stdout="")
         if path in self.broken_json:
@@ -64,13 +65,12 @@ class Gh:
         parts = path.split("/")
         number = int(parts[4])
         if parts[3] == "issues":
+            assert page.isdigit(), argv
             self.comment_reads += 1
             if self.comments_fail_from is not None and self.comment_reads >= self.comments_fail_from:
                 return SimpleNamespace(returncode=1, stdout="")
-            pages = [json.dumps([c]) for c in self.comments.get(number, [])]
-            if "--paginate" not in argv:
-                pages = pages[:1]
-            return SimpleNamespace(returncode=0, stdout="\n".join(pages) if pages else "[]")
+            rows = self.comments.get(number, [])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows[(int(page) - 1) * 100:int(page) * 100]))
         return SimpleNamespace(returncode=0, stdout=json.dumps(self.pulls[number]))
 
     broken_json = frozenset()
@@ -370,23 +370,28 @@ def test_a_parked_pr_whose_original_launch_is_unknown_is_reported_not_given_anot
     assert out["sendBack"] == [] and out["noLane"] == [{"pr": 10, "issue": 101}]
 
 
-def test_comments_are_read_with_the_paginate_flag_so_later_pages_count(w):
+def test_comments_are_read_page_by_number_so_later_pages_count(w):
     _lane(w, "l-a", 101, "session-a", "a")
-    w.gh.comments[10] = [{"id": 1, "body": "chatter"}, _lapsed_comment(10)]
+    w.gh.comments[10] = [{"id": n, "body": "chatter"} for n in range(1, 101)] + [_lapsed_comment(10)]
     w.gh.pulls[10] = _pull(101)
     assert _notice(w, 10)["kind"] == "lapsed-pass"
-    assert any("--paginate" in c for c in w.gh.calls if "/comments" in c[-1])
+    asked = [c[-1] for c in w.gh.calls if "/comments" in c[-1]]
+    assert asked[:2] == [_comments_path(10) + "?per_page=100&page=%d" % n for n in (1, 2)]
+    assert not any("--paginate" in c for c in w.gh.calls)
     w.gh.comments[11] = [{"id": 1, "body": "chatter"}, {"id": 2, "body": "chatter"}]
     assert _notice(w, 11)["kind"] == "not-lapsed-pass"
 
 
+# axis: an owner go-ahead past the first comment page; a read that stops at page 1 sends the PR back
 def test_an_owner_go_ahead_on_a_later_comment_page_is_still_seen(w):
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
-    w.gh.comments[10] += [{"id": 8, "body": "chatter"},
-                          _record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}])]
+    w.gh.comments[10] += [{"id": 1000 + n, "body": "chatter"} for n in range(100)]
+    w.gh.comments[10].append(_record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}]))
     _renew(w)
+    w.gh.calls.clear()
     assert _send(w)["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}]
+    assert _comments_path(10) + "?per_page=100&page=2" in [c[-1] for c in w.gh.calls]
 
 
 def test_a_parked_pr_closed_or_merged_before_the_renewal_is_not_sent_back(w):

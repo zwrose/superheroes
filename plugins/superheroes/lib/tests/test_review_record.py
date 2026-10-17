@@ -10,6 +10,7 @@ import pytest
 
 import canon
 import core_md
+import gh_pages
 import model_registry
 import pr_comment
 import review_record as rr
@@ -2704,8 +2705,8 @@ def test_a_page_that_is_not_json_or_not_a_list_makes_the_read_unavailable(monkey
 
 def test_a_list_that_never_ends_fails_the_read_after_the_page_cap(monkeypatch):
     # axis: the page cap; a list that never ends returning the rows read so far, or being asked for without end
-    assert rr._MAX_PAGES == 1000 and rr._PAGE_ROWS == 100
-    monkeypatch.setattr(rr, "_MAX_PAGES", 4)
+    assert gh_pages.MAX_PAGES == 1000 and gh_pages.PAGE_ROWS == 100
+    monkeypatch.setattr(gh_pages, "MAX_PAGES", 4)
     seen = []
 
     def endless(argv, cwd=None):
@@ -2715,13 +2716,3 @@ def test_a_list_that_never_ends_fails_the_read_after_the_page_cap(monkeypatch):
     assert rr._read_pages("repos/o/r/pulls/7/files") is None
     assert len(seen) == 4
     assert rr.changed_paths(7, "o/r") is None
-
-
-def test_the_page_query_joins_a_path_that_already_has_one_with_an_ampersand(monkeypatch):
-    # axis: the page request's query; a second ? appended to a path that already carries a query
-    seen = []
-    monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: seen.append(list(argv)) or "[]")
-    assert rr._read_pages("repos/o/r/x?state=open") == []
-    assert rr._read_pages("repos/o/r/y") == []
-    assert seen == [["gh", "api", "repos/o/r/x?state=open&per_page=100&page=1"],
-                    ["gh", "api", "repos/o/r/y?per_page=100&page=1"]]

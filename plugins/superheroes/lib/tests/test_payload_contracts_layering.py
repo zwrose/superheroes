@@ -29,6 +29,7 @@ _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "dispatch_outcome",
     "engine_adapter",
     "finding_identity",
+    "gh_pages",  # stdlib-only page reader pr_comment's comment listing imports
     "git_routing",  # break_it's only sibling import
     "model_registry",
     "payload_contracts",

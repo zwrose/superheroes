@@ -181,11 +181,10 @@ def _park_time(comment):
 
 
 def _comments(repo, pr, env, run):
-    code, out = _sib("cloud_builder")._gh(run, ["api", "--paginate", "repos/%s/issues/%d/comments" % (repo, pr)], env)
-    try:
-        found = _sib("pr_comment")._parse_paginated_arrays(out) if code == 0 else None
-    except ValueError:
-        return None
+    def fetch(endpoint):
+        code, out = _sib("cloud_builder")._gh(run, ["api", endpoint], env)
+        return out if code == 0 else None
+    found = _sib("gh_pages").read(fetch, "repos/%s/issues/%d/comments" % (repo, pr))
     return found if found is not None and all(isinstance(c, dict) for c in found) else None
 
 

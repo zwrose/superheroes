@@ -33,6 +33,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import gh_pages  # noqa: E402
 import grounding_stage  # noqa: E402
 import md_fence  # noqa: E402
 
@@ -275,11 +276,14 @@ def _read_body(run, pr, repo):
 
 
 def _read_comments(run, pr, repo):
-    argv = ["gh", "api", "repos/%s/issues/%d/comments" % (repo, pr), "--paginate", "--slurp"]
-    pages = _gh_json(run, argv, "comments")
-    if not isinstance(pages, list) or not all(isinstance(p, list) for p in pages):
-        raise _Refusal("read-failed", "comments: pages are not lists")
-    comments = [c for page in pages for c in page]
+    def fetch(endpoint):
+        try:
+            return _gh(run, ["gh", "api", endpoint], "comments")
+        except _Refusal:
+            return None
+    comments = gh_pages.read(fetch, "repos/%s/issues/%d/comments" % (repo, pr))
+    if comments is None:
+        raise _Refusal("read-failed", "comments: a page could not be read")
     for c in comments:
         if not isinstance(c, dict):
             raise _Refusal("read-failed", "comments: a comment lacks body, created_at, or user.login")

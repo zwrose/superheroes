@@ -62,20 +62,23 @@ class Gh:
             if times_out:
                 raise subprocess.TimeoutExpired(argv, 60)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if path in self.broken:
+        listing, _, page = path.partition("&page=")  # a list is read page by number; `broken` names it without the page
+        if path in self.broken or listing in self.broken:
             return SimpleNamespace(returncode=1, stdout="", stderr="gh: Server Error (HTTP 500)")
         if path.startswith(base + "/pulls/"):
             return SimpleNamespace(returncode=0, stdout=json.dumps(self.pulls[int(path.rsplit("/", 1)[1])]), stderr="")
         if path == base:
             return SimpleNamespace(returncode=0, stdout=json.dumps({"default_branch": self.default}), stderr="")
-        if path == base + "/pulls?state=open&per_page=100":
-            assert "--paginate" in argv
-            if self.open_raw is not None:
+        if listing in (base + "/pulls?state=open&per_page=100", base + "/branches?per_page=100"):
+            assert "--paginate" not in argv and page.isdigit(), argv
+            if listing.endswith("/branches?per_page=100"):
+                rows = [{"name": n} for n in self.branches]
+            elif self.open_raw is not None:
                 return SimpleNamespace(returncode=0, stdout=self.open_raw, stderr="")
-            return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps([p]) for p in self.open_prs) or "[]", stderr="")
-        if path == base + "/branches?per_page=100":
-            assert "--paginate" in argv
-            return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps([{"name": n}]) for n in self.branches), stderr="")
+            else:
+                rows = self.open_prs
+            piece = rows[(int(page) - 1) * 100:int(page) * 100]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(piece), stderr="")
         assert path.startswith(base + "/git/ref/heads/"), path
         branch = urllib.parse.unquote(path[len(base + "/git/ref/heads/"):])
         sha = self.ref_override.get(branch) or self.branches.get(branch)
