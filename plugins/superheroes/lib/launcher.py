@@ -2560,7 +2560,10 @@ _remote_branch_head_fn = _remote_branch_head
 
 
 def _read_checkout(repo_root, env):
-    """The launching checkout's ``(branch, head)``, each None when it could not be read."""
+    """The launching checkout's ``(branch, head)``, each None when it could not be read.
+
+    The branch is read on both sides of the HEAD read, so one result never combines two branches.
+    """
     branch = None
     head = None
     named = _git_scrubbed(
@@ -2579,6 +2582,18 @@ def _read_checkout(repo_root, env):
         said = (read.stdout or "").strip()
         if _HEX40.match(said):
             head = said
+    named = _git_scrubbed(
+        repo_root, "symbolic-ref", "--quiet", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    branch_after = None
+    if named is not None and named.returncode == 0:
+        said = (named.stdout or "").strip()
+        prefix = "refs/heads/"
+        if said.startswith(prefix) and len(said) > len(prefix):
+            branch_after = said[len(prefix):]
+    # axis: a branch read after HEAD that is unreadable or names another branch makes the whole read unreadable — see bite-proof record i1900_cloud_checkout
+    if branch_after != branch:
+        return None, head
     return branch, head
 
 

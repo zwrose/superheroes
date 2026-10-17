@@ -5,7 +5,7 @@ branch whose local HEAD and whose tip on `origin` are both exactly the premise's
 otherwise it refuses with a named reason before the command runs, at both check points; the
 checkout is never written.
 
-Guarded-element set (declared by the order): G1–G7 below, all in
+Guarded-element set (declared by the order): G1–G8 below, all in
 `plugins/superheroes/lib/launcher.py`. Each node was run alone as
 `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest "<node>" -q -p no:cacheprovider`
 with the detector unedited. Every capture below is the full output of that command; each begins
@@ -535,4 +535,71 @@ final remote lookup was pending.
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
 1 passed in 1.63s
+```
+
+---
+
+## G8 — the branch read on both sides of the HEAD read (`_read_checkout`)
+
+**Guarded element:** `launcher.py:2595` `if branch_after != branch:` → `return None, head`, the
+comparison of the branch read after HEAD with the branch read before it.
+**Axis:** a branch read after HEAD that is unreadable or names another branch makes the whole read
+unreadable, so one result never combines two branches.
+
+**Neutralization:** `if branch_after != branch:` → `if False and branch_after != branch:` (the second
+read is ignored).
+
+**Red run** (`test_one_checkout_read_never_mixes_two_branches[another-branch-after-head]`):
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_one_checkout_read_never_mixes_two_branches[another-branch-after-head] __
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fd78ae94320>
+second_branch = CompletedProcess(args=[], returncode=0, stdout='refs/heads/other\n', stderr='')
+
+    @pytest.mark.parametrize("second_branch", [
+        _proc(0, "refs/heads/other\n"),
+        _proc(128),
+    ], ids=["another-branch-after-head", "branch-unreadable-after-head"])
+    def test_one_checkout_read_never_mixes_two_branches(monkeypatch, second_branch):
+        # axis: a branch that changed or became unreadable across the HEAD read makes the read unreadable
+        base = "a" * 40
+        branch_reads = []
+    
+        def scrubbed(repo_root, *args, env=None, timeout=None):
+            if args[0] == "rev-parse":
+                return _proc(0, base + "\n")
+            branch_reads.append(True)
+            if len(branch_reads) == 1:
+                return _proc(0, "refs/heads/main\n")
+            return second_branch
+    
+        monkeypatch.setattr(L, "_git_scrubbed", scrubbed)
+>       assert L._read_checkout("/repo", None) == (None, base)
+E       AssertionError: assert ('main', 'aaa...aaaaaaaaaaaa') == (None, 'aaaaa...aaaaaaaaaaaa')
+E         
+E         At index 0 diff: 'main' != None
+E         Use -v to get more diff
+
+/home/user/wt-1900/plugins/superheroes/lib/tests/test_launcher_cloud_checkout.py:365: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launcher_cloud_checkout.py::test_one_checkout_read_never_mixes_two_branches[another-branch-after-head]
+1 failed in 1.42s
+```
+Axis check: the red is the stale branch `main` returned together with the current commit.
+
+**Restore:** inverse edit, `if False and branch_after != branch:` → `if branch_after != branch:`.
+**Restore receipt:** read back from the file (`launcher.py:2595-2596`):
+```
+    if branch_after != branch:
+        return None, head
+```
+
+**Green run:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 1.41s
 ```

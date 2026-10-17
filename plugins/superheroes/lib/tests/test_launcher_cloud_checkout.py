@@ -315,11 +315,15 @@ def test_the_checkout_read_again_after_the_remote_answered_must_still_be_on_the_
     # axis: a checkout that cannot be read or has moved once the remote answered refuses, with the re-read facts
     base = "a" * 40
     reads = {"symbolic-ref": 0, "rev-parse": 0}
+    calls = []
 
     def scrubbed(repo_root, *args, env=None, timeout=None):
         name = args[0]
         reads[name] += 1
-        if reads[name] > 1 and name in again:
+        # each _read_checkout pass makes three git calls, so the second pass is calls 4 to 6
+        second_pass = len(calls) >= 3
+        calls.append(name)
+        if second_pass and name in again:
             return again[name]
         if name == "symbolic-ref":
             return _proc(0, "refs/heads/main\n")
@@ -334,7 +338,32 @@ def test_the_checkout_read_again_after_the_remote_answered_must_still_be_on_the_
     assert detail["checkoutBranch"] == branch
     assert detail["checkoutHead"] == head
     assert detail["remoteBranchHead"] == base
-    assert reads == {"symbolic-ref": 2, "rev-parse": 2}
+    assert reads == {"symbolic-ref": 4, "rev-parse": 2}
+
+
+# --- one checkout read describes one state of the checkout ------------------------------------
+
+
+@pytest.mark.parametrize("second_branch", [
+    _proc(0, "refs/heads/other\n"),
+    _proc(128),
+], ids=["another-branch-after-head", "branch-unreadable-after-head"])
+def test_one_checkout_read_never_mixes_two_branches(monkeypatch, second_branch):
+    # axis: a branch that changed or became unreadable across the HEAD read makes the read unreadable
+    base = "a" * 40
+    branch_reads = []
+
+    def scrubbed(repo_root, *args, env=None, timeout=None):
+        if args[0] == "rev-parse":
+            return _proc(0, base + "\n")
+        branch_reads.append(True)
+        if len(branch_reads) == 1:
+            return _proc(0, "refs/heads/main\n")
+        return second_branch
+
+    monkeypatch.setattr(L, "_git_scrubbed", scrubbed)
+    assert L._read_checkout("/repo", None) == (None, base)
+    assert len(branch_reads) == 2
 
 
 # --- the existing base refusals keep their precedence -----------------------------------------
