@@ -114,6 +114,9 @@ def _cloud_repo(tmp_path):
     subprocess.run(["git", "init", "-q", "--bare", remote], check=True)
     _git(repo, "remote", "add", "origin", remote)
     _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    # The checkout's own branch is on the remote too, as a cloud launch requires.
+    branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/%s" % branch)
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     return repo
 
