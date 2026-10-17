@@ -29,6 +29,7 @@ if _LIB_DIR not in sys.path:
 import guardian_census  # noqa: E402
 import guardian_collect as gc  # noqa: E402
 import guardian_lens  # noqa: E402
+import guardian_tools as gt  # noqa: E402
 
 MIN_CCN = 10
 TOP_N = 25
@@ -459,6 +460,57 @@ def _normalize_complexity_paths(cwd, complexity):
     return out
 
 
+def _cap_mib():
+    return "%g" % (gt.MAX_OUTPUT_BYTES / (1024 * 1024))
+
+
+def _run_batch(ctx, cwd, batch, fixed_argv, tool, outputs):
+    """Run one batch; append its stdout to ``outputs``. Returns a failure reason or None.
+
+    A collector-cap truncation on a multi-file batch splits it in half and retries both
+    halves (never degrades while splittable); on a one-file batch it fails with the cap
+    named. Any other run failure fails with that run's reason.
+    """
+    res = gc.run_tool(
+        [*fixed_argv, *_abs_paths(cwd, batch)], ctx=ctx, cwd=cwd, ok_exits=(0,))
+    if res["ok"]:
+        outputs.append(res.get("stdout") or "")
+        return None
+    if res.get("truncated"):
+        if len(batch) > 1:
+            mid = len(batch) // 2
+            return (_run_batch(ctx, cwd, batch[:mid], fixed_argv, tool, outputs)
+                    or _run_batch(ctx, cwd, batch[mid:], fixed_argv, tool, outputs))
+        return "%s output for %s exceeded the %s MiB collector cap (truncated-output)" % (
+            tool, _normalize_one_path(cwd, batch[0]), _cap_mib())
+    return "%s failed: %s" % (tool, res["reason"])
+
+
+def _run_batched(ctx, cwd, paths, fixed_argv, tool):
+    """Run ``tool`` over ``paths`` in argv-budget-sized batches.
+
+    Returns ``(outputs, None)`` — one stdout per successful run, in order — or
+    ``(None, reason)``. Any failed batch fails the whole language (no partial merge).
+    Under the budget this is exactly one call.
+    """
+    budget, env_failed = guardian_census.argv_operand_budget_detail(cwd, fixed_argv)
+    if budget <= 0:
+        return None, (
+            "%s cannot run: the argv operand budget is %d bytes%s"
+            % (tool, budget, " (child-env measurement failed)" if env_failed else ""))
+    batches, oversize = guardian_census.batch_operands(cwd, paths, budget)
+    if oversize:
+        return None, (
+            "%s cannot run: %d tracked file(s) each exceed the %d-byte argv operand "
+            "budget (first: %s)" % (tool, len(oversize), budget, oversize[0]))
+    outputs = []
+    for batch in batches:
+        err = _run_batch(ctx, cwd, batch, fixed_argv, tool, outputs)
+        if err is not None:
+            return None, err
+    return outputs, None
+
+
 def _run_radon(ctx, cwd, paths):
     """Run radon over absolute input paths via run_tool.
 
@@ -469,23 +521,26 @@ def _run_radon(ctx, cwd, paths):
     """
     if not paths:
         return {}, [], None
-    abs_paths = _abs_paths(cwd, paths)
-    res = gc.run_tool(
-        ["radon", "cc", "-s", "-j", *abs_paths], ctx=ctx, cwd=cwd, ok_exits=(0,))
-    if not res["ok"]:
-        return None, None, "radon failed: %s" % res["reason"]
-    text = res.get("stdout") or ""
-    if not text.strip():
+    outputs, err = _run_batched(ctx, cwd, paths, ["radon", "cc", "-s", "-j"], "radon")
+    if err is not None:
+        return None, None, err
+    texts = [t for t in outputs if t.strip()]
+    if not texts:
         return None, None, "radon returned empty output"
-    try:
-        parsed, error_paths = parse_radon_json(text)
-    except _Degraded as exc:
-        return None, None, str(exc)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        return None, None, "radon output unparseable: %s" % exc
+    complexity = {}
+    all_error_paths = []
+    for text in texts:
+        try:
+            parsed, error_paths = parse_radon_json(text)
+        except _Degraded as exc:
+            return None, None, str(exc)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return None, None, "radon output unparseable: %s" % exc
+        complexity.update(parsed)
+        all_error_paths.extend(error_paths)
     return (
-        _normalize_complexity_paths(cwd, parsed),
-        [_normalize_one_path(cwd, p) for p in error_paths],
+        _normalize_complexity_paths(cwd, complexity),
+        [_normalize_one_path(cwd, p) for p in all_error_paths],
         None,
     )
 
@@ -499,27 +554,28 @@ def _run_lizard(ctx, cwd, paths):
     """
     if not paths:
         return {}, None
-    abs_paths = _abs_paths(cwd, paths)
-    res = gc.run_tool(
-        ["lizard", "--csv", "-l", "javascript", *abs_paths],
-        ctx=ctx, cwd=cwd, ok_exits=(0,))
-    if not res["ok"]:
-        return None, "lizard failed: %s" % res["reason"]
-    text = res.get("stdout") or ""
-    if not text.strip():
+    outputs, err = _run_batched(
+        ctx, cwd, paths, ["lizard", "--csv", "-l", "javascript"], "lizard")
+    if err is not None:
+        return None, err
+    texts = [t for t in outputs if t.strip()]
+    if not texts:
         return None, "lizard returned empty output"
-    try:
-        parsed = parse_lizard_csv(text)
-    except (TypeError, ValueError, csv.Error, IndexError) as exc:
-        return None, "lizard output unparseable: %s" % exc
-    # Honesty mirror of radon's guard: lizard produced NON-EMPTY output but parsing
-    # yielded zero usable rows (short / garbage CSV). That is a tool malfunction, not a
-    # clean zero-complexity read — degrade js rather than fail open with a silent {}.
-    if not parsed:
-        return None, (
-            "lizard reported output but parsing yielded zero usable rows "
-            "(reported-nonzero-parsed-zero)")
-    return _normalize_complexity_paths(cwd, parsed), None
+    complexity = {}
+    for text in texts:
+        try:
+            parsed = parse_lizard_csv(text)
+        except (TypeError, ValueError, csv.Error, IndexError) as exc:
+            return None, "lizard output unparseable: %s" % exc
+        # Honesty mirror of radon's guard: lizard produced NON-EMPTY output but parsing
+        # yielded zero usable rows (short / garbage CSV). That is a tool malfunction, not
+        # a clean zero-complexity read — degrade js rather than fail open with a silent {}.
+        if not parsed:
+            return None, (
+                "lizard reported output but parsing yielded zero usable rows "
+                "(reported-nonzero-parsed-zero)")
+        complexity.update(parsed)
+    return _normalize_complexity_paths(cwd, complexity), None
 
 
 def _is_unmeasured_file(rec):
