@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.43.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.43.0...superheroes-v0.43.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **superheroes:** adopt-version holds only on before-switching upgrade steps ([#1895](https://github.com/zwrose/superheroes/issues/1895)) ([49f94d3](https://github.com/zwrose/superheroes/commit/49f94d34f78cab8953f6bffc394e784b1f9864af))
+* **superheroes:** review record reads GitHub lists page by number ([#1896](https://github.com/zwrose/superheroes/issues/1896)) ([6f80b67](https://github.com/zwrose/superheroes/commit/6f80b6753a39b0fa3f8554a06f5d6b8256a5aa0b))
+* **superheroes:** the session resumes on its own after the mod's compaction or a manual /compact ([#1894](https://github.com/zwrose/superheroes/issues/1894)) ([b5fcdc6](https://github.com/zwrose/superheroes/commit/b5fcdc6c241db86d765869c264c904a093fd21b4))
+
 ## [0.43.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.42.0...superheroes-v0.43.0) (2026-10-17)
 
 
