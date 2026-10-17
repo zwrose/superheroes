@@ -240,7 +240,8 @@ its own practice; checklist items done; **inputs needed** — each as a numbered
 its context, options, consequences, and a recommendation per
 `skills/showrunner/reference/owner-decisions.md` (read that page; do not restate its spine);
 **owed** — each after-switching item from step 4, the owner's ones as numbered decisions in
-that same shape, stating that the seat already runs the new version; and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
+that same shape, stating that the seat already runs the new version when step 6 wrote the
+taken-up line, and otherwise that each comes due once adoption completes; and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
 TRANSITION gaps from step 1, and any **no TRANSITION section (no consumer-visible change
 recorded)** entries named for awareness).
 
