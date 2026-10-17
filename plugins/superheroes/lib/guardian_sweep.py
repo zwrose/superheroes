@@ -5,6 +5,7 @@
 Stdlib-only. Deterministic shell for repo-health sweeps — never edits code or files issues.
 """
 import argparse
+import copy
 import json
 import math
 import os
@@ -1265,23 +1266,85 @@ def _metric_at_disposition(candidate):
     return {"metric": metric}
 
 
+def _resettled_metric(candidate, record):
+    """The metricAtDisposition a re-decided trade settles at.
+
+    A dict baseline keeps its keys, each refreshed from the candidate's current value
+    where comparable, so the next `materially_worsened` compares like with like; any
+    other baseline falls back to the plain `{"metric": n}` form."""
+    old = record.get("metricAtDisposition")
+    if not isinstance(old, dict):
+        return _metric_at_disposition(candidate)
+    fresh = dict(old)
+    for key in old:
+        current = guardian_ledger._candidate_metric(candidate, key)
+        if current is not None:
+            fresh[key] = int(current) if current.is_integer() else current
+    return fresh
+
+
+def _redecide_settled(record, decision, candidate):
+    """Re-settle an accepted/declined record whose trade worsened → (record, reason).
+
+    The same disposition is re-stated for a candidate that materially worsened past the
+    record's metricAtDisposition: the record's metric (and reason / reraiseWhen when the
+    decision gives them) and date are updated in place, `adjudicatedIn` stays write-once,
+    so the re-decided trade stops resurfacing. `(None, None)` when nothing needs
+    updating; `(None, why)` when the refreshed record is not valid."""
+    if not guardian_ledger.materially_worsened(candidate, record):
+        return None, None
+    proposed = copy.deepcopy(record)
+    proposed["metricAtDisposition"] = _resettled_metric(candidate, record)
+    for key in ("reason", "reraiseWhen"):
+        if decision.get(key) is not None:
+            proposed[key] = decision[key]
+    proposed["date"] = guardian_ledger._today()
+    ok, reasons = guardian_ledger.validate_record(proposed)
+    if not ok:
+        return None, "; ".join(reasons)
+    return proposed, None
+
+
 def _apply_decisions(records, decisions, surfaced, sweep_id):
     """Turn triage decisions into ledger records → (new_records, applied, skipped).
 
+    A decision finds its record the way `collect` does (`guardian_ledger.match`, so a
+    line-drifted id advances the one record it names instead of birthing a colliding
+    second); an ambiguous identity falls back to the exact id, and with none is skipped.
     Every move goes through `guardian_ledger.advance`: absent → candidate → surfaced →
     target; surfaced/reopened → target when `ALLOWED_TRANSITIONS` allows it. A decision
-    already at its target is a no-op (idempotent re-run). A decision with no legal path,
-    or whose chain `advance` refuses part-way, is skipped and reported — the working copy
-    is dropped, so a half-advanced record is never written."""
+    already at its target is a no-op (idempotent re-run) — except an accepted/declined
+    record whose candidate materially worsened, which is re-settled in place at the new
+    metric (`_redecide_settled`). A decision with no legal path, or whose chain `advance`
+    refuses part-way, is skipped and reported — the working copy is dropped, so a
+    half-advanced record is never written."""
     new_records = list(records or [])
     cand_by_id = {s.get("id"): s for s in surfaced or [] if isinstance(s, dict)}
     applied, skipped = [], []
     for dec in decisions:
-        rid, target = dec["id"], dec["disposition"]
-        existing = next((r for r in new_records
-                         if isinstance(r, dict) and r.get("id") == rid), None)
+        decided_id, target = dec["id"], dec["disposition"]
+        by_id = {r["id"]: r for r in new_records
+                 if isinstance(r, dict) and isinstance(r.get("id"), str)}
+        existing, match_note = guardian_ledger.match(decided_id, by_id)
+        if existing is None and match_note:
+            existing = by_id.get(decided_id)
+            if existing is None:
+                skipped.append({"id": decided_id, "from": None, "to": target,
+                                "reason": match_note})
+                continue
+        rid = existing["id"] if existing is not None else decided_id
         from_state = existing.get("disposition") if existing is not None else None
         if from_state == target:
+            if target in guardian_ledger.WONT_FIX_STATES:
+                proposed, why = _redecide_settled(
+                    existing, dec, cand_by_id.get(decided_id))
+                if why:
+                    skipped.append({"id": rid, "from": from_state, "to": target,
+                                    "reason": "re-decision refused: %s" % why})
+                elif proposed is not None:
+                    new_records = [proposed if r is existing else r for r in new_records]
+                    applied.append({"id": rid, "from": from_state, "to": target,
+                                    "redecided": True})
             continue
         if existing is None:
             chain = ["candidate", "surfaced", target]
@@ -1294,13 +1357,16 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
         if chain is None or (
                 from_state == "reopened"
                 and target not in guardian_ledger.ALLOWED_TRANSITIONS["reopened"]):
-            skipped.append({
-                "id": rid, "from": from_state, "to": target,
-                "reason": "no legal path from %s to %s — record left untouched"
-                          % (from_state, target)})
+            reason = "no legal path from %s to %s — record left untouched" % (
+                from_state, target)
+            if from_state in guardian_ledger.WONT_FIX_STATES:
+                reason = ("%s is terminal — a different disposition (%s) needs a new "
+                          "ledger entry by hand or a follow-up; record left untouched"
+                          % (from_state, target))
+            skipped.append({"id": rid, "from": from_state, "to": target, "reason": reason})
             continue
         fields = {"sweepId": sweep_id,
-                  "metricAtDisposition": _metric_at_disposition(cand_by_id.get(rid))}
+                  "metricAtDisposition": _metric_at_disposition(cand_by_id.get(decided_id))}
         for key in ("issue", "reason", "reraiseWhen"):
             fields[key] = dec.get(key)
         working = new_records

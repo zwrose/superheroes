@@ -2765,6 +2765,15 @@ def test_merge_depcruise_payloads_unions_dependencies_and_dedups_violations():
     assert adapters.merge_depcruise_payloads([only]) is only
 
 
+def test_merge_depcruise_payloads_keeps_runtime_and_type_only_records_for_one_target():
+    both = _payload(edges=[("a", "b", ["local", "type-only"]), ("a", "b", ["local", "import"])])
+    other = _payload(edges=[("a", "b", ["local", "import"])], sources=["c"])
+    merged = adapters.merge_depcruise_payloads([both, other])
+    by_source = {m["source"]: m for m in merged["modules"]}
+    assert [d["dependencyTypes"] for d in by_source["a"]["dependencies"]] == [
+        ["local", "type-only"], ["local", "import"]]
+
+
 def test_failing_second_batch_fails_js_without_a_partial_digest(tmp_path, monkeypatch):
     names = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]
     repo, tracked = _write_graph_repo(tmp_path, names)

@@ -3747,6 +3747,100 @@ def test_apply_decisions_reopened_record_takes_a_legal_target():
     assert skipped == []
 
 
+def _settled(disposition, metric, rid="fixture:normal", **extra):
+    rec = {"id": rid, "disposition": disposition, "date": "2026-07-01", "issue": None,
+           "reason": "known trade", "reraiseWhen": None,
+           "metricAtDisposition": {"metric": metric}, "adjudicatedIn": "s0"}
+    rec.update(extra)
+    return rec
+
+
+@pytest.mark.parametrize("disposition", ["accepted", "declined"])
+def test_apply_decisions_restated_worsened_trade_settles_at_the_new_metric(disposition):
+    """A worsened accepted/declined trade re-stated is updated in place, write-once sweep."""
+    import guardian_ledger as gled
+
+    decisions = [{"id": "fixture:normal", "disposition": disposition, "issue": None,
+                  "reason": "still fine", "reraiseWhen": "metric grows again"}]
+    records, applied, skipped = gsw._apply_decisions(
+        [_settled(disposition, 1)], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert skipped == []
+    assert applied == [{"id": "fixture:normal", "from": disposition, "to": disposition,
+                        "redecided": True}]
+    (rec,) = records
+    assert rec["disposition"] == disposition
+    assert rec["metricAtDisposition"] == {"metric": 2}
+    assert rec["reason"] == "still fine"
+    assert rec["reraiseWhen"] == "metric grows again"
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["date"] != "2026-07-01"
+    assert gled.materially_worsened({"id": "fixture:normal", "metric": 2}, rec) is False
+
+
+def test_apply_decisions_restated_unworsened_trade_is_a_no_op():
+    decisions = [{"id": "fixture:normal", "disposition": "declined", "issue": None,
+                  "reason": "again", "reraiseWhen": None}]
+    before = _settled("declined", 3)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 3}], "s1")
+    assert records == [before]
+    assert applied == [] and skipped == []
+
+
+def test_apply_decisions_different_disposition_from_terminal_state_stays_skipped():
+    decisions = [{"id": "fixture:normal", "disposition": "filed", "issue": "#7",
+                  "reason": None, "reraiseWhen": None}]
+    before = _settled("declined", 1)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert records == [before]
+    assert applied == []
+    assert [(s["id"], s["from"], s["to"]) for s in skipped] == [
+        ("fixture:normal", "declined", "filed")]
+    assert "declined is terminal" in skipped[0]["reason"]
+
+
+def test_commit_ledger_restated_worsened_trade_persists_and_stops_resurfacing(tmp_path):
+    repo, root = _seeded_repo(tmp_path, records=[_settled("declined", 1)])
+    disp = [_disposition("rejected", {"disposition": "declined", "reason": "accepted growth"})]
+    bundle = gsw.collect(repo, lenses=[_drift_lens(metric=5)], root=root)
+    assert [s["id"] for s in bundle["surfaced"]] == ["fixture:normal"]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is True, res
+    assert res["decisionsSkipped"] == []
+    rec = _record(repo, root)
+    assert rec["metricAtDisposition"] == {"metric": 5}
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["reason"] == "accepted growth"
+    assert gsw.collect(repo, lenses=[_drift_lens(metric=5)], root=root)["surfaced"] == []
+
+
+def test_apply_decisions_line_drifted_id_advances_the_matched_record():
+    surfaced_rec = {"id": "deadcode:x:a.py:10", "disposition": "surfaced",
+                    "date": "2026-07-01"}
+    decisions = [{"id": "deadcode:x:a.py:20", "disposition": "triaged-out", "issue": None,
+                  "reason": "noise", "reraiseWhen": None}]
+    records, applied, skipped = gsw._apply_decisions(
+        [surfaced_rec], decisions, [{"id": "deadcode:x:a.py:20", "metric": 1}], "s1")
+    assert [(r["id"], r["disposition"]) for r in records] == [
+        ("deadcode:x:a.py:10", "triaged-out")]
+    assert applied == [{"id": "deadcode:x:a.py:10", "from": "surfaced", "to": "triaged-out"}]
+    assert skipped == []
+
+
+def test_apply_decisions_ambiguous_identity_without_exact_record_is_skipped():
+    recs = [{"id": "deadcode:x:a.py:10", "disposition": "surfaced", "date": "2026-07-01"},
+            {"id": "deadcode:x:a.py:30", "disposition": "surfaced", "date": "2026-07-01"}]
+    decisions = [{"id": "deadcode:x:a.py:20", "disposition": "triaged-out", "issue": None,
+                  "reason": "noise", "reraiseWhen": None}]
+    records, applied, skipped = gsw._apply_decisions(recs, decisions, [], "s1")
+    assert records == recs
+    assert applied == []
+    assert [(s["id"], s["to"]) for s in skipped] == [("deadcode:x:a.py:20", "triaged-out")]
+    assert "ambiguous" in skipped[0]["reason"]
+
+
 @pytest.mark.parametrize("candidate", [
     {"id": "fixture:normal"},
     {"id": "fixture:normal", "metric": "5"},

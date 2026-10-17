@@ -401,9 +401,13 @@ def depcruise_parsed_modules(payload):
 
 
 def _dep_key(dep):
-    """Identity of one dependency edge: its resolved path, else the raw module specifier."""
+    """Identity of one dependency record: its resolved path (else the raw module specifier)
+    plus its dependency types — depcruise emits separate runtime and type-only records for
+    the same target, and the edge classifier tells them apart."""
     resolved = dep.get("resolved")
-    return resolved if resolved is not None else dep.get("module")
+    target = resolved if resolved is not None else dep.get("module")
+    types = tuple(sorted(str(t) for t in dep.get("dependencyTypes") or []))
+    return (target, types)
 
 
 def merge_depcruise_payloads(payloads):
@@ -412,7 +416,7 @@ def merge_depcruise_payloads(payloads):
     ``modules`` merge by ``source`` in first-seen order: a module can be an operand in one
     batch and a dependency-only stub (``dependencies: []``) in another, so the merged
     ``dependencies`` are the union across batches deduplicated by ``resolved`` (else
-    ``module``), and the other module fields come from the first entry that has a non-empty
+    ``module``) together with ``dependencyTypes``, and the other module fields come from the first entry that has a non-empty
     ``dependencies`` list, else the first. ``summary.violations`` are concatenated and
     deduplicated; ``summary.environment`` comes from the first payload. A single payload
     passes through unchanged. Callers hand in schema-validated payloads.
