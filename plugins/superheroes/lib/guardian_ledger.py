@@ -1110,8 +1110,41 @@ def _card_body_sans_updated(card_region):
         "<!-- guardian-report-card:begin updated=DATE -->", card_region, count=1)
 
 
-def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=None):
+def _recomputed_records(recompute, base_records, path):
+    """Run the caller's `recompute` over a deep copy of the freshly read `base_records`.
+
+    Returns ``(records, None)`` or ``(None, fail_prepared)``. The proposal is validated
+    here, so a recompute that yields an unwritable record set fails closed like a caller-
+    supplied one; a recompute that raises writes nothing."""
+    try:
+        proposed = recompute(copy.deepcopy(list(base_records)))
+    except Exception as exc:  # noqa: BLE001 — fail closed, never write a half proposal
+        return None, {
+            "kind": "fail",
+            "result": {
+                "ok": False, "reason": "recompute-failed",
+                "errors": ["%s: %s" % (type(exc).__name__, exc)], "path": path,
+            },
+        }
+    ok, reasons = validate_records(proposed if proposed is not None else [])
+    if not ok:
+        return None, {
+            "kind": "fail",
+            "result": {
+                "ok": False, "reason": "invalid-records", "errors": reasons, "path": path,
+            },
+        }
+    return proposed, None
+
+
+def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=None,
+                          recompute=None):
     """Build a ledger write without mutating disk.
+
+    ``recompute`` (optional callable ``fresh_records -> proposed_records``) derives the
+    proposal from the record list read from disk in THIS call — the same bytes the CAS
+    check guards — so a record edited after the caller's own read is never overwritten
+    by a stale proposal. With ``recompute=None`` the caller's ``records`` are used as-is.
 
     Returns a dict:
       - ``{"kind": "fail", "result": {...}}`` — fail-closed skip / invalid
@@ -1125,18 +1158,24 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
     `report_card` remains accepted for API compatibility.
     """
     del report_card  # persisted card always derived from merged records (Fix 4)
-    ok, reasons = validate_records(records if records is not None else [])
-    if not ok:
-        return {
-            "kind": "fail",
-            "result": {
-                "ok": False, "reason": "invalid-records", "errors": reasons, "path": path,
-            },
-        }
+    if recompute is None:
+        ok, reasons = validate_records(records if records is not None else [])
+        if not ok:
+            return {
+                "kind": "fail",
+                "result": {
+                    "ok": False, "reason": "invalid-records", "errors": reasons,
+                    "path": path,
+                },
+            }
 
     day = now or _today()
 
     if not os.path.isfile(path):
+        if recompute is not None:
+            records, bad = _recomputed_records(recompute, [], path)
+            if bad is not None:
+                return bad
         card = _report_card(records if records is not None else [])
         text = render(records, report_card=card, sweeps=sweeps or [], now=day,
                       created=_read_created(path) if os.path.lexists(path) else None)
@@ -1280,6 +1319,11 @@ def _prepare_ledger_write(path, records, *, report_card=None, sweeps=None, now=N
                     },
                 }
 
+    if recompute is not None:
+        records, bad = _recomputed_records(recompute, fresh_records, path)
+        if bad is not None:
+            return bad
+
     # Merge into the parsed object so unknown top-level keys survive.
     block = dict(existing_block)
     block["schemaVersion"] = guardian_store.LEDGER_SCHEMA_VERSION
@@ -1389,8 +1433,14 @@ def _author_exclusive(path, payload_bytes):
             pass
 
 
-def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
+def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
+                  recompute=None):
     """Never-clobber ledger write assuming the caller already holds the sweep lock.
+
+    ``recompute`` (optional ``fresh_records -> proposed_records``) is invoked on EVERY
+    attempt with the records `_prepare_ledger_write` just read from disk, so the proposal
+    (and any retry of it) is always derived from the bytes the CAS check guards. With
+    ``recompute=None`` the caller's ``records`` are merged as before.
 
     Mirrors the lock-assuming vitals/sweep writers: `write` acquires the lock then
     calls this; `commit_ledger` holds the lock itself and must call this directly
@@ -1399,7 +1449,8 @@ def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now
     last = None
     for _attempt in range(1, _WRITE_ATTEMPTS + 1):
         prepared = _prepare_ledger_write(
-            path, records, report_card=report_card, sweeps=sweeps, now=now)
+            path, records, report_card=report_card, sweeps=sweeps, now=now,
+            recompute=recompute)
         if prepared["kind"] == "fail":
             return prepared["result"]
         if prepared["kind"] == "author":
@@ -1455,7 +1506,8 @@ def _write_locked(cwd, records, *, root=None, report_card=None, sweeps=None, now
     }
 
 
-def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
+def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None,
+          recompute=None):
     """Advisor sole writer for ledger.md — bounded never-clobber re-read/re-splice loop.
 
     The fenced JSON block and the report-card region are **machine-owned** (the advisor is
@@ -1481,7 +1533,8 @@ def write(cwd, records, *, root=None, report_card=None, sweeps=None, now=None):
         return {"ok": False, "reason": "raced", "lockHeld": exc.holder, "path": path}
     try:
         return _write_locked(
-            cwd, records, root=root, report_card=report_card, sweeps=sweeps, now=now)
+            cwd, records, root=root, report_card=report_card, sweeps=sweeps, now=now,
+            recompute=recompute)
     finally:
         file_lock.release(lock_path)
 

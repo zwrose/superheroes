@@ -6,6 +6,7 @@ Stdlib-only. Deterministic shell for repo-health sweeps — never edits code or 
 """
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -1121,6 +1122,37 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     }
 
 
+_LEDGER_DECISION_STATES = ("filed", "accepted", "declined", "triaged-out")
+_LEDGER_DECISION_KEYS = ("disposition", "issue", "reason", "reraiseWhen")
+
+
+def _nonempty_str(val):
+    return isinstance(val, str) and bool(val.strip())
+
+
+def _ledger_decision_errors(did, verdict, ledger):
+    """Errors for one entry's optional `ledger` decision object (empty list = valid)."""
+    if not isinstance(ledger, dict):
+        return ["%s: ledger must be an object" % did]
+    if verdict == "degraded":
+        return ["%s: a degraded verdict cannot carry a ledger decision" % did]
+    errors = []
+    for key in sorted(k for k in ledger if k not in _LEDGER_DECISION_KEYS):
+        errors.append("%s: unknown ledger key %r" % (did, key))
+    for key in ("issue", "reason", "reraiseWhen"):
+        if ledger.get(key) is not None and not isinstance(ledger[key], str):
+            errors.append("%s: ledger.%s must be a string" % (did, key))
+    state = ledger.get("disposition")
+    if state not in _LEDGER_DECISION_STATES:
+        errors.append("%s: ledger.disposition must be %s"
+                      % (did, "|".join(_LEDGER_DECISION_STATES)))
+    elif state == "filed" and not _nonempty_str(ledger.get("issue")):
+        errors.append("%s: ledger filed requires a non-empty issue" % did)
+    elif state in ("accepted", "declined") and not _nonempty_str(ledger.get("reason")):
+        errors.append("%s: ledger %s requires a non-empty reason" % (did, state))
+    return errors
+
+
 def validate_dispositions(bundle, dispositions):
     """Total check: exactly one disposition per surfaced id."""
     errors = []
@@ -1141,6 +1173,8 @@ def validate_dispositions(bundle, dispositions):
                 val = d.get(field)
                 if not isinstance(val, str) or not val:
                     errors.append("%s: validated requires non-empty %s" % (did, field))
+        if "ledger" in d:
+            errors.extend(_ledger_decision_errors(did, verdict, d["ledger"]))
 
     seen_set = set(seen)
     for sid in expected:
@@ -1187,6 +1221,105 @@ def _close_filed_records(records, observations, sweep_id):
                 new_records, rid, "reopened", sweepId=sweep_id)
         advances.append(result)
     return new_records, advances
+
+
+def _decisions_from_dispositions(dispositions):
+    """The triage decisions a sweep's dispositions carry → list of decision dicts.
+
+    An explicit `ledger` object is the decision. A `rejected` verdict with none means
+    `triaged-out` (reason = the entry's reason). A `validated` verdict with none is still
+    pending, and `degraded` never writes — both yield no decision. Input is assumed to
+    have passed `validate_dispositions`."""
+    decisions = []
+    for d in dispositions or []:
+        if not isinstance(d, dict) or d.get("verdict") == "degraded":
+            continue
+        ledger = d.get("ledger")
+        if isinstance(ledger, dict):
+            decisions.append({
+                "id": d.get("id"),
+                "disposition": ledger.get("disposition"),
+                "issue": ledger.get("issue"),
+                "reason": ledger.get("reason"),
+                "reraiseWhen": ledger.get("reraiseWhen"),
+            })
+        elif d.get("verdict") == "rejected":
+            reason = d.get("reason")
+            decisions.append({
+                "id": d.get("id"),
+                "disposition": "triaged-out",
+                "issue": None,
+                "reason": reason if isinstance(reason, str) and reason.strip() else None,
+                "reraiseWhen": None,
+            })
+    return decisions
+
+
+def _metric_at_disposition(candidate):
+    """`{"metric": n}` when the candidate carries a finite numeric metric, else None."""
+    metric = candidate.get("metric") if isinstance(candidate, dict) else None
+    if isinstance(metric, bool) or not isinstance(metric, (int, float)):
+        return None
+    if not math.isfinite(float(metric)):
+        return None
+    return {"metric": metric}
+
+
+def _apply_decisions(records, decisions, surfaced, sweep_id):
+    """Turn triage decisions into ledger records → (new_records, applied, skipped).
+
+    Every move goes through `guardian_ledger.advance`: absent → candidate → surfaced →
+    target; surfaced/reopened → target when `ALLOWED_TRANSITIONS` allows it. A decision
+    already at its target is a no-op (idempotent re-run). A decision with no legal path,
+    or whose chain `advance` refuses part-way, is skipped and reported — the working copy
+    is dropped, so a half-advanced record is never written."""
+    new_records = list(records or [])
+    cand_by_id = {s.get("id"): s for s in surfaced or [] if isinstance(s, dict)}
+    applied, skipped = [], []
+    for dec in decisions:
+        rid, target = dec["id"], dec["disposition"]
+        existing = next((r for r in new_records
+                         if isinstance(r, dict) and r.get("id") == rid), None)
+        from_state = existing.get("disposition") if existing is not None else None
+        if from_state == target:
+            continue
+        if existing is None:
+            chain = ["candidate", "surfaced", target]
+        elif from_state == "candidate":
+            chain = ["surfaced", target]
+        elif from_state in ("surfaced", "reopened"):
+            chain = [target]
+        else:
+            chain = None
+        if chain is None or (
+                from_state == "reopened"
+                and target not in guardian_ledger.ALLOWED_TRANSITIONS["reopened"]):
+            skipped.append({
+                "id": rid, "from": from_state, "to": target,
+                "reason": "no legal path from %s to %s — record left untouched"
+                          % (from_state, target)})
+            continue
+        fields = {"sweepId": sweep_id,
+                  "metricAtDisposition": _metric_at_disposition(cand_by_id.get(rid))}
+        for key in ("issue", "reason", "reraiseWhen"):
+            fields[key] = dec.get(key)
+        working = new_records
+        failure = None
+        for step in chain:
+            step_fields = fields if step == target else {}
+            working, result = guardian_ledger.advance(working, rid, step, **step_fields)
+            if not result.get("ok"):
+                failure = result
+                break
+        if failure is not None:
+            skipped.append({
+                "id": rid, "from": from_state, "to": target,
+                "reason": "advance refused at %s: %s" % (failure.get("to"),
+                                                         failure.get("reason"))})
+            continue
+        new_records = working
+        applied.append({"id": rid, "from": from_state, "to": target})
+    return new_records, applied, skipped
 
 
 # Allow-list only. A newly introduced reader status must NOT become writable by
@@ -1430,6 +1563,11 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
     cross-deadlock; this function must call `_write_locked` (not the lock-acquiring
     `write`) because the lock is non-reentrant.
 
+    The sweep's triage decisions (an entry's `ledger` object; `rejected` defaults to
+    `triaged-out`) are written as records at the decided state — record id = the surfaced
+    `id` — via `guardian_ledger.advance`. Closures and decisions are recomputed on every
+    write attempt from the records read in that attempt (`_write_locked(recompute=...)`).
+
     Fail-closed on opaque/unreadable ledgers, stale bundles (latest.json moved on), and
     transient roster-read failures. Idempotent for a same-identity re-run: already-
     advanced records are skipped by `_close_filed_records`, and `append_sweep` dedups
@@ -1488,8 +1626,18 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
 
         sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
             bundle.get("sweptSha") or "unknown")["sweepId"]
-        new_records, advances = _close_filed_records(
-            ledger["records"], bundle.get("filedObservations"), sweep_id)
+        decisions = _decisions_from_dispositions(dispositions)
+        outcome = {"advances": [], "decisions": [], "decisionsSkipped": []}
+
+        def recompute(fresh_records):
+            # Runs on every write attempt against the records just read from disk, so an
+            # edit made after the read above is built upon, never overwritten.
+            closed, advances = _close_filed_records(
+                fresh_records, bundle.get("filedObservations"), sweep_id)
+            proposed, applied, skipped = _apply_decisions(
+                closed, decisions, bundle.get("surfaced"), sweep_id)
+            outcome.update(advances=advances, decisions=applied, decisionsSkipped=skipped)
+            return proposed
 
         # R2 — roster tri-state: read failure fails the commit closed (retryable).
         path = guardian_store.ledger_path(cwd, root)
@@ -1508,9 +1656,9 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
         # Report card is derived inside _write_locked from the final merged records —
         # do not reuse collect-time bundle.reportCard (Fix 4).
         result = guardian_ledger._write_locked(
-            cwd, new_records, root=root, sweeps=sweeps)
+            cwd, ledger["records"], root=root, sweeps=sweeps, recompute=recompute)
         out = dict(result)
-        out["advances"] = advances
+        out.update(outcome)
         return out
     finally:
         file_lock.release(lock_path)
