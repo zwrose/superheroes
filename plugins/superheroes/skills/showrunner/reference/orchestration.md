@@ -303,6 +303,12 @@ harmless.
   (`skills/showrunner/reference/dispatch-preflight.md` § Where a build runs). The parked notice comes
   on top of them, never in place of them.
 
+**Checks after an account's first setup need no `/remote-env` pick.** A renewal or a new check on an
+account with a ready setup record names the record's environment, and `cloud_environment.py compare`
+matches it without reading the picker, which several accounts on one machine share. Ask for a pick
+only at an account's first setup or when the owner moves it to another environment
+(`skills/configure/reference/set-up.md` § 6, "When the pick is needed").
+
 **Send it back.** Run `python3 -B <plugin root>/lib/cloud_parked.py send-back --repo-root <root>`
 after every `cloud_pass.py record-confirmation` that writes, after every passed setup check, and at
 each gardening pass while any parked PR is still recorded. The pass command alone renews nothing:

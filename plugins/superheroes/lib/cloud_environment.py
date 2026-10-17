@@ -13,19 +13,22 @@ same environment kept, not a missing pick.
 
 On a machine where several Claude accounts share one settings file, the second read is made right
 after the pick, because another account's pick in between would be read as this one's. Standard
-library plus `config_dir` and `engine_adapter`. Every public function returns a plain dict and
-never raises; nothing here prints, logs or writes a file except the one result line of the command
-line.
+library plus `cloud_setup`, `config_dir` and `engine_adapter`. Every public function returns a plain
+dict and never raises; nothing here prints, logs or writes a file except the one result line of the
+command line.
 
-`compare` runs just before a step uses an environment id: it reads the one the picker holds now
-and says whether it is the id about to be used, so no step runs against an environment other than
-the one the owner picked.
+`compare` runs just before a step uses an environment id and says whether it is the id about to be
+used, so no step runs against an environment other than the one the owner picked. Once the account
+has a setup record (written only after a passed check naming a picked id), the record's id matches
+without reading the picker, because several accounts on one machine share the picker's one value.
+Any other id is compared with the picker's current value, as at an account's first setup.
 """
 import argparse
 import json
 import os
 import sys
 
+import cloud_setup
 import config_dir
 import engine_adapter
 
@@ -143,11 +146,25 @@ def _unchecked(reason):
     return {"action": "unchecked", "reason": reason, "environment": None, "message": _UNCHECKED}
 
 
-def compare(environment, env=None, cwd=None):
-    """Compare the id about to be used with the one the picker holds now. Never raises."""
+def _recorded(env, cwd, root):
+    """The environment this account's setup record names, or None when it has no valid record."""
+    if cwd is None:
+        return None
+    account = cloud_setup.launching_account(env, cwd)
+    if account is None:
+        return None
+    return cloud_setup.recorded_environment(cwd, account, root)
+
+
+def compare(environment, env=None, cwd=None, root=None):
+    """Compare the id about to be used with the account's setup record, then with the one the
+    picker holds now. Never raises."""
     try:
         if not _is_id(environment):
             return _unchecked("environment-invalid")
+        # axis: only the id the account's setup record names matches without the picker — see bite-proof record c1918_recorded_environment.md
+        if environment == _recorded(env, cwd, root):
+            return {"action": "matched", "reason": "recorded", "environment": environment}
         readable, current = _read(env, cwd)
         if not readable or current is None:
             return _unchecked("pick-unreadable")
