@@ -1435,3 +1435,43 @@ def test_file_over_argv_budget_fails_js_naming_it(tmp_path, monkeypatch):
     assert status == "not-collected"
     assert "argv operand budget" in reason and "f0.js" in reason
     assert _tool_calls(run, "lizard") == []
+
+
+@pytest.mark.parametrize("tool, ext, prefix", [
+    ("lizard", "js", ["lizard", "--csv", "-l", "javascript"]),
+    ("radon", "py", ["radon", "cc", "-s", "-j"]),
+])
+def test_budget_prefix_and_run_prefix_are_byte_identical_per_tool(
+        tmp_path, monkeypatch, tool, ext, prefix):
+    names = _repo(tmp_path, 2, ext=ext)
+    measured = []
+
+    def capture_budget(repo, fixed):
+        measured.append(list(fixed))
+        return (10 ** 9, False)
+
+    monkeypatch.setattr(gcensus, "argv_operand_budget_detail", capture_budget)
+    run = _per_file_run(names)
+    outputs, err = hot._run_batched(_ctx(tmp_path, run), str(tmp_path), names, tool)
+
+    assert err is None
+    assert hot._fixed_argv_for(tool) == prefix
+    assert measured == [prefix]
+    calls = _tool_calls(run, tool)
+    assert len(calls) == 1
+    assert calls[0][:len(prefix)] == measured[0]
+
+
+def test_unknown_hotspot_tool_fails_without_spawning(tmp_path):
+    names = _repo(tmp_path, 1)
+    run = _per_file_run(names)
+    ctx = _ctx(tmp_path, run)
+
+    assert hot._fixed_argv_for("eslint") is None
+    outputs, err = hot._run_batched(ctx, str(tmp_path), names, "eslint")
+    assert outputs is None and "eslint" in err and "unknown hotspot tool" in err
+    sink = []
+    err = hot._run_batch(ctx, str(tmp_path), names, "eslint", sink)
+    assert "eslint" in err and "unknown hotspot tool" in err
+    assert sink == []
+    assert run.calls == []

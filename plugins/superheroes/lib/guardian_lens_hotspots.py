@@ -464,35 +464,58 @@ def _cap_mib():
     return "%g" % (gt.MAX_OUTPUT_BYTES / (1024 * 1024))
 
 
-def _run_batch(ctx, cwd, batch, fixed_argv, tool, outputs):
+def _fixed_argv_for(tool):
+    """The fixed argv prefix for ``tool`` (before the absolute operands), or None if unknown.
+
+    The one source for both the budget measurement and the run, so the two stay
+    byte-identical per tool.
+    """
+    if tool == "lizard":
+        return ["lizard", "--csv", "-l", "javascript"]
+    if tool == "radon":
+        return ["radon", "cc", "-s", "-j"]
+    return None
+
+
+def _run_batch(ctx, cwd, batch, tool, outputs):
     """Run one batch; append its stdout to ``outputs``. Returns a failure reason or None.
 
     A collector-cap truncation on a multi-file batch splits it in half and retries both
     halves (never degrades while splittable); on a one-file batch it fails with the cap
-    named. Any other run failure fails with that run's reason.
+    named. Any other run failure fails with that run's reason. The tool name is a string
+    literal at argv[0] of each ``run_tool`` call; an unknown ``tool`` never spawns.
     """
-    res = gc.run_tool(
-        [*fixed_argv, *_abs_paths(cwd, batch)], ctx=ctx, cwd=cwd, ok_exits=(0,))
+    abs_batch = _abs_paths(cwd, batch)
+    if tool == "lizard":
+        argv = ["lizard", "--csv", "-l", "javascript", *abs_batch]
+    elif tool == "radon":
+        argv = ["radon", "cc", "-s", "-j", *abs_batch]
+    else:
+        return "%s cannot run: unknown hotspot tool" % tool
+    res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,))
     if res["ok"]:
         outputs.append(res.get("stdout") or "")
         return None
     if res.get("truncated"):
         if len(batch) > 1:
             mid = len(batch) // 2
-            return (_run_batch(ctx, cwd, batch[:mid], fixed_argv, tool, outputs)
-                    or _run_batch(ctx, cwd, batch[mid:], fixed_argv, tool, outputs))
+            return (_run_batch(ctx, cwd, batch[:mid], tool, outputs)
+                    or _run_batch(ctx, cwd, batch[mid:], tool, outputs))
         return "%s output for %s exceeded the %s MiB collector cap (truncated-output)" % (
             tool, _normalize_one_path(cwd, batch[0]), _cap_mib())
     return "%s failed: %s" % (tool, res["reason"])
 
 
-def _run_batched(ctx, cwd, paths, fixed_argv, tool):
+def _run_batched(ctx, cwd, paths, tool):
     """Run ``tool`` over ``paths`` in argv-budget-sized batches.
 
     Returns ``(outputs, None)`` — one stdout per successful run, in order — or
     ``(None, reason)``. Any failed batch fails the whole language (no partial merge).
     Under the budget this is exactly one call.
     """
+    fixed_argv = _fixed_argv_for(tool)
+    if fixed_argv is None:
+        return None, "%s cannot run: unknown hotspot tool" % tool
     budget, env_failed = guardian_census.argv_operand_budget_detail(cwd, fixed_argv)
     if budget <= 0:
         return None, (
@@ -505,7 +528,7 @@ def _run_batched(ctx, cwd, paths, fixed_argv, tool):
             "budget (first: %s)" % (tool, len(oversize), budget, oversize[0]))
     outputs = []
     for batch in batches:
-        err = _run_batch(ctx, cwd, batch, fixed_argv, tool, outputs)
+        err = _run_batch(ctx, cwd, batch, tool, outputs)
         if err is not None:
             return None, err
     return outputs, None
@@ -521,7 +544,7 @@ def _run_radon(ctx, cwd, paths):
     """
     if not paths:
         return {}, [], None
-    outputs, err = _run_batched(ctx, cwd, paths, ["radon", "cc", "-s", "-j"], "radon")
+    outputs, err = _run_batched(ctx, cwd, paths, "radon")
     if err is not None:
         return None, None, err
     texts = [t for t in outputs if t.strip()]
@@ -554,8 +577,7 @@ def _run_lizard(ctx, cwd, paths):
     """
     if not paths:
         return {}, None
-    outputs, err = _run_batched(
-        ctx, cwd, paths, ["lizard", "--csv", "-l", "javascript"], "lizard")
+    outputs, err = _run_batched(ctx, cwd, paths, "lizard")
     if err is not None:
         return None, err
     texts = [t for t in outputs if t.strip()]
