@@ -64,7 +64,7 @@ _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"
 _SHELL_PROGRAMS = frozenset(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "busybox"])
 _REGULAR_MODES = ("100644", "100755")
 _PYTHON_PROGRAM = re.compile(r"^python(\d+(\.\d+)?)?$")
-_SEPARATOR_CHARS = frozenset(";&|()")
+_SEPARATOR_CHARS = frozenset(";&|()\n")
 _COMMAND_WORDS = frozenset(["if", "then", "else", "elif", "do", "while", "until", "!", "{"])
 _UNSET = object()
 _TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
@@ -260,17 +260,27 @@ def project_interpreter(verify_command):
     if not isinstance(verify_command, str) or verify_command.strip() in ("", "none"):
         return None
     try:
-        lexer = shlex.shlex(verify_command, posix=True, punctuation_chars=True)
+        # axis: an unquoted newline is a command boundary, so it is a separator token, never whitespace
+        lexer = shlex.shlex(verify_command, posix=True, punctuation_chars=";&|()<>\n")
+        lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
         return None
     at_command = True
+    after_env = False
     for i, tok in enumerate(tokens):
         if _is_separator(tok):
             at_command = True
+            after_env = False
             continue
         if not at_command:
+            continue
+        # axis: an absolute env wrapper is skipped (with its options) so the python it launches is the launcher, never the wrapper
+        if after_env and tok.startswith("-"):
+            continue
+        if os.path.basename(tok) == "env":
+            after_env = True
             continue
         if tok in _COMMAND_WORDS or _ENV_TOKEN.match(tok):
             continue
