@@ -2524,6 +2524,325 @@ def _cloud_base_refusal(repo_root, stamped, env):
     return None
 
 
+def _refuse_unreserved(
+    ctx, reason, stage, premise, preflight_result, compose_result=None, **extra
+):
+    """Account one refusal that falls before the launch's real reservation.
+
+    A refused launch is still a launch the ledger must show: reserve a record for it, terminalize
+    it with `reason` at `stage`, and return the accounted failure. A terminalization failure
+    replaces the reason and keeps `extra`. `ctx` is the launch's shared context, built once in
+    `launch_build`; every such refusal goes through here so none can return a bare failure.
+    """
+    reserve_result = _try_reserve_for_refusal(
+        ctx["repo_root"], ctx["launch_id"], ctx["issue"], premise, preflight_result,
+        compose_result, ctx["env"],
+        slot=ctx["slot"], generation=ctx["generation"], boundary=ctx["boundary"],
+        seat_instance=ctx["seat_instance"],
+        foreign_instance_allowed=ctx["foreign_override"],
+        **ctx["place_fields"],
+    )
+    if reserve_result.get("reserved"):
+        term = _terminalize(
+            ctx["repo_root"], ctx["launch_id"], False, reason, stage=stage, env=ctx["env"],
+        )
+        if not term["ok"]:
+            return _accounted_fail(
+                reserve_result,
+                _terminalization_reason(term, reason),
+                ctx["launch_id"],
+                **extra,
+            )
+    return _accounted_fail(reserve_result, reason, ctx["launch_id"], **extra)
+
+
+def _check_premises(
+    ctx,
+    premise,
+    checks_input,
+    *,
+    model,
+    effort,
+    doctrine_loader,
+    batch_id,
+    gate_place,
+    cloud,
+    cloud_environment,
+    cloud_session_name,
+    worktree_path,
+    deadline,
+    pr_vet_reader,
+    pr_lookup,
+    membership_reader,
+):
+    """Validate every premise a launch rests on, before anything is reserved or made.
+
+    Walks preflight, validates the premise, applies the dependency and stack gates, composes the
+    launch and checks the cloud base (cloud) or the worktree path (local), in that order. Returns
+    `{"refusal": <accounted failure>}` on the first refusal, else `{"refusal": None}` with the
+    `preflight`, `premise` (stamped), `compose`, `stackGate` and `dependencyGate` results.
+    """
+    repo_root = ctx["repo_root"]
+    env = ctx["env"]
+    if membership_reader is None:
+        membership_reader = stack_check.read_membership
+    if pr_lookup is None:
+        pr_lookup = _lookup_stack_entry_pr
+    if pr_vet_reader is None:
+        pr_vet_reader = stack_check.read_pr_vet_state
+
+    preflight_result = walk_preflight(
+        checks_input,
+        repo_root,
+        env=env,
+        doctrine_loader=doctrine_loader,
+        batch_id=batch_id,
+        slot=ctx["slot"],
+        generation=ctx["generation"],
+        place=gate_place,
+    )
+    if not preflight_result["ok"]:
+        return {"refusal": _refuse_unreserved(
+            ctx, preflight_result["reason"], "preflight", premise, preflight_result,
+            **_preflight_extra(preflight_result),
+        )}
+
+    premise_result = validate_premise(
+        premise,
+        repo_root,
+        preflight_checks=preflight_result["checks"],
+        env=env,
+        issue=ctx["issue"],
+    )
+    if not premise_result["ok"]:
+        return {"refusal": _refuse_unreserved(
+            ctx, premise_result["reason"], "premise", premise, preflight_result,
+        )}
+
+    stamped_premise = premise_result["premise"]
+    resolved_base = premise_result["resolvedBaseCommit"]
+    dependency_gate = None
+    if "dependency" in stamped_premise:
+        gate_result = _apply_dependency_gate(
+            stamped_premise,
+            resolved_base,
+            repo_root,
+            env,
+            pr_vet_reader,
+            deadline=deadline,
+        )
+        if not gate_result["ok"]:
+            extra = {}
+            if "detail" in gate_result:
+                extra["detail"] = gate_result["detail"]
+            return {"refusal": _refuse_unreserved(
+                ctx, gate_result["reason"], "dependency", stamped_premise, preflight_result,
+                **extra,
+            )}
+        dependency_gate = gate_result["dependencyGate"]
+    stack_gate = None
+    if "stack" in stamped_premise:
+        gate_result = _apply_stack_gate(
+            stamped_premise,
+            resolved_base,
+            repo_root,
+            env,
+            pr_lookup,
+            membership_reader,
+            deadline=deadline,
+        )
+        if not gate_result["ok"]:
+            extra = {}
+            if "detail" in gate_result:
+                extra["detail"] = gate_result["detail"]
+            return {"refusal": _refuse_unreserved(
+                ctx, gate_result["reason"], "stack", stamped_premise, preflight_result,
+                **extra,
+            )}
+        stack_gate = gate_result["stackGate"]
+
+    compose_cloud = (
+        {
+            "place": PLACE_CLOUD,
+            "cloud_environment": cloud_environment,
+            "session_name": cloud_session_name,
+        }
+        if cloud else {}
+    )
+    compose_result = compose_launch(
+        repo_root, ctx["issue"], stamped_premise, model=model, doctrine_loader=doctrine_loader,
+        effort=effort, **compose_cloud,
+    )
+    if not compose_result["ok"]:
+        stage = "compose" if compose_result["reason"] != "model-not-registry-known" else "model"
+        if compose_result["reason"] == "model-default-unavailable":
+            stage = "model"
+        if compose_result["reason"] == "effort-not-registry-known":
+            stage = "model"
+        return {"refusal": _refuse_unreserved(
+            ctx, compose_result["reason"], stage, premise_result["premise"], preflight_result,
+            compose_result,
+        )}
+
+    stamped = stamped_premise
+    if cloud:
+        # The cloud session starts from the base commit the prompt names, so the remote must have
+        # it. The launcher pushes nothing to make it so.
+        refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
+        if refusal_reason is not None:
+            return {"refusal": _refuse_unreserved(
+                ctx, refusal_reason, "cloud-base", stamped, preflight_result, compose_result,
+            )}
+
+    if not cloud and not worktree_path:
+        return {"refusal": _refuse_unreserved(
+            ctx, "launch-worktree-path-unresolvable", "worktree", stamped, preflight_result,
+            compose_result,
+        )}
+
+    return {
+        "refusal": None,
+        "preflight": preflight_result,
+        "premise": stamped_premise,
+        "compose": compose_result,
+        "stackGate": stack_gate,
+        "dependencyGate": dependency_gate,
+    }
+
+
+def _reserved_record(
+    repo_root,
+    launch_id,
+    issue,
+    stamped,
+    preflight_result,
+    compose_result,
+    *,
+    cloud,
+    cloud_environment,
+    plugin_ver,
+    worktree_path,
+    env,
+    seat_instance,
+    foreign_override,
+    slot,
+    generation,
+    boundary,
+):
+    """Build the `reserved` ledger record for a launch, and the config dir its child runs under.
+
+    Returns `(reserved, config_dir)`; the caller keeps `config_dir` for the cloud child's
+    environment.
+    """
+    argv = compose_result["argv"]
+    doctrine = compose_result["doctrine"]
+    resolution = compose_result["modelResolution"]
+    model_reason = resolution["reason"]
+    reserved = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": stamped["batchId"],
+        "repoId": ll.repo_identity(repo_root) or "",
+        "issue": issue,
+        "surfaces": stamped["surfaces"],
+        "premise": stamped,
+        "preflight": {"checks": preflight_result["checks"]},
+        "argv": argv,
+        "doctrineDigest": doctrine["digest"],
+        "model": compose_result["model"],
+        "modelSource": resolution["source"],
+        "modelReason": model_reason if model_reason is not None else "",
+        # Effort provenance sits beside the model's: "" is the inherit case, which is exactly
+        # what a reader needs to tell an unpinned lane from one pinned to the same value.
+        "effort": compose_result["effort"] or "",
+        "effortSource": compose_result["effortSource"],
+    }
+    if cloud:
+        reserved["place"] = PLACE_CLOUD
+        reserved["cloudEnvironment"] = cloud_environment
+        reserved["pluginVersion"] = plugin_ver
+        # The launching account's id, so a later reader decides "the advisor's account" by id,
+        # not by config-dir path. Omitted when the account cannot be read.
+        account_id = cloud_setup.launching_account(env, cwd=repo_root)
+        if isinstance(account_id, str) and account_id:
+            reserved["accountId"] = account_id
+    else:
+        reserved["worktree"] = worktree_path
+        reserved["sessionId"] = compose_result["sessionId"]
+    config_dir = spawn_config_dir(env=env, cwd=repo_root if cloud else worktree_path)
+    if config_dir is not None:
+        reserved["configDir"] = config_dir
+    if seat_instance is not None:
+        reserved["seatInstance"] = seat_instance
+    if foreign_override:
+        reserved["foreignInstanceAllowed"] = True
+    if slot is not None:
+        reserved["slot"] = slot
+    if generation is not None:
+        reserved["generation"] = generation
+    if boundary is not None:
+        reserved["boundary"] = boundary
+    return reserved, config_dir
+
+
+def _attach_gates(result, stack_gate, dependency_gate):
+    """Record the stack and dependency gate results on a successful launch `result`."""
+    if stack_gate is not None:
+        result["stackGate"] = stack_gate
+    if dependency_gate is not None:
+        result["dependencyGate"] = dependency_gate
+    return result
+
+
+def _premise_batch_id(premise):
+    """The premise's batch id: a non-empty string, else None."""
+    batch_id = premise.get("batchId") if isinstance(premise, dict) else None
+    if not isinstance(batch_id, str) or not batch_id.strip():
+        batch_id = None
+    return batch_id
+
+
+def _launch_timing(
+    settle_seconds, max_attempts, backoff_seconds, total_deadline_seconds,
+    device_hub_poll_seconds,
+):
+    """Resolve the launch's timing knobs to their defaults.
+
+    Returns `(settle_seconds, max_attempts, backoff_seconds, total_deadline_seconds,
+    device_hub_poll_seconds)`.
+    """
+    settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
+    max_attempts = _MAX_ATTEMPTS if max_attempts is None else max_attempts
+    backoff_seconds = _BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
+    total_deadline_seconds = (
+        _TOTAL_DEADLINE_SECONDS if total_deadline_seconds is None else total_deadline_seconds
+    )
+    poll_seconds = (
+        _DEVICE_HUB_POLL_SECONDS if device_hub_poll_seconds is None else device_hub_poll_seconds
+    )
+    return settle_seconds, max_attempts, backoff_seconds, total_deadline_seconds, poll_seconds
+
+
+def _cloud_child_env(env, config_dir, effort):
+    """The environment a cloud launch command runs under."""
+    # The launch command carries none of the launch-id, slot, iPhone or heartbeat variables:
+    # the session it makes runs elsewhere and has no use for this machine's lane plumbing.
+    cloud_env = ll.scrub_env(env)
+    for name in (
+        hb.LAUNCH_ID_ENV, hb.HEARTBEAT_ROOT_ENV, SLOT_REF_ENV, IPHONE_ID_ENV, DEVICE_HUB_ENV,
+    ):
+        cloud_env.pop(name, None)
+    if config_dir is not None:
+        cloud_env[CONFIG_DIR_ENV] = config_dir
+    # The same rule as the local spawn: the variable outranks the `--effort` flag, so a
+    # resolved effort overwrites the ambient value and drops the stale reflection; a None
+    # effort touches neither.
+    pin_effort(cloud_env, effort)
+    return cloud_env
+
+
 def _holds_launch_ownership(func):
     """Run `func` (a launch) holding its per-launch ownership lock from before it reserves.
 
@@ -2586,31 +2905,22 @@ def launch_build(
     With ``place="cloud"`` the builder is started in a cloud session instead: the platform command
     runs once, the session's identity is read from its output, the lane is recorded and the call
     returns. No worktree is made, no local child is left, and nothing is pushed.
+
+    Every premise the launch rests on is checked by `_check_premises` before anything is made.
     """
-    if membership_reader is None:
-        membership_reader = stack_check.read_membership
-    if pr_lookup is None:
-        pr_lookup = _lookup_stack_entry_pr
-    if pr_vet_reader is None:
-        pr_vet_reader = stack_check.read_pr_vet_state
-    settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
-    max_attempts = _MAX_ATTEMPTS if max_attempts is None else max_attempts
-    backoff_seconds = _BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
-    total_deadline_seconds = (
-        _TOTAL_DEADLINE_SECONDS if total_deadline_seconds is None else total_deadline_seconds
+    settle_seconds, max_attempts, backoff_seconds, total_deadline_seconds, poll_seconds = (
+        _launch_timing(
+            settle_seconds, max_attempts, backoff_seconds, total_deadline_seconds,
+            device_hub_poll_seconds,
+        )
     )
 
     run = iphone_run or _default_iphone_run
-    poll_seconds = (
-        _DEVICE_HUB_POLL_SECONDS if device_hub_poll_seconds is None else device_hub_poll_seconds
-    )
 
     launch_id = _launch_id or "launch-%s" % secrets.token_hex(8)
     deadline = time.monotonic() + total_deadline_seconds
 
-    batch_id = premise.get("batchId") if isinstance(premise, dict) else None
-    if not isinstance(batch_id, str) or not batch_id.strip():
-        batch_id = None
+    batch_id = _premise_batch_id(premise)
 
     # Pre-reservation refusals: nothing is written to the ledger for any of these.
     place_refusal = _place_refusal(
@@ -2659,232 +2969,38 @@ def launch_build(
     else:
         seat = {"instance": None, "reason": "seat-pid-absent"}
 
-    preflight_result = walk_preflight(
-        checks_input,
-        repo_root,
-        env=env,
-        doctrine_loader=doctrine_loader,
-        batch_id=batch_id,
-        slot=slot,
-        generation=generation,
-        place=gate_place,
-    )
-    if not preflight_result["ok"]:
-        stage = "preflight"
-        reason = preflight_result["reason"]
-        reserve_result = _try_reserve_for_refusal(
-            repo_root, launch_id, issue, premise, preflight_result, None, env,
-            slot=slot, generation=generation, boundary=boundary,
-            seat_instance=seat["instance"],
-            foreign_instance_allowed=foreign_override,
-            **place_fields,
-        )
-        if reserve_result.get("reserved"):
-            term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
-            if not term["ok"]:
-                return _accounted_fail(
-                    reserve_result,
-                    _terminalization_reason(term, reason),
-                    launch_id,
-                    **_preflight_extra(preflight_result),
-                )
-        return _accounted_fail(
-            reserve_result,
-            reason,
-            launch_id,
-            **_preflight_extra(preflight_result),
-        )
+    ctx = {
+        "repo_root": repo_root,
+        "launch_id": launch_id,
+        "issue": issue,
+        "env": env,
+        "slot": slot,
+        "generation": generation,
+        "boundary": boundary,
+        "seat_instance": seat["instance"],
+        "foreign_override": foreign_override,
+        "place_fields": place_fields,
+    }
 
-    premise_result = validate_premise(
-        premise,
-        repo_root,
-        preflight_checks=preflight_result["checks"],
-        env=env,
-        issue=issue,
+    checked = _check_premises(
+        ctx, premise, checks_input,
+        model=model, effort=effort, doctrine_loader=doctrine_loader, batch_id=batch_id,
+        gate_place=gate_place, cloud=cloud, cloud_environment=cloud_environment,
+        cloud_session_name=cloud_session_name, worktree_path=worktree_path,
+        deadline=deadline, pr_vet_reader=pr_vet_reader, pr_lookup=pr_lookup,
+        membership_reader=membership_reader,
     )
-    if not premise_result["ok"]:
-        stage = "premise"
-        reason = premise_result["reason"]
-        reserve_result = _try_reserve_for_refusal(
-            repo_root, launch_id, issue, premise, preflight_result, None, env,
-            slot=slot, generation=generation, boundary=boundary,
-            seat_instance=seat["instance"],
-            foreign_instance_allowed=foreign_override,
-            **place_fields,
-        )
-        if reserve_result.get("reserved"):
-            term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
-            if not term["ok"]:
-                return _accounted_fail(
-                    reserve_result, _terminalization_reason(term, reason), launch_id,
-                )
-        return _accounted_fail(reserve_result, reason, launch_id)
-
-    stamped_premise = premise_result["premise"]
-    resolved_base = premise_result["resolvedBaseCommit"]
-    dependency_gate = None
-    if "dependency" in stamped_premise:
-        gate_result = _apply_dependency_gate(
-            stamped_premise,
-            resolved_base,
-            repo_root,
-            env,
-            pr_vet_reader,
-            deadline=deadline,
-        )
-        if not gate_result["ok"]:
-            stage = "dependency"
-            reason = gate_result["reason"]
-            extra = {}
-            if "detail" in gate_result:
-                extra["detail"] = gate_result["detail"]
-            reserve_result = _try_reserve_for_refusal(
-                repo_root, launch_id, issue, stamped_premise,
-                preflight_result, None, env,
-                slot=slot, generation=generation, boundary=boundary,
-                seat_instance=seat["instance"],
-                foreign_instance_allowed=foreign_override,
-                **place_fields,
-            )
-            if reserve_result.get("reserved"):
-                term = _terminalize(
-                    repo_root, launch_id, False, reason, stage=stage, env=env,
-                )
-                if not term["ok"]:
-                    return _accounted_fail(
-                        reserve_result,
-                        _terminalization_reason(term, reason),
-                        launch_id,
-                        **extra,
-                    )
-            return _accounted_fail(reserve_result, reason, launch_id, **extra)
-        dependency_gate = gate_result["dependencyGate"]
-    stack_gate = None
-    if "stack" in stamped_premise:
-        gate_result = _apply_stack_gate(
-            stamped_premise,
-            resolved_base,
-            repo_root,
-            env,
-            pr_lookup,
-            membership_reader,
-            deadline=deadline,
-        )
-        if not gate_result["ok"]:
-            stage = "stack"
-            reason = gate_result["reason"]
-            extra = {}
-            if "detail" in gate_result:
-                extra["detail"] = gate_result["detail"]
-            reserve_result = _try_reserve_for_refusal(
-                repo_root, launch_id, issue, stamped_premise,
-                preflight_result, None, env,
-                slot=slot, generation=generation, boundary=boundary,
-                seat_instance=seat["instance"],
-                foreign_instance_allowed=foreign_override,
-                **place_fields,
-            )
-            if reserve_result.get("reserved"):
-                term = _terminalize(
-                    repo_root, launch_id, False, reason, stage=stage, env=env,
-                )
-                if not term["ok"]:
-                    return _accounted_fail(
-                        reserve_result,
-                        _terminalization_reason(term, reason),
-                        launch_id,
-                        **extra,
-                    )
-            return _accounted_fail(reserve_result, reason, launch_id, **extra)
-        stack_gate = gate_result["stackGate"]
-
-    compose_cloud = (
-        {
-            "place": PLACE_CLOUD,
-            "cloud_environment": cloud_environment,
-            "session_name": cloud_session_name,
-        }
-        if cloud else {}
-    )
-    compose_result = compose_launch(
-        repo_root, issue, stamped_premise, model=model, doctrine_loader=doctrine_loader,
-        effort=effort, **compose_cloud,
-    )
-    if not compose_result["ok"]:
-        stage = "compose" if compose_result["reason"] != "model-not-registry-known" else "model"
-        if compose_result["reason"] == "model-default-unavailable":
-            stage = "model"
-        if compose_result["reason"] == "effort-not-registry-known":
-            stage = "model"
-        reason = compose_result["reason"]
-        reserve_result = _try_reserve_for_refusal(
-            repo_root, launch_id, issue, premise_result["premise"],
-            preflight_result, compose_result, env,
-            slot=slot, generation=generation, boundary=boundary,
-            seat_instance=seat["instance"],
-            foreign_instance_allowed=foreign_override,
-            **place_fields,
-        )
-        if reserve_result.get("reserved"):
-            term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
-            if not term["ok"]:
-                return _accounted_fail(
-                    reserve_result, _terminalization_reason(term, reason), launch_id,
-                )
-        return _accounted_fail(reserve_result, reason, launch_id)
-
-    stamped = stamped_premise
+    if checked["refusal"] is not None:
+        return checked["refusal"]
+    preflight_result = checked["preflight"]
+    stamped = checked["premise"]
+    compose_result = checked["compose"]
+    stack_gate = checked["stackGate"]
+    dependency_gate = checked["dependencyGate"]
     iphone_check = stamped.get("iphoneCheck") is True
     iphone_info = {"id": None, "deviceHub": None} if iphone_check else None
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
-
-    if cloud:
-        # The cloud session starts from the base commit the prompt names, so the remote must have
-        # it. The launcher pushes nothing to make it so.
-        refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
-        if refusal_reason is not None:
-            reserve_result = _try_reserve_for_refusal(
-                repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
-                slot=slot, generation=generation, boundary=boundary,
-                seat_instance=seat["instance"],
-                foreign_instance_allowed=foreign_override,
-                **place_fields,
-            )
-            if reserve_result.get("reserved"):
-                term = _terminalize(
-                    repo_root, launch_id, False, refusal_reason, stage="cloud-base", env=env,
-                )
-                if not term["ok"]:
-                    return _accounted_fail(
-                        reserve_result,
-                        _terminalization_reason(term, refusal_reason),
-                        launch_id,
-                    )
-            return _accounted_fail(reserve_result, refusal_reason, launch_id)
-
-    if not cloud and not worktree_path:
-        reserve_result = _try_reserve_for_refusal(
-            repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
-            slot=slot, generation=generation, boundary=boundary,
-            seat_instance=seat["instance"],
-            foreign_instance_allowed=foreign_override,
-            **place_fields,
-        )
-        if reserve_result.get("reserved"):
-            term = _terminalize(
-                repo_root, launch_id, False, "launch-worktree-path-unresolvable",
-                stage="worktree", env=env,
-            )
-            if not term["ok"]:
-                return _accounted_fail(
-                    reserve_result,
-                    _terminalization_reason(term, "launch-worktree-path-unresolvable"),
-                    launch_id,
-                )
-        return _accounted_fail(
-            reserve_result, "launch-worktree-path-unresolvable", launch_id,
-        )
 
     # A cloud lane has no worktree to make.
     worktree_result = (
@@ -2893,83 +3009,21 @@ def launch_build(
         else create_build_worktree(repo_root, worktree_path, stamped["baseCommit"], env=env)
     )
     if not worktree_result["ok"]:
-        refusal_reason = worktree_result["reason"]
-        reserve_result = _try_reserve_for_refusal(
-            repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
-            slot=slot, generation=generation, boundary=boundary,
-            seat_instance=seat["instance"],
-            foreign_instance_allowed=foreign_override,
-            **place_fields,
-        )
         extra = {"path": worktree_result["path"]}
         if "remedy" in worktree_result:
             extra["remedy"] = worktree_result["remedy"]
-        if reserve_result.get("reserved"):
-            term = _terminalize(
-                repo_root,
-                launch_id,
-                False,
-                refusal_reason,
-                stage="worktree",
-                env=env,
-            )
-            if not term["ok"]:
-                return _accounted_fail(
-                    reserve_result,
-                    _terminalization_reason(term, refusal_reason),
-                    launch_id,
-                    **extra,
-                )
-        return _accounted_fail(reserve_result, refusal_reason, launch_id, **extra)
+        return _refuse_unreserved(
+            ctx, worktree_result["reason"], "worktree", stamped, preflight_result,
+            compose_result, **extra,
+        )
 
-    resolution = compose_result["modelResolution"]
-    model_reason = resolution["reason"]
-    reserved = {
-        "event": "reserved",
-        "launchId": launch_id,
-        "ts": time.time(),
-        "schema": ll.SCHEMA,
-        "batchId": stamped["batchId"],
-        "repoId": ll.repo_identity(repo_root) or "",
-        "issue": issue,
-        "surfaces": stamped["surfaces"],
-        "premise": stamped,
-        "preflight": {"checks": preflight_result["checks"]},
-        "argv": argv,
-        "doctrineDigest": doctrine["digest"],
-        "model": compose_result["model"],
-        "modelSource": resolution["source"],
-        "modelReason": model_reason if model_reason is not None else "",
-        # Effort provenance sits beside the model's: "" is the inherit case, which is exactly
-        # what a reader needs to tell an unpinned lane from one pinned to the same value.
-        "effort": compose_result["effort"] or "",
-        "effortSource": compose_result["effortSource"],
-    }
-    if cloud:
-        reserved["place"] = PLACE_CLOUD
-        reserved["cloudEnvironment"] = cloud_environment
-        reserved["pluginVersion"] = plugin_ver
-        # The launching account's id, so a later reader decides "the advisor's account" by id,
-        # not by config-dir path. Omitted when the account cannot be read.
-        account_id = cloud_setup.launching_account(env, cwd=repo_root)
-        if isinstance(account_id, str) and account_id:
-            reserved["accountId"] = account_id
-    else:
-        reserved["worktree"] = worktree_path
-        reserved["sessionId"] = compose_result["sessionId"]
-    config_dir = spawn_config_dir(env=env, cwd=repo_root if cloud else worktree_path)
-    if config_dir is not None:
-        reserved["configDir"] = config_dir
-    if seat["instance"] is not None:
-        reserved["seatInstance"] = seat["instance"]
-    if foreign_override:
-        reserved["foreignInstanceAllowed"] = True
-    if slot is not None:
-        reserved["slot"] = slot
-    if generation is not None:
-        reserved["generation"] = generation
-    if boundary is not None:
-        reserved["boundary"] = boundary
+    reserved, config_dir = _reserved_record(
+        repo_root, launch_id, issue, stamped, preflight_result, compose_result,
+        cloud=cloud, cloud_environment=cloud_environment, plugin_ver=plugin_ver,
+        worktree_path=worktree_path, env=env, seat_instance=seat["instance"],
+        foreign_override=foreign_override, slot=slot, generation=generation,
+        boundary=boundary,
+    )
     # The phone is made here, outside the ledger lock: a slow simulator creation must never hold
     # other launches' reservations. Its id rides on the reserved record.
     made_iphone_id = None
@@ -3075,19 +3129,7 @@ def launch_build(
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 
     if cloud:
-        # The launch command carries none of the launch-id, slot, iPhone or heartbeat variables:
-        # the session it makes runs elsewhere and has no use for this machine's lane plumbing.
-        cloud_env = ll.scrub_env(env)
-        for name in (
-            hb.LAUNCH_ID_ENV, hb.HEARTBEAT_ROOT_ENV, SLOT_REF_ENV, IPHONE_ID_ENV, DEVICE_HUB_ENV,
-        ):
-            cloud_env.pop(name, None)
-        if config_dir is not None:
-            cloud_env[CONFIG_DIR_ENV] = config_dir
-        # The same rule as the local spawn: the variable outranks the `--effort` flag, so a
-        # resolved effort overwrites the ambient value and drops the stale reflection; a None
-        # effort touches neither.
-        pin_effort(cloud_env, compose_result["effort"])
+        cloud_env = _cloud_child_env(env, config_dir, compose_result["effort"])
         success_base = {
             "ok": True,
             "reason": None,
@@ -3121,10 +3163,7 @@ def launch_build(
             success_base,
         )
         if cloud_result.get("ok"):
-            if stack_gate is not None:
-                cloud_result["stackGate"] = stack_gate
-            if dependency_gate is not None:
-                cloud_result["dependencyGate"] = dependency_gate
+            _attach_gates(cloud_result, stack_gate, dependency_gate)
         return cloud_result
 
     # A phone or Device Hub that is not there never fails the launch: the builder is told what
@@ -3284,10 +3323,7 @@ def launch_build(
                 "worktree": worktree_path,
                 "warnings": warnings,
             }
-            if stack_gate is not None:
-                success["stackGate"] = stack_gate
-            if dependency_gate is not None:
-                success["dependencyGate"] = dependency_gate
+            _attach_gates(success, stack_gate, dependency_gate)
             if iphone_check:
                 success["iphone"] = dict(iphone_info)
             return success
