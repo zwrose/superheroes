@@ -12,6 +12,9 @@ import charter_detect
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
 _HCHANGELOG = re.compile(r"^## \[?(\d+\.\d+\.\d+)\]?")
+# A "Before you upgrade" bullet opens with one of these markers (TRANSITION.md's header);
+# a bullet with none is treated as before-switching, so an unmarked section fails safe.
+_MARKER = re.compile(r"^\*\*(Before|After) switching[.:]?\*\*[.:]?(?=\s|$)")
 _SKIP = frozenset({"__pycache__", ".in_use", ".orphaned_at"})
 # The three seats this planner serves; charter_detect gains charters (discovery) it does not adopt.
 ADOPT_ROLES = ("showrunner", "workhorse", "detective")
@@ -88,19 +91,29 @@ def _parse_transition(path, fv, tv, installed):
                 ver = m.group(1)
                 found.add(ver)
                 if _vt(fv) < _vt(ver) <= _vt(tv):
-                    subs, j, inf = [], i + 1, False
+                    subs, steps, j, inf = [], [], i + 1, False
                     while j < len(lines):
-                        if lines[j].strip().startswith("```"):
+                        ln = lines[j]
+                        if ln.strip().startswith("```"):
                             inf = not inf
                         elif not inf:
-                            if _HVER.match(lines[j]):
+                            if _HVER.match(ln):
                                 break
-                            if lines[j].startswith(("### ", "#### ")):
-                                subs.append(lines[j].lstrip("#").strip())
+                            if ln.startswith(("### ", "#### ")):
+                                subs.append(ln.lstrip("#").strip())
+                            elif subs and subs[-1] == "Before you upgrade":
+                                if ln.startswith("- "):
+                                    steps.append({"line": j + 1, "text": ln[2:].strip()})
+                                elif steps and ln[:1].isspace() and ln.strip():
+                                    steps[-1]["text"] += " " + ln.strip()
                         j += 1
+                    for st in steps:
+                        mk = _MARKER.match(st["text"])
+                        st["marked"] = bool(mk)
+                        st["when"] = "after-switching" if mk and mk.group(1) == "After" else "before-switching"
                     sections.append({"version": ver, "line": i + 1,
                                      "beforeYouUpgrade": "Before you upgrade" in subs,
-                                     "subheadings": subs})
+                                     "subheadings": subs, "upgradeSteps": steps})
         i += 1
     missing = [v for v in installed if _vt(fv) < _vt(v) <= _vt(tv) and v not in found]
     if tv not in found and tv not in missing:
