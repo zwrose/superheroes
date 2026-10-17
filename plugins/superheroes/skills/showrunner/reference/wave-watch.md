@@ -30,7 +30,7 @@
 - **`run`** — a true one-shot. One ledger read (and at most one open-PR read, for stack state), no
   waiting, then prints one JSON line on stdout and exits. It does **not** re-arm.
 - **`note-answered`** — not a watch: `--repo-root` and `--comment-id N` record a builder note's
-  comment as answered, so `builder-note` stops surfacing it. It prints one JSON line on stdout and
+  **or a cloud terminal comment's** comment as answered, so `builder-note` stops surfacing it. It prints one JSON line on stdout and
   exits 1 on a refusal: `comment-id-invalid`, `note-answers-unreadable` (the record is never
   overwritten), or `store-unresolvable`.
 
@@ -371,8 +371,9 @@ builder is `builder-exited` instead. See [Before treating `lane-stale` as a wedg
 for resolution, degradation tokens, and why an unresolvable transcript still alerts.
 
 For a [cloud lane](../../../rubric/glossary.md#cloud-lane) the watcher never reports `builder-exited`,
-`lane-terminal`, `lane-blocked`, or `lane-never-stamped`, and never reads a transcript. Its ending
-reaches you through its PR and its issue. While a batch has a live cloud lane, every result carries
+`lane-blocked`, or `lane-never-stamped`, and never reads a transcript. It reports **`lane-terminal`**
+for a cloud lane from the lane's issue comments (below). Its ending reaches you through its PR and
+its issue. While a batch has a live cloud lane, every result carries
 `cloudLanes`, which lists them.
 
 When **`builder-note`** fires, a cloud builder has posted an issue comment opening with
@@ -383,6 +384,25 @@ by comment id: `{"launchId", "issue", "commentId", "url", "createdAt", "cloudSes
 `alsoObserved`. Answer the builder as [Answering a builder note](#answering-a-builder-note) says;
 until a confirmed delivery is followed by `note-answered`, the note fires again on every arm. A note posted while you were away fires when you are back. It reads
 the repository's issue comments once per tick, a `304` re-using the stored list.
+
+When **`lane-terminal`** fires for a cloud lane, the newest comment on a live started lane's issue,
+created at or after that lane's attempt began, opens with one of the terminal headers
+(`TERMINAL_HEADERS` in `lib/cloud_builder.py`: handback, stop, park), and no `note-answered` has
+recorded it. Its `launches` entry carries `{"launchId", "state", "kind", "issue", "commentId", "url",
+"createdAt", "source": "comment", "cloudSessionName", "cloudSessionId", "configDir"}`, with `state`
+`handback`, `stopped` or `parked`; every cloud lane that ended since the last read rides `launches`.
+It reads the same issue-comments request as the builder note, so it costs no extra request. When a
+local lane's `lane-terminal`, `lane-blocked` or `builder-exited` is already due, the cloud reads are
+skipped that tick, so a cloud ending in the same tick surfaces on the next arm.
+
+What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
+3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
+unrepaired. On a **park**, answer it or route it; a parked lane is **never recovered**
+(`cloud_recover.py assess` answers `parked`). If you answer a park by message and the builder
+resumes, run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
+--comment-id <the park comment's id>` so the watch stops reporting it and recovery no longer reads it
+as a park. A builder that ends with a free-form comment instead is seen only by the `lane-stale`
+fallback.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
 on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
