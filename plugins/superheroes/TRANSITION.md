@@ -9,6 +9,13 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Hooks: the plugin approves its own iPhone commands
+
+- A third `PreToolUse` command on the `Bash` matcher, `hooks/iphone_allow.py`, runs after the worktree guard. It approves (`permissionDecision: "allow"`) only one plain call, `python3 [-B] <plugin root>/lib/iphone_check.py <verb> …`, where the verb is `preflight`, `boot`, `open`, `drive`, `shot`, `read`, `judge` or `render`. A `drive` call needs an AXe step after `--` that is `tap`, `type`, `button`, `swipe` or `describe-ui`. `judge` may read its step as `judge < <file>`.
+- It never denies. Any other command gets no decision from it, so the normal permission flow applies, and the worktree guard still denies what it denies. Direct `axe` calls are not covered.
+- It is wired on Claude Code only. The Codex hooks file stays empty.
+- A pilot call gets the approval only when it writes the absolute plugin root, one call per command, with no `$ROOT_DIR` variable and no chaining.
+
 ## 0.43.0
 
 ### Before you upgrade

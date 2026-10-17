@@ -202,6 +202,9 @@ iPhone check (a check on a simulated iPhone, a phone the Mac imitates in softwar
 means no phone. The launcher records `iphoneCheck` on the launch record and, when it made a phone,
 the phone's ID as `iphoneId`. The premise names no place to check.
 
+The plugin's `iphone_allow.py` hook approves the pilot's plain `iphone_check.py` calls, so an iPhone
+lane does not park on their permission prompt (Claude Code only).
+
 **Reaping.** When the lane is finished (every launch for the issue has a terminal outcome
 recorded), run
 `python3 -B <plugin root>/lib/iphone_reap.py reap --repo-root <repo> --issue <n>`.
