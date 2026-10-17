@@ -21,6 +21,7 @@ import launcher
 
 U = "0A1B2C3D-4E5F-6789-ABCD-0123456789AB"
 V = "11111111-2222-3333-4444-555555555555"
+W = "ABCDEF01-2345-6789-ABCD-EF0123456789"
 DT17 = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 RT27 = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "iphone", "reading-page.html")
@@ -508,7 +509,7 @@ def test_classify_env_valid_phone_list_is_pending(e):
     ids_env(""),
     ids_env(f"{U},"),
     ids_env(f"{U},not-a-phone"),
-    ids_env(f"{U},{V.lower()}"),
+    ids_env(f"{U},{W.lower()}"),
     ids_env(f"{U},{U}"),
     ids_env(f"{V},{U}"),
     ids_env(f"{U}, {V}"),

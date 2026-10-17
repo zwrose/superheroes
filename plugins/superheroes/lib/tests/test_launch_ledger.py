@@ -6306,12 +6306,10 @@ def test_iphone_ids_consistent_record_folds_with_both_phones():
         # axis: the list's first id must be iphoneId (mismatch, or iphoneId absent)
         (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID_2, _IPHONE_UUID]}),
         (_IPHONES_PREMISE, {"iphoneIds": [_IPHONE_UUID]}),
-        # axis: a phone list on a premise that did not name iphoneModels, or did not ask for the check
+        # axis: a phone list on a premise that did not name iphoneModels as a list
         ({"iphoneCheck": True}, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID]}),
         ({"iphoneCheck": True, "iphoneModels": "iPhone 17"},
          {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID]}),
-        ({"iphoneModels": ["iPhone 17"]}, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID]}),
-        ({}, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID]}),
     ],
 )
 def test_iphone_ids_bad_shape_refuses_fold(premise, fields):
@@ -6319,6 +6317,16 @@ def test_iphone_ids_bad_shape_refuses_fold(premise, fields):
     result = ll.fold([rec])
     assert result["ok"] is False
     assert result["reason"] == "fold-bad-field:reserved:iphoneIds"
+
+
+@pytest.mark.parametrize("premise", [{"iphoneModels": ["iPhone 17"]}, {}])
+def test_phone_fields_on_a_premise_without_the_check_refuse_at_iphoneId(premise):
+    # axis: phone fields on a premise that did not ask for the check are refused first, at iphoneId
+    rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(premise),
+                    iphoneId=_IPHONE_UUID, iphoneIds=[_IPHONE_UUID])
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:iphoneId"
 
 
 def test_iphone_ids_legacy_single_id_folds_as_a_one_phone_list():
