@@ -228,7 +228,7 @@ def test_no_message_asks_to_type_or_paste_an_id():
     # axis: message wording — no reader message asks the owner to type, paste or copy an id — see bite-proof record c8a_wo3.md
     messages = [value for name, value in vars(CE).items()
                 if name.startswith("_") and name.isupper() and isinstance(value, str)]
-    assert len(messages) == 9
+    assert len(messages) == 10
     for message in messages:
         assert not re.search(r"\b(type|paste|copy)\b", message, re.IGNORECASE), message
 
@@ -446,27 +446,35 @@ def test_compare_matches_the_recorded_id_with_no_readable_pick(tmp_path):
     assert result["action"] == "matched" and result["reason"] == "recorded"
 
 
-def test_compare_refuses_an_id_that_is_neither_the_record_nor_the_pick(tmp_path):
-    # axis: recorded-match — an id other than the record's still goes to the picker and refuses — see bite-proof record c1918_recorded_environment.md
+@pytest.mark.parametrize("environment", [THIRD_ENV_ID, OTHER_ENV_ID])
+def test_compare_refuses_an_id_other_than_the_record_toward_the_record(tmp_path, environment):
+    # axis: recorded-refuses — a recorded account refuses any other id, even one the shared pick names, and points back to the record — see bite-proof record c1918_recorded_environment.md
     env = _env(tmp_path)
     _signed_in(env)
     _write(env, _with_value(OTHER_ENV_ID))
     repo, store = _record(tmp_path, ENV_ID)
-    result = CE.compare(THIRD_ENV_ID, env=env, cwd=repo, root=store)
+    result = CE.compare(environment, env=env, cwd=repo, root=store)
+    assert result["action"] == "mismatched" and result["reason"] == "recorded-differs"
+    assert result["environment"] == ENV_ID
+    assert result["message"] == CE._RECORDED_DIFFERS
+
+
+def test_compare_a_move_goes_to_the_picker(tmp_path):
+    # axis: recorded-refuses — on a move the record is set aside and the shared pick decides — see bite-proof record c1918_recorded_environment.md
+    env = _env(tmp_path)
+    _signed_in(env)
+    _write(env, _with_value(OTHER_ENV_ID))
+    repo, store = _record(tmp_path, ENV_ID)
+    result = CE.compare(OTHER_ENV_ID, env=env, cwd=repo, root=store, moving=True)
+    assert result == {"action": "matched", "reason": None, "environment": OTHER_ENV_ID}
+    result = CE.compare(ENV_ID, env=env, cwd=repo, root=store, moving=True)
+    assert result["action"] == "mismatched" and result["reason"] == "picked-differs"
+    assert result["environment"] == OTHER_ENV_ID
+    result = CE.compare(THIRD_ENV_ID, env=env, cwd=repo, root=store, moving=True)
     assert result["action"] == "mismatched" and result["environment"] == OTHER_ENV_ID
     _write(env, "not json")
-    result = CE.compare(THIRD_ENV_ID, env=env, cwd=repo, root=store)
+    result = CE.compare(THIRD_ENV_ID, env=env, cwd=repo, root=store, moving=True)
     assert result["action"] == "unchecked" and result["environment"] is None
-
-
-def test_compare_a_fresh_pick_moves_a_recorded_account(tmp_path):
-    # axis: recorded-match — a fresh pick of another environment still matches, so the owner can move the account — see bite-proof record c1918_recorded_environment.md
-    env = _env(tmp_path)
-    _signed_in(env)
-    _write(env, _with_value(OTHER_ENV_ID))
-    repo, store = _record(tmp_path, ENV_ID)
-    result = CE.compare(OTHER_ENV_ID, env=env, cwd=repo, root=store)
-    assert result == {"action": "matched", "reason": None, "environment": OTHER_ENV_ID}
 
 
 def test_compare_first_setup_with_no_record_still_needs_the_pick(tmp_path):
@@ -510,5 +518,7 @@ def test_compare_cli_matches_the_recorded_id(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
     code, out = _run(capsys, ["compare", "--environment", ENV_ID, "--cwd", repo])
     assert code == 0 and out == {"action": "matched", "reason": "recorded", "environment": ENV_ID}
-    code, out = _run(capsys, ["compare", "--environment", THIRD_ENV_ID, "--cwd", repo])
-    assert code == 1 and out["action"] == "mismatched"
+    code, out = _run(capsys, ["compare", "--environment", OTHER_ENV_ID, "--cwd", repo])
+    assert code == 1 and out["action"] == "mismatched" and out["environment"] == ENV_ID
+    code, out = _run(capsys, ["compare", "--environment", OTHER_ENV_ID, "--cwd", repo, "--moving"])
+    assert code == 0 and out == {"action": "matched", "reason": None, "environment": OTHER_ENV_ID}

@@ -510,8 +510,11 @@ python3 -B "$ROOT_DIR/lib/cloud_setup.py" read --cwd .
 When it returns `ready: true` and the owner has not said they are moving the account, skip steps 1
 and 3 and use the record's `environment` as the id in steps 5 to 8. `compare` matches that id with
 reason `recorded` without reading the picker: on a machine where several Claude accounts share one
-settings file, the shared pick may name another account's environment. Any other id is still
-compared with the picker, so a wrong environment still refuses. Otherwise run every step.
+settings file, the shared pick may name another account's environment. Any other id is refused as
+`mismatched` with reason `recorded-differs`, and its `environment` is the recorded one. Otherwise
+run every step. When the owner says they are moving the account to another environment, run every
+step and add `--moving` to every `compare`, so the new pick decides as at a first setup; the passed
+check records the new environment.
 
 1. **Read the current pick.** Before anything else, read what the account's settings hold before
    the owner picks, and keep the result's `environment` (it may be null).
