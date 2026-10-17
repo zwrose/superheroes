@@ -382,13 +382,16 @@ def test_comments_are_read_page_by_number_so_later_pages_count(w):
     assert _notice(w, 11)["kind"] == "not-lapsed-pass"
 
 
+# axis: an owner go-ahead past the first comment page; a read that stops at page 1 sends the PR back
 def test_an_owner_go_ahead_on_a_later_comment_page_is_still_seen(w):
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
-    w.gh.comments[10] += [{"id": 8, "body": "chatter"},
-                          _record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}])]
+    w.gh.comments[10] += [{"id": 1000 + n, "body": "chatter"} for n in range(100)]
+    w.gh.comments[10].append(_record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}]))
     _renew(w)
+    w.gh.calls.clear()
     assert _send(w)["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}]
+    assert _comments_path(10) + "?per_page=100&page=2" in [c[-1] for c in w.gh.calls]
 
 
 def test_a_parked_pr_closed_or_merged_before_the_renewal_is_not_sent_back(w):
