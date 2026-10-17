@@ -2508,10 +2508,11 @@ _base_on_remote_fn = _base_on_remote
 def _cloud_base_refusal(repo_root, stamped, env):
     """The refusal reason when the base commit the launch names is not on the remote, else None.
 
-    The cloud session starts from the commit named on the prompt's ``Base commit:`` line, so the
-    checkout's HEAD need not be it. Run before reservation and again right before the cloud
-    command: reservation can wait on the ledger lock. The check fails closed: a remote that could
-    not be asked refuses.
+    The cloud command takes no revision, and the platform starts the session from the launching
+    checkout's commit, not from the prompt's ``Base commit:`` line. So the base must be on the
+    remote (this function) and the checkout must be on the base (``_cloud_checkout_refusal``).
+    Run before reservation and again right before the cloud command: reservation can wait on the
+    ledger lock. The check fails closed: a remote that could not be asked refuses.
     """
     # axis: the named base is on the remote, read fresh from the server and never from local tracking refs — see bite-proof record wo_c_place_call
     found = _base_on_remote_fn(repo_root, stamped["baseCommit"], env)
@@ -2522,6 +2523,135 @@ def _cloud_base_refusal(repo_root, stamped, env):
     if found is not True:
         return "launch-cloud-base-not-on-remote"
     return None
+
+
+def _remote_branch_head(repo_root, branch, env):
+    """The tip of ``refs/heads/<branch>`` on ``origin``, asked of the remote afresh, as a pair.
+
+    ``(sha, None)`` when the remote answers with exactly that one ref. ``(None, "absent")`` when
+    git says no such ref exists (``--exit-code`` exits 2). ``(None, "unchecked")`` for everything
+    else: git could not run, a timeout, any other exit code, no line, several lines, or a line
+    that does not parse or names another ref. Tests replace it through ``_remote_branch_head_fn``.
+    """
+    ask_env = dict(os.environ if env is None else env)
+    ask_env["GIT_TERMINAL_PROMPT"] = "0"
+    ref = "refs/heads/%s" % branch
+    asked = _git_scrubbed(
+        repo_root, "ls-remote", "--exit-code", "origin", ref,
+        env=ask_env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if asked is None:
+        return None, "unchecked"
+    if asked.returncode == 2:
+        return None, "absent"
+    if asked.returncode != 0:
+        return None, "unchecked"
+    lines = (asked.stdout or "").splitlines()
+    if len(lines) != 1:
+        return None, "unchecked"
+    sha, tab, named = lines[0].partition("\t")
+    if tab != "\t" or named != ref or not _HEX40.match(sha):
+        return None, "unchecked"
+    return sha, None
+
+
+# The round-trip to the remote for a branch tip; tests replace it.
+_remote_branch_head_fn = _remote_branch_head
+
+
+def _read_checkout(repo_root, env):
+    """The launching checkout's ``(branch, head)``, each None when it could not be read.
+
+    The branch is read on both sides of the HEAD read, so one result never combines two branches.
+    """
+    branch = None
+    head = None
+    named = _git_scrubbed(
+        repo_root, "symbolic-ref", "--quiet", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if named is not None and named.returncode == 0:
+        prefix = "refs/heads/"
+        said = (named.stdout or "").strip()
+        if said.startswith(prefix) and len(said) > len(prefix):
+            branch = said[len(prefix):]
+    read = _git_scrubbed(
+        repo_root, "rev-parse", "--verify", "HEAD^{commit}", env=env,
+        timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if read is not None and read.returncode == 0:
+        said = (read.stdout or "").strip()
+        if _HEX40.match(said):
+            head = said
+    named = _git_scrubbed(
+        repo_root, "symbolic-ref", "--quiet", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    branch_after = None
+    if named is not None and named.returncode == 0:
+        said = (named.stdout or "").strip()
+        prefix = "refs/heads/"
+        if said.startswith(prefix) and len(said) > len(prefix):
+            branch_after = said[len(prefix):]
+    # axis: a branch read after HEAD that is unreadable or names another branch makes the whole read unreadable — see bite-proof record i1900_cloud_checkout
+    if branch_after != branch:
+        return None, head
+    return branch, head
+
+
+def _cloud_checkout_refusal(repo_root, base, env):
+    """None when the launching checkout is on a named branch whose local HEAD and whose tip on
+    ``origin`` are both ``base``; else ``(reason, detail)``. It only reads the checkout.
+
+    The platform starts the session from the checkout's commit, and we cannot tell whether it
+    reads the local commit or the branch's tip on the remote, so both must be the base. Anything
+    that cannot be read refuses. The checkout is read again after the remote answers, because the
+    owner may switch while the lookup is pending.
+    """
+    branch, head = _read_checkout(repo_root, env)
+    detail = {
+        "checkout": repo_root,
+        "checkoutBranch": branch,
+        "checkoutHead": head,
+        "baseCommit": base,
+    }
+    # axis: a branch or HEAD that could not be read refuses, a detached HEAD included — see bite-proof record i1900_cloud_checkout
+    if branch is None or head is None:
+        return "launch-cloud-checkout-unreadable", detail
+    # axis: a checkout whose HEAD is not the base refuses, and the remote is not asked — see bite-proof record i1900_cloud_checkout
+    if head != base:
+        return "launch-cloud-checkout-off-base", detail
+    tip, why = _remote_branch_head_fn(repo_root, branch, env)
+    detail["remoteBranchHead"] = tip
+    # axis: a remote branch tip that could not be read refuses — see bite-proof record i1900_cloud_checkout
+    if why == "unchecked":
+        return "launch-cloud-checkout-remote-unchecked", detail
+    # axis: a branch the remote lacks refuses — see bite-proof record i1900_cloud_checkout
+    if why == "absent":
+        return "launch-cloud-checkout-branch-not-on-remote", detail
+    # axis: a remote branch tip that is not the base refuses — see bite-proof record i1900_cloud_checkout
+    if tip != base:
+        return "launch-cloud-checkout-off-base", detail
+    again_branch, again_head = _read_checkout(repo_root, env)
+    detail["checkoutBranch"] = again_branch
+    detail["checkoutHead"] = again_head
+    # axis: a checkout that cannot be read again after the remote answered refuses — see bite-proof record i1900_cloud_checkout
+    if again_branch is None or again_head is None:
+        return "launch-cloud-checkout-unreadable", detail
+    # axis: a checkout that moved to another branch or commit while the remote lookup was pending refuses — see bite-proof record i1900_cloud_checkout
+    if again_branch != branch or again_head != base:
+        return "launch-cloud-checkout-off-base", detail
+    return None
+
+
+def _cloud_start_refusal(repo_root, stamped, env):
+    """None, or ``(reason, extra)``: why a cloud launch must not run the cloud command now.
+
+    The base-on-remote refusals come first, with their tokens and their local fallback
+    unchanged; then the checkout check, whose refusals carry the checkout's facts in ``extra``.
+    """
+    reason = _cloud_base_refusal(repo_root, stamped, env)
+    if reason is not None:
+        return reason, {}
+    return _cloud_checkout_refusal(repo_root, stamped["baseCommit"], env)
 
 
 def _holds_launch_ownership(func):
@@ -2840,10 +2970,12 @@ def launch_build(
     argv = compose_result["argv"]
 
     if cloud:
-        # The cloud session starts from the base commit the prompt names, so the remote must have
-        # it. The launcher pushes nothing to make it so.
-        refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
-        if refusal_reason is not None:
+        # The cloud command takes no revision and the platform starts the session from the
+        # launching checkout's commit, so the remote must have the base and the checkout must be
+        # on it. The launcher pushes nothing and never changes the checkout to make it so.
+        refusal = _cloud_start_refusal(repo_root, stamped, env)
+        if refusal is not None:
+            refusal_reason, refusal_extra = refusal
             reserve_result = _try_reserve_for_refusal(
                 repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
                 slot=slot, generation=generation, boundary=boundary,
@@ -2860,8 +2992,9 @@ def launch_build(
                         reserve_result,
                         _terminalization_reason(term, refusal_reason),
                         launch_id,
+                        **refusal_extra,
                     )
-            return _accounted_fail(reserve_result, refusal_reason, launch_id)
+            return _accounted_fail(reserve_result, refusal_reason, launch_id, **refusal_extra)
 
     if not cloud and not worktree_path:
         reserve_result = _try_reserve_for_refusal(
@@ -3101,10 +3234,13 @@ def launch_build(
         }
         # axis: reservation may have waited on the ledger lock, so the base is re-checked
         # right before the command; a base the remote lost terminalizes the unstarted lane.
-        drift = _cloud_base_refusal(repo_root, stamped, env)
+        drift = _cloud_start_refusal(repo_root, stamped, env)
         if drift is not None:
-            term = _terminalize(repo_root, launch_id, False, drift, stage="cloud-base", env=env)
-            return _post_reserve_fail(_terminalization_reason(term, drift))
+            drift_reason, drift_extra = drift
+            term = _terminalize(
+                repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
         cloud_result = _run_cloud_spawn(
             repo_root,
             launch_id,
@@ -3571,6 +3707,9 @@ def _cli_compose(args):
 # (a ``terminalization-failed:`` reason) is never one of them. Each maps to the placing reason the
 # local fallback records. A remote that could not be asked is the platform being out of reach;
 # a base the remote lacks is something only the owner's machine has. No other result is one.
+# The four ``launch-cloud-checkout-*`` refusals also mean no session exists, but they are
+# deliberately left out: they are a stop for the owner (the checkout is theirs to put on the base),
+# not a reason to build elsewhere.
 _CLOUD_NEVER_STARTED_REASONS = {
     "spawn-oserror": ("unreachable", None),
     "log-open-failed": ("unreachable", None),
@@ -3662,6 +3801,7 @@ def _cli_launch(args):
         place_call, place=PLACE_CLOUD, cloud_environment=place_call["environment"],
     )
     # axis: fall back only on the results that mean no session could exist; any other result may have a live lane, and a second builder must never start — see bite-proof record wo_b_place_call
+    # The four launch-cloud-checkout-* refusals also mean no session exists, but they are left out of the map on purpose: they stop for the owner, whose checkout it is, and never build elsewhere.
     if not result.get("ok") and result.get("reason") in _CLOUD_NEVER_STARTED_REASONS:
         # axis: a cloud attempt the launcher ended is the platform being unreachable, or the build needing a commit only this machine has — see bite-proof record wo_b_place_call
         fallback_reason, fallback_need = _CLOUD_NEVER_STARTED_REASONS[result["reason"]]

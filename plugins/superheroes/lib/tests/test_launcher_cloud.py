@@ -114,6 +114,9 @@ def _cloud_repo(tmp_path):
     subprocess.run(["git", "init", "-q", "--bare", remote], check=True)
     _git(repo, "remote", "add", "origin", remote)
     _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    # The checkout's own branch is on the remote too, as a cloud launch requires.
+    branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/%s" % branch)
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     return repo
 
@@ -680,10 +683,10 @@ def test_edge3_a_base_the_remote_lacks_refuses(tmp_path):
     assert calls == []
 
 
-def test_edge3_a_head_that_is_not_the_named_base_is_not_refused_when_the_remote_has_the_base(
+def test_edge3_a_head_past_the_named_base_refuses_even_when_the_remote_has_the_base(
     tmp_path,
 ):
-    # axis: the checkout's HEAD need not be the named base
+    # axis: a checkout whose HEAD is not the named base refuses, though the remote has the base
     repo = _cloud_repo(tmp_path)
     base = _head_sha(repo)
     later = _later_commit(tmp_path, repo)
@@ -691,9 +694,10 @@ def test_edge3_a_head_that_is_not_the_named_base_is_not_refused_when_the_remote_
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
                      premise=_valid_premise(repo, baseCommit=base))
-    assert result["ok"] is True, result
-    assert len(calls) == 1
-    assert ("Base commit: %s" % base) in calls[0]["argv"][2].split("\n")
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-checkout-off-base", "cloud-base")
+    assert calls == []
+    assert result["checkoutHead"] == later
+    assert result["baseCommit"] == base
 
 
 def test_edge3_a_stale_tracking_ref_does_not_decide_the_result(tmp_path):
