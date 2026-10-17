@@ -129,6 +129,26 @@ GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
+def _fixer_create_items(batch):
+    """The ``file`` of each batch row that is a break-it finding the driver itself stamped for that path.
+
+    The test file such a finding names is written by the fixer, so it does not exist when the
+    order is linted. The stamp is the driver's: compile strips a seat-supplied one and only the
+    break-it intercept stamps a copy, so an unstamped row, or one stamped for another path, is
+    never exempted.
+    """
+    out = []
+    for row in batch if isinstance(batch, list) else []:
+        if not isinstance(row, dict) or not break_it.is_break_it(row):
+            continue
+        stamp = row.get(break_it.RUN_FIELD)
+        # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
+        if (isinstance(stamp, dict) and isinstance(stamp.get("path"), str) and stamp["path"]
+                and stamp["path"] == row.get("file")):
+            out.append(row["file"])
+    return out
+
+
 def _order_lint_text(order_text, context):
     """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's.
 
@@ -10829,7 +10849,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             lint_text = _order_lint_text(order_text, context)
             lint = order_lint.check_text(
                 lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
-                allow_payload_contract=context.get("host_seat") is True)
+                allow_payload_contract=context.get("host_seat") is True,
+                create_items=_fixer_create_items(pending.get("batch") or []))
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"

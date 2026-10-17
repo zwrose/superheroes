@@ -10,7 +10,8 @@ Tokens (one finding each when triggered):
 - ``order-repo-root-unresolved`` — ``--repo-root`` or ``--alt-root`` is absent or unreadable.
 - ``order-path-unresolved`` — a cited repo-relative path with a known extension (seeded
   locally, unioned with ``guardian_lens_docs.KNOWN_EXTENSIONS``; matched case-insensitively)
-  does not exist.
+  does not exist; a ``create_items`` path is exempt from the existence check only and must still
+  resolve inside a root (``escapes-root`` otherwise).
 - ``order-placeholder-unfilled`` — a ``{{NAME}}`` or ``{name}`` placeholder remains in the
   text outside inline backticks and fenced blocks (``{ {NAME}}`` is checked everywhere).
 - ``order-result-shape-ambiguous`` — the write-report sentinel sits beside a native-typed
@@ -187,7 +188,7 @@ def _cand(tok):
     return i > 0 and base[i:].lower() in EXTENSIONS
 
 
-def _resolve(rel, roots):
+def _resolve(rel, roots, must_exist=True):
     n = posixpath.normpath(rel)
     if n in (".", "..") or any(p == ".." for p in n.split("/")):
         return False, "escapes-root"
@@ -198,9 +199,20 @@ def _resolve(rel, roots):
         if rj != rr and not rj.startswith(rr + os.sep):
             escaped = True
             continue
+        if not must_exist:
+            continue
         if os.path.exists(joined):
             return True, ""
+    if not must_exist:
+        # Containment only: one root that the path escapes refuses it, since a file still to be
+        # created is not found under any root and so no other root can vouch for it.
+        return (not escaped, "escapes-root" if escaped else "")
     return False, ("escapes-root" if escaped else "")
+
+
+def _contained(rel, roots):
+    """Containment-only check of a path still to be created: no existence test."""
+    return _resolve(rel, roots, must_exist=False)
 
 
 def _exempt(line, o, c, tok, expect):
@@ -244,7 +256,8 @@ def _gather_exempt(text, expect):
     return exempt
 
 
-def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=None):
+def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=None,
+            create=frozenset()):
     pos = o if o is not None else 0
     end = c if c is not None else (len(line) if line is not None else len(text))
     search_line = line if line is not None else text
@@ -267,13 +280,17 @@ def _region(text, expect, roots, skip, out, seen, exempt, line=None, o=None, c=N
         if skip:
             pos = tok_end if idx >= 0 else pos + len(raw)
             continue
-        ok, why = _resolve(tok, roots)
+        if norm in create:
+            # axis: a path declared as still to be created skips the existence check only; it must still resolve inside a root — see bite-proof record wo_2_1910_fixer_lint_break_it
+            ok, why = _contained(tok, roots)
+        else:
+            ok, why = _resolve(tok, roots)
         if not ok:
             out.append(_f(TOKEN_PATH_UNRESOLVED, tok + (":" + why if why else "")))
         pos = tok_end if idx >= 0 else pos + len(raw)
 
 
-def _paths(text, expect, roots, skip):
+def _paths(text, expect, roots, skip, create=frozenset()):
     exempt = _gather_exempt(text, expect)
     out, seen = [], set()
     inline = _mask_fences(text)
@@ -282,17 +299,17 @@ def _paths(text, expect, roots, skip):
         le = inline.find("\n", m.end())
         line = inline[ls:le if le >= 0 else len(inline)]
         _region(m.group(1), expect, roots, skip, out, seen, exempt,
-                line, m.start() - ls, m.end() - ls)
+                line, m.start() - ls, m.end() - ls, create=create)
     for m in _FENCE.finditer(text):
         for ln in m.group(1).splitlines():
-            _region(ln, expect, roots, skip, out, seen, exempt)
+            _region(ln, expect, roots, skip, out, seen, exempt, create=create)
     prose = _BTICK.sub(" ", inline)
     for ln in prose.splitlines():
-        _region(ln, expect, roots, skip, out, seen, exempt, line=ln)
+        _region(ln, expect, roots, skip, out, seen, exempt, line=ln, create=create)
     for m in _MD_LINK.finditer(prose):
         target = _strip_tok(m.group(1))
         if _cand(target):
-            _region(target, expect, roots, skip, out, seen, exempt, line=target)
+            _region(target, expect, roots, skip, out, seen, exempt, line=target, create=create)
     return out, len(seen)
 
 
@@ -332,7 +349,7 @@ def _root_ok(path):
 
 
 def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer",
-               allow_payload_contract=False):
+               allow_payload_contract=False, create_items=()):
     if not isinstance(text, str):
         return _refuse(kind, TOKEN_UNREADABLE, "not-text")
     if not text.strip():
@@ -358,9 +375,16 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
             expect.add(res)
         else:
             findings.append(_f(TOKEN_PATH_UNRESOLVED, "%s:%s" % (item, res)))
+    create = set()
+    for item in create_items:
+        ok, res = _norm_item(item)
+        if ok:
+            create.add(res)
+        else:
+            findings.append(_f(TOKEN_PATH_UNRESOLVED, "%s:%s" % (item, res)))
     ph, pc = _placeholders(text)
     findings.extend(ph)
-    pf, path_n = _paths(text, expect, roots, skip)
+    pf, path_n = _paths(text, expect, roots, skip, create)
     findings.extend(pf)
     amb = _shape(text, expect_items, kind=kind,
                  allow_payload_contract=allow_payload_contract)
@@ -374,7 +398,7 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
 
 
 def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer",
-          allow_payload_contract=False):
+          allow_payload_contract=False, create_items=()):
     try:
         with open(order_path, encoding="utf-8", errors="strict") as fh:
             text = fh.read()
@@ -387,7 +411,7 @@ def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implemente
     if not text.strip():
         return _refuse(kind, TOKEN_UNREADABLE, "empty")
     return check_text(text, repo_root, expect_items, alt_roots, kind,
-                      allow_payload_contract=allow_payload_contract)
+                      allow_payload_contract=allow_payload_contract, create_items=create_items)
 
 
 class _LintArgumentParser(argparse.ArgumentParser):
