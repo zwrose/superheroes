@@ -14,6 +14,10 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ## Unreleased
 
+### Launcher: cloud launch
+
+- A cloud launch now refuses unless the launching checkout is on a named branch whose local head and whose tip on `origin` are both the premise's `baseCommit`. The new refusal reasons are `launch-cloud-checkout-unreadable`, `launch-cloud-checkout-off-base`, `launch-cloud-checkout-branch-not-on-remote` and `launch-cloud-checkout-remote-unchecked`. Each refusal result carries `checkout`, `checkoutBranch`, `checkoutHead` and `baseCommit`, and `remoteBranchHead` once the remote was asked. These refusals do not fall back to the owner's machine. Put the checkout on the base, pushed, and launch again.
+
 ### Adopt-version: before- and after-switching upgrade steps
 
 - `lib/adopt_version.py plan` adds `upgradeSteps` to each `transitionSections` entry: one
