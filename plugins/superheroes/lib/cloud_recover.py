@@ -230,11 +230,12 @@ def _newest_comment(repo, issue, since, env, run, parse):
     time or a body `parse` accepts is not kept."""
     cb = _sib("cloud_builder")
     endpoint = "repos/%s/issues/%d/comments?since=%s" % (repo, issue, _iso(since - 1))
-    code, out = cb._gh(run, ["api", "--paginate", endpoint], cb._git_env(env))
-    try:
-        comments = _sib("pr_comment")._parse_paginated_arrays(out) if code == 0 else None
-    except (ValueError, TypeError):
-        comments = None
+    git_env = cb._git_env(env)
+
+    def fetch(page_endpoint):
+        code, out = cb._gh(run, ["api", page_endpoint], git_env)
+        return out if code == 0 else None
+    comments = _sib("gh_pages").read(fetch, endpoint)
     if comments is None or not all(isinstance(c, dict) for c in comments):
         return None, False
     found = []
