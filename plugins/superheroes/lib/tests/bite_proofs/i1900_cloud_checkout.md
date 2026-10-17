@@ -5,7 +5,7 @@ branch whose local HEAD and whose tip on `origin` are both exactly the premise's
 otherwise it refuses with a named reason before the command runs, at both check points; the
 checkout is never written.
 
-Guarded-element set (declared by the order): G1–G6 below, all in
+Guarded-element set (declared by the order): G1–G7 below, all in
 `plugins/superheroes/lib/launcher.py`. Each node was run alone as
 `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest "<node>" -q -p no:cacheprovider`
 with the detector unedited. Every capture below is the full output of that command; each begins
@@ -426,4 +426,113 @@ Axis check: the red is the launch running (`ok` True) after the checkout moved d
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
 1 passed in 1.64s
+```
+
+---
+
+## G7 — the re-read after the remote answered (`_cloud_checkout_refusal`)
+
+**Guarded element:** `launcher.py:2625` `if again_branch != branch or again_head != base:` →
+`launch-cloud-checkout-off-base`, the comparison on the checkout read again after the remote
+answered `tip == base`.
+**Axis:** a checkout that moved to another branch or commit while the remote lookup was pending
+refuses, and the launch does not run.
+
+**Neutralization:** `if again_branch != branch or again_head != base:` →
+`if False and (again_branch != branch or again_head != base):` (the comparison is never true).
+
+**Red run** (`test_final_remote_lookup_cannot_accept_a_stale_local_checkout`, in
+`test_launcher_cloud_checkout_race_break_it.py`):
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_final_remote_lookup_cannot_accept_a_stale_local_checkout _________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-13/test_final_remote_lookup_canno0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f28c0db8410>
+
+    def test_final_remote_lookup_cannot_accept_a_stale_local_checkout(tmp_path, monkeypatch):
+        # axis: movement during the final remote lookup refuses without altering owner work.
+        monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger-root"))
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
+        monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
+        monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    
+        repo = _cloud_repo(tmp_path)
+        base = _head_sha(repo)
+        original_branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+        _git(repo, "checkout", "-q", "-b", "owner-work")
+        other_head = _commit(repo, "owner.txt")
+        assert other_head != base
+        _git(repo, "checkout", "-q", original_branch)
+    
+        tracked = tmp_path / "repo" / "file.txt"
+        untracked = tmp_path / "repo" / "untracked.txt"
+        tracked.write_text("staged owner work\n")
+        _git(repo, "add", "file.txt")
+        tracked.write_text("unstaged owner work\n")
+        untracked.write_text("untracked owner work\n")
+    
+        def owner_work():
+            return (
+                tracked.read_bytes(),
+                untracked.read_bytes(),
+                _git(repo, "diff", "--cached"),
+                _git(repo, "diff"),
+                _git(repo, "status", "--porcelain"),
+            )
+    
+        before = owner_work()
+        real_remote_head = L._remote_branch_head_fn
+        lookups = []
+        moved = []
+    
+        def remote_head_then_owner_switches(repo_root, branch, env):
+            answer = real_remote_head(repo_root, branch, env)
+            lookups.append(branch)
+            if len(lookups) == 2:
+                assert answer == (base, None)
+                # Deterministic interleaving: the owner switches while the final lookup is pending.
+                _git(repo, "checkout", "-q", "owner-work")
+                moved.append(True)
+            return answer
+    
+        monkeypatch.setattr(L, "_remote_branch_head_fn", remote_head_then_owner_switches)
+        calls = []
+        result = _launch(
+            repo, tmp_path, _fake_spawn(calls=calls),
+            premise=_valid_premise(repo, baseCommit=base),
+        )
+    
+        assert moved, "the final remote-lookup interleaving was not exercised"
+        assert _head_sha(repo) == other_head
+        assert owner_work() == before
+>       assert result["ok"] is False, result
+E       AssertionError: {'ok': True, 'reason': None, 'launchId': 'launch-d24dafa37c624f4c', 'place': 'cloud', ...}
+E       assert True is False
+
+/home/user/wt-1900/plugins/superheroes/lib/tests/test_launcher_cloud_checkout_race_break_it.py:76: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launcher_cloud_checkout_race_break_it.py::test_final_remote_lookup_cannot_accept_a_stale_local_checkout
+1 failed in 1.70s
+```
+Axis check: the red is the launch running (`ok` True) after the owner switched branches while the
+final remote lookup was pending.
+
+**Restore:** inverse edit, `if False and (again_branch != branch or again_head != base):` →
+`if again_branch != branch or again_head != base:`.
+**Restore receipt:** read back from the file (`launcher.py:2625-2626`):
+```
+    if again_branch != branch or again_head != base:
+        return "launch-cloud-checkout-off-base", detail
+```
+
+**Green run:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 1.63s
 ```

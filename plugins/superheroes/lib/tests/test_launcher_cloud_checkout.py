@@ -114,6 +114,7 @@ def test_row1_a_checkout_on_another_branch_at_another_commit_refuses_and_is_left
 
 
 def test_row2_a_checkout_on_the_base_with_the_branch_tip_on_the_base_launches(tmp_path):
+    # axis: a checkout and a remote tip that both sit on the base launch
     repo = _cloud_repo(tmp_path)
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
@@ -154,6 +155,7 @@ def test_row3_a_detached_head_at_the_base_refuses_as_unreadable(tmp_path):
 def test_row4_a_checkout_git_cannot_read_refuses_as_unreadable_and_the_remote_is_not_asked(
     monkeypatch, unread,
 ):
+    # axis: local facts git cannot read refuse before any remote call
     base = "a" * 40
     asked = []
     monkeypatch.setattr(L, "_remote_branch_head_fn", lambda *a, **k: asked.append(a))
@@ -249,6 +251,7 @@ SHA = "1234567890abcdef1234567890abcdef12345678"
     "another-ref", "a-longer-ref", "non-hex-sha", "no-tab", "git-did-not-run",
 ])
 def test_row8_remote_branch_head_maps_what_git_said(monkeypatch, answer, expected):
+    # axis: the ls-remote answer parses exactly: one matching ref line is a tip, anything else is absent or unchecked
     seen = _ls_remote_answer(monkeypatch, answer)
     assert L._remote_branch_head("/repo", "main", {"KEEP": "1"}) == expected
     assert len(seen) == 1
@@ -257,6 +260,7 @@ def test_row8_remote_branch_head_maps_what_git_said(monkeypatch, answer, expecte
 
 
 def test_row8_remote_branch_head_never_prompts_and_does_not_touch_the_callers_env(monkeypatch):
+    # axis: the tip lookup never prompts and never mutates the caller's env
     seen = _ls_remote_answer(monkeypatch, _proc(2))
     caller = {"KEEP": "1"}
     L._remote_branch_head("/repo", "main", caller)
@@ -293,12 +297,53 @@ def test_row9_a_checkout_that_moves_while_reserving_terminalizes_the_unstarted_l
     assert lane["started"] is False
 
 
+# --- the checkout is read again after the remote answered -------------------------------------
+
+
+@pytest.mark.parametrize("again,reason,branch,head", [
+    ({"symbolic-ref": _proc(128)}, UNREADABLE, None, "a" * 40),
+    ({"rev-parse": _proc(128)}, UNREADABLE, "main", None),
+    ({"symbolic-ref": _proc(0, "refs/heads/other\n")}, OFF_BASE, "other", "a" * 40),
+    ({"rev-parse": _proc(0, "b" * 40 + "\n")}, OFF_BASE, "main", "b" * 40),
+], ids=[
+    "branch-unreadable", "head-unreadable", "another-branch-at-the-base",
+    "same-branch-at-another-commit",
+])
+def test_the_checkout_read_again_after_the_remote_answered_must_still_be_on_the_base(
+    monkeypatch, again, reason, branch, head,
+):
+    # axis: a checkout that cannot be read or has moved once the remote answered refuses, with the re-read facts
+    base = "a" * 40
+    reads = {"symbolic-ref": 0, "rev-parse": 0}
+
+    def scrubbed(repo_root, *args, env=None, timeout=None):
+        name = args[0]
+        reads[name] += 1
+        if reads[name] > 1 and name in again:
+            return again[name]
+        if name == "symbolic-ref":
+            return _proc(0, "refs/heads/main\n")
+        return _proc(0, base + "\n")
+
+    monkeypatch.setattr(L, "_git_scrubbed", scrubbed)
+    monkeypatch.setattr(L, "_remote_branch_head_fn", lambda *a, **k: (base, None))
+    result = L._cloud_checkout_refusal("/repo", base, None)
+    assert result is not None
+    got_reason, detail = result
+    assert got_reason == reason
+    assert detail["checkoutBranch"] == branch
+    assert detail["checkoutHead"] == head
+    assert detail["remoteBranchHead"] == base
+    assert reads == {"symbolic-ref": 2, "rev-parse": 2}
+
+
 # --- the existing base refusals keep their precedence -----------------------------------------
 
 
 def test_a_base_the_remote_lacks_is_refused_with_its_own_token_before_the_checkout_is_read(
     tmp_path,
 ):
+    # axis: the base-on-remote refusal keeps its precedence and the checkout is not read
     repo = _cloud_repo(tmp_path)
     later = _commit(repo, "later.txt")
     _git(repo, "checkout", "-q", "-b", "elsewhere")
@@ -311,6 +356,7 @@ def test_a_base_the_remote_lacks_is_refused_with_its_own_token_before_the_checko
 
 
 def test_start_refusal_hands_back_a_base_refusal_as_a_bare_reason_with_no_extra(monkeypatch):
+    # axis: a base refusal comes back as a bare reason with no extra
     monkeypatch.setattr(L, "_base_on_remote_fn", lambda *a, **k: None)
     monkeypatch.setattr(
         L, "_cloud_checkout_refusal", lambda *a, **k: pytest.fail("the checkout was read"),

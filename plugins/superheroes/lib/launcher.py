@@ -2559,14 +2559,8 @@ def _remote_branch_head(repo_root, branch, env):
 _remote_branch_head_fn = _remote_branch_head
 
 
-def _cloud_checkout_refusal(repo_root, base, env):
-    """None when the launching checkout is on a named branch whose local HEAD and whose tip on
-    ``origin`` are both ``base``; else ``(reason, detail)``. It only reads the checkout.
-
-    The platform starts the session from the checkout's commit, and we cannot tell whether it
-    reads the local commit or the branch's tip on the remote, so both must be the base. Anything
-    that cannot be read refuses.
-    """
+def _read_checkout(repo_root, env):
+    """The launching checkout's ``(branch, head)``, each None when it could not be read."""
     branch = None
     head = None
     named = _git_scrubbed(
@@ -2585,6 +2579,19 @@ def _cloud_checkout_refusal(repo_root, base, env):
         said = (read.stdout or "").strip()
         if _HEX40.match(said):
             head = said
+    return branch, head
+
+
+def _cloud_checkout_refusal(repo_root, base, env):
+    """None when the launching checkout is on a named branch whose local HEAD and whose tip on
+    ``origin`` are both ``base``; else ``(reason, detail)``. It only reads the checkout.
+
+    The platform starts the session from the checkout's commit, and we cannot tell whether it
+    reads the local commit or the branch's tip on the remote, so both must be the base. Anything
+    that cannot be read refuses. The checkout is read again after the remote answers, because the
+    owner may switch while the lookup is pending.
+    """
+    branch, head = _read_checkout(repo_root, env)
     detail = {
         "checkout": repo_root,
         "checkoutBranch": branch,
@@ -2607,6 +2614,15 @@ def _cloud_checkout_refusal(repo_root, base, env):
         return "launch-cloud-checkout-branch-not-on-remote", detail
     # axis: a remote branch tip that is not the base refuses — see bite-proof record i1900_cloud_checkout
     if tip != base:
+        return "launch-cloud-checkout-off-base", detail
+    again_branch, again_head = _read_checkout(repo_root, env)
+    detail["checkoutBranch"] = again_branch
+    detail["checkoutHead"] = again_head
+    # axis: a checkout that cannot be read again after the remote answered refuses — see bite-proof record i1900_cloud_checkout
+    if again_branch is None or again_head is None:
+        return "launch-cloud-checkout-unreadable", detail
+    # axis: a checkout that moved to another branch or commit while the remote lookup was pending refuses — see bite-proof record i1900_cloud_checkout
+    if again_branch != branch or again_head != base:
         return "launch-cloud-checkout-off-base", detail
     return None
 
