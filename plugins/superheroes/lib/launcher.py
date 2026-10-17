@@ -51,8 +51,10 @@ SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 # builder is told that phone's ID and whether Device Hub is up. No launcher path quits Device
 # Hub — quitting it shuts down every simulator on the Mac — or kills an app. The only simulator
 # a launcher path removes is the phone its own launch just made, when the reservation refuses
-# before writing the record.
+# before writing the record. A launch naming `iphoneModels` gets one phone per named size, all
+# handed over and all recorded.
 IPHONE_ID_ENV = "SUPERHEROES_IPHONE_ID"
+IPHONE_IDS_ENV = "SUPERHEROES_IPHONE_IDS"
 DEVICE_HUB_ENV = "SUPERHEROES_DEVICE_HUB"
 IPHONE_NONE = "none"
 DEVICE_HUB_AVAILABLE = "available"
@@ -1268,6 +1270,20 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not isinstance(premise["iphoneCheck"], bool):
             return _fail("premise-iphone-check-invalid")
 
+    if "iphoneModels" in premise:
+        models_val = premise["iphoneModels"]
+        # axis: iphoneModels names the phone sizes to make — a non-empty list of distinct, unpadded,
+        # non-blank strings beside iphoneCheck true; anything else would make a phone the lane did
+        # not ask for or none at all, and a size named without the check would never be made
+        if (
+            not isinstance(models_val, list)
+            or not models_val
+            or not all(isinstance(m, str) and m.strip() and m == m.strip() for m in models_val)
+            or len(set(models_val)) != len(models_val)
+            or premise.get("iphoneCheck") is not True
+        ):
+            return _fail("premise-iphone-models-invalid")
+
     if "needs" in premise:
         needs_val = premise["needs"]
         # axis: needs is the advisor's list of what only the owner's machine has — a list of non-empty strings, else the routing step would read it as nothing — see bite-proof record wo_b_place_call
@@ -1892,7 +1908,48 @@ def _default_iphone_run(argv, timeout):
     )
 
 
-def _create_iphone(launch_id, run, budget_seconds):
+def _resolve_iphone_models(models, run, budget_seconds):
+    """Resolve each named phone size to its simulator device type; never raises.
+
+    Returns {"ok": True, "types": [(name, identifier), ...]} in `models` order, or
+    {"ok": False, "reason": ..., "unknownModels": [...]}. The inventory is the output of
+    `simctl list devicetypes -j`, read as {"devicetypes": [{"name", "identifier"}, ...]}. A size
+    matches by exact name, and only an entry whose identifier is a device-type identifier.
+    """
+    unreadable = {"ok": False, "reason": "iphone-models-unreadable", "unknownModels": []}
+    if budget_seconds <= 0:
+        return unreadable
+    try:
+        proc = run(
+            ["xcrun", "simctl", "list", "devicetypes", "-j"],
+            min(_IPHONE_CREATE_TIMEOUT, budget_seconds),
+        )
+        if proc.returncode != 0:
+            return unreadable
+        data = json.loads(proc.stdout)
+        entries = data.get("devicetypes") if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            return unreadable
+        by_name = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            name, identifier = entry.get("name"), entry.get("identifier")
+            if (
+                isinstance(name, str)
+                and isinstance(identifier, str)
+                and ".SimDeviceType." in identifier
+            ):
+                by_name.setdefault(name, identifier)
+        unknown = [m for m in models if m not in by_name]
+        if unknown:
+            return {"ok": False, "reason": "iphone-model-unknown", "unknownModels": unknown}
+        return {"ok": True, "types": [(m, by_name[m]) for m in models]}
+    except Exception:
+        return unreadable
+
+
+def _create_iphone(launch_id, run, budget_seconds, device_type=IPHONE_DEVICE_TYPE, name=None):
     """Create this launch's phone; return {"iphoneId": udid}, or {} on any failure.
 
     Called just before the reservation, outside the ledger lock, and never raises: a phone
@@ -1903,7 +1960,11 @@ def _create_iphone(launch_id, run, budget_seconds):
         return {}
     try:
         proc = run(
-            ["xcrun", "simctl", "create", "superheroes-%s" % launch_id, IPHONE_DEVICE_TYPE],
+            [
+                "xcrun", "simctl", "create",
+                name if name is not None else "superheroes-%s" % launch_id,
+                device_type,
+            ],
             min(_IPHONE_CREATE_TIMEOUT, budget_seconds),
         )
         if proc.returncode != 0:
@@ -2016,6 +2077,7 @@ def _spawn_attempt(
     # The scrub is unconditional, so a launch issued from inside an iPhone lane can never hand
     # its own phone to a lane that has none; only the launcher's own iphone_env sets them.
     child_env.pop(IPHONE_ID_ENV, None)
+    child_env.pop(IPHONE_IDS_ENV, None)
     child_env.pop(DEVICE_HUB_ENV, None)
     if isinstance(iphone_env, dict):
         child_env.update(iphone_env)
@@ -2836,8 +2898,50 @@ def launch_build(
     stamped = stamped_premise
     iphone_check = stamped.get("iphoneCheck") is True
     iphone_info = {"id": None, "deviceHub": None} if iphone_check else None
+    models_named = iphone_check and isinstance(stamped.get("iphoneModels"), list)
+    if models_named:
+        iphone_info["ids"] = []
+    iphone_spent = 0.0
+    iphone_types = []
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
+
+    # The named sizes are looked up before anything is created, so an unknown or unreadable size
+    # refuses with no worktree, no phone and no child.
+    if models_named:
+        step_started = time.monotonic()
+        resolved_models = _resolve_iphone_models(
+            stamped["iphoneModels"], run, _IPHONE_CEILING_SECONDS - iphone_spent
+        )
+        took = time.monotonic() - step_started
+        iphone_spent += took
+        deadline += took
+        if not resolved_models["ok"]:
+            refusal_reason = resolved_models["reason"]
+            reserve_result = _try_reserve_for_refusal(
+                repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
+                slot=slot, generation=generation, boundary=boundary,
+                seat_instance=seat["instance"],
+                foreign_instance_allowed=foreign_override,
+                **place_fields,
+            )
+            extra = {}
+            if resolved_models.get("unknownModels"):
+                extra["unknownModels"] = resolved_models["unknownModels"]
+            if reserve_result.get("reserved"):
+                term = _terminalize(
+                    repo_root, launch_id, False, refusal_reason,
+                    stage="iphone-models", env=env,
+                )
+                if not term["ok"]:
+                    return _accounted_fail(
+                        reserve_result,
+                        _terminalization_reason(term, refusal_reason),
+                        launch_id,
+                        **extra,
+                    )
+            return _accounted_fail(reserve_result, refusal_reason, launch_id, **extra)
+        iphone_types = resolved_models["types"]
 
     if cloud:
         # The cloud session starts from the base commit the prompt names, so the remote must have
@@ -2972,34 +3076,54 @@ def launch_build(
         reserved["boundary"] = boundary
     # The phone is made here, outside the ledger lock: a slow simulator creation must never hold
     # other launches' reservations. Its id rides on the reserved record.
-    made_iphone_id = None
-    iphone_spent = 0.0
+    made_iphone_ids = []
     if iphone_check:
         step_started = time.monotonic()
-        made_iphone_id = _create_iphone(
-            launch_id, run, _IPHONE_CEILING_SECONDS - iphone_spent
-        ).get("iphoneId")
+        if models_named:
+            # One phone per named size, in premise order. A create that fails is skipped; the
+            # others still go.
+            for number, (_model, device_type) in enumerate(iphone_types, 1):
+                made = _create_iphone(
+                    launch_id,
+                    run,
+                    _IPHONE_CEILING_SECONDS - iphone_spent - (time.monotonic() - step_started),
+                    device_type=device_type,
+                    name="superheroes-%s-%d" % (launch_id, number),
+                ).get("iphoneId")
+                if made:
+                    made_iphone_ids.append(made)
+        else:
+            made = _create_iphone(
+                launch_id, run, _IPHONE_CEILING_SECONDS - iphone_spent
+            ).get("iphoneId")
+            if made:
+                made_iphone_ids.append(made)
         took = time.monotonic() - step_started
         iphone_spent += took
         deadline += took
-        if made_iphone_id:
-            reserved["iphoneId"] = made_iphone_id
+    made_iphone_id = made_iphone_ids[0] if made_iphone_ids else None
+    if made_iphone_id:
+        reserved["iphoneId"] = made_iphone_id
+        if models_named:
+            reserved["iphoneIds"] = list(made_iphone_ids)
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         extra = {}
         if made_iphone_id:
             if reserve_result.get("reason") == "ledger-append-failed":
-                # The append may or may not have landed, so the record may name this phone:
-                # it is reported, never removed.
-                extra["iphone"] = {"id": made_iphone_id, "recorded": "uncertain"}
+                # The append may or may not have landed, so the record may name these phones:
+                # they are reported, never removed.
+                phone_outcomes = [{"id": udid, "recorded": "uncertain"} for udid in made_iphone_ids]
             else:
-                # Every other refusal returns before the append: no record names this phone,
-                # so it is this launch's own and nothing else can reap it.
-                extra["iphone"] = {
-                    "id": made_iphone_id,
-                    "recorded": False,
-                    "deleted": _delete_own_iphone(made_iphone_id, run),
-                }
+                # Every other refusal returns before the append: no record names these phones,
+                # so they are this launch's own and nothing else can reap them.
+                phone_outcomes = [
+                    {"id": udid, "recorded": False, "deleted": _delete_own_iphone(udid, run)}
+                    for udid in made_iphone_ids
+                ]
+            extra["iphone"] = phone_outcomes[0]
+            if models_named:
+                extra["iphones"] = phone_outcomes
         if not cloud:
             proc = _git_scrubbed(
                 repo_root, "worktree", "remove", worktree_path,
@@ -3016,6 +3140,8 @@ def launch_build(
     overlap_evidence = _overlap_evidence(warnings)
     if iphone_info is not None:
         iphone_info["id"] = made_iphone_id
+        if models_named:
+            iphone_info["ids"] = list(made_iphone_ids)
 
     def _post_reserve_fail(reason, **extra):
         """Every return past the reservation carries the overlap disclosure.
@@ -3079,7 +3205,8 @@ def launch_build(
         # the session it makes runs elsewhere and has no use for this machine's lane plumbing.
         cloud_env = ll.scrub_env(env)
         for name in (
-            hb.LAUNCH_ID_ENV, hb.HEARTBEAT_ROOT_ENV, SLOT_REF_ENV, IPHONE_ID_ENV, DEVICE_HUB_ENV,
+            hb.LAUNCH_ID_ENV, hb.HEARTBEAT_ROOT_ENV, SLOT_REF_ENV, IPHONE_ID_ENV, IPHONE_IDS_ENV,
+            DEVICE_HUB_ENV,
         ):
             cloud_env.pop(name, None)
         if config_dir is not None:
@@ -3141,6 +3268,8 @@ def launch_build(
             IPHONE_ID_ENV: iphone_info["id"] or IPHONE_NONE,
             DEVICE_HUB_ENV: iphone_info["deviceHub"],
         }
+        if models_named and made_iphone_ids:
+            iphone_env[IPHONE_IDS_ENV] = ",".join(made_iphone_ids)
     else:
         iphone_env = None
 
