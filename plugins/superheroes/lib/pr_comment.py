@@ -15,6 +15,12 @@ import re
 import subprocess
 import sys
 
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import gh_pages  # noqa: E402
+
 MARKER_FAMILIES = ("plan", "results")
 # Keys come from store.artifact_key(): %-encoded branch + optional ~slot.
 # Legitimate keys are %-encoded so '/' never appears literally; '..' and '-->'
@@ -191,22 +197,16 @@ def gh_user():
     return _gh("api", "user", "-q", ".login").strip()
 
 
-def _parse_paginated_arrays(text):
-    """gh api --paginate concatenates page outputs; parse them all."""
-    dec, idx, items = json.JSONDecoder(), 0, []
-    while idx < len(text):
-        while idx < len(text) and text[idx] in " \r\n\t":
-            idx += 1
-        if idx >= len(text):
-            break
-        obj, idx = dec.raw_decode(text, idx)
-        items.extend(obj if isinstance(obj, list) else [obj])
-    return items
-
-
 def list_comments(pr):
-    raw = _parse_paginated_arrays(_gh(
-        "api", f"repos/{{owner}}/{{repo}}/issues/{pr}/comments", "--paginate"))
+    def fetch(endpoint):
+        try:
+            return _gh("api", endpoint)
+        except RuntimeError:
+            return None
+    endpoint = f"repos/{{owner}}/{{repo}}/issues/{pr}/comments"
+    raw = gh_pages.read(fetch, endpoint)
+    if raw is None or not all(isinstance(c, dict) for c in raw):
+        raise RuntimeError(f"gh api {endpoint} failed: a page could not be read")
     return [{"id": c["id"], "author": c["user"]["login"], "body": c["body"]}
             for c in raw]
 

@@ -180,26 +180,13 @@ def _object(run, path, env):
 
 
 def _pages(run, path, env):
-    """Every item of a paginated REST list, or None when any page failed or was not a JSON list of objects
-    (a page that is a bare object, such as `{}`, is unreadable)."""
-    code, out, _ = _gh(run, ["api", "--paginate", path], env)
-    if code != 0 or not out.strip():
-        return None
-    decoder, at, found = json.JSONDecoder(), 0, []
-    try:
-        while True:
-            while at < len(out) and out[at] in " \r\n\t":
-                at += 1
-            if at >= len(out):
-                break
-            # axis: a successful page that is not a JSON list is unreadable, so a bare object never reads as one open PR
-            page, at = decoder.raw_decode(out, at)
-            if not isinstance(page, list):
-                return None
-            found.extend(page)
-    except ValueError:
-        return None
-    return found if all(isinstance(i, dict) for i in found) else None
+    """Every item of a paginated REST list, read page by number, or None when any page failed or the rows
+    were not all JSON objects (a page that is a bare object, such as `{}`, is unreadable)."""
+    def fetch(endpoint):
+        code, out, _ = _gh(run, ["api", endpoint], env)
+        return out if code == 0 else None
+    found = _sib("gh_pages").read(fetch, path)
+    return found if found is not None and all(isinstance(i, dict) for i in found) else None
 
 
 def _name(node, *keys):
@@ -403,14 +390,14 @@ def _ref_sha(repo, branch, env, run):
 
 
 def _listing(repo, env, run):
-    found = _pages(run, "repos/%s/branches?per_page=100" % repo, env)
+    found = _pages(run, "repos/%s/branches" % repo, env)
     names = [b.get("name") for b in found] if found is not None else None
     return names if names is not None and all(isinstance(n, str) for n in names) else None
 
 
 def _in_use(repo, branch, env, run):
     """True/False: an open PR uses the branch as head (in this repository) or as base; None unreadable."""
-    found = _pages(run, "repos/%s/pulls?state=open&per_page=100" % repo, env)
+    found = _pages(run, "repos/%s/pulls?state=open" % repo, env)
     if found is None:
         return None
     for other in found:
