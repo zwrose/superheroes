@@ -152,6 +152,50 @@ def test_t2_real_important_open_at_the_round_cap_is_left_for_owner(sources_calls
     assert sources_calls == []
 
 
+def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
+    """A fixer's `fixes` names files, never findings: the skipped finding is not credited `fixed`."""
+    counter = {"n": 0}
+
+    def fix_step(batch, rnd, payload):
+        counter["n"] += 1
+        return {"fixes": [{"file": "f.py", "summary": "fixed the first"}],
+                "headDiff": TRD.HEAD, "changedSubjects": ["Code"]}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [_finding("First bug", 1, "Important", "real"),
+                                 _finding("Second bug", 2, "Important", "real")]}
+        return []
+
+    def auditor(targets, rnd):
+        rulings = []
+        for t in targets or []:
+            if t["id"] == "f.py::first bug@L1":
+                rulings.append({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                                "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")})
+            else:
+                rulings.append({"id": t["id"], "ruling": "not-discharged", "reason": "still broken"})
+        return rulings
+
+    result, state = TRD._run_loop_capturing_state(
+        TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
+                   io={"stall_menu": lambda payload: "hold"}),
+        TRD._cfg_cert(maxRounds=2))
+    assert state["terminal"]
+    assert counter["n"] >= 1
+    _assert_all_settled(state)
+    assert _row(state, "First bug", 1)["disposition"] == "fixed"
+    ledger = _ledger(state)
+    assert "f.py::second bug@L2" in ledger, (
+        {k: (r.get("disposition"), r.get("settledReason"), r.get(SC.MERGED_INTO_FIELD))
+         for k, r in ledger.items()}, state["rounds"])
+    second = _row(state, "Second bug", 2)
+    assert second["disposition"] != "fixed", (second, state["rounds"])
+    assert second["disposition"] == "left-for-owner", second
+    assert "round cap" in second["settledReason"]
+    assert state["terminal"] == "capped-with-open-blocker"
+
+
 # --- T3 / T10: rulings that cite a decision ---------------------------------------------------
 
 def _provenance():
