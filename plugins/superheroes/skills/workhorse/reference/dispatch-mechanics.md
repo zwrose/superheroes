@@ -46,6 +46,10 @@ fields stay authoritative. Mechanics by dispatch kind:
   dispatch time is a runaway to kill even while its file grows. If the in-turn poll cannot fit the
   turn, park (§ Awaiting a dispatch). The output-file stall signals above still apply to the
   detached child.
+- **A `dispatch-write` attempt has its own limit, 900 seconds by default**, separate from the
+  `--max-wait` slice. An order whose own commands run for minutes can hit it after its edits have
+  landed and forfeit anyway, so size `--timeout` and `--retry-timeout` to the order at launch and
+  pass the same values on every continuation.
 - **A native subagent dispatch** has a **harness-managed lifecycle**: no `bash_timeout` floor and no
   CPU column of your own to watch. The shell mechanics above don't apply, and there is **no
   caller-set ceiling to invent**. The harness returns when the subagent completes. How to await it,
