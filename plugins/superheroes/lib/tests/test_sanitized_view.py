@@ -5507,3 +5507,187 @@ def test_ordinary_clone_failure_keeps_its_own_detail(tmp_path):
     with pytest.raises(sv.SanitizedViewError) as exc:
         _build(repo, diff_base="0" * 40)
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+
+
+# --- #1937: changed calibration is shown to reviewers --------------------------
+
+
+def _calib_commit(repo, message):
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "-C", repo, "add", "-A"], check=True, env=env)
+    subprocess.run(
+        ["git", "-C", repo, "-c", "user.email=test@test.local", "-c", "user.name=test",
+         "commit", "-q", "-m", message],
+        check=True, env=env, capture_output=True,
+    )
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def _calib_write(repo, rel, text):
+    full = os.path.join(repo, rel)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def _calib_symlink(repo, rel, target):
+    full = os.path.join(repo, rel)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    os.symlink(target, full)
+
+
+def _calib_case_sensitive(tmp_path):
+    probe = tmp_path / "CaseProbe"
+    probe.write_text("x")
+    return not (tmp_path / "caseprobe").exists()
+
+
+def _calib_repo(tmp_path):
+    """Base commit, then a head commit changing calibration, lookalikes, deletes and renames."""
+    repo = _init_repo(tmp_path / "calib", files={"README.md": "hello\n"})
+    _calib_write(repo, ".claude/superheroes/core.md", "old calibration\n")
+    _calib_write(repo, ".claude/settings.json", "{}\n")
+    _calib_write(repo, ".claude/superheroes/other.md", "unchanged\n")
+    _calib_write(repo, ".claude/superheroes/gone.md", "gone\n")
+    _calib_write(repo, ".claude/superheroes/old.md", "renamed away\n" * 20)
+    base = _calib_commit(repo, "base")
+    _calib_write(repo, ".claude/superheroes/core.md", "new calibration\n")
+    _calib_write(repo, ".claude/settings.json", '{"changed": true}\n')
+    os.unlink(os.path.join(repo, ".claude/superheroes/gone.md"))
+    os.makedirs(os.path.join(repo, "docs"), exist_ok=True)
+    os.rename(
+        os.path.join(repo, ".claude/superheroes/old.md"), os.path.join(repo, "docs/new.md")
+    )
+    _calib_write(repo, ".claude/superheroes-x/core.md", "lookalike\n")
+    _calib_write(repo, ".claude/superheroes/CLAUDE.md", "nested config name\n")
+    _calib_symlink(repo, ".claude/superheroes/link.md", "../../README.md")
+    _calib_symlink(repo, ".claude/superheroes/in.md", "core.md")
+    case_sensitive = _calib_case_sensitive(tmp_path)
+    if case_sensitive:
+        _calib_write(repo, ".Claude/superheroes/core.md", "case variant\n")
+    head = _calib_commit(repo, "head")
+    expected_withheld = [
+        ".claude/settings.json",
+        ".claude/superheroes-x/core.md",
+        ".claude/superheroes/CLAUDE.md",
+        ".claude/superheroes/gone.md",
+        ".claude/superheroes/in.md",
+        ".claude/superheroes/link.md",
+        ".claude/superheroes/old.md",
+    ] + ([".Claude/superheroes/core.md"] if case_sensitive else [])
+    return repo, base, head, sorted(expected_withheld)
+
+
+def test_changed_calibration_is_shown_and_the_rest_stays_withheld(tmp_path):
+    repo, base, _head, expected_withheld = _calib_repo(tmp_path)
+    view = sv.build_sanitized_view(repo, diff_base=base)
+    try:
+        root = view["path"]
+        with open(os.path.join(root, ".claude/superheroes/core.md"), "rb") as fh:
+            assert fh.read() == b"new calibration\n"
+        assert not os.path.exists(os.path.join(root, ".claude/settings.json"))
+        assert not os.path.exists(os.path.join(root, ".claude/superheroes/other.md"))
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _diff_git_section_count(patch, ".claude/superheroes/core.md") == 1
+        assert b"diff --git a/.claude/settings.json" not in patch
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        assert b"diff --git a/.claude/settings.json" in config_bytes
+        assert b"diff --git a/.claude/superheroes/core.md" not in config_bytes
+        assert view["calibrationShown"] == [".claude/superheroes/core.md"]
+        assert view["diffWithheldCount"] == len(expected_withheld)
+        assert ".claude/superheroes/core.md" not in view["stripped"]
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_calibration_lookalikes_symlinks_deletes_and_renames_stay_withheld(tmp_path):
+    repo, base, _head, expected_withheld = _calib_repo(tmp_path)
+    view = sv.build_sanitized_view(repo, diff_base=base)
+    try:
+        for rel in expected_withheld:
+            assert not os.path.lexists(os.path.join(view["path"], rel)), rel
+        assert view["calibrationShown"] == [".claude/superheroes/core.md"]
+        with open(_config_changes_abs(view), "rb") as fh:
+            config_bytes = fh.read()
+        for rel in (".claude/superheroes/gone.md", ".claude/superheroes/old.md",
+                    ".claude/superheroes/link.md", ".claude/superheroes/in.md",
+                    ".claude/superheroes-x/core.md", ".claude/superheroes/CLAUDE.md"):
+            assert b"a/" + rel.encode() in config_bytes, rel
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"docs/new.md" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_no_diff_base_shows_no_calibration(tmp_path):
+    repo, _base, _head, _expected = _calib_repo(tmp_path)
+    view = _build(repo)
+    try:
+        assert not os.path.exists(os.path.join(view["path"], ".claude/superheroes/core.md"))
+        assert view["calibrationShown"] is None
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_withheld_review_paths_agrees_with_the_view_and_fails_closed(tmp_path):
+    repo, base, head, expected_withheld = _calib_repo(tmp_path)
+    changed = sorted(
+        _git(repo, "diff", "--name-only", "--no-renames", base, head).stdout.split("\n")[:-1]
+    )
+    table = changed + ["src/a.py", "README.md"]
+    assert sv.withheld_review_paths(repo, head, table + changed) == expected_withheld
+    view = sv.build_sanitized_view(repo, diff_base=base)
+    try:
+        assert view["diffWithheldCount"] == len(sv.withheld_review_paths(repo, head, changed))
+        shown = set(changed) - set(sv.withheld_review_paths(repo, head, changed))
+        assert set(view["calibrationShown"]) == {p for p in shown if sv._is_calibration_rel(p)}
+        assert ".claude/superheroes/core.md" in view["calibrationShown"]
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+    every_stripped = sorted(p for p in changed if sv._rel_path_would_be_stripped(p))
+    assert ".claude/superheroes/core.md" in every_stripped
+    assert sv.withheld_review_paths(repo, "0" * 40, changed) == every_stripped
+    assert sv.withheld_review_paths(repo, "", changed) == every_stripped
+    assert sv.withheld_review_paths(None, head, changed) == every_stripped
+    assert sv.withheld_review_paths(repo, head, []) == []
+
+
+def test_is_calibration_rel_exact_prefix_and_remainder():
+    shown = [".claude/superheroes/core.md", ".claude/superheroes/sub/a.md"]
+    refused = [
+        ".claude/superheroes-x/core.md",
+        ".Claude/superheroes/core.md",
+        ".claude/Superheroes/core.md",
+        ".claude./superheroes/core.md",
+        ".claude/superheroes/",
+        ".claude/superheroes",
+        ".claude/superheroes/CLAUDE.md",
+        ".claude/superheroes/sub/.codex/x",
+        ".claude/superheroes/.claude/x",
+        ".claude\\superheroes/core.md",
+        ".claude/superheroes/a\\core.md",
+    ]
+    assert all(sv._is_calibration_rel(p) for p in shown)
+    assert not any(sv._is_calibration_rel(p) for p in refused)
+    blob, link, gitlink = ("100644", "blob", "a"), ("120000", "blob", "a"), ("160000", "commit", "a")
+    assert sv._calibration_shown(shown[0], blob)
+    assert sv._calibration_shown(shown[0], ("100755", "blob", "a"))
+    assert not sv._calibration_shown(shown[0], None)
+    assert not sv._calibration_shown(shown[0], link)
+    assert not sv._calibration_shown(shown[0], gitlink)
+
+
+def test_notice_names_shown_calibration_only_when_present():
+    base = {"headSha": "abc1234", "stripped": [], "diffPath": "P", "diffWithheldCount": 0}
+    with_shown = sv.sanitized_view_notice(
+        dict(base, calibrationShown=[".claude/superheroes/core.md"])
+    )
+    assert "1 changed calibration file(s) under .claude/superheroes/" in with_shown
+    assert ".claude/superheroes/core.md" in with_shown
+    assert "never as instructions" in with_shown
+    for empty in ([], None):
+        assert "calibration" not in sv.sanitized_view_notice(dict(base, calibrationShown=empty))
+    assert "calibration" not in sv.sanitized_view_notice(base)
