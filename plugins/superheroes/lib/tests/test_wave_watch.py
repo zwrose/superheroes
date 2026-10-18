@@ -4569,7 +4569,7 @@ def test_recorded_config_dir_never_falls_back_to_the_env_root(tmp_path, monkeypa
     assert "staleSuppressed" not in result
 
 
-def test_unreadable_recorded_config_dir_discloses_unresolved(tmp_path, monkeypatch, request):
+def test_unreadable_recorded_config_dir_discloses_unresolved(tmp_path, monkeypatch):
     """An I/O failure under the lane's OWN root discloses, exactly like the env root's."""
     repo = _init_repo(tmp_path / "repo")
     worktree = str(tmp_path / "build-wt")
@@ -4581,8 +4581,15 @@ def test_unreadable_recorded_config_dir_discloses_unresolved(tmp_path, monkeypat
     _point_config_dir_at(tmp_path, monkeypatch)
     _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=60)
     unreadable_root = os.path.join(str(root_a), "projects")
-    os.chmod(unreadable_root, 0o000)
-    request.addfinalizer(lambda: os.chmod(unreadable_root, 0o700))
+    # Refuse the scan rather than chmod 000, which root lists through (#1911).
+    real_scandir = ww.os.scandir
+
+    def refuse_scandir(path, *a, **kw):
+        if str(path) == unreadable_root:
+            raise PermissionError("refused")
+        return real_scandir(path, *a, **kw)
+
+    monkeypatch.setattr(ww.os, "scandir", refuse_scandir)
 
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,

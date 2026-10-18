@@ -182,11 +182,16 @@ def test_edge_02c_unreadable_file(tmp_path, monkeypatch):
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(_base_record(launch_id), fh)
-    os.chmod(path, 0o000)
-    try:
-        result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
-    finally:
-        os.chmod(path, 0o600)
+    # Refuse the open itself rather than chmod 000, which root reads through (#1911).
+    real_open = hb.os.open
+
+    def refuse_open(name, flags, *a, **kw):
+        if str(name) == path:
+            raise PermissionError("refused")
+        return real_open(name, flags, *a, **kw)
+
+    monkeypatch.setattr(hb.os, "open", refuse_open)
+    result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
     assert result["class"] == "unknown"
     assert result["reason"] == "heartbeat-unreadable"
 
