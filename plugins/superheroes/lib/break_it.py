@@ -23,6 +23,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import break_it_key  # noqa: E402  (sibling leaf; the interpreter key name's one home)
 from git_routing import GIT_ROUTING_VARS  # noqa: E402
 import readout  # noqa: E402  (the band's fail-closed scrub seam)
 
@@ -30,7 +31,7 @@ SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
-INTERPRETER_KEY = "breakItInterpreter"
+INTERPRETER_KEY = break_it_key.INTERPRETER_KEY
 REDACTED_FIELD = "suggestionRedacted"
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192

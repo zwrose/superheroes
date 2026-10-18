@@ -18,6 +18,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import break_it_key  # noqa: E402  (sibling leaf; the interpreter key name's one home)
 import calibration_paths  # noqa: E402  (sibling; the in-repo calibration directory's one home)
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
@@ -134,7 +135,7 @@ _SANDBOX_ACCEPTED_BOOL = "true or false"
 _SANDBOX_ACCEPTED_PATH = "an absolute path such as /Users/me/Library/Caches/ms-playwright"
 _SANDBOX_ACCEPTED_PATH_BELOW_ROOT = "an absolute path below / — the whole filesystem is never writable"
 _SANDBOX_HOSTNAME = re.compile(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*")
-BREAK_IT_INTERPRETER_KEY = "breakItInterpreter"  # equals break_it.INTERPRETER_KEY (a test pins it)
+BREAK_IT_INTERPRETER_KEY = break_it_key.INTERPRETER_KEY
 BREAK_IT_INTERPRETER_REASON_MALFORMED = "break-it-interpreter-malformed"
 BREAK_IT_INTERPRETER_REASON_INPUT_EMPTY = "break-it-interpreter-input-empty"
 BREAK_IT_INTERPRETER_REASON_ROUND_TRIP = "break-it-interpreter-round-trip-refused"

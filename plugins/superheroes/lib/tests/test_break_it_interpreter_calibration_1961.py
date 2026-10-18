@@ -434,18 +434,22 @@ def test_c4_the_launcher_writer_leaves_sibling_keys_intact(tmp_path):
 
 def _break_it_args(emitted):
     """The BREAK_IT_ARGS block of skills/review-code/reference/setup.md, in Python: the flag is
-    passed iff `.breakItInterpreter != null` (presence, never `-n`), so "" still goes through."""
-    return [] if emitted is None else ["--break-it-interpreter", emitted]
+    passed iff `.breakItInterpreter != null` (presence, never `-n`), so "" still goes through, and
+    flag and value travel as ONE `--break-it-interpreter=VALUE` argument so a dash-leading value
+    is never read as an option."""
+    return [] if emitted is None else ["--break-it-interpreter=" + emitted]
 
 
-def _driver_config(next_args):
-    """The `next` override path: `--break-it-interpreter V` lands as overrides[INTERPRETER_KEY],
-    `--verify-command` as overrides["verifyCommand"], then `_default_config` loads them."""
-    overrides = {"verifyCommand": "pytest -q"}
-    if next_args:
-        assert next_args[0] == "--break-it-interpreter"
-        overrides[break_it.INTERPRETER_KEY] = next_args[1]
-    return round_driver._default_config(overrides)
+def _driver_state(tmp_path, next_args):
+    """Run the real `round_driver next` on a fresh session with the handoff args and return the
+    saved state's config."""
+    import test_break_it_interpreter_key_1961 as K
+    d = str(tmp_path / "s")
+    os.makedirs(d)
+    assert round_driver.main(["next", "--session-dir", d] + list(next_args) + K._guard_argv(d)) == 0
+    ok, state = round_driver.load_state(d)
+    assert ok
+    return state["config"]
 
 
 _EMISSIONS = {
@@ -470,7 +474,10 @@ def test_c5_emission_then_handoff_fails_closed(tmp_path, monkeypatch, case):
     assert out["verifyCommand"] == "pytest -q"
     assert out[_KEY] == emitted
     assert (out[_KEY] is None) == (emitted is None)
-    cfg = _driver_config(_break_it_args(out[_KEY]))
+    cfg = _driver_state(tmp_path, _break_it_args(out[_KEY]))
+    assert (_KEY in cfg) == (emitted is not None)
+    if emitted is not None:
+        assert cfg[_KEY] == emitted
     assert break_it.resolve_interpreter(cfg) == launcher
 
 
@@ -502,7 +509,7 @@ def test_c5_the_other_output_keys_are_unchanged(tmp_path):
 
 def test_c6_one_validator():
     # axis: C6 core_md's key and validator are break_it's
-    assert CM.BREAK_IT_INTERPRETER_KEY == break_it.INTERPRETER_KEY
+    assert CM.BREAK_IT_INTERPRETER_KEY is break_it.INTERPRETER_KEY
     for value in ["scripts/pinned-python", "uv run python", "  python3  ", "-x", "'unterminated",
                   "", "   ", None, 5, ["a"], {"a": 1}, True, "a 'b c' d"]:
         assert CM.break_it_interpreter_argv(value) == break_it.launcher_argv(value), repr(value)
