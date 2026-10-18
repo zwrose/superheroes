@@ -136,8 +136,18 @@ def _git(cwd, *args):
 # --- route ---------------------------------------------------------------------------------
 
 
+def _calibrated_implementer(cwd):
+    rows = preflight_probe.dispatch_calibration(cwd=cwd)
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("role") == "implementer" and row.get("engine"):
+            return row["engine"]
+    return None
+
+
 def route(cwd):
-    """native exactly when cloud, linux and a calibration that turns localSockets on."""
+    """native exactly when cloud, linux, a calibration that turns localSockets on and a claude
+    implementer; any other calibrated engine keeps its own dispatch path."""
+    calibrated = _calibrated_implementer(cwd)
     if (cloud_pass._is_cloud(os.environ)
             and engine_dispatch._host_platform() == "linux"):
         read = core_md.read_sandbox_access(cwd)
@@ -146,13 +156,11 @@ def route(cwd):
             if read.get("reason") == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
                 return {"ok": False, "reason": "sandbox-access-malformed"}
             return {"ok": False, "reason": "sandbox-access-unreadable"}
-        if access.get("localSockets") is True:
+        if access.get("localSockets") is True and calibrated in (None, "claude"):
             return {"ok": True, "engine": "native", "reason": ROUTE_REASON_NATIVE,
                     "why": NATIVE_WHY}
-    rows = preflight_probe.dispatch_calibration(cwd=cwd)
-    for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, dict) and row.get("role") == "implementer" and row.get("engine"):
-            return {"ok": True, "engine": row["engine"], "reason": ROUTE_REASON_CALIBRATED}
+    if calibrated:
+        return {"ok": True, "engine": calibrated, "reason": ROUTE_REASON_CALIBRATED}
     return {"ok": False, "reason": "calibration-unreadable"}
 
 
@@ -213,8 +221,16 @@ def _cmd_open(args):
     if not DEADLINE_MIN_SECONDS <= args.deadline_seconds <= DEADLINE_MAX_SECONDS:
         return _refusal("deadline-invalid")
     expected = args.expect_item or None
-    if expected is not None and any(_item_invalid(item) for item in expected):
-        return _refusal("expect-item-invalid")
+    if expected is not None:
+        if any(_item_invalid(item) for item in expected):
+            return _refusal("expect-item-invalid")
+        normalized = []
+        for item in expected:
+            ok, detail = engine_dispatch._normalize_expected_item(item)
+            if not ok:
+                return _refusal("expect-item-invalid")
+            normalized.append(detail)
+        expected = normalized
     resolved = seat_bundle.resolve_entry(args.seat, verb="guard-check")
     if not resolved.get("ok"):
         return _refusal(resolved.get("entryReason"), detail=resolved.get("detail"))
@@ -411,6 +427,11 @@ def _read_bytes(path):
         return None
 
 
+def _in_tree(cwd, rev, path):
+    """True when ``path`` is a file in ``rev``'s tree."""
+    return _git(cwd, "cat-file", "-e", "%s:%s" % (rev, path))[0] == 0
+
+
 class _Close(object):
     """One close attempt under the run-dir lock; every outcome goes through ``_finish``."""
 
@@ -503,6 +524,8 @@ class _Close(object):
         for item in self.opened.get("expectedItems") or []:
             mine = _read_bytes(os.path.join(into, item))
             theirs = _read_bytes(os.path.join(target, item))
+            if mine is None and theirs is None and _in_tree(target, base, item):
+                continue  # a declared deletion (or rename source), applied on both sides
             if mine is None or mine != theirs:
                 return self._forfeit("native-collect-incomplete", **extra)
         return self._finish(self._result(
