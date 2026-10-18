@@ -310,6 +310,26 @@ answer that sends the PR back never counts.
 - Un-accepting an item after a Merge clears the Merge, saved as null with the note kept. A Merge
   restored onto a sheet that is locked is cleared the same way.
 
+### Decided for you
+
+A left-for-owner finding the advisor re-graded as craft at vet is no card. It is an entry of the sheet's
+**Decided for you** list (`prSheet.decidedForYou`, `$defs/decided` in `sheet.schema.json`). The list sits
+below the cards, unfolded, and is left out when it is empty. Each entry shows its title, its ground, its
+reason and one control, **Make this mine**. An entry never counts toward the accepted items. The advisor
+writes each one in the `craftDeterminations` key of its input, whose shape is in the docstring of
+`lib/pr_sheet.py`. The list's words are in the `pr` block of `sheet-words.json`.
+
+A carried sheet keeps the earlier sheet's entries. The builder refuses a carry that adds a determination,
+changes one, or turns one back into a card, because each of those changes what the owner decides.
+
+**Make this mine** saves an ordinary answer at `answers/<entry id>`, with `optionId` `make-this-mine` and
+the note, and clearing it saves a null answer. Any other document stored there counts as taken back, so a
+malformed one never hides a take-back. While any entry is taken back, or may still be stored as taken back,
+Merge is locked and a held Merge is cleared. `pr_state` reads that PR as Needs you.
+
+After "done", a saved take-back sends the finding back to the owner as a card on a new, unsigned sheet, as
+`skills/showrunner/reference/owner-decisions.md` § Reading a PR sheet says.
+
 ### Pictures on the walk
 
 The builder copies each walk picture into `pictures/` beside `sheet.json` and lists the paths in its
@@ -358,6 +378,9 @@ stop is the owner's word to file that follow-up.
 A note that disagrees with its answer (Keep it with a note that says to fix it first) leaves the item
 open, and the session asks which one stands.
 
+A saved take-back on a Decided for you entry is read with the answers after "done", and it keeps the PR
+from merging on that sheet.
+
 ## The index
 
 The index (`kind` is `index`) lists every PR that waits on the owner, so the owner has one place to see what
@@ -394,7 +417,7 @@ answered question leaves the index when the advisor rebuilds it.
 A PR is **Being fixed** when a saved answer sends it back for a fix: an option that sends the PR back, or
 a walk Problem whose fix is before merge. Otherwise it is **Ready** when its Merge verdict stands: saved on
 the sheet's current revision, with every item accepted, no walk Problem left without a follow-up fix, and
-`covers` naming exactly the answers the store holds now. Every other PR is under **Needs you**. One rule,
+`covers` naming exactly the answers the store holds now. Every other PR is under **Needs you**, and a taken-back Decided for you entry keeps a PR there. One rule,
 `pr_state` in `lib/pr_sheet.py`, decides this.
 
 A sheet republished for a fixed PR keeps its link, so the PR's row keeps opening the current sheet.
