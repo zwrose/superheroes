@@ -11,6 +11,13 @@
   ],
   "leftovers": {
     "6:H1": {
+      "why": "How a split payment should look to a customer is a shop-experience call, and only you can decide how much surprise at checkout is acceptable.",
+      "context": "A gift card that covers only part of an order is spent, and checkout then asks for a second payment without having said so first.",
+      "options": {
+        "keep-it": "Customers with a small gift card may reach the end of checkout and be asked for a payment they did not expect; some will leave.",
+        "fix-in-a-follow-up": "The stack ships with the surprise second payment for now; a follow-up adds a notice before it, with a revisit date.",
+        "fix-before-merge": "The stack goes back to show the remaining amount before the customer pays, and returns with a new sheet."
+      },
       "recommendation": {"text": "Fix it before merge", "reason": "A surprise second payment loses the sale.", "optionId": "fix-before-merge"}
     }
   },

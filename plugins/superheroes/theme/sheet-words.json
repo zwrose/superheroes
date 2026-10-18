@@ -29,6 +29,8 @@
     "leftoverKind": "Leftover",
     "closureKind": "Closure receipt",
     "ifLeft": "If left",
+    "whyYours": "Why it's yours",
+    "whatHappened": "What happened",
     "leftoverOptions": [
       {"id": "keep-it", "label": "Keep it", "consequence": "Ships as is; no follow-up.", "sendsBack": false},
       {"id": "fix-in-a-follow-up", "label": "Fix in a follow-up", "consequence": "Ships now; a follow-up issue is filed with a revisit date.", "sendsBack": false},

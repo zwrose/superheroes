@@ -1702,9 +1702,10 @@ def _git_scrubbed(cwd, *args, timeout=None):
     )
 
 
-# The platform whose sandbox runtime honors network.allowLocalBinding and network.allowUnixSockets.
-# The upstream sandbox runtime forwards both settings to its macOS wrapper only; its Linux wrapper
-# receives neither, so a run opened there would record local access that is never granted.
+# The platform whose sandbox wrapper honors network.allowLocalBinding and network.allowUnixSockets.
+# On Linux the sandbox's own network namespace already gives loopback, so localPorts opens there;
+# its seccomp filter blocks Unix sockets on every path and its only switch lifts the block for all
+# paths, so a bounded socket grant would be recorded but not honored.
 _LOCAL_ACCESS_PLATFORM = "darwin"
 
 # Claude Code 2.1.284 builds the sandboxed shell's per-user temp dir, <base>/claude-<uid>, from
@@ -1797,8 +1798,8 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
         if reason == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
         return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
-    if (calibrated["localPorts"] or calibrated["localSockets"]) \
-            and _host_platform() != _LOCAL_ACCESS_PLATFORM:
+    # axis: refusal — off macOS only localSockets refuses; localPorts opens (#1944)
+    if calibrated["localSockets"] and _host_platform() != _LOCAL_ACCESS_PLATFORM:
         return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM
     socket_dirs = []
     tmp_base = None
