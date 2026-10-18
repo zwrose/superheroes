@@ -12,7 +12,8 @@ to push, the successor's premise, and the board's words.
 
 A successor is composed only for a cloud lane the launch ledger records as ended and `assess` recorded as
 `stopped` (positive stop evidence or a confirmed handover), so no path through this module helps two
-builders work one issue. Every verb checks its inputs through the one `_inputs`.
+builders work one issue. Every verb checks its inputs through the one `_inputs`. `assess` also answers `parked`
+(the issue holds a builder stop or park newer than the lane's last pushed work; never a recovery step).
 
 Stdlib plus plugin imports only. A function that reads the environment takes `env=None` (a mapping; default
 the process environment), and one that runs a command also takes `run=None` (default `subprocess.run`).
@@ -47,6 +48,7 @@ _LOCK_WAIT_SECONDS = 30
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 _PUSH_SOURCES = ("push", "commit")
+_PARK_KINDS = ("stop", "park")
 _PLACES = ("cloud", "local")
 _LAUNCHER_STAMPED = ("placeCall", "standingExclusions")
 
@@ -224,10 +226,8 @@ def _replaced(repo_root, launch_id, info, env):
     return _started_later(repo_root, info, env)
 
 
-def _newest_comment(repo, issue, since, env, run, parse):
-    """(the newest comment created at or after `since` whose `parse(body)` is truthy, as {"commentId", "url",
-    "parsed", "createdAt"} or None, whether the comments were read). A comment without a readable creation
-    time or a body `parse` accepts is not kept."""
+def _issue_comments(repo, issue, since, env, run):
+    """The issue's comments updated since `since - 1` (every page); None when they could not be read whole."""
     cb = _sib("cloud_builder")
     endpoint = "repos/%s/issues/%d/comments?since=%s" % (repo, issue, _iso(since - 1))
     git_env = cb._git_env(env)
@@ -237,17 +237,30 @@ def _newest_comment(repo, issue, since, env, run, parse):
         return out if code == 0 else None
     comments = _sib("gh_pages").read(fetch, endpoint)
     if comments is None or not all(isinstance(c, dict) for c in comments):
-        return None, False
+        return None
+    return comments
+
+
+def _newest(comments, since, parse):
+    """The newest of `comments` created at or after `since` whose `parse(body)` is truthy, as {"commentId", "url",
+    "parsed", "createdAt"}; None when there is none. A comment without a readable creation time or a body
+    `parse` accepts is not kept."""
     found = []
     for comment in comments:
         created, parsed = _epoch(comment.get("created_at")), parse(comment.get("body"))
         if created is not None and created >= since and parsed:
             found.append((created, comment, parsed))
     if not found:
-        return None, True
+        return None
     _, comment, parsed = max(found, key=lambda t: t[0])
     return {"commentId": comment.get("id"), "url": comment.get("html_url"), "parsed": parsed,
-            "createdAt": comment["created_at"]}, True
+            "createdAt": comment["created_at"]}
+
+
+def _newest_comment(repo, issue, since, env, run, parse):
+    """(the newest comment created at or after `since` whose `parse(body)` is truthy, whether the comments were read)."""
+    comments = _issue_comments(repo, issue, since, env, run)
+    return (None, False) if comments is None else (_newest(comments, since, parse), True)
 
 
 def _push_time(repo, name, sha, env, run):
@@ -321,41 +334,90 @@ def _withdrawn(repo_root, launch_id, out, env):
     return out if wrote["ok"] or wrote["reason"] == "recover-state-unreadable" else wrote
 
 
+def _park_reading(repo_root, repo, info, reserved, comments, cutoff, env, run):
+    """(the builder stop or park that is the lane's last word, as {"commentId", "url", "kind", "createdAt"} or None;
+    "ok" when nothing it needed was left unread, else "failed"). Any doubt reads as None, which leaves today's answers."""
+    cb = _sib("cloud_builder")
+    # axis: the comments are read whole and from the attempt's own start, or no stop or park is believed
+    if comments is None or not _is_number(cutoff):
+        return None, "failed"
+    # axis: only the newest terminal-family comment of this attempt counts, so a later handover, handback or ask ends a park
+    found = _newest(comments, cutoff, cb.terminal_kind)
+    if found is None or found["parsed"] not in _PARK_KINDS:
+        return None, "ok"
+    commented, comment_id = _epoch(found["createdAt"]), found["commentId"]
+    tied = any(c.get("created_at") == found["createdAt"] and cb.terminal_kind(c.get("body")) not in _PARK_KINDS + (None,)
+               for c in comments)
+    if tied or commented is None or not isinstance(comment_id, int) or isinstance(comment_id, bool):
+        return None, "failed"
+    ww = _sib("wave_watch")
+    path = ww._answered_notes_path(repo_root, env, create=False)
+    answered, readable = ww._load_answered_notes(path) if path is not None else (set(), False)
+    # axis: an answered record that cannot be read answers nothing, and a stop or park already answered is no longer current
+    if not readable:
+        return None, "failed"
+    if comment_id in answered:
+        return None, "ok"
+    premise = (reserved or {}).get("premise")
+    work = pushed(repo_root, info["issue"], repo=repo, adopted=premise.get("adoptsBranch") if isinstance(premise, dict) else None,
+                  env=env, run=run)
+    # axis: the pushed work is read whole and each branch timed from GitHub's push record, never from a commit time that may predate the push
+    if not work["ok"] or any("reason" in b or b.get("pushTimeSource") != "push" or not _is_number(b.get("pushedAt"))
+                             for b in work["branches"]):
+        return None, "failed"
+    # axis: work pushed after the stop or park means the builder went on, so the comment is no longer its last word
+    if any(b["pushedAt"] > commented for b in work["branches"]):
+        return None, "ok"
+    return {"commentId": comment_id, "url": found["url"], "kind": found["parsed"], "createdAt": found["createdAt"]}, "ok"
+
+
 def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, repo, env=None, run=None, now=None):
     """Whether the lane may be recovered now. `stopped` is returned only on positive stop evidence (the
     session failed, was archived or is gone) or a handover comment, and is recorded; every other verdict
-    leaves the lane alone."""
+    leaves the lane alone. `parked` (evidence `builder-stop` or `builder-park`, the comment in `parkComment`)
+    means the issue holds a builder stop or park newer than the lane's last pushed work; it is never a recovery
+    step. `parkRead` is `failed` when a read the park needed failed, so a park was not believed for want of it."""
     env = _env(env)
     bad = _inputs(repo=repo, launch_id=launch_id, session_state=session_state,
                   activity_age_seconds=activity_age_seconds)
     if bad:
         return _refusal(bad)
-    info, _, refused = _lane(repo_root, launch_id, env)
+    info, reserved, refused = _lane(repo_root, launch_id, env)
     if refused:
         return refused
     now = time.time() if now is None else now
     out = {"ok": True, "launchId": launch_id, "issue": info["issue"], "verdict": None, "evidence": None,
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
-           "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None}
+           "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None,
+           "parkComment": None, "parkRead": None}
     # axis: a parked or died lane is still recoverable from current stop evidence until a successor is composed for it
     latest = _latest_outcome(info)
     if info["terminal"] and (latest not in ("park", "died") or _replaced(repo_root, launch_id, info, env)):
         out["verdict"] = "ended"
         return _withdrawn(repo_root, launch_id, out, env)
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
-    found, read = (_newest_comment(repo, info["issue"], start, env, run, _sib("cloud_builder").handover_sha)
-                   if _is_number(start) else (None, False))
+    cutoff = _sib("wave_watch")._note_cutoff(info)  # the watch's attempt start, so both agree on which comments belong to it
+    # one request, from the earlier of the handover's start and the attempt's cutoff, serves both reads below
+    begins = [t for t in (start, cutoff) if _is_number(t)]
+    comments = _issue_comments(repo, info["issue"], min(begins), env, run) if begins else None
+    read = _is_number(start) and comments is not None
+    found = _newest(comments, start, _sib("cloud_builder").handover_sha) if read else None
     handover = found and {"commentId": found["commentId"], "url": found["url"], "sha": found["parsed"],
                           "createdAt": found["createdAt"]}
     out["handover"], out["handoverRead"] = handover, "ok" if read else "failed"
     fresh = (session_state in _LIVE_STATES and _is_number(age)
              and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
-    # axis: positive stop evidence recovers at once, whatever the lane's GitHub activity age says
-    if session_state in _STOP_STATES:
-        out["verdict"], out["evidence"] = "stopped", "session-" + session_state
-    # axis: a working or blocked session with recent activity is never recovered while it could still be working, whatever an earlier handover says
-    elif fresh:
+    if not fresh:
+        out["parkComment"], out["parkRead"] = _park_reading(repo_root, repo, info, reserved, comments, cutoff, env, run)
+    # axis: a working or blocked session with recent activity is never recovered while it could still be working, whatever the comments say
+    if fresh:
         out["verdict"] = "working"
+    # axis: a builder that stopped or parked on a question is not recovered, even when its session is gone
+    elif out["parkComment"] is not None:
+        out["verdict"], out["evidence"] = "parked", "builder-" + out["parkComment"]["kind"]
+    # axis: positive stop evidence recovers at once, whatever the lane's GitHub activity age says
+    elif session_state in _STOP_STATES:
+        out["verdict"], out["evidence"] = "stopped", "session-" + session_state
     elif handover is not None:
         out["verdict"], out["evidence"] = "stopped", "handover"
     elif session_state == "unread":
