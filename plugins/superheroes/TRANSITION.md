@@ -17,13 +17,9 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
-<<<<<<< HEAD
-- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`. See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
-- **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
-=======
 - **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`, though in a cloud session on Linux a builder's implementer orders do not reach that refusal, because they run on the native engine (the channel itself still refuses). See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
 - **After switching.** **In a cloud session on Linux, a `localSockets` project's implementer orders run as native subagents through `native_engine.py`, and `route` decides it.** The builder runs `native_engine.py route --cwd <build worktree>` before each implementer order; `native` sends it through the native engine, any other engine keeps `dispatch-write`. See [Native implementer engine](#native-implementer-engine).
->>>>>>> origin/main
+- **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
 
 ### PR sheet: leftovers carry the decision spine
 
