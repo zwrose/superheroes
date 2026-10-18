@@ -69,11 +69,43 @@ def _engine_dispatch():
 
 # --- the command-prefix fence ------------------------------------------------------------------
 
+def _heredoc_operator(command, i):
+    """Parse the here-document operator at command[i:] (`<<` or `<<-`, then the delimiter word). Returns
+    (end index, delimiter or None, strip_tabs)."""
+    n = len(command)
+    j = i + 2
+    strip_tabs = j < n and command[j] == "-"
+    if strip_tabs:
+        j += 1
+    while j < n and command[j] in " \t":
+        j += 1
+    word, quote = [], None
+    while j < n:
+        ch = command[j]
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                word.append(ch)
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "\\" and j + 1 < n:
+            j += 1
+            word.append(command[j])
+        elif ch in " \t\n;|&<>()":
+            break
+        else:
+            word.append(ch)
+        j += 1
+    return j, "".join(word) or None, strip_tabs
+
+
 def _split_segments(command):
     """Split on ; && || | & and newlines outside quotes, dropping comments. An unterminated quote stays in its segment
     (shlex then refuses it)."""
     segments, cur = [], []
     quote = None
+    pending = []  # here-document (delimiter, strip_tabs) pairs whose bodies start after the next newline
     i, n = 0, len(command)
     while i < n:
         ch = command[i]
@@ -96,11 +128,32 @@ def _split_segments(command):
             # A comment outside quotes: Bash ignores it through the newline (the newline stays).
             while i + 1 < n and command[i + 1] != "\n":
                 i += 1
+        elif ch == "<" and command.startswith("<<<", i):
+            cur.append("<<<")
+            i += 2
+        elif ch == "<" and command.startswith("<<", i):
+            end, delim, strip_tabs = _heredoc_operator(command, i)
+            cur.append(command[i:end])
+            if delim:
+                pending.append((delim, strip_tabs))
+            i = end - 1
         elif ch in ";|&\n":
             segments.append("".join(cur))
             cur = []
             if ch in "|&" and i + 1 < n and command[i + 1] == ch:
                 i += 1
+            elif ch == "\n" and pending:
+                # Skip each here-document body through its terminating delimiter line: the body is data.
+                pos = i + 1
+                for delim, strip_tabs in pending:
+                    while pos < n:
+                        nl = command.find("\n", pos)
+                        line = command[pos:] if nl < 0 else command[pos:nl]
+                        pos = n if nl < 0 else nl + 1
+                        if (line.lstrip("\t") if strip_tabs else line) == delim:
+                            break
+                pending = []
+                i = pos - 1
         else:
             cur.append(ch)
         i += 1

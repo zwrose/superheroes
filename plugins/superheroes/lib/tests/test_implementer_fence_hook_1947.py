@@ -322,6 +322,17 @@ def test_wrappers_chaining_and_paths_are_seen_through(tmp_path, command):
     assert reason.startswith("installs and network commands are refused for a native implementer: ")
 
 
+def test_here_document_bodies_are_data_not_commands():
+    assert native_fence.fence_word("cat <<'EOF'\ncurl is documentation\nEOF") is None
+    assert native_fence.fence_word("cat <<\"EOF\"\nIt's a local fixture.\nEOF") is None
+    assert native_fence.fence_word("cat <<-EOF\n\tcurl x\n\tEOF\nls") is None
+    assert native_fence.fence_word("cat <<A <<B\ncurl a\nA\npip install b\nB\n") is None
+    # Commands before and after the body are still inspected; a here-string is not a here-document.
+    assert native_fence.fence_word("curl x <<EOF\nbody\nEOF") == "curl"
+    assert native_fence.fence_word("cat <<EOF\nbody\nEOF\ncurl x") == "curl"
+    assert native_fence.fence_word("cat <<< hi\ncurl x") == "curl"
+
+
 def test_shell_comments_are_ignored_outside_quotes():
     assert native_fence.fence_word("git status # don't fetch") is None
     assert native_fence.fence_word("ls\n# pip install x\ngit status") is None
