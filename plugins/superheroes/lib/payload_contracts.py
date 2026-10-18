@@ -565,7 +565,7 @@ _PAYLOAD_FIELD_BINDINGS = {
     P_AUDITS: {
         "required": ["id", "ruling", "reason"],
         "optional": ["newIssues", "evidence", "auditorVendor", "unnamedChange",
-                     "unnamedChangeAllowedBySeq"],
+                     "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts"],
         "conditional": {
             "newIssues": "required when ruling is %s" % RULING_NEW_ISSUE,
         },
@@ -579,6 +579,8 @@ _PAYLOAD_FIELD_BINDINGS = {
             "auditorVendor": "string",
             "unnamedChange": "string",
             "unnamedChangeAllowedBySeq": "integer",
+            "unnamedChangeFixes": "list",
+            "unnamedChangeReverts": "list",
         },
         "elements": {
             "newIssues": {"required": [], "optional": [], "types": {}, "enums": {}},
