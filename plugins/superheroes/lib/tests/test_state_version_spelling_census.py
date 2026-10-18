@@ -598,7 +598,7 @@ def test_synthetic_injection_mint_binding():
 
 
 def test_synthetic_injection_string_literal():
-    path = os.path.join(_LIB, "handback_gate.py")
+    path = os.path.join(_LIB, "build_lane.py")
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
     injected = source + '\n_SYNTH = "receipt-certified/9"\n'
@@ -747,7 +747,7 @@ def test_synthetic_injection_no_pinned_symbol_module():
 
 
 def test_synthetic_injection_embedded_string_literal():
-    path = os.path.join(_LIB, "handback_gate.py")
+    path = os.path.join(_LIB, "build_lane.py")
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
     embedded_literal = "prefix receipt-certified/9 suffix"
