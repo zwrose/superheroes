@@ -24,7 +24,7 @@ from test_round_orders import _base_context
 _PLACEHOLDER = "{{CLAUDE_MD_PATH}}"
 # A bare relative CLAUDE.md in a path slot: "...: CLAUDE.md" at end of line, a line that is only
 # the name, "(CLAUDE.md)" tail, or "...: CLAUDE.md and ..." (the five "Project conventions" lines).
-_BARE_SLOT = re.compile(r"(?:^|[:(]\s*)CLAUDE\.md\s*$|:\s*CLAUDE\.md\s+and\b")
+_BARE_SLOT = re.compile(r"(?:^|[:(]\s*)CLAUDE\.md\)?\s*$|:\s*CLAUDE\.md\s+and\b")
 _REVIEWER_PHASES = [p for p in RO.ORDER_PHASES if p != RP.P_FIXER]
 
 
@@ -164,6 +164,7 @@ def test_sanitized_view_notice_points_seats_at_absolute_paths_outside_the_view()
 @pytest.mark.parametrize("line", [
     "- CLAUDE.md (project conventions): CLAUDE.md",
     "- Project conventions: CLAUDE.md and the project profile.",
+    "- Project conventions (CLAUDE.md)",
 ])
 def test_bare_slot_regex_matches_bare_relative_claude_md(line):
     assert _BARE_SLOT.search(line)
