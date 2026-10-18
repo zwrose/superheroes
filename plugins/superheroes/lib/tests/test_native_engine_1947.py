@@ -1365,7 +1365,9 @@ def test_hostile_global_git_config_never_reaches_the_collection(tmp_path, monkey
         "[diff]\n\tnoprefix = true\n\tcontext = 0\n\tsubmodule = log\n"
         "[apply]\n\twhitespace = error\n"
         "[status]\n\tshowUntrackedFiles = no\n"
-        "[color]\n\tui = always\n", encoding="utf-8")
+        "[color]\n\tui = always\n"
+        "[core]\n\texcludesFile = %s\n" % (home / "global-ignore"), encoding="utf-8")
+    (home / "global-ignore").write_text("new/n.txt\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
     monkeypatch.delenv("GIT_CONFIG_GLOBAL")

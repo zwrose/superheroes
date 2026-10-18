@@ -43,6 +43,7 @@ import core_md  # noqa: E402  read_sandbox_access
 import dispatch_outcome  # noqa: E402  REASON_FORFEITED
 import engine_dispatch  # noqa: E402  journal, git, host platform, declared-item check
 import file_lock  # noqa: E402  the run-dir lock
+import launch_ledger  # noqa: E402  scrub_env
 import model_registry  # noqa: E402  CLAUDE_ALIAS_RESOLUTION
 import preflight_probe  # noqa: E402  dispatch_calibration
 import seat_bundle  # noqa: E402  the callable `dispatch_guard.py check --seat` runs
@@ -130,7 +131,7 @@ def _refusal(reason, **extra):
 # Every git subprocess this module causes runs under `_neutral_git`: the owner's global and system
 # git config never reaches it (#1949). The env pair does not reach the repository's own or the
 # worktree's config, and `engine_dispatch._git_scrubbed` strips GIT_CONFIG_GLOBAL from its child, so
-# `_git` also pins each setting the engine's porcelain parsing depends on.
+# `_git` builds its own child environment (the pair restored) and also pins each setting the engine's porcelain parsing depends on.
 _NEUTRAL_ENV = (("GIT_CONFIG_GLOBAL", os.devnull), ("GIT_CONFIG_NOSYSTEM", "1"))
 _NEUTRAL_CONFIG = (
     "diff.noprefix=false", "diff.context=3", "apply.whitespace=nowarn",
@@ -160,11 +161,22 @@ def _neutral_git():
 
 
 def _git(cwd, *args):
-    """(returncode, stdout, stderr); returncode -1 when git cannot run or times out."""
+    """(returncode, stdout, stderr); returncode -1 when git cannot run or times out.
+
+    The child environment is scrubbed of the routing variables first and the neutral pair is put
+    back after: ``engine_dispatch._git_scrubbed`` would drop ``GIT_CONFIG_GLOBAL`` with them and
+    leave git reading the owner's global config (a global ``core.excludesFile`` hides a new file
+    from ``add -A``)."""
     overrides = [part for setting in _NEUTRAL_CONFIG for part in ("-c", setting)]
     try:
         with _neutral_git():
-            proc = engine_dispatch._git_scrubbed(cwd, *overrides, *args, timeout=GIT_TIMEOUT)
+            env = launch_ledger.scrub_env(
+                keys=engine_dispatch._GIT_ROUTING_VARS, roots=(engine_dispatch.JOURNAL_ROOT_ENV,))
+            env.update(_NEUTRAL_ENV)
+            proc = subprocess.run(
+                ["git", "-C", cwd, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=",
+                 *overrides, *args],
+                capture_output=True, text=True, env=env, timeout=GIT_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError):
         return -1, "", ""
     return proc.returncode, proc.stdout or "", proc.stderr or ""
