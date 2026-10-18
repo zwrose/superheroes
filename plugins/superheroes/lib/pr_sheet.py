@@ -32,9 +32,15 @@ The advisor's input is one JSON object; any key not listed is refused.
                  sheet's digest (and the digests it carried) in prSheet.carriedForward. previousCommit, when also given,
                  must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned.
   prs            Required on a stack, refused on a pr: at least 2 {number, title}, bottom PR first.
-  leftovers      Optional object. A key names a left-for-owner finding by its findingKey, or by its id when
-                 no other left-for-owner finding shares it ("<pr number>:<key>" on a stack). A value is {"options": ..., "recommendation": ...}: options is "leftover" (the
-                 default, the words' three options), "none", or a list of options.
+  leftovers      An object with an entry for every left-for-owner finding (one with none is refused). A key names a
+                 finding by its findingKey, or by its id when no other left-for-owner finding shares it ("<pr number>:<key>"
+                 on a stack). A value is {why, context, options, ifLeft?, recommendation?}: why (why the call is the owner's)
+                 and context (what happened) are non-empty strings, and ifLeft, when given, is a non-empty string shown
+                 instead of the reviewer's consequence. The card shows Why it's yours, What happened and If left, in that
+                 order. options is "none" (nothing is left to decide: the page's Accept and Discuss), a list of options, or
+                 an object giving each of keep-it, fix-in-a-follow-up and fix-before-merge, and no other key, a non-empty
+                 string: this finding's consequence for that option (the words' three options carry them). The bare string
+                 "leftover" is refused.
   items          Optional list. Each is {id, kind, title, ifLeft, options, recommendation?} with options
                  "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items.
   closesSpec     Optional. Null, or {"spec": ..., "receipt": ...}.
@@ -227,19 +233,26 @@ def _record(raw, n, problems):
 
 
 def _options(given, words, leftover):
-    """The options a value gives: "none", "leftover" (on a leftover only) or a list; None when it is none of these."""
+    """The options a value gives: "none", a list or (on a leftover only) an object of consequences by option id; None when it is none of these."""
     if given == "none":
         return []
-    if given == "leftover" and leftover:
-        return words["leftoverOptions"]
+    if leftover and isinstance(given, dict):
+        base = words["leftoverOptions"]
+        ok = set(given) == {o["id"] for o in base} and all(_text(v) for v in given.values())
+        return [{**o, "consequence": given[o["id"]]} for o in base] if ok else None
     return given if isinstance(given, list) else None
 
 
 def _check_call(where, call, words, problems, leftover):
-    given = call.get("options", "leftover") if leftover else call["options"]
+    given = call["options"]
     opts = _options(given, words, leftover)
-    if opts is None:
-        problems.append(f'{where}: options must be {"leftover, " if leftover else ""}none or a list of options')
+    ids = ", ".join(o["id"] for o in words["leftoverOptions"])
+    if given == "leftover" and leftover:
+        problems.append(f'{where}: options "leftover" is refused; give each option\'s consequence for this leftover '
+                        f'(an object with {ids}) or "none"')
+    elif opts is None:
+        problems.append(f'{where}: options must be none, a list of options'
+                        + (f' or an object giving {ids} a non-empty consequence each' if leftover else ""))
     opts = _check_list(f"{where}: options", opts or [], ("id", "label", "consequence", "sendsBack"), (), problems)
     problems.extend(f"{where}: option {o['id']} needs sendsBack to be true or false"
                     for o in opts if "sendsBack" in o and not isinstance(o["sendsBack"], bool))
@@ -300,7 +313,9 @@ def _check_input(adv, words, problems):
     if not isinstance(leftovers, dict):
         problems.append("leftovers must be an object")
     for k, call in (leftovers.items() if isinstance(leftovers, dict) else ()):
-        if _keys(f"leftovers {k}", call, (), ("options", "recommendation"), problems):
+        if _keys(f"leftovers {k}", call, ("why", "context", "options"), ("ifLeft", "recommendation"), problems):
+            problems.extend(f"leftovers {k}: {t} must be a non-empty string" for t in ("why", "context", "ifLeft")
+                            if t in call and not _text(call[t]))
             _check_call(f"leftovers {k}", call, words, problems, True)
     for it in _check_list("items", adv.get("items", []), ("id", "kind", "title", "ifLeft", "options"),
                           ("recommendation",), problems):
@@ -468,8 +483,12 @@ def build(records, advisor, words, place=None, previous=None):
     for r in recs:
         for f in r["findings"]:
             if isinstance(f, dict) and f.get("outcome") == _LEFT:
-                for k in _lookups(kind, r["pr"], f):
+                keys = _lookups(kind, r["pr"], f)
+                for k in keys:
                     named[k] = named.get(k, 0) + 1
+                if keys and isinstance(leftovers, dict) and not any(k in leftovers for k in keys):
+                    problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} has no leftovers entry (key {keys[0]!r}); "
+                                    "give it why, context and options")
     if isinstance(leftovers, dict):
         problems.extend(f"leftovers key {k!r} names no left-for-owner finding" for k in leftovers if k not in named)
         problems.extend(f"leftovers key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
@@ -484,10 +503,13 @@ def build(records, advisor, words, place=None, previous=None):
     for r in recs:
         for f in (f for f in r["findings"] if f["outcome"] == _LEFT):
             call = _leftover_call(kind, r["pr"], f, leftovers)
-            options = _options(call.get("options", "leftover"), words, True)
+            options = _options(call["options"], words, True)
             cards.append(_card("f-", r["pr"], f.get("findingKey") or f["id"],
                                words["leftoverKind"] + (f" · #{r['pr']}" if stack else ""), _title(f),
-                               [_section(words["ifLeft"], "paragraph", f["consequence"])], options, call.get("recommendation")))
+                               [_section(words["whyYours"], "paragraph", call["why"]),
+                                _section(words["whatHappened"], "paragraph", call["context"]),
+                                _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
+                               options, call.get("recommendation")))
     for it in advisor.get("items", []):
         cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], "paragraph", it["ifLeft"])],
                            _options(it["options"], words, False), it.get("recommendation")))

@@ -165,12 +165,13 @@ def test_the_closure_receipt_is_one_card_and_only_when_asked_for():
     assert [c for c in built(BIG)["cards"] if c["callKind"] == "Closure receipt"] == []
 
 
-def test_options_default_none_and_custom():
-    # Axis: a default leftover gets the words' options with only fix-before-merge sending back; none gives no options.
+def test_options_object_and_none():
+    # Axis: an object-form leftover gets the words' three options with only fix-before-merge sending back; none gives no options.
     cards = {c["question"]: c for c in leftover_cards(built(BIG))}
-    default = cards["A payment that fails three times ends with no email"]
-    assert default["options"] == WORDS["leftoverOptions"]
-    assert [o["id"] for o in default["options"] if o["sendsBack"]] == ["fix-before-merge"]
+    given = cards["A payment that fails three times ends with no email"]
+    assert [{k: v for k, v in o.items() if k != "consequence"} for o in given["options"]] == \
+        [{k: v for k, v in o.items() if k != "consequence"} for o in WORDS["leftoverOptions"]]
+    assert [o["id"] for o in given["options"] if o["sendsBack"]] == ["fix-before-merge"]
     assert cards["Customers are not told a retry happened"]["options"] == []
 
 
@@ -247,14 +248,15 @@ def test_incomplete_review_evidence_is_kept_in_the_history():
 
 
 def test_leftover_overrides_are_keyed_by_finding_key_and_an_ambiguous_id_is_refused():
-    # Axis: two left-for-owner findings sharing a reviewer id take separate overrides by findingKey; the shared id is refused.
+    # Axis: two left-for-owner findings sharing a reviewer id take separate entries by findingKey; the shared id is refused.
     records, advisor = bundle(BIG)
     left = [f for f in records[0]["findings"] if f["outcome"] == "left-for-owner"]
     left[1]["id"] = left[0]["id"]
-    advisor["leftovers"] = {left[0]["findingKey"]: {"options": "none", "recommendation": {"text": "A", "reason": "a"}}}
+    entry = {"why": "w", "context": "c", "options": "none"}
+    advisor["leftovers"] = {left[0]["findingKey"]: {**entry, "recommendation": {"text": "A", "reason": "a"}}, left[1]["findingKey"]: entry}
     cards = [c for c in build(records, advisor)["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]
     assert [c.get("recommendation", {}).get("text") for c in cards] == ["A", None]
-    advisor["leftovers"] = {left[0]["id"]: {"options": "none"}}
+    advisor["leftovers"] = {left[0]["id"]: entry}
     assert any("names 2 left-for-owner findings" in p for p in problems_of(records, advisor))
 
 
@@ -668,14 +670,87 @@ def test_one_input_with_several_problems_is_refused_with_all_of_them():
             "record for PR #214: its ci, lane, rounds, reviewers or missing reviews are malformed"} == set(problems)
 
 
-def test_a_leftover_with_no_override_gets_the_words_three_options():
-    # Axis: a left-for-owner finding the advisor says nothing about gets the words' leftover options, and only fix-before-merge sends back.
+def test_a_leftover_with_no_entry_is_refused():
+    # Axis: a left-for-owner finding with no leftovers entry is refused by title and key, never given the words' generic options.
     records, advisor = bundle(BIG)
     advisor["leftovers"].pop("F6")
-    card = next(c for c in leftover_cards(build(records, advisor)) if c["question"] == "Customers are not told a retry happened")
-    assert card["options"] == WORDS["leftoverOptions"] and len(card["options"]) == 3
-    assert [o["sendsBack"] for o in card["options"]] == [False, False, True]
-    assert "recommendation" not in card
+    assert problems_of(records, advisor) == ["left-for-owner finding 'Customers are not told a retry happened' on PR #214 "
+                                             "has no leftovers entry (key 'retry/no-notice'); give it why, context and options"]
+
+
+def test_a_leftover_card_carries_the_spine_in_order():
+    # Axis: a leftover's context is Why it's yours, What happened, If left in that order, the third being ifLeft when given, else the finding's consequence.
+    records, advisor = bundle(BIG)
+    titles = [WORDS["whyYours"], WORDS["whatHappened"], WORDS["ifLeft"]]
+    for key, finding in zip(("F6", "F7"), records[0]["findings"][5:7]):
+        entry = advisor["leftovers"][key]
+        card = next(c for c in leftover_cards(build(records, advisor)) if c["question"] == finding["title"])
+        assert [s["title"] for s in card["context"]] == titles
+        assert [s["blocks"] for s in card["context"]] == [[{"paragraph": entry["why"]}], [{"paragraph": entry["context"]}],
+                                                          [{"paragraph": finding["consequence"]}]]
+    advisor["leftovers"]["F7"]["ifLeft"] = ("The email is now sent by the shop's mail service.")
+    card = next(c for c in leftover_cards(build(records, advisor)) if c["question"] == records[0]["findings"][6]["title"])
+    assert card["context"][2] == {"title": WORDS["ifLeft"], "blocks": [{"paragraph": "The email is now sent by the shop's mail service."}]}
+
+
+def no_why(advisor):
+    advisor["leftovers"]["F7"].pop("why")
+
+
+def no_context(advisor):
+    advisor["leftovers"]["F7"].pop("context")
+
+
+def bare_leftover(advisor):
+    advisor["leftovers"]["F7"]["options"] = "leftover"
+
+
+def object_missing_an_id(advisor):
+    advisor["leftovers"]["F7"]["options"].pop("keep-it")
+
+
+def object_with_an_extra_key(advisor):
+    advisor["leftovers"]["F7"]["options"]["ship-it"] = "Ships."
+
+
+@pytest.mark.parametrize("edit, text", [
+    pytest.param(no_why, "leftovers F7 is missing why", id="no-why"),
+    pytest.param(no_context, "leftovers F7 is missing context", id="no-context"),
+    pytest.param(bare_leftover, 'leftovers F7: options "leftover" is refused; give each option\'s consequence for this leftover', id="bare-leftover"),
+    pytest.param(object_missing_an_id, "leftovers F7: options must be none, a list of options or an object giving", id="object-missing-an-id"),
+    pytest.param(object_with_an_extra_key, "leftovers F7: options must be none, a list of options or an object giving", id="object-extra-key"),
+])
+def test_a_leftover_without_its_spine_is_refused_naming_the_finding(edit, text):
+    # Axis: an entry missing why or context, the bare "leftover" options, or a malformed options object is refused and the problem names the leftover's key.
+    records, advisor = bundle(BIG)
+    edit(advisor)
+    assert any(text in p for p in problems_of(records, advisor))
+
+
+def test_an_object_form_leftover_carries_the_advisors_consequences():
+    # Axis: an object-form entry's card has the advisor's three consequences and none of the words file's generic ones, with the words' ids, labels and sendsBack.
+    card = next(c for c in leftover_cards(built(BIG)) if c["question"] == "A payment that fails three times ends with no email")
+    given = load("input-big.json")["leftovers"]["F7"]["options"]
+    assert [o["consequence"] for o in card["options"]] == [given[o["id"]] for o in WORDS["leftoverOptions"]]
+    assert not {o["consequence"] for o in WORDS["leftoverOptions"]} & {o["consequence"] for o in card["options"]}
+    assert [{k: o[k] for k in ("id", "label", "sendsBack")} for o in card["options"]] == \
+        [{k: o[k] for k in ("id", "label", "sendsBack")} for o in WORDS["leftoverOptions"]]
+
+
+def test_none_options_build_a_leftover_with_no_options():
+    # Axis: options "none" on a leftover builds a card whose options are empty (the page's Accept and Discuss).
+    card = next(c for c in leftover_cards(built(BIG)) if c["question"] == "Customers are not told a retry happened")
+    assert load("input-big.json")["leftovers"]["F6"]["options"] == "none" and card["options"] == []
+
+
+@pytest.mark.parametrize("given", [{key: "Ships." for key in ("keep-it", "fix-in-a-follow-up", "fix-before-merge")}, "leftover"],
+                         ids=["object", "bare-leftover"])
+def test_an_item_keeps_none_or_a_list_for_options(given):
+    # Axis: the advisor's own items take only "none" or a list of options; neither the leftover object form nor the bare "leftover" reaches them.
+    records, advisor = bundle(BIG)
+    advisor["items"][0]["options"] = given
+    assert any(p.startswith("items retry-window: options must be none, a list of options") and "object" not in p
+               for p in problems_of(records, advisor))
 
 
 PICTURE_FILES = ["cart-empty.png", "cart-paid.png", "declined-screen.png"]
@@ -1190,7 +1265,7 @@ STATE_TABLE = {
 # The same rule on a stack sheet: one card (the leftover, whose third option sends back), a look stop and a try stop.
 STACK_SHEET = json.dumps(built(STACK), indent=2).encode("utf-8")
 STACK_DIGEST = hashlib.sha256(STACK_SHEET).hexdigest()
-STACK_CARD, STACK_LOOK, STACK_TRY = "f-a64d7a0d1734", "gift-card-table-18668f855294", "checkout-redeem-449ec5af939f"
+STACK_CARD, STACK_LOOK, STACK_TRY = "f-8bd7e2d907ef", "gift-card-table-18668f855294", "checkout-redeem-449ec5af939f"
 STACK_TABLE = {
     "stack-ready": (store_of({STACK_CARD: KEEP}, {STACK_LOOK: walk_doc("looks-right"), STACK_TRY: walk_doc("works")},
                              merge_doc([f"answers/{STACK_CARD}@{REV_A}"], STACK_DIGEST), STACK_DIGEST), ("ready", 1, 1, 2, 2)),

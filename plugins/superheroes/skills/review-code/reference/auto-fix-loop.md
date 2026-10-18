@@ -103,7 +103,10 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > remote, and no parent commit (one synthetic commit, no history). The dispatch prompt's auto-prepended
 > notice states this prohibition to the seat explicitly. Paths the runner stripped are **unreadable**
 > even when the diff under review touches them — the dispatch prompt should name stripped paths so the
-> seat knows why a read failed.
+> seat knows why a read failed. The one exception: with `--diff-base`, a changed regular file under
+> exactly `.claude/superheroes/` whose remainder matches no other stripped name is shown in full and kept
+> in the review patch; symlinks, gitlinks, deleted or renamed-away files, case or alias variants and every
+> other `.claude/` path stay withheld.
 >
 > **`--mode {review,brief-check}` (optional, default `review`).** `--mode review` or omitted →
 > behaviour identical to today, including `--diff-base` resolving to an empty patch →
@@ -151,7 +154,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, and unaccounted census entries **refuse the dispatch** rather than being counted here — opaque review-patch content refuses unless it is a genuine binary blob (placeholder line); opaque content in the configuration-changes file still refuses — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld (it excludes the changed calibration files shown in full, and a view built without `--diff-base`, brief-check included, shows none); undecodable paths, unrecognized spans, and unaccounted census entries **refuse the dispatch** rather than being counted here — opaque review-patch content refuses unless it is a genuine binary blob (placeholder line); opaque content in the configuration-changes file still refuses — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
 > | `configDiffPath` | `SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt`, relative to the view root, when withheld configuration hunks were staged; `null` when nothing was withheld |
 > | `configDiffBytes` | size in bytes of that configuration-changes file; `null` when `configDiffPath` is `null` |
 >
