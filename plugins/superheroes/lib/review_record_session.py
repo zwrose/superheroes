@@ -564,7 +564,8 @@ def _owner_rulings(entries, findings, merged):
     names a row as the writer reads it (`review_record._ruling_hits`: raw findingKey, stored key or id); the
     ruling on the representative covers the members, unless an entry already names that member. A member whose
     merge did not resolve is not in `merged` and gets no entry. The writer validates the entries; one that is
-    not a dict, or names no row here, is passed through unchanged."""
+    not a dict, or names no row here, is passed through unchanged. This covers the current session's rows only;
+    `_carried_rulings` extends the result over the rows carried from the earlier record."""
     out = list(entries)
     for e in entries:
         key = e.get("key") if isinstance(e, dict) else None
@@ -577,6 +578,33 @@ def _owner_rulings(entries, findings, merged):
                 if any(isinstance(o, dict) and review_record._ruling_hits([row], o.get("key")) for o in out):
                     continue
                 out.append({"key": row["findingKey"], "url": e.get("url"), "words": e.get("words")})
+    return out
+
+
+def _carried_rulings(entries, findings, carried):
+    """`entries` plus one entry per carried member row of each finding an entry names, over the account's final findings.
+
+    A carried row has no ledger merge to follow, so it is covered only when its reason's mark
+    (`merged_into`) names the representative's id and that id names exactly one of `findings`; any other case
+    adds no entry, and the member stays a card. An entry already naming the member, or one that would name
+    more than that one row, is not added (the writer refuses an entry that names two rows or a row twice)."""
+    out = list(entries)
+    if not carried or not all(isinstance(f, dict) and "id" in f for f in findings):
+        return out
+    for e in entries:
+        key = e.get("key") if isinstance(e, dict) else None
+        for i in review_record._ruling_hits(findings, key):
+            rep = findings[i]
+            for row in carried:
+                mark = merged_into(row.get("reason"))
+                if row is rep or mark is None or mark != rep["id"] or sum(f["id"] == mark for f in findings) != 1:
+                    continue
+                member = row.get(sc.FINDING_KEY_FIELD) if isinstance(row.get(sc.FINDING_KEY_FIELD), str) else None
+                if member is None or review_record._ruling_hits(findings, member) != {j for j, f in enumerate(findings) if f is row}:
+                    continue
+                if any(isinstance(o, dict) and review_record._ruling_hits([row], o.get("key")) for o in out):
+                    continue
+                out.append({"key": member, "url": e.get("url"), "words": e.get("words")})
     return out
 
 
@@ -612,7 +640,10 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None):
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0])
-        account["findings"] += _carried(account, extras, repo_root, readers)
+        carried = _carried(account, extras, repo_root, readers)
+        account["findings"] += carried
+        # axis: a ruling on a carried merged group's representative covers its carried members — see bite-proof record wo_a_1958_owner_ruling
+        account["ownerRulings"] = _carried_rulings(account["ownerRulings"], account["findings"], carried)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)

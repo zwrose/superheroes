@@ -10,7 +10,7 @@ import finding_outcomes as fo
 import pr_sheet
 import review_record as rr
 import review_record_session as rs
-from test_review_record_session import CODEX, HEAD, KEY, Fake, Session, extras, ledger_row, put_extras, _merged
+from test_review_record_session import CODEX, HEAD, KEY, Fake, Session, extras, ledger_row, put_extras, _merged, _second_session
 
 WORDS = json.loads((Path(__file__).resolve().parents[2] / "theme" / "sheet-words.json").read_text(encoding="utf-8"))["pr"]
 U = "https://github.com/o/r/issues/12#issuecomment-555"
@@ -379,3 +379,43 @@ def test_t10_decided_by_well_formed_takes_exactly_the_owner_ruling_shape():
     assert fo.on_record({"kind": "owner-ruling", "ref": {}}, None) == (False, "the ruling names no link or words")
     assert fo.on_record(good, {"ownerRulings": {U: DOC}}) == (False, L2)
     assert fo.on_record(good, {"repo": "o/r"}) == (False, L3)
+
+
+def _earlier_merged_record(tmp_path, fake, more=()):
+    oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+    s = Session(tmp_path, dispositionLedger=_merged({}, oos) + list(more))
+    s.seat("code-reviewer")
+    out = rs.write_from_session(s.save(), put_extras(tmp_path, extras(repo="o/r")), str(tmp_path), readers(fake=fake))
+    assert out["ok"], out
+    return rr.read(7, readers=fake.readers())["findings"]
+
+
+def _later_write(tmp_path, fake, rep_key):
+    given = [{"key": rep_key, "url": U, "words": W}]
+    out = rs.write_from_session(_second_session(tmp_path), put_extras(tmp_path, extras(repo="o/r", ownerRulings=given)),
+                                str(tmp_path), readers(fake=fake))
+    assert out["ok"], out
+    return rr.read(7, readers=fake.readers())
+
+
+def test_wo_e_a_ruling_on_a_carried_representative_covers_its_carried_members(tmp_path):
+    # Axis: the owner rules on the representative the sheet showed, so a member carried with it folds too.
+    fake = Fake()
+    before = {f["id"]: f for f in _earlier_merged_record(tmp_path, fake)}
+    assert before["m-1"]["reason"].endswith(" (merged into rep-1)") and before["m-1"]["outcome"] == "left-for-owner"
+    rec = _later_write(tmp_path, fake, before["rep-1"]["findingKey"])
+    assert {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "ruling", "rep-1": "ruling"}
+    assert rec["leftForOwner"] == []
+    assert rs.CARRIED in next(f for f in rec["findings"] if f["id"] == "m-1")["reason"]
+
+
+def test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry(tmp_path):
+    # Axis: E1, fail closed; an id that names two rows cannot tell which representative the mark means.
+    oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+    fake = Fake()
+    before = _earlier_merged_record(tmp_path, fake, [ledger_row("other::t@L5", id="rep-1", line=5, **oos)])
+    assert sorted(f["line"] for f in before if f["id"] == "rep-1") == [3, 5]
+    rep = next(f for f in before if f["id"] == "rep-1" and f["line"] == 3)
+    rec = _later_write(tmp_path, fake, rep["findingKey"])
+    assert {f["outcome"] for f in rec["findings"] if f["id"] == "m-1"} == {"left-for-owner"}
+    assert sorted(f["outcome"] for f in rec["findings"] if f["id"] == "rep-1") == ["left-for-owner", "ruling"]

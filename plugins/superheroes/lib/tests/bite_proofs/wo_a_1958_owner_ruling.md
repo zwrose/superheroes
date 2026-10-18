@@ -785,3 +785,94 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 1 passed in 0.18s
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 ```
+
+## Review session 2 fixes (WO-E)
+
+### CE: the carried expansion `_carried_rulings` call in `write_from_session` (`review_record_session.py`)
+
+- **file:** `plugins/superheroes/lib/review_record_session.py` (`write_from_session`)
+- **axis:** a ruling on a representative covers the members carried from the earlier record, not only the current session's
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_e_a_ruling_on_a_carried_representative_covers_its_carried_members`
+- **neutralization:** `account["ownerRulings"] = _carried_rulings(account["ownerRulings"], account["findings"], carried)` replaced by `account["ownerRulings"] = account["ownerRulings"]`
+
+**raw red** (exit code 1, the failure block as the run printed it):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_wo_e_a_ruling_on_a_carried_representative_covers_its_carried_members ___
+
+    def test_wo_e_a_ruling_on_a_carried_representative_covers_its_carried_members(tmp_path):
+        # Axis: the owner rules on the representative the sheet showed, so a member carried with it folds too.
+        fake = Fake()
+        before = {f["id"]: f for f in _earlier_merged_record(tmp_path, fake)}
+        assert before["m-1"]["reason"].endswith(" (merged into rep-1)") and before["m-1"]["outcome"] == "left-for-owner"
+        rec = _later_write(tmp_path, fake, before["rep-1"]["findingKey"])
+>       assert {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "ruling", "rep-1": "ruling"}
+E       AssertionError: assert {'m-1': 'left...-1': 'ruling'} == {'m-1': 'ruli...-1': 'ruling'}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'m-1': 'left-for-owner'} != {'m-1': 'ruling'}
+E         Use -v to get more diff
+
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_e_a_ruling_on_a_carried_representative_covers_its_carried_members
+1 failed in 0.79s
+```
+
+**restore** (the inverse replacement) and the restored line quoted back (`review_record_session.py:646`):
+```
+        account["ownerRulings"] = _carried_rulings(account["ownerRulings"], account["findings"], carried)
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 1.45s
+```
+
+### CU: the unique-id check in `_carried_rulings` (`review_record_session.py`)
+
+- **file:** `plugins/superheroes/lib/review_record_session.py` (`_carried_rulings`)
+- **axis:** E1, a carried member is covered only when the id its mark names is one row's, so an id two rows share expands nothing
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry`
+- **neutralization:** ` or mark != rep["id"] or sum(f["id"] == mark for f in findings) != 1:` replaced by ` or mark != rep["id"]:` (the uniqueness clause removed)
+
+**raw red** (exit code 1, the failure block as the run printed it):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry __________
+
+    def test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry(tmp_path):
+        # Axis: E1, fail closed; an id that names two rows cannot tell which representative the mark means.
+        oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+        fake = Fake()
+        before = _earlier_merged_record(tmp_path, fake, [ledger_row("other::t@L5", id="rep-1", line=5, **oos)])
+        assert sorted(f["line"] for f in before if f["id"] == "rep-1") == [3, 5]
+        rep = next(f for f in before if f["id"] == "rep-1" and f["line"] == 3)
+        rec = _later_write(tmp_path, fake, rep["findingKey"])
+>       assert {f["outcome"] for f in rec["findings"] if f["id"] == "m-1"} == {"left-for-owner"}
+E       AssertionError: assert {'ruling'} == {'left-for-owner'}
+E         
+E         Extra items in the left set:
+E         'ruling'
+E         Extra items in the right set:
+E         'left-for-owner'
+E         Use -v to get more diff
+
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry
+1 failed in 0.31s
+```
+
+**restore** (the inverse replacement) and the restored line quoted back (`review_record_session.py:600`):
+```
+                if row is rep or mark is None or mark != rep["id"] or sum(f["id"] == mark for f in findings) != 1:
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.36s
+```
