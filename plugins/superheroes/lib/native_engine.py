@@ -221,8 +221,16 @@ def _cmd_open(args):
     if not DEADLINE_MIN_SECONDS <= args.deadline_seconds <= DEADLINE_MAX_SECONDS:
         return _refusal("deadline-invalid")
     expected = args.expect_item or None
-    if expected is not None and any(_item_invalid(item) for item in expected):
-        return _refusal("expect-item-invalid")
+    if expected is not None:
+        if any(_item_invalid(item) for item in expected):
+            return _refusal("expect-item-invalid")
+        normalized = []
+        for item in expected:
+            ok, detail = engine_dispatch._normalize_expected_item(item)
+            if not ok:
+                return _refusal("expect-item-invalid")
+            normalized.append(detail)
+        expected = normalized
     resolved = seat_bundle.resolve_entry(args.seat, verb="guard-check")
     if not resolved.get("ok"):
         return _refusal(resolved.get("entryReason"), detail=resolved.get("detail"))
@@ -419,6 +427,11 @@ def _read_bytes(path):
         return None
 
 
+def _in_tree(cwd, rev, path):
+    """True when ``path`` is a file in ``rev``'s tree."""
+    return _git(cwd, "cat-file", "-e", "%s:%s" % (rev, path))[0] == 0
+
+
 class _Close(object):
     """One close attempt under the run-dir lock; every outcome goes through ``_finish``."""
 
@@ -511,6 +524,8 @@ class _Close(object):
         for item in self.opened.get("expectedItems") or []:
             mine = _read_bytes(os.path.join(into, item))
             theirs = _read_bytes(os.path.join(target, item))
+            if mine is None and theirs is None and _in_tree(target, base, item):
+                continue  # a declared deletion (or rename source), applied on both sides
             if mine is None or mine != theirs:
                 return self._forfeit("native-collect-incomplete", **extra)
         return self._finish(self._result(
