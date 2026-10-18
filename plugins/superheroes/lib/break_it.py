@@ -281,6 +281,10 @@ def _strip_comments(text):
     i = 0
     while i < len(text):
         c = text[i]
+        if c == "\\" and quote != "'" and text[i + 1:i + 2] == "\n":
+            # axis: a backslash-newline outside single quotes is a line continuation, joined out so it is never a command boundary
+            i += 2
+            continue
         if quote:
             if c == "\\" and quote == '"' and i + 1 < len(text):
                 out.append(c)
@@ -326,6 +330,7 @@ def project_interpreter(verify_command):
     at_command = True
     after_env = False
     skip_operand = False
+    env_chdir = False
     i = -1
     while i + 1 < len(tokens):
         i += 1
@@ -334,6 +339,7 @@ def project_interpreter(verify_command):
             at_command = True
             after_env = False
             skip_operand = False
+            env_chdir = False
             continue
         if not at_command:
             continue
@@ -349,6 +355,9 @@ def project_interpreter(verify_command):
                 tokens[i:i + used] = words
                 i -= 1
                 continue
+            # axis: env -C/--chdir moves the working directory the launcher path resolves from; a relative launcher after it is not modelled, so it fails closed to unresolved
+            if tok.startswith("-C") or tok.startswith("--chdir"):
+                env_chdir = True
             skip_operand = tok in _ENV_OPERAND_OPTIONS or tok in _ENV_SPLIT_OPTIONS
             continue
         if os.path.basename(tok) == "env":
@@ -357,6 +366,8 @@ def project_interpreter(verify_command):
         if tok in _COMMAND_WORDS or _ENV_TOKEN.match(tok):
             continue
         at_command = False
+        if env_chdir and not os.path.isabs(tok) and "/" in tok:
+            return None
         if _is_python_program(tok):
             return tok
         if "/" in tok:
@@ -613,6 +624,10 @@ def _run_contained(argv, env, copy, repo_root, token, timeout):
     return launch_failed, timed_out, proc.returncode, drain.tail()
 
 
+_PROBE_CODE = "import sys; sys.stdout.write(str(6 * 7) + 'ok')"
+_PROBE_MARKER = "42ok"
+
+
 def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, interpreter=None):
     def rec(outcome, reason=None, exit_code=None, output=""):
         return _record(head, block, outcome, reason, exit_code, output, interpreter)
@@ -643,8 +658,9 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
     if interpreter:
         # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
         failed, timed, status, tail = _run_contained(
-            [interpreter, "-c", "pass"], env, copy, repo_root, uuid.uuid4().hex, timeout)
-        if failed or timed or status != 0:
+            [interpreter, "-c", _PROBE_CODE], env, copy, repo_root, uuid.uuid4().hex, timeout)
+        # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
+        if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
             return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
     token = uuid.uuid4().hex
     launch_failed, timed_out, code, output = _run_contained(argv, env, copy, repo_root, token, timeout)

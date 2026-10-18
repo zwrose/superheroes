@@ -23,15 +23,16 @@ CHATTY_LAUNCHER = "scripts/chatty-python"
 def _detaching_launcher_body(sleep_program):
     # The launcher's startup spawns a worker in its own session, with an empty environment, from `/`, and
     # records its pid in the file the environment names; only the reaper's own tree scan can catch it. It does so
-    # for the readiness probe's `-c pass` only, so the recorded worker is the probe's and never the test run's. The
+    # for the readiness probe's `-c` only, so the recorded worker is the probe's and never the test run's. The
     # worker lets go of the pipe, so the launcher's exit ends the probe at once and the worker is what is left behind.
     return ("#!%s\n"
             "import os, subprocess, sys\n"
-            "if sys.argv[1:] == ['-c', 'pass']:\n"
+            "if sys.argv[1:2] == ['-c']:\n"
             "    d = subprocess.DEVNULL\n"
             "    p = subprocess.Popen([%r, '60'], start_new_session=True, env={}, cwd='/',\n"
             "                         stdin=d, stdout=d, stderr=d)\n"
-            "    open(os.environ[%r], 'w').write(str(p.pid))\n") % (sys.executable, sleep_program,
+            "    open(os.environ[%r], 'w').write(str(p.pid))\n"
+            "    exec(sys.argv[2])\n") % (sys.executable, sleep_program,
                                                                 WORKER_PIDFILE_ENV)
 
 
