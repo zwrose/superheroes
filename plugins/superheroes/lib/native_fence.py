@@ -147,7 +147,9 @@ def _split_segments(command):
             elif ch == "\n" and pending:
                 # Skip each here-document body through its terminating delimiter line: the body is data.
                 # An unquoted delimiter's body is expanded by the shell, so a body holding $( or a backtick is
-                # left in the stream and inspected as commands (fail closed).
+                # left in the stream as segments. The fence reads only each segment's leading token, so command
+                # substitution ($(...), backticks) and subshells pass it: this keeps the body visible, it does
+                # not make the substitution fail closed.
                 pos = i + 1
                 for delim, strip_tabs, quoted in pending:
                     start = pos

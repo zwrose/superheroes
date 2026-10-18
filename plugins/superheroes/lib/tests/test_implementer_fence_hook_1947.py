@@ -330,8 +330,11 @@ def test_here_document_bodies_are_data_not_commands():
     # Commands before and after the body are still inspected; a here-string is not a here-document.
     assert native_fence.fence_word("curl x <<EOF\nbody\nEOF") == "curl"
     assert native_fence.fence_word("cat <<EOF\nbody\nEOF\ncurl x") == "curl"
-    # An unquoted delimiter's body is expanded by the shell: a substitution stays in the inspected stream.
+    # An unquoted delimiter's body is expanded by the shell, so it stays in the segment stream. The fence reads
+    # only each segment's leading token, so command substitution ($(...), backticks) and subshells pass it:
+    # the substitution is not denied.
     assert any("curl" in seg for seg in native_fence._split_segments("cat <<EOF\n$(curl x)\nEOF"))
+    assert native_fence.fence_word("cat <<EOF\n$(curl x)\nEOF") is None
     assert not any("curl" in seg for seg in native_fence._split_segments("cat <<'EOF'\n$(curl x)\nEOF"))
     assert native_fence.fence_word("cat <<< hi\ncurl x") == "curl"
 
