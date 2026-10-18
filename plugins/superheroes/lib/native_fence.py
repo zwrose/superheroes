@@ -70,7 +70,7 @@ def _engine_dispatch():
 # --- the command-prefix fence ------------------------------------------------------------------
 
 def _split_segments(command):
-    """Split on ; && || | & and newlines outside quotes. An unterminated quote stays in its segment
+    """Split on ; && || | & and newlines outside quotes, dropping comments. An unterminated quote stays in its segment
     (shlex then refuses it)."""
     segments, cur = [], []
     quote = None
@@ -91,6 +91,11 @@ def _split_segments(command):
         elif ch in "'\"":
             quote = ch
             cur.append(ch)
+        elif ch == "#" and (
+                not cur or (cur[-1] in " \t" and not (len(cur) > 1 and cur[-2] == "\\"))):
+            # A comment outside quotes: Bash ignores it through the newline (the newline stays).
+            while i + 1 < n and command[i + 1] != "\n":
+                i += 1
         elif ch in ";|&\n":
             segments.append("".join(cur))
             cur = []

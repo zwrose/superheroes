@@ -322,6 +322,15 @@ def test_wrappers_chaining_and_paths_are_seen_through(tmp_path, command):
     assert reason.startswith("installs and network commands are refused for a native implementer: ")
 
 
+def test_shell_comments_are_ignored_outside_quotes():
+    assert native_fence.fence_word("git status # don't fetch") is None
+    assert native_fence.fence_word("ls\n# pip install x\ngit status") is None
+    assert native_fence.fence_word("ls # note\npip install x") == "pip install"
+    assert native_fence.fence_word("echo 'a # b' && pip install x") == "pip install"
+    assert native_fence.fence_word("echo a#b; git fetch") == "git fetch"
+    assert native_fence.fence_word('echo "unterminated') == "unparseable"
+
+
 def test_unparseable_command_is_denied(tmp_path):
     # axis: parsing — a segment shlex cannot parse is refused, not waved through
     _enrolled_run(tmp_path)
