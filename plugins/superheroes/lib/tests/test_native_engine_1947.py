@@ -981,3 +981,47 @@ def test_wait_stops_at_the_max_wait(tmp_path, monkeypatch, capsys):
     assert code == 0
     assert out["resultPresent"] is False and out["deadlinePassed"] is False
     assert clock.sleeps == 30
+
+
+def test_close_forfeits_when_the_patch_cannot_apply_and_leaves_b_untouched(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — a failed `git apply` is a forfeit, never a successful collection
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    _write(os.path.join(r.B, "a.txt"), "builder\n")
+    _git(r.B, "add", "a.txt")
+    before = _git(r.B, "diff", "--cached")
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "native-collect-failed")
+    assert _git(r.B, "show", ":a.txt") == "builder\n"
+    assert _git(r.B, "diff", "--cached") == before
+
+
+def test_close_into_a_subdirectory_collects_against_the_worktree_root(
+        tmp_path, monkeypatch, capsys):
+    # axis: boundary — --into a subdirectory of B still applies root-relative patch paths
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    sub = os.path.join(r.B, "subdir")
+    os.makedirs(sub)
+    code, out = _close(capsys, r, into=sub)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["a.txt"]
+    assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+
+
+def test_close_lock_reclaims_a_dead_holder(tmp_path, monkeypatch, capsys):
+    # axis: mapping — the close mutex asks for dead-holder reclaim so a retry is not locked out
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    seen = {}
+    real = NE.file_lock.acquire_with_reason
+
+    def spy(lock, **kw):
+        seen.update(kw)
+        return real(lock, **kw)
+
+    monkeypatch.setattr(NE.file_lock, "acquire_with_reason", spy)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert seen.get("reclaim_dead_holder") is True

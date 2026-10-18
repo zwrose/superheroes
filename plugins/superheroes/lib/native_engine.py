@@ -483,6 +483,9 @@ class _Close(object):
             return self._forfeit("native-not-enrolled")
         target = os.path.realpath(args.worktree)
         into = os.path.realpath(args.into)
+        rc, top, _ = _git(into, "rev-parse", "--show-toplevel")
+        if rc == 0 and top.strip():
+            into = os.path.realpath(top.strip())  # patch paths are root-relative
         agent_id = enrolled.get("agentId")
         if (target != os.path.realpath(enrolled.get("worktree") or "")
                 or not isinstance(agent_id, str) or not agent_id
@@ -563,7 +566,7 @@ def _cmd_close(args):
     if not os.path.isdir(run_dir):
         return _refusal("native-run-not-open")
     try:
-        file_lock.acquire_with_reason(lock)
+        file_lock.acquire_with_reason(lock, reclaim_dead_holder=True)
     except file_lock.LockHeld:
         return _refusal("run-dir-locked")
     try:
