@@ -809,7 +809,8 @@ def build_record(account, readers):
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
-    paths = rd["changed_paths"](a["pr"], a["repo"])
+    # An account that names no repository reads no changed files, so the list is unknown.
+    paths = rd["changed_paths"](a["pr"], a["repo"]) if a.get("repoRoot") else None
     withheld = rd["withheld_paths"](a.get("repoRoot"), fc["sha"], paths) if isinstance(paths, list) else None
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
