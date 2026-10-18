@@ -863,6 +863,30 @@ def test_close_interrupted_collection_is_not_reapplied(tmp_path, monkeypatch, ca
     assert _kinds(r)[-1] == "run-closed"
 
 
+def test_close_refuses_a_corrupt_journal_before_collecting(tmp_path, monkeypatch, capsys):
+    # axis: refusal — an interior-corrupt journal never reaches collection
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    with open(ED._journal_path(os.path.realpath(r.run)), "a", encoding="utf-8") as fh:
+        fh.write("{not json\n")
+    code, out = _close(capsys, r)
+    assert code == 1
+    assert out["ok"] is False and out["reason"] == "native-journal-corrupt"
+    _b_clean(r)
+    assert "native-collecting" not in _kinds(r)
+
+
+def test_close_collects_a_root_file_under_diff_noprefix(tmp_path, monkeypatch, capsys):
+    # axis: configuration — repo-level diff.noprefix must not break patch application
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    _git(r.T, "config", "diff.noprefix", "true")
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+
+
 def test_close_journal_write_failed_before_the_apply_leaves_b_unchanged(
         tmp_path, monkeypatch, capsys):
     # axis: refusal — when native-collecting cannot be journaled, nothing is applied

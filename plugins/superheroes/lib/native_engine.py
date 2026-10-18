@@ -184,8 +184,9 @@ def _cmd_route(args):
 
 def _state(run_dir_real):
     """The native run's journal facts: opened, enrolled, collecting, closed (each a record or None)."""
-    records = engine_dispatch._journal_read_raw(run_dir_real)[0]
-    state = {"opened": None, "enrolled": None, "collecting": None, "closed": None}
+    records, interior_corrupt = engine_dispatch._journal_read_raw(run_dir_real)[:2]
+    state = {"opened": None, "enrolled": None, "collecting": None, "closed": None,
+             "corrupt": bool(interior_corrupt)}
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -526,7 +527,10 @@ class _Close(object):
         if rc != 0:
             return self._forfeit("native-collect-failed", **extra)
         files = sorted(name for name in names.split("\0") if name)
-        if _git(target, "diff", "--cached", "--binary", "--output=" + patch_path, base)[0] != 0:
+        if _git(
+                target, "diff", "--cached", "--binary", "--src-prefix=a/", "--dst-prefix=b/",
+                "--no-color", "--no-ext-diff", "--no-textconv",
+                "--output=" + patch_path, base)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         patch_sha = _sha256_file(patch_path)
         if not engine_dispatch._journal_append(
@@ -568,6 +572,8 @@ def _cmd_close(args):
             return _refusal("native-run-not-open")
         if state["closed"] is not None:
             return _replay(state["closed"])
+        if state["corrupt"]:
+            return _refusal("native-journal-corrupt")
         return _Close(run_dir, state["opened"], state).run(args)
     finally:
         file_lock.release(lock)
