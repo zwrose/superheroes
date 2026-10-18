@@ -3220,15 +3220,12 @@ def test_advance_calibration_path_policy_applied_source_gate_policy(tmp_path, ad
 # =============================================================================================
 
 def _drive_to_terminal(d, tmp_path, adapters, gitdir=None):
-    """Panel → verifiers → synthesis → terminal, entirely on the advance path."""
+    """Panel → verifiers → terminal, entirely on the advance path."""
     git = _fake_git(gitdir or _gitdir(tmp_path))
     _record_all_panel_seats(d)
     out = RD.cmd_advance(d, git=git)
     assert out["ok"], out
-    out = RD.cmd_advance(d, git=git)              # verifiers: empty roster
-    assert out["ok"], out
-    _land_and_record(d, "synthesis", payload={"grouping": None})
-    out = RD.cmd_advance(d, git=git)
+    out = RD.cmd_advance(d, git=git)              # verifiers: empty roster, no survivors
     assert out["ok"], out
     return out
 
@@ -3384,8 +3381,6 @@ def test_terminal_sidecar_lands_in_a_real_git_dir(tmp_path, adapters):
     RD.save_state(d, state)
     _record_all_panel_seats(d)
     assert RD.cmd_advance(d)["ok"] is True
-    assert RD.cmd_advance(d)["ok"] is True
-    _land_and_record(d, "synthesis", payload={"grouping": None})
     out = RD.cmd_advance(d)
     assert out["ok"] is True and out["terminal"] == "converged"
     sidecar_path = os.path.join(repo, ".git", "superheroes", "review-receipt.json")
