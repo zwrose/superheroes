@@ -687,7 +687,7 @@ the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.m
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-# Route first: "engine":"native" means stop here and follow § The native implementer engine instead
+# Route first: "engine":"native" means run the seat resolution through the IMPL_SEAT line below, then skip the dispatch-write calls and follow § The native implementer engine (its open takes "$IMPL_SEAT")
 python3 -B "$ROOT_DIR/lib/native_engine.py" route --cwd "$BUILD_WORKTREE"
 # Resolve implementer cell from dispatch calibration + registry (honor configured model pin)
 read -r IMPL_ENGINE IMPL_ENGINE_MODEL IMPL_EFFORT <<<"$(python3 -B -c "
@@ -840,7 +840,7 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
 
 ### The native implementer engine
 
-A cloud session on Linux cannot serve `localSockets` in the sandbox, so an implementer order for a project whose calibration turns it on runs as a native `superheroes:implementer` subagent, bounded by the platform's auto mode and the plugin's fence, not a sandbox. `route` resolves it (cloud, Linux and `localSockets` on; `native` is never a hand-set calibration value). `E="$ROOT_DIR/lib/native_engine.py"`; every verb prints one JSON object.
+A cloud session on Linux cannot serve `localSockets` in the sandbox, so an implementer order for a project whose calibration turns it on runs as a native `superheroes:implementer` subagent, bounded by the platform's auto mode and the plugin's fence, not a sandbox. `route` resolves it (cloud, Linux and `localSockets` on; `native` is never a hand-set calibration value). `E="$ROOT_DIR/lib/native_engine.py"`; every verb prints one JSON object. `$IMPL_SEAT` comes from the seat resolution at the top of § Supervised write dispatch; run it in the same shell first, because `open` refuses `seat-empty` on an unset seat.
 
 1. **Open.** `python3 -B "$E" open --run-dir "$RUN_DIR" --order-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --base-sha "$BUILD_BASE_SHA" --deadline-seconds N [--expect-item <path>]... --seat "$IMPL_SEAT"`. The seat must be vendor `claude`. It refuses, with nothing journaled, `native-engine-not-routed`, `run-dir-not-empty`, `base-sha-invalid`, `deadline-invalid` (N outside 60 to 7200), `expect-item-invalid` (an absolute path or `..`), or the model gate's own refusal. It journals one `run-opened` record: `engine: "native"`, `bounds`, `baseSha`, `expectedItems`, `deadlineAt`, `resolvedSeat`, `expectedServedModel`, and `effectiveEffort: null` with an `effortNote`, because the host's subagent dispatch takes no effort and the subagent runs at its default. It writes no `claudeWriteSandbox` key. It writes `agent-prompt.md` (the native preamble, then the order verbatim) and prints `agent`: the agent type, `model`, `isolation`, `run_in_background` and `promptPath`.
 2. **Launch.** Dispatch the printed agent as a background subagent with exactly the printed agent type, `model`, worktree isolation and background flag, and the prompt read from `promptPath`. Change none of them.
