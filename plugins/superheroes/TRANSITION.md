@@ -31,7 +31,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Review: the post-fix diff comes from git
 
 - The driver derives the post-fix diff itself, from `git diff <pinned baseRef>...<fix-fold head>`. A `headDiff` or `headDiffPath` a fixer submits is a cross-check against that derivation, and submitting none is allowed.
-- A supplied diff that differs from git's (line endings aside) stops the round with `head-diff-mismatch`. Git unable to read the head beside a supplied diff stops it with `head-diff-unverifiable`. A `headDiffPath` that cannot be read is recorded and git governs.
+- A supplied diff that differs from git's (line endings aside) stops the round with `head-diff-mismatch`. Git unable to read the head beside a supplied diff stops it with `head-diff-unverifiable`. A `headDiffPath` that cannot be read is recorded as `supplied-unreadable` and git governs on a hand `submit`; on the durable-record path `record-result` refuses `head-diff-unreadable` at record time, and the remedy is to omit the optional `headDiffPath` or replace it with a readable absolute path, then record again.
 - Each round and its receipt row gain `headDiffCheck` (`match`, `mismatch`, `none-supplied`, `supplied-unreadable`, `unverifiable` or `no-repository`), and `headDiffSource` reads `git` whenever the driver derived the diff.
 - A fix round with no supplied diff audits its fixes instead of running a wider panel.
 
