@@ -962,8 +962,10 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started, shown=frozen
         if batch is not None:
             batch.close()
 
+    # Passed only when non-empty so the call is unchanged when no calibration file is shown.
+    extra = (shown,) if shown else ()
     _verify_export_complete(
-        view_root, census, materialized, submodules, escaping_symlinks, shown
+        view_root, census, materialized, submodules, escaping_symlinks, *extra
     )
     return sorted(stripped_set)
 
@@ -1894,8 +1896,10 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started, chang
                 return False
         return True
 
+    # Passed only when non-empty so the call is unchanged when no calibration file is shown.
+    extra = (shown,) if shown else ()
     try:
-        patch_bytes = _filter_patch_sections(patch_bytes, is_genuinely_binary, shown)
+        patch_bytes = _filter_patch_sections(patch_bytes, is_genuinely_binary, *extra)
     finally:
         if cat_batch is not None:
             cat_batch.close()
