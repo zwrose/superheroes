@@ -253,3 +253,38 @@ def test_argv_operand_budget_bytes_empty_fixed_argv_and_non_ascii(tmp_path):
     budget_unicode = gcensus.argv_operand_budget_bytes(repo, ["é" * 64])
     assert budget_unicode < budget_ascii
     assert budget_unicode < budget_empty
+
+
+# ---------------------------------------------------------------------------
+# batch_operands — argv-safe batching (#1754 F3)
+# ---------------------------------------------------------------------------
+
+def test_batch_operands_bounds_order_and_oversize(tmp_path):
+    cwd = os.path.realpath(str(tmp_path))
+    files = ["f%02d.js" % i for i in range(10)]
+    one = gcensus.operand_payload_bytes(cwd, ["f00.js"])
+    budget = one * 3 + 1  # three files fit, four do not
+    # input deliberately unsorted; a long name whose own payload exceeds the budget
+    huge = "z" * (budget + 1) + ".js"
+    batches, oversize = gcensus.batch_operands(cwd, [huge] + list(reversed(files)), budget)
+    assert oversize == [huge]
+    assert len(batches) == 4
+    assert all(gcensus.operand_payload_bytes(cwd, b) <= budget for b in batches)
+    assert [f for b in batches for f in b] == files  # sorted input order, nothing lost
+    assert batches[0] == files[:3]  # greedily filled
+    assert huge not in [f for b in batches for f in b]
+
+
+def test_batch_operands_everything_fits_is_one_batch(tmp_path):
+    cwd = os.path.realpath(str(tmp_path))
+    batches, oversize = gcensus.batch_operands(cwd, ["b.py", "a.py"], 10_000)
+    assert batches == [["a.py", "b.py"]]
+    assert oversize == []
+    assert gcensus.batch_operands(cwd, [], 10_000) == ([], [])
+
+
+@pytest.mark.parametrize("budget", [0, -5, None])
+def test_batch_operands_nonpositive_budget_degrades(tmp_path, budget):
+    batches, oversize = gcensus.batch_operands(str(tmp_path), ["b.py", "a.py"], budget)
+    assert batches == []
+    assert oversize == ["a.py", "b.py"]
