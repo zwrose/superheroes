@@ -165,9 +165,33 @@ def _substitution_spans(body):
     return spans
 
 
+def _join_continuations(command):
+    """Remove backslash-newline pairs outside single quotes, as Bash does before tokenization."""
+    out = []
+    quote = None
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+        elif ch == "\\" and i + 1 < n:
+            if command[i + 1] != "\n":
+                out.append(ch)
+                out.append(command[i + 1])
+            i += 2
+            continue
+        elif ch in "'\"":
+            quote = ch if quote is None else (None if quote == ch else quote)
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _split_segments(command):
     """Split on ; && || | & and newlines outside quotes, dropping comments. An unterminated quote stays in its segment
     (shlex then refuses it)."""
+    command = _join_continuations(command)
     segments, cur = [], []
     quote = None
     pending = []  # here-document (delimiter, strip_tabs) pairs whose bodies start after the next newline
@@ -272,6 +296,25 @@ def _subcommands(args):
     return [a for a in args if not a.startswith("-")]
 
 
+_PIP_VALUED = frozenset((
+    "--cache-dir", "--log", "--proxy", "--retries", "--timeout", "--exists-action", "--trusted-host", "--cert",
+    "--client-cert", "--python", "--keyring-provider", "--use-feature", "--use-deprecated"))
+
+
+def _pip_subcommand(args):
+    """The first pip subcommand, past pip's global options and the values of its valued ones."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in _PIP_VALUED:
+            i += 2
+        elif tok.startswith("-"):
+            i += 1
+        else:
+            return tok
+    return None
+
+
 def _git_subcommand(args):
     i = 0
     while i < len(args):
@@ -344,11 +387,12 @@ def _segment_word(tokens):
     if word == "npm" and first in ("exec", "x") and _no_install(args[1:]):
         return None
     if _PIP_RE.match(word):
-        if first in ("install", "download"):
-            return "%s %s" % (word, first)
+        pip_sub = _pip_subcommand(args)
+        if pip_sub in ("install", "download"):
+            return "%s %s" % (word, pip_sub)
     elif _PYTHON_RE.match(word):
         module, rest = _python_m_pip(args)
-        rest_subs = _subcommands(rest)
+        rest_subs = [_pip_subcommand(rest)]
         if module == "ensurepip":
             return "%s -m ensurepip" % word
         if module and _PIP_RE.match(module) and rest_subs and rest_subs[0] in ("install", "download"):

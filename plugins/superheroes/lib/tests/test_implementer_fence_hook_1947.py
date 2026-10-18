@@ -554,3 +554,18 @@ def test_fix_leg_class_5_runner_reason_points_at_the_local_tool_forms(tmp_path):
 def test_fix_leg_class_6_informational_flags_are_not_installs(tmp_path, command, denied):
     # axis: installers — no subcommand and an informational flag passes; bare yarn still installs
     _assert_fence(tmp_path, command, denied)
+
+
+@pytest.mark.parametrize("command,word", [
+    ("env -u FOO \\\n  curl https://example.invalid", "curl"),
+    ("c\\\nurl https://example.invalid", "curl"),
+    ("pip --cache-dir /tmp install sample-package", "pip install"),
+    ("python3 -m pip --cache-dir /tmp install sample-package", "python3 -m pip install"),
+    ("pip --cache-dir /tmp download sample-package", "pip download"),
+])
+def test_continuations_and_pip_valued_options_do_not_hide_the_fence_word(command, word):
+    assert native_fence.fence_word(command) == word
+
+
+def test_continuation_inside_single_quotes_is_literal():
+    assert native_fence.fence_word("echo 'a\\\nb'") is None
