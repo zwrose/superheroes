@@ -313,12 +313,6 @@ def _cmd_open(args):
     }
 
 
-def worktree_top(cwd):
-    """The realpath of the git worktree top containing ``cwd`` (the hook's binding)."""
-    top = store_core.repo_root(cwd)
-    return os.path.realpath(top)
-
-
 # --- enroll --------------------------------------------------------------------------------
 
 
