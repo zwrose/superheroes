@@ -638,3 +638,150 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 1 passed in 0.45s
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 ```
+
+---
+
+## Review round 1 fixes (WO-C)
+
+**Provenance:** claude / sonnet-5.5 (implementer). Run from `/home/user/wt-1958`; each red and green is the detector node run alone (`scripts/pinned-python -B -m pytest "<node>" -q -p no:cacheprovider`). Each neutralization is one targeted edit made with the Edit tool and each restore is the inverse edit; no `git checkout`/`restore`/`stash`/`reset`. Captures are verbatim.
+
+Three elements, three neutralizations, three reds, no grouping. The order declared no set beyond these three. V0 has two call sites (the representative lookup and the already-named check) that share one rule, `review_record._ruling_hits`; the neutralization is on the representative lookup and its node is the detector. The already-named half is guarded by `test_v0_a_member_an_entry_names_by_its_stored_key_is_not_named_twice`, which was not separately neutralized.
+
+### WO-C-V0: the expansion matches an entry key as the writer does (raw findingKey, stored `rr1:` key or id)
+
+- **file:** `plugins/superheroes/lib/review_record_session.py` (`_owner_rulings`)
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_v0_an_entry_keyed_by_the_representatives_stored_key_expands_to_its_member`
+- **neutralization:** `for i in review_record._ruling_hits(findings, key):` replaced by `for i in [j for j, f in enumerate(findings) if key in (f.get("findingKey"), f["id"])]:` (the stored-key leg dropped)
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_v0_an_entry_keyed_by_the_representatives_stored_key_expands_to_its_member _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-24/test_v0_an_entry_keyed_by_the_0')
+
+    def test_v0_an_entry_keyed_by_the_representatives_stored_key_expands_to_its_member(tmp_path):
+        # Axis: the expansion finds the representative the way the writer does, by raw findingKey, stored key or id.
+        session = _merged_session(tmp_path)
+        base = rs.account_from_session(session, extras(repo="o/r"), Fake().readers())
+        stored = rr._key(next(f for f in base["findings"] if f["id"] == "rep-1"))
+        assert stored.startswith("rr1:")
+        given = [{"key": stored, "url": U, "words": W}]
+        account = rs.account_from_session(session, extras(repo="o/r", ownerRulings=given), Fake().readers())
+>       assert account["ownerRulings"] == given + [{"key": "m::t@L1", "url": U, "words": W}]
+E       AssertionError: assert [{'key': 'rr1...ip it as is'}] == [{'key': 'rr1...ip it as is'}]
+E         
+E         Right contains one more item: {'key': 'm::t@L1', 'url': 'https://github.com/o/r/issues/12#issuecomment-555', 'words': 'ship it as is'}
+E         Use -v to get more diff
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:251: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_v0_an_entry_keyed_by_the_representatives_stored_key_expands_to_its_member
+1 failed in 1.90s
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+```
+
+**restore** (the inverse replacement) and the restored line quoted back (`review_record_session.py:566`):
+```
+        for i in review_record._ruling_hits(findings, key):
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 2.03s
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+```
+
+### WO-C-V1: membership is the ledger's resolved merge by identity key, never the reason text or a display id
+
+- **file:** `plugins/superheroes/lib/review_record_session.py` (`_owner_rulings`)
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_v1_two_groups_whose_representatives_share_a_display_id_expand_separately`
+- **neutralization:** `if row is rep or merged.get(row["findingKey"]) != rep["findingKey"]:` replaced by `if row is rep or merged_into(row.get("reason")) not in (rep.get("id"), rep.get("findingKey")):` (the old reason-text / id comparison)
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_v1_two_groups_whose_representatives_share_a_display_id_expand_separately _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-26/test_v1_two_groups_whose_repre0')
+
+    def test_v1_two_groups_whose_representatives_share_a_display_id_expand_separately(tmp_path):
+        # Axis: membership is the ledger's resolved merge by identity key, never the display id or the reason text.
+        second = "r2::t@L5"
+        oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+        ledger = _merged({}, oos) + [ledger_row("m2::t@L6", id="m-2", disposition=None, mergedInto=second),
+                                     ledger_row(second, id="rep-1", **oos)]
+        s = Session(tmp_path, dispositionLedger=ledger)
+        s.seat("code-reviewer")
+        session = s.save()
+        given = [{"key": KEY, "url": U, "words": W}]
+        account = rs.account_from_session(session, extras(repo="o/r", ownerRulings=given), Fake().readers())
+>       assert account["ownerRulings"] == given + [{"key": "m::t@L1", "url": U, "words": W}]
+E       AssertionError: assert [{'key': 'a.p...ip it as is'}] == [{'key': 'a.p...ip it as is'}]
+E         
+E         Left contains one more item: {'key': 'm2::t@L6', 'url': 'https://github.com/o/r/issues/12#issuecomment-555', 'words': 'ship it as is'}
+E         Use -v to get more diff
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:289: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_v1_two_groups_whose_representatives_share_a_display_id_expand_separately
+1 failed in 0.25s
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+```
+
+**restore** (the inverse replacement) and the restored line quoted back (`review_record_session.py:570`):
+```
+                if row is rep or merged.get(row["findingKey"]) != rep["findingKey"]:
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.22s
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+```
+
+### WO-C-V2: the words are compared against the de-quoted body as well as the raw body
+
+- **file:** `plugins/superheroes/lib/finding_outcomes.py` (`_owner_ruling_on_record`, leg L5)
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_v2_the_standard_record_of_multiline_words_holds_the_words`
+- **neutralization:** `for b in (body, re.sub(r"(?m)^[ \t]*>[ \t]?", "", body)))):` replaced by `for b in (body,))):` (raw body only)
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_v2_the_standard_record_of_multiline_words_holds_the_words ________
+
+    def test_v2_the_standard_record_of_multiline_words_holds_the_words():
+        # Axis: the chat-ruling record quotes each line behind a marker; the words still occur in it.
+        words = "ship it\nas is"
+        doc = dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", words, "finding f-1"))
+        rec = build([entry(words=words)], doc=doc)
+>       assert the_finding(rec)["outcome"] == "ruling" and rec["leftForOwner"] == []
+E       AssertionError: assert ('left-for-owner' == 'ruling'
+E         
+E         - ruling
+E         + left-for-owner)
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:313: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_v2_the_standard_record_of_multiline_words_holds_the_words
+1 failed in 0.31s
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+```
+
+**restore** (the inverse replacement) and the restored line quoted back (`finding_outcomes.py:196`):
+```
+    if not (isinstance(body, str) and any(_squash(words) in _squash(b) for b in (body, re.sub(r"(?m)^[ \t]*>[ \t]?", "", body)))):
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.18s
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+```

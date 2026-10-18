@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import canon
 import finding_outcomes as fo
 import pr_sheet
 import review_record as rr
@@ -230,6 +231,93 @@ def test_t8_a_member_an_entry_already_names_is_not_named_twice(tmp_path):
     given = [{"key": KEY, "url": U, "words": W}, {"key": "m-1", "url": U, "words": W}]
     account = rs.account_from_session(s.save(), extras(repo="o/r", ownerRulings=given), Fake().readers())
     assert account["ownerRulings"] == given
+
+
+def _merged_session(tmp_path):
+    oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+    s = Session(tmp_path, dispositionLedger=_merged({}, oos))
+    s.seat("code-reviewer")
+    return s.save()
+
+
+def test_v0_an_entry_keyed_by_the_representatives_stored_key_expands_to_its_member(tmp_path):
+    # Axis: the expansion finds the representative the way the writer does, by raw findingKey, stored key or id.
+    session = _merged_session(tmp_path)
+    base = rs.account_from_session(session, extras(repo="o/r"), Fake().readers())
+    stored = rr._key(next(f for f in base["findings"] if f["id"] == "rep-1"))
+    assert stored.startswith("rr1:")
+    given = [{"key": stored, "url": U, "words": W}]
+    account = rs.account_from_session(session, extras(repo="o/r", ownerRulings=given), Fake().readers())
+    assert account["ownerRulings"] == given + [{"key": "m::t@L1", "url": U, "words": W}]
+    rec = rr.build_record(account, readers())
+    assert rec["leftForOwner"] == [] and {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "ruling", "rep-1": "ruling"}
+
+
+def test_v0_a_member_an_entry_names_by_its_stored_key_is_not_named_twice(tmp_path):
+    # Axis: the already-named check reads an entry key as the writer does, so the writer's one-entry rule holds.
+    session = _merged_session(tmp_path)
+    base = rs.account_from_session(session, extras(repo="o/r"), Fake().readers())
+    member = rr._key(next(f for f in base["findings"] if f["id"] == "m-1"))
+    given = [{"key": KEY, "url": U, "words": W}, {"key": member, "url": U, "words": W}]
+    account = rs.account_from_session(session, extras(repo="o/r", ownerRulings=given), Fake().readers())
+    assert account["ownerRulings"] == given
+    fake = Fake()
+    out = rs.write_from_session(session, put_extras(tmp_path, extras(repo="o/r", ownerRulings=given)), str(tmp_path),
+                                readers(fake=fake))
+    assert out["ok"], out
+    assert {f["id"]: f["outcome"] for f in rr.read(7, readers=fake.readers())["findings"]} == {"m-1": "ruling", "rep-1": "ruling"}
+
+
+def test_v0_an_entry_that_names_no_row_adds_no_expansion(tmp_path):
+    # Axis: E1, an unmatched key expands to nothing; the writer refuses it as before.
+    given = [{"key": "rr1:nothing", "url": U, "words": W}]
+    account = rs.account_from_session(_merged_session(tmp_path), extras(repo="o/r", ownerRulings=given), Fake().readers())
+    assert account["ownerRulings"] == given
+
+
+def test_v1_two_groups_whose_representatives_share_a_display_id_expand_separately(tmp_path):
+    # Axis: membership is the ledger's resolved merge by identity key, never the display id or the reason text.
+    second = "r2::t@L5"
+    oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+    ledger = _merged({}, oos) + [ledger_row("m2::t@L6", id="m-2", disposition=None, mergedInto=second),
+                                 ledger_row(second, id="rep-1", **oos)]
+    s = Session(tmp_path, dispositionLedger=ledger)
+    s.seat("code-reviewer")
+    session = s.save()
+    given = [{"key": KEY, "url": U, "words": W}]
+    account = rs.account_from_session(session, extras(repo="o/r", ownerRulings=given), Fake().readers())
+    assert account["ownerRulings"] == given + [{"key": "m::t@L1", "url": U, "words": W}]
+    rec = rr.build_record(account, readers())
+    assert {f["findingKey"]: f["outcome"] for f in account["findings"]} == {
+        KEY: "left-for-owner", "m::t@L1": "left-for-owner", second: "left-for-owner", "m2::t@L6": "left-for-owner"}
+    assert {f["id"]: f["outcome"] for f in rec["findings"] if f["id"] != "rep-1"} == {"m-1": "ruling", "m-2": "left-for-owner"}
+    assert sorted(f["outcome"] for f in rec["findings"] if f["id"] == "rep-1") == ["left-for-owner", "ruling"]
+
+
+def test_v1_a_member_whose_merge_does_not_resolve_gets_no_entry(tmp_path):
+    # Axis: E2, fail closed; a member naming a representative that is not in the ledger stays a card.
+    oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
+    ledger = [ledger_row("m::t@L1", id="m-1", disposition=None, mergedInto="gone::t@L1"), ledger_row(KEY, id="rep-1", **oos)]
+    s = Session(tmp_path, dispositionLedger=ledger)
+    s.seat("code-reviewer")
+    given = [{"key": KEY, "url": U, "words": W}]
+    account = rs.account_from_session(s.save(), extras(repo="o/r", ownerRulings=given), Fake().readers())
+    assert account["ownerRulings"] == given
+
+
+def test_v2_the_standard_record_of_multiline_words_holds_the_words():
+    # Axis: the chat-ruling record quotes each line behind a marker; the words still occur in it.
+    words = "ship it\nas is"
+    doc = dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", words, "finding f-1"))
+    rec = build([entry(words=words)], doc=doc)
+    assert the_finding(rec)["outcome"] == "ruling" and rec["leftForOwner"] == []
+
+
+def test_v2_words_that_occur_in_neither_form_stay_a_card():
+    # Axis: E5, the de-quote widens nothing; words absent from the raw and the de-quoted body stay a card.
+    doc = dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "ship it\nas is", "finding f-1"))
+    rec = build([entry(words="ship it\nas was")], doc=doc)
+    assert the_finding(rec)["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
 
 
 def test_t8_extras_ownerrulings_that_is_not_a_list_is_refused(tmp_path):

@@ -192,7 +192,8 @@ def _owner_ruling_on_record(ref, sources):
         return False, "the ruling's comment is not the owner's"
     body = doc.get("body")
     # axis: the comment must hold the owner's quoted words — see bite-proof record wo_a_1958_owner_ruling
-    if not (isinstance(body, str) and _squash(words) in _squash(body)):
+    # the standard chat-ruling record quotes each line of the words behind a `> ` marker; the words may sit in either form
+    if not (isinstance(body, str) and any(_squash(words) in _squash(b) for b in (body, re.sub(r"(?m)^[ \t]*>[ \t]?", "", body)))):
         return False, "the ruling's comment does not hold the owner's words"
     return True, 'owner ruling "%s" (%s)' % (words, url)
 
