@@ -102,3 +102,28 @@ FAILED plugins/superheroes/lib/tests/test_session_pickup_and_upgrade_1721.py::te
 - **Restore:** inverse edit `SESSION_GENERATION = 5` → `SESSION_GENERATION = 6`.
 - **Restore receipt (quoted back, `grep -n`):** `271:SESSION_GENERATION = 6`; `git diff --stat -- plugins/superheroes/lib/round_driver.py` printed nothing after the four restores, so `round_driver.py` is byte-clean against the build's head.
 - **Raw green:** `. [100%]` / `1 passed in 1.35s`.
+
+## G5 — the absolute-path rule on a supplied `headDiffPath`
+
+- **Guarded element:** `round_driver.py` `_read_supplied_head_diff` (line 5057), the `os.path.isabs(path)` term of the condition that reads a supplied `headDiffPath`.
+- **Axis:** a non-absolute path is never read, even when the file exists under the working directory the driver reads from; it is present-but-unreadable and git governs.
+- **Authorized detector edit:** `test_e3_non_absolute_path_is_unreadable_and_git_governs` now creates `relative/fix.diff` (text that is not git's diff) in the cwd the driver reads from, inside its `supply` hook. Driving to the fixer step moves the cwd into the session checkout, so the file is written at supply time, not at test start. Before this, the missing file alone kept the test green with the guard removed.
+- **Neutralization:** `if isinstance(path, str) and path and os.path.isabs(path):` → `if isinstance(path, str) and path:` (the `and os.path.isabs(path)` term removed).
+- **Detector:** `plugins/superheroes/lib/tests/test_head_diff_from_git_1966.py::test_e3_non_absolute_path_is_unreadable_and_git_governs`.
+- **Raw red:** `1 failed in 2.57s`; the relative file was read, the supplied text differed from git's, and the fold parked `cannot-certify`:
+
+```
+>       assert state.get("terminal") is None
+E       AssertionError: assert 'cannot-certify' is None
+E        +  where 'cannot-certify' = <built-in method get of dict object at 0x7fe964fe9940>('terminal')
+FAILED plugins/superheroes/lib/tests/test_head_diff_from_git_1966.py::test_e3_non_absolute_path_is_unreadable_and_git_governs
+```
+
+- **Restore:** inverse edit, `and os.path.isabs(path)` put back.
+- **Restore receipt (quoted back, `sed -n 5057p`):**
+
+```
+    if isinstance(path, str) and path and os.path.isabs(path):
+```
+
+- **Raw green:** `. [100%]` / `1 passed in 2.32s`.

@@ -270,7 +270,16 @@ def test_t4_no_supplied_diff_derives_git_and_schedules_the_fix_audit(tmp_path, m
 
 def test_e3_non_absolute_path_is_unreadable_and_git_governs(tmp_path, monkeypatch):
     cli = _Cli(tmp_path, monkeypatch)
-    cli.supply = lambda c: {"headDiffPath": "relative/fix.diff"}
+
+    def supply(c):
+        # driving to the fixer step moves the cwd into the session checkout, so the relative file is made where the
+        # driver reads from, holding text git's diff does not: only the absolute-path rule keeps it unread
+        os.makedirs("relative", exist_ok=True)
+        with open("relative/fix.diff", "w", encoding="utf-8") as fh:
+            fh.write("not git's diff\n")
+        return {"headDiffPath": "relative/fix.diff"}
+
+    cli.supply = supply
     n, state = cli.fold_fixer()
     assert state.get("terminal") is None
     rec = state["rounds"][str(n["round"])]
