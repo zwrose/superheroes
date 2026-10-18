@@ -57,6 +57,7 @@ RAW_MARKER = "<!-- superheroes:review-raw-output -->"
 PART_MARKER = "<!-- superheroes:review-record-part -->"
 PARTS_SCHEMA = "review-record-parts/1"
 CAP_KINDS = ("rounds", "ceiling")
+CARRIED_SETTLED = ("fixed", "applies", "unsettled")
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
 FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
@@ -106,6 +107,22 @@ def _run(argv, cwd=None):
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 else None
+
+
+def _is_ancestor(repo_root, commit, head):
+    """True when `commit` is in `head`'s history, False when it is not, None when git could not say.
+
+    Not _run: that folds exit 1 (not an ancestor) and a real error into one None.
+    """
+    if not (isinstance(repo_root, str) and os.path.isdir(repo_root)) \
+            or not all(isinstance(x, str) and x and not x.startswith("-") for x in (commit, head)):
+        return None
+    try:
+        r = subprocess.run(["git", "-C", repo_root, "merge-base", "--is-ancestor", commit, head],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(r.returncode)
 
 
 def _gh_json(*args):
@@ -274,7 +291,7 @@ def _readers(overrides):
             "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
-            "read_text": _read_text,
+            "read_text": _read_text, "is_ancestor": _is_ancestor,
             "changed_paths": changed_paths, "decision_sources": finding_outcomes.decision_sources,
             **(overrides or {})}
 
@@ -350,6 +367,18 @@ def _validate(a):
             f"goAheads[{i}]")
     for i, x in enumerate(lst("refused")):
         chk(isinstance(x, dict) and ne(x.get("title")) and ne(x.get("reason")), f"refused[{i}] (needs title and reason)")
+    named = []
+    for i, c in enumerate(lst("carriedChecks")):
+        where = f"carriedChecks[{i}]"
+        chk(isinstance(c, dict) and ne(c.get("key")), f"{where}.key")
+        chk(c.get("settled") in CARRIED_SETTLED, f"{where}.settled (allowed: {', '.join(CARRIED_SETTLED)})")
+        chk(isinstance(c.get("evidence"), str) and bool(c["evidence"].strip()), f"{where}.evidence")
+        for k in ("commit", "checkedHead"):
+            chk(ne(c.get(k)) or (c.get(k) is None and c["settled"] != CARRIED_SETTLED[0]), f"{where}.{k}")
+        hit = {j for j, f in enumerate(a["findings"]) if c["key"] in (_key(f), f["id"])}
+        chk(len(hit) == 1, f"{where}.key names {'no finding' if not hit else 'more than one finding'}")
+        chk(hit.isdisjoint(named), f"{where}.key names a finding another entry names")
+        named += hit
     chk(a.get("sheetAnswers") is None or isinstance(a["sheetAnswers"], dict), "sheetAnswers")
     chk(a.get("baseRef") is None or ne(a["baseRef"]), "baseRef")
     rounds = a.get("rounds", {"count": 0, "cap": None, "stoppedAtCap": False})
@@ -360,7 +389,7 @@ def _validate(a):
         and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
-            "sheetAnswers": None, "baseRef": None, **a,
+            "carriedChecks": [], "sheetAnswers": None, "baseRef": None, **a,
             "makers": makers or [], "rounds": dict(rounds, capKind=rounds.get("capKind", CAP_KINDS[0]))}
 
 
@@ -748,7 +777,56 @@ def _recheck_decisions(findings, sources):
     return out, changes
 
 
-def build_record(account, readers):
+def _recheck_carried(findings, checks, prior, head, is_ancestor):
+    """Re-check each left-for-owner finding a carried check names against the record's final commit `head`.
+    A finding moves to fixed only on a `fixed` entry for a finding carried from `prior`, checked on `head`, whose
+    fix commit is in `head`'s history (is_ancestor exactly True); every other case keeps its outcome, with the
+    reason saying why. A finding is never removed. Returns the findings and one row per entry."""
+    earlier = prior.get("findings") if isinstance(prior, dict) else None
+    stored = {_key(i) for i in earlier if isinstance(i, dict)} if isinstance(earlier, list) else set()
+    out, rows = [], []
+    for f in findings:
+        c = next((c for c in checks if c["key"] in (f.get(session_contract.FINDING_KEY_FIELD), f.get("id"))), None)
+        if c is None:
+            out.append(f)
+            continue
+        settled, commit, seen, evidence, old = c["settled"], c.get("commit"), c.get("checkedHead"), c["evidence"], f.get("reason")
+        shown, result, why = (head or "unknown")[:7], "kept", None
+        if f.get("outcome") != _LEFT_FOR_OWNER:
+            result, why = "unchanged", "not left for the owner"
+        elif settled == "applies":
+            why = f"the check found it still applies: {evidence}"
+        elif settled == "unsettled":
+            why = f"the check could not settle it: {evidence}"
+        # axis: a finding is marked fixed only if it was carried from the earlier record — see bite-proof record wo_b_1933_carried-recheck
+        elif _key(f) not in stored:
+            why = "not carried from an earlier record"
+        # axis: a check counts only for the commit the record names as final, so a head that moved after it keeps the finding — see bite-proof record wo_b_1933_carried-recheck
+        elif seen != head:
+            why = f"checked on {seen[:7]}, not the final commit {shown}"
+        else:
+            # axis: the fix commit counts as in the history only when the read returns exactly True; unknown keeps the finding — see bite-proof record wo_b_1933_carried-recheck
+            in_history = is_ancestor(commit, head)
+            if in_history is False:
+                why = f"its fix commit {commit[:7]} is not in the final commit's history"
+            elif in_history is not True:
+                why = "its fix commit's place in the history could not be read"
+        if why is None:
+            result = "fixed"
+            reason = (f"fixed after its review at {commit[:7]}: {evidence} "
+                      f"(checked against the final commit {shown} when this record was written)")
+            out.append(dict(f, outcome="fixed", reason=f"{reason}; earlier: {old}" if old else reason))
+        elif result == "kept":
+            kept = f"a check against the final commit kept it for the owner: {why}"
+            out.append(dict(f, reason=f"{old}; {kept}" if old else kept))
+        else:
+            out.append(f)
+        rows.append({"finding": _name(f), "settled": settled, "result": result, "why": why or "fixed",
+                     "commit": commit, "checkedHead": seen, "evidence": evidence})
+    return out, rows
+
+
+def build_record(account, readers, prior=None):
     a, rd, dis = _validate(account), _readers(readers), []
     meta = rd["pr_meta"](a["pr"], a["repo"])
     fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
@@ -792,6 +870,8 @@ def build_record(account, readers):
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     findings, rechecks = _recheck_decisions(findings, sources)
+    findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], prior, fc["sha"],
+                                              lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head))
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -803,6 +883,7 @@ def build_record(account, readers):
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
+        "carriedRechecks": carried_rows,
         "refused": a["refused"], "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
@@ -1472,7 +1553,7 @@ def write(account_path, repo_root, readers=None):
         if missing:
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
-        record = build_record(a, rd)
+        record = build_record(a, rd, prior=prior)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
