@@ -322,6 +322,23 @@ def test_wrappers_chaining_and_paths_are_seen_through(tmp_path, command):
     assert reason.startswith("installs and network commands are refused for a native implementer: ")
 
 
+def test_here_document_bodies_are_data_not_commands():
+    assert native_fence.fence_word("cat <<'EOF'\ncurl is documentation\nEOF") is None
+    assert native_fence.fence_word("cat <<\"EOF\"\nIt's a local fixture.\nEOF") is None
+    assert native_fence.fence_word("cat <<-EOF\n\tcurl x\n\tEOF\nls") is None
+    assert native_fence.fence_word("cat <<A <<B\ncurl a\nA\npip install b\nB\n") is None
+    # Commands before and after the body are still inspected; a here-string is not a here-document.
+    assert native_fence.fence_word("curl x <<EOF\nbody\nEOF") == "curl"
+    assert native_fence.fence_word("cat <<EOF\nbody\nEOF\ncurl x") == "curl"
+    # An unquoted delimiter's body is expanded by the shell, so it stays in the segment stream. The fence reads
+    # only each segment's leading token, so command substitution ($(...), backticks) and subshells pass it:
+    # the substitution is not denied.
+    assert any("curl" in seg for seg in native_fence._split_segments("cat <<EOF\n$(curl x)\nEOF"))
+    assert native_fence.fence_word("cat <<EOF\n$(curl x)\nEOF") is None
+    assert not any("curl" in seg for seg in native_fence._split_segments("cat <<'EOF'\n$(curl x)\nEOF"))
+    assert native_fence.fence_word("cat <<< hi\ncurl x") == "curl"
+
+
 def test_shell_comments_are_ignored_outside_quotes():
     assert native_fence.fence_word("git status # don't fetch") is None
     assert native_fence.fence_word("ls\n# pip install x\ngit status") is None
@@ -415,3 +432,9 @@ def test_shim_fails_closed_on_a_corrupt_index_entry(tmp_path):
     assert r.returncode == 0
     assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecisionReason"] == \
         "superheroes native fence error (fail-closed)"
+
+
+def test_expanded_here_document_body_text_stays_data_around_substitutions():
+    assert native_fence.fence_word("cat <<EOF\nIt's $(printf today)\nEOF") is None
+    assert native_fence.fence_word("cat <<EOF\ncurl is docs `date`\nEOF") is None
+    assert native_fence.fence_word("cat <<EOF\ncurl docs\n$(printf a)\nEOF\ncurl x") == "curl"
