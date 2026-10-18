@@ -39,11 +39,13 @@ if _LIB_DIR not in sys.path:
 
 import cloud_pass  # noqa: E402  _is_cloud
 import core_md  # noqa: E402  read_sandbox_access
+import dispatch_outcome  # noqa: E402  REASON_FORFEITED
 import engine_dispatch  # noqa: E402  journal, git, host platform, declared-item check
 import file_lock  # noqa: E402  the run-dir lock
 import model_registry  # noqa: E402  CLAUDE_ALIAS_RESOLUTION
 import preflight_probe  # noqa: E402  dispatch_calibration
 import seat_bundle  # noqa: E402  the callable `dispatch_guard.py check --seat` runs
+import store_core  # noqa: E402  repo root and git dirs
 
 NATIVE_WHY = (
     "a cloud session on Linux whose calibration turns on localSockets, "
@@ -320,16 +322,15 @@ def _cmd_enroll(args):
     rc, out, _ = _git(here, "status", "--porcelain")
     if rc != 0 or out.strip():
         return _enroll_refusal("native-worktree-dirty")
-    rc, top, _ = _git(here, "rev-parse", "--show-toplevel")
-    top = os.path.realpath(top.strip()) if rc == 0 and top.strip() else None
-    if top is None:
+    try:
+        top = store_core.repo_root(here)
+        git_dir = store_core.get_worktree_gitdir(top)
+        common_dir = store_core.get_gitdir(top)
+    except Exception:  # fail closed: a resolver failure leaves isolation unproven
         return _enroll_refusal("native-worktree-not-isolated")
-    rc_dir, git_dir, _ = _git(top, "rev-parse", "--git-dir")
-    rc_common, common_dir, _ = _git(top, "rev-parse", "--git-common-dir")
-    if rc_dir != 0 or rc_common != 0:
+    if not all(isinstance(p, str) and p for p in (top, git_dir, common_dir)):
         return _enroll_refusal("native-worktree-not-isolated")
-    git_dir = os.path.realpath(os.path.join(top, git_dir.strip()))
-    common_dir = os.path.realpath(os.path.join(top, common_dir.strip()))
+    top = os.path.realpath(top)
     if git_dir == common_dir or top == os.path.realpath(opened.get("cwd") or ""):
         return _enroll_refusal("native-worktree-not-isolated")
     base = opened.get("baseSha")
@@ -454,7 +455,8 @@ class _Close(object):
 
     def _forfeit(self, token, **extra):
         return self._finish(self._result(
-            ok=False, terminal=True, reason="forfeited", forfeited=True, detail=token, **extra))
+            ok=False, terminal=True, reason=dispatch_outcome.REASON_FORFEITED,
+            forfeited=True, detail=token, **extra))
 
     def run(self, args):
         opened = self.opened
