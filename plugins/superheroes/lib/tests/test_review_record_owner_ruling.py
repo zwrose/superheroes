@@ -398,48 +398,11 @@ def _later_write(tmp_path, fake, rep_key):
     return rr.read(7, readers=fake.readers())
 
 
-def test_wo_e_a_ruling_on_a_carried_representative_covers_its_carried_members(tmp_path):
-    # Axis: the owner rules on the representative the sheet showed, so a member carried with it folds too.
+def test_wo_g_a_ruling_on_a_carried_representative_does_not_cover_its_carried_member(tmp_path):
+    # Axis: fail closed; a carried row gets no entry the session did not write, so the member stays a card.
     fake = Fake()
     before = {f["id"]: f for f in _earlier_merged_record(tmp_path, fake)}
     assert before["m-1"]["reason"].endswith(" (merged into rep-1)") and before["m-1"]["outcome"] == "left-for-owner"
     rec = _later_write(tmp_path, fake, before["rep-1"]["findingKey"])
-    assert {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "ruling", "rep-1": "ruling"}
-    assert rec["leftForOwner"] == []
+    assert {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "left-for-owner", "rep-1": "ruling"}
     assert rs.CARRIED in next(f for f in rec["findings"] if f["id"] == "m-1")["reason"]
-
-
-def test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry(tmp_path):
-    # Axis: E1, fail closed; an id that names two rows cannot tell which representative the mark means.
-    oos = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow-up"}
-    fake = Fake()
-    before = _earlier_merged_record(tmp_path, fake, [ledger_row("other::t@L5", id="rep-1", line=5, **oos)])
-    assert sorted(f["line"] for f in before if f["id"] == "rep-1") == [3, 5]
-    rep = next(f for f in before if f["id"] == "rep-1" and f["line"] == 3)
-    rec = _later_write(tmp_path, fake, rep["findingKey"])
-    assert {f["outcome"] for f in rec["findings"] if f["id"] == "m-1"} == {"left-for-owner"}
-    assert sorted(f["outcome"] for f in rec["findings"] if f["id"] == "rep-1") == ["left-for-owner", "ruling"]
-
-
-def _carried_out(member_reason):
-    rep = {"id": "rep-1", "findingKey": "k-rep", "outcome": "left-for-owner", "reason": "waits for the owner"}
-    member = {"id": "m-1", "findingKey": "k-m", "outcome": "left-for-owner", "reason": member_reason}
-    given = [{"key": "k-rep", "url": U, "words": W}]
-    return [e["key"] for e in rs._carried_rulings(given, [rep, member], [member])]
-
-
-def test_wo_f_a_mark_followed_by_a_later_suffix_still_makes_the_carried_row_a_member():
-    # Axis: the mark can sit before text `_recheck_decisions` appends, so membership is containment, not the end of the reason.
-    reason = "waits for the owner (merged into rep-1); the owner ruling it cites is not on record (the link is gone)" + rs.CARRIED
-    assert _carried_out(reason) == ["k-rep", "k-m"]
-
-
-def test_wo_f_a_mark_naming_a_longer_id_does_not_match_a_shorter_representative():
-    # Axis: the mark includes the closing parenthesis, so rep-1 never matches rep-10.
-    assert _carried_out("waits for the owner (merged into rep-10)" + rs.CARRIED) == ["k-rep"]
-
-
-@pytest.mark.parametrize("reason", [None, 7], ids=["none", "not-a-string"])
-def test_wo_f_a_carried_row_with_no_string_reason_gets_no_entry(reason):
-    # Axis: fail closed; a reason that is not a string holds no mark.
-    assert _carried_out(reason) == ["k-rep"]

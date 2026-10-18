@@ -922,3 +922,53 @@ FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo
 .                                                                        [100%]
 1 passed in 1.96s
 ```
+
+## Review session 2 round 3 fix (WO-G)
+
+The WO-E and WO-F elements (the carried-member expansion in `_carried_rulings`, its ambiguous-id refusal, the mark-anywhere test, the longer-id and non-string-reason edges) were retired with the code they guarded: `_carried_rulings` is deleted and `test_wo_e_*` and `test_wo_f_*` are replaced by the one test below.
+
+### CX: the absence of a carried expansion in `write_from_session` (`review_record_session.py`)
+
+- **file:** `plugins/superheroes/lib/review_record_session.py` (`write_from_session`)
+- **axis:** no carried row gets an `ownerRulings` entry the session did not write, so a carried member stays a card until the session names it
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_g_a_ruling_on_a_carried_representative_does_not_cover_its_carried_member`
+- **neutralization:** one line added after `account["findings"] += _carried(account, extras, repo_root, readers)`: `account["ownerRulings"] += [dict(e, key="m-1") for e in account["ownerRulings"]]`
+
+**raw red** (exit code 1, the failure block as the run printed it):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_wo_g_a_ruling_on_a_carried_representative_does_not_cover_its_carried_member _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-43/test_wo_g_a_ruling_on_a_carrie0')
+
+    def test_wo_g_a_ruling_on_a_carried_representative_does_not_cover_its_carried_member(tmp_path):
+        # Axis: fail closed; a carried row gets no entry the session did not write, so the member stays a card.
+        fake = Fake()
+        before = {f["id"]: f for f in _earlier_merged_record(tmp_path, fake)}
+        assert before["m-1"]["reason"].endswith(" (merged into rep-1)") and before["m-1"]["outcome"] == "left-for-owner"
+        rec = _later_write(tmp_path, fake, before["rep-1"]["findingKey"])
+>       assert {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "left-for-owner", "rep-1": "ruling"}
+E       AssertionError: assert {'m-1': 'ruli...-1': 'ruling'} == {'m-1': 'left...-1': 'ruling'}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'m-1': 'ruling'} != {'m-1': 'left-for-owner'}
+E         Use -v to get more diff
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:407: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_g_a_ruling_on_a_carried_representative_does_not_cover_its_carried_member
+1 failed in 0.57s
+```
+
+**restore** (the inverse edit: the added line removed) and the restored line quoted back (`review_record_session.py:616`):
+```
+        account["findings"] += _carried(account, extras, repo_root, readers)
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.91s
+```
