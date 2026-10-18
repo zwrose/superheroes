@@ -72,7 +72,7 @@ def test_iphone_allow_hook_is_wired_fail_soft_after_worktree_guard():
         "iphone_allow must be listed after the worktree guard on the Bash matcher"
 
 
-def test_bash_pretooluse_chain_is_exactly_guard_timeout_then_iphone():
+def test_bash_pretooluse_chain_is_exactly_guard_timeout_iphone_then_fence():
     """The Bash PreToolUse chain is pinned: adding a hook requires changing this test deliberately."""
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -83,14 +83,32 @@ def test_bash_pretooluse_chain_is_exactly_guard_timeout_then_iphone():
         "worktree_guard_gate.py",
         "bash_timeout.py",
         "iphone_allow.py",
+        "implementer_fence.py",
     ]
-    # axis: the Bash PreToolUse chain is exactly three hooks — the worktree guard, bash_timeout, then the iPhone approver
+    # axis: the Bash PreToolUse chain is exactly four hooks — the worktree guard, bash_timeout, the iPhone approver, then the native fence
     assert len(cmds) == len(expected), (
         f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
     )
     for i, name in enumerate(expected):
         # axis: hook order and identity pinned to the three-hook chain
         assert name in cmds[i], f"hook {i} must be {name}, got {cmds[i]!r}"
+
+
+_FENCE_COMMAND = 'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/implementer_fence.py" || true'
+
+
+def test_implementer_fence_is_wired_on_bash_and_edit_write_fail_open():
+    cfg = json.load(open(_HOOKS))
+    entries = cfg["hooks"]["PreToolUse"]
+    for matcher in ("Bash", "Edit|Write"):
+        cmds = [h["command"] for e in entries if e.get("matcher") == matcher for h in e["hooks"]]
+        # axis: the native fence runs on both the Bash matcher and the Edit|Write matcher, with the exact command
+        assert _FENCE_COMMAND in cmds, f"{matcher} matcher must carry the exact fence command"
+    edit_write = [h["command"] for e in entries if e.get("matcher") == "Edit|Write" for h in e["hooks"]]
+    # axis: the Edit|Write matcher carries the fence alone
+    assert edit_write == [_FENCE_COMMAND]
+    # axis: the shim the command names exists
+    assert os.path.isfile(os.path.join(_PLUGIN, "hooks", "implementer_fence.py"))
 
 
 def test_hooks_codex_still_wires_nothing():

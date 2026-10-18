@@ -567,9 +567,10 @@ out-of-scope keys from the fix batch; the fix batch sha256 in the order commits 
 bytes.
 
 An entry may also carry `decidedBy`, the decision the ruling rests on:
-`{"kind": "canon" | "residual" | "sheet-answer", "ref": ...}` and nothing else. For `canon` and
+`{"kind": "canon" | "residual" | "sheet-answer" | "owner-ruling", "ref": ...}` and nothing else. For `canon` and
 `residual` the `ref` is a non-blank string (the Canon entry's id, or the residual's text); for
-`sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`. A `decidedBy` of any other shape
+`sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`; for `owner-ruling` it is
+`{"url": <non-blank string>, "words": <non-blank string>}`. A `decidedBy` of any other shape
 is refused with `ruling-decided-by-malformed`. `rule` only records it in `rulingsLog`; it does not
 decide the finding's outcome — the end of the loop does (§ Dispositions).
 
