@@ -6,6 +6,7 @@ branch and re-run there at rebase. This module reproduces that escape *class*
 behaviorally through the generic seam but does not carry depcruise/import-linter argv.
 """
 import ast
+import builtins
 import json
 import os
 import shutil
@@ -485,7 +486,20 @@ def test_git_toplevel_junk_gitfile_only_is_indeterminate(tmp_path):
     assert gt._git_toplevel(str(plain)) == os.path.sep
 
 
-def test_git_toplevel_unreadable_gitfile_does_not_narrow_to_nested(tmp_path):
+def _refuse_open_of(monkeypatch, path):
+    """Make ``gt``' own ``open`` raise PermissionError for ``path`` only; delegate the rest."""
+    target = os.path.realpath(str(path))
+    real_open = builtins.open
+
+    def refuse_open(name, *a, **kw):
+        if isinstance(name, (str, os.PathLike)) and os.path.realpath(name) == target:
+            raise PermissionError("refused")
+        return real_open(name, *a, **kw)
+
+    monkeypatch.setattr(gt, "open", refuse_open, raising=False)
+
+
+def test_git_toplevel_unreadable_gitfile_does_not_narrow_to_nested(tmp_path, monkeypatch):
     """Unreadable regular ``.git`` file must not narrow the boundary (#742)."""
     outer = tmp_path / "outer"
     outer.mkdir()
@@ -495,24 +509,18 @@ def test_git_toplevel_unreadable_gitfile_does_not_narrow_to_nested(tmp_path):
     gitfile = nested / ".git"
     gitfile.write_text("gitdir: /some/path\n")
     outer_real = os.path.realpath(str(outer))
-    try:
-        gitfile.chmod(0)
-        assert gt._git_toplevel(str(nested)) == outer_real
-    finally:
-        gitfile.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    _refuse_open_of(monkeypatch, gitfile)
+    assert gt._git_toplevel(str(nested)) == outer_real
 
 
-def test_git_toplevel_unreadable_gitfile_only_is_indeterminate(tmp_path):
+def test_git_toplevel_unreadable_gitfile_only_is_indeterminate(tmp_path, monkeypatch):
     """Unreadable ``.git`` file alone must fail closed (#742)."""
     plain = tmp_path / "plain"
     plain.mkdir()
     gitfile = plain / ".git"
     gitfile.write_text("gitdir: /some/path\n")
-    try:
-        gitfile.chmod(0)
-        assert gt._git_toplevel(str(plain)) == os.path.sep
-    finally:
-        gitfile.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    _refuse_open_of(monkeypatch, gitfile)
+    assert gt._git_toplevel(str(plain)) == os.path.sep
 
 
 def test_git_toplevel_git_dot_entry_ancestor_oserror_returns_sep(tmp_path, monkeypatch):

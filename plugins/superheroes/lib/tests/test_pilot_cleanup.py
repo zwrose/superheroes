@@ -1,11 +1,11 @@
 """Tests for pilot_cleanup.py — cleanup primitives and receipt binding."""
+import builtins
 import copy
 import errno
 import hashlib
 import inspect
 import json
 import os
-import stat
 import subprocess
 import sys
 import time
@@ -676,15 +676,19 @@ def test_argv0_content_digest_nonexistent():
     assert pc.argv0_content_digest("/no/such/file") is None
 
 
-def test_argv0_content_digest_unreadable_regular_file(private_tmp):
+def test_argv0_content_digest_unreadable_regular_file(private_tmp, monkeypatch):
     path = os.path.join(private_tmp, "script.sh")
     with open(path, "wb") as handle:
         handle.write(b"content\n")
-    os.chmod(path, 0o000)
-    try:
-        assert pc.argv0_content_digest(path) is None
-    finally:
-        os.chmod(path, stat.S_IMODE(os.stat(path).st_mode) | 0o600)
+    real_open = builtins.open
+
+    def refuse_open(name, *a, **kw):
+        if str(name) == path:
+            raise PermissionError("refused")
+        return real_open(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", refuse_open)
+    assert pc.argv0_content_digest(path) is None
 
 
 def test_argv0_content_digest_large_file(private_tmp):

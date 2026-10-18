@@ -1,6 +1,6 @@
 """Tests for PR-body staging in sanitized_view (#609 stage 2)."""
+import builtins
 import os
-import stat
 import sys
 
 import pytest
@@ -98,17 +98,22 @@ def test_stage_pr_body_name_collision(tmp_path):
     assert exc.value.detail == "sanitized-view-pr-body-name-collision"
 
 
-def test_stage_pr_body_unreadable(tmp_path):
+def test_stage_pr_body_unreadable(tmp_path, monkeypatch):
     session = _session(tmp_path)
     body_path = _pr_body(session)
-    os.chmod(body_path, 0)
     view = _view_root(tmp_path)
-    try:
-        with pytest.raises(sv.SanitizedViewError) as exc:
-            sv._stage_pr_body(view, body_path, session)
-        assert exc.value.detail == "sanitized-view-pr-body-unreadable"
-    finally:
-        os.chmod(body_path, stat.S_IRUSR | stat.S_IWUSR)
+    target = os.path.realpath(body_path)
+    real_open = builtins.open
+
+    def refuse_open(name, *a, **kw):
+        if isinstance(name, (str, os.PathLike)) and os.path.realpath(name) == target:
+            raise PermissionError("refused")
+        return real_open(name, *a, **kw)
+
+    monkeypatch.setattr(sv, "open", refuse_open, raising=False)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._stage_pr_body(view, body_path, session)
+    assert exc.value.detail == "sanitized-view-pr-body-unreadable"
 
 
 def test_stage_pr_body_empty(tmp_path):
