@@ -68,14 +68,27 @@ def resolve_tiers(overrides):
             for key, role in _TIER_ROLE.items()}
 
 
+def _break_it_interpreter_value(record):
+    """The ``breakItInterpreter`` calibration key as the core record carries it: the stored string
+    verbatim (valid or not), None when absent or null, and "" for any other type so the driver
+    reads a malformed value as set-but-invalid and fails closed, never as unset."""
+    value = record.get(core_md.BREAK_IT_INTERPRETER_KEY)
+    if value is None or isinstance(value, str):
+        return value
+    return ""
+
+
 def resolve(cwd, root=None):
     verify = None
     verify_mode = None
     profile = None
     overrides = {}
     refusal = None
+    break_it_interpreter = None
     try:
         shared = core_md.resolve_shared(cwd, root=root)
+        if isinstance(shared, dict) and shared.get("action") != "refused":
+            break_it_interpreter = _break_it_interpreter_value(shared)
         if isinstance(shared, dict) and shared.get("action") == "refused":
             refusal = {
                 "reason": shared.get("reason"),
@@ -127,6 +140,7 @@ def resolve(cwd, root=None):
         "verifyMode": verify_mode,
         "tiers": tiers,
         "calibrationRefusal": refusal,
+        "breakItInterpreter": break_it_interpreter,
     }
 
 

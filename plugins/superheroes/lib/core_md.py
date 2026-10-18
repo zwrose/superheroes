@@ -134,6 +134,12 @@ _SANDBOX_ACCEPTED_BOOL = "true or false"
 _SANDBOX_ACCEPTED_PATH = "an absolute path such as /Users/me/Library/Caches/ms-playwright"
 _SANDBOX_ACCEPTED_PATH_BELOW_ROOT = "an absolute path below / — the whole filesystem is never writable"
 _SANDBOX_HOSTNAME = re.compile(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*")
+BREAK_IT_INTERPRETER_KEY = "breakItInterpreter"  # equals break_it.INTERPRETER_KEY (a test pins it)
+BREAK_IT_INTERPRETER_REASON_MALFORMED = "break-it-interpreter-malformed"
+BREAK_IT_INTERPRETER_REASON_INPUT_EMPTY = "break-it-interpreter-input-empty"
+BREAK_IT_INTERPRETER_REASON_ROUND_TRIP = "break-it-interpreter-round-trip-refused"
+BREAK_IT_INTERPRETER_REASON_UNREADABLE = "break-it-interpreter-unreadable"
+BREAK_IT_INTERPRETER_SUGGESTION = "scripts/pinned-python"
 SIZE_EXCLUDE_KEY = "sizeExclude"
 SIZE_EXCLUDE_REASON_MALFORMED = "size-exclude-malformed"
 SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE = "size-exclude-input-unparseable"
@@ -409,6 +415,8 @@ def render_core(facts, status, created, updated):
         block[SANDBOX_ACCESS_KEY] = copy.deepcopy(facts[SANDBOX_ACCESS_KEY])
     if SIZE_EXCLUDE_KEY in facts:
         block[SIZE_EXCLUDE_KEY] = copy.deepcopy(facts[SIZE_EXCLUDE_KEY])
+    if BREAK_IT_INTERPRETER_KEY in facts:
+        block[BREAK_IT_INTERPRETER_KEY] = copy.deepcopy(facts[BREAK_IT_INTERPRETER_KEY])
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -519,6 +527,8 @@ def parse_core(text):
         out[SANDBOX_ACCESS_KEY] = copy.deepcopy(block[SANDBOX_ACCESS_KEY])
     if SIZE_EXCLUDE_KEY in block:
         out[SIZE_EXCLUDE_KEY] = copy.deepcopy(block[SIZE_EXCLUDE_KEY])
+    if BREAK_IT_INTERPRETER_KEY in block:
+        out[BREAK_IT_INTERPRETER_KEY] = copy.deepcopy(block[BREAK_IT_INTERPRETER_KEY])
     return out
 
 
@@ -772,6 +782,8 @@ def read(cwd, root=None, *, persist_backfill=True):
         out[SANDBOX_ACCESS_KEY] = facts[SANDBOX_ACCESS_KEY]
     if SIZE_EXCLUDE_KEY in facts:
         out[SIZE_EXCLUDE_KEY] = facts[SIZE_EXCLUDE_KEY]
+    if BREAK_IT_INTERPRETER_KEY in facts:
+        out[BREAK_IT_INTERPRETER_KEY] = facts[BREAK_IT_INTERPRETER_KEY]
     return out
 
 
@@ -2418,6 +2430,117 @@ def clear_size_exclude(cwd, *, root=None):
     return result
 
 
+def break_it_interpreter_argv(value):
+    """The launcher argv a ``breakItInterpreter`` value names, or None when it is not valid.
+    Delegates to ``break_it.launcher_argv``, the key's one validator; the import is lazy so
+    core_md keeps no module-level dependency on break_it."""
+    import break_it  # noqa: E402  (sibling; lazy by design)
+    return break_it.launcher_argv(value)
+
+
+def _break_it_interpreter_suggestion(cwd):
+    """``scripts/pinned-python`` when that is a regular executable file at the repository root,
+    else None. Executes nothing; never raises."""
+    try:
+        path = os.path.join(_repo_root(cwd), BREAK_IT_INTERPRETER_SUGGESTION)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return BREAK_IT_INTERPRETER_SUGGESTION
+    except Exception:
+        pass
+    return None
+
+
+def read_break_it_interpreter(cwd, root=None):
+    """Read the ``breakItInterpreter`` json key from core.md. Total and read-only: never raises,
+    never writes. An absent or null key reads declared False; a valid string reads declared True
+    with its argv; any other stored value reads declared True, argv None, reason
+    ``break-it-interpreter-malformed``; every other failure reads reason
+    ``break-it-interpreter-unreadable`` with a detail. ``suggestion`` is in every return."""
+    base = {
+        "declared": False,
+        "value": None,
+        "argv": None,
+        "reason": None,
+        "detail": None,
+        "behind": False,
+        "suggestion": _break_it_interpreter_suggestion(cwd),
+    }
+    unreadable = BREAK_IT_INTERPRETER_REASON_UNREADABLE
+    try:
+        try:
+            path = _size_exclude_core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return dict(base, reason=unreadable,
+                        detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))
+        if path is None:
+            return dict(base, reason="core-md-absent")
+
+        structural = _structural_refusal_at_path(path)
+        if structural is not None:
+            return dict(base, reason=unreadable, detail=structural)
+
+        if not os.path.isfile(path):
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: not a regular file at %s" % path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: %s" % gate_refusal_detail(exc, at=path))
+        try:
+            facts = parse_core(text)
+        except VerifyCommandMalformed as exc:
+            return dict(base, reason=unreadable, detail="VerifyCommandMalformed: %s" % exc)
+        if facts is None:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unparseable: corrupt or unreadable core.md at %s" % path)
+
+        behind = facts["schemaVersion"] > SCHEMA_VERSION
+        raw = facts.get(BREAK_IT_INTERPRETER_KEY)
+        if raw is None:
+            return dict(base, behind=behind)
+        argv = break_it_interpreter_argv(raw)
+        if argv is None:
+            return dict(base, declared=True, value=copy.deepcopy(raw),
+                        reason=BREAK_IT_INTERPRETER_REASON_MALFORMED, behind=behind)
+        return dict(base, declared=True, value=raw, argv=argv, behind=behind)
+    except Exception as exc:  # total: any other failure is a named read refusal, never a raise
+        return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
+
+
+def write_break_it_interpreter(cwd, value, *, root=None):
+    """Lock-guarded surgical write of ``breakItInterpreter`` only. Never raises."""
+    if break_it_interpreter_argv(value) is None:
+        return {"action": "refused", "reason": BREAK_IT_INTERPRETER_REASON_MALFORMED}
+    return _write_json_block_key(
+        cwd,
+        BREAK_IT_INTERPRETER_KEY,
+        value,
+        root=root,
+        not_a_mapping_reason=BREAK_IT_INTERPRETER_REASON_MALFORMED,
+        round_trip_reason=BREAK_IT_INTERPRETER_REASON_ROUND_TRIP,
+        require_mapping=False,
+    )
+
+
+def clear_break_it_interpreter(cwd, *, root=None):
+    """Remove the ``breakItInterpreter`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        BREAK_IT_INTERPRETER_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=BREAK_IT_INTERPRETER_REASON_MALFORMED,
+        round_trip_reason=BREAK_IT_INTERPRETER_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
+
+
 def read_risk_areas(cwd, root=None):
     """Read ``projectConfiguration.riskAreas`` from core.md. Total and read-only: never raises,
     never writes. An absent key (or an absent core.md) reads areas None with no malformed items;
@@ -2996,6 +3119,8 @@ def confirm(cwd, *, root=None, now=None):
                 facts[SANDBOX_ACCESS_KEY] = existing[SANDBOX_ACCESS_KEY]
             if SIZE_EXCLUDE_KEY in existing:
                 facts[SIZE_EXCLUDE_KEY] = existing[SIZE_EXCLUDE_KEY]
+            if BREAK_IT_INTERPRETER_KEY in existing:
+                facts[BREAK_IT_INTERPRETER_KEY] = existing[BREAK_IT_INTERPRETER_KEY]
             if existing.get("enginePreferences"):
                 facts["enginePreferences"] = existing["enginePreferences"]
             created = existing.get("created") or stamp
@@ -3163,6 +3288,17 @@ def main(argv):
         "--clear",
         action="store_true",
         help="remove sizeExclude from core.md (explicit clear; empty stdin is refused)",
+    )
+    bi = sub.add_parser("break-it-interpreter")
+    bi.add_argument("--cwd", default=".")
+    bi.add_argument("--root", default=None)
+    wbi = sub.add_parser("write-break-it-interpreter")
+    wbi.add_argument("--cwd", default=".")
+    wbi.add_argument("--root", default=None)
+    wbi.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove breakItInterpreter from core.md (explicit clear; empty stdin is refused)",
     )
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
@@ -3522,6 +3658,35 @@ def main(argv):
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
                 out = write_size_exclude(args.cwd, globs, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "break-it-interpreter":
+        try:
+            out = read_break_it_interpreter(args.cwd, root=args.root)
+        except Exception:
+            out = {
+                "declared": False,
+                "value": None,
+                "argv": None,
+                "reason": BREAK_IT_INTERPRETER_REASON_UNREADABLE,
+                "detail": None,
+                "behind": False,
+                "suggestion": None,
+            }
+    elif args.cmd == "write-break-it-interpreter":
+        try:
+            if args.clear:
+                out = clear_break_it_interpreter(args.cwd, root=args.root)
+            else:
+                text = sys.stdin.read().strip()
+                if text == "":
+                    out = {"action": "refused", "reason": BREAK_IT_INTERPRETER_REASON_INPUT_EMPTY}
+                else:
+                    out = write_break_it_interpreter(args.cwd, text, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
