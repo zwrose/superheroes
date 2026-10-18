@@ -54,7 +54,7 @@ Decide mode (auto-detected or explicit, per `## Invocation`). Create the session
 
 **Resolve the run's inputs before dispatching anything.** In order: the base rubric path, repo root, the calibration paths, the plugin and rubric versions, the model tiers, the per-role engine, then the staleness self-check, the profile bootstrap, the verify story, and the post-bootstrap refresh of the dispatch paths. The exact commands, the variable each one sets, and the tier→model dispatch mapping are in `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/setup.md` § Setup resolution — read it and run the blocks in the order given.
 
-Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$VERIFY_MODE`, `$REFUSAL`, and `$SEAT_MAP` and `$AUTHOR_FAMILY`, which the seat-map compose step sets right after the base pin. A step below that reads one of these without that file having been run is a bug in the step; the shell defaults that do appear (`${VERIFY_CMD:-unverified}`, `${VERIFY_CMD:-none}`) are deliberate value fallbacks for an unset-but-legitimate verify story, not a licence to skip the setup file.
+Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$BREAK_IT_ARGS`, `$VERIFY_MODE`, `$REFUSAL`, and `$SEAT_MAP` and `$AUTHOR_FAMILY`, which the seat-map compose step sets right after the base pin. A step below that reads one of these without that file having been run is a bug in the step; the shell defaults that do appear (`${VERIFY_CMD:-unverified}`, `${VERIFY_CMD:-none}`) are deliberate value fallbacks for an unset-but-legitimate verify story, not a licence to skip the setup file.
 
 **PR mode:**
 
@@ -297,7 +297,7 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --fixer-vendor "$IMPL_ENGINE" \
   --prior-comments "$SESSION_DIR/prior-comments.json" \
   --max-rounds 7 \
-  "${SEAT_MAP_ARGS[@]}"
+  "${BREAK_IT_ARGS[@]}" "${SEAT_MAP_ARGS[@]}"
 ```
 
 Round 1 is the round that dispatches the panel, and without the seat map no round-1 seat's vendor resolves, so every seat falls back to the safe stdout contract and the orchestrator must land each payload itself; passing the map keeps native seats on the direct-write path and records real vendor provenance (#1035). The guard above only passes `--seat-map` when `$SEAT_MAP` is non-empty and parses as a JSON object, so a genuinely empty/unset `$SEAT_MAP` never gets written to a file and handed to the driver.

@@ -55,8 +55,11 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --session-dir "$SESSION_DIR" \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \
   --verify-command "${VERIFY_CMD:-none}" \
-  --max-rounds 7
+  --max-rounds 7 \
+  "${BREAK_IT_ARGS[@]}"
 ```
+
+`--break-it-interpreter <text>` (config `breakItInterpreter`; fresh-state only, refused `break-it-interpreter-not-fresh-state` otherwise) is the launcher the session's break-it tests run under. The value, an empty string included, is stored as the session's `breakItInterpreter`; setup passes it only when calibration sets the key (`skills/review-code/reference/setup.md`).
 
 `--fix-batch-cap N` (config `fixBatchCap`, default `round_phases.FIX_BATCH_CAP_DEFAULT` (stated once in § Round economy), a positive integer; fresh-state only, refused `fix-batch-cap-invalid` otherwise) is the most findings one `dispatch-fixer` order carries — § Round economy states the split.
 
