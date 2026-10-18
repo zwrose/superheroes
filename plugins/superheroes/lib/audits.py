@@ -89,6 +89,53 @@ def has_usable_unnamed_change(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def _claim_members(value):
+    """The stripped members of an `unnamedChangeFixes` / `unnamedChangeReverts` claim, or None when
+    the value is not a usable claim list (non-list, or a member that is not a non-blank string)."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    members = []
+    for m in value:
+        if not (isinstance(m, str) and m.strip()):
+            return None
+        if m.strip() not in members:
+            members.append(m.strip())
+    return members
+
+
+def unnamed_change_claims_fault(fixes, reverts):
+    """The name of the first malformed claim field among `unnamedChangeFixes` / `unnamedChangeReverts`,
+    or None. A claim is None or a list of non-blank strings (an empty list is no claim). Sibling of
+    `has_usable_reason`: the submit guard and the fold read the field through this one predicate."""
+    if _claim_members(fixes) is None:
+        return "unnamedChangeFixes"
+    if _claim_members(reverts) is None:
+        return "unnamedChangeReverts"
+    return None
+
+
+def _target_names(target, field, key):
+    """The usable names a driver-built list on a target carries: the non-blank string `key` of each
+    dict entry of `target[field]`. A missing or non-list field has none."""
+    rows = target.get(field) if isinstance(target, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    return {row[key] for row in rows
+            if isinstance(row, dict) and isinstance(row.get(key), str) and row[key].strip()}
+
+
+def _claims_verify(target, fixes, reverts):
+    """True when at least one claim is given and every named id is a round finding of the target's
+    driver-built `roundFindings` and every named ref is one of its `reportedUnnamedChanges`."""
+    if not (fixes or reverts):
+        return False
+    round_ids = _target_names(target, "roundFindings", "id")
+    refs = _target_names(target, "reportedUnnamedChanges", "ref")
+    return all(i in round_ids for i in fixes) and all(x in refs for x in reverts)
+
+
 # The reason an audit entry carries when no result came back for its target (silence, not a ruling).
 NO_AUDIT_RESULT_REASON = "no audit result for this finding — cannot certify the fix discharged"
 
@@ -126,10 +173,19 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                  `unnamedChange`. A non-string, non-null `unnamedChange` is malformed, and so is a
                  non-integer, non-null `unnamedChangeAllowedBySeq` (the fold, not this function,
                  verifies the named decision before an id is listed here).
+                 A clearing result with an `unnamedChange` is also discharged, for an id not in
+                 `change_allowed_ids`, when it attributes the change to the DRIVER's own record, read off
+                 the target: `unnamedChangeFixes` (ids, each in the target's `roundFindings`) and/or
+                 `unnamedChangeReverts` (refs, each in the target's `reportedUnnamedChanges`). Each
+                 given claim must verify, and at least one must be given. The entry then records
+                 `attributedChange` (the change), `sameRoundFixes` and `revertedChanges` (the claims
+                 given), never `allowedChange`; the id is listed in `attributedChange`. A claim that
+                 is not None or a list of non-blank strings is malformed. Every result that states
+                 an `unnamedChange` records it on its entry as `reportedUnnamedChange`.
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched, unauthenticated, echoMismatch, unnamedChange}. Each `audits` entry carries the EFFECTIVE
-    (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
+    unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange}. Each `audits` entry
+    carries the EFFECTIVE (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the
     orchestrator's manifest could not authenticate (missing entry, or manifest ≠ the selected
@@ -179,6 +235,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     unauthenticated = []
     echo_mismatch = []
     unnamed_change = []
+    attributed_change = []
     allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
     matched_ids = set()
 
@@ -201,6 +258,17 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         base.update(ruling="not-discharged",
                     reason=UNNAMED_CHANGE_REASON_PREFIX + text)
         audits.append(base)
+
+    def credit_attribution(base, fid, text, fixes, reverts):
+        """A clearing result whose unnamed change is attributed, by claims the driver's record
+        verifies, to a same-round fix and/or a revert: stays discharged, never `allowedChange`."""
+        base["attributedChange"] = text
+        if fixes:
+            base["sameRoundFixes"] = fixes
+        if reverts:
+            base["revertedChanges"] = reverts
+        if fid is not None:
+            attributed_change.append(fid)
 
     for f in audited:
         if not isinstance(f, dict):
@@ -332,14 +400,38 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             if fid is not None:
                 not_discharged.append(fid)
             continue
+
+        claim_fault = (unnamed_change_claims_fault(r.get("unnamedChangeFixes"),
+                                                   r.get("unnamedChangeReverts"))
+                       if ruling in _CLEARS else None)
+        if claim_fault is not None:
+            if fid is not None:
+                malformed.append(fid)
+            base.update(ruling="not-discharged",
+                        reason="`%s` is not a list of non-blank strings — treated as not-discharged"
+                        % claim_fault)
+            audits.append(base)
+            if fid is not None:
+                not_discharged.append(fid)
+            continue
         unnamed_text = unnamed.strip() if has_usable_unnamed_change(unnamed) else None
+        # The change is attributed (rather than refused) only when every claim the auditor gives
+        # verifies against the driver's own record on the target; claims without a change do nothing.
+        fixes = _claim_members(r.get("unnamedChangeFixes")) if ruling in _CLEARS else []
+        reverts = _claim_members(r.get("unnamedChangeReverts")) if ruling in _CLEARS else []
+        attributed = bool(unnamed_text and fid not in allowed_ids
+                          and _claims_verify(f, fixes, reverts))
+        if unnamed_text:
+            base["reportedUnnamedChange"] = unnamed_text
 
         if ruling == "discharged":
-            if has_reason and unnamed_text and fid not in allowed_ids:
+            if has_reason and unnamed_text and fid not in allowed_ids and not attributed:
                 refuse_unnamed_change(base, fid, unnamed_text, [])
                 continue
             if has_reason:
-                if unnamed_text:
+                if attributed:
+                    credit_attribution(base, fid, unnamed_text, fixes, reverts)
+                elif unnamed_text:
                     base["allowedChange"] = unnamed_text
                 base.update(ruling="discharged", reason=reason.strip())
                 if isinstance(evidence, str) and evidence.strip():
@@ -361,11 +453,13 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
 
         if ruling == "discharged-but-new-issue":
             candidates = _valid_new_issues(r.get("newIssues"), fid)
-            if candidates and unnamed_text and fid not in allowed_ids:
+            if candidates and unnamed_text and fid not in allowed_ids and not attributed:
                 refuse_unnamed_change(base, fid, unnamed_text, candidates)
                 continue
             if candidates:
-                if unnamed_text:
+                if attributed:
+                    credit_attribution(base, fid, unnamed_text, fixes, reverts)
+                elif unnamed_text:
                     base["allowedChange"] = unnamed_text
                 base.update(ruling="discharged-but-new-issue",
                             reason=reason.strip() if has_reason else "fix discharged; new issue emitted")
@@ -423,4 +517,5 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         "unauthenticated": unauthenticated,
         "echoMismatch": echo_mismatch,
         "unnamedChange": unnamed_change,
+        "attributedChange": attributed_change,
     }

@@ -12,7 +12,7 @@ import vet_slot as vs
 
 REPO = "owner/example"
 PR = 42
-VIEW = ("gh", "pr", "view", "42", "-R", REPO, "--json", "body")
+VIEW = ("gh", "api", "repos/owner/example/pulls/42")
 COMMENTS = ("gh", "api", "repos/owner/example/issues/42/comments?per_page=100&page=1")
 USER = ("gh", "api", "user", "-q", ".login")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "vet_slot")
@@ -106,6 +106,8 @@ class FakeGh:
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
         assert kwargs.get("timeout") == vs.GH_TIMEOUT
+        if list(argv[:3]) == ["gh", "pr", "view"]:
+            raise AssertionError("gh pr view reads over GraphQL, which cloud sessions refuse: %r" % (argv,))
         key = tuple(argv)
         if key == VIEW:
             if self.view_rc:
@@ -113,7 +115,7 @@ class FakeGh:
             if self.view_raw is not None:
                 return SimpleNamespace(returncode=0, stdout=self.view_raw, stderr="")
             body = self.bodies.pop(0) if len(self.bodies) > 1 else self.bodies[0]
-            return SimpleNamespace(returncode=0, stdout=json.dumps({"body": body}), stderr="")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"body": body, "number": 42}), stderr="")
         if key == USER:
             return SimpleNamespace(returncode=0, stdout="advisor\n", stderr="")
         if key[:2] == ("gh", "api") and key[2].startswith(COMMENTS[2].split("?")[0] + "?per_page=100&page="):
@@ -330,6 +332,24 @@ def test_empty_read_refuses_read_failed(slot_file):
     assert result["reason"] == "read-failed"
     assert "empty" in result["detail"]
     assert fake.edit_calls() == []
+
+
+def test_null_rest_body_reads_as_empty(slot_file):
+    fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), view_raw=json.dumps({"body": None}))
+    result = _write(fake, slot_file)
+    assert result["reason"] == "read-failed"
+    assert "empty" in result["detail"]
+    assert fake.edit_calls() == []
+
+
+def test_every_body_read_is_rest_never_graphql(slot_file):
+    fake = _ok_fake()
+    result = _write(fake, slot_file)
+    assert result["ok"] is True
+    reads = [c for c in fake.calls if c[:2] == ["gh", "api"] and "/pulls/" in c[2]]
+    assert len(reads) == 3  # first read, pre-push re-read, readback
+    assert all(c == list(VIEW) for c in reads)
+    assert not [c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
 
 
 def test_non_string_body_refuses_read_failed():
@@ -692,7 +712,7 @@ def test_only_non_advisor_receipt_is_receipt_missing():
     ({"view_rc": 1}, "PR body: exit 1 boom"),
     ({"view_raw": "not json"}, "PR body: bad JSON"),
     ({"view_raw": json.dumps(["body"])}, "PR body: body is not a string"),
-    ({"view_raw": json.dumps({"body": None})}, "PR body: body is not a string"),
+    ({"view_raw": json.dumps({"body": 7})}, "PR body: body is not a string"),
 ])
 def test_body_read_failures_are_read_failed(kwargs, detail, slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), **kwargs)

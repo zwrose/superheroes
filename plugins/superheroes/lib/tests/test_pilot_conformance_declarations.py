@@ -1,8 +1,8 @@
 """Tests for pilot_conformance_declarations.py — declaration conformance rows (C10)."""
+import builtins
 import copy
 import json
 import os
-import stat
 import sys
 
 import pytest
@@ -282,16 +282,20 @@ def test_resolve_inputs_registry_missing_path(tmp_path):
     assert by_input["declarations"]["reason"] == pc.REASON_INPUT_REGISTRY_MISSING
 
 
-def test_resolve_inputs_registry_unreadable(tmp_path):
+def test_resolve_inputs_registry_unreadable(tmp_path, monkeypatch):
     unreadable = tmp_path / "registry.json"
     unreadable.write_text("{}", encoding="utf-8")
-    os.chmod(unreadable, 0o000)
-    try:
-        inputs, resolution = _resolved_declarations_inputs(
-            tmp_path, registry_path=str(unreadable),
-        )
-    finally:
-        os.chmod(unreadable, stat.S_IWUSR | stat.S_IRUSR)
+    real_open = builtins.open
+
+    def refuse_open(name, *a, **kw):
+        if str(name) == str(unreadable):
+            raise PermissionError("refused")
+        return real_open(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", refuse_open)
+    inputs, resolution = _resolved_declarations_inputs(
+        tmp_path, registry_path=str(unreadable),
+    )
     assert "declarations" not in inputs
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["declarations"]["reason"] == pc.REASON_INPUT_REGISTRY_UNREADABLE

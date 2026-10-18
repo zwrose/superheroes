@@ -494,9 +494,27 @@ never switches cloud builds on. Every message the owner reads comes from
 owner unchanged.
 
 The environment's id comes only from Claude Code's settings, read before and after the owner picks
-the environment by name with Claude Code's `/remote-env` picker. Never ask the owner to type, copy
-or paste the id, and never use an id from anywhere but a `picked` result or a `mismatched` result's
-`environment`.
+the environment by name with Claude Code's `/remote-env` picker, or, after the account's first
+setup, from its setup record. Never ask the owner to type, copy or paste the id, and never use an id
+from anywhere but a `picked` result, a `mismatched` result's `environment`, or a ready setup
+record's `environment`.
+
+**When the pick is needed.** Only at the account's first setup, and when the owner moves the account
+to another environment. Before step 1, read the account's setup record:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/cloud_setup.py" read --cwd .
+```
+
+When it returns `ready: true` and the owner has not said they are moving the account, skip steps 1
+and 3 and use the record's `environment` as the id in steps 5 to 8. `compare` matches that id with
+reason `recorded` without reading the picker: on a machine where several Claude accounts share one
+settings file, the shared pick may name another account's environment. Any other id is refused as
+`mismatched` with reason `recorded-differs`, and its `environment` is the recorded one. Otherwise
+run every step. When the owner says they are moving the account to another environment, run every
+step and add `--moving` to every `compare`, so the new pick decides as at a first setup; the passed
+check records the new environment.
 
 1. **Read the current pick.** Before anything else, read what the account's settings hold before
    the owner picks, and keep the result's `environment` (it may be null).
@@ -549,8 +567,8 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" sign-in
    ```
-5. **Give the pass command, naming the id.** Before giving it, check the id against the picker
-   (steps 6 and 7 repeat this check). Tell the owner to run it on their own machine. It puts
+5. **Give the pass command, naming the id.** Before giving it, check the id (steps 6 and 7 repeat
+   this check). Tell the owner to run it on their own machine. It puts
    the [reviewer pass](../../../rubric/glossary.md#reviewer-pass) block on their clipboard, and they
    paste the block into the environment's variables. Never run it for them, and never ask to see
    what it copied. The owner's terminal does not hold `ROOT_DIR`, so give them the command with
@@ -623,8 +641,8 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    Never write the setup record any other way, and never tell the owner a check passed without a
    `passed` result.
 8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the environment now in use (the id step 3
-   returned, the one the latest recovery pick returned, or the one the latest `mismatched` check
-   returned, whichever came last).
+   returned or the record's, the one the latest recovery pick returned, or the one the latest
+   `mismatched` check returned, whichever came last).
    When the failed part was the environment, run `snapshot` (step 1's command) before relaying the
    failure message, so the baseline is the value as the owner leaves it. When the owner says the
    repair is done, read the pick with both the new baseline and the environment now in use, and use the

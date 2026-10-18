@@ -8,6 +8,7 @@ imports nothing from this plugin, so the round driver and the review record may 
 LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
 
 DECISION_KINDS = (
+    "audit-attributed-change",
     "audit-echo-mismatch",
     "audit-provenance-fail",
     "audit-unnamed-change",
@@ -42,6 +43,7 @@ DECISION_KINDS = (
     "self-recovery",
     "stall-choice",
     "stall-menu",
+    "synthesis-no-survivors",
     "synthesis-unseatable",
     "unknown-surface",
     "verifier-refuted",

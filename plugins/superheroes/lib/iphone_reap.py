@@ -2,8 +2,8 @@
 """Reap a finished iPhone lane's simulated phones (FR-18/UFR-7).
 
 The advisor runs this once a lane is terminal: it deletes the phones that lane's launch records
-name, records one result per phone-carrying launch on the ledger, and reports what it could not
-delete. It only ever deletes the phones the lane's records name, and it never runs a command that
+name, records one result per phone on the ledger (a launch that made several phones gets one
+result for each), and reports what it could not delete. It only ever deletes the phones the lane's records name, and it never runs a command that
 could stop Device Hub or any other phone. Never raises to callers."""
 from __future__ import annotations
 
@@ -64,8 +64,9 @@ def _failure(issue, reason, **extra):
 def lane_phones(repo_root, issue, env=None):
     """List the phones a lane's launch records name, and the launches still live.
 
-    ``phones`` covers every launch for the issue that carries a phone, in reserved-record order,
-    including relaunches and launches that were refused or failed after reserving.
+    ``phones`` covers every phone of every launch for the issue, in reserved-record order and then
+    in the order the launch made them, including relaunches and launches that were refused or
+    failed after reserving.
     ``liveLaunches`` covers every launch for the issue, phone or not, that is not terminal.
     """
     if not _is_issue(issue):
@@ -87,10 +88,12 @@ def lane_phones(repo_root, issue, env=None):
         # axis: lane scoping -- only launches whose issue is this lane's issue are in the lane.
         if info.get("issue") != issue:
             continue
-        if info.get("iphoneId") is not None:
+        # axis: one entry per phone — a launch that made several (iphoneIds) lists each one, so
+        # each gets its own delete, result and amendment.
+        for udid in info.get("iphoneIds") or []:
             phones.append({
                 "launchId": launch_id,
-                "iphoneId": info["iphoneId"],
+                "iphoneId": udid,
                 "terminal": bool(info.get("terminal")),
             })
         if not info.get("terminal"):
@@ -165,7 +168,7 @@ def _note(udid, result, detail):
 
 
 def reap_lane(repo_root, issue, run=None, env=None):
-    """Delete the phones a finished lane's records name; record one result per launch.
+    """Delete the phones a finished lane's records name; record one result per phone.
 
     Refuses, running nothing, while any launch for the issue is live. A phone that could not be
     deleted or a result that could not be recorded makes the reap not ok.

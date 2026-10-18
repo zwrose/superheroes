@@ -4,6 +4,8 @@ import os
 import re
 import subprocess
 
+import pytest
+
 import guardian_lens as gl
 import guardian_vitals as gv
 import round_driver as rd
@@ -3485,3 +3487,422 @@ def test_coverage_entries_all_bound_stay_present(tmp_path):
     out = gsw.verify_config(repo, root=root, needed_facts=set())
     fact = next(f for f in out["facts"] if f["fact"] == "recorded-coverage")
     assert fact["status"] == "present"
+
+
+# --- #1754 F1: commit_ledger records the sweep's triage decisions ------------
+
+
+def _seeded_repo(tmp_path, records=None):
+    """Calibrated repo + store with a prior `fixture` baseline (so the lens is not first-seed)."""
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {"vitals": False})
+    if records is not None:
+        write_ledger(tmp_path, records, root=root)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    return repo, root
+
+
+def _drift_lens(metric=5):
+    return FixtureLens(
+        emit_normal=True, digest={"v": 2}, diff_new=["fixture:normal"], metric=metric)
+
+
+def _disposition(verdict, ledger=None, reason=None, sid="fixture:normal"):
+    entry = {"id": sid, "verdict": verdict}
+    if verdict == "validated":
+        entry.update(consequence="c", receipt="r", effort="e", ledgerJoin="some-other-join")
+    if reason is not None:
+        entry["reason"] = reason
+    if ledger is not None:
+        entry["ledger"] = ledger
+    return entry
+
+
+def _decide(repo, root, lens, disp):
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert [s["id"] for s in bundle["surfaced"]] == ["fixture:normal"]
+    fin = gsw.finalize(repo, bundle, disp, root=root)
+    assert fin["ok"] is True, fin
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is True, res
+    return bundle, res
+
+
+def _record(repo, root, rid="fixture:normal"):
+    return gs.read_ledger(repo, root)["byId"].get(rid)
+
+
+@pytest.mark.parametrize("disp,state,fields", [
+    # T1
+    (_disposition("validated", {"disposition": "filed", "issue": "#7"}),
+     "filed", {"issue": "#7"}),
+    # T2
+    (_disposition("rejected", {"disposition": "declined", "reason": "not worth it",
+                               "reraiseWhen": "metric grows"}),
+     "declined", {"reason": "not worth it", "reraiseWhen": "metric grows"}),
+    # T3
+    (_disposition("rejected", {"disposition": "triaged-out", "reason": "noise"}),
+     "triaged-out", {"reason": "noise"}),
+    # T4
+    (_disposition("rejected", reason="sanctioned convention"),
+     "triaged-out", {"reason": "sanctioned convention"}),
+    # T5
+    (_disposition("validated", {"disposition": "accepted", "reason": "tolerated"}),
+     "accepted", {"reason": "tolerated"}),
+], ids=["T1-filed", "T2-declined", "T3-triaged-out", "T4-rejected-default", "T5-accepted"])
+def test_commit_ledger_writes_decision_record(tmp_path, disp, state, fields):
+    repo, root = _seeded_repo(tmp_path)
+    bundle, res = _decide(repo, root, _drift_lens(), [disp])
+    rec = _record(repo, root)
+    assert rec["disposition"] == state
+    assert rec["adjudicatedIn"] == bundle["sweepId"]
+    assert rec["metricAtDisposition"] == {"metric": 5}
+    for key, val in fields.items():
+        assert rec[key] == val
+    assert res["decisions"] == [{"id": "fixture:normal", "from": None, "to": state}]
+    assert res["decisionsSkipped"] == []
+    # the id is the surfaced id, never the ledgerJoin
+    assert _record(repo, root, "some-other-join") is None
+
+
+def test_validated_without_ledger_writes_no_record(tmp_path):
+    repo, root = _seeded_repo(tmp_path)
+    _bundle, res = _decide(repo, root, _drift_lens(), [_disposition("validated")])
+    assert _record(repo, root) is None
+    assert res["decisions"] == []
+
+
+def test_declined_decision_keeps_finding_out_of_next_sweep(tmp_path):
+    """T6 — the DoD case: a declined finding does not come back next sweep."""
+    repo, root = _seeded_repo(tmp_path)
+    _decide(repo, root, _drift_lens(), [_disposition(
+        "rejected", {"disposition": "declined", "reason": "known trade"})])
+    assert _record(repo, root)["disposition"] == "declined"
+    with_record = open(gs.ledger_path(repo, root), encoding="utf-8").read()
+
+    # Precondition (non-vacuous): with the record absent, the same second sweep surfaces it.
+    write_ledger(tmp_path, [], root=root)
+    absent = gsw.collect(repo, lenses=[_drift_lens()], root=root)
+    assert [s["id"] for s in absent["surfaced"]] == ["fixture:normal"]
+    assert absent["funnel"]["killedByLedger"] == []
+
+    sc.atomic_write(gs.ledger_path(repo, root), with_record)
+    second = gsw.collect(repo, lenses=[_drift_lens()], root=root)
+    assert second["surfaced"] == []
+    assert [(k["id"], k["disposition"]) for k in second["funnel"]["killedByLedger"]] == [
+        ("fixture:normal", "declined")]
+    assert funnel_conserved(second)
+
+
+def test_declined_decision_resurfaces_when_metric_worsens(tmp_path):
+    """T7 — re-raise: the settled finding comes back once its metric worsens."""
+    repo, root = _seeded_repo(tmp_path)
+    _decide(repo, root, _drift_lens(metric=5), [_disposition(
+        "rejected", {"disposition": "declined", "reason": "known trade"})])
+    same = gsw.collect(repo, lenses=[_drift_lens(metric=5)], root=root)
+    assert same["surfaced"] == []
+    worse = gsw.collect(repo, lenses=[_drift_lens(metric=9)], root=root)
+    assert [s["id"] for s in worse["surfaced"]] == ["fixture:normal"]
+
+
+def test_commit_ledger_decision_preserves_existing_ledger_and_prose(tmp_path):
+    """T8 — an unrelated record and owner prose survive byte-for-byte."""
+    keep = {
+        "id": "other:keep", "disposition": "accepted", "date": "2026-07-01",
+        "issue": None, "metricAtDisposition": {"metric": 1}, "reason": "kept",
+        "reraiseWhen": None, "adjudicatedIn": "s0",
+    }
+    repo, root = _seeded_repo(tmp_path, records=[keep])
+    path = gs.ledger_path(repo, root)
+    head = "# Guardian ledger\n\n"
+    tail = "\n## Owner notes\nhand-written line — do not touch\n"
+    with open(path, encoding="utf-8") as fh:
+        original = fh.read()
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(original + tail)
+    _decide(repo, root, _drift_lens(), [_disposition(
+        "rejected", {"disposition": "declined", "reason": "known trade"})])
+    text = open(path, encoding="utf-8").read()
+    assert text.startswith(head)
+    assert text.endswith(tail)
+    block = json.loads(gs.find_ledger_fences(text)[0].group(1))
+    by_id = {r["id"]: r for r in block["records"]}
+    assert by_id["other:keep"] == keep
+    assert by_id["fixture:normal"]["disposition"] == "declined"
+
+
+def test_commit_ledger_recomputes_against_record_edited_after_read(tmp_path, monkeypatch):
+    """T9 — E11: an on-disk edit between commit_ledger's read and the write survives."""
+    import guardian_ledger as gled
+
+    surfaced_rec = {"id": "fixture:normal", "disposition": "surfaced", "date": "2026-07-01",
+                    "issue": None, "metricAtDisposition": None, "reason": None,
+                    "reraiseWhen": "orig"}
+    repo, root = _seeded_repo(tmp_path, records=[surfaced_rec])
+    path = gs.ledger_path(repo, root)
+    real = gled._read_sweeps_result
+    edits = []
+
+    def read_then_owner_edits(p):
+        out = real(p)
+        if not edits:
+            text = open(p, encoding="utf-8").read()
+            edited = text.replace('"reraiseWhen": "orig"', '"reraiseWhen": "owner edit"')
+            assert edited != text
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(edited)
+            edits.append(1)
+        return out
+
+    monkeypatch.setattr(gled, "_read_sweeps_result", read_then_owner_edits)
+    bundle = gsw.collect(repo, lenses=[_drift_lens()], root=root)
+    disp = [_disposition("validated", {"disposition": "filed", "issue": "#9"})]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is True, res
+    assert edits == [1]
+    rec = _record(repo, root)
+    assert rec["disposition"] == "filed"
+    assert rec["reraiseWhen"] == "owner edit"
+    assert "owner edit" in open(path, encoding="utf-8").read()
+
+
+def test_commit_ledger_with_decisions_idempotent_byte_identical(tmp_path):
+    """T10 — E12: re-running the same bundle + dispositions leaves identical bytes."""
+    repo, root = _seeded_repo(tmp_path)
+    disp = [_disposition("rejected", {"disposition": "declined", "reason": "known trade"})]
+    bundle, _first = _decide(repo, root, _drift_lens(), disp)
+    after_first = open(gs.ledger_path(repo, root), "rb").read()
+    second = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert second["ok"] is True, second
+    assert second["decisions"] == []
+    assert open(gs.ledger_path(repo, root), "rb").read() == after_first
+
+
+def test_commit_ledger_decisions_grade_the_lens_in_report_card(tmp_path):
+    """T11 — a committed decision gives `report-card` something to grade."""
+    import guardian_ledger as gled
+
+    repo, root = _seeded_repo(tmp_path)
+    _decide(repo, root, _drift_lens(), [_disposition(
+        "rejected", {"disposition": "declined", "reason": "known trade"})])
+    card = gled.report_card(gs.read_ledger(repo, root)["records"])
+    assert card["fixture"]["adjudicated"] == 1
+    assert isinstance(card["fixture"]["actionability"], float)
+
+
+@pytest.mark.parametrize("from_state,target,ledger_extra", [
+    ("filed", "declined", {"reason": "r"}),
+    ("triaged-out", "declined", {"reason": "r"}),
+    ("reopened", "triaged-out", {}),
+], ids=["filed-to-declined", "triaged-out-to-declined", "reopened-to-triaged-out"])
+def test_commit_ledger_decision_without_legal_path_is_skipped_and_reported(
+        tmp_path, from_state, target, ledger_extra):
+    """E7 — never force: the record stays untouched and the skip is reported."""
+    existing = {"id": "fixture:normal", "disposition": from_state, "date": "2026-07-01",
+                "issue": "#1" if from_state == "filed" else None,
+                "metricAtDisposition": None, "reason": None, "reraiseWhen": None,
+                "adjudicatedIn": "s0"}
+    repo, root = _seeded_repo(tmp_path)
+    bundle = gsw.collect(repo, lenses=[_drift_lens()], root=root)
+    disp = [_disposition("rejected", dict(ledger_extra, disposition=target))]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    # The record reaches its state between collect and commit (another session's triage).
+    write_ledger(tmp_path, [existing], root=root)
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is True, res
+    assert res["decisions"] == []
+    assert [(s["id"], s["from"], s["to"]) for s in res["decisionsSkipped"]] == [
+        ("fixture:normal", from_state, target)]
+    assert _record(repo, root)["disposition"] == from_state
+
+
+def test_apply_decisions_refused_mid_chain_writes_no_half_advanced_record():
+    """E8 — `advance` refusing the last step drops the working copy entirely."""
+    decisions = [{"id": "fixture:normal", "disposition": "accepted", "issue": None,
+                  "reason": None, "reraiseWhen": None}]  # accepted needs a reason
+    records, applied, skipped = gsw._apply_decisions(
+        [], decisions, [{"id": "fixture:normal", "metric": 5}], "s1")
+    assert records == []
+    assert applied == []
+    assert [(s["id"], s["from"], s["to"]) for s in skipped] == [
+        ("fixture:normal", None, "accepted")]
+
+
+def test_apply_decisions_reopened_record_takes_a_legal_target():
+    reopened = {"id": "fixture:normal", "disposition": "reopened", "date": "2026-07-01"}
+    decisions = [{"id": "fixture:normal", "disposition": "declined", "issue": None,
+                  "reason": "settled", "reraiseWhen": None}]
+    records, applied, skipped = gsw._apply_decisions(
+        [reopened], decisions, [{"id": "fixture:normal", "metric": 5}], "s1")
+    assert [r["disposition"] for r in records] == ["declined"]
+    assert applied == [{"id": "fixture:normal", "from": "reopened", "to": "declined"}]
+    assert skipped == []
+
+
+def _settled(disposition, metric, rid="fixture:normal", **extra):
+    rec = {"id": rid, "disposition": disposition, "date": "2026-07-01", "issue": None,
+           "reason": "known trade", "reraiseWhen": None,
+           "metricAtDisposition": {"metric": metric}, "adjudicatedIn": "s0"}
+    rec.update(extra)
+    return rec
+
+
+@pytest.mark.parametrize("disposition", ["accepted", "declined"])
+def test_apply_decisions_restated_worsened_trade_settles_at_the_new_metric(disposition):
+    """A worsened accepted/declined trade re-stated is updated in place, write-once sweep."""
+    import guardian_ledger as gled
+
+    decisions = [{"id": "fixture:normal", "disposition": disposition, "issue": None,
+                  "reason": "still fine", "reraiseWhen": "metric grows again"}]
+    records, applied, skipped = gsw._apply_decisions(
+        [_settled(disposition, 1)], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert skipped == []
+    assert applied == [{"id": "fixture:normal", "from": disposition, "to": disposition,
+                        "redecided": True}]
+    (rec,) = records
+    assert rec["disposition"] == disposition
+    assert rec["metricAtDisposition"] == {"metric": 2}
+    assert rec["reason"] == "still fine"
+    assert rec["reraiseWhen"] == "metric grows again"
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["date"] != "2026-07-01"
+    assert gled.materially_worsened({"id": "fixture:normal", "metric": 2}, rec) is False
+
+
+def test_apply_decisions_restated_unworsened_trade_is_a_no_op():
+    decisions = [{"id": "fixture:normal", "disposition": "declined", "issue": None,
+                  "reason": "again", "reraiseWhen": None}]
+    before = _settled("declined", 3)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 3}], "s1")
+    assert records == [before]
+    assert applied == [] and skipped == []
+
+
+def test_apply_decisions_different_disposition_from_terminal_state_stays_skipped():
+    decisions = [{"id": "fixture:normal", "disposition": "filed", "issue": "#7",
+                  "reason": None, "reraiseWhen": None}]
+    before = _settled("declined", 1)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert records == [before]
+    assert applied == []
+    assert [(s["id"], s["from"], s["to"]) for s in skipped] == [
+        ("fixture:normal", "declined", "filed")]
+    assert "declined is terminal" in skipped[0]["reason"]
+
+
+def test_commit_ledger_restated_worsened_trade_persists_and_stops_resurfacing(tmp_path):
+    repo, root = _seeded_repo(tmp_path, records=[_settled("declined", 1)])
+    disp = [_disposition("rejected", {"disposition": "declined", "reason": "accepted growth"})]
+    bundle = gsw.collect(repo, lenses=[_drift_lens(metric=5)], root=root)
+    assert [s["id"] for s in bundle["surfaced"]] == ["fixture:normal"]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is True, res
+    assert res["decisionsSkipped"] == []
+    rec = _record(repo, root)
+    assert rec["metricAtDisposition"] == {"metric": 5}
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["reason"] == "accepted growth"
+    assert gsw.collect(repo, lenses=[_drift_lens(metric=5)], root=root)["surfaced"] == []
+
+
+def test_apply_decisions_line_drifted_id_advances_the_matched_record():
+    surfaced_rec = {"id": "deadcode:x:a.py:10", "disposition": "surfaced",
+                    "date": "2026-07-01"}
+    decisions = [{"id": "deadcode:x:a.py:20", "disposition": "triaged-out", "issue": None,
+                  "reason": "noise", "reraiseWhen": None}]
+    records, applied, skipped = gsw._apply_decisions(
+        [surfaced_rec], decisions, [{"id": "deadcode:x:a.py:20", "metric": 1}], "s1")
+    assert [(r["id"], r["disposition"]) for r in records] == [
+        ("deadcode:x:a.py:10", "triaged-out")]
+    assert applied == [{"id": "deadcode:x:a.py:10", "from": "surfaced", "to": "triaged-out"}]
+    assert skipped == []
+
+
+def test_apply_decisions_ambiguous_identity_without_exact_record_is_skipped():
+    recs = [{"id": "deadcode:x:a.py:10", "disposition": "surfaced", "date": "2026-07-01"},
+            {"id": "deadcode:x:a.py:30", "disposition": "surfaced", "date": "2026-07-01"}]
+    decisions = [{"id": "deadcode:x:a.py:20", "disposition": "triaged-out", "issue": None,
+                  "reason": "noise", "reraiseWhen": None}]
+    records, applied, skipped = gsw._apply_decisions(recs, decisions, [], "s1")
+    assert records == recs
+    assert applied == []
+    assert [(s["id"], s["to"]) for s in skipped] == [("deadcode:x:a.py:20", "triaged-out")]
+    assert "ambiguous" in skipped[0]["reason"]
+
+
+@pytest.mark.parametrize("candidate", [
+    {"id": "fixture:normal"},
+    {"id": "fixture:normal", "metric": "5"},
+    {"id": "fixture:normal", "metric": True},
+    {"id": "fixture:normal", "metric": float("inf")},
+    {"id": "fixture:normal", "metric": float("nan")},
+], ids=["missing", "string", "bool", "inf", "nan"])
+def test_apply_decisions_unusable_metric_writes_null(candidate):
+    """E9 — a missing / non-numeric / non-finite candidate metric → null, decision still lands."""
+    decisions = [{"id": "fixture:normal", "disposition": "triaged-out", "issue": None,
+                  "reason": None, "reraiseWhen": None}]
+    records, applied, _skipped = gsw._apply_decisions([], decisions, [candidate], "s1")
+    assert records[0].get("metricAtDisposition") is None
+    assert len(applied) == 1
+
+
+def test_commit_ledger_opaque_ledger_still_writes_nothing(tmp_path):
+    """E10 — an unreadable ledger keeps the existing fail-closed skip; decisions don't force it."""
+    repo, root = _seeded_repo(tmp_path)
+    bundle = gsw.collect(repo, lenses=[_drift_lens()], root=root)
+    disp = [_disposition("rejected", {"disposition": "declined", "reason": "known trade"})]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    path = gs.ledger_path(repo, root)
+    opaque = "# Guardian ledger\n\nnot a fenced block at all\n"
+    sc.atomic_write(path, opaque)
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is False
+    assert "skipped" in res
+    assert open(path, encoding="utf-8").read() == opaque
+
+
+@pytest.mark.parametrize("disp,needle", [
+    (_disposition("rejected", ledger="declined", reason="r"), "ledger must be an object"),  # E1
+    (_disposition("rejected", {"disposition": "wontfix", "reason": "r"}),
+     "ledger.disposition must be"),  # E2
+    (_disposition("rejected", {"disposition": "filed"}), "filed requires a non-empty issue"),  # E3
+    (_disposition("rejected", {"disposition": "filed", "issue": "  "}),
+     "filed requires a non-empty issue"),  # E3 (blank)
+    (_disposition("rejected", {"disposition": "accepted"}),
+     "accepted requires a non-empty reason"),  # E4
+    (_disposition("rejected", {"disposition": "declined", "reason": ""}),
+     "declined requires a non-empty reason"),  # E4 (empty)
+    (_disposition("degraded", {"disposition": "triaged-out"}, reason="r"),
+     "degraded verdict cannot carry"),  # E5
+    (_disposition("rejected", {"disposition": "triaged-out", "bogus": 1}, reason="r"),
+     "unknown ledger key 'bogus'"),  # E6
+], ids=["E1", "E2", "E3", "E3-blank", "E4", "E4-empty", "E5", "E6"])
+def test_validate_dispositions_refuses_bad_ledger_decision(disp, needle):
+    bundle = {"surfaced": [{"id": "fixture:normal"}]}
+    ok, errors = gsw.validate_dispositions(bundle, [disp])
+    assert ok is False
+    assert any(needle in e for e in errors), errors
+
+
+def test_validate_dispositions_accepts_well_formed_ledger_decisions():
+    bundle = {"surfaced": [{"id": "fixture:normal"}]}
+    for ledger in (
+        {"disposition": "filed", "issue": "#1"},
+        {"disposition": "accepted", "reason": "r", "reraiseWhen": "worse"},
+        {"disposition": "declined", "reason": "r"},
+        {"disposition": "triaged-out"},
+    ):
+        ok, errors = gsw.validate_dispositions(
+            bundle, [_disposition("validated", ledger)])
+        assert ok is True, errors

@@ -128,6 +128,26 @@ GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
+def _fixer_create_items(batch):
+    """The ``file`` of each batch row that is a break-it finding the driver itself stamped for that path.
+
+    The test file such a finding names is written by the fixer, so it does not exist when the
+    order is linted. The stamp is the driver's: compile strips a seat-supplied one and only the
+    break-it intercept stamps a copy, so an unstamped row, or one stamped for another path, is
+    never exempted.
+    """
+    out = []
+    for row in batch if isinstance(batch, list) else []:
+        if not isinstance(row, dict) or not break_it.is_break_it(row):
+            continue
+        stamp = row.get(break_it.RUN_FIELD)
+        # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
+        if (isinstance(stamp, dict) and isinstance(stamp.get("path"), str) and stamp["path"]
+                and stamp["path"] == row.get("file")):
+            out.append(row["file"])
+    return out
+
+
 def _order_lint_text(order_text, context):
     """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's.
 
@@ -3285,7 +3305,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
-    intercepted, runs, exempt = break_it.intercept(break_it_raw, repo_root, head)
+    # axis: a break-it python run executes under the project's own interpreter launcher read from the verify command, never a PATH python — see bite-proof record wo_3_1910_break_it_interpreter
+    intercepted, runs, exempt = break_it.intercept(
+        break_it_raw, repo_root, head,
+        interpreter=break_it.project_interpreter(config.get("verifyCommand")))
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
     # test role's first finding, so the original order holds.
     break_it_ids = {id(g) for g in break_it_raw}
@@ -3740,6 +3763,12 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
+    # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors
+    if not state["_verified"]:
+        _decision(state, "synthesis-no-survivors",
+                  "verification left no findings, so no grouping seat was dispatched")
+        _fold_synthesis(state, config, {"grouping": []})
+        return
     if _nonpanel_unseatable(state, session_dir, P_SYNTHESIS):
         # No grouping seat outside the makers' families on a proven synthesis cell: no order is
         # emitted and the round folds exactly as an empty grouping would — every verified finding
@@ -5213,6 +5242,12 @@ def _audit_result_entry_fault(entry, index, target_ids):
         return ("%s `unnamedChange` is %s, not a string; expected a plain-words string, or leave the "
                 "field out when the fix changes nothing beyond what the finding names"
                 % (where, type(unnamed).__name__))
+    claim_field = audits.unnamed_change_claims_fault(entry.get("unnamedChangeFixes"),
+                                                     entry.get("unnamedChangeReverts"))
+    if claim_field is not None:
+        return ("%s `%s` is %r, not a list of non-blank strings; expected the ids of the target's "
+                "`roundFindings` (fixes) or the refs of its `reportedUnnamedChanges` (reverts), or "
+                "leave the field out" % (where, claim_field, entry.get(claim_field)))
     if ruling == "discharged" and not audits.has_usable_reason(entry.get("reason")):
         return ("%s rules `discharged` with no `reason` — a bare discharge is the unproven claim "
                 "the audit fold exists to reject; expected a non-empty `reason` string" % where)
@@ -5789,6 +5824,43 @@ def _carried_owner_ruling(decision):
     return owner_ruling, _decision_seq(decision)
 
 
+def _reported_unnamed_changes(state):
+    """Every unnamed change an audit of this review recorded, oldest first: ``{ref, round, id, text}``
+    with ``ref`` = ``r<round>:<audit entry id>``. The text is the entry's ``reportedUnnamedChange``;
+    an entry recorded before that key existed gives it back from its reason (the downgraded-clearing
+    prefix, or the ``Unnamed change:`` tail a not-discharged ruling keeps). One entry per ref."""
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return []
+    reported, seen = [], set()
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        entries = rounds[rnd_key].get("audits") if isinstance(rounds[rnd_key], dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if not (isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]):
+                continue
+            text = entry.get("reportedUnnamedChange")
+            if not audits.has_usable_unnamed_change(text):
+                reason = entry.get("reason")
+                text = None
+                if isinstance(reason, str) and reason.startswith(audits.UNNAMED_CHANGE_REASON_PREFIX):
+                    text = reason[len(audits.UNNAMED_CHANGE_REASON_PREFIX):]
+                elif (entry.get("ruling") == "not-discharged" and isinstance(reason, str)
+                        and " Unnamed change: " in reason):
+                    text = reason.split(" Unnamed change: ", 1)[1]
+                if not audits.has_usable_unnamed_change(text):
+                    continue
+            ref = "r%d:%s" % (rnd_num, entry["id"])
+            if ref not in seen:
+                seen.add(ref)
+                reported.append({"ref": ref, "round": rnd_num, "id": entry["id"],
+                                 "text": text.strip()})
+    return reported
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -5827,6 +5899,31 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                 sibling["ownerRuling"] = sib_ruling
                 sibling["ownerRulingSeq"] = sib_seq
             batch_findings.append(sibling)
+    # The round's other findings ride every target: a change the fix makes that the auditor can
+    # attribute to one of them is that finding's fix, not an unnamed change. Findings the owner
+    # skipped or ruled out of scope, and refuted ones, are no round finding to attribute a change to.
+    batch_keys = {_finding_key_of(bf) for bf in state.get("fixBatch") or [] if isinstance(bf, dict)}
+    round_findings = []
+    for rf in state.get("findings") or []:
+        rkey = _finding_key_of(rf) if isinstance(rf, dict) else None
+        if (not isinstance(rkey, str) or rkey in batch_keys
+                or any(r["id"] == rkey for r in round_findings)):
+            continue
+        rdecision = _row_decision(state, effective, ledger_by_key, rkey)
+        if rdecision is not None and rdecision.get("ruling") not in _OWNER_FIX_RULINGS:
+            continue
+        if (ledger_by_key.get(rkey) or {}).get("disposition") in ("refuted", "out-of-scope"):
+            continue
+        entry = {"id": rkey, "file": rf.get("file"), "line": rf.get("line"), "title": rf.get("title")}
+        for carried in ("body", "suggestion"):
+            if rf.get(carried) is not None:
+                entry[carried] = rf[carried]
+        entry_ruling, entry_seq = _carried_owner_ruling(rdecision)
+        if entry_ruling is not None:
+            entry["ownerRuling"] = entry_ruling
+            entry["ownerRulingSeq"] = entry_seq
+        round_findings.append(entry)
+    reported_changes = _reported_unnamed_changes(state)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5862,6 +5959,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if attempt_delta is not None:
             row["fixerDelta"] = list(attempt_delta)
         row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
+        row["roundFindings"] = list(round_findings)
+        row["reportedUnnamedChanges"] = list(reported_changes)
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
         # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
         # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
@@ -6065,6 +6164,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
         _decision(state, "audit-unnamed-change",
                   "the fix changes behaviour its finding does not name, so it is not accepted "
                   "without a ruling: %s" % ", ".join(unnamed_ids))
+    attributed_ids = list(outcome.get("attributedChange") or [])
+    if attributed_ids:
+        _record_round(state, "auditAttributedChange", attributed_ids)
+        _decision(state, "audit-attributed-change",
+                  "the fix's other change is the fix of a round finding or a revert of a reported "
+                  "change, checked against the review's own record: %s" % ", ".join(attributed_ids))
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
                   "audit result for %s echoed a vendor other than the recorded dispatch provenance "
@@ -6728,7 +6833,8 @@ def _break_it_kept_step(state, config):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
                          "reason": disposition})
             continue
-        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
+                                  interpreter=break_it.project_interpreter(config.get("verifyCommand")))
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}
         rows.append(row)
@@ -10828,7 +10934,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             lint_text = _order_lint_text(order_text, context)
             lint = order_lint.check_text(
                 lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
-                allow_payload_contract=context.get("host_seat") is True)
+                allow_payload_contract=context.get("host_seat") is True,
+                create_items=_fixer_create_items(pending.get("batch") or []))
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"

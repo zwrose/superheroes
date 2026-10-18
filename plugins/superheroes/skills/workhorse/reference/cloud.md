@@ -13,6 +13,7 @@
   - [Review](#review)
   - [The cloud container](#the-cloud-container)
   - [Verify: cloud-only failures](#verify-cloud-only-failures)
+  - [Terminal comments: handback, stop, park](#terminal-comments-handback-stop-park)
   - [Handback](#handback)
   - [The gh calls on a cloud build's path](#the-gh-calls-on-a-cloud-builds-path)
 
@@ -136,7 +137,7 @@ go through GraphQL. Use these in their place:
 |---|---|
 | `gh pr list --head` and `gh pr view --json …` | `cloud_builder.py pr-json --repo <o>/<r> --branch <b> --out <file>` (same field names) |
 | `gh repo view --json nameWithOwner` | `cloud_builder.py repo-json --repo <o>/<r>` |
-| a PR body | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
+| a PR body | `gh api repos/<o>/<r>/pulls/<n> --jq .body`; `lib/vet_slot.py` reads it this way |
 | an issue and its comments | `gh api repos/<o>/<r>/issues/<n>` and `gh api "repos/<o>/<r>/issues/<n>/comments?per_page=100&page=<N>"` for N = 1, 2, … until a page holds fewer than 100 rows (an empty page ends it); a page that fails fails the read (every page, so a late advisor reply is seen) |
 
 Writes go one per call: one comment, one edit.
@@ -155,7 +156,7 @@ Writes go one per call: one comment, one edit.
    durable record: act on either copy inside the reply window, the message or the issue comment
    carrying the advisor's answer.
 5. With no answer in that time, **park**. Commit and push what is done, post a park comment on the
-   issue, and end the turn. The comment says what is done and pushed with its head SHA, what is
+   issue (composed with `terminal --kind park`, § Terminal comments), and end the turn. The comment says what is done and pushed with its head SHA, what is
    blocked, and what the builder needs.
 
 A cloud session stays listed while parked, and the advisor's message resumes it. On resume, re-read
@@ -197,7 +198,7 @@ says.
 
 If the pass has lapsed before the review runs, do not substitute a reviewer. Post the `comment` from
 `python3 -B <plugin root>/lib/cloud_builder.py review-lapsed` on the PR, leave the PR not ready, and
-park. A review that already finished before the lapse stays recorded as it was.
+park. Post the park on the issue too, with `terminal --kind park` (§ Terminal comments). A review that already finished before the lapse stays recorded as it was.
 
 A cloud build hands back only with its review record written, as the charter's §11 and
 `rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. In a cloud session
@@ -206,7 +207,8 @@ PR closes from the body's first line, so write the close link there. The record 
 final commit was reported by the session rather than read from the PR (`whatIsMissing` names an
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
 as a comment naming the head it reviewed, leaves the PR not ready, and parks, naming the review
-record as missing. A record that was written and reads `not-reviewed` for any other reason, such as
+record as missing. The park is also posted on the issue with `terminal --kind park` (§ Terminal
+comments). A record that was written and reads `not-reviewed` for any other reason, such as
 an owner-authorized go-ahead covering a missing review, is a written record: handback follows
 `skills/review-code/reference/review-record.md`.
 
@@ -218,6 +220,12 @@ findings" line. If `render_raw` refuses the file as too large, post instead a sh
 round's findings (severity, title, file:line), rendered through `render_raw` before it is posted, and
 say the full text was too large. The review
 session's own directory lives only on the container and is lost when the session ends.
+
+A cloud session's GitHub writes (`gh api` and the session's GitHub tools alike) pass through an egress
+that appends a host footer and wraps each bare `http(s)://` run in backticks, up to the next
+whitespace, fenced code included. The record writer's JSON is unaffected because it escapes `/`. A
+raw-output comment or the record's summary prose can still show a URL in backticks; nothing parses
+those.
 
 When the record writer refuses, follow `skills/review-code/reference/review-record.md` § When it
 refuses.
@@ -259,12 +267,38 @@ Keep the failing command and its output in the build record, and disclose it. Cl
 only with green CI on the same PR head. Where the project owns the test, the preferred remedy is a
 test made independent of the user, which is the durable fix.
 
+## Terminal comments: handback, stop, park
+
+A cloud builder posts its handback, every stop and every park **on the build's issue**. Each is a
+comment whose first line is one fixed header. The headers are defined once, in `lib/cloud_builder.py`
+(`TERMINAL_HEADERS`). They are:
+
+- `Builder handback (cloud build).` The PR is ready and handed back (charter §11).
+- `Builder stop (cloud build).` The build stopped before any spend and built nothing: a route-back,
+  an Anchor stop report, any intake stop report (charter §1).
+- `Builder park (cloud build).` A park with work pushed: a builder note with no answer in the reply
+  window, a review that did not run, a missing review record, any other park.
+
+Write the comment's text to a file. Run
+`python3 -B <plugin root>/lib/cloud_builder.py terminal --kind handback|stop|park --text-file <file>`.
+Post the result's `comment` on the issue as it is. The cloud harness adds its own footer; the readers
+allow it.
+
+A park on the PR (the lapsed-review comment, the review receipt) is still posted where § Review says.
+The builder also posts a park comment on the issue, because the watch and recovery read the issue.
+
+The refusal at intake keeps its own header (§ Intake). It is not one of these.
+
+What the advisor does with them is the advisor's: `skills/showrunner/reference/wave-watch.md` and
+`skills/showrunner/reference/orchestration.md`.
+
 ## Handback
 
 Everything the vet needs is on the PR before handback: the review record, the receipts,
 the dispositions. Nothing lives only on the cloud machine. Open the PR through the GitHub channel
 from § Preflight. Verify the remote head through `cloud_builder.py pr-json`, not `gh pr view`.
 A stack layer's build record lists the stack link owed to the advisor (§ Workspace).
+The handback comment on the issue is composed with `terminal --kind handback` (§ Terminal comments).
 
 ## The gh calls on a cloud build's path
 
@@ -276,7 +310,7 @@ off a cloud build's path:
 |---|---|---|
 | `skills/review-code/SKILL.md`, PR mode setup | `gh pr list --head`, `gh pr view --json`, `gh repo view --json nameWithOwner` | the stand-ins in § GitHub reads |
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
-| `lib/vet_slot.py handback`, `--pr <n> --repo <owner/name>` | `gh pr view` | `--body-file <body.md>` on the body read through `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
+| `lib/vet_slot.py`, `--pr <n> --repo <owner/name>` | the PR body through `gh api repos/<o>/<r>/pulls/<n>` (REST); `write` also edits it with `gh pr edit` | the body read works; `write` is the advisor's, not a builder's path |
 | `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `rubric/native-stacks.md`, linking a layer | `gh stack link` | the advisor's, at handback: § Workspace, "A stack layer" |

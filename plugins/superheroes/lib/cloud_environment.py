@@ -2,7 +2,7 @@
 
   cloud_environment.py snapshot [--cwd D]
   cloud_environment.py pick [--before ID] [--confirmed ID] [--cwd D]
-  cloud_environment.py compare --environment ID [--cwd D]
+  cloud_environment.py compare --environment ID [--moving] [--cwd D]
 
 Claude Code saves the pick as `remote.defaultEnvironmentId` in the user settings file of the
 account it runs on. `snapshot` reads that value before the owner picks; `pick` reads it again and
@@ -13,19 +13,23 @@ same environment kept, not a missing pick.
 
 On a machine where several Claude accounts share one settings file, the second read is made right
 after the pick, because another account's pick in between would be read as this one's. Standard
-library plus `config_dir` and `engine_adapter`. Every public function returns a plain dict and
-never raises; nothing here prints, logs or writes a file except the one result line of the command
-line.
+library plus `cloud_setup`, `config_dir` and `engine_adapter`. Every public function returns a plain
+dict and never raises; nothing here prints, logs or writes a file except the one result line of the
+command line.
 
-`compare` runs just before a step uses an environment id: it reads the one the picker holds now
-and says whether it is the id about to be used, so no step runs against an environment other than
-the one the owner picked.
+`compare` runs just before a step uses an environment id and says whether it is the id about to be
+used, so no step runs against an environment other than the one the owner picked. Once the account
+has a setup record (written only after a passed check naming a picked id), the record's id matches
+without reading the picker, because several accounts on one machine share the picker's one value,
+and any other id is refused unless the owner is moving the account to another environment
+(`--moving`). With no record, or on a move, the id is compared with the picker's current value.
 """
 import argparse
 import json
 import os
 import sys
 
+import cloud_setup
 import config_dir
 import engine_adapter
 
@@ -46,6 +50,9 @@ _CONFIRMED_INVALID = "The environment confirmed earlier is not an environment id
 _KEPT = "Got it: I can see you kept the same environment."
 _MISMATCHED = ("The environment picked in /remote-env is a different one from the one I was about "
                "to use. The sitting will use the picked one.")
+_RECORDED_DIFFERS = ("The environment I was about to use is not the one this account's cloud setup "
+                     "recorded. The sitting will use the recorded one. If you're moving this account "
+                     "to another environment, tell me and pick it with /remote-env.")
 _UNCHECKED = ("I can't confirm which environment is picked in /remote-env, so I'm stopping here. "
               "Check that Claude Code's settings file on this machine is readable and that an "
               "environment shows as picked in /remote-env, then tell me and I'll look again.")
@@ -143,11 +150,30 @@ def _unchecked(reason):
     return {"action": "unchecked", "reason": reason, "environment": None, "message": _UNCHECKED}
 
 
-def compare(environment, env=None, cwd=None):
-    """Compare the id about to be used with the one the picker holds now. Never raises."""
+def _recorded(env, cwd, root):
+    """The environment this account's setup record names, or None when it has no valid record."""
+    if cwd is None:
+        return None
+    account = cloud_setup.launching_account(env, cwd)
+    if account is None:
+        return None
+    return cloud_setup.recorded_environment(cwd, account, root)
+
+
+def compare(environment, env=None, cwd=None, root=None, moving=False):
+    """Compare the id about to be used with the account's setup record, or, with no record or on a
+    move (`moving`), with the one the picker holds now. Never raises."""
     try:
         if not _is_id(environment):
             return _unchecked("environment-invalid")
+        recorded = None if moving else _recorded(env, cwd, root)
+        # axis: only the id the account's setup record names matches without the picker — see bite-proof record c1918_recorded_environment.md
+        if recorded is not None and environment == recorded:
+            return {"action": "matched", "reason": "recorded", "environment": environment}
+        # axis: a recorded account refuses any other id unless the owner is moving it — see bite-proof record c1918_recorded_environment.md
+        if recorded is not None:
+            return {"action": "mismatched", "reason": "recorded-differs", "environment": recorded,
+                    "message": _RECORDED_DIFFERS}
         readable, current = _read(env, cwd)
         if not readable or current is None:
             return _unchecked("pick-unreadable")
@@ -166,12 +192,13 @@ def main(argv=None):
     parser.add_argument("--before", default=None)
     parser.add_argument("--confirmed", default=None)
     parser.add_argument("--environment", default=None)
+    parser.add_argument("--moving", action="store_true")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.verb == "snapshot":
         result = snapshot(cwd=cwd)
     elif args.verb == "compare":
-        result = compare(args.environment, cwd=cwd)
+        result = compare(args.environment, cwd=cwd, moving=args.moving)
     else:
         result = pick(before=args.before, confirmed=args.confirmed, cwd=cwd)
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")

@@ -12,15 +12,75 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## 0.43.1
+## 0.44.0
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts 0.43.1. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.44.0. Each step names the note it comes from.
 
-- **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
+- **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.44.0, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.44.0 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
 - **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
+- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`, though in a cloud session on Linux a builder's implementer orders do not reach that refusal, because they run on the native engine (the channel itself still refuses). See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
+- **After switching.** **In a cloud session on Linux, a `localSockets` project's implementer orders run as native subagents through `native_engine.py`, and `route` decides it.** The builder runs `native_engine.py route --cwd <build worktree>` before each implementer order; `native` sends it through the native engine, any other engine keeps `dispatch-write`. See [Native implementer engine](#native-implementer-engine).
+
+### PR sheet: leftovers carry the decision spine
+
+- `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
+- A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
+- A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
+
+### Claude write sandbox: localPorts opens on Linux
+
+- The unsupported-platform refusal now names only `localSockets` off macOS; the token `engine-config:sandbox-access-unsupported-platform` and the result keys are unchanged.
+- A Linux run with `localPorts` journals `access.localPorts: true` and writes `network.allowLocalBinding: true`.
+
+### Native implementer engine
+
+- `native_engine.py` takes five verbs. `route --cwd` returns `ok`, `engine`, `reason` and, for `native`, `why`; `open` returns `ok`, `terminal`, `runDir`, `deadlineAt` and `agent` (`subagent_type`, `model`, `isolation`, `run_in_background`, `promptPath`); `enroll` returns `ok` and `head`; `wait` returns `ok`, `resultPresent`, `deadlinePassed` and `secondsLeft`; `close` returns `ok`, `terminal`, `signal` or `reason`, `forfeited`, `engine`, `bounds`, `servedModel`, and on success `itemCheck` and `collected` (`files`, `patchSha256`).
+- A native run's `run-opened` record carries `engine: "native"`, `bounds`, `effectiveEffort` (always null, because the host's subagent dispatch takes no effort), `expectedServedModel` and `deadlineAt`, and no `claudeWriteSandbox`. The run also journals `native-enrolled`, `native-collecting` and `run-closed` records.
+- Close tokens, in check order: `native-deadline`, `native-not-enrolled`, `native-binding-mismatch`, `native-worktree-not-isolated`, `native-base-mismatch`, `native-model-unread`, `native-model-mismatch`, `native-result-invalid`; then `items-undelivered`, `item-evidence-unavailable:<cause>`, `native-collect-failed`, `native-collect-incomplete`, `native-collect-interrupted` and `journal-write-failed`. `needs_context` and `blocked` close unforfeited.
+- A new PreToolUse hook, `implementer_fence.py`, runs on the `Bash` and `Edit|Write` matchers. It acts only on a `superheroes:implementer` subagent: it records the binding on a native run's enroll command and fences only an implementer enrolled that way (install and network commands, a closed run, a passed deadline). Every other agent, the builder included, is untouched.
+
+### Review record: carried leftovers are re-checked against the head
+
+- A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
+
+### Review record: survives the cloud egress, and an unreadable one names where
+
+- The record's JSON writes `/` as `\/`, so a cloud session's URL rewrite cannot change it. Records already posted read as before.
+- `read`'s `review-record-unreadable` detail now names the comment and character offset of the break with an excerpt, after the URL it already gave; the reason token and keys are unchanged.
+
+### Fix audit: a same-round fix or a revert is not an unnamed change
+
+- A fix audit that reports a change its finding does not name now clears the fix when the auditor attributes every such change to the review's own record: `unnamedChangeFixes` names findings raised in the same round outside the fix batch (not skipped, ruled out of scope or refuted), and `unnamedChangeReverts` names an unnamed change an earlier audit of the review reported and this fix undoes. The driver checks each id and ref against that record.
+- An unnamed change with no claim, or with a claim the record does not bear out, still refuses as before, and an owner ruling that allows the change works as before.
+- Audit results take the two optional members `unnamedChangeFixes` and `unnamedChangeReverts` (lists of strings). An audit entry gains `reportedUnnamedChange`, and, when attributed, `attributedChange`, `sameRoundFixes` and `revertedChanges`; the round gains `auditAttributedChange`.
+- A review no longer stops at the owner gate when a fix round also fixed a small same-round finding or reverted such an edit.
+
+### Guardian: the coupling lens keeps a baseline past a flat Python layout
+
+- A repo with a flat Python layout (no `__init__.py` under any Python source root) and collectable JS/TS now has its coupling baseline saved on the first sweep. Drift and the JS module-count cliff run against it from the next sweep on. The degraded line naming the Python half still shows on every sweep.
+- Any other degradation (a missing tool, a Python file that will not parse, a cliff) is still transient: a transient partial on a first sweep saves nothing, as before.
+- The lens's `collectorVersion` is unchanged, so repos that already hold a coupling baseline keep it.
+
+### Launcher: one phone per named iPhone size
+
+- A premise may carry `iphoneModels`, a non-empty list of distinct simulator device-type names (`"iPhone 17"`, `"iPhone 17e"`), valid only beside `"iphoneCheck": true`. Otherwise the launch refuses `premise-iphone-models-invalid`.
+- Before it makes anything, the launcher reads `xcrun simctl list devicetypes -j`. A name the inventory lacks refuses `iphone-model-unknown` (with `unknownModels`), and an unreadable inventory refuses `iphone-models-unreadable`. Both refuse at stage `iphone-models`, with no worktree, no phone and no child made.
+- It then makes one phone per name, in order, named `superheroes-<launchId>-<n>`. A create that fails is skipped. The launch record keeps `iphoneId` (the first phone) and adds `iphoneIds` (every phone made).
+- The builder gets `SUPERHEROES_IPHONE_IDS` (every phone, comma-joined, the first being `SUPERHEROES_IPHONE_ID`) beside `SUPERHEROES_IPHONE_ID`, only when sizes were named and at least one phone was made.
+- `iphone_check.py preflight` checks every handed phone, and its `ready` result adds `phones`. `render` refuses a check object whose evidence comes from more than one phone, so the pilot renders one check object per phone.
+- The fold's lane view carries `iphoneIds` (a legacy record reads `[iphoneId]`). The reap deletes every one, with one result and one `evidence`/`reap` amendment per phone. A caller that reads the reap's `phones[]` now gets one entry per phone.
+- At vet, a piece's `phone` must be among the record's phones, and a launch that named sizes needs a complete check for every size.
+- Launches without `iphoneModels` behave exactly as before.
+
+### Hooks: the plugin approves its own iPhone commands
+
+- A third `PreToolUse` command on the `Bash` matcher, `hooks/iphone_allow.py`, runs after the worktree guard. It approves (`permissionDecision: "allow"`) only one plain call, `python3 [-B] <plugin root>/lib/iphone_check.py <verb> …`, where the verb is `preflight`, `boot`, `open`, `drive`, `shot`, `read`, `judge` or `render`. A `drive` call needs an AXe step after `--` that is `tap`, `type`, `button`, `swipe` or `describe-ui`. `judge` may read its step as `judge < <file>`.
+- It never denies. Any other command gets no decision from it, so the normal permission flow applies, and the worktree guard still denies what it denies. Direct `axe` calls are not covered.
+- It is wired on Claude Code only. The Codex hooks file stays empty.
+- A pilot call gets the approval only when it writes the absolute plugin root, one call per command, with no `$ROOT_DIR` variable and no chaining.
 
 ### Launcher: cloud launch
 
@@ -44,16 +104,6 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
   held comment (`superheroes:canon-held`) still carries a held ruling until it is committed. No CLI,
   result key or refusal changes.
 
-### PR sheet: leftovers carry the decision spine
-
-- `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
-- A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
-- A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
-
-### Review record: carried leftovers are re-checked against the head
-
-- A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
-
 ### Review: a changed calibration file is shown to reviewers, and the record lists what they could not read
 
 - In the cleaned copy a review dispatch builds with `--diff-base`, a changed regular file under exactly `.claude/superheroes/` (a project's calibration, such as `core.md`) is now in full and kept in the review patch. Every other `.claude/` path, a lookalike folder, a case variant, a symlink, and a deleted or renamed-away calibration file stay withheld, as before. A brief check (no `--diff-base`) shows none. The view's result gains `calibrationShown` (the paths shown, or `null` without `--diff-base`); `diffWithheldCount` no longer counts them. The six `sanitizedView` receipt keys are unchanged.
@@ -64,7 +114,7 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
 - A cloud builder posts its handback, stop and park on the issue under one fixed first line each: `Builder handback (cloud build).`, `Builder stop (cloud build).`, `Builder park (cloud build).` (`cloud_builder.py terminal --kind handback|stop|park --text-file <file>`; refusals `kind-invalid`, `text-empty`). The cloud's own footer is tolerated.
 - `wave_watch.py` reports `lane-terminal` for a cloud lane as soon as one of those comments is on its issue, not after the quiet window. Several lanes ending together are all reported.
 - `cloud_recover.py assess` has a new verdict, `parked` (evidence `builder-stop` or `builder-park`), when the lane's newest terminal comment is an unanswered stop or park newer than anything the builder pushed since. The result gains `parkComment` (the comment's id, url, kind and time) and `parkRead` (`ok`, `failed`, or `null` when not read). A `parked` lane is never recovered: repair a stop, answer a park. Any doubtful read falls back to the answers it gave before.
-- Builders on an older plugin still post free-form endings, which the quiet alarm still catches. Builders pick up the headers once the cloud environment runs 0.43.1's setup text (the first step above).
+- Builders on an older plugin still post free-form endings, which the quiet alarm still catches. Builders pick up the headers once the cloud environment runs 0.44.0's setup text (the first step above).
 
 ### Publishing a sheet: stage its title
 
@@ -73,6 +123,25 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
 ### Removed: the handback gate and orphaned review code
 
 - `lib/handback_gate.py`, its hook `hooks/handback_receipt_gate.py` (never switched on) and `lib/loop_plan_common.py` are deleted, with about a dozen uncalled functions from the review redesign. The gate had allowed every command for several releases. A project that wired the hook in its own settings removes that entry.
+
+### Review-code: a round with nothing left to verify, and break-it runs on the project's interpreter
+
+- A round whose verification leaves no findings now journals the decision kind `synthesis-no-survivors` and sends no `dispatch-synthesis` order; the round folds as if the grouping were empty. Before, it still sent a synthesis order.
+- A break-it record's `breakItRun` gains `interpreter`. Python break-it tests now run under the launcher the project's `verifyCommand` names, not a `python` on the PATH. A run that cannot use it ends `outcome: not-run` with the new reason `interpreter-unavailable`, or `interpreter-unresolved` when the verify command names no launcher.
+- A fixer order may name a break-it test file that does not exist yet, as long as it resolves inside a root; the fixer runs the record's `run` command with its `interpreter`.
+- A verifier phase accepted by hand with nothing to verify no longer adds a planned-reviewer row to the review record.
+
+### Guardian: the ledger records the sweep's decisions
+
+- Each entry in the dispositions JSON may carry a `ledger` object: `disposition` (`filed`, which needs a non-empty `issue`; `accepted` or `declined`, which need a non-empty `reason`; or `triaged-out`), plus optional `issue`, `reason` and `reraiseWhen`. Any other key is refused, and a `degraded` entry cannot carry one.
+- With no `ledger`, a `rejected` entry writes a `triaged-out` record with the entry's reason, and a `validated` entry writes nothing.
+- `commit-ledger` now writes the sweep's decisions as ledger records, keyed by the surfaced `id` (no longer `ledgerJoin`). Its result gains `decisions` (applied) and `decisionsSkipped` (each with `id`, `from`, `to` and `reason`); an illegal move is skipped and reported, never written.
+- `guardian_ledger.write` takes an optional `recompute` callable, with the failure reasons `recompute-failed` and `invalid-records`. `guardian_collect.run_tool` results gain `truncated`, true when the output hit the collector cap. The lenses now also collect on very large repos.
+
+### Cloud checks: an account's recorded environment
+
+- `cloud_environment.py compare` matches an account whose cloud setup record is ready against its recorded environment id, without reading the `/remote-env` picker: `action: matched, reason: recorded`, or `action: mismatched, reason: recorded-differs` with `environment` the recorded id. The new `--moving` flag restores the picker comparison, for when the owner moves an account to another environment.
+- So the owner picks an environment only at an account's first setup, or when moving it. A later "check again" reads `cloud_setup.py read` and, when `ready: true`, uses the record's `environment` (`skills/configure/reference/set-up.md` § 6).
 
 ## 0.43.0
 

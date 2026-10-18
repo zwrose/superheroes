@@ -29,7 +29,7 @@ Implementation lives in `guardian_lens_coupling.py` (lens logic, eligibility, ce
 Both sides run inside one `collect()`. Per-ecosystem status lives in `digest.ecosystems`; the whole-lens status follows main's three-state contract:
 
 - **collected** — a healthy matrix was measured for either or both ecosystems (`candidates` stay `[]` while vocabulary is deferred; the digest records the deferral).
-- **partial** — one ecosystem degraded while the other collected; the reason names what degraded; the digest is kept for the measured side.
+- **partial** — one ecosystem degraded while the other collected; the reason names what degraded; the digest is kept for the measured side. When the only thing that degraded is a flat Python layout, the partial is a **permanent boundary** (see "Flat-repo honesty (Python)").
 - **not-collected** (`digest=None`) — nothing collectable: no JS/TS and no Python sources (reason text keeps that case distinct), or collapse / cliff / byte-cap / tool-broken / flat-not-analyzable on every present side.
 
 **Python is an AST census, not import-linter.** While declared-vocabulary / repo-config reading is owner-deferred, import-linter has nothing safe to run: the Python side builds the folder-level matrix from a stdlib AST import walk (`parseMode` = `ast-census-only`). Never spawn `lint-imports` from this lens.
@@ -77,7 +77,7 @@ Ecosystem detection is lens-owned: a recursive source/manifest census (`census()
 
 An ecosystem with **no sources** is simply absent from `digest.ecosystems` — not a degradation. A repo that legitimately has no Python must never force the whole lens to `not-collected` when JS collected cleanly. Whole-lens `not-collected` with a reason that names **no sources in this repo** is reserved for the case where *neither* side has sources.
 
-Degraded paths (tool absence, parser collapse, flat Python layout, repo writes, malformed collector output, cliffs, byte caps) map to ecosystem `not-collected` and then to whole-lens `partial` or `not-collected` per the rules above — never an empty candidate list that reads as "ran clean".
+Degraded paths (tool absence, parser collapse, flat Python layout, repo writes, malformed collector output, cliffs, byte caps) map to ecosystem `not-collected` and then to whole-lens `partial` or `not-collected` per the rules above — never an empty candidate list that reads as "ran clean". Of these, only the flat Python layout is permanent; every other degradation is transient, and a transient partial saves nothing on a first seed.
 
 ## Collapse tripwires
 
@@ -92,6 +92,8 @@ A collector that silently collapsed must never be indistinguishable from a repo 
 ## Flat-repo honesty (Python)
 
 A flat layout with no `__init__.py` under any Python source root (`_python_is_packaged()`) reports via `guardian_coupling_adapters.OUTCOMES["flat-layout"]` — honestly degraded rather than faking a clean result. This repo's own `plugins/superheroes/lib/` is exactly that case. The Python side collects via the stdlib AST census only (`parseMode: ast-census-only`) and does not spawn import-linter.
+
+A flat Python layout is a **permanent boundary**, not a failure that a later sweep will fix. When it is the only thing that degraded, the lens's partial carries `permanentBoundary` (the key is `guardian_lens.PERMANENT_BOUNDARY_KEY`; the contract is in [lens-contract.md](lens-contract.md)). The sweep then saves the JS baseline on the first sweep, so drift and the JS module-count cliff run against it from the next sweep on. The degraded line still appears on every sweep and names the Python half and why. If anything else degraded alongside it, the partial is transient and the key stays off.
 
 ## Non-mutating collection
 

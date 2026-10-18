@@ -51,6 +51,7 @@ if _LIB_DIR not in sys.path:
 import guardian_census  # noqa: E402
 import guardian_collect as gc                  # noqa: E402
 import guardian_coupling_adapters as adapters  # noqa: E402
+import guardian_lens as gl                     # noqa: E402
 import guardian_tools as gt                    # noqa: E402
 import store_core                              # noqa: E402
 
@@ -115,6 +116,15 @@ COLLAPSE_RATIO = 0.1
 # Secondary signal: a cliff vs the prior digest. A genuine repo shrink drops sources too,
 # so the current source census is what distinguishes shrink from parser collapse.
 CLIFF_RATIO = 0.5
+
+# --- permanent boundary ---------------------------------------------------------------
+# Appended to the partial reason when every degraded ecosystem degraded for a structural
+# reason (today: only the Python flat layout). The sweep reads `permanentBoundary` from
+# the partial and saves the baseline for the half that collects.
+PERMANENT_BOUNDARY_NOTE = (
+    "a permanent boundary of this repo's layout, not a collection failure: the coupling "
+    "baseline is kept for the half that collects, and this note repeats on every sweep "
+    "while the boundary holds")
 
 # --- language census -----------------------------------------------------------------
 JS_EXT_LANG = {
@@ -809,6 +819,7 @@ class CouplingLens(object):
         ecosystems = {}
         all_rows = []
         reasons = []
+        permanence = []
         any_collected = False
         versions = {}
         per_workspace = {}
@@ -820,6 +831,7 @@ class CouplingLens(object):
                 "js", "%s js: git ls-files failed: %s" % (self.name, js_census_err))
             ecosystems["js"] = js_fail["section"]
             reasons.append(js_fail["reason"])
+            permanence.append(bool(js_fail.get("permanent", False)))
         elif js_total > 0:
             js = self._measure_js(ctx, repo, js_census, prev)
             ecosystems["js"] = js["section"]
@@ -832,6 +844,7 @@ class CouplingLens(object):
                 per_workspace.update(js.get("per_workspace") or {})
             if js.get("reason"):
                 reasons.append(js["reason"])
+                permanence.append(bool(js.get("permanent", False)))
         # else: ecosystem absent — not a degradation
 
         if py_census_err:
@@ -839,6 +852,7 @@ class CouplingLens(object):
                 "py", "%s py: git ls-files failed: %s" % (self.name, py_census_err))
             ecosystems["py"] = py_fail["section"]
             reasons.append(py_fail["reason"])
+            permanence.append(bool(py_fail.get("permanent", False)))
         elif py_total > 0:
             py = self._measure_py(ctx, repo, py_census, prev)
             ecosystems["py"] = py["section"]
@@ -851,6 +865,7 @@ class CouplingLens(object):
                 per_workspace.update(py.get("per_workspace") or {})
             if py.get("reason"):
                 reasons.append(py["reason"])
+                permanence.append(bool(py.get("permanent", False)))
 
         if not any_collected:
             return dict(
@@ -881,7 +896,11 @@ class CouplingLens(object):
         safe_candidates = self._sanitize_candidates(candidates)
         out = dict(candidates=safe_candidates, digest=digest)
         if reasons:
-            out.update(gc.partial("; ".join(reasons)))
+            reason = "; ".join(reasons)
+            if all(permanence):
+                out[gl.PERMANENT_BOUNDARY_KEY] = True
+                reason = "%s — %s" % (reason, PERMANENT_BOUNDARY_NOTE)
+            out.update(gc.partial(reason))
         else:
             out.update(gc.collected())
         return out
@@ -1005,77 +1024,90 @@ class CouplingLens(object):
                 operand_payload_bytes=operand_bytes,
                 argv_operand_budget_bytes=budget)
 
-        if operand_bytes > budget:
-            if env_measurement_failed:
-                reason = (
-                    "%s js: child-env measurement failed — cannot derive operand argv "
-                    "budget for depcruise (fail-closed budget 0 bytes)"
-                    % self.name)
-                return _js_fail(reason)
+        batches, oversize = guardian_census.batch_operands(repo, targets, budget)
+        if env_measurement_failed:
             reason = (
-                "%s js: tracked-file operand payload is %d bytes across %d files, "
-                "exceeding the derived %d-byte operand budget (platform ARG_MAX %d "
-                "after child env and fixed argv) — remedy: batch the depcruise into "
-                "budget-sized runs; not measured"
-                % (self.name, operand_bytes, len(targets), budget, platform_max))
+                "%s js: child-env measurement failed — cannot derive operand argv "
+                "budget for depcruise (fail-closed budget 0 bytes)"
+                % self.name)
+            return _js_fail(reason)
+        if oversize or not batches:
+            reason = (
+                "%s js: %d tracked file(s) each exceed the derived %d-byte operand "
+                "budget (platform ARG_MAX %d after child env and fixed argv); "
+                "not measured"
+                % (self.name, len(oversize), budget, platform_max))
             return _js_fail(reason)
 
-        argv = adapters.depcruise_argv(abs_targets)
-        res = gc.run_tool(argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
-                          ok_exits=(0,), extra_node_path=toolchain)
-        after_cache = adapters.cache_paths_present(repo)
-        wrote = set(after_cache) - set(before_cache)
-        if wrote:
-            reason = "%s js: %s (%s)" % (
-                self.name, adapters.OUTCOMES["repo-write"][1],
-                ", ".join(sorted(wrote)))
-            return _js_fail(reason)
+        abs_by_target = dict(zip(targets, abs_targets))
+        payloads = []
+        outcomes = []
+        argv = None
+        collector_cwd = None
+        for batch in batches:
+            batch_argv = adapters.depcruise_argv([abs_by_target[t] for t in batch])
+            res = gc.run_tool(batch_argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
+                              ok_exits=(0,), extra_node_path=toolchain)
+            # Cumulative against the pre-run snapshot: a cache write from any batch trips it.
+            after_cache = adapters.cache_paths_present(repo)
+            wrote = set(after_cache) - set(before_cache)
+            if wrote:
+                reason = "%s js: %s (%s)" % (
+                    self.name, adapters.OUTCOMES["repo-write"][1],
+                    ", ".join(sorted(wrote)))
+                return _js_fail(reason)
 
-        if not res.get("ok"):
-            why = res.get("reason") or "dependency-cruiser failed"
-            detail = (res.get("stderr") or "").strip().splitlines()
-            # bite-proof axis: a crash reason names the fatal stderr line, not a stack frame.
-            _fatal_markers = (
-                "fatal error", "heap out of memory", "allocation failed", "out of memory")
-            tail_line = None
-            for line in detail:
-                low = line.lower()
-                if any(m in low for m in _fatal_markers):
-                    tail_line = line
-                    break
-            if tail_line is None and detail:
-                tail_line = detail[-1]
-            tail = (" — " + tail_line) if tail_line else ""
-            exit_code = res.get("exit")
-            if tail and isinstance(exit_code, int) and exit_code < 0:
-                try:
-                    signame = signal.Signals(-exit_code).name
-                except ValueError:
-                    signame = "signal %d" % (-exit_code)
-                tail += " (killed by %s)" % signame
-            # Evidence-only parse of stdout (never promote a failed run to collected).
+            if not res.get("ok"):
+                why = res.get("reason") or "dependency-cruiser failed"
+                detail = (res.get("stderr") or "").strip().splitlines()
+                # bite-proof axis: a crash reason names the fatal stderr line, not a stack frame.
+                _fatal_markers = (
+                    "fatal error", "heap out of memory", "allocation failed", "out of memory")
+                tail_line = None
+                for line in detail:
+                    low = line.lower()
+                    if any(m in low for m in _fatal_markers):
+                        tail_line = line
+                        break
+                if tail_line is None and detail:
+                    tail_line = detail[-1]
+                tail = (" — " + tail_line) if tail_line else ""
+                exit_code = res.get("exit")
+                if tail and isinstance(exit_code, int) and exit_code < 0:
+                    try:
+                        signame = signal.Signals(-exit_code).name
+                    except ValueError:
+                        signame = "signal %d" % (-exit_code)
+                    tail += " (killed by %s)" % signame
+                # Evidence-only parse of stdout (never promote a failed run to collected).
+                parsed = adapters.parse_depcruise_json(
+                    res.get("stdout") or "", returncode=res.get("exit") or 1)
+                evidence = ""
+                if adapters.is_ok(parsed.get("outcome")):
+                    evidence = " (stdout was parseable but the run failed — not promoted)"
+                reason = "%s js: %s%s%s" % (self.name, why, tail, evidence)
+                return _js_fail(reason)
+
             parsed = adapters.parse_depcruise_json(
-                res.get("stdout") or "", returncode=res.get("exit") or 1)
-            evidence = ""
-            if adapters.is_ok(parsed.get("outcome")):
-                evidence = " (stdout was parseable but the run failed — not promoted)"
-            reason = "%s js: %s%s%s" % (self.name, why, tail, evidence)
-            return _js_fail(reason)
+                res.get("stdout") or "", returncode=res.get("exit") or 0)
+            batch_outcome = parsed.get("outcome")
+            klass, default_reason = adapters.classify(batch_outcome)
+            if klass == adapters.DEGRADED:
+                reason = "%s js: %s%s" % (
+                    self.name, default_reason or batch_outcome,
+                    (" — " + parsed["detail"]) if parsed.get("detail") else "")
+                return _js_fail(reason)
+            if argv is None:
+                argv = batch_argv
+                collector_cwd = res.get("collectorCwd")
+            payloads.append(parsed.get("payload") or {})
+            outcomes.append(batch_outcome)
 
-        parsed = adapters.parse_depcruise_json(
-            res.get("stdout") or "", returncode=res.get("exit") or 0)
-        outcome = parsed.get("outcome")
-        klass, default_reason = adapters.classify(outcome)
-        if klass == adapters.DEGRADED:
-            reason = "%s js: %s%s" % (
-                self.name, default_reason or outcome,
-                (" — " + parsed["detail"]) if parsed.get("detail") else "")
-            return _js_fail(reason)
-
-        payload = parsed.get("payload") or {}
+        payload = adapters.merge_depcruise_payloads(payloads)
+        outcome = (
+            "ok-with-violations" if "ok-with-violations" in outcomes else outcomes[0])
         versions = adapters.depcruise_versions(payload)
         tracked_set = src_census.get("trackedSet") or set()
-        collector_cwd = res.get("collectorCwd")
         parsed_paths, dep_edges, untracked_filtered = _filter_depcruise_to_tracked(
             repo, payload, tracked_set, collector_cwd)
         # Dedup once (defect F2): a report listing the same module path twice must not
@@ -1125,6 +1157,7 @@ class CouplingLens(object):
             "modulesParsed": len(parsed_paths),
             "argv": _recorded_argv,
             "operandCount": len(abs_targets),
+            "batchCount": len(batches),
             "operandPayloadBytes": operand_bytes,
             "argvOperandBudgetBytes": budget,
             "typescriptToolchainProvided": ts_toolchain_provided,
@@ -1173,7 +1206,7 @@ class CouplingLens(object):
             reason = (
                 "%s py: %s — %s. Reporting honestly rather than faking a clean result."
                 % (self.name, adapters.OUTCOMES["flat-layout"][1], why))
-            return self._eco_fail("py", reason)
+            return self._eco_fail("py", reason, permanent=True)
 
         edges = _python_edges(repo, src_census)
         if edges.get("capped"):
@@ -1264,7 +1297,8 @@ class CouplingLens(object):
     @staticmethod
     def _eco_fail(
             ecosystem, reason, typescript_toolchain_provided=None,
-            operand_payload_bytes=None, argv_operand_budget_bytes=None):
+            operand_payload_bytes=None, argv_operand_budget_bytes=None,
+            permanent=False):
         section = {
             "status": "not-collected",
             "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
@@ -1286,6 +1320,7 @@ class CouplingLens(object):
             "parsed_total": 0,
             "per_workspace": {},
             "section": section,
+            "permanent": bool(permanent),
         }
 
     # --------------------------------------------------------------- candidates/digest

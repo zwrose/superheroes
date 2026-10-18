@@ -2605,15 +2605,193 @@ def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, m
     assert out["digest"] is None
     reason = out.get("reason") or ""
     assert (
-        "tracked-file operand payload is %d bytes across %d files"
-        % (operand_bytes, len(js_targets))) in reason
-    assert "derived %d-byte operand budget" % budget in reason
-    assert "platform ARG_MAX %d" % guardian_census.platform_arg_max_bytes() in reason
-    assert "remedy: batch the depcruise into budget-sized runs" in reason
-    assert "not measured" in reason
+        "1 tracked file(s) each exceed the derived %d-byte operand budget "
+        "(platform ARG_MAX %d after child env and fixed argv); not measured"
+        % (budget, guardian_census.platform_arg_max_bytes())) in reason
     depcruise_calls = [
         a for a in calls if a and a[0] == adapters.DEPCRUISE_BIN]
     assert not depcruise_calls, "depcruise must not run when operand budget exceeded"
+
+
+def test_budget_zero_env_failure_degrades_without_invoking_depcruise(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    tracked = ["src/app.ts"]
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (0, True))
+    calls = []
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        return (0, dc_report(extra_sources=tracked), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert "child-env measurement failed" in (out.get("reason") or "")
+    assert not calls
+
+
+# --------------------------------------------------------------------------------------
+# batched depcruise runs (#1754 F4)
+# --------------------------------------------------------------------------------------
+
+def _batch_operands_of(argv):
+    return argv[argv.index("--") + 1:]
+
+
+def _call_operand_bytes(argv):
+    return sum(len(op.encode("utf-8")) for op in _batch_operands_of(argv))
+
+
+def _graph_handler(repo, graph, calls):
+    """A fake depcruise over ``graph`` ({rel: [rel deps]}) at ``--max-depth 1``.
+
+    Operands report their dependencies; a dependency that is not an operand of this run
+    appears as a dependency-only stub (``dependencies: []``), as the real tool does.
+    """
+    repo_real = os.path.realpath(repo)
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        operands = [os.path.relpath(op, repo_real) for op in _batch_operands_of(argv)]
+        edges = [(src, dst) for src in operands for dst in graph.get(src, [])]
+        return (0, dc_report(edges=edges, extra_sources=operands), "")
+    return handler
+
+
+def _write_graph_repo(tmp_path, names):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"batched"}\n')
+    for name in names:
+        write(repo, name, "export const x = 1;\n")
+    return repo, ["package.json"] + list(names)
+
+
+def _force_budget(monkeypatch, budget):
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (budget, False))
+
+
+def test_batched_collect_matches_single_run_and_respects_budget(tmp_path, monkeypatch):
+    names = ["src/f%02d.ts" % i for i in range(6)]
+    graph = {names[i]: [names[(i + 1) % 6]] for i in range(6)}
+    repo, tracked = _write_graph_repo(tmp_path, names)
+
+    single_calls = []
+    single = lens().collect(ctx(repo, tmp_path, run=make_run(
+        _graph_handler(repo, graph, single_calls), tracked=tracked)))
+    assert st(single) == "collected", single.get("reason")
+    assert len(single_calls) == 1
+    assert single["digest"]["ecosystems"]["js"]["batchCount"] == 1
+
+    per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+    budget = 2 * per_file
+    _force_budget(monkeypatch, budget)
+    calls = []
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(
+        _graph_handler(repo, graph, calls), tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    assert len(calls) >= 3
+    for argv in calls:
+        assert _call_operand_bytes(argv) <= budget
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["batchCount"] == len(calls)
+    assert js["operandCount"] == 6
+    assert js["operandPayloadBytes"] == 6 * per_file
+    assert out["digest"]["counters"]["edges"] == single["digest"]["counters"]["edges"]
+    assert single["digest"]["counters"]["edges"] == 6
+    assert js["modulesParsed"] == single["digest"]["ecosystems"]["js"]["modulesParsed"]
+
+
+def test_argv_operand_bytes_stay_flat_as_file_count_grows(tmp_path, monkeypatch):
+    results = {}
+    for count in (10, 200):
+        sub = tmp_path / ("n%d" % count)
+        sub.mkdir()
+        names = ["src/f%03d.ts" % i for i in range(count)]
+        repo, tracked = _write_graph_repo(sub, names)
+        per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+        budget = 4 * per_file
+        _force_budget(monkeypatch, budget)
+        calls = []
+        out = lens().collect(ctx(repo, sub, run=make_run(
+            _graph_handler(repo, {}, calls), tracked=tracked)))
+        assert st(out) == "collected", out.get("reason")
+        biggest = max(_call_operand_bytes(argv) for argv in calls)
+        assert biggest <= budget
+        results[count] = (biggest, len(calls))
+    assert results[10][1] >= 3
+    assert results[200][1] > results[10][1]
+
+
+def test_cross_batch_edge_survives_the_merge_once(tmp_path, monkeypatch):
+    names = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]
+    graph = {"src/a.ts": ["src/c.ts"], "src/c.ts": ["src/d.ts"]}
+    repo, tracked = _write_graph_repo(tmp_path, names)
+    per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+    _force_budget(monkeypatch, 2 * per_file)
+    calls = []
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(
+        _graph_handler(repo, graph, calls), tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    assert [sorted(os.path.basename(o) for o in _batch_operands_of(a)) for a in calls] == [
+        ["a.ts", "b.ts"], ["c.ts", "d.ts"]]
+    assert out["digest"]["counters"]["edges"] == 2
+
+
+def _payload(edges=(), sources=(), violations=()):
+    return json.loads(dc_report(edges=edges, extra_sources=sources, violations=violations))
+
+
+def test_merge_depcruise_payloads_unions_dependencies_and_dedups_violations():
+    first = _payload(
+        edges=[("a", "c"), ("a", "x")], sources=["a", "b"],
+        violations=[("a", "c", "no-cross")])
+    second = _payload(
+        edges=[("c", "d"), ("a", "c")], sources=["c"],
+        violations=[("a", "c", "no-cross"), ("c", "d", "no-cross")])
+    merged = adapters.merge_depcruise_payloads([first, second])
+    by_source = {m["source"]: m for m in merged["modules"]}
+    assert sorted(by_source) == ["a", "b", "c", "d", "x"]
+    assert [m["source"] for m in merged["modules"]][:2] == ["a", "b"]
+    assert [d["resolved"] for d in by_source["a"]["dependencies"]] == ["c", "x"]
+    assert [d["resolved"] for d in by_source["c"]["dependencies"]] == ["d"]
+    assert len(merged["summary"]["violations"]) == 2
+    assert merged["summary"]["environment"] == first["summary"]["environment"]
+    assert adapters.depcruise_violations(merged) == [
+        {"from": "a", "to": "c", "rule": "no-cross"},
+        {"from": "c", "to": "d", "rule": "no-cross"}]
+    only = _payload(edges=[("a", "b")])
+    assert adapters.merge_depcruise_payloads([only]) is only
+
+
+def test_merge_depcruise_payloads_keeps_runtime_and_type_only_records_for_one_target():
+    both = _payload(edges=[("a", "b", ["local", "type-only"]), ("a", "b", ["local", "import"])])
+    other = _payload(edges=[("a", "b", ["local", "import"])], sources=["c"])
+    merged = adapters.merge_depcruise_payloads([both, other])
+    by_source = {m["source"]: m for m in merged["modules"]}
+    assert [d["dependencyTypes"] for d in by_source["a"]["dependencies"]] == [
+        ["local", "type-only"], ["local", "import"]]
+
+
+def test_failing_second_batch_fails_js_without_a_partial_digest(tmp_path, monkeypatch):
+    names = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]
+    repo, tracked = _write_graph_repo(tmp_path, names)
+    per_file = guardian_census.operand_payload_bytes(repo, [names[0]])
+    _force_budget(monkeypatch, 2 * per_file)
+    calls = []
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        if len(calls) == 2:
+            return (1, "", "boom: second batch died")
+        return (0, dc_report(extra_sources=["src/a.ts", "src/b.ts"]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    assert len(calls) == 2
+    assert "boom: second batch died" in (out.get("reason") or "")
 
 
 def test_js_collected_section_records_operand_payload_and_argv_budget(tmp_path):
@@ -2780,3 +2958,160 @@ def test_digest_argv_summarizes_file_operands(tmp_path):
     run_argv = captured[0]
     run_sep = run_argv.index("--")
     assert len(run_argv[run_sep + 1:]) == 30
+
+
+# ======================================================================================
+# 20. permanent boundary (#1960): only a flat Python layout is structural
+# ======================================================================================
+
+def _weekly_eats_repo(tmp_path, pairs=2):
+    """Flat Python (`lib/one.py`, no __init__ anywhere) beside a two-cluster TS tree."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "lib/one.py", "x = 1\n")
+    _grow_ts_tree(repo, pairs)
+    return repo
+
+
+def _grow_ts_tree(repo, pairs):
+    for i in range(pairs):
+        write(repo, "src/a/m%d.ts" % i)
+        write(repo, "src/b/m%d.ts" % i)
+
+
+def _cross_cluster_run(pairs, parsed_pairs=None):
+    """A fake depcruise reporting `parsed_pairs` (default: all) a/m<i> -> b/m<i> edges."""
+    n = pairs if parsed_pairs is None else parsed_pairs
+    edges = [("src/a/m%d.ts" % i, "src/b/m%d.ts" % i) for i in range(n)]
+    return depcruise_run(dc_report(edges=edges))
+
+
+def _packaged_py_with_a_parse_failure(repo):
+    write(repo, "pkg/__init__.py", "")
+    write(repo, "pkg/mod.py", "x = 1\n")
+    write(repo, "pkg/bad.py", "def (:\n")
+
+
+class _RecordingLens(glc.CouplingLens):
+    """The real lens, remembering the prior digest each sweep threaded to it."""
+
+    def __init__(self):
+        super().__init__()
+        self.seen_prev = []
+
+    def collect(self, ctx):
+        self.seen_prev.append(ctx.get("prevDigest"))
+        return super().collect(ctx)
+
+
+def _coupling_flat_layout_lines(report_path):
+    """The report's degraded-lens lines for coupling that name the flat Python layout."""
+    with open(report_path, encoding="utf-8") as fh:
+        return [ln for ln in fh.read().splitlines()
+                if ln.startswith("- coupling:") and "flat layout" in ln]
+
+
+def test_flat_python_beside_collected_js_is_a_permanent_boundary(tmp_path):
+    # axis: the lens sets permanentBoundary on a partial whose only degraded half is flat Python
+    repo = _weekly_eats_repo(tmp_path)
+    out = lens().collect(ctx(repo, tmp_path, run=_cross_cluster_run(2)))
+    assert st(out) == "partial"
+    assert out["permanentBoundary"] is True
+    assert gl.permanent_boundary(out) is True
+    assert "py" in out["reason"]
+    assert "flat layout" in out["reason"]
+    assert glc.PERMANENT_BOUNDARY_NOTE in out["reason"]
+    assert out["digest"]["ecosystems"]["js"]["status"] == "collected"
+
+
+def test_a_python_parse_failure_beside_collected_js_is_transient(tmp_path):
+    # axis: a transient Python degradation (parse failure, packaged layout) never sets the key
+    repo = init_calibrated_repo(tmp_path)
+    _grow_ts_tree(repo, 2)
+    _packaged_py_with_a_parse_failure(repo)
+    out = lens().collect(ctx(repo, tmp_path, run=_cross_cluster_run(2)))
+    assert st(out) == "partial"
+    assert "could not be opened or parsed" in out["reason"]
+    assert "permanentBoundary" not in out
+    assert gl.permanent_boundary(out) is False
+    assert glc.PERMANENT_BOUNDARY_NOTE not in out["reason"]
+
+
+def test_an_absent_js_tool_beside_collected_python_is_transient(tmp_path):
+    # axis: a transient JS degradation (tool absent) never sets the key, even with Python collected
+    repo = init_calibrated_repo(tmp_path)
+    _grow_ts_tree(repo, 2)
+    write(repo, "pkg/__init__.py", "")
+    write(repo, "pkg/mod.py", "x = 1\n")
+    run = make_run(lambda argv, kw: FileNotFoundError("depcruise"))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "partial"
+    assert out["digest"]["ecosystems"]["py"]["status"] == "collected"
+    assert out["digest"]["ecosystems"]["js"]["status"] == "not-collected"
+    assert "permanentBoundary" not in out
+    assert gl.permanent_boundary(out) is False
+    assert glc.PERMANENT_BOUNDARY_NOTE not in out["reason"]
+
+
+def test_a_permanent_partial_seeds_the_js_baseline_and_drift_runs_against_it(tmp_path):
+    # axis: through the sweep a first-seed flat-Python partial saves the JS baseline, and the
+    # second sweep reads it back as prevDigest and reports coupling drift against it
+    repo = _weekly_eats_repo(tmp_path, pairs=2)
+    root = store(tmp_path)
+    the_lens = _RecordingLens()
+
+    bundle = gsw.collect(repo, lenses=[the_lens], root=root, run=_cross_cluster_run(2))
+    saved = bundle["nextSnapshot"]["lenses"]["coupling"]
+    assert saved["collectorVersion"] == glc.COLLECTOR_VERSION
+    assert saved["digest"]["ecosystems"]["js"]["status"] == "collected"
+    degraded = {d["lens"]: d for d in bundle["funnel"]["degradedLenses"]}
+    assert "py" in degraded["coupling"]["reason"]
+    assert "flat layout" in degraded["coupling"]["reason"]
+    result = gsw.finalize(repo, bundle, [], root=root)
+    assert result["ok"] is True
+    lines = _coupling_flat_layout_lines(result["reportPath"])
+    assert len(lines) == 1 and " py: " in lines[0]
+    assert the_lens.seen_prev == [None]
+
+    _grow_ts_tree(repo, 6)
+    bundle2 = gsw.collect(repo, lenses=[the_lens], root=root, run=_cross_cluster_run(6))
+    assert the_lens.seen_prev[1] == saved["digest"]
+    crossed = [c["vital"] for c in bundle2["vitalsDelta"]["crossings"]]
+    assert "couplingEdges" in crossed
+    degraded2 = {d["lens"]: d for d in bundle2["funnel"]["degradedLenses"]}
+    assert "py" in degraded2["coupling"]["reason"]
+    assert "flat layout" in degraded2["coupling"]["reason"]
+    result2 = gsw.finalize(repo, bundle2, [], root=root)
+    assert result2["ok"] is True
+    lines2 = _coupling_flat_layout_lines(result2["reportPath"])
+    assert len(lines2) == 1 and " py: " in lines2[0]
+
+
+def test_the_module_count_cliff_arms_against_a_baseline_saved_past_flat_python(tmp_path):
+    # axis: the JS module-count cliff fires on sweep two because sweep one saved a baseline
+    repo = _weekly_eats_repo(tmp_path, pairs=12)
+    root = store(tmp_path)
+    the_lens = glc.CouplingLens()
+    # 24 JS sources on disk; 4 parsed is above the collapse floor and below the cliff line.
+    assert 24 >= glc.COLLAPSE_MIN_SOURCES and 4 > 24 * glc.COLLAPSE_RATIO
+    assert 4 < 24 * glc.CLIFF_RATIO
+
+    bundle = gsw.collect(repo, lenses=[the_lens], root=root, run=_cross_cluster_run(12))
+    assert "coupling" in bundle["nextSnapshot"]["lenses"]
+    assert gsw.finalize(repo, bundle, [], root=root)["ok"] is True
+
+    bundle2 = gsw.collect(
+        repo, lenses=[the_lens], root=root, run=_cross_cluster_run(12, parsed_pairs=2))
+    degraded = {d["lens"]: d for d in bundle2["funnel"]["degradedLenses"]}
+    assert "coupling" in degraded
+    assert "cliff" in degraded["coupling"]["reason"]
+
+
+def test_a_transient_partial_on_a_first_sweep_saves_no_baseline(tmp_path):
+    # axis: through the sweep a transient partial (Python parse failure) saves nothing on a first seed
+    repo = init_calibrated_repo(tmp_path)
+    _grow_ts_tree(repo, 2)
+    _packaged_py_with_a_parse_failure(repo)
+    bundle = gsw.collect(
+        repo, lenses=[glc.CouplingLens()], root=store(tmp_path), run=_cross_cluster_run(2))
+    assert "coupling" not in bundle["nextSnapshot"]["lenses"]
+    assert "coupling" in {d["lens"] for d in bundle["funnel"]["degradedLenses"]}

@@ -54,7 +54,25 @@ def test_worktree_guard_gate_wired_fail_closed_before_bash_timeout():
         "worktree guard must be listed before bash_timeout on the Bash matcher"
 
 
-def test_bash_pretooluse_chain_is_exactly_guard_then_timeout():
+def test_iphone_allow_hook_is_wired_fail_soft_after_worktree_guard():
+    cfg = json.load(open(_HOOKS))
+    bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert bash, "no Bash PreToolUse matcher"
+    cmds = [h["command"] for entry in bash for h in entry["hooks"]]
+
+    iphone = [c for c in cmds if "iphone_allow.py" in c]
+    assert iphone, "hooks.json must wire iphone_allow.py on the Bash matcher"
+    # axis: the iPhone approver is fail-soft — a failure to start leaves no decision, never a block
+    assert "|| true" in iphone[0]
+
+    guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
+    iphone_idx = next(i for i, c in enumerate(cmds) if "iphone_allow.py" in c)
+    # axis: the iPhone approver is listed after the worktree guard on the Bash matcher
+    assert guard_idx < iphone_idx, \
+        "iphone_allow must be listed after the worktree guard on the Bash matcher"
+
+
+def test_bash_pretooluse_chain_is_exactly_guard_timeout_iphone_then_fence():
     """The Bash PreToolUse chain is pinned: adding a hook requires changing this test deliberately."""
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -64,14 +82,33 @@ def test_bash_pretooluse_chain_is_exactly_guard_then_timeout():
     expected = [
         "worktree_guard_gate.py",
         "bash_timeout.py",
+        "iphone_allow.py",
+        "implementer_fence.py",
     ]
-    # axis: the Bash PreToolUse chain is exactly two hooks — the worktree guard, then bash_timeout
+    # axis: the Bash PreToolUse chain is exactly four hooks — the worktree guard, bash_timeout, the iPhone approver, then the native fence
     assert len(cmds) == len(expected), (
         f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
     )
     for i, name in enumerate(expected):
-        # axis: hook order and identity pinned to the two-hook chain
+        # axis: hook order and identity pinned to the three-hook chain
         assert name in cmds[i], f"hook {i} must be {name}, got {cmds[i]!r}"
+
+
+_FENCE_COMMAND = 'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/implementer_fence.py" || true'
+
+
+def test_implementer_fence_is_wired_on_bash_and_edit_write_fail_open():
+    cfg = json.load(open(_HOOKS))
+    entries = cfg["hooks"]["PreToolUse"]
+    for matcher in ("Bash", "Edit|Write"):
+        cmds = [h["command"] for e in entries if e.get("matcher") == matcher for h in e["hooks"]]
+        # axis: the native fence runs on both the Bash matcher and the Edit|Write matcher, with the exact command
+        assert _FENCE_COMMAND in cmds, f"{matcher} matcher must carry the exact fence command"
+    edit_write = [h["command"] for e in entries if e.get("matcher") == "Edit|Write" for h in e["hooks"]]
+    # axis: the Edit|Write matcher carries the fence alone
+    assert edit_write == [_FENCE_COMMAND]
+    # axis: the shim the command names exists
+    assert os.path.isfile(os.path.join(_PLUGIN, "hooks", "implementer_fence.py"))
 
 
 def test_hooks_codex_still_wires_nothing():

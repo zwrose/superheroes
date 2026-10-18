@@ -386,9 +386,11 @@ judgment, so "this fix is tiny" is no reason to type in a full-lane build. Every
 order goes to an implementer under the one implementer template,
 `${CLAUDE_PLUGIN_ROOT}/agents/implementer.md`:
 
-Every implementer order goes through `dispatch-write` on the engine the project's calibrated
-implementation engine names, `claude` included (`claude` runs the sandboxed Claude write channel);
-inline `agents/implementer.md`, minus its frontmatter, verbatim into the dispatch prompt.
+Before every implementer order, run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/native_engine.py" route --cwd <build worktree>`:
+`native` (only ever for a calibrated claude implementer) runs the order as a native `superheroes:implementer` subagent through the native engine
+(`skills/workhorse/reference/dispatch-mechanics.md` § The native implementer engine); any other
+engine goes through `dispatch-write`, `claude` included. Inline `agents/implementer.md`, minus its
+frontmatter, verbatim into the dispatch prompt.
 
 **Cited paths in every dispatched seat resolve in the build's own worktree** when the cited file is
 part of the change. `${CLAUDE_PLUGIN_ROOT}` resolves to the installed cache and would hand an
@@ -586,9 +588,9 @@ evidence that stands in for it: the receipts you re-ran and the review. Never fa
 run.
 
 **The iPhone check.** At intake, read `SUPERHEROES_IPHONE_ID` and `SUPERHEROES_DEVICE_HUB` from
-your environment. The handed ID is the lane's only phone. Pass the pilot that phone ID, where to
-check per the issue (or your own choice, stated as yours), and the execution steps' iPhone
-section.
+your environment. The handed IDs (`SUPERHEROES_IPHONE_IDS` when set, else `SUPERHEROES_IPHONE_ID`)
+are the lane's only phones. Pass the pilot every handed ID, where to check per the issue (or your
+own choice, stated as yours), and the execution steps' iPhone section.
 **Read `skills/test-pilot-execute/reference/execution-steps.md` § The iPhone check when the launch hands you a phone or the issue names an iPhone check.**
 
 **Done when:** the pilot's results are posted and every reported bug has an implementer order, or the
