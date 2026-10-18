@@ -160,10 +160,10 @@ def test_lstat_signature_differs_on_symlink_replacement(tmp_path):
 
 
 def test_patched_module_absent_old_raises():
-    import handback_gate as hg
+    import build_lane as bl
 
     with pytest.raises(AssertionError, match="not found"):
-        patched_module(hg, ("THIS STRING DOES NOT EXIST", "x"))
+        patched_module(bl, ("THIS STRING DOES NOT EXIST", "x"))
 
 
 def test_patched_module_duplicate_old_raises(tmp_path):
@@ -176,40 +176,40 @@ def test_patched_module_duplicate_old_raises(tmp_path):
 
 
 def test_patched_module_two_edits_in_order():
-    import handback_gate as hg
+    import build_lane as bl
 
-    old1 = '    if global_repo and parsed.get("repo") is None:'
-    old2 = '    if inherited_repo and parsed.get("repo") is None:'
-    with open(hg.__file__, encoding="utf-8") as fh:
+    old1 = '    if lane != "full":'
+    old2 = '    if not _ensure_git_repository(resolved_root):'
+    with open(bl.__file__, encoding="utf-8") as fh:
         disk_before = fh.read()
     mod = patched_module(
-        hg,
+        bl,
         [
-            (old1, '    if False and global_repo and parsed.get("repo") is None:'),
-            (old2, '    if False and inherited_repo and parsed.get("repo") is None:'),
+            (old1, '    if False and lane != "full":'),
+            (old2, '    if False and not _ensure_git_repository(resolved_root):'),
         ],
     )
-    with open(hg.__file__, encoding="utf-8") as fh:
+    with open(bl.__file__, encoding="utf-8") as fh:
         disk_after = fh.read()
     assert disk_after == disk_before
-    assert mod is not hg
-    assert hasattr(mod, "validate_handback")
+    assert mod is not bl
+    assert hasattr(mod, "declare")
 
 
 def test_patched_module_leaves_original_and_sys_modules(tmp_path):
-    import handback_gate as hg
+    import build_lane as bl
 
-    before_id = id(hg)
-    before_name = hg.__name__
-    assert "handback_gate__patched" not in sys.modules
+    before_id = id(bl)
+    before_name = bl.__name__
+    assert "build_lane__patched" not in sys.modules
     mod = patched_module(
-        hg,
-        ('if not os.path.isdir(obj["sessionDir"]):', 'if False and not os.path.isdir(obj["sessionDir"]):'),
+        bl,
+        ('if lane != "full":', 'if False and lane != "full":'),
     )
-    assert id(hg) == before_id
-    assert hg.__name__ == before_name
-    assert "handback_gate__patched" not in sys.modules
-    assert mod is not hg
+    assert id(bl) == before_id
+    assert bl.__name__ == before_name
+    assert "build_lane__patched" not in sys.modules
+    assert mod is not bl
 
 
 # --- Group 2: bite-proofs (in-memory via patched_module) -----------------------
@@ -362,12 +362,12 @@ def test_bite_empty_manifest_raises(tmp_path):
 
 
 def test_bite_patched_module_count_zero():
-    import handback_gate as hg
+    import build_lane as bl
     import bite_support as bs
 
     def raises_absent(mod):
         try:
-            mod.patched_module(hg, ("ABSENT_TARGET_XYZ", "y"))
+            mod.patched_module(bl, ("ABSENT_TARGET_XYZ", "y"))
             return False
         except AssertionError:
             return True

@@ -28,6 +28,7 @@
       "unit": "reviewer-minutes"
     },
     "decisionRechecks": [],
+    "carriedRechecks": [],
     "earlierRecordsNotChecked": [],
     "finalCommit": {
       "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

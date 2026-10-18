@@ -67,36 +67,6 @@ def _family_slice(row):
     return {f: row[f] for f in SC.DISPOSITION_FAMILY_FIELDS if f in row}
 
 
-def _unrecognized_marker_state():
-    legacy = {
-        "file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
-        SC.FINDING_KEY_FIELD: "legacy-key",
-        "disposition": "refuted", "dispositionRound": 1, "refutedReason": "only-in-records",
-    }
-    return {
-        "schemaVersion": 5,
-        "dispositionLedgerOwner": "ledger-v2",
-        "dispositionLedger": [],
-        "findings": [],
-        "_records": [{"findings": [legacy]}],
-    }
-
-
-def _null_owner_marker_state():
-    legacy = {
-        "file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
-        SC.FINDING_KEY_FIELD: "legacy-key",
-        "disposition": "fixed", "dispositionRound": 1,
-    }
-    return {
-        "schemaVersion": 5,
-        "dispositionLedgerOwner": None,
-        "dispositionLedger": [],
-        "findings": [],
-        "_records": [{"findings": [legacy]}],
-    }
-
-
 def _panel_artifact():
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seats["code-reviewer"] = {

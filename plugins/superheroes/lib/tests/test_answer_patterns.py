@@ -107,13 +107,19 @@ def test_the_answer_words_and_the_one_place_that_makes_buttons():
 
 
 @pytest.mark.parametrize("case", [BIG, STACK], ids=["pr", "stack"])
-def test_default_leftover_options_are_the_words_files(case):
+def test_there_is_no_default_leftover_options(case):
     records, advisor = bundle(case)
+    sheet = pr_sheet.build(copy.deepcopy(records), copy.deepcopy(advisor), PW)
+    leftovers = [card for card in sheet["cards"] if card["callKind"].startswith(PW["leftoverKind"]) and card["options"]]
+    assert leftovers, "the fixture has no leftover with options"
+    generic = {o["consequence"] for o in PW["leftoverOptions"]}
+    for card in leftovers:
+        assert [{k: o[k] for k in ("id", "label", "sendsBack")} for o in card["options"]] == \
+            [{k: o[k] for k in ("id", "label", "sendsBack")} for o in PW["leftoverOptions"]], card["id"]
+        assert not generic & {o["consequence"] for o in card["options"]}, card["id"]
     for key in ("leftovers", "items", "closesSpec"):
         advisor.pop(key, None)
-    sheet = pr_sheet.build(copy.deepcopy(records), advisor, PW)
-    leftovers = [card for card in sheet["cards"] if card["callKind"].startswith(PW["leftoverKind"])]
-    assert leftovers, "the fixture has no leftover to carry default options"
-    for card in leftovers:
-        assert card["options"] == PW["leftoverOptions"], card["id"]
+    with pytest.raises(pr_sheet.Refusal) as caught:
+        pr_sheet.build(copy.deepcopy(records), advisor, PW)
+    assert any("has no leftovers entry" in p for p in caught.value.problems)
 

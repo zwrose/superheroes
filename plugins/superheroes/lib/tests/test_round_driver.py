@@ -3525,26 +3525,6 @@ def test_producer_is_inert_without_a_records_path(tmp_path, monkeypatch):
     assert persisted == []
 
 
-def _two_round_disclosure_seams():
-    """Round 1 baseline panel and round 2 scoped-finder delta — each records disclosure channels."""
-    f1 = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
-          "dimension": "Code"}
-    f2 = {"title": "bug2", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 3,
-          "dimension": "Code"}
-
-    def reviewer(dim, tier, rnd, ctx):
-        if dim == "scoped-finder":
-            return [dict(f2)] if rnd == 2 else []
-        if rnd == 1 and dim == "code-reviewer":
-            return {"findings": [dict(f1)]}
-        return []
-
-    def fix_step(batch, rnd, payload):
-        return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]}
-
-    return _seams(reviewer=reviewer, fix_step=fix_step)
-
-
 def _vacuous_round1_seams():
     """Round 1: one vacuous seat (a real `vacuousSeats` + `seatMapUnavailable` record) plus a
     blocking finding so the run continues past round 1 to a terminal."""

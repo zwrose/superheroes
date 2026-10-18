@@ -109,11 +109,27 @@
   },
   "cards": [
     {
-      "id": "f-a64d7a0d1734",
+      "id": "f-8bd7e2d907ef",
       "callKind": "Leftover · #6",
       "warning": false,
       "question": "A gift card that covers part of an order leaves the rest unpaid",
       "context": [
+        {
+          "title": "Why it's yours",
+          "blocks": [
+            {
+              "paragraph": "How a split payment should look to a customer is a shop-experience call, and only you can decide how much surprise at checkout is acceptable."
+            }
+          ]
+        },
+        {
+          "title": "What happened",
+          "blocks": [
+            {
+              "paragraph": "A gift card that covers only part of an order is spent, and checkout then asks for a second payment without having said so first."
+            }
+          ]
+        },
         {
           "title": "If left",
           "blocks": [
@@ -128,19 +144,19 @@
         {
           "id": "keep-it",
           "label": "Keep it",
-          "consequence": "Ships as is; no follow-up.",
+          "consequence": "Customers with a small gift card may reach the end of checkout and be asked for a payment they did not expect; some will leave.",
           "sendsBack": false
         },
         {
           "id": "fix-in-a-follow-up",
           "label": "Fix in a follow-up",
-          "consequence": "Ships now; a follow-up issue is filed with a revisit date.",
+          "consequence": "The stack ships with the surprise second payment for now; a follow-up adds a notice before it, with a revisit date.",
           "sendsBack": false
         },
         {
           "id": "fix-before-merge",
           "label": "Fix before merge",
-          "consequence": "The PR goes back for the fix and returns with a new sheet.",
+          "consequence": "The stack goes back to show the remaining amount before the customer pays, and returns with a new sheet.",
           "sendsBack": true
         }
       ],
