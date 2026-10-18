@@ -908,6 +908,18 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
 | **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
 | review run | **key absent** |
 
+### The native implementer fence
+
+The fence (`lib/native_fence.py`, the `hooks/implementer_fence.py` hook) is a command-prefix fence
+on an enrolled native implementer's Bash calls, not a sandbox. It reads each segment's leading
+command after assignments, the shell keywords and grouping (`if then elif else while until do ! {`)
+and the wrappers with their option arguments (`env`, `command -p`, `nice`, `timeout`, `stdbuf`,
+`nohup`, `sudo`, `exec`, `time`; `command -v` passes). It fences installers (an unknown global
+option fails closed), fetch-and-run runners, and network commands. A local tool runs via
+`npx --no-install <bin>` (or `npx --no`, `npm exec --no`; `--yes` cancels it, `--offline` alone
+does not qualify) or `npm run <script>`. The documented passes — command substitution, subshells,
+here-strings, `eval`, `sh -c`/`bash -c`, `xargs`, `find -exec`, variable indirection — are not fenced.
+
 ## Refusal streak — shell health
 
 Three refusal round-trips in a row on one caller's dispatch invocations is the shell's health
