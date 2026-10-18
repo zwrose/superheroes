@@ -31,7 +31,6 @@ import core_md
 import engine_dispatch as ED
 import native_engine as NE
 
-_GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 _NO_KEY = object()
 _SEAT = '{"vendor": "claude", "model": "sonnet", "effort": "high", "role": "implementer"}'
 _AGENT = "a1b2c3d4"
@@ -73,15 +72,19 @@ def _routed(monkeypatch):
 
 
 def _git(cwd, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     proc = subprocess.run(
         ["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@invalid", *args],
-        capture_output=True, text=True, env=_GIT_ENV, timeout=60)
+        capture_output=True, text=True, env=env, timeout=60)
     assert proc.returncode == 0, "git %s failed: %s" % (" ".join(args), proc.stderr)
     return proc.stdout
 
 
-def _core_text(block):
+def _core_text(block, prefs=None):
     facts = dict(_CORE_FACTS)
+    if prefs:
+        facts["enginePreferences"] = prefs
     if block is not _NO_KEY:
         facts["sandboxAccess"] = block
     return core_md.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
@@ -97,7 +100,7 @@ class Repo:
     pass
 
 
-def _make_repo(tmp_path, block=None):
+def _make_repo(tmp_path, block=None, prefs=None):
     """main (with a base commit holding core.md), B (builder), T and T2 (subagent candidates)."""
     block = {"localSockets": True} if block is None else block
     root = os.path.realpath(str(tmp_path))
@@ -107,7 +110,7 @@ def _make_repo(tmp_path, block=None):
     _git(r.main, "init", "-q", "-b", "main")
     _write(os.path.join(r.main, "a.txt"), "alpha\n")
     _write(os.path.join(r.main, ".gitignore"), "*.log\n")
-    _write(os.path.join(r.main, core_md.in_repo_core_rel_path()), _core_text(block))
+    _write(os.path.join(r.main, core_md.in_repo_core_rel_path()), _core_text(block, prefs))
     _git(r.main, "add", "-A")
     _git(r.main, "commit", "-q", "-m", "base")
     r.base = _git(r.main, "rev-parse", "HEAD").strip()
@@ -252,6 +255,15 @@ def test_route_calibrated_without_local_sockets(tmp_path, monkeypatch, capsys, b
     code, out = _cli(capsys, "route", "--cwd", r.B)
     assert code == 0
     assert out == {"ok": True, "engine": "claude", "reason": "calibrated"}
+
+
+def test_route_calibrated_uses_the_configured_implementation_engine(tmp_path, monkeypatch, capsys):
+    # axis: mapping — the calibrated engine is the owner's configured one, not a hardcoded claude
+    r = _make_repo(tmp_path, prefs={"implementation": "codex", "reviewer": "claude"})
+    _host(monkeypatch, None, "linux")
+    code, out = _cli(capsys, "route", "--cwd", r.B)
+    assert code == 0
+    assert out == {"ok": True, "engine": "codex", "reason": "calibrated"}
 
 
 def test_route_malformed_sandbox_access_is_a_refusal(tmp_path, monkeypatch, capsys):
@@ -688,6 +700,28 @@ def test_close_grading_forfeits_unavailable_item_evidence(tmp_path, monkeypatch,
     code, out = _close(capsys, r)
     _forfeited(code, out, "item-evidence-unavailable:diff-timeout")
     _assert_untouched(r)
+
+
+def test_open_normalizes_declared_items_and_close_credits_them(tmp_path, monkeypatch, capsys):
+    # axis: mapping — ./a.txt is recorded in the form git reports
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r, items=["./a.txt"])
+    rec = _records(r)[0]
+    assert rec["kind"] == "run-opened" and rec["expectedItems"] == ["a.txt"]
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["itemCheck"]["missing"] == []
+
+
+def test_close_accepts_a_declared_deletion(tmp_path, monkeypatch, capsys):
+    # axis: preservation — a declared tracked file the subagent deleted is collected, not forfeited
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r, items=["a.txt"], edit=False)
+    os.unlink(os.path.join(r.T, "a.txt"))
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["a.txt"]
+    assert not os.path.exists(os.path.join(r.B, "a.txt"))
 
 
 def test_close_grading_forfeits_a_declared_file_the_patch_cannot_carry(
