@@ -301,6 +301,10 @@ this tree. For a lone build, write one healthy-case probe per new refusal and ru
 refusal-leg bite-proof shows the refusal fires on bad input; it cannot see the same refusal firing
 on good input, so over-refusal ships unseen.
 
+Before you order a test that guards a prose line, check it against the pin rule and
+Named-failure-first (`rubric/review-discipline.md`). A line that fails either bar gets no test;
+record it as review-guarded instead.
+
 ## A pending spec gate is not an unreviewed spec
 
 Before dispatching any review gate on a spec, read the linked issue's review receipts. A spec's

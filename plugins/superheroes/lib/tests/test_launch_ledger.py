@@ -241,14 +241,18 @@ def test_read_missing_file(tmp_path, monkeypatch):
 def test_read_unreadable_file(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
-    ll.append(repo, {"x": 1})
-    path = _ledger_file(repo, os.environ)
-    os.chmod(path, 0o000)
-    try:
-        result = ll.read(repo)
-        assert result["state"] == "unreadable"
-    finally:
-        os.chmod(path, 0o600)
+    assert ll.append(repo, {"x": 1}) is True
+    # Refuse the read-mode open rather than chmod 000, which root reads through (#1911).
+    real_open = ll.os.open
+
+    def refuse_open(name, flags, *a, **kw):
+        if name == ll.LEDGER_NAME and not flags & (os.O_WRONLY | os.O_RDWR):
+            raise PermissionError("refused")
+        return real_open(name, flags, *a, **kw)
+
+    monkeypatch.setattr(ll.os, "open", refuse_open)
+    result = ll.read(repo)
+    assert result["state"] == "unreadable"
 
 
 def test_resolve_root_inside_repo(tmp_path, monkeypatch):
@@ -296,7 +300,16 @@ def test_append_failure_returns_false(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     ledger_root = str(tmp_path / "ledger-root")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
-    os.makedirs(ledger_root, mode=0o500)
+    os.makedirs(ledger_root, mode=0o700)
+    # Deny the root's write check rather than mode 0o500, which root writes through (#1911).
+    real_access = ll.os.access
+
+    def deny_write(path, mode, *a, **kw):
+        if mode & os.W_OK and os.path.realpath(path) == os.path.realpath(ledger_root):
+            return False
+        return real_access(path, mode, *a, **kw)
+
+    monkeypatch.setattr(ll.os, "access", deny_write)
     assert ll.append(repo, {"x": 1}) is False
 
 

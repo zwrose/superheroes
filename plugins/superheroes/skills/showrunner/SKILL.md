@@ -581,8 +581,8 @@ above).
 
    **Which branch, and when to commit.** The contract's
    [Writing a ruling](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling) says which
-   branch the ruling rides, that Canon never gets a pull request of its own, and when the commit
-   happens. This charter adds only how you hold a ruling when no pull request of yours is open.
+   branch and which pull request the ruling rides, and when the commit happens. This charter adds
+   only how you hold a ruling when no pull request of yours is open.
 
    **Project-store Canon is never held.** When Canon's `home` is `"project-store"`, commit the
    ruling at once to the store's own repository by the contract's write procedure; there is no
@@ -594,7 +594,12 @@ above).
    HTML comment naming `superheroes:canon-held`. Create the comment when none exists, and edit it in place. Mint
    the id by the contract's id rule, counting the held lines as already present, so a later
    take-back can name it in its `supersedes:` field. `${CLAUDE_PLUGIN_ROOT}/lib/canon.py hold` does both: given the
-   held comment's body, it returns the line and the new body, or refuses what Canon keeps out. When you next open a pull request, append the
+   held comment's body, it returns the line and the new body, or refuses what Canon keeps out. A
+   ruling made inside a piece of work still rides that work's pull request. A ruling you hold goes
+   into a Canon-only pull request, one where only Canon's paths change, whenever no pull request of
+   your own is coming soon, and whenever the owner asks for one. It merges on a sheet like any
+   other. Otherwise it waits for the next pull request you open. Keep the held comment for the time
+   between. When you open either pull request, append the
    held lines to Canon on its branch byte for byte, by the contract's write procedure
    (`${CLAUDE_PLUGIN_ROOT}/lib/canon.py append --lines-file`), skipping any
    line whose id Canon already holds, and commit them at once. Confirm the commit as the contract

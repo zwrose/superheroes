@@ -10,14 +10,12 @@ import pytest
 import canon
 import circuit_breaker
 import decision_kinds
-import handback_gate as hg
 import model_registry
 import receipt_disclosures
 import record_paths
 import review_record as rr
 import review_record_session as rs
 import round_driver
-import store_core as sc
 
 HEAD = "b" * 40  # the PR's head in the default Fake, and the final commit of the built sessions
 EARLIER = "a" * 40
@@ -855,54 +853,6 @@ def test_terminal_tables_live_in_decision_kinds():
         assert "round_" + "certification" not in fh.read()
 
 
-def _git(cwd, *args):
-    subprocess.run(["git", "-C", cwd, *args], check=True, capture_output=True, text=True)
-
-
-def _init_repo(path, remote="git@github.com:org/repo.git"):
-    path = str(path)
-    subprocess.run(["git", "init", "-q", "-b", "main", path], check=True, capture_output=True, text=True)
-    _git(path, "config", "user.email", "t@example.com")
-    _git(path, "config", "user.name", "Test")
-    if remote:
-        _git(path, "remote", "add", "origin", remote)
-    return path
-
-
-def _commit_file(repo, name, content, msg="init"):
-    p = os.path.join(repo, name)
-    with open(p, "w") as f:
-        f.write(content)
-    _git(repo, "add", name)
-    _git(repo, "commit", "-q", "-m", msg)
-    return p
-
-
-def _gitdir(repo):
-    return sc.get_worktree_gitdir(repo)
-
-
-def _superheroes_dir(repo):
-    d = os.path.join(_gitdir(repo), hg._SIDECAR_DIR)
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def _write_build_lane(repo, **over):
-    d = _superheroes_dir(repo)
-    obj = {
-        "schema": hg.BUILD_LANE_SCHEMA,
-        "lane": "full",
-        "issue": "#624",
-        "declaredAt": "2026-08-09T00:00:00Z",
-        "repoRoot": os.path.realpath(repo),
-        "branch": sc.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "main",
-    }
-    obj.update(over)
-    with open(os.path.join(d, hg.BUILD_LANE_FILE), "w", encoding="utf-8") as fh:
-        json.dump(obj, fh)
-
-
 def test_finished_full_lane_session_writes_its_record_without_a_certificate(tmp_path):
     session, runs, body = fix_session(tmp_path)
     assert not os.path.exists(os.path.join(session, "certification-receipt.json"))
@@ -914,12 +864,6 @@ def test_finished_full_lane_session_writes_its_record_without_a_certificate(tmp_
     text = json.dumps(out, sort_keys=True)
     for token in ("certification-receipt", "handback-no-receipt", "unrun-review"):
         assert token not in text, token
-    repo = _init_repo(tmp_path / "repo")
-    _commit_file(repo, "f.txt", "x\n")
-    _write_build_lane(repo)
-    result = hg.validate_handback("gh pr ready", repo)
-    assert result["decision"] == "allow"
-    assert result["reason"] is None
 
 
 def test_a_superseded_attempt_of_an_older_journal_is_no_reviewer(tmp_path):

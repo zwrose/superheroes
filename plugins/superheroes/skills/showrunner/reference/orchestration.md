@@ -95,6 +95,10 @@ commit. It records the path on the `reserved` record and starts the session insi
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
 
+**Before you reap a worktree or a branch**, list everything that still uses it: live lanes, open
+PRs and stacks. Remove only paths on that list, one per call, each written out in full, never one a
+glob or a variable resolves to.
+
 **Cloud launch.** A launch can start the builder in a
 [cloud session](../../../rubric/glossary.md#cloud-builder). On `launch`, `--place` is the owner's
 launch word (`local` or `cloud`), and the launcher's routing step decides every launch's place; a
