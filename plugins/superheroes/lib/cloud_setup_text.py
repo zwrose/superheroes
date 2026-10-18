@@ -355,7 +355,8 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         ') >> "$LOG" 2>&1 &',
         "",
         "# Install the project's pinned Python, when it has a .python-version file: in the working",
-        "# directory, or in the clone beside it.",
+        "# directory, or in the clone beside it. uv reads the file itself, from that directory, with",
+        "# UV_PYTHON cleared so an inherited value cannot override it.",
         "(",
         '  DIR=""',
         '  if [ -f "$PWD/.python-version" ]; then DIR="$PWD"',
@@ -366,8 +367,8 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         '    echo "pinned python: no .python-version in $PWD%s"'
         % (" or $PWD/$CLONE" if clone is not None else ""),
         "  else",
-        "    PIN=$(tr -d '[:space:]' < \"$DIR/.python-version\")",
-        '    if [ -n "$PIN" ] && (cd "$DIR" && uv python install "$PIN"); then'
+        "    if grep -qvE '^[[:space:]]*(#|$)' \"$DIR/.python-version\""
+        ' && (cd "$DIR" && env -u UV_PYTHON uv python install); then'
         ' echo "pinned python ok"',
         '    else echo "pinned python FAILED"; fi',
         "  fi",

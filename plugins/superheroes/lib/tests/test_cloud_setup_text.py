@@ -232,6 +232,13 @@ def _stubs(tmp_path, code=0, apt_install_fails_first=False):
         path = stub / name
         path.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit %d\n' % (name, log, code))
         path.chmod(0o755)
+    # `uv` also records whether UV_PYTHON reached it, and (in a second log) where it ran.
+    (stub / "uv").write_text(
+        '#!/bin/bash\n'
+        'echo "uv $* UV_PYTHON=${UV_PYTHON-unset}" >> "%s"\n'
+        'echo "$PWD" >> "%s"\n'
+        'exit %d\n' % (log, tmp_path / "uv-cwd.log", code)
+    )
     if apt_install_fails_first:
         # `apt-get install` fails the first time it is run and succeeds after; every other
         # `apt-get` verb (`update`) succeeds. A counter file carries the count between runs.
@@ -348,7 +355,7 @@ def test_working_sandbox_tools_and_pinned_python_are_logged_ok(tmp_path):
     setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
     assert "sandbox tools ok" in setup_log and "pinned python ok" in setup_log
     calls = log.read_text().splitlines()
-    assert "uv python install 3.12" in calls
+    assert "uv python install UV_PYTHON=unset" in calls
     assert "apt-get install -y bubblewrap socat" in calls
     assert "apt-get update" not in calls
 
@@ -388,23 +395,40 @@ def test_pinned_python_is_installed_from_the_clone_when_the_script_runs_from_its
     assert proc.returncode == 0, proc.stderr
     setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
     assert "pinned python ok" in setup_log and "pinned python FAILED" not in setup_log
-    assert "uv python install 3.12" in log.read_text().splitlines()
+    assert "uv python install UV_PYTHON=unset" in log.read_text().splitlines()
 
 
 def test_an_inherited_uv_python_does_not_change_the_installed_pin(tmp_path):
-    # axis: the installed version is the file's, not the environment's
+    # axis: the installed version is the file's, not the environment's — an inherited UV_PYTHON
+    # never reaches uv, and uv runs in the clone directory where it reads the file
     w = _inside(tmp_path)
     proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop",
                             extra_env={"UV_PYTHON": "3.11"})
     assert proc.returncode == 0, proc.stderr
-    calls = log.read_text().splitlines()
-    assert "uv python install 3.12" in calls
-    assert "uv python install" not in calls
+    uv_calls = [line for line in log.read_text().splitlines() if line.startswith("uv ")]
+    assert uv_calls == ["uv python install UV_PYTHON=unset"], uv_calls
+    assert (w.tmp / "uv-cwd.log").read_text().splitlines() == [str(w.tmp / "work" / "corner-shop")]
 
 
-def test_an_empty_python_version_file_fails_the_step_without_calling_uv(tmp_path):
+def test_a_commented_python_version_file_is_read_by_uv_not_flattened(tmp_path):
+    # axis: uv parses the version file itself (comments and all), not the shell
     w = _inside(tmp_path)
-    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop", pin_text=" \n\t\n")
+    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop",
+                            pin_text="3.12\n# project interpreter\n")
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "pinned python ok" in setup_log and "pinned python FAILED" not in setup_log
+    calls = log.read_text()
+    assert [line for line in calls.splitlines() if line.startswith("uv ")] == [
+        "uv python install UV_PYTHON=unset"
+    ]
+    assert "3.12#projectinterpreter" not in calls
+
+
+@pytest.mark.parametrize("pin_text", [" \n\t\n", "# nothing\n\n"])
+def test_an_empty_python_version_file_fails_the_step_without_calling_uv(tmp_path, pin_text):
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop", pin_text=pin_text)
     assert proc.returncode == 0, proc.stderr
     setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
     assert "pinned python FAILED" in setup_log and "pinned python ok" not in setup_log

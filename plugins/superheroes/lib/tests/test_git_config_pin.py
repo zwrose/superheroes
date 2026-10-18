@@ -10,11 +10,12 @@ def _git(cwd, *args):
                           check=True).stdout.strip()
 
 
-def test_session_pins_git_config_outside_real_home():
+def test_session_pins_git_config_to_the_session_temp_dir(tmp_path_factory):
     config = os.environ["GIT_CONFIG_GLOBAL"]
     assert os.path.isfile(config)
-    real_home = os.path.realpath(_REAL_HOME)
-    assert os.path.commonpath([os.path.realpath(config), real_home]) != real_home
+    base = os.path.realpath(str(tmp_path_factory.getbasetemp()))
+    assert os.path.commonpath([os.path.realpath(config), base]) == base
+    assert os.path.realpath(config) != os.path.realpath(os.path.join(_REAL_HOME, ".gitconfig"))
     assert os.environ.get("GIT_CONFIG_NOSYSTEM") == "1"
 
 
