@@ -430,17 +430,52 @@ def test_unreadable_calibration_refuses_before_open(tmp_path, monkeypatch):
     assert _no_run_opened(run_dir)
 
 
+# axis: refusal — off macOS a calibration that turns on localSockets refuses, with or without
+# localPorts beside it; the Linux sandbox has no path-bounded Unix-socket grant (#1944)
 @pytest.mark.parametrize("block", [
-    pytest.param({"localPorts": True}, id="local-ports"),
     pytest.param({"localSockets": True}, id="local-sockets"),
+    pytest.param({"localSockets": True, "localPorts": True}, id="local-sockets-and-ports"),
 ])
-def test_local_access_on_unsupported_platform_refuses_before_open(tmp_path, monkeypatch, block):
+def test_local_sockets_on_unsupported_platform_refuses_before_open(tmp_path, monkeypatch, block):
     monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
     wt, run_dir, res, fake = _open_with_core(tmp_path, monkeypatch, _core_text(block))
     assert res["detail"] == "engine-config:sandbox-access-unsupported-platform"
     assert res["attempts"] == 0
     assert fake.calls == []
     assert _no_run_opened(run_dir)
+
+
+# axis: mapping — off macOS a localPorts-only calibration opens, and the journaled record and the
+# spawned settings agree: the loopback grant is present, no Unix-socket key of either spelling (#1944)
+def test_local_ports_on_unsupported_platform_opens_with_a_truthful_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, res, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text({"localPorts": True}))
+    opened, settings = _opened_settings(run_dir, fake)
+    recorded = opened["claudeWriteSandbox"]
+    assert recorded["access"]["localPorts"] is True
+    assert recorded["access"]["localSocketDirs"] == []
+    assert recorded["localBinding"] is False
+    network = settings["sandbox"]["network"]
+    assert network["allowLocalBinding"] is True
+    assert "allowUnixSockets" not in network
+    assert "allowAllUnixSockets" not in network
+    _assert_options(opened, settings, ports=True)
+
+
+# axis: mapping — the settings carry allowLocalBinding exactly when the journaled sandbox records
+# localPorts, and never a Unix-socket key, for a sandbox shaped as a non-macOS open journals it (#1944)
+@pytest.mark.parametrize("local_ports", [False, True], ids=["ports-off", "ports-on"])
+def test_settings_carry_exactly_the_recorded_local_grants_off_macos(local_ports):
+    sandbox = dict(
+        _SANDBOX, localBinding=False,
+        access=dict(_ALL_OFF_ACCESS, localPorts=local_ports, localSocketDirs=[]))
+    network = json.loads(EA.claude_write_sandbox_settings(sandbox))["sandbox"]["network"]
+    assert ("allowLocalBinding" in network) is local_ports
+    if local_ports:
+        assert network["allowLocalBinding"] is True
+    assert "allowUnixSockets" not in network
+    assert "allowAllUnixSockets" not in network
 
 
 def test_non_local_access_on_unsupported_platform_still_opens(tmp_path, monkeypatch):

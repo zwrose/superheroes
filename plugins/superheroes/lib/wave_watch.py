@@ -12,7 +12,7 @@ Verbs:
   cells (pr_state, stack_state, pr_sampled) threaded through every arm so
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
   a prior arm's successful PR poll is not forgotten on the next arm's timer.
-- note-answered: record a builder-note comment id as answered (the only writer here).
+- note-answered: record a builder note's or a cloud terminal comment's id as answered (the only writer here).
 
 Contract:
 - Refusals (ok=False): the REFUSALS constant.
@@ -98,6 +98,11 @@ Contract:
   started cloud lane's issue, created at or after that lane's start, as builder-note. It
   keeps surfacing until `note-answered` records its comment id; a read that could not be
   made records builder-note-unavailable and the lane is neither noted nor clean.
+- Cloud endings: the same comments read surfaces, per live started cloud lane, the newest
+  comment opening with a `cloud_builder.TERMINAL_HEADERS` header (handback, stop, park),
+  created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
+  with state handback, stopped or parked. A newer handover, or an answered newest comment,
+  surfaces nothing.
 - Standing guarantees: the watcher never writes ledger or heartbeat state; under
   the store its only write is its own loop-lock sidecar (`wave-watch-locks/`);
   `--log` writes the caller-selected log. The `note-answered` verb alone writes
@@ -1340,6 +1345,30 @@ def _note_cutoff(info):
     return None
 
 
+def _comment_lane(comment, watched):
+    """(launch id, issue number, created epoch) of the watched lane a comment is for, else None.
+
+    The one lane-assignment rule for every comment the cloud read surfaces. A malformed
+    element is no lane's.
+    """
+    if not isinstance(comment, dict):
+        return None
+    issue_url = comment.get("issue_url")
+    created = _parse_activity_time(comment.get("created_at"))
+    if created is None or not isinstance(issue_url, str):
+        return None
+    match = re.search(r"/issues/(\d+)$", issue_url)
+    number = int(match.group(1)) if match else None
+    # bite-axis: WATCHED ISSUE — a comment on an issue no watched lane has is no lane's.
+    on_issue = [lid for lid in watched if watched[lid]["issue"] == number]
+    # bite-axis: STARTED — an earlier lane's comment on the same issue is not this lane's.
+    lanes = [lid for lid in on_issue if created >= _note_cutoff(watched[lid])]
+    if not lanes:
+        return None
+    lid = max(lanes, key=lambda lane: (_note_cutoff(watched[lane]), lane))
+    return lid, number, created
+
+
 def _builder_note(comment, watched, answered):
     """The note a comment is for one watched lane, else None. A malformed element is skipped."""
     if not isinstance(comment, dict):
@@ -1357,15 +1386,10 @@ def _builder_note(comment, watched, answered):
     # bite-axis: ANSWERED — a note the advisor recorded answered stops surfacing.
     if comment_id in answered:
         return None
-    match = re.search(r"/issues/(\d+)$", issue_url)
-    number = int(match.group(1)) if match else None
-    # bite-axis: WATCHED ISSUE — a comment on an issue no watched lane has is no note.
-    on_issue = [lid for lid in watched if watched[lid]["issue"] == number]
-    # bite-axis: STARTED — an earlier lane's note on the same issue is not this lane's.
-    lanes = [lid for lid in on_issue if created >= _note_cutoff(watched[lid])]
-    if not lanes:
+    lane = _comment_lane(comment, watched)
+    if lane is None:
         return None
-    lid = max(lanes, key=lambda lane: (_note_cutoff(watched[lane]), lane))
+    lid, number, _created = lane
     info = watched[lid]
     return {
         "launchId": lid,
@@ -1379,11 +1403,69 @@ def _builder_note(comment, watched, answered):
     }
 
 
-def _evaluate_builder_notes(
+_TERMINAL_STATE = {"handback": "handback", "stop": "stopped", "park": "parked"}
+
+
+def _cloud_terminals(comments, watched, answered):
+    """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
+
+    Never raises on a malformed element. Sorted by launch id.
+    """
+    newest = {}
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        comment_id, body = comment.get("id"), comment.get("body")
+        if not _valid_positive_int(comment_id) or not isinstance(body, str):
+            continue
+        # bite-axis: HEADER — only a body whose first line is a terminal header (or the
+        # handover wording) is an ending; any other comment is free-form.
+        kind = cb.terminal_kind(body)
+        if kind is None:
+            continue
+        lane = _comment_lane(comment, watched)
+        if lane is None:
+            continue
+        lid, number, created = lane
+        key = (created, comment_id)
+        # bite-axis: NEWEST — the lane's newest ending comment decides, never an older one.
+        if lid not in newest or key > newest[lid][0]:
+            newest[lid] = (key, kind, comment, number)
+    entries = []
+    for lid, (_key, kind, comment, number) in newest.items():
+        # bite-axis: HANDOVER — a newer handover means the lane moved on: no entry, and no
+        # fallback to an older comment.
+        if kind == "handover":
+            continue
+        # bite-axis: ANSWERED — a comment the advisor recorded answered stops surfacing.
+        if comment["id"] in answered:
+            continue
+        info = watched[lid]
+        entries.append({
+            "launchId": lid,
+            "state": _TERMINAL_STATE[kind],
+            "kind": kind,
+            "issue": number,
+            "commentId": comment["id"],
+            "url": comment.get("html_url"),
+            "createdAt": comment["created_at"],
+            "source": "comment",
+            "cloudSessionName": info.get("cloudSessionName"),
+            "cloudSessionId": info.get("cloudSessionId"),
+            "configDir": info.get("configDir"),
+        })
+    return sorted(entries, key=lambda entry: entry["launchId"])
+
+
+def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
     note_state, known_slug=None, slug_cell=None,
 ):
-    """Unanswered builder notes on live started cloud lanes' issues, by comment id."""
+    """(notes, cloud_terminals) on live started cloud lanes' issues, from one comments read.
+
+    Notes are unanswered builder notes by comment id; terminals are the lanes whose newest
+    ending comment is a handback, stop or park not recorded answered.
+    """
     watched = {
         lid: info for lid, info in live_lanes.items()
         if _is_cloud_lane(info) and info.get("started")
@@ -1391,7 +1473,7 @@ def _evaluate_builder_notes(
         and _note_cutoff(info) is not None
     }
     if not watched:
-        return []
+        return [], []
     if note_state is None:
         note_state = [None]
     try:
@@ -1400,24 +1482,30 @@ def _evaluate_builder_notes(
         ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
     except (ValueError, OverflowError, OSError):
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        return []
+        return [], []
     state, comments = _read_issue_comments(
         repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state, slug_cell,
     )
     if state is None:
         # A watched channel that was never sampled for lack of budget is disclosed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        return []
+        return [], []
     if not state:
         # Disclose the incomplete read, but still evaluate whatever was observed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     notes = [_builder_note(comment, watched, answered) for comment in comments]
-    return sorted(
+    notes = sorted(
         (note for note in notes if note is not None),
         key=lambda note: note["commentId"],
     )
+    return notes, _cloud_terminals(comments, watched, answered)
+
+
+def _evaluate_builder_notes(*args, **kwargs):
+    """The notes half of `_evaluate_cloud_comments`, for callers that read only notes."""
+    return _evaluate_cloud_comments(*args, **kwargs)[0]
 
 
 def _parse_comment_id(value):
@@ -1427,7 +1515,7 @@ def _parse_comment_id(value):
 
 
 def note_answered(repo_root, comment_id, *, env=None):
-    """Record a builder-note comment id as answered. Never raises.
+    """Record a builder note's or a cloud terminal comment's id as answered. Never raises.
 
     Two concurrent calls can lose one id; that note surfaces again, which fails toward
     the advisor seeing it.
@@ -2265,11 +2353,14 @@ def _evaluate_tick(
             notes_deadline = max(
                 cloud_deadline, activity_deadline + _MIN_PR_POLL_SECONDS,
             )
-        builder_notes = _evaluate_builder_notes(
+        builder_notes, cloud_terminals = _evaluate_cloud_comments(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
             known_slug=repo_slug, slug_cell=slug_cell,
         )
+        # bite-axis: CLOUD ENDING — a cloud lane's ending comment joins the lane-terminal
+        # set before the event is built, so it is reported and seen by alsoObserved.
+        terminal_launches.extend(cloud_terminals)
 
     cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state)
     if cloud_payload_out is not None:
