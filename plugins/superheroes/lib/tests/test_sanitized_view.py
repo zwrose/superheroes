@@ -5697,3 +5697,20 @@ def test_notice_names_shown_calibration_only_when_present():
     for empty in ([], None):
         assert "calibration" not in sv.sanitized_view_notice(dict(base, calibrationShown=empty))
     assert "calibration" not in sv.sanitized_view_notice(base)
+
+
+def test_in_view_guard_still_refuses_other_config_when_calibration_is_shown(tmp_path):
+    # axis: the shown exemption is per path; a shown calibration file switching the guard off for every other stripped path
+    root = tmp_path / "view"
+    shown = frozenset({".claude/superheroes/core.md"})
+    calibration = root / ".claude" / "superheroes" / "core.md"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text("calibration\n")
+    sv._assert_no_stripped_paths_in_view(str(root), shown)
+    (root / ".claude" / "settings.json").write_text("{}\n")
+    with pytest.raises(sv.SanitizedViewError) as shown_exc:
+        sv._assert_no_stripped_paths_in_view(str(root), shown)
+    assert shown_exc.value.detail == "sanitized-view-diff-path-collision"
+    with pytest.raises(sv.SanitizedViewError) as empty_exc:
+        sv._assert_no_stripped_paths_in_view(str(root), frozenset())
+    assert empty_exc.value.detail == "sanitized-view-diff-path-collision"
