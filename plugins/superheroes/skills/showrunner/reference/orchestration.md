@@ -274,6 +274,8 @@ never resumes anything on its own. You act on what it reports.
 sweep reports it `nonterminal` for want of a heartbeat. The watch reads that activity and raises
 `lane-stale` when it goes quiet; the procedure, and what to check before treating that as a wedge, is
 in [Before treating `lane-stale` as a wedge](wave-watch.md#before-treating-lane-stale-as-a-wedge).
+A cloud lane's handback, stop or park reaches you as `lane-terminal` from its issue comments
+(`wave-watch.md`), and `lane-stale` remains the fallback for a builder that posted none.
 `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript
 for it to read.
 
@@ -400,9 +402,13 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   verbs are `python3 -B <plugin root>/lib/cloud_recover.py <verb> --repo-root <root> …`.
   1. Read the session's state in the host's session listing, and the lane's activity age from the
      wave watch.
-  2. Run `assess`. Its answer is `working`, `unresolved`, `awaiting-handover`, `ask-to-push` or
-     `stopped`. `working`, `unresolved` and `awaiting-handover` never recover. An alive session that
+  2. Run `assess`. Its answer is `working`, `unresolved`, `parked`, `awaiting-handover`,
+     `ask-to-push` or `stopped`. `working`, `unresolved`, `parked` and `awaiting-handover` never
+     recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
+     pushed work, and the answer names that comment (`parkComment`). An alive session that
      never hands over is resolved by the owner archiving it, which then reads `archived`.
+     On `parked`, act on the named comment as `wave-watch.md` says for a stop or a park (repair a
+     stop; answer or route a park); never ask to push and never launch a successor.
   3. On `ask-to-push`, send `ask`'s text to the lane's session: on the same account with
      `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
      Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at

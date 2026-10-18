@@ -820,7 +820,7 @@ run against a disposable sanitized export of the named repo root — machinery i
 orchestrator discipline. The runner can stage the reviewed change as a patch inside the view via
 optional `--diff-base <commit-oid>` (a pinned commit object id) (merge-base→head in the source repo, written to
 `SUPERHEROES_REVIEW_DIFF.patch` before the view's synthetic commit); paths matching the stripped-config
-predicate are withheld from that patch by the same rule that strips the tree. The staged patch does
+predicate are withheld from that patch by the same rule that strips the tree. The one exception: with `--diff-base`, a changed regular file under exactly `.claude/superheroes/` whose remainder matches no other stripped name is materialized in full and kept in the review patch (#1937); symlinks, gitlinks, deleted or renamed-away files, case or alias variants and every other `.claude/` path stay withheld, and the review record lists what was withheld. The staged patch does
 not satisfy the #666 investigation floor — citing only that artifact forfeits vacuously. A view that
 cannot be built is a named refusal with `attempts: 0` and no spawn; there is no fallback to the raw
 checkout. The census of changed paths is authoritative: it comes from direct two-tree enumeration,
