@@ -141,21 +141,25 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 
 ## The iPhone check
 
-You drive the lane's simulated iPhone through `lib/iphone_check.py`, with no
+You drive the lane's simulated iPhones through `lib/iphone_check.py`, with no
 browser MCP. Every verb prints one JSON object and exits 0 when its `ok` is
 true. Every verb that touches the phone takes `--timeout <seconds>`.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-python3 -B "$ROOT_DIR/lib/iphone_check.py" preflight [--issue-names-check]
-python3 -B "$ROOT_DIR/lib/iphone_check.py" boot --phone <id>
-python3 -B "$ROOT_DIR/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
-python3 -B "$ROOT_DIR/lib/iphone_check.py" drive --phone <id> -- type hello
-python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --run-dir <dir> --token <token>
-python3 -B "$ROOT_DIR/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
-python3 -B "$ROOT_DIR/lib/iphone_check.py" judge < step.json
-python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
+python3 -B "<plugin root>/lib/iphone_check.py" preflight [--issue-names-check]
+python3 -B "<plugin root>/lib/iphone_check.py" boot --phone <id>
+python3 -B "<plugin root>/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
+python3 -B "<plugin root>/lib/iphone_check.py" drive --phone <id> -- type hello
+python3 -B "<plugin root>/lib/iphone_check.py" shot --phone <id> --out <png> --run-dir <dir> --token <token>
+python3 -B "<plugin root>/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
+python3 -B "<plugin root>/lib/iphone_check.py" judge < step.json
+python3 -B "<plugin root>/lib/iphone_check.py" render --in check.json
 ```
+
+`<plugin root>` is the absolute path the session states. Issue each call on its own, with the
+absolute plugin root written out: no variables, no `cd … &&`, no chaining, and no redirect except
+`judge < <file>`. That is the one shape the plugin's hook approves without a prompt. Any other shape
+still works, but it may stop on a permission prompt a headless lane cannot answer.
 
 - **When it applies.** The check applies when `SUPERHEROES_IPHONE_ID` or
   `SUPERHEROES_DEVICE_HUB` is in your environment (the launcher sets both for
@@ -165,8 +169,16 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   - `off`: leave the iPhone section out of the results.
   - `did-not-run`: post its `line` as the opening of the results, and stop the
     iPhone check.
-  - `ready`: go on. The handed ID is the lane's only phone. Never create or
-    boot another, pick a phone by name, or use `booted` as a target.
+  - `ready`: go on. The handed phones are the lane's only phones:
+    `SUPERHEROES_IPHONE_IDS` when set (one phone for each named size whose phone
+    was made; a size whose phone could not be made has none, and its check is not
+    complete; `preflight`'s `phones` lists them), else `SUPERHEROES_IPHONE_ID`.
+    Never create or boot another, pick a phone by name, use `booted` as a target,
+    or drive a phone other than a handed one.
+- **Several phones.** Run the **whole** check (boot, open, readings, steps, and
+  both parts the issue asks for) on each phone in turn, and render **one check
+  object per phone**: `render` refuses a check object whose evidence comes from
+  more than one phone. Each phone's results section stands alone.
 - **Where to check.** The issue's statement governs: the browser, the installed
   web app, or both. A check limited to the browser does not meet an issue that
   asks for the installed app. When the issue says nothing, the lane chooses and
@@ -313,7 +325,6 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   evidence, and its `section` after the steps table (the iPhone slots in
   `templates/results-comment.md`).
 - **Hard lines.** Never quit Device Hub. Never shut down, erase or delete any
-  phone; the advisor deletes the lane's phone when it reaps the lane. Never
-  drive a phone other than the handed one. The check needs no owner approval
-  and no sandbox change. An iPhone check that did not complete never holds the
+  phone; the advisor deletes the lane's phones when it reaps the lane. The
+  check needs no owner approval and no sandbox change. An iPhone check that did not complete never holds the
   PR: the results say so, and the build hands back.
