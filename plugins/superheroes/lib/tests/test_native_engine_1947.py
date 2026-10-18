@@ -224,6 +224,20 @@ def test_route_native_when_cloud_linux_and_local_sockets(tmp_path, monkeypatch, 
                "which the Linux sandbox cannot serve"}
 
 
+@pytest.mark.parametrize("engine", ["codex", "cursor"])
+def test_route_non_claude_implementer_keeps_its_engine_with_local_sockets(
+        tmp_path, monkeypatch, capsys, engine):
+    # axis: mapping — a cloud linux localSockets build with a non-claude implementer never routes native
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    monkeypatch.setattr(
+        NE.preflight_probe, "dispatch_calibration",
+        lambda cwd=None, **kw: [{"role": "implementer", "engine": engine}])
+    code, out = _cli(capsys, "route", "--cwd", r.B)
+    assert code == 0
+    assert out == {"ok": True, "engine": engine, "reason": "calibrated"}
+
+
 @pytest.mark.parametrize("remote", ["True", "1", " true", None])
 def test_route_calibrated_unless_remote_is_exactly_true(tmp_path, monkeypatch, capsys, remote):
     # axis: mapping — only the exact string "true" is a cloud session

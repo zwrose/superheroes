@@ -387,7 +387,7 @@ order goes to an implementer under the one implementer template,
 `${CLAUDE_PLUGIN_ROOT}/agents/implementer.md`:
 
 Before every implementer order, run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/native_engine.py" route --cwd <build worktree>`:
-`native` runs the order as a native `superheroes:implementer` subagent through the native engine
+`native` (only ever for a calibrated claude implementer) runs the order as a native `superheroes:implementer` subagent through the native engine
 (`skills/workhorse/reference/dispatch-mechanics.md` § The native implementer engine); any other
 engine goes through `dispatch-write`, `claude` included. Inline `agents/implementer.md`, minus its
 frontmatter, verbatim into the dispatch prompt.

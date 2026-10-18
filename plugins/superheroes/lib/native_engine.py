@@ -136,8 +136,18 @@ def _git(cwd, *args):
 # --- route ---------------------------------------------------------------------------------
 
 
+def _calibrated_implementer(cwd):
+    rows = preflight_probe.dispatch_calibration(cwd=cwd)
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("role") == "implementer" and row.get("engine"):
+            return row["engine"]
+    return None
+
+
 def route(cwd):
-    """native exactly when cloud, linux and a calibration that turns localSockets on."""
+    """native exactly when cloud, linux, a calibration that turns localSockets on and a claude
+    implementer; any other calibrated engine keeps its own dispatch path."""
+    calibrated = _calibrated_implementer(cwd)
     if (cloud_pass._is_cloud(os.environ)
             and engine_dispatch._host_platform() == "linux"):
         read = core_md.read_sandbox_access(cwd)
@@ -146,13 +156,11 @@ def route(cwd):
             if read.get("reason") == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
                 return {"ok": False, "reason": "sandbox-access-malformed"}
             return {"ok": False, "reason": "sandbox-access-unreadable"}
-        if access.get("localSockets") is True:
+        if access.get("localSockets") is True and calibrated in (None, "claude"):
             return {"ok": True, "engine": "native", "reason": ROUTE_REASON_NATIVE,
                     "why": NATIVE_WHY}
-    rows = preflight_probe.dispatch_calibration(cwd=cwd)
-    for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, dict) and row.get("role") == "implementer" and row.get("engine"):
-            return {"ok": True, "engine": row["engine"], "reason": ROUTE_REASON_CALIBRATED}
+    if calibrated:
+        return {"ok": True, "engine": calibrated, "reason": ROUTE_REASON_CALIBRATED}
     return {"ok": False, "reason": "calibration-unreadable"}
 
 
