@@ -49,6 +49,16 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
 - adopt-version's step 4 holds only on before-switching owner items. After-switching items are owed:
   step 6 writes an `owed:` line next to the taken-up line, and step 8 names them.
 
+### Canon: a pull request of its own
+
+- Canon may now have a pull request of its own. `rubric/canon-contract.md` § Writing a ruling and
+  the showrunner charter's duty 8 used to say Canon never gets one. Now a ruling made inside a
+  piece of work still rides that work's pull request. A ruling the advisor holds goes into a
+  Canon-only pull request (only Canon's paths change) whenever no pull request of the advisor's own
+  is coming soon, and whenever the owner asks for one. It merges on a sheet like any other. The
+  held comment (`superheroes:canon-held`) still carries a held ruling until it is committed. No CLI,
+  result key or refusal changes.
+
 ## 0.43.0
 
 ### Before you upgrade

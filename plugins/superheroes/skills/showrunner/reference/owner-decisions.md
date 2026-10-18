@@ -729,7 +729,7 @@ say how it changes and what the advisor says when the owner finds a review slow.
   optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
   about leftovers is the Canon entry alone. The Canon
   entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
-  which is the next PR it opens. It never goes on the branch of the PR whose sheet carried the proposal.
+  which is a Canon-only PR or the next PR it opens. It never goes on the branch of the PR whose sheet carried the proposal.
   A result other than `applied` is reported to the owner as it is, never as done. A `partial` result
   means the approval is recorded and the setting is not confirmed written: usually it did not change,
   but under reason `calibration-unconfirmed` the write may have landed and the setting must be read back
@@ -860,8 +860,8 @@ by an unsigned one; neither is a head move.
   change, or a ceded call, is recorded in Canon by Canon's write procedure
   ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)). Such a ruling is handled
   as a ruling the advisor receives outside an open pull request it is working on: it is committed to
-  the branch of the next pull request the advisor opens, and never to the PR whose sheet carried it
-  before that PR merges, because a commit there moves the PR's head after the owner's word, which the
+  the branch of a Canon-only pull request or of the next pull request the advisor opens, and never
+  to the PR whose sheet carried it before that PR merges, because a commit there moves the PR's head after the owner's word, which the
   advisor would then have to judge and republish. A
   ruling from a sheet whose PR was sent back still holds, and is written the same way. Every other
   answer stays on the sheet and the PR's receipt.

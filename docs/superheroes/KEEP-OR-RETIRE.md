@@ -195,14 +195,17 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a live
   handback-receipt refusal (none possible while dark and unwired). On firing, a retirement proposal
   to the owner at a gardening pass. An absent, unreadable, or short-of-window record reads
-  unmeasured, never zero.
+  unmeasured, never zero. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1908 (owner ruling 2026-10-17, gardening pass 4).
 - **Notes.** harness-limit — the host PreToolUse chain does not arm this hook;
   review-before-handback is held in charter prose until K1 lands.
 - **Retirement — the refusing behaviour.** Retired the refusal the hook called into: the handback gate
   now allows every command (see D6). The hook file stays, unwired. Receipt: PR #1761 (issue #1719).
+- **Retirement — the hook.** Deleted `hooks/handback_receipt_gate.py` and its test; it was never
+  wired into `hooks/hooks.json`, and `test_hook_wiring.py` still pins the Bash PreToolUse chain to
+  the worktree guard and the timeout floor. Receipt: issue #1908.
 
 #### A4 — Bash timeout hook
 
@@ -606,15 +609,17 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite
   `handback_gate.py` or the handback refusal class after K1 retires. On firing, a proposal to the
-  owner at a gardening pass.
+  owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #1908 (owner ruling 2026-10-17, gardening pass 4).
 - **Notes.** harness-limit — a Claude-host Bash tripwire with no wired reader; #954 audit recommends
   retire and the driver mandate (#1095) already holds the same line.
 - **Retirement — the refusing half.** Retired all refusal logic in `handback_gate.py`: the module now
   allows every command and reads no receipt, so nothing refuses a handback for lacking a certificate;
   the review record replaces it as the account of a review. Receipt: PR #1761 (issue #1719).
+- **Retirement — the module.** Deleted `lib/handback_gate.py` and its test; the tests that borrowed
+  it as a sample module now use `lib/build_lane.py`. Receipt: issue #1908.
 - **This project's arming record for driver-or-park.** The flip arms when the milestone *Review panels
   can't silently degrade* closes, which is the owner's judgment that its exit condition is met; the
   release that carries the flip stamps the close.
@@ -667,10 +672,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 #### D10 — Review lens agents
 
-- **Component.** The machinery embedded in the review-lens product row: five lens agents plus spine
-  docs (`agents/*-reviewer.md`, `review-base.md`, review-code reference tree). The row costs charter
-  mass and panel dispatch time; CP2 keeps the lenses untouched and indicts routing and triage around
-  them.
+- **Component.** The lens agents' shared spine docs (`review-base.md`, review-code reference tree).
+  The lens agents themselves have their own entries, I1 to I5; the owner narrowed this row to the
+  shared spine on 2026-10-14 (ruling 122 b, collector #695 item 122). The row costs charter mass;
+  CP2 keeps the lenses untouched and indicts routing and triage around them.
 - **Start date.** 2026-09-15.
 - **Condition.** Catch-based, 45 days: CONFIRMED review findings from a lens seat that fixed a
   defect or blocked a park. On firing, a proposal to the owner at a gardening pass.
@@ -915,18 +920,20 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### D23 — `build_interim_receipt`
 
 - **Component.** `round_driver.build_interim_receipt` — the loop's own progress artifact on the CLI
-  and advance path (not a certification); it costs a second receipt-shaped builder beside the
-  certification writer (retired) until FR-D9 retires it.
+  and advance path (not a certification); it costs a second receipt form inside the driver, with
+  its own schema and the keys it strips from the full receipt, that the driver's receipt code must
+  keep in step. The certification writer it once sat beside is retired, and FR-D9 (deleting the
+  driver) never happened, so nothing else retires it.
 - **Start date.** 2026-09-18.
 - **Condition.** Usage-based, 60 days: the signal is CLI/advance invocations that write
   `round-receipt-interim.json` against terminal certifications written in the same window — a zero
   count means the interim path is unused, not that certification absorbed progress reporting. On
-  firing, a retirement proposal to the owner at a gardening pass at FR-D9.
+  firing, a retirement proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — interim progress disclosure is structural on long CLI sessions; maintaining a
-  second receipt builder is capability-gap baggage until FR-D9 lands the single-writer cut.
+  second receipt form is capability-gap baggage.
 
 #### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
 
@@ -1558,7 +1565,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) now covers only the lens agents' shared spine docs (ruling 122 b).
 
 #### I2 — The test role
 
@@ -1568,7 +1575,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. The test role took the test reviewer's seat. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. The test role took the test reviewer's seat. D10 (Review lens agents) now covers only the lens agents' shared spine docs (ruling 122 b).
 
 #### I3 — The architecture specialist
 
@@ -1578,7 +1585,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) now covers only the lens agents' shared spine docs (ruling 122 b).
 
 #### I4 — The security specialist
 
@@ -1588,7 +1595,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) now covers only the lens agents' shared spine docs (ruling 122 b).
 
 #### I5 — The premortem specialist
 
@@ -1598,7 +1605,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) now covers only the lens agents' shared spine docs (ruling 122 b).
 
 #### I6 — The review record writer
 
@@ -2286,9 +2293,6 @@ file, returns exactly that set.
 - `plugins/superheroes/hooks/bash_timeout.py` — PreToolUse Bash timeout floor when the model omits
   an explicit timeout. **delete-when:** the host Bash tool defaults to at least 600 s without a
   PreToolUse rewrite hook.
-- `plugins/superheroes/lib/build_lane.py` — build-lane sidecar marker so the receipt gate can arm
-  before review starts. **delete-when:** the host session carries build scope without a
-  build-lane.json sidecar file.
 - `plugins/superheroes/lib/core_md.py` — the profile schema stays at 2 while it carries the
   project-configuration keys an older build does not know, so an older build re-calibrating from
   scratch can drop them. **delete-when:** the keep list is stamped and a release carrying the
@@ -2351,9 +2355,3 @@ file, returns exactly that set.
   its boundary, for every lane of a wave and not merely for most lanes, so that ending a turn stops
   costing the result; the supervising process surviving a turn boundary does not satisfy this on its
   own. (Receipt: **needed**, LEDGERS.md §5.4, "the turn-end doctrine and its slice recipes".)
-- `plugins/superheroes/lib/round_driver.py` — the `order-anchor` cited-head derivation retained for
-  write runs and for records landed without a runner run directory. **delete-when:** every seat's
-  evidence is minted from a runner record, so `runner-view` is the only derivation a `recorded` row
-  can declare. (Inventory only: `round_driver.py` carries no `WORKAROUND:` comment for this yet; the
-  marker is owed at the next PR that touches the order-anchor derivation. Found at gardening pass 2,
-  2026-10-03.)
