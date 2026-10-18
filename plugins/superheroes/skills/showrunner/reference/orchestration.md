@@ -95,6 +95,10 @@ commit. It records the path on the `reserved` record and starts the session insi
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
 
+**Before you reap a worktree or a branch**, list everything that still uses it: live lanes, open
+PRs and stacks. Remove only paths on that list, one per call, each written out in full, never one a
+glob or a variable resolves to.
+
 **Cloud launch.** A launch can start the builder in a
 [cloud session](../../../rubric/glossary.md#cloud-builder). On `launch`, `--place` is the owner's
 launch word (`local` or `cloud`), and the launcher's routing step decides every launch's place; a
@@ -119,6 +123,17 @@ lane's `started` record, and returns once the session exists. It does not wait f
   nothing and ends the lane. A result whose reason begins `terminalization-failed:` means the launcher
   could not confirm it ended the lane. Read the ledger to see whether the lane is ended or still
   live before you reconcile it or launch the issue again. The launcher never pushes.
+- The command cannot be told what to start from, and the platform starts the session from the
+  checkout's commit. So the launch also refuses unless the checkout is on a branch whose local head
+  and whose tip on the remote are both the base commit. `launch-cloud-checkout-unreadable` fires
+  when the branch or the head cannot be read, a detached head included.
+  `launch-cloud-checkout-off-base` fires when the local head, or the branch's tip on the remote,
+  is not the base. `launch-cloud-checkout-branch-not-on-remote` fires when the remote has no such
+  branch, and `launch-cloud-checkout-remote-unchecked` when the remote could not be asked for its
+  tip. The refusal names the checkout, its branch, its head and the base, and the launcher never
+  changes the checkout. These refusals never fall back to the owner's machine. The advisor tells the
+  owner the checkout, branch and base, and launches again once the owner has put the checkout on the
+  base and pushed it.
 - The launcher runs the command from its checkout, which must be a folder the platform's command line
   already trusts. In an untrusted folder the command waits on its trust question until the launch's
   time limit, and the launch reads `cloud-session-unconfirmed`.
@@ -256,6 +271,8 @@ never resumes anything on its own. You act on what it reports.
 sweep reports it `nonterminal` for want of a heartbeat. The watch reads that activity and raises
 `lane-stale` when it goes quiet; the procedure, and what to check before treating that as a wedge, is
 in [Before treating `lane-stale` as a wedge](wave-watch.md#before-treating-lane-stale-as-a-wedge).
+A cloud lane's handback, stop or park reaches you as `lane-terminal` from its issue comments
+(`wave-watch.md`), and `lane-stale` remains the fallback for a builder that posted none.
 `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript
 for it to read.
 
@@ -382,9 +399,13 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   verbs are `python3 -B <plugin root>/lib/cloud_recover.py <verb> --repo-root <root> …`.
   1. Read the session's state in the host's session listing, and the lane's activity age from the
      wave watch.
-  2. Run `assess`. Its answer is `working`, `unresolved`, `awaiting-handover`, `ask-to-push` or
-     `stopped`. `working`, `unresolved` and `awaiting-handover` never recover. An alive session that
+  2. Run `assess`. Its answer is `working`, `unresolved`, `parked`, `awaiting-handover`,
+     `ask-to-push` or `stopped`. `working`, `unresolved`, `parked` and `awaiting-handover` never
+     recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
+     pushed work, and the answer names that comment (`parkComment`). An alive session that
      never hands over is resolved by the owner archiving it, which then reads `archived`.
+     On `parked`, act on the named comment as `wave-watch.md` says for a stop or a park (repair a
+     stop; answer or route a park); never ask to push and never launch a successor.
   3. On `ask-to-push`, send `ask`'s text to the lane's session: on the same account with
      `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
      Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at

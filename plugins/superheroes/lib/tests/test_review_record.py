@@ -14,6 +14,7 @@ import gh_pages
 import model_registry
 import pr_comment
 import review_record as rr
+import sanitized_view
 import seat_map as seat_map_module
 
 HEAD = "b" * 40
@@ -2716,3 +2717,101 @@ def test_a_list_that_never_ends_fails_the_read_after_the_page_cap(monkeypatch):
     assert rr._read_pages("repos/o/r/pulls/7/files") is None
     assert len(seen) == 4
     assert rr.changed_paths(7, "o/r") is None
+
+
+# --- the paths withheld from reviewers ---
+
+CORE_MD = ".claude/superheroes/core.md"
+SETTINGS = ".claude/settings.json"
+SRC = "src/a.py"
+WITHHELD_LEAD = "Withheld from reviewers (not readable in full; the vet checks these by hand): "
+
+
+def _regular_blobs(monkeypatch, *paths):
+    """Serve the head tree as regular files for `paths`, so the real withheld rule runs without a git repository."""
+    entries = [("100644", "blob", str(i) * 40, p) for i, p in enumerate(paths)]
+    monkeypatch.setattr(sanitized_view, "_git_ls_tree_export", lambda repo_real, sha: entries)
+
+
+def _withheld_record(tmp_path, monkeypatch, changed, **over):
+    fake = Fake()
+    fake.changed = changed
+    _regular_blobs(monkeypatch, *changed)
+    return build(account(repoRoot=str(tmp_path), **over), fake)
+
+
+def test_r1_a_changed_calibration_file_is_shown_and_a_changed_settings_file_is_listed(tmp_path, monkeypatch):
+    # axis: the withheld list from the one rule; a shown calibration file listed, or a stripped settings file left out
+    rec = _withheld_record(tmp_path, monkeypatch, [CORE_MD, SETTINGS, SRC])
+    assert rec["withheldFromReviewers"] == [SETTINGS]
+    assert f"{WITHHELD_LEAD}{SETTINGS}." in rr.render(rec)
+
+
+def test_r2_a_change_with_nothing_withheld_records_an_empty_list(tmp_path, monkeypatch):
+    # axis: the empty list; a change with nothing withheld read as unknown, or the none line missing
+    rec = _withheld_record(tmp_path, monkeypatch, [SRC])
+    assert rec["withheldFromReviewers"] == []
+    assert "Withheld from reviewers: none." in rr.render(rec)
+
+
+def test_r3_unreadable_changed_files_record_null_not_an_empty_list(tmp_path):
+    # axis: the unread leg; an unreadable changed-file list recorded as an empty list
+    fake = Fake()
+    fake.changed = None
+    rec = build(account(repoRoot=str(tmp_path)), fake)
+    assert rec["withheldFromReviewers"] is None
+    assert "Withheld from reviewers: could not be read" in rr.render(rec)
+
+
+def test_r3b_an_account_naming_no_repository_reads_no_changed_files_and_records_null():
+    # axis: the no-repoRoot leg of the withheld list; an account naming no repository reading the PR's files anyway
+    calls = []
+    readers = {**Fake().readers(), "changed_paths": lambda pr, repo: calls.append((pr, repo)) or [SETTINGS]}
+    rec = rr.build_record(account(), readers)
+    assert rec["withheldFromReviewers"] is None
+    assert calls == []
+
+
+def test_r4_the_changed_files_are_read_once_per_record(tmp_path):
+    # axis: the one-read cache; the lane basis and the withheld list each reading the PR's files
+    calls = []
+    readers = {**Fake().readers(), "changed_paths": lambda pr, repo: calls.append((pr, repo)) or [SRC]}
+    rec = rr.build_record(account(repoRoot=str(tmp_path)), readers)
+    assert rec["withheldFromReviewers"] == []
+    assert len(calls) == 1
+
+
+def test_r5_a_withheld_path_named_like_a_claim_does_not_trip_the_claim_check(tmp_path, monkeypatch):
+    # axis: the withheld line's exemption from the claim check; a path spelling a claim refusing the render
+    rec = _withheld_record(tmp_path, monkeypatch, [".claude/bug-free.md"])
+    assert rec["withheldFromReviewers"] == [".claude/bug-free.md"]
+    rr.render_plan(rec)
+
+
+def test_r6_five_hundred_withheld_paths_become_a_count_in_the_head_and_are_whole_in_the_parts(tmp_path, monkeypatch):
+    # axis: the withheld list across the parts split; paths cut short or dropped when the record goes to parts
+    paths = [f".claude/p{i}.md" for i in range(500)]
+    rec = _withheld_record(tmp_path, monkeypatch, paths)
+    rec["whatIsMissing"] = rec["whatIsMissing"] + ["w" * rr.MAX_BODY_CHARS]
+    plan = rr.render_plan(rec)
+    assert plan.parts
+    ids = list(range(1, len(plan.parts) + 1))
+    head = plan.head(ids)
+    assert "500 paths" in head
+    posted = rr._parse_body(head, {i: {"body": part} for i, part in zip(ids, plan.parts)})
+    assert posted["withheldFromReviewers"] == sorted(paths)
+
+
+def test_r7_withheld_paths_do_not_change_the_status(tmp_path, monkeypatch):
+    # axis: the status's independence from the withheld list; a withheld path lowering or raising the status
+    plain = _withheld_record(tmp_path, monkeypatch, [SRC])
+    held = _withheld_record(tmp_path, monkeypatch, [SRC, SETTINGS])
+    assert plain["withheldFromReviewers"] == [] and held["withheldFromReviewers"] == [SETTINGS]
+    assert held["status"] == plain["status"]
+
+
+@pytest.mark.parametrize("root", [None, "tmp"])
+def test_r8_a_head_tree_that_cannot_be_read_lists_every_stripped_path(tmp_path, root):
+    # axis: the fail-closed head-tree read; an unreadable tree treating a calibration file as shown
+    repo_root = str(tmp_path) if root else None
+    assert sanitized_view.withheld_review_paths(repo_root, "a" * 40, [CORE_MD, SRC]) == [CORE_MD]

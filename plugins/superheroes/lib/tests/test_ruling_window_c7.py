@@ -84,11 +84,6 @@ def _batch_keys(state):
     return [_key(row) for row in state.get("_fixBatch") or []]
 
 
-def _rows_by_title(state):
-    rows = list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
-    return {row.get("title"): row for row in rows}
-
-
 def _finding_key_by_title(state, title):
     for finding in state.get("findings") or []:
         if finding.get("title") == title:

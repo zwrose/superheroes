@@ -14,6 +14,39 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ## Unreleased
 
+### Before you upgrade
+
+- **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
+- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`. See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
+
+### PR sheet: leftovers carry the decision spine
+
+- `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
+- A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
+- A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
+
+### Claude write sandbox: localPorts opens on Linux
+
+- The unsupported-platform refusal now names only `localSockets` off macOS; the token `engine-config:sandbox-access-unsupported-platform` and the result keys are unchanged.
+- A Linux run with `localPorts` journals `access.localPorts: true` and writes `network.allowLocalBinding: true`.
+
+### Review record: carried leftovers are re-checked against the head
+
+- A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
+
+## 0.43.1
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.43.1. Each step names the note it comes from.
+
+- **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
+- **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
+
+### Launcher: cloud launch
+
+- A cloud launch now refuses unless the launching checkout is on a named branch whose local head and whose tip on `origin` are both the premise's `baseCommit`. The new refusal reasons are `launch-cloud-checkout-unreadable`, `launch-cloud-checkout-off-base`, `launch-cloud-checkout-branch-not-on-remote` and `launch-cloud-checkout-remote-unchecked`. Each refusal result carries `checkout`, `checkoutBranch`, `checkoutHead` and `baseCommit`, and `remoteBranchHead` once the remote was asked. These refusals do not fall back to the owner's machine. Put the checkout on the base, pushed, and launch again.
+
 ### Adopt-version: before- and after-switching upgrade steps
 
 - `lib/adopt_version.py plan` adds `upgradeSteps` to each `transitionSections` entry: one
@@ -21,6 +54,16 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
   `after-switching`. An unmarked bullet reads `before-switching`. No new refusal.
 - adopt-version's step 4 holds only on before-switching owner items. After-switching items are owed:
   step 6 writes an `owed:` line next to the taken-up line, and step 8 names them.
+
+### Canon: a pull request of its own
+
+- Canon may now have a pull request of its own. `rubric/canon-contract.md` § Writing a ruling and
+  the showrunner charter's duty 8 used to say Canon never gets one. Now a ruling made inside a
+  piece of work still rides that work's pull request. A ruling the advisor holds goes into a
+  Canon-only pull request (only Canon's paths change) whenever no pull request of the advisor's own
+  is coming soon, and whenever the owner asks for one. It merges on a sheet like any other. The
+  held comment (`superheroes:canon-held`) still carries a held ruling until it is committed. No CLI,
+  result key or refusal changes.
 
 ## 0.43.0
 

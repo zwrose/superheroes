@@ -46,6 +46,10 @@ fields stay authoritative. Mechanics by dispatch kind:
   dispatch time is a runaway to kill even while its file grows. If the in-turn poll cannot fit the
   turn, park (§ Awaiting a dispatch). The output-file stall signals above still apply to the
   detached child.
+- **A `dispatch-write` attempt has its own limit, 900 seconds by default**, separate from the
+  `--max-wait` slice. An order whose own commands run for minutes can hit it after its edits have
+  landed and forfeit anyway, so size `--timeout` and `--retry-timeout` to the order at launch and
+  pass the same values on every continuation.
 - **A native subagent dispatch** has a **harness-managed lifecycle**: no `bash_timeout` floor and no
   CPU column of your own to watch. The shell mechanics above don't apply, and there is **no
   caller-set ceiling to invent**. The harness returns when the subagent completes. How to await it,
@@ -755,7 +759,9 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
 
 - **Allowed:** writes to the build worktree, its git dir, the shared git common dir, the uv
   cache, and `/tmp` (with its realpath, `/private/tmp` on macOS); on macOS, binding and connecting
-  on localhost, which also allows a bind on 0.0.0.0. The `/tmp` writes and the localhost binding
+  on localhost, which also allows a bind on 0.0.0.0; on Linux, loopback inside the sandbox's own
+  network namespace, reachable whether or not `localPorts` is on (the record's `localBinding` stays
+  `false` there). The `/tmp` writes and the localhost binding
   are on by default for every project. **Blocked:** the network (unless `sandboxAccess` opens it),
   writes to the common dir's `hooks` and `config` and the worktree's `config.worktree`, the
   runner's own state (its run dir, the supervisor journal root, the worktree lease, and the launch
@@ -779,7 +785,8 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   (`sandbox.network.allowUnixSockets`); `extraWritePaths` adds writable roots
   (`sandbox.filesystem.allowWrite`). The deny list (the git hooks, the git config files, the worktree
   identity files) wins over any extra path. Localhost binding is already on for every run on macOS,
-  so setting `localPorts` adds nothing there; on any other host it still refuses.
+  so setting `localPorts` adds nothing there; on Linux it opens (loopback inside the sandbox's own
+  network namespace).
 - **Roots freeze at open.** The writable roots are resolved once at run open and journaled as
   `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. The access
   options are read once at open and journaled with the roots as `claudeWriteSandbox.access`, and the
@@ -791,9 +798,10 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `engine-config:sandbox-roots-unresolvable` or `engine-config:sandbox-uv-cache-unresolvable`. So does
   a `sandboxAccess` the open cannot use: `engine-config:sandbox-access-malformed`, or
   `engine-config:sandbox-access-unreadable` when a `core.md` that exists cannot be read, parsed, or
-  resolved (an absent `core.md` is all off). `localPorts` and `localSockets` are macOS-only: the
-  sandbox runtime forwards `allowLocalBinding` and `allowUnixSockets` to its macOS wrapper and not
-  its Linux one, so on any other host an open that asks for either refuses
+  resolved (an absent `core.md` is all off). `localPorts` works on every host (on Linux the
+  sandbox's own network namespace gives loopback, with no reach to the host's); `localSockets` is
+  macOS-only, because the Linux sandbox blocks Unix sockets on every path and its only switch lifts
+  the block for all of them, so an open off macOS that asks for it refuses
   `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
   An `extraWritePaths` entry that resolves to `/` through a symlink refuses
   `engine-config:sandbox-access-malformed`. A `/tmp` whose realpath resolves to `/` is not journaled.
