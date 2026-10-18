@@ -20,6 +20,10 @@ Tokens (one finding each when triggered):
   text (the fixer literal or a ``## Payload contract`` heading).
 - ``order-budget-missing`` — an implementer order lacks a command-budget declaration.
 - ``order-kind-unknown`` — ``--kind`` is not ``implementer`` or ``fixer``.
+Warnings (never a refusal): the result's ``warnings`` list never changes ``ok``, ``findings``
+or the CLI exit code. ``order-timeout-missing`` — an implementer order names a test suite or
+long-running command (``pytest``, ``npm test``, ``go test``, ``full suite`` …) and sets no
+``--timeout``; checked on the template-masked text with code spans and fences kept.
 Per-kind table:
 | check | implementer | fixer |
 |---|---|---|
@@ -30,6 +34,7 @@ Per-kind table:
 | order-result-shape-ambiguous | yes | yes |
 | order-result-shape-authored | no | yes |
 | order-budget-missing | yes | no |
+| order-timeout-missing (warning) | yes | no |
 | order-kind-unknown | other kind; alone | |
 
 Limitations: no-slash/extensionless tokens skip the path check; a ``budget`` word
@@ -59,6 +64,8 @@ TOKEN_RESULT_SHAPE_AMBIGUOUS = "order-result-shape-ambiguous"
 TOKEN_RESULT_SHAPE_AUTHORED = "order-result-shape-authored"
 TOKEN_BUDGET_MISSING = "order-budget-missing"
 TOKEN_KIND_UNKNOWN = "order-kind-unknown"
+WARN_TIMEOUT_MISSING = "order-timeout-missing"
+WARNINGS = (WARN_TIMEOUT_MISSING,)
 TOKENS = (
     TOKEN_UNREADABLE, TOKEN_REPO_ROOT_UNRESOLVED, TOKEN_PATH_UNRESOLVED,
     TOKEN_PLACEHOLDER_UNFILLED, TOKEN_RESULT_SHAPE_AMBIGUOUS,
@@ -81,6 +88,10 @@ _BUDGET = re.compile(r"budget.{0,60}(\d+)|(\d+).{0,60}budget", re.I | re.DOTALL)
 _BUDGET_AT = re.compile(r"at most \d+ (?:command|invocation)", re.I)
 _MD_LINK = re.compile(r"\]\(([^)]+)\)")
 _TRAIL_PUNCT = re.compile(r"[.,;:!?)}\]]+$")
+# A command, not a file path: no word character, dot or dash before; no word character or ".ext" after.
+_SUITE_CMD = re.compile(
+    r"(?<![\w.-])(?:pytest|npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test|jest|vitest|go\s+test"
+    r"|cargo\s+test|make\s+test|full\s+suite|test\s+suites?)(?!\w|\.\w)", re.I)
 _NATIVE = ('"resultKind"', "--output-schema")
 # Driver-bound verify-command token — not an unfilled order placeholder.
 _DRIVER_PH = frozenset({"baseRef"})
@@ -156,7 +167,8 @@ def _f(token, detail=""):
 
 
 def _refuse(kind, token, detail):
-    return {"ok": False, "kind": kind, "findings": [_f(token, detail)], "checked": _EMPTY}
+    return {"ok": False, "kind": kind, "findings": [_f(token, detail)], "checked": _EMPTY,
+            "warnings": []}
 
 
 def _norm_item(raw):
@@ -327,6 +339,13 @@ def _budget_ok(text):
     return bool(_BUDGET_AT.search(text) or _BUDGET.search(text))
 
 
+def _timeout_warnings(text):
+    if "--timeout" in text:
+        return []
+    m = _SUITE_CMD.search(text)
+    return [_f(WARN_TIMEOUT_MISSING, m.group(0))] if m else []
+
+
 def _root_ok(path):
     return isinstance(path, str) and path and os.path.isdir(path) and os.access(path, os.R_OK)
 
@@ -370,7 +389,8 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
         findings.append(_f(TOKEN_BUDGET_MISSING, ""))
     return {"ok": not findings, "kind": kind, "findings": findings,
             "checked": {"paths": path_n, "placeholders": pc},
-            "vocabSource": "canonical", "templateCopiesMasked": template_n}
+            "vocabSource": "canonical", "templateCopiesMasked": template_n,
+            "warnings": _timeout_warnings(text) if kind == "implementer" else []}
 
 
 def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer",

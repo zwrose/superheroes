@@ -50,6 +50,7 @@ _CODEX_HOME_ENV = "CODEX_HOME"
 _AUTH_FILE = "auth.json"
 _CLIPBOARD_COMMANDS = (("pbcopy",), ("wl-copy",), ("xclip", "-selection", "clipboard"))
 _CLIPBOARD_TIMEOUT = 30
+_CLIPBOARD_LOCALE = "en_US.UTF-8"
 
 
 def _env(env):
@@ -165,8 +166,12 @@ def _find_clipboard(env):
 
 def _run_clipboard(argv, text):
     # DEVNULL, not pipes: xclip forks a selection owner that keeps inherited pipes open.
-    proc = subprocess.run(list(argv), input=text, text=True, stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, timeout=_CLIPBOARD_TIMEOUT)
+    # pbcopy decodes its input by the locale; a non-UTF-8 one turned an em-dash into "‚Äî" in the field.
+    child_env = dict(os.environ, LANG=_CLIPBOARD_LOCALE, LC_ALL=_CLIPBOARD_LOCALE,
+                     LC_CTYPE=_CLIPBOARD_LOCALE)
+    proc = subprocess.run(list(argv), input=text, text=True, encoding="utf-8", env=child_env,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          timeout=_CLIPBOARD_TIMEOUT)
     if proc.returncode != 0:
         raise RuntimeError("clipboard command exited non-zero")
 
