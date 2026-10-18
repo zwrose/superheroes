@@ -12,7 +12,14 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.43.1
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.43.1. Each step names the note it comes from.
+
+- **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
+- **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
 
 ### Launcher: cloud launch
 
@@ -25,6 +32,16 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
   `after-switching`. An unmarked bullet reads `before-switching`. No new refusal.
 - adopt-version's step 4 holds only on before-switching owner items. After-switching items are owed:
   step 6 writes an `owed:` line next to the taken-up line, and step 8 names them.
+
+### Canon: a pull request of its own
+
+- Canon may now have a pull request of its own. `rubric/canon-contract.md` § Writing a ruling and
+  the showrunner charter's duty 8 used to say Canon never gets one. Now a ruling made inside a
+  piece of work still rides that work's pull request. A ruling the advisor holds goes into a
+  Canon-only pull request (only Canon's paths change) whenever no pull request of the advisor's own
+  is coming soon, and whenever the owner asks for one. It merges on a sheet like any other. The
+  held comment (`superheroes:canon-held`) still carries a held ruling until it is committed. No CLI,
+  result key or refusal changes.
 
 ## 0.43.0
 

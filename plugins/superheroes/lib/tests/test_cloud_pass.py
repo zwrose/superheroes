@@ -1144,6 +1144,33 @@ def test_clipboard_command_runs_without_captured_pipes(monkeypatch):
     assert seen["input"] == "text"
 
 
+def test_clipboard_command_runs_with_a_utf8_locale(monkeypatch):
+    monkeypatch.setenv("LANG", "C")
+    monkeypatch.setenv("LC_ALL", "C")
+    seen = {}
+
+    def fake(argv, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(CP.subprocess, "run", fake)
+    CP._run_clipboard(("pbcopy",), "setup text — with an em-dash")
+    assert seen["env"]["LANG"] == seen["env"]["LC_ALL"] == seen["env"]["LC_CTYPE"] == "en_US.UTF-8"
+    assert seen["encoding"] == "utf-8"
+    assert seen["input"] == "setup text — with an em-dash"
+
+
+def test_clipboard_copy_delivers_utf8_bytes_and_locale_to_the_command(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANG", "C")
+    monkeypatch.setenv("LC_ALL", "C")
+    text_sink = tmp_path / "clip.bin"
+    locale_sink = tmp_path / "locale.txt"
+    body = 'cat > %s\nprintf \'%%s\\n\' "$LANG" "$LC_ALL" "$LC_CTYPE" > %s\n' % (text_sink, locale_sink)
+    bin_dir = _fake_clipboard_bin(tmp_path, "pbcopy", body)
+    CP.copy_to_clipboard("a — b", env={"PATH": str(bin_dir)})
+    assert text_sink.read_bytes() == "a — b".encode("utf-8")
+    assert locale_sink.read_bytes().decode("ascii").splitlines() == ["en_US.UTF-8"] * 3
+
+
 # ---------------------------------------------------------------- placed_pass_state
 
 
