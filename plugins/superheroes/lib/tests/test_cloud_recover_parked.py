@@ -59,6 +59,7 @@ def test_1_a_stop_newer_than_the_last_activity_reads_parked_and_names_the_commen
 
 def test_1_a_footered_park_is_parked_even_when_the_session_is_gone(w):
     _lane(w, "l1")
+    _pushed_at(w, 1500)  # work pushed before the park: the park is the builder's last word
     w.gh.comments = [_comment(FOOTERED_PARK, age=600, cid=12)]
     out = _assess(w, state="failed")
     assert (out["verdict"], out["evidence"], out["parkRead"]) == ("parked", "builder-park", "ok")
