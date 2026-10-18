@@ -43,6 +43,17 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
 - **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
 - **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
 
+### Launcher: one phone per named iPhone size
+
+- A premise may carry `iphoneModels`, a non-empty list of distinct simulator device-type names (`"iPhone 17"`, `"iPhone 17e"`), valid only beside `"iphoneCheck": true`. Otherwise the launch refuses `premise-iphone-models-invalid`.
+- Before it makes anything, the launcher reads `xcrun simctl list devicetypes -j`. A name the inventory lacks refuses `iphone-model-unknown` (with `unknownModels`), and an unreadable inventory refuses `iphone-models-unreadable`. Both refuse at stage `iphone-models`, with no worktree, no phone and no child made.
+- It then makes one phone per name, in order, named `superheroes-<launchId>-<n>`. A create that fails is skipped. The launch record keeps `iphoneId` (the first phone) and adds `iphoneIds` (every phone made).
+- The builder gets `SUPERHEROES_IPHONE_IDS` (every phone, comma-joined, the first being `SUPERHEROES_IPHONE_ID`) beside `SUPERHEROES_IPHONE_ID`, only when sizes were named and at least one phone was made.
+- `iphone_check.py preflight` checks every handed phone, and its `ready` result adds `phones`. `render` refuses a check object whose evidence comes from more than one phone, so the pilot renders one check object per phone.
+- The fold's lane view carries `iphoneIds` (a legacy record reads `[iphoneId]`). The reap deletes every one, with one result and one `evidence`/`reap` amendment per phone. A caller that reads the reap's `phones[]` now gets one entry per phone.
+- At vet, a piece's `phone` must be among the record's phones, and a launch that named sizes needs a complete check for every size.
+- Launches without `iphoneModels` behave exactly as before.
+
 ### Hooks: the plugin approves its own iPhone commands
 
 - A third `PreToolUse` command on the `Bash` matcher, `hooks/iphone_allow.py`, runs after the worktree guard. It approves (`permissionDecision: "allow"`) only one plain call, `python3 [-B] <plugin root>/lib/iphone_check.py <verb> …`, where the verb is `preflight`, `boot`, `open`, `drive`, `shot`, `read`, `judge` or `render`. A `drive` call needs an AXe step after `--` that is `tap`, `type`, `button`, `swipe` or `describe-ui`. `judge` may read its step as `judge < <file>`.
