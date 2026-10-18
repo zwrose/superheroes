@@ -266,6 +266,16 @@ def read(cwd, account, root=None, *, persist_backfill=True):
     }
 
 
+def recorded_environment(cwd, account, root=None):
+    """The environment a ready setup record for ``account`` names, or None. Never raises; writes
+    nothing."""
+    try:
+        state, record = _load(cwd, account, root)
+    except Exception:
+        return None
+    return record["environment"] if state == "ready" else None
+
+
 def failed_check_path(cwd, account, root=None):
     """Where the failed-check marker for ``account`` lives: the setup record's path, beside it."""
     return record_path(cwd, account, root)[:-len(".json")] + FAILED_CHECK_SUFFIX

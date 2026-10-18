@@ -269,6 +269,22 @@ def _project_name(cwd):
         return os.path.basename(os.path.abspath(cwd))
 
 
+_CLONE_DIR_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _clone_dir(cwd):
+    """The directory a cloud clone of this repository is named: the last path component of its
+    remote, when that is plain enough for the shell; else None."""
+    try:
+        remote = store_core.get_remote(cwd)
+        name = remote.split("/")[-1] if remote else None
+    except Exception:
+        return None
+    if name and _CLONE_DIR_RE.fullmatch(name) and name not in (".", ".."):
+        return name
+    return None
+
+
 def _utc_date(now):
     moment = now if isinstance(now, datetime) else datetime.fromtimestamp(
         time.time() if now is None else now, timezone.utc)
@@ -302,7 +318,7 @@ def _scan(text):
     return _plain_shape(text) or _encoded_shape(text)
 
 
-def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp):
+def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -312,6 +328,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         'LOG="%s"' % _LOG,
         'SRC="%s"' % source_dir,
         'LINK="%s"' % plugin_dir,
+        *(['CLONE="%s"' % clone] if clone is not None else []),
         "",
         "# Fetch the plugin at the commit the owner's machine runs.",
         "(",
@@ -337,12 +354,23 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         '    && echo "sandbox tools ok" || echo "sandbox tools FAILED"',
         ') >> "$LOG" 2>&1 &',
         "",
-        "# Install the project's pinned Python, when it has a .python-version file.",
+        "# Install the project's pinned Python, when it has a .python-version file: in the working",
+        "# directory, or in the clone beside it. uv reads the file itself, from that directory, with",
+        "# UV_PYTHON cleared so an inherited value cannot override it.",
         "(",
-        "  if [ -f .python-version ]; then",
-        '    uv python install && echo "pinned python ok" || echo "pinned python FAILED"',
+        '  DIR=""',
+        '  if [ -f "$PWD/.python-version" ]; then DIR="$PWD"',
+        *(['  elif [ -f "$PWD/$CLONE/.python-version" ]; then DIR="$PWD/$CLONE"']
+          if clone is not None else []),
+        "  fi",
+        '  if [ -z "$DIR" ]; then',
+        '    echo "pinned python: no .python-version in $PWD%s"'
+        % (" or $PWD/$CLONE" if clone is not None else ""),
         "  else",
-        '    echo "pinned python: no .python-version in $PWD"',
+        "    if grep -qvE '^[[:space:]]*(#|$)' \"$DIR/.python-version\""
+        ' && (cd "$DIR" && env -u UV_PYTHON uv python install); then'
+        ' echo "pinned python ok"',
+        '    else echo "pinned python FAILED"; fi',
         "  fi",
         ') >> "$LOG" 2>&1 &',
         "wait",
@@ -421,7 +449,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         part = "calibration in the repository"
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
-    text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp)
+    text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
+                   _clone_dir(cwd))
     shape = _scan(text)
     if shape:
         where = next((rel for rel, data in files.items()

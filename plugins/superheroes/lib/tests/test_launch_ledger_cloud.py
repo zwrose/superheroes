@@ -102,8 +102,10 @@ def test_edge2_cloud_reserved_bad_field(field, value):
         {"slot": "slot-a", "generation": 1},
         {"boundary": {}},
         {"iphoneId": "0F0E0D0C-0B0A-4908-8706-050403020100"},
+        # axis: a cloud lane makes no simulator phones, so a phone list is as foreign to it as one phone
+        {"iphoneIds": ["0F0E0D0C-0B0A-4908-8706-050403020100"]},
     ],
-    ids=["worktree", "sessionId", "slot-generation", "boundary", "iphoneId"],
+    ids=["worktree", "sessionId", "slot-generation", "boundary", "iphoneId", "iphoneIds"],
 )
 def test_edge3_cloud_reserved_refuses_local_only_field(extra):
     rec = _cloud_reserved("a", **extra)

@@ -21,6 +21,7 @@ import launcher
 
 U = "0A1B2C3D-4E5F-6789-ABCD-0123456789AB"
 V = "11111111-2222-3333-4444-555555555555"
+W = "ABCDEF01-2345-6789-ABCD-EF0123456789"
 DT17 = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 RT27 = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "iphone", "reading-page.html")
@@ -403,9 +404,9 @@ def env(phone=U, hub="available"):
 
 def test_both_unset_is_off_and_with_the_issue_naming_the_check_is_ufr5(fake):
     f = fake()
-    assert ic.preflight({}) == {"ok": False, "state": "off", "phone": None, "line": None}
+    assert ic.preflight({}) == {"ok": False, "state": "off", "phone": None, "phones": None, "line": None}
     out = ic.preflight({}, issue_names_check=True)
-    assert out == {"ok": False, "state": "did-not-run", "phone": None, "line": UFR5_LITERAL}
+    assert out == {"ok": False, "state": "did-not-run", "phone": None, "phones": None, "line": UFR5_LITERAL}
     assert f.calls == []
 
 
@@ -413,7 +414,7 @@ def test_none_is_the_ufr5_line_and_nothing_else_even_with_the_hub_unavailable(fa
     f = fake()
     assert ic.preflight(env("none", "available"))["line"] == UFR5_LITERAL
     out = ic.preflight(env("none", "unavailable"))
-    assert out == {"ok": False, "state": "did-not-run", "phone": None, "line": UFR5_LITERAL}
+    assert out == {"ok": False, "state": "did-not-run", "phone": None, "phones": None, "line": UFR5_LITERAL}
     assert f.calls == []
 
 
@@ -432,7 +433,7 @@ def test_classify_env_invalid_values(fake, e):
     f = fake()
     assert ic.classify_env(e) == ("did-not-run", PRE + "launch values unreadable")
     out = ic.preflight(e, issue_names_check=True)
-    assert out == {"ok": False, "state": "did-not-run", "phone": None, "line": PRE + "launch values unreadable"}
+    assert out == {"ok": False, "state": "did-not-run", "phone": None, "phones": None, "line": PRE + "launch values unreadable"}
     assert f.calls == []
 
 
@@ -482,8 +483,84 @@ def test_preflight_unreadable_inventory_is_never_ready(fake, monkeypatch):
 def test_preflight_all_good_is_ready(fake, monkeypatch):
     f = fake(sim(inventory((V, "Shutdown"), (U, "Shutdown"))))
     monkeypatch.setattr(shutil, "which", lambda name: "/opt/axe")
-    assert ic.preflight(env()) == {"ok": True, "state": "ready", "phone": U, "line": None}
+    assert ic.preflight(env()) == {"ok": True, "state": "ready", "phone": U, "phones": [U], "line": None}
     assert ["xcrun", "simctl", "list", "devices", "-j"] in [c[0] for c in f.calls]
+
+
+def ids_env(ids, phone=U, hub="available"):
+    e = env(phone, hub)
+    if ids is not None:
+        e["SUPERHEROES_IPHONE_IDS"] = ids
+    return e
+
+
+def test_classify_env_phone_list_literal_pin():
+    assert ic.IPHONE_IDS_ENV == "SUPERHEROES_IPHONE_IDS"
+    assert ic.IPHONE_IDS_ENV is launcher.IPHONE_IDS_ENV
+
+
+@pytest.mark.parametrize("e", [ids_env(U), ids_env(f"{U},{V}")], ids=["one", "two"])
+def test_classify_env_valid_phone_list_is_pending(e):
+    # axis: one or more distinct canonical IDs led by the lane's own phone stay pending
+    assert ic.classify_env(e) == ("pending", None)
+
+
+@pytest.mark.parametrize("e", [
+    ids_env(""),
+    ids_env(f"{U},"),
+    ids_env(f"{U},not-a-phone"),
+    ids_env(f"{U},{W.lower()}"),
+    ids_env(f"{U},{U}"),
+    ids_env(f"{V},{U}"),
+    ids_env(f"{U}, {V}"),
+    ids_env(f"{U},{V}", phone="none"),
+    ids_env("none", phone="none"),
+], ids=["empty", "trailing-comma", "malformed", "lower-case", "duplicate", "first-differs", "padded",
+        "beside-none", "none-listed"])
+def test_classify_env_bad_phone_list_is_unreadable(fake, e):
+    # axis: an empty, malformed, repeated or differently-led list, or one beside `none`, is unreadable launch values
+    f = fake()
+    assert ic.classify_env(e) == ("did-not-run", PRE + "launch values unreadable")
+    out = ic.preflight(e)
+    assert out == {"ok": False, "state": "did-not-run", "phone": None, "phones": None,
+                   "line": PRE + "launch values unreadable"}
+    assert f.calls == []
+
+
+def test_preflight_two_phones_ready_names_both(fake, monkeypatch):
+    # axis: every listed phone is checked and a ready check keeps the first as phone and lists all
+    fake(sim(inventory((V, "Booted"), (U, "Booted"))))
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/axe")
+    assert ic.preflight(ids_env(f"{U},{V}")) == {
+        "ok": True, "state": "ready", "phone": U, "phones": [U, V], "line": None}
+
+
+def test_preflight_second_phone_failing_is_the_whole_check_not_running(fake, monkeypatch):
+    # axis: the first phone that fails decides the whole check, even when the first one is live
+    asked = []
+
+    def live(udid):
+        asked.append(udid)
+        return None if udid == U else "the phone is not on this Mac"
+
+    monkeypatch.setattr(ic, "_live_reason", live)
+    assert ic.preflight(ids_env(f"{U},{V}")) == {
+        "ok": False, "state": "did-not-run", "phone": None, "phones": None,
+        "line": PRE + "the phone is not on this Mac"}
+    assert asked == [U, V]
+
+
+def test_preflight_first_phone_failing_stops_before_the_second(monkeypatch):
+    # axis: the phones are checked in order, so a failing first phone is the reason reported
+    asked = []
+
+    def live(udid):
+        asked.append(udid)
+        return "Device Hub unavailable"
+
+    monkeypatch.setattr(ic, "_live_reason", live)
+    assert ic.preflight(ids_env(f"{U},{V}"))["line"] == PRE + "Device Hub unavailable"
+    assert asked == [U]
 
 
 def test_preflight_cli_reads_the_environment_and_exits_by_ok(fake, monkeypatch, capsys):
@@ -1422,6 +1499,25 @@ def test_render_refuses_a_piece_missing_a_label(missing):
     blank = labels(**{missing: " "})
     with pytest.raises(ValueError):
         ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "labels": blank}]))
+
+
+def test_render_refuses_evidence_from_more_than_one_phone():
+    # axis: evidence whose pieces carry different phone labels is refused, since one section would present two phones as one device
+    mixed = chk(where=["browser", "installed"],
+                evidence=[ev_shot("browser"), ev_shot("installed", phone=V)])
+    with pytest.raises(ValueError, match="more than one phone"):
+        ic.render(mixed)
+    # a superseded piece from another phone is evidence too
+    stale = {**ev_shot("browser", phone=V), "superseded": True}
+    with pytest.raises(ValueError, match="more than one phone"):
+        ic.render(chk(where=["browser"], evidence=[ev_shot("browser"), stale]))
+
+
+def test_render_still_renders_pieces_that_share_one_phone():
+    # axis: pieces from the same phone render as before, so the one-phone check is not refused
+    _, section = ic.render(chk(where=["browser", "installed"],
+                               evidence=[ev_shot("browser"), ev_shot("installed")]))
+    assert "iPhone evidence 2" in section
 
 
 def test_render_refuses_a_source_other_than_simulator():

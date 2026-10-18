@@ -54,7 +54,25 @@ def test_worktree_guard_gate_wired_fail_closed_before_bash_timeout():
         "worktree guard must be listed before bash_timeout on the Bash matcher"
 
 
-def test_bash_pretooluse_chain_is_exactly_guard_then_timeout_then_fence():
+def test_iphone_allow_hook_is_wired_fail_soft_after_worktree_guard():
+    cfg = json.load(open(_HOOKS))
+    bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert bash, "no Bash PreToolUse matcher"
+    cmds = [h["command"] for entry in bash for h in entry["hooks"]]
+
+    iphone = [c for c in cmds if "iphone_allow.py" in c]
+    assert iphone, "hooks.json must wire iphone_allow.py on the Bash matcher"
+    # axis: the iPhone approver is fail-soft — a failure to start leaves no decision, never a block
+    assert "|| true" in iphone[0]
+
+    guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
+    iphone_idx = next(i for i, c in enumerate(cmds) if "iphone_allow.py" in c)
+    # axis: the iPhone approver is listed after the worktree guard on the Bash matcher
+    assert guard_idx < iphone_idx, \
+        "iphone_allow must be listed after the worktree guard on the Bash matcher"
+
+
+def test_bash_pretooluse_chain_is_exactly_guard_timeout_iphone_then_fence():
     """The Bash PreToolUse chain is pinned: adding a hook requires changing this test deliberately."""
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -64,9 +82,10 @@ def test_bash_pretooluse_chain_is_exactly_guard_then_timeout_then_fence():
     expected = [
         "worktree_guard_gate.py",
         "bash_timeout.py",
+        "iphone_allow.py",
         "implementer_fence.py",
     ]
-    # axis: the Bash PreToolUse chain is exactly three hooks — the worktree guard, bash_timeout, the native fence
+    # axis: the Bash PreToolUse chain is exactly four hooks — the worktree guard, bash_timeout, the iPhone approver, then the native fence
     assert len(cmds) == len(expected), (
         f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
     )

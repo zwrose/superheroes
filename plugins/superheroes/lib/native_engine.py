@@ -24,6 +24,7 @@ refusal or a forfeit. Grading rests on git and on the harness's transcript and j
 """
 import argparse
 import calendar
+import contextlib
 import hashlib
 import json
 import os
@@ -42,6 +43,7 @@ import core_md  # noqa: E402  read_sandbox_access
 import dispatch_outcome  # noqa: E402  REASON_FORFEITED
 import engine_dispatch  # noqa: E402  journal, git, host platform, declared-item check
 import file_lock  # noqa: E402  the run-dir lock
+import launch_ledger  # noqa: E402  scrub_env
 import model_registry  # noqa: E402  CLAUDE_ALIAS_RESOLUTION
 import preflight_probe  # noqa: E402  dispatch_calibration
 import seat_bundle  # noqa: E402  the callable `dispatch_guard.py check --seat` runs
@@ -126,10 +128,55 @@ def _refusal(reason, **extra):
 # --- git -----------------------------------------------------------------------------------
 
 
-def _git(cwd, *args):
-    """(returncode, stdout, stderr); returncode -1 when git cannot run or times out."""
+# Every git subprocess this module causes runs under `_neutral_git`: the owner's global and system
+# git config never reaches it (#1949). The env pair does not reach the repository's own or the
+# worktree's config, and `engine_dispatch._git_scrubbed` strips GIT_CONFIG_GLOBAL from its child, so
+# `_git` builds its own child environment (the pair restored) and also pins each setting the engine's porcelain parsing depends on.
+_NEUTRAL_ENV = (("GIT_CONFIG_GLOBAL", os.devnull), ("GIT_CONFIG_NOSYSTEM", "1"))
+_NEUTRAL_CONFIG = (
+    "diff.noprefix=false", "diff.context=3", "apply.whitespace=nowarn",
+    "status.showUntrackedFiles=all", "diff.submodule=short", "status.submoduleSummary=false",
+    "color.ui=false", "core.quotePath=false", "diff.external=", "diff.renames=false",
+)
+
+
+@contextlib.contextmanager
+def _neutral_git():
+    """Run git, and the callees that spawn it, under neutral configuration.
+
+    Hides the ambient routing variables, then points the global config at the null device and
+    switches the system config off in ``os.environ`` for the duration. The previous values (or their
+    absence) come back afterwards, on an exception too; the context nests."""
+    saved = {key: os.environ.get(key) for key, _ in _NEUTRAL_ENV}
     try:
-        proc = engine_dispatch._git_scrubbed(cwd, *args, timeout=GIT_TIMEOUT)
+        with engine_dispatch._git_routing_scrubbed_environ():
+            os.environ.update(_NEUTRAL_ENV)  # after the scrub: GIT_CONFIG_GLOBAL is a routing var
+            yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _git(cwd, *args):
+    """(returncode, stdout, stderr); returncode -1 when git cannot run or times out.
+
+    The child environment is scrubbed of the routing variables first and the neutral pair is put
+    back after: ``engine_dispatch._git_scrubbed`` would drop ``GIT_CONFIG_GLOBAL`` with them and
+    leave git reading the owner's global config (a global ``core.excludesFile`` hides a new file
+    from ``add -A``)."""
+    overrides = [part for setting in _NEUTRAL_CONFIG for part in ("-c", setting)]
+    try:
+        with _neutral_git():
+            env = launch_ledger.scrub_env(
+                keys=engine_dispatch._GIT_ROUTING_VARS, roots=(engine_dispatch.JOURNAL_ROOT_ENV,))
+            env.update(_NEUTRAL_ENV)
+            proc = subprocess.run(
+                ["git", "-C", cwd, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=",
+                 *overrides, *args],
+                capture_output=True, text=True, env=env, timeout=GIT_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError):
         return -1, "", ""
     return proc.returncode, proc.stdout or "", proc.stderr or ""
@@ -138,9 +185,16 @@ def _git(cwd, *args):
 # --- route ---------------------------------------------------------------------------------
 
 
+_CALIBRATION_ERROR = object()
+
+
 def _calibrated_implementer(cwd):
+    """The calibrated implementer engine, or None; a calibration read error is ``_CALIBRATION_ERROR``."""
     rows = preflight_probe.dispatch_calibration(cwd=cwd)
-    for row in rows if isinstance(rows, list) else []:
+    rows = rows if isinstance(rows, list) else []
+    if any(isinstance(row, dict) and row.get("readError") for row in rows):
+        return _CALIBRATION_ERROR
+    for row in rows:
         if isinstance(row, dict) and row.get("role") == "implementer" and row.get("engine"):
             return row["engine"]
     return None
@@ -149,19 +203,23 @@ def _calibrated_implementer(cwd):
 def route(cwd):
     """native exactly when cloud, linux, a calibration that turns localSockets on and a claude
     implementer; any other calibrated engine keeps its own dispatch path."""
-    calibrated = _calibrated_implementer(cwd)
-    if (cloud_pass._is_cloud(os.environ)
-            and engine_dispatch._host_platform() == "linux"):
-        read = core_md.read_sandbox_access(cwd)
+    with _neutral_git():  # both reads name cwd's repository
+        calibrated = _calibrated_implementer(cwd)
+        cloud_linux = (cloud_pass._is_cloud(os.environ)
+                       and engine_dispatch._host_platform() == "linux")
+        read = core_md.read_sandbox_access(cwd) if cloud_linux else None
+    if cloud_linux:
         access = read.get("access")
         if not isinstance(access, dict):
             if read.get("reason") == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
                 return {"ok": False, "reason": "sandbox-access-malformed"}
             return {"ok": False, "reason": "sandbox-access-unreadable"}
-        if access.get("localSockets") is True and calibrated in (None, "claude"):
+        if calibrated is _CALIBRATION_ERROR:
+            return {"ok": False, "reason": "calibration-unreadable"}
+        if access.get("localSockets") is True and calibrated == "claude":
             return {"ok": True, "engine": "native", "reason": ROUTE_REASON_NATIVE,
                     "why": NATIVE_WHY}
-    if calibrated:
+    if calibrated and calibrated is not _CALIBRATION_ERROR:
         return {"ok": True, "engine": calibrated, "reason": ROUTE_REASON_CALIBRATED}
     return {"ok": False, "reason": "calibration-unreadable"}
 
@@ -175,8 +233,9 @@ def _cmd_route(args):
 
 def _state(run_dir_real):
     """The native run's journal facts: opened, enrolled, collecting, closed (each a record or None)."""
-    records = engine_dispatch._journal_read_raw(run_dir_real)[0]
-    state = {"opened": None, "enrolled": None, "collecting": None, "closed": None}
+    records, interior_corrupt = engine_dispatch._journal_read_raw(run_dir_real)[:2]
+    state = {"opened": None, "enrolled": None, "collecting": None, "closed": None,
+             "corrupt": bool(interior_corrupt)}
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -261,6 +320,14 @@ def _cmd_open(args):
         return _refusal("run-dir-locked")
     prompt_path = os.path.join(run_dir, _PROMPT_NAME)
     try:
+        if engine_dispatch._journal_read_raw(run_dir)[2] != "absent":
+            return _refusal("run-dir-journal-exists")
+        pointer_path = os.path.join(run_dir, "journal-root.txt")
+        try:  # survive the loss of a command-scoped journal-root override
+            with open(pointer_path, "w", encoding="utf-8") as fh:
+                fh.write(engine_dispatch._journal_root_for_run_dir(run_dir) + "\n")
+        except OSError:
+            return _refusal("journal-write-failed")
         opened_at = int(_now())
         enroll = "python3 -B %s enroll --run-dir %s" % (
             shlex.quote(os.path.join(_LIB_DIR, "native_engine.py")), shlex.quote(run_dir))
@@ -292,6 +359,7 @@ def _cmd_open(args):
         }
         if not engine_dispatch._journal_append(run_dir, record):
             os.unlink(prompt_path)
+            os.unlink(pointer_path)
             return _refusal("journal-write-failed")
     finally:
         file_lock.release(lock)
@@ -319,19 +387,27 @@ def _cmd_enroll(args):
     if deadline is None or _now() > deadline:
         return _enroll_refusal("native-deadline")
     here = os.getcwd()
-    rc, out, _ = _git(here, "status", "--porcelain")
+    rc, out, _ = _git(here, "status", "--porcelain", "--untracked-files=all")
     if rc != 0 or out.strip():
         return _enroll_refusal("native-worktree-dirty")
     try:
-        top = store_core.repo_root(here)
-        git_dir = store_core.get_worktree_gitdir(top)
-        common_dir = store_core.get_gitdir(top)
+        with _neutral_git():  # same worktree `_git` sees
+            top = store_core.repo_root(here)
+            git_dir = store_core.get_worktree_gitdir(top)
+            common_dir = store_core.get_gitdir(top)
     except Exception:  # fail closed: a resolver failure leaves isolation unproven
         return _enroll_refusal("native-worktree-not-isolated")
     if not all(isinstance(p, str) and p for p in (top, git_dir, common_dir)):
         return _enroll_refusal("native-worktree-not-isolated")
     top = os.path.realpath(top)
-    if git_dir == common_dir or top == os.path.realpath(opened.get("cwd") or ""):
+    try:
+        with _neutral_git():
+            builder_top = store_core.repo_root(opened.get("cwd") or "")
+    except Exception:  # fail closed: the builder's root unresolved leaves isolation unproven
+        return _enroll_refusal("native-worktree-not-isolated")
+    if not isinstance(builder_top, str) or not builder_top:
+        return _enroll_refusal("native-worktree-not-isolated")
+    if git_dir == common_dir or top == os.path.realpath(builder_top):
         return _enroll_refusal("native-worktree-not-isolated")
     base = opened.get("baseSha")
     rc, _, _ = _git(top, "checkout", "--detach", base)
@@ -420,12 +496,17 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def _read_bytes(path):
-    try:
-        with open(path, "rb") as fh:
-            return fh.read()
-    except OSError:
+def _staged_entry(cwd, path):
+    """The index entry (mode, object id, stage) of ``path``; "" when absent, None on a git failure.
+    Compared by object id and mode, so a symlink is never followed."""
+    rc, out, _ = _git(cwd, "ls-files", "-s", "-z", "--", ":(literal)" + path)
+    if rc != 0:
         return None
+    for record in out.split("\0"):
+        head, _, name = record.partition("\t")
+        if name == path:  # exactly the declared file, never a sibling the pathspec matched
+            return head
+    return ""
 
 
 def _in_tree(cwd, rev, path):
@@ -470,6 +551,14 @@ class _Close(object):
             return self._forfeit("native-not-enrolled")
         target = os.path.realpath(args.worktree)
         into = os.path.realpath(args.into)
+        try:
+            with _neutral_git():  # same root `_git` will use
+                top = store_core.repo_root(into)
+        except Exception:
+            return self._forfeit("native-collect-failed")
+        if not top:
+            return self._forfeit("native-collect-failed")
+        into = os.path.realpath(top)  # patch paths are root-relative
         agent_id = enrolled.get("agentId")
         if (target != os.path.realpath(enrolled.get("worktree") or "")
                 or not isinstance(agent_id, str) or not agent_id
@@ -495,11 +584,12 @@ class _Close(object):
         return self._collect(target, into, base)
 
     def _collect(self, target, into, base):
-        item_check = engine_dispatch._item_delivery_check(
-            target,
-            {"expectedItems": self.opened.get("expectedItems"), "baseSha": base,
-             "baselineDirty": {}},
-            timeout=GIT_TIMEOUT)
+        with _neutral_git():
+            item_check = engine_dispatch._item_delivery_check(
+                target,
+                {"expectedItems": self.opened.get("expectedItems"), "baseSha": base,
+                 "baselineDirty": {}},
+                timeout=GIT_TIMEOUT)
         extra = {} if item_check is None else {"itemCheck": item_check}
         if item_check is not None:
             if item_check.get("evidenceUnavailable"):
@@ -510,25 +600,31 @@ class _Close(object):
         patch_path = os.path.join(self.run_dir, _PATCH_NAME)
         if _git(target, "add", "-A")[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
-        rc, names, _ = _git(target, "diff", "--cached", "--name-only", "-z", base)
+        rc, names, _ = _git(target, "diff", "--cached", "--name-only", "-z",
+                            "--ignore-submodules=none", base)
         if rc != 0:
             return self._forfeit("native-collect-failed", **extra)
         files = sorted(name for name in names.split("\0") if name)
-        if _git(target, "diff", "--cached", "--binary", "--output=" + patch_path, base)[0] != 0:
+        if _git(
+                target, "diff", "--cached", "--binary", "--unified=3", "--src-prefix=a/",
+                "--dst-prefix=b/", "--no-color", "--no-ext-diff", "--no-textconv",
+                "--ignore-submodules=none", "--submodule=short", "--output=" + patch_path, base)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         patch_sha = _sha256_file(patch_path)
         if not engine_dispatch._journal_append(
                 self.run_dir, {"kind": "native-collecting", "patchSha256": patch_sha,
                                "at": _stamp(_now())}):
             return self._result(ok=False, terminal=True, reason="journal-write-failed")
-        if files and _git(into, "apply", "--index", patch_path)[0] != 0:
+        if files and _git(into, "apply", "--index", "--whitespace=nowarn", patch_path)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         for item in self.opened.get("expectedItems") or []:
-            mine = _read_bytes(os.path.join(into, item))
-            theirs = _read_bytes(os.path.join(target, item))
-            if mine is None and theirs is None and _in_tree(target, base, item):
+            mine = _staged_entry(into, item)
+            theirs = _staged_entry(target, item)
+            if mine is None or theirs is None:
+                return self._forfeit("native-collect-incomplete", **extra)
+            if mine == "" and theirs == "" and _in_tree(target, base, item):
                 continue  # a declared deletion (or rename source), applied on both sides
-            if mine is None or mine != theirs:
+            if mine == "" or mine != theirs:
                 return self._forfeit("native-collect-incomplete", **extra)
         return self._finish(self._result(
             ok=True, terminal=True, signal="ok", itemCheck=item_check,
@@ -545,7 +641,7 @@ def _cmd_close(args):
     if not os.path.isdir(run_dir):
         return _refusal("native-run-not-open")
     try:
-        file_lock.acquire_with_reason(lock)
+        file_lock.acquire_with_reason(lock, reclaim_dead_holder=True)
     except file_lock.LockHeld:
         return _refusal("run-dir-locked")
     try:
@@ -554,6 +650,8 @@ def _cmd_close(args):
             return _refusal("native-run-not-open")
         if state["closed"] is not None:
             return _replay(state["closed"])
+        if state["corrupt"]:
+            return _refusal("native-journal-corrupt")
         return _Close(run_dir, state["opened"], state).run(args)
     finally:
         file_lock.release(lock)

@@ -249,13 +249,20 @@ def test_edge_04_git_status_nonzero_denies(tmp_path, monkeypatch):
     _commit_file(repo, "f.txt", "x\n")
     with open(os.path.join(repo, "f.txt"), "w") as f:
         f.write("dirty")
-    os.chmod(os.path.join(repo, ".git"), 0)
-    try:
-        decision, reason = wg.classify("git checkout -- f.txt", repo)
-        assert decision == "deny"
-        assert reason == wg.indeterminate_message("checkout-path")
-    finally:
-        os.chmod(os.path.join(repo, ".git"), 0o755)
+    real_run = wg.subprocess.run
+    status_calls = []
+
+    def run_status_nonzero(argv, *a, **kw):
+        if "status" in argv[:5]:
+            status_calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: refused")
+        return real_run(argv, *a, **kw)
+
+    monkeypatch.setattr(wg.subprocess, "run", run_status_nonzero)
+    decision, reason = wg.classify("git checkout -- f.txt", repo)
+    assert status_calls, "the guard never launched git status"
+    assert decision == "deny"
+    assert reason == wg.indeterminate_message("checkout-path")
 
 
 def test_edge_05_git_binary_absent_denies(tmp_path, monkeypatch):

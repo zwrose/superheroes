@@ -1134,17 +1134,21 @@ def test_gate_edge2_dangling_symlink(tmp_path):
     assert path in cfg.detail
 
 
-def test_gate_edge3_stat_oserror(tmp_path):
+def test_gate_edge3_stat_oserror(tmp_path, monkeypatch):
     parent = tmp_path / "locked"
     parent.mkdir()
-    os.chmod(parent, 0)
-    try:
-        path = str(parent / "core.md")
-        cfg = CM._classify_core_md_at_path(path)
-        assert cfg.status == CM.CONFIG_UNREADABLE
-        assert path in cfg.detail
-    finally:
-        os.chmod(parent, 0o755)
+    path = str(parent / "core.md")
+    real_stat = CM.os.stat
+
+    def refuse_stat(name, *a, **kw):
+        if str(name) == path:
+            raise PermissionError("refused")
+        return real_stat(name, *a, **kw)
+
+    monkeypatch.setattr(CM.os, "stat", refuse_stat)
+    cfg = CM._classify_core_md_at_path(path)
+    assert cfg.status == CM.CONFIG_UNREADABLE
+    assert path in cfg.detail
 
 
 def test_gate_edge4_directory_not_file(tmp_path):

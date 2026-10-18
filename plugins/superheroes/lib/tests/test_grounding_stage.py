@@ -1,4 +1,5 @@
 import ast
+import builtins
 import importlib.util
 import io
 import json
@@ -300,16 +301,26 @@ def test_manifest_empty_files_rejected(tmp_path):
     _assert_refusal(rc, body, "stage-manifest-invalid")
 
 
-def test_edge_11_staged_file_unreadable(tmp_path):
+def _refuse_open_of(monkeypatch, path):
+    """Make ``GS``' own ``open`` raise PermissionError for ``path`` only; delegate the rest."""
+    target = os.path.realpath(path)
+    real_open = builtins.open
+
+    def refuse_open(name, *a, **kw):
+        if isinstance(name, (str, os.PathLike)) and os.path.realpath(name) == target:
+            raise PermissionError("refused")
+        return real_open(name, *a, **kw)
+
+    monkeypatch.setattr(GS, "open", refuse_open, raising=False)
+
+
+def test_edge_11_staged_file_unreadable(tmp_path, monkeypatch):
     session = _session(tmp_path, body=_happy_body())
     rc, _ = _invoke("stage", session)
     assert rc == 0
-    os.chmod(os.path.join(session, "grounding", "pr-body.md"), 0)
-    try:
-        rc, body = _invoke("check", session)
-        _assert_refusal(rc, body, "staged-file-unreadable")
-    finally:
-        os.chmod(os.path.join(session, "grounding", "pr-body.md"), 0o644)
+    _refuse_open_of(monkeypatch, os.path.join(session, "grounding", "pr-body.md"))
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "staged-file-unreadable")
 
 
 def test_edge_12_staged_file_hash_mismatch(tmp_path):
@@ -525,7 +536,7 @@ def test_check_branch_mode_applicable_false(tmp_path):
     assert body == {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
 
 
-def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
+def test_every_registered_refusal_reason_is_observably_emitted(tmp_path, monkeypatch):
     # bite-axis: refusal reachability — every registered token must be observable in a live refusal.
     cases = {}
 
@@ -643,11 +654,9 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
         rc, _ = _invoke("stage", session)
         assert rc == 0
         pr_body = os.path.join(session, "grounding", "pr-body.md")
-        os.chmod(pr_body, 0)
-        try:
+        with monkeypatch.context() as scoped:
+            _refuse_open_of(scoped, pr_body)
             return _invoke("check", session)
-        finally:
-            os.chmod(pr_body, 0o644)
 
     cases["staged-file-unreadable"] = case_staged_file_unreadable
 

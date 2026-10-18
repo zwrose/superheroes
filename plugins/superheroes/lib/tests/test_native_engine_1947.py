@@ -18,7 +18,11 @@ Detector axes (bite-proof):
 - E8 test_close_success_* — preservation: the subagent's change lands in the builder's index
 - E9 test_close_idempotent_* / _interrupted_ / _journal_write_failed — idempotence: no second apply
 - E10 test_wait_* — bound: the wait ends at result.json, the deadline, or the cap
+- E11 test_every_git_call_* / test_neutral_git_* — containment: every git subprocess runs inside
+  ``_neutral_git``, which sets and restores the neutral environment
+- E12 test_hostile_global_git_config_* — configuration: the owner's own git config never reaches a collection
 """
+import ast
 import calendar
 import json
 import os
@@ -100,7 +104,7 @@ class Repo:
     pass
 
 
-def _make_repo(tmp_path, block=None, prefs=None):
+def _make_repo(tmp_path, block=None, prefs=None, a_text="alpha\n"):
     """main (with a base commit holding core.md), B (builder), T and T2 (subagent candidates)."""
     block = {"localSockets": True} if block is None else block
     root = os.path.realpath(str(tmp_path))
@@ -108,7 +112,7 @@ def _make_repo(tmp_path, block=None, prefs=None):
     r.main = os.path.join(root, "main")
     os.makedirs(r.main)
     _git(r.main, "init", "-q", "-b", "main")
-    _write(os.path.join(r.main, "a.txt"), "alpha\n")
+    _write(os.path.join(r.main, "a.txt"), a_text)
     _write(os.path.join(r.main, ".gitignore"), "*.log\n")
     _write(os.path.join(r.main, core_md.in_repo_core_rel_path()), _core_text(block, prefs))
     _git(r.main, "add", "-A")
@@ -327,6 +331,33 @@ def test_open_refuses_a_run_dir_that_is_not_empty(tmp_path, monkeypatch, capsys)
     assert _records(r) == []
 
 
+def test_open_refuses_a_run_path_that_already_has_a_journal(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a cleaned run dir reusing a journaled path never reopens
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _ = _open(capsys, r)
+    assert code == 0
+    for name in os.listdir(r.run):
+        os.unlink(os.path.join(r.run, name))
+    before = _records(r)
+    code, out = _open(capsys, r)
+    assert code == 1
+    assert out == {"ok": False, "terminal": True, "reason": "run-dir-journal-exists"}
+    assert _records(r) == before
+
+
+def test_route_refuses_when_the_calibration_cannot_be_read(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a calibration read error never selects the native engine
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    monkeypatch.setattr(
+        NE.preflight_probe, "dispatch_calibration",
+        lambda cwd=None, **kw: [{"role": "*", "engine": None, "model": None, "readError": "x"}])
+    code, out = _cli(capsys, "route", "--cwd", r.B)
+    assert code == 1
+    assert out == {"ok": False, "reason": "calibration-unreadable"}
+
+
 def test_open_refuses_a_short_base_sha(tmp_path, monkeypatch, capsys):
     # axis: refusal — only a full 40-hex sha pins the base
     r = _make_repo(tmp_path)
@@ -469,6 +500,28 @@ def test_enroll_checks_out_the_base_when_head_sits_ahead(tmp_path, monkeypatch, 
     assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
 
 
+def test_enroll_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
+    # axis: preservation — ambient GIT_DIR/GIT_WORK_TREE naming a sibling never moves the sibling
+    r = _make_repo(tmp_path)
+    _write(os.path.join(r.main, "ahead.txt"), "ahead\n")
+    _git(r.main, "add", "-A")
+    _git(r.main, "commit", "-q", "-m", "ahead")
+    ahead = _git(r.main, "rev-parse", "HEAD").strip()
+    _git(r.T2, "checkout", "-q", "--detach", ahead)
+    sibling_dir = _git(r.T2, "rev-parse", "--absolute-git-dir").strip()
+    _routed(monkeypatch)
+    _open(capsys, r)
+    monkeypatch.setenv("GIT_DIR", sibling_dir)
+    monkeypatch.setenv("GIT_WORK_TREE", r.T2)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert code == 0, out
+    assert out == {"ok": True, "head": r.base}
+    assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
+    assert _git(r.T2, "rev-parse", "HEAD").strip() == ahead
+
+
 def test_enroll_refuses_a_dirty_worktree(tmp_path, monkeypatch, capsys):
     # axis: refusal — a worktree with uncommitted files never enrolls
     r = _make_repo(tmp_path)
@@ -480,11 +533,39 @@ def test_enroll_refuses_a_dirty_worktree(tmp_path, monkeypatch, capsys):
     assert out == {"ok": False, "reason": "native-worktree-dirty"}
 
 
+def test_enroll_refuses_untracked_files_even_when_status_hides_them(tmp_path, monkeypatch, capsys):
+    # axis: refusal — status.showUntrackedFiles=no must not let a stray untracked file enroll
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    _git(r.T, "config", "status.showUntrackedFiles", "no")
+    _write(os.path.join(r.T, "stray.txt"), "x")
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 1
+    assert out == {"ok": False, "reason": "native-worktree-dirty"}
+
+
 def test_enroll_refuses_the_builders_own_worktree(tmp_path, monkeypatch, capsys):
     # axis: refusal — the subagent never runs in the run's own cwd, even a linked worktree
     r = _make_repo(tmp_path)
     _routed(monkeypatch)
     _open(capsys, r)
+    code, out = _enroll(capsys, monkeypatch, r, r.B)
+    assert code == 1
+    assert out == {"ok": False, "reason": "native-worktree-not-isolated"}
+    assert _git(r.B, "rev-parse", "HEAD").strip() == r.base
+
+
+def test_enroll_refuses_the_builders_worktree_when_the_run_opened_in_a_subdirectory(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — a recorded cwd below the builder's root still names the builder's worktree
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    sub = os.path.join(r.B, "subdir")
+    os.makedirs(sub)
+    code, out = _cli(capsys, "open", "--run-dir", r.run, "--order-path", r.order, "--cwd", sub,
+                     "--base-sha", r.base, "--deadline-seconds", "600", "--seat", _SEAT)
+    assert code == 0, out
     code, out = _enroll(capsys, monkeypatch, r, r.B)
     assert code == 1
     assert out == {"ok": False, "reason": "native-worktree-not-isolated"}
@@ -738,6 +819,17 @@ def test_close_accepts_a_declared_deletion(tmp_path, monkeypatch, capsys):
     assert not os.path.exists(os.path.join(r.B, "a.txt"))
 
 
+def test_close_collects_a_declared_symlink_to_a_missing_target(tmp_path, monkeypatch, capsys):
+    # axis: preservation — a new symlink is compared by object id, never followed
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r, items=["a.txt", "link"])
+    os.symlink("nowhere", os.path.join(r.T, "link"))
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["a.txt", "link"]
+    assert os.path.islink(os.path.join(r.B, "link"))
+
+
 def test_close_grading_forfeits_a_declared_file_the_patch_cannot_carry(
         tmp_path, monkeypatch, capsys):
     # axis: refusal — an ignored declared file is not in the patch, so collection is incomplete
@@ -749,6 +841,16 @@ def test_close_grading_forfeits_a_declared_file_the_patch_cannot_carry(
     assert out["itemCheck"]["missing"] == []
     assert _git(r.B, "diff", "--cached", "--name-only").split() == ["a.txt"]
     assert "native-collecting" in _kinds(r)
+
+
+def test_staged_entry_treats_a_bracketed_name_as_a_literal_path(tmp_path):
+    # axis: refusal — a glob-like declared name never matches a tracked sibling
+    r = _make_repo(tmp_path)
+    _write(os.path.join(r.main, "rep1.log"), "tracked\n")
+    _git(r.main, "add", "-f", "rep1.log")
+    _write(os.path.join(r.main, "rep[1].log"), "ignored\n")
+    assert NE._staged_entry(r.main, "rep[1].log") == ""
+    assert NE._staged_entry(r.main, "rep1.log").startswith("100644 ")
 
 
 # --- E8 success ----------------------------------------------------------------------------
@@ -823,6 +925,67 @@ def test_close_interrupted_collection_is_not_reapplied(tmp_path, monkeypatch, ca
     _forfeited(code, out, "native-collect-interrupted")
     _b_clean(r)
     assert _kinds(r)[-1] == "run-closed"
+
+
+def test_close_refuses_a_corrupt_journal_before_collecting(tmp_path, monkeypatch, capsys):
+    # axis: refusal — an interior-corrupt journal never reaches collection
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    with open(ED._journal_path(os.path.realpath(r.run)), "a", encoding="utf-8") as fh:
+        fh.write("{not json\n")
+    code, out = _close(capsys, r)
+    assert code == 1
+    assert out["ok"] is False and out["reason"] == "native-journal-corrupt"
+    _b_clean(r)
+    assert "native-collecting" not in _kinds(r)
+
+
+def test_close_collects_a_root_file_under_diff_noprefix(tmp_path, monkeypatch, capsys):
+    # axis: configuration — repo-level diff.noprefix must not break patch application
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    _git(r.T, "config", "diff.noprefix", "true")
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+
+
+def test_close_collects_an_interior_edit_under_diff_context_zero(tmp_path, monkeypatch, capsys):
+    # axis: configuration — repo-level diff.context=0 must not yield a patch git apply rejects
+    r = _make_repo(tmp_path, a_text="one\ntwo\nthree\nfour\nfive\n")
+    _ready(capsys, monkeypatch, r, edit=False)
+    _write(os.path.join(r.T, "a.txt"), "one\ntwo\nTHREE\nfour\nfive\n")
+    _git(r.T, "config", "diff.context", "0")
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert _git(r.B, "show", ":a.txt") == "one\ntwo\nTHREE\nfour\nfive\n"
+
+
+@pytest.mark.parametrize("setting", ["error", "fix"])
+def test_close_preserves_trailing_whitespace_under_apply_whitespace(
+        tmp_path, monkeypatch, capsys, setting):
+    # axis: configuration — repo-level apply.whitespace must not forfeit or alter the delivered bytes
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r, edit=False)
+    _write(os.path.join(r.T, "a.txt"), "alpha\nfixture \n")
+    _git(r.T, "config", "apply.whitespace", setting)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert _git(r.B, "show", ":a.txt") == "alpha\nfixture \n"
+
+
+def test_route_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
+    # axis: environment — GIT_DIR/GIT_WORK_TREE naming another worktree must not override --cwd
+    r = _make_repo(tmp_path / "a")
+    other = _make_repo(tmp_path / "b", block={"localSockets": False})
+    _routed(monkeypatch)
+    monkeypatch.setenv("GIT_DIR", os.path.join(other.main, ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", other.main)
+    code, out = _cli(capsys, "route", "--cwd", r.B)
+    assert code == 0 and out["engine"] == "native", out
+    assert os.environ["GIT_DIR"] == os.path.join(other.main, ".git")
 
 
 def test_close_journal_write_failed_before_the_apply_leaves_b_unchanged(
@@ -904,8 +1067,9 @@ def test_wait_never_loops_past_the_deadline(tmp_path, monkeypatch, capsys):
     clock = _clocked(monkeypatch, _opened_epoch(r))
     code, out = _cli(capsys, "wait", "--run-dir", r.run, "--max-wait", "540")
     assert code == 0
-    assert clock.sleeps <= 60 + 5
+    assert 60 <= clock.now - _opened_epoch(r) <= 65
     assert out["resultPresent"] is False and out["deadlinePassed"] is True
+    assert out["secondsLeft"] == 0
 
 
 def test_wait_stops_at_the_max_wait(tmp_path, monkeypatch, capsys):
@@ -918,3 +1082,312 @@ def test_wait_stops_at_the_max_wait(tmp_path, monkeypatch, capsys):
     assert code == 0
     assert out["resultPresent"] is False and out["deadlinePassed"] is False
     assert clock.sleeps == 30
+
+
+def test_close_forfeits_when_the_patch_cannot_apply_and_leaves_b_untouched(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — a failed `git apply` is a forfeit, never a successful collection
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    _write(os.path.join(r.B, "a.txt"), "builder\n")
+    _git(r.B, "add", "a.txt")
+    before = _git(r.B, "diff", "--cached")
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "native-collect-failed")
+    assert _git(r.B, "show", ":a.txt") == "builder\n"
+    assert _git(r.B, "diff", "--cached") == before
+
+
+def test_close_into_a_subdirectory_collects_against_the_worktree_root(
+        tmp_path, monkeypatch, capsys):
+    # axis: boundary — --into a subdirectory of B still applies root-relative patch paths
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    sub = os.path.join(r.B, "subdir")
+    os.makedirs(sub)
+    code, out = _close(capsys, r, into=sub)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["a.txt"]
+    assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+
+
+def test_close_into_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
+    # axis: preservation — ambient GIT_DIR/GIT_WORK_TREE naming a sibling never redirects --into
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    monkeypatch.setenv("GIT_DIR", _git(r.T2, "rev-parse", "--absolute-git-dir").strip())
+    monkeypatch.setenv("GIT_WORK_TREE", r.T2)
+    code, out = _close(capsys, r)
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert code == 0, out
+    assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+    assert _git(r.T2, "diff", "--cached", "--name-only") == ""
+
+
+def test_close_lock_reclaims_a_dead_holder(tmp_path, monkeypatch, capsys):
+    # axis: mapping — the close mutex asks for dead-holder reclaim so a retry is not locked out
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    seen = {}
+    real = NE.file_lock.acquire_with_reason
+
+    def spy(lock, **kw):
+        seen.update(kw)
+        return real(lock, **kw)
+
+    monkeypatch.setattr(NE.file_lock, "acquire_with_reason", spy)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert seen.get("reclaim_dead_holder") is True
+
+
+def test_open_persists_the_journal_root_so_later_commands_survive_the_env_removal(
+        tmp_path, monkeypatch, capsys):
+    # axis: preservation — a command-scoped journal-root override is recorded in journal-root.txt
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _ = _open(capsys, r)
+    assert code == 0
+    run = os.path.realpath(r.run)
+    expected = str(tmp_path / "journals")
+    with open(os.path.join(run, "journal-root.txt"), encoding="utf-8") as fh:
+        assert fh.read().strip() == expected
+    monkeypatch.delenv("SUPERHEROES_DISPATCH_JOURNAL_ROOT")
+    assert _kinds(r) == ["run-opened"]
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert out.get("reason") != "native-run-not-open"
+
+
+def test_collect_carries_a_staged_gitlink_despite_submodule_diff_settings(
+        tmp_path, monkeypatch, capsys):
+    # axis: mapping — diff.ignoreSubmodules=all / diff.submodule=diff never hide or reshape a gitlink
+    r = _make_repo(tmp_path)
+    _git(r.main, "config", "diff.ignoreSubmodules", "all")
+    _git(r.main, "config", "diff.submodule", "diff")
+    _ready(capsys, monkeypatch, r, edit=False)
+    sub = os.path.join(r.T, "sub")
+    os.makedirs(sub)
+    _git(sub, "init", "-q", "-b", "main")
+    _write(os.path.join(sub, "f.txt"), "x\n")
+    _git(sub, "add", "-A")
+    _git(sub, "commit", "-q", "-m", "sub")
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["sub"]
+    assert "160000" in _git(r.B, "ls-files", "-s", "sub")
+
+
+# --- E11 / E12 one neutral-config chokepoint (#1949) ----------------------------------------
+
+
+_GUARDED_MODULES = {"subprocess", "engine_dispatch", "store_core"}
+_GUARDED_ATTRS = {
+    "engine_dispatch": {"_git_scrubbed", "_git_scrubbed_bytes", "_item_delivery_check"},
+    "store_core": {"repo_root", "get_gitdir", "get_worktree_gitdir"},
+}
+_GUARDED_BARE = {"_git_scrubbed", "_git_scrubbed_bytes", "_item_delivery_check", "repo_root",
+                 "get_gitdir", "get_worktree_gitdir"}
+
+
+def _is_guarded_call(func):
+    if isinstance(func, ast.Name):
+        return func.id in _GUARDED_BARE
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        if func.value.id == "subprocess":
+            return True
+        return func.attr in _GUARDED_ATTRS.get(func.value.id, ())
+    return False
+
+
+def _calls_outside_neutral_git(source):
+    """``(line, text)`` of every guarded call that sits outside ``_neutral_git``'s definition and
+    outside a ``with _neutral_git():`` block, plus every import form that would hide one."""
+    found = []
+
+    def neutral_with(node):
+        return any(isinstance(item.context_expr, ast.Call)
+                   and isinstance(item.context_expr.func, ast.Name)
+                   and item.context_expr.func.id == "_neutral_git" for item in node.items)
+
+    def walk(node, covered):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_neutral_git":
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            covered = False  # a nested body may run after the enclosing block has exited
+        if isinstance(node, ast.ImportFrom) and node.module in _GUARDED_MODULES:
+            found.append((node.lineno, "from %s import ..." % node.module))
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _GUARDED_MODULES and alias.asname:
+                    found.append((node.lineno, "import %s as %s" % (alias.name, alias.asname)))
+        if isinstance(node, ast.Call) and not covered and _is_guarded_call(node.func):
+            found.append((node.lineno, ast.unparse(node.func)))
+        if isinstance(node, (ast.With, ast.AsyncWith)) and neutral_with(node):
+            for item in node.items:
+                walk(item, covered)
+            for stmt in node.body:
+                walk(stmt, True)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child, covered)
+
+    walk(ast.parse(source), False)
+    return found
+
+
+def test_every_git_call_in_native_engine_runs_inside_the_neutral_context():
+    # axis: containment — a git call added outside `_neutral_git` runs under the owner's config
+    with open(NE.__file__.replace(".pyc", ".py"), encoding="utf-8") as fh:
+        stray = _calls_outside_neutral_git(fh.read())
+    assert stray == [], "git called outside `with _neutral_git():` — %s" % stray
+
+
+@pytest.mark.parametrize("source", [
+    "import subprocess\nsubprocess.run(['git', '--version'])\n",
+    "def f():\n    engine_dispatch._git_scrubbed('.', 'status')\n",
+    "def f():\n    engine_dispatch._git_scrubbed_bytes('.', 'status')\n",
+    "def f():\n    store_core.repo_root('.')\n",
+    "def f():\n    store_core.get_gitdir('.')\n",
+    "def f():\n    store_core.get_worktree_gitdir('.')\n",
+    "def f():\n    engine_dispatch._item_delivery_check('.', None)\n",
+    "from subprocess import run\n",
+    "import subprocess as sp\n",
+    "def f():\n    with _neutral_git():\n        pass\n    store_core.repo_root('.')\n",
+    "def f():\n    with _neutral_git():\n        def g():\n            store_core.repo_root('.')\n",
+    "def f():\n    with other():\n        store_core.repo_root('.')\n",
+])
+def test_the_census_flags_a_git_call_outside_the_neutral_context(source):
+    # axis: containment — the scanner itself sees each guarded call form
+    assert _calls_outside_neutral_git(source)
+
+
+def test_the_census_accepts_calls_inside_the_context_and_the_helper_definition():
+    # axis: containment — the scanner does not flag the sanctioned places
+    source = (
+        "def _neutral_git():\n    subprocess.run(['git'])\n"
+        "def f():\n    with _neutral_git():\n        store_core.repo_root('.')\n"
+        "        engine_dispatch._git_scrubbed('.', 'status')\n"
+    )
+    assert _calls_outside_neutral_git(source) == []
+
+
+def test_neutral_git_sets_the_pair_and_restores_their_absence(monkeypatch):
+    # axis: environment — the pair is set inside the context and gone again after it
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    with NE._neutral_git():
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert os.environ["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert "GIT_CONFIG_GLOBAL" not in os.environ
+    assert "GIT_CONFIG_NOSYSTEM" not in os.environ
+
+
+def test_neutral_git_restores_the_environment_after_an_exception(monkeypatch):
+    # axis: environment — an exception inside the context still restores every variable
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "0")
+    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
+    with pytest.raises(RuntimeError):
+        with NE._neutral_git():
+            assert "GIT_DIR" not in os.environ
+            raise RuntimeError("boom")
+    assert "GIT_CONFIG_GLOBAL" not in os.environ
+    assert os.environ["GIT_CONFIG_NOSYSTEM"] == "0"
+    assert os.environ["GIT_DIR"] == "/elsewhere/.git"
+
+
+def test_neutral_git_restores_a_preexisting_global_config_value(monkeypatch):
+    # axis: environment — the owner's GIT_CONFIG_GLOBAL is hidden inside and back afterwards
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+    with NE._neutral_git():
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+
+
+def test_neutral_git_nests_safely(monkeypatch):
+    # axis: environment — the inner exit leaves the outer context neutral; the outer exit restores
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
+    with NE._neutral_git():
+        with NE._neutral_git():
+            assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert os.environ["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert "GIT_DIR" not in os.environ
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+    assert "GIT_CONFIG_NOSYSTEM" not in os.environ
+    assert os.environ["GIT_DIR"] == "/elsewhere/.git"
+
+
+def test_enroll_maps_a_raising_resolver_inside_the_context_to_its_refusal(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — a store_core call that raises under the context is still the existing token
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+
+    def boom(*_args, **_kw):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(NE.store_core, "repo_root", boom)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 1
+    assert out == {"ok": False, "reason": "native-worktree-not-isolated"}
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+
+
+def test_close_maps_a_raising_resolver_inside_the_context_to_its_forfeit(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — the same raise at close is still `native-collect-failed`
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+
+    def boom(*_args, **_kw):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(NE.store_core, "repo_root", boom)
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "native-collect-failed")
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+    _b_clean(r)
+
+
+def test_hostile_global_git_config_never_reaches_the_collection(tmp_path, monkeypatch, capsys):
+    # axis: configuration — the owner's own global git config cannot reshape open -> enroll -> close
+    r = _make_repo(tmp_path, a_text="one\ntwo\nthree\nfour\nfive\n")
+    home = tmp_path / "hostile-home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[diff]\n\tnoprefix = true\n\tcontext = 0\n\tsubmodule = log\n"
+        "[apply]\n\twhitespace = error\n"
+        "[status]\n\tshowUntrackedFiles = no\n"
+        "[color]\n\tui = always\n"
+        "[core]\n\texcludesFile = %s\n" % (home / "global-ignore"), encoding="utf-8")
+    (home / "global-ignore").write_text("new/n.txt\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL")
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    _routed(monkeypatch)
+    code, out = _open(capsys, r)
+    assert code == 0, out
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    _enrolled(r)
+    interior = "one\ntwo\nTHREE\nfour\nfive\nfixture \n"
+    _write(os.path.join(r.T, "a.txt"), interior)
+    _write(os.path.join(r.T, "new", "n.txt"), "fresh\n")
+    _result(r)
+    _transcript(r)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert out["collected"]["files"] == ["a.txt", "new/n.txt"]
+    for rel, text in (("a.txt", interior), ("new/n.txt", "fresh\n")):
+        with open(os.path.join(r.B, rel), "rb") as fh:
+            assert fh.read() == text.encode("utf-8")
+        assert _git(r.B, "show", ":" + rel) == text
