@@ -1335,7 +1335,10 @@ def _summary(r, level):
 
 
 def _record_json(r):
-    return json.dumps(r, sort_keys=True, separators=(",", ":"))
+    # Every "/" is written "\/" (a valid JSON escape, same values), so no bare "://" is left for a host that
+    # rewrites bare URLs in transit to wrap. A "/" occurs in the dump only inside a string, and a backslash there
+    # is already dumped as "\\", so the replace is exact.
+    return json.dumps(r, sort_keys=True, separators=(",", ":")).replace("/", "\\/")
 
 
 def _part_body(piece):
@@ -1525,6 +1528,57 @@ def _parse_body(body, by_id=None):
     return _resolve_parts(obj, by_id) if obj.get("schema") == PARTS_SCHEMA else None
 
 
+def _span(text, offset):
+    """The excerpt of `text` at most 40 characters either side of `offset`, as a JSON string."""
+    return json.dumps(text[max(0, offset - 40):offset + 40])
+
+
+def _unreadable_detail(latest, by_id):
+    """Why the latest record comment is unreadable, in a short phrase: the comment's url (or a stand-in), then where
+    the JSON text first fails to parse (character offset in the comment body that holds it, with an excerpt), or the
+    other cause. Only the refusal path calls it."""
+    where = latest.get("url") or "the existing record"
+    body = latest.get("body")
+    try:
+        start, end = body.rindex("```json\n") + 8, body.rindex("\n```\n</details>")
+    except (AttributeError, ValueError):
+        return f"{where}: the comment has no JSON block"
+    try:
+        obj = json.loads(body[start:end])
+    except json.JSONDecodeError as e:
+        return f"{where}: the record's JSON does not parse at character {start + e.pos} of comment " \
+               f"{latest.get('id')}: {_span(body, start + e.pos)}"
+    if not isinstance(obj, dict) or obj.get("schema") not in (RECORD_SCHEMA, PARTS_SCHEMA):
+        return f"{where}: the JSON is not a review record"
+    if obj.get("schema") == RECORD_SCHEMA:
+        return f"{where}: the record could not be read"
+    ids = obj.get("parts")
+    if not (isinstance(ids, list) and ids and all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        return f"{where}: the parts index is malformed"
+    pieces = []
+    for pid in ids:
+        piece = _part_slice((by_id.get(pid) or {}).get("body"))
+        if piece is None:
+            return f"{where}: part comment {pid} is missing or malformed"
+        pieces.append(piece)
+    text = "".join(pieces)
+    try:
+        rec = json.loads(text)
+    except json.JSONDecodeError as e:
+        pos = e.pos
+        for pid, piece in zip(ids, pieces):
+            if pos < len(piece) or pid == ids[-1]:
+                break
+            pos -= len(piece)
+        part = by_id[pid]["body"]
+        offset = part.index("\n", len(PART_MARKER) + 1) + 1 + pos
+        return f"{where}: the record's JSON does not parse at character {offset} of comment {pid}: " \
+               f"{_span(part, offset)}"
+    if not (isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA):
+        return f"{where}: the joined parts are not a review record"
+    return f"{where}: the parts index is malformed"
+
+
 def _comments(rd, pr, repo):
     comments = rd["list_comments"](pr, repo)
     if comments is None:
@@ -1632,9 +1686,10 @@ def read(pr, repo=None, readers=None):
         if not found:
             raise Refusal("review-record-missing", f"no review record on PR {pr}")
         latest = found[-1]
-        rec = _parse_body(latest["body"], {c["id"]: c for c in comments})
+        by_id = {c["id"]: c for c in comments}
+        rec = _parse_body(latest["body"], by_id)
         if rec is None:
-            raise Refusal("review-record-unreadable", latest.get("url") or "the existing record")
+            raise Refusal("review-record-unreadable", _unreadable_detail(latest, by_id))
         return {"ok": True, "url": latest.get("url"), **rec, "earlierRecords": [c.get("url") for c in found[:-1]]}
     return _guarded(go)
 
