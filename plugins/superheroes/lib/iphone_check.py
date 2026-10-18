@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import launch_ledger
 from launcher import (DEVICE_HUB_AVAILABLE, DEVICE_HUB_ENV, DEVICE_HUB_PROCESS, DEVICE_HUB_UNAVAILABLE,
-                      IPHONE_ID_ENV, IPHONE_NONE)
+                      IPHONE_ID_ENV, IPHONE_IDS_ENV, IPHONE_NONE)
 
 READING_PARAM = "superheroes-reading"
 NOT_ESTABLISHED = "could not be established"
@@ -106,6 +106,13 @@ def classify_env(environ, issue_names_check=False):
     if (phone is None or hub is None or hub not in (DEVICE_HUB_AVAILABLE, DEVICE_HUB_UNAVAILABLE)
             or not (phone == IPHONE_NONE or launch_ledger.is_iphone_id(phone))):
         return "did-not-run", _line("whole check", "launch values unreadable")
+    phones = environ.get(IPHONE_IDS_ENV)
+    if phones is not None:
+        ids = phones.split(",")
+        # Axis: the phone list is not one or more distinct canonical phone IDs led by the lane's own phone (so it never sits beside `none`)
+        if (not all(launch_ledger.is_iphone_id(i) for i in ids) or len(set(ids)) != len(ids)
+                or ids[0] != phone):
+            return "did-not-run", _line("whole check", "launch values unreadable")
     # Axis: `none` dominates — no other whole cause is reported next to it
     if phone == IPHONE_NONE:
         return "did-not-run", UFR5
@@ -135,10 +142,17 @@ def _live_reason(udid):
 def preflight(environ, issue_names_check=False):
     state, line = classify_env(environ, issue_names_check)
     udid = environ.get(IPHONE_ID_ENV)
+    phones = environ[IPHONE_IDS_ENV].split(",") if IPHONE_IDS_ENV in environ else [udid]
     if state == "pending":
-        reason = _live_reason(udid)
-        state, line = ("ready", None) if reason is None else ("did-not-run", _line("whole check", reason))
-    return {"ok": state == "ready", "state": state, "phone": udid if state == "ready" else None, "line": line}
+        state, line = "ready", None
+        # Axis: every phone is checked in order and the first one that fails decides the whole check
+        for phone in phones:
+            reason = _live_reason(phone)
+            if reason is not None:
+                state, line = "did-not-run", _line("whole check", reason)
+                break
+    return {"ok": state == "ready", "state": state, "phone": udid if state == "ready" else None,
+            "phones": phones if state == "ready" else None, "line": line}
 
 
 def boot(phone, timeout):
@@ -666,6 +680,9 @@ def render(check):
         if isinstance(p, dict) and "superseded" in p and not (
                 isinstance(p["superseded"], list) and all(isinstance(r, str) and r.strip() for r in p["superseded"])):
             raise ValueError(f"parts.{name}.superseded is not a list of non-empty strings")
+    # Axis: evidence from more than one phone, which one section would present as a single device's
+    if len({ev["labels"]["phone"] for ev in evidence}) > 1:
+        raise ValueError("evidence comes from more than one phone: render one check per phone")
     commit = check.get("commit")
     # Axis: evidence with no app commit to stand against (missing, a ref like HEAD, or not 7-40 lower-case hex)
     if evidence and not (isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,40}", commit)):

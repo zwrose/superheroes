@@ -96,9 +96,11 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
     account = rs.account_from_session(session, extras(), Fake().readers())
     # bites on: a hand-submit session refused, or its panel rounds' seats not listed as reviewers that ran
     expected = {f"{seat} (round {n})" for n, s in status.items() for seat in s}
-    expected |= {"verifiers reviewer (round %d)" % r["round"] for r in journal  # the hand-accepted verifier phase is a reviewer too
-                 if r.get("outcome") == "accepted" and r.get("phase") == RD.P_VERIFIERS}
+    verifier_rounds = {r["round"] for r in journal if r.get("outcome") == "accepted" and r.get("phase") == RD.P_VERIFIERS}
+    empty = {n for n in verifier_rounds if rs._nothing_to_verify(state, n)}  # a verifier phase with nothing to verify is no planned reviewer
+    expected |= {"verifiers reviewer (round %d)" % n for n in verifier_rounds - empty}  # a hand-accepted verifier phase that had something to verify is a reviewer too
     assert set(_names(account)) == expected and len(account["reviewers"]) == len(expected)
+    assert not any("verifiers reviewer (round %d)" % n in _names(account) for n in empty)
     for v in account["reviewers"]:
         assert v["ran"] is (not v["name"].startswith("verifiers")) and v["planned"] is True and v["runDir"] is None  # the fixture's verifier submits no verdicts: it never ran
         assert v["vendor"] and v["model"] and "notIndependent" not in v

@@ -190,11 +190,13 @@ iPhone, a phone the Mac imitates in software), or the issue's done-definition na
 **Rule a piece invalid, with its reason, when:**
 
 - (a) it has no `phone` value;
-- (b) its `phone` differs from the `iphoneId` on the record of the launch the builder runs under.
-  That is the launch that delivered the PR, normally the lane's latest started launch; the
-  builder's heartbeat is filed under that launch id. List each launch's `launchId` and `iphoneId`
-  with `python3 -B <plugin root>/lib/iphone_reap.py phones --repo-root <repo> --issue <n>`.
-  A phone from an earlier launch of the same lane is still another phone;
+- (b) its `phone` is not among the phones on the record of the launch the builder runs under
+  (`iphoneIds`, or `iphoneId` on a record without it). That is the launch that delivered the PR,
+  normally the lane's latest started launch; the builder's heartbeat is filed under that launch id.
+  `python3 -B <plugin root>/lib/iphone_reap.py phones --repo-root <repo> --issue <n>` lists one
+  `phones[]` entry per phone (`launchId`, `iphoneId`). The delivering launch's phones are the
+  `iphoneId` values of the entries whose `launchId` is that launch's.
+  A phone from an earlier launch of the same lane is still not on the record;
 - (c) it has no `where` label;
 - (d) its `where` disagrees with its reading (for example `installed` on a piece whose reading says
   the page runs in the browser);
@@ -228,6 +230,14 @@ The ruling lists every invalid piece and its reason.
 13. the results do not state that the served checkout was clean (`git status --porcelain` empty)
     at that `commit` when the check ran. A commit alone does not show the page served matched it.
 
+**When the launch named sizes.** When the delivering launch's premise names `iphoneModels`, the
+check is complete only when **every named size has its own complete check**: one rendered check
+object per phone, whose evidence is all from that one phone (its `model` label names the size), with
+every part the issue asks for (browser, installed) completed on that phone. A size with no phone,
+no evidence, or only part of its check makes the whole check not complete. Evidence split across
+phones (browser on one size, installed on the other) completes neither. Without `iphoneModels`, the
+conditions above stand as written.
+
 **Superseded attempts.** Pieces under *Superseded attempts* are read and listed but count toward
 nothing: conditions 3–8 and 11 and the invalid-piece rules apply to the final attempt's pieces only.
 A superseded attempt never excuses a part whose final attempt did not complete. A retry the results
@@ -241,9 +251,13 @@ checked. When neither names a place, the receipt records the place as undetermin
 the browser and in the installed web app alike, so that no place is preferred; never pick one of
 them. Use a phone of your own, never a lane's phone that is waiting to be reaped.
 
-1. Make a phone: `xcrun simctl create superheroes-advisor-<vet> <type>`, where `<type>` is the
-   value of `IPHONE_DEVICE_TYPE` in `lib/launcher.py` (read it from there; never type it here).
-   Keep the ID it prints.
+When the delivering launch named sizes, check **each size the builder's evidence does not cover**,
+one advisor phone per size, running the steps below for each in turn.
+
+1. Make a phone: `xcrun simctl create superheroes-advisor-<vet> <type>`. With named sizes, `<type>`
+   is the identifier of the entry in `xcrun simctl list devicetypes -j` whose `name` matches the
+   size. With none, it is the value of `IPHONE_DEVICE_TYPE` in `lib/launcher.py` (read it from
+   there; never type it here). Keep the ID it prints.
 2. An advisor seat has no launch values, so set them for the check's commands:
    `SUPERHEROES_IPHONE_ID=<your id> SUPERHEROES_DEVICE_HUB=available` before
    `iphone_check.py preflight`. Preflight still proves Device Hub is running.
@@ -260,7 +274,7 @@ python3 -B -m http.server <port> --bind 127.0.0.1 --directory <dir>
 
 ```
 piece 1: no phone ID                        → invalid: no `phone` value (a)
-piece 2: phone from an earlier launch       → invalid: another phone (b)
+piece 2: phone from an earlier launch       → invalid: not on the record (b)
 piece 3: where installed, reading: browser  → invalid: `where` disagrees with reading (d)
 piece 4: no `where` label                   → invalid: no `where` label (c)
 piece 5: page reads NOT_ESTABLISHED         → invalid: page not established (e)
@@ -268,6 +282,16 @@ piece 6: under Superseded attempts          → read and listed; counts toward n
 check not complete (condition 5) → advisor's own iPhone check recorded
 check not complete (condition 12: git diff --name-only abc1234 <head> lists app/page.html) → recorded
 ruling: pieces 1–5 invalid, with the reasons above
+```
+
+```
+sizes iPhone 17, iPhone 17e; a complete check object from each phone on the record
+  → complete
+sizes iPhone 17, iPhone 17e; a complete check from the iPhone 17 phone only
+  → not complete: the iPhone 17e size is missing; the advisor's own check covers it
+sizes iPhone 17, iPhone 17e; browser evidence from the iPhone 17 phone, installed evidence from
+the iPhone 17e phone
+  → not complete for either size
 ```
 
 ## A new refusal needs a healthy-case check

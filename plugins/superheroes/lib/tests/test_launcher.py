@@ -20,6 +20,7 @@ _LD_MOD = os.path.join(_HERE, "..", "launch_doctrine.py")
 
 import launch_ledger as ll  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import iphone_reap  # noqa: E402
 
 
 def _load_launcher():
@@ -8894,6 +8895,461 @@ def test_iphone_external_contract_values_are_pinned():
     assert L.DEVICE_HUB_UNAVAILABLE == "unavailable"
     assert 0 < L._IPHONE_CEILING_SECONDS <= 90
     assert not hasattr(L, "_IPHONE_SPAWN_HEADROOM_SECONDS")
+    assert L.IPHONE_IDS_ENV == "SUPERHEROES_IPHONE_IDS"
+
+
+# --- one phone per named size: premise `iphoneModels` ----------------------------------------
+
+_DT = "com.apple.CoreSimulator.SimDeviceType."
+# The shape `xcrun simctl list devicetypes -j` is documented to print, pinned here because there
+# is no Mac to measure it on: an object whose `devicetypes` list holds named entries with an
+# `identifier`.
+_DEVICETYPES = {"devicetypes": [
+    {"name": "iPhone 17", "identifier": _DT + "iPhone-17", "productFamily": "iPhone"},
+    {"name": "iPhone 17e", "identifier": _DT + "iPhone-17e", "productFamily": "iPhone"},
+    {"name": "iPad Pro", "identifier": _DT + "iPad-Pro", "productFamily": "iPad"},
+]}
+_DEVICETYPES_ARGV = ["xcrun", "simctl", "list", "devicetypes", "-j"]
+_TWO_MODELS = {"iphoneCheck": True, "iphoneModels": ["iPhone 17", "iPhone 17e"]}
+
+
+class _FakeModelsRun(_FakeIphoneRun):
+    """`_FakeIphoneRun` that tells the three `xcrun` verbs apart.
+
+    `inventory` answers `simctl list devicetypes -j`: a dict (printed as JSON), a str (printed as
+    is), an int (that exit status) or an exception instance (raised). `creates` is one reply per
+    create, the last repeating: "ok" (a fresh UDID), an int (that exit status) or an exception.
+    A delete exits 0 and makes no phone.
+    """
+
+    def __init__(self, inventory=_DEVICETYPES, creates=("ok",), **kwargs):
+        super().__init__(**kwargs)
+        self.inventory = inventory
+        self.creates = list(creates)
+        self.creates_made = []
+        self.deleted = []
+
+    def __call__(self, argv, timeout):
+        if argv[:2] != ["xcrun", "simctl"]:
+            return super().__call__(argv, timeout)
+        self.calls.append(list(argv))
+        self.timeouts.append((list(argv), timeout))
+        if argv[2] == "list":
+            if isinstance(self.inventory, BaseException):
+                raise self.inventory
+            if isinstance(self.inventory, int):
+                return subprocess.CompletedProcess(argv, self.inventory, stdout="", stderr="")
+            out = self.inventory if isinstance(self.inventory, str) else json.dumps(self.inventory)
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+        if argv[2] == "delete":
+            self.deleted.append(argv[3])
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        assert argv[2] == "create", argv
+        reply = self.creates[min(len(self.creates_made), len(self.creates) - 1)]
+        self.creates_made.append(list(argv))
+        if isinstance(reply, BaseException):
+            raise reply
+        if reply == "ok":
+            udid = str(uuid.uuid4()).upper()
+            self.udids.append(udid)
+            return subprocess.CompletedProcess(argv, 0, stdout="%s\n" % udid, stderr="")
+        return subprocess.CompletedProcess(argv, reply, stdout="", stderr="")
+
+    def devicetype_calls(self):
+        return [c for c in self.calls if c == _DEVICETYPES_ARGV]
+
+
+def _models_launch(tmp_path, monkeypatch, runner, captured, premise_extra=None, **kwargs):
+    root = tmp_path / "wt-root"
+    monkeypatch.setenv(L.WORKTREES_ROOT_ENV, str(root))
+    return _iphone_launch(
+        tmp_path, monkeypatch, runner, captured,
+        premise_extra=_TWO_MODELS if premise_extra is None else premise_extra, **kwargs,
+    ), root
+
+
+def _assert_nothing_created(runner, captured, root, result):
+    assert result["ok"] is False
+    assert runner.creates_made == []
+    assert runner.deleted == []
+    assert captured == []
+    assert "pid" not in result
+    assert not root.exists()
+
+
+def test_iphone_models_two_sizes_make_two_phones_recorded_handed_over_and_reaped(
+    tmp_path, monkeypatch,
+):
+  # axis: DoD — one phone per named size, each recorded on the reservation, both handed to the
+  # builder (first = SUPERHEROES_IPHONE_ID), and the reap deletes every one
+    runner = _FakeModelsRun(creates=("ok", "ok"))
+    captured = []
+    (repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    assert result["ok"] is True
+    assert runner.devicetype_calls() == [_DEVICETYPES_ARGV]
+    assert [(c[3], c[4]) for c in runner.creates_made] == [
+        ("superheroes-%s-1" % result["launchId"], _DT + "iPhone-17"),
+        ("superheroes-%s-2" % result["launchId"], _DT + "iPhone-17e"),
+    ]
+    first, second = runner.udids
+    record = _reserved_record(repo, result)
+    assert record["iphoneId"] == first
+    assert record["iphoneIds"] == [first, second]
+    launch = _folded_launch(repo, result)
+    assert launch["iphoneId"] == first
+    assert launch["iphoneIds"] == [first, second]
+    assert captured[0][L.IPHONE_ID_ENV] == first
+    assert captured[0][L.IPHONE_IDS_ENV] == "%s,%s" % (first, second)
+    assert result["iphone"] == {"id": first, "ids": [first, second], "deviceHub": "available"}
+
+    _reap(result)
+    ended = ll.terminalize(repo, result["launchId"], outcome="handback", evidence="done")
+    assert ended["ok"] is True, ended
+    deleted = []
+
+    def reap_run(argv, timeout):
+        deleted.append(argv[3])
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    reaped = iphone_reap.reap_lane(repo, 656, run=reap_run)
+    assert reaped["ok"] is True
+    assert deleted == [first, second]
+    assert [(p["iphoneId"], p["result"]) for p in reaped["phones"]] == [
+        (first, "deleted"), (second, "deleted"),
+    ]
+
+
+def test_iphone_models_unknown_size_refuses_before_anything_is_created(tmp_path, monkeypatch):
+  # axis: DoD — a size the inventory lacks refuses with no worktree, no phone and no child
+    runner = _FakeModelsRun()
+    captured = []
+    (repo, result), root = _models_launch(
+        tmp_path, monkeypatch, runner, captured,
+        premise_extra={"iphoneCheck": True, "iphoneModels": ["iPhone 17", "iPhone 99"]},
+    )
+    _assert_nothing_created(runner, captured, root, result)
+    assert result["reason"] == "iphone-model-unknown"
+    assert result["unknownModels"] == ["iPhone 99"]
+    folded = ll.fold(ll.read(repo)["records"])["launches"][result["launchId"]]
+    assert folded["terminal"] is True
+    assert folded["iphoneIds"] == []
+
+
+@pytest.mark.parametrize("inventory", [
+    1,
+    subprocess.TimeoutExpired(["xcrun"], 20),
+    "not json",
+    {"devices": []},
+    {"devicetypes": "iPhone 17"},
+], ids=["nonzero", "timeout", "non-json", "no-devicetypes", "devicetypes-not-list"])
+def test_iphone_models_unreadable_inventory_refuses_before_anything_is_created(
+    tmp_path, monkeypatch, inventory,
+):
+  # axis: an inventory that cannot be read is a refusal, never a guess at the identifiers
+    runner = _FakeModelsRun(inventory=inventory)
+    captured = []
+    (_repo, result), root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    _assert_nothing_created(runner, captured, root, result)
+    assert result["reason"] == "iphone-models-unreadable"
+    assert "unknownModels" not in result
+
+
+def test_iphone_models_absent_behaves_as_before(tmp_path, monkeypatch):
+  # axis: DoD — a launch without iphoneModels asks no inventory, makes one iPhone 17 under
+  # today's name and records and hands over no list
+    monkeypatch.setenv(L.IPHONE_IDS_ENV, "STALE")
+    runner = _FakeModelsRun()
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert runner.devicetype_calls() == []
+    assert [c[3:] for c in runner.creates_made] == [
+        ["superheroes-%s" % result["launchId"], L.IPHONE_DEVICE_TYPE],
+    ]
+    assert "iphoneIds" not in _reserved_record(repo, result)
+    assert _folded_launch(repo, result)["iphoneIds"] == [runner.udids[0]]
+    assert captured[0][L.IPHONE_ID_ENV] == runner.udids[0]
+    assert L.IPHONE_IDS_ENV not in captured[0]
+    assert result["iphone"] == {"id": runner.udids[0], "deviceHub": "available"}
+    _reap(result)
+
+
+def test_iphone_models_absent_failed_create_still_spawns_with_none(tmp_path, monkeypatch):
+  # axis: DoD — without iphoneModels a failed create is still a launch with the phone `none`
+    runner = _FakeModelsRun(creates=(1,))
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert runner.devicetype_calls() == []
+    assert captured[0][L.IPHONE_ID_ENV] == "none"
+    assert L.IPHONE_IDS_ENV not in captured[0]
+    assert "iphoneId" not in _reserved_record(repo, result)
+    _reap(result)
+
+
+def test_iphone_models_second_create_failing_keeps_the_first_only(tmp_path, monkeypatch):
+  # axis: a create that fails is skipped; the phone that was made is recorded and handed over
+    runner = _FakeModelsRun(creates=("ok", 1))
+    captured = []
+    (repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    assert result["ok"] is True
+    assert len(runner.creates_made) == 2
+    first = runner.udids[0]
+    assert _reserved_record(repo, result)["iphoneIds"] == [first]
+    assert _folded_launch(repo, result)["iphoneIds"] == [first]
+    assert captured[0][L.IPHONE_ID_ENV] == first
+    assert captured[0][L.IPHONE_IDS_ENV] == first
+    assert result["iphone"]["ids"] == [first]
+    _reap(result)
+
+
+def test_iphone_models_first_create_failing_keeps_the_second(tmp_path, monkeypatch):
+  # axis: a skipped first create leaves the second phone as iphoneId and the list's only entry
+    runner = _FakeModelsRun(creates=(1, "ok"))
+    captured = []
+    (repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    assert result["ok"] is True
+    second = runner.udids[0]
+    assert runner.creates_made[1][3] == "superheroes-%s-2" % result["launchId"]
+    record = _reserved_record(repo, result)
+    assert (record["iphoneId"], record["iphoneIds"]) == (second, [second])
+    assert captured[0][L.IPHONE_ID_ENV] == second
+    _reap(result)
+
+
+def test_iphone_models_every_create_failing_spawns_with_none(tmp_path, monkeypatch):
+  # axis: no phone made means no iphoneId, no iphoneIds, `none` for the builder and no list env
+    runner = _FakeModelsRun(creates=(1,))
+    captured = []
+    (repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    assert result["ok"] is True
+    assert len(runner.creates_made) == 2
+    record = _reserved_record(repo, result)
+    assert "iphoneId" not in record
+    assert "iphoneIds" not in record
+    assert _folded_launch(repo, result)["iphoneIds"] == []
+    assert captured[0][L.IPHONE_ID_ENV] == "none"
+    assert L.IPHONE_IDS_ENV not in captured[0]
+    assert result["iphone"] == {"id": None, "ids": [], "deviceHub": "available"}
+    _reap(result)
+
+
+def test_iphone_models_refusal_after_creation_deletes_every_phone(tmp_path, monkeypatch):
+  # axis: a refusal before the append leaves no record naming the phones, so all of them go
+    monkeypatch.setattr(
+        ll, "reserve", lambda *a, **k: {"ok": False, "reason": "lock-unavailable", "path": None},
+    )
+    runner = _FakeModelsRun(creates=("ok", "ok"))
+    captured = []
+    (_repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    first, second = runner.udids
+    assert result["ok"] is False
+    assert result["reason"] == "lock-unavailable"
+    assert result["iphone"] == {"id": first, "recorded": False, "deleted": True}
+    assert result["iphones"] == [
+        {"id": first, "recorded": False, "deleted": True},
+        {"id": second, "recorded": False, "deleted": True},
+    ]
+    assert runner.deleted == [first, second]
+    assert captured == []
+
+
+def test_iphone_models_append_failure_reports_every_phone_uncertain_and_deletes_none(
+    tmp_path, monkeypatch,
+):
+  # axis: a phone that a failed append may have recorded is reported, never removed — each one
+    real_append = ll.append
+
+    def failing_reserved_append(repo_root, record, env=None):
+        if record.get("event") == "reserved":
+            return False
+        return real_append(repo_root, record, env=env)
+
+    monkeypatch.setattr(ll, "append", failing_reserved_append)
+    runner = _FakeModelsRun(creates=("ok", "ok"))
+    captured = []
+    (_repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    first, second = runner.udids
+    assert result["reason"] == "ledger-append-failed"
+    assert result["iphone"] == {"id": first, "recorded": "uncertain"}
+    assert result["iphones"] == [
+        {"id": first, "recorded": "uncertain"},
+        {"id": second, "recorded": "uncertain"},
+    ]
+    assert runner.deleted == []
+
+
+def test_iphone_models_absent_refusal_after_creation_carries_no_phone_list(tmp_path, monkeypatch):
+  # axis: without iphoneModels the refusal's phone report is today's, with no `iphones` key
+    monkeypatch.setattr(
+        ll, "reserve", lambda *a, **k: {"ok": False, "reason": "lock-unavailable", "path": None},
+    )
+    runner = _FakeModelsRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["iphone"] == {"id": runner.udids[0], "recorded": False, "deleted": True}
+    assert "iphones" not in result
+
+
+@pytest.mark.parametrize("extra,reason", [
+    # axis: iphoneModels must be a non-empty list of distinct, unpadded, non-blank strings
+    ({"iphoneCheck": True, "iphoneModels": "iPhone 17"}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": None}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": ("iPhone 17",)}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": []}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": [17]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": ["iPhone 17", None]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": [""]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": ["  "]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": [" iPhone 17"]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": ["iPhone 17\n"]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": True, "iphoneModels": ["iPhone 17", "iPhone 17"]},
+     "premise-iphone-models-invalid"),
+    # axis: a size named without the check on would never be made
+    ({"iphoneModels": ["iPhone 17"]}, "premise-iphone-models-invalid"),
+    ({"iphoneCheck": False, "iphoneModels": ["iPhone 17"]}, "premise-iphone-models-invalid"),
+])
+def test_premise_iphone_models_shape_refuses(tmp_path, extra, reason):
+    repo = _init_repo(tmp_path / "repo")
+    result = L.validate_premise(_valid_premise(repo, **extra), repo)
+    assert result["ok"] is False
+    assert result["reason"] == reason
+
+
+@pytest.mark.parametrize("models", [["iPhone 17"], ["iPhone 17", "iPhone 17e"]])
+def test_premise_iphone_models_valid_shapes_pass(tmp_path, models):
+  # axis: a well-formed list beside iphoneCheck true passes the premise
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo, iphoneCheck=True, iphoneModels=models)
+    assert L.validate_premise(premise, repo)["ok"] is True
+
+
+def test_iphone_models_invalid_premise_runs_no_command(tmp_path, monkeypatch):
+  # axis: a bad iphoneModels refuses at the premise, before any inventory, phone or child
+    runner = _FakeModelsRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured,
+        premise_extra={"iphoneCheck": True, "iphoneModels": []},
+    )
+    assert result["reason"] == "premise-iphone-models-invalid"
+    assert runner.calls == []
+    assert captured == []
+
+
+@pytest.mark.parametrize("premise_extra,creates", [
+    # axis: an inherited phone list reaches no child, whatever the launch asked for
+    (None, ("ok",)),
+    ({"iphoneCheck": True}, ("ok",)),
+    ({"iphoneCheck": True}, (1,)),
+    (_TWO_MODELS, (1,)),
+], ids=["no-check", "check-only", "check-create-fails", "models-all-creates-fail"])
+def test_iphone_models_inherited_phone_list_never_reaches_the_child(
+    tmp_path, monkeypatch, premise_extra, creates,
+):
+    monkeypatch.setenv(L.IPHONE_IDS_ENV, "STALE-A,STALE-B")
+    runner = _FakeModelsRun(creates=creates)
+    captured = []
+    if premise_extra is None:
+        _repo, result = _iphone_launch(tmp_path, monkeypatch, runner, captured)
+    else:
+        (_repo, result), _root = _models_launch(
+            tmp_path, monkeypatch, runner, captured, premise_extra=premise_extra,
+        )
+    assert result["ok"] is True
+    assert L.IPHONE_IDS_ENV not in captured[0]
+    _reap(result)
+
+
+def test_iphone_models_inherited_phone_list_is_replaced_by_the_launchs_own(tmp_path, monkeypatch):
+  # axis: the scrub drops a stale list and the launcher's own list is the only one the child sees
+    monkeypatch.setenv(L.IPHONE_IDS_ENV, "STALE-A,STALE-B")
+    runner = _FakeModelsRun(creates=("ok", "ok"))
+    captured = []
+    (_repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
+    assert captured[0][L.IPHONE_IDS_ENV] == ",".join(runner.udids)
+    _reap(result)
+
+
+def _resolve(inventory, models=("iPhone 17",), budget=60):
+    calls = []
+
+    def run(argv, timeout):
+        calls.append((list(argv), timeout))
+        if isinstance(inventory, BaseException):
+            raise inventory
+        if isinstance(inventory, int):
+            return subprocess.CompletedProcess(argv, inventory, stdout="", stderr="")
+        out = inventory if isinstance(inventory, str) else json.dumps(inventory)
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    return L._resolve_iphone_models(list(models), run, budget), calls
+
+
+def test_resolve_iphone_models_matches_by_exact_name_in_premise_order():
+  # axis: each size resolves to the identifier of the entry with exactly that name, in premise order
+    result, calls = _resolve(_DEVICETYPES, ["iPhone 17e", "iPhone 17"])
+    assert result == {"ok": True, "types": [
+        ("iPhone 17e", _DT + "iPhone-17e"), ("iPhone 17", _DT + "iPhone-17"),
+    ]}
+    assert calls == [(_DEVICETYPES_ARGV, L._IPHONE_CREATE_TIMEOUT)]
+
+
+def test_resolve_iphone_models_unknown_names_come_back_in_premise_order():
+  # axis: every unmatched name is reported, in the order the premise gave them; no prefix matching
+    result, _ = _resolve(_DEVICETYPES, ["iPhone 99", "iPhone 17", "iPhone", "iphone 17e"])
+    assert result["ok"] is False
+    assert result["reason"] == "iphone-model-unknown"
+    assert result["unknownModels"] == ["iPhone 99", "iPhone", "iphone 17e"]
+
+
+@pytest.mark.parametrize("entry", [
+    {"name": "iPhone 17"},
+    {"name": "iPhone 17", "identifier": None},
+    {"name": "iPhone 17", "identifier": 17},
+    {"name": "iPhone 17", "identifier": "iPhone-17"},
+    {"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"},
+    "iPhone 17",
+], ids=["no-identifier", "null", "non-string", "bare", "runtime-id", "not-an-object"])
+def test_resolve_iphone_models_entry_without_a_usable_identifier_does_not_match(entry):
+  # axis: an entry whose identifier is not a string naming a SimDeviceType never matches its name
+    result, _ = _resolve({"devicetypes": [entry]})
+    assert result["ok"] is False
+    assert result["reason"] == "iphone-model-unknown"
+    assert result["unknownModels"] == ["iPhone 17"]
+
+
+@pytest.mark.parametrize("inventory", [
+    1, subprocess.TimeoutExpired(["xcrun"], 20), OSError("no xcrun"), "", "not json", "[]", "null",
+    {"devices": {}}, {"devicetypes": None}, {"devicetypes": {}},
+], ids=["nonzero", "timeout", "raises", "empty", "non-json", "list", "null", "no-key", "none", "dict"])
+def test_resolve_iphone_models_unreadable_inventory(inventory):
+  # axis: nonzero exit, timeout or exception, non-JSON, or no devicetypes list is unreadable, never raised
+    result, _ = _resolve(inventory)
+    assert result["ok"] is False
+    assert result["reason"] == "iphone-models-unreadable"
+
+
+@pytest.mark.parametrize("budget,expected", [(5, 5), (60, L._IPHONE_CREATE_TIMEOUT)])
+def test_resolve_iphone_models_timeout_is_capped_by_the_budget(budget, expected):
+  # axis: the inventory never runs longer than the budget left, nor longer than a create may
+    _result, calls = _resolve(_DEVICETYPES, budget=budget)
+    assert calls[0][1] == expected
+
+
+@pytest.mark.parametrize("budget", [0, -3])
+def test_resolve_iphone_models_with_no_budget_runs_nothing(budget):
+  # axis: no budget left means the inventory is not run and the sizes are unreadable
+    result, calls = _resolve(_DEVICETYPES, budget=budget)
+    assert calls == []
+    assert result["ok"] is False
+    assert result["reason"] == "iphone-models-unreadable"
 
 
 @pytest.mark.parametrize("pair", [

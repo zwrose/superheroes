@@ -1264,6 +1264,51 @@ def test_two_checkout_roots_yield_identical_repo_relative_ids(tmp_path):
     assert gld.LENS.diff(a["digest"], b["digest"]) == {"new": [], "worsened": [], "resolved": []}
 
 
+def _sweep_echoing(real_root, echo_root):
+    """One collect() of the excerpt tree at `real_root` (the resolved ctx cwd) whose tools
+    echo their absolute paths under `echo_root` — the symlinked, unresolved spelling."""
+    files = _vulture_excerpt_files()
+    files["pyproject.toml"] = "[project]\nname = \"x\"\n"
+    repo = os.path.realpath(_node_repo_with_knip_fixture(real_root, extra=files))
+    knip_abs = json.loads(KNIP_JSON)
+    for entry in knip_abs["issues"]:
+        entry["file"] = str(echo_root) + "/" + entry["file"]
+    run = FakeRun([
+        ("vulture", (3, _absolute_excerpt(str(echo_root)), "")),
+        ("knip", (1, json.dumps(knip_abs), "")),
+    ], tracked=sorted(files) + _knip_tracked_files())
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out
+    return out
+
+
+def test_symlinked_echo_of_the_checkout_path_yields_the_same_ids(tmp_path):
+    """A tool that echoes the swept tree through a symlink (macOS /tmp -> /private/tmp)
+    yields the same repo-relative ids as one echoing the resolved path (#1754 F2)."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    via_link = _sweep_echoing(real, link)
+    via_real = _sweep_echoing(tmp_path / "real2", os.path.realpath(tmp_path / "real2"))
+    ids_link = sorted(via_link["digest"]["candidates"])
+    assert ids_link, "symlink-echoed hits were filtered out"
+    assert len(ids_link) == 8
+    assert ids_link == sorted(via_real["digest"]["candidates"])
+    for cand_id in ids_link:
+        assert ".." not in cand_id, cand_id
+        assert str(tmp_path) not in cand_id, cand_id
+
+
+def test_knip_repo_relative_paths_are_not_reinterpreted(tmp_path):
+    """Relative paths a tool reports pass through untouched (only absolute ones resolve)."""
+    repo = _node_repo_with_knip_fixture(tmp_path)
+    run = FakeRun([("knip", (1, KNIP_JSON, ""))], tracked=_knip_tracked_files())
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out
+    assert "deadcode:knip:scripts/docgen/lib.js:GENERATED_HEADER" in out["digest"]["candidates"]
+
+
 def _legacy_vulture(path, kind, symbol, lines):
     cid = "deadcode:vulture:%s:%s:%s" % (path, kind, symbol)
     return cid, {"id": cid, "tool": "vulture", "kind": kind, "path": path, "symbol": symbol,

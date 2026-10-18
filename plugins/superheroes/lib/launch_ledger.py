@@ -77,7 +77,7 @@ PLACES = (PLACE_LOCAL, PLACE_CLOUD)
 _CLOUD_SESSION_ID_RE = re.compile(r"^session_[A-Za-z0-9]+$")
 # Reserved fields that describe a local checkout or a local pilot slot; a cloud lane has none.
 _CLOUD_FORBIDDEN_RESERVED_FIELDS = (
-    "worktree", "sessionId", "slot", "generation", "boundary", "iphoneId",
+    "worktree", "sessionId", "slot", "generation", "boundary", "iphoneId", "iphoneIds",
 )
 # Optional `started` fields a cloud lane records about its cloud session.
 _CLOUD_STARTED_FIELDS = (
@@ -1038,6 +1038,25 @@ def _validate_reserved_optional_fields(rec):
         ):
             return "fold-bad-field:reserved:iphoneId"
 
+    if "iphoneIds" in rec:
+        # Every phone a launch naming `iphoneModels` made, first the one `iphoneId` names.
+        # axis: iphoneIds shape, order and premise provenance — bites on a non-list or empty list, a
+        # malformed or repeated id, a first id that is not iphoneId, or a list on a premise without
+        # iphoneCheck true and a list of iphoneModels.
+        premise = rec.get("premise")
+        ids = rec["iphoneIds"]
+        if (
+            not isinstance(ids, list)
+            or not ids
+            or not all(is_iphone_id(i) for i in ids)
+            or len(set(ids)) != len(ids)
+            or rec.get("iphoneId") != ids[0]
+            or not isinstance(premise, dict)
+            or premise.get("iphoneCheck") is not True
+            or not isinstance(premise.get("iphoneModels"), list)
+        ):
+            return "fold-bad-field:reserved:iphoneIds"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1340,6 +1359,13 @@ def fold(records):
                 # The simulator device provisioned at reserve time; None on every record that
                 # carries none. It survives terminalization, so a reader can still reap it.
                 "iphoneId": rec.get("iphoneId"),
+                # Every simulator device provisioned at reserve time: the recorded list, else
+                # the lone `iphoneId` of a record that predates it, else empty.
+                "iphoneIds": (
+                    list(rec["iphoneIds"]) if "iphoneIds" in rec
+                    else [rec["iphoneId"]] if rec.get("iphoneId") is not None
+                    else []
+                ),
                 # Where the lane runs, decided here and nowhere else. Never missing: an absent
                 # `place` on the record is a local lane. The cloud session values are filled
                 # in by the lane's `started` record.

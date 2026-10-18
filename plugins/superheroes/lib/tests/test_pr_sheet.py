@@ -244,7 +244,147 @@ def test_incomplete_review_evidence_is_kept_in_the_history():
     records[0]["reviewers"][0].update(coversFinalCommit=False, commit="aaaaaaa")
     history = build(records, advisor)["prSheet"]["history"]
     assert "The review record is incomplete: no planned reviewer's run covers the final commit bbbbbbb." in history
-    assert any("reviewed an earlier commit (aaaaaaa)" in line for line in history)
+    assert no_final_review("a1b2c3d", "commit aaaaaaa") in history
+
+
+def fill(key, **slots):
+    return pr_sheet._fill(WORDS[key], **slots)
+
+
+def later_rounds(final, earlier):
+    return fill("historyLaterRounds", final=final, earlier=earlier)
+
+
+def no_final_review(final, earlier):
+    return fill("historyNoFinalReview", final=final, earlier=earlier)
+
+
+def coverage_lines(history, prefix=""):
+    return [line for line in history if line.startswith(prefix) and (
+        "Earlier rounds read" in line or "covers the final commit" in line or "reviewed an earlier commit" in line)]
+
+
+def with_rows(record, *rows):
+    """The record's first reviewer rows, each updated as given; any further row is dropped."""
+    record["reviewers"] = [{**v, **row} for v, row in zip(record["reviewers"], rows)]
+
+
+def test_a_normal_multi_round_review_reads_as_normal():
+    # Axis: earlier rows plus a later covering row give one plain line and no warning, and never a per-seat line.
+    records, advisor = bundle(BIG)
+    with_rows(records[0], {"coversFinalCommit": False, "commit": "aaaaaaa"}, {"coversFinalCommit": False, "commit": "aaaaaaa"},
+              {"coversFinalCommit": True})
+    history = build(records, advisor)["prSheet"]["history"]
+    assert coverage_lines(history) == [later_rounds("a1b2c3d", "commit aaaaaaa")]
+    assert not any("reviewed an earlier commit" in line for line in history)
+    assert not any(WORDS["historyNoFinalReview"].split("{")[0] in line for line in history)
+
+
+def test_an_audit_row_covering_the_final_commit_covers_it():
+    # Axis: an audit row (planned, covers the final commit) is a covering row like any other.
+    records, advisor = bundle(BIG)
+    with_rows(records[0], {"coversFinalCommit": False, "commit": "aaaaaaa"}, {"coversFinalCommit": False, "commit": "bbbbbbb"})
+    records[0]["reviewers"].append({"name": "audits auditor codex (round 2)", "family": "codex", "ran": "engine-record",
+                                    "planned": True, "coversFinalCommit": True})
+    history = build(records, advisor)["prSheet"]["history"]
+    assert coverage_lines(history) == [later_rounds("a1b2c3d", "commits aaaaaaa, bbbbbbb")]
+
+
+def test_a_final_commit_no_row_covers_is_the_real_gap_warning():
+    # Axis: earlier rows and no covering row give exactly one warning naming the final and the earlier commits.
+    records, advisor = bundle(BIG)
+    with_rows(records[0], {"coversFinalCommit": False, "commit": "aaaaaaa"}, {"coversFinalCommit": False, "commit": "bbbbbbb"})
+    history = build(records, advisor)["prSheet"]["history"]
+    assert coverage_lines(history) == [no_final_review("a1b2c3d", "commits aaaaaaa, bbbbbbb")]
+    assert "Earlier rounds read" not in " ".join(history)
+
+
+def test_a_row_that_is_unplanned_or_silent_about_coverage_never_covers():
+    # Axis: planned false never covers, and a coverage flag absent (or not literally True) never covers.
+    records, advisor = bundle(BIG)
+    with_rows(records[0], {"coversFinalCommit": False, "commit": "aaaaaaa"}, {"planned": False, "coversFinalCommit": True})
+    history = build(records, advisor)["prSheet"]["history"]
+    assert coverage_lines(history) == [no_final_review("a1b2c3d", "commit aaaaaaa")]
+    records, advisor = bundle(BIG)
+    with_rows(records[0], {"coversFinalCommit": False, "commit": "aaaaaaa"}, {})
+    assert "coversFinalCommit" not in records[0]["reviewers"][1]
+    assert coverage_lines(build(records, advisor)["prSheet"]["history"]) == [no_final_review("a1b2c3d", "commit aaaaaaa")]
+    records[0]["reviewers"][1]["coversFinalCommit"] = "yes"
+    assert coverage_lines(build(records, advisor)["prSheet"]["history"]) == [no_final_review("a1b2c3d", "commit aaaaaaa")]
+
+
+def test_earlier_rows_naming_no_commit_say_an_earlier_commit():
+    # Axis: no named earlier commit reads "an earlier commit"; an empty final sha is refused before the history is built.
+    records, advisor = bundle(BIG)
+    with_rows(records[0], {"coversFinalCommit": False})
+    history = build(records, advisor)["prSheet"]["history"]
+    assert coverage_lines(history) == [no_final_review("a1b2c3d", "an earlier commit")]
+    records[0]["finalCommit"]["sha"] = ""
+    assert problems_of(records, advisor) == ["record for PR #214: finalCommit.sha is null or not a commit id"]
+
+
+def test_no_earlier_rows_give_no_coverage_line():
+    # Axis: with no ran row on an earlier commit there is no coverage line, covered or not.
+    records, advisor = bundle(BIG)
+    assert coverage_lines(build(records, advisor)["prSheet"]["history"]) == []
+    with_rows(records[0], {"coversFinalCommit": True}, {"coversFinalCommit": False, "commit": "aaaaaaa", "ran": "not-run"})
+    assert coverage_lines(build(records, advisor)["prSheet"]["history"]) == []
+
+
+def test_leftover_lines_collapse_to_one_count_and_other_gaps_stay_incomplete():
+    # Axis: only a line exactly equal to a left-for-owner finding's leftover line of the same record is counted.
+    records, advisor = bundle(BIG)
+    left = [f for f in records[0]["findings"] if f["outcome"] == "left-for-owner"]
+    lines = [review_record.leftover_line(f) for f in left]
+    assert len(lines) == 2
+    records[0].update(status="not-reviewed", whatIsMissing=list(lines))
+    history = build(records, advisor)["prSheet"]["history"]
+    assert fill("historyLeftovers", count=2) == "2 findings are left for you below." and history.count("2 findings are left for you below.") == 1
+    assert not any("The review record is incomplete" in line or "waits for the owner" in line for line in history)
+    records[0]["whatIsMissing"] = lines[:1]
+    history = build(records, advisor)["prSheet"]["history"]
+    assert history.count(WORDS["historyLeftover"]) == 1 and not any("findings are left" in line for line in history)
+    ghost = "finding ghost waits for the owner's decision"
+    records[0]["whatIsMissing"] = ["CI is red on abc1234", lines[0], ghost, lines[1]]
+    history = build(records, advisor)["prSheet"]["history"]
+    incomplete = [line for line in history if "The review record is incomplete" in line]
+    assert incomplete == [fill("historyIncomplete", what="CI is red on abc1234"), fill("historyIncomplete", what=ghost)]
+    assert history.count("2 findings are left for you below.") == 1
+    assert history.index(incomplete[0]) < history.index("2 findings are left for you below.") < history.index(incomplete[1])
+
+
+def test_leftover_lines_are_replaced_only_when_the_record_is_not_reviewed():
+    # Axis: the not-reviewed gate stays; a record with another status, or with no whatIsMissing, adds no gap or count line.
+    records, advisor = bundle(BIG)
+    lines = [review_record.leftover_line(f) for f in records[0]["findings"] if f["outcome"] == "left-for-owner"]
+    records[0].update(status="reviewed", whatIsMissing=lines)
+    assert not any("left for you" in line or "incomplete" in line for line in build(records, advisor)["prSheet"]["history"])
+    for gone in (None, []):
+        records[0].update(status="not-reviewed", whatIsMissing=gone)
+        assert not any("left for you" in line or "incomplete" in line for line in build(records, advisor)["prSheet"]["history"])
+
+
+def test_each_pr_of_a_stack_gets_its_own_coverage_and_leftover_lines():
+    # Axis: on a stack the coverage and leftover lines are built per record and prefixed with that record's PR.
+    records, advisor = bundle(STACK)
+    five, six = records[0], records[1]
+    five["reviewers"] = [{**five["reviewers"][0], "coversFinalCommit": False, "commit": "aaaaaaa"},
+                         {**five["reviewers"][0], "name": "audits auditor codex (round 2)", "planned": True, "coversFinalCommit": True}]
+    with_rows(six, {"coversFinalCommit": False, "commit": "bbbbbbb"}, {})
+    six.update(status="not-reviewed", whatIsMissing=[review_record.leftover_line(f) for f in six["findings"] if f["outcome"] == "left-for-owner"])
+    history = build(records, advisor)["prSheet"]["history"]
+    assert coverage_lines(history, "#5: ") == ["#5: " + later_rounds("1111111", "commit aaaaaaa")]
+    assert coverage_lines(history, "#6: ") == ["#6: " + no_final_review("2222222", "commit bbbbbbb")]
+    assert coverage_lines(history, "#7: ") == []
+    assert history.count("#6: " + WORDS["historyLeftover"]) == 1
+    assert not any(line.startswith("#5: ") and "left for you" in line for line in history)
+
+
+def test_the_leftover_line_is_the_records_own_wording():
+    # Axis: the sheet reads the leftover wording from review_record, so the record and the sheet cannot drift.
+    assert review_record.leftover_line({"id": "x"}) == "finding x waits for the owner's decision"
+    f = {"id": "x", "outcome": "left-for-owner", "reason": "the owner decides"}
+    assert review_record._finding_lines([f]) == [review_record.leftover_line(f)]
 
 
 def test_leftover_overrides_are_keyed_by_finding_key_and_an_ambiguous_id_is_refused():
