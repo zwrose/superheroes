@@ -221,6 +221,12 @@ round's findings (severity, title, file:line), rendered through `render_raw` bef
 say the full text was too large. The review
 session's own directory lives only on the container and is lost when the session ends.
 
+A cloud session's GitHub writes (`gh api` and the session's GitHub tools alike) pass through an egress
+that appends a host footer and wraps each bare `http(s)://` run in backticks, up to the next
+whitespace, fenced code included. The record writer's JSON is unaffected because it escapes `/`. A
+raw-output comment or the record's summary prose can still show a URL in backticks; nothing parses
+those.
+
 When the record writer refuses, follow `skills/review-code/reference/review-record.md` § When it
 refuses.
 
