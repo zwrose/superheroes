@@ -34,6 +34,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
 
+### Guardian: the coupling lens keeps a baseline past a flat Python layout
+
+- A repo with a flat Python layout (no `__init__.py` under any Python source root) and collectable JS/TS now has its coupling baseline saved on the first sweep. Drift and the JS module-count cliff run against it from the next sweep on. The degraded line naming the Python half still shows on every sweep.
+- Any other degradation (a missing tool, a Python file that will not parse, a cliff) is still transient: a transient partial on a first sweep saves nothing, as before.
+- The lens's `collectorVersion` is unchanged, so repos that already hold a coupling baseline keep it.
+
 ## 0.43.1
 
 ### Before you upgrade
