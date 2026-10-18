@@ -75,7 +75,7 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
     rec = build([entry(settled=settled, commit=None, checkedHead=None, evidence="still reads past the end")])
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
-    assert f["reason"] == ("waits for the owner; a check against the final commit kept it for the owner: "
+    assert f["reason"] == ("waits for the owner; a check on no named commit kept it for the owner: "
                            + said + "still reads past the end")
     (row,) = rec["carriedRechecks"]
     assert (row["result"], row["settled"], row["why"]) == ("kept", settled, said + "still reads past the end")
@@ -88,20 +88,22 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
     assert len([c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]) == 1
 
 
-@pytest.mark.parametrize("checks, prior, kw, why", [
-    pytest.param([], PRIOR, {}, None, id="no-entry"),
-    pytest.param([entry()], {"findings": []}, {}, "not carried from an earlier record", id="not-carried"),
-    pytest.param([entry()], None, {}, "not carried from an earlier record", id="no-earlier-record"),
+@pytest.mark.parametrize("checks, prior, kw, why, opening", [
+    pytest.param([], PRIOR, {}, None, "a check against the final commit", id="no-entry"),
+    pytest.param([entry()], {"findings": []}, {}, "not carried from an earlier record", "a check against the final commit",
+                 id="not-carried"),
+    pytest.param([entry()], None, {}, "not carried from an earlier record", "a check against the final commit",
+                 id="no-earlier-record"),
     pytest.param([entry(checkedHead=THIRD)], PRIOR, {}, f"checked on {THIRD[:7]}, not the final commit {HEAD[:7]}",
-                 id="head-moved-after-the-check"),
+                 "a check", id="head-moved-after-the-check"),
     pytest.param([entry()], PRIOR, {"ancestor": False}, f"its fix commit {FIX[:7]} is not in the final commit's history",
-                 id="fix-commit-not-in-history"),
+                 "a check against the final commit", id="fix-commit-not-in-history"),
     pytest.param([entry()], PRIOR, {"ancestor": None}, "its fix commit's place in the history could not be read",
-                 id="history-unreadable"),
+                 "a check against the final commit", id="history-unreadable"),
     pytest.param([entry(checkedHead=HEAD)], PRIOR, {"head": THIRD}, f"checked on {HEAD[:7]}, not the final commit {THIRD[:7]}",
-                 id="github-head-differs-from-the-session-head"),
+                 "a check", id="github-head-differs-from-the-session-head"),
 ])
-def test_every_other_case_keeps_the_finding_for_the_owner(checks, prior, kw, why):
+def test_every_other_case_keeps_the_finding_for_the_owner(checks, prior, kw, why, opening):
     # Axis: fail closed, a finding stays left-for-owner unless every condition of the check holds; it is never removed.
     rec = build(checks, prior, **kw)
     f = the_finding(rec)
@@ -109,9 +111,34 @@ def test_every_other_case_keeps_the_finding_for_the_owner(checks, prior, kw, why
     if why is None:
         assert f["reason"] == "waits for the owner" and rec["carriedRechecks"] == []
         return
-    assert f["reason"] == f"waits for the owner; a check against the final commit kept it for the owner: {why}"
+    assert f["reason"] == f"waits for the owner; {opening} kept it for the owner: {why}"
     (row,) = rec["carriedRechecks"]
     assert (row["result"], row["why"]) == ("kept", why)
+
+
+@pytest.mark.parametrize("settled", ["applies", "unsettled"])
+@pytest.mark.parametrize("seen, clause", [
+    pytest.param(THIRD, f"a check on {THIRD[:7]} (not the final commit {HEAD[:7]})", id="older-commit"),
+    pytest.param(None, "a check on no named commit", id="no-commit"),
+    pytest.param(HEAD, "a check against the final commit", id="final-commit"),
+])
+def test_a_kept_reason_names_the_commit_the_check_was_made_on(settled, seen, clause):
+    # Axis: a kept reason claims the final commit only when the check ran on it, else it names the commit or says none.
+    said = {"applies": "the check found it still applies: ", "unsettled": "the check could not settle it: "}[settled]
+    rec = build([entry(settled=settled, commit=None, checkedHead=seen, evidence="still reads past the end")])
+    f = the_finding(rec)
+    assert f["outcome"] == "left-for-owner"
+    assert f["reason"] == f"waits for the owner; {clause} kept it for the owner: {said}still reads past the end"
+    if seen != HEAD:
+        assert "against the final commit" not in f["reason"]
+
+
+def test_a_fixed_check_not_carried_from_an_earlier_record_and_made_on_an_older_commit_names_that_commit():
+    # Axis: the older-commit clause also applies where the check was set aside for not being carried.
+    f = the_finding(build([entry(checkedHead=THIRD)], {"findings": []}))
+    assert f["outcome"] == "left-for-owner"
+    assert f["reason"] == (f"waits for the owner; a check on {THIRD[:7]} (not the final commit {HEAD[:7]}) "
+                           "kept it for the owner: not carried from an earlier record")
 
 
 def test_a_check_on_a_finding_that_is_not_left_for_the_owner_changes_nothing_and_is_listed():
