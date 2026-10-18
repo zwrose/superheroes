@@ -11835,6 +11835,8 @@ def _native_review_branch(kind, **overrides):
             "auditorVendor": None,
             "unnamedChange": None,
             "unnamedChangeAllowedBySeq": None,
+            "unnamedChangeFixes": None,
+            "unnamedChangeReverts": None,
             "investigated": investigated,
         }
     elif kind == "verdicts":
@@ -11863,6 +11865,8 @@ def _native_review_branch(kind, **overrides):
             "auditorVendor": None,
             "unnamedChange": None,
             "unnamedChangeAllowedBySeq": None,
+            "unnamedChangeFixes": None,
+            "unnamedChangeReverts": None,
             "investigated": investigated,
         }
     elif kind == "grouping":
@@ -11879,6 +11883,8 @@ def _native_review_branch(kind, **overrides):
             "auditorVendor": None,
             "unnamedChange": None,
             "unnamedChangeAllowedBySeq": None,
+            "unnamedChangeFixes": None,
+            "unnamedChangeReverts": None,
             "investigated": investigated,
         }
     else:

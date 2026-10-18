@@ -44,6 +44,18 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A run record's `interpreter`, for a multi-word launcher, is the shell-joined prefix, such as `uv run python`.
 - `core_md.py` gains the verbs `break-it-interpreter` (read) and `write-break-it-interpreter` (write, or clear with `--clear`). Read the write result's `action`: only `written` or `noop` means saved. See `skills/configure/reference/view-and-tune.md` and `skills/review-code/reference/auto-fix-loop.md` § Break-it tests.
 
+### Review record: survives the cloud egress, and an unreadable one names where
+
+- The record's JSON writes `/` as `\/`, so a cloud session's URL rewrite cannot change it. Records already posted read as before.
+- `read`'s `review-record-unreadable` detail now names the comment and character offset of the break with an excerpt, after the URL it already gave; the reason token and keys are unchanged.
+
+### Fix audit: a same-round fix or a revert is not an unnamed change
+
+- A fix audit that reports a change its finding does not name now clears the fix when the auditor attributes every such change to the review's own record: `unnamedChangeFixes` names findings raised in the same round outside the fix batch (not skipped, ruled out of scope or refuted), and `unnamedChangeReverts` names an unnamed change an earlier audit of the review reported and this fix undoes. The driver checks each id and ref against that record.
+- An unnamed change with no claim, or with a claim the record does not bear out, still refuses as before, and an owner ruling that allows the change works as before.
+- Audit results take the two optional members `unnamedChangeFixes` and `unnamedChangeReverts` (lists of strings). An audit entry gains `reportedUnnamedChange`, and, when attributed, `attributedChange`, `sameRoundFixes` and `revertedChanges`; the round gains `auditAttributedChange`.
+- A review no longer stops at the owner gate when a fix round also fixed a small same-round finding or reverted such an edit.
+
 ## 0.43.1
 
 ### Before you upgrade
