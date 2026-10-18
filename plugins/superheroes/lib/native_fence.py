@@ -71,7 +71,7 @@ def _engine_dispatch():
 
 def _heredoc_operator(command, i):
     """Parse the here-document operator at command[i:] (`<<` or `<<-`, then the delimiter word). Returns
-    (end index, delimiter or None, strip_tabs)."""
+    (end index, delimiter or None, strip_tabs, quoted). An unquoted delimiter means the body undergoes expansion."""
     n = len(command)
     j = i + 2
     strip_tabs = j < n and command[j] == "-"
@@ -79,7 +79,7 @@ def _heredoc_operator(command, i):
         j += 1
     while j < n and command[j] in " \t":
         j += 1
-    word, quote = [], None
+    word, quote, quoted = [], None, False
     while j < n:
         ch = command[j]
         if quote:
@@ -89,7 +89,9 @@ def _heredoc_operator(command, i):
                 word.append(ch)
         elif ch in "'\"":
             quote = ch
+            quoted = True
         elif ch == "\\" and j + 1 < n:
+            quoted = True
             j += 1
             word.append(command[j])
         elif ch in " \t\n;|&<>()":
@@ -97,7 +99,7 @@ def _heredoc_operator(command, i):
         else:
             word.append(ch)
         j += 1
-    return j, "".join(word) or None, strip_tabs
+    return j, "".join(word) or None, strip_tabs, quoted
 
 
 def _split_segments(command):
@@ -132,10 +134,10 @@ def _split_segments(command):
             cur.append("<<<")
             i += 2
         elif ch == "<" and command.startswith("<<", i):
-            end, delim, strip_tabs = _heredoc_operator(command, i)
+            end, delim, strip_tabs, quoted = _heredoc_operator(command, i)
             cur.append(command[i:end])
             if delim:
-                pending.append((delim, strip_tabs))
+                pending.append((delim, strip_tabs, quoted))
             i = end - 1
         elif ch in ";|&\n":
             segments.append("".join(cur))
@@ -144,14 +146,20 @@ def _split_segments(command):
                 i += 1
             elif ch == "\n" and pending:
                 # Skip each here-document body through its terminating delimiter line: the body is data.
+                # An unquoted delimiter's body is expanded by the shell, so a body holding $( or a backtick is
+                # left in the stream and inspected as commands (fail closed).
                 pos = i + 1
-                for delim, strip_tabs in pending:
+                for delim, strip_tabs, quoted in pending:
+                    start = pos
                     while pos < n:
                         nl = command.find("\n", pos)
                         line = command[pos:] if nl < 0 else command[pos:nl]
                         pos = n if nl < 0 else nl + 1
                         if (line.lstrip("\t") if strip_tabs else line) == delim:
                             break
+                    if not quoted and ("$(" in command[start:pos] or "`" in command[start:pos]):
+                        pos = start
+                        break
                 pending = []
                 i = pos - 1
         else:
