@@ -30,7 +30,7 @@
 - **`run`** — a true one-shot. One ledger read (and at most one open-PR read, for stack state), no
   waiting, then prints one JSON line on stdout and exits. It does **not** re-arm.
 - **`note-answered`** — not a watch: `--repo-root` and `--comment-id N` record a builder note's
-  **or a cloud terminal comment's** comment as answered, so `builder-note` stops surfacing it. It prints one JSON line on stdout and
+  **or a cloud terminal comment's** comment as answered, so `builder-note` or a cloud `lane-terminal` stops surfacing it. It prints one JSON line on stdout and
   exits 1 on a refusal: `comment-id-invalid`, `note-answers-unreadable` (the record is never
   overwritten), or `store-unresolvable`.
 
@@ -434,7 +434,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
