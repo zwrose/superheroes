@@ -156,10 +156,12 @@ def _calibrated_implementer(cwd):
 def route(cwd):
     """native exactly when cloud, linux, a calibration that turns localSockets on and a claude
     implementer; any other calibrated engine keeps its own dispatch path."""
-    calibrated = _calibrated_implementer(cwd)
-    if (cloud_pass._is_cloud(os.environ)
-            and engine_dispatch._host_platform() == "linux"):
-        read = core_md.read_sandbox_access(cwd)
+    with engine_dispatch._git_routing_scrubbed_environ():  # both reads name cwd's repository
+        calibrated = _calibrated_implementer(cwd)
+        cloud_linux = (cloud_pass._is_cloud(os.environ)
+                       and engine_dispatch._host_platform() == "linux")
+        read = core_md.read_sandbox_access(cwd) if cloud_linux else None
+    if cloud_linux:
         access = read.get("access")
         if not isinstance(access, dict):
             if read.get("reason") == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
@@ -537,8 +539,8 @@ class _Close(object):
             return self._forfeit("native-collect-failed", **extra)
         files = sorted(name for name in names.split("\0") if name)
         if _git(
-                target, "diff", "--cached", "--binary", "--src-prefix=a/", "--dst-prefix=b/",
-                "--no-color", "--no-ext-diff", "--no-textconv",
+                target, "diff", "--cached", "--binary", "--unified=3", "--src-prefix=a/",
+                "--dst-prefix=b/", "--no-color", "--no-ext-diff", "--no-textconv",
                 "--output=" + patch_path, base)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         patch_sha = _sha256_file(patch_path)

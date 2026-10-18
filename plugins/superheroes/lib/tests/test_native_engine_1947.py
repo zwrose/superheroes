@@ -100,7 +100,7 @@ class Repo:
     pass
 
 
-def _make_repo(tmp_path, block=None, prefs=None):
+def _make_repo(tmp_path, block=None, prefs=None, a_text="alpha\n"):
     """main (with a base commit holding core.md), B (builder), T and T2 (subagent candidates)."""
     block = {"localSockets": True} if block is None else block
     root = os.path.realpath(str(tmp_path))
@@ -108,7 +108,7 @@ def _make_repo(tmp_path, block=None, prefs=None):
     r.main = os.path.join(root, "main")
     os.makedirs(r.main)
     _git(r.main, "init", "-q", "-b", "main")
-    _write(os.path.join(r.main, "a.txt"), "alpha\n")
+    _write(os.path.join(r.main, "a.txt"), a_text)
     _write(os.path.join(r.main, ".gitignore"), "*.log\n")
     _write(os.path.join(r.main, core_md.in_repo_core_rel_path()), _core_text(block, prefs))
     _git(r.main, "add", "-A")
@@ -919,6 +919,29 @@ def test_close_collects_a_root_file_under_diff_noprefix(tmp_path, monkeypatch, c
     assert code == 0, out
     assert out["ok"] is True
     assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+
+
+def test_close_collects_an_interior_edit_under_diff_context_zero(tmp_path, monkeypatch, capsys):
+    # axis: configuration — repo-level diff.context=0 must not yield a patch git apply rejects
+    r = _make_repo(tmp_path, a_text="one\ntwo\nthree\nfour\nfive\n")
+    _ready(capsys, monkeypatch, r, edit=False)
+    _write(os.path.join(r.T, "a.txt"), "one\ntwo\nTHREE\nfour\nfive\n")
+    _git(r.T, "config", "diff.context", "0")
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert _git(r.B, "show", ":a.txt") == "one\ntwo\nTHREE\nfour\nfive\n"
+
+
+def test_route_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
+    # axis: environment — GIT_DIR/GIT_WORK_TREE naming another worktree must not override --cwd
+    r = _make_repo(tmp_path / "a")
+    other = _make_repo(tmp_path / "b", block={"localSockets": False})
+    _routed(monkeypatch)
+    monkeypatch.setenv("GIT_DIR", os.path.join(other.main, ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", other.main)
+    code, out = _cli(capsys, "route", "--cwd", r.B)
+    assert code == 0 and out["engine"] == "native", out
+    assert os.environ["GIT_DIR"] == os.path.join(other.main, ".git")
 
 
 def test_close_journal_write_failed_before_the_apply_leaves_b_unchanged(
