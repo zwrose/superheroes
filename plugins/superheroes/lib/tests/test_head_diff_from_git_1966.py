@@ -427,3 +427,15 @@ def test_e10_no_repository_path_and_unknown_rows(tmp_path, case):
     rec = state["rounds"]["1"]
     source = "path" if case == "path" else "unknown"
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == (source, "no-repository")
+
+
+def test_e10_no_repository_unreadable_path_is_unknown_and_never_an_empty_surface(tmp_path):
+    missing = str(tmp_path / "does-not-exist.diff")
+    _r, state = _no_repo_loop({"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]})
+    rec = state["rounds"]["1"]
+    assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "no-repository")
+    assert state["terminal"] == "cannot-certify"
+    reason = state["certification"]["reason"]
+    assert reason.startswith("panel-diff-underivable")
+    assert "repoRoot missing" in reason
+    assert "2" not in state["rounds"]

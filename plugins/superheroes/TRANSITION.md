@@ -16,6 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
 - **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`. See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
 
@@ -24,6 +25,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
 - A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
 - A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
+
+### Review: the post-fix diff comes from git
+
+- The driver derives the post-fix diff itself, from `git diff <pinned baseRef>...<fix-fold head>`. A `headDiff` or `headDiffPath` a fixer submits is a cross-check against that derivation, and submitting none is allowed.
+- A supplied diff that differs from git's (line endings aside) stops the round with `head-diff-mismatch`. Git unable to read the head beside a supplied diff stops it with `head-diff-unverifiable`. A `headDiffPath` that cannot be read is recorded and git governs.
+- Each round and its receipt row gain `headDiffCheck` (`match`, `mismatch`, `none-supplied`, `supplied-unreadable`, `unverifiable` or `no-repository`), and `headDiffSource` reads `git` whenever the driver derived the diff.
+- A fix round with no supplied diff audits its fixes instead of running a wider panel.
 
 ### Claude write sandbox: localPorts opens on Linux
 

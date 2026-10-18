@@ -1214,9 +1214,10 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
     assert payload["certification"]["shape"] == "full-panel-confirmed"
 
 
-def test_unknown_delta_surface_runs_full_panel(tmp_path):
+def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
     """A malformed/quoted-path head diff → unknown surface → a FULL reviewer-deep panel (the
-    existing unknown→run-everything rule), not a scoped audit."""
+    existing unknown→run-everything rule), not a scoped audit. Git's answer is the malformed text
+    too, so the supplied diff cross-checks as a match and the split meets the malformed diff."""
     from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
 
     repo, init_head = _init_ceiling_git_repo(tmp_path)
@@ -1225,6 +1226,16 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
     seed_session_meta(d, repo)
     bad_head = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
     seen = {"panel_r2": False}
+    real_derive = RD._derive_panel_diff_at_head
+    derive_calls = []
+
+    def derive_once_malformed(config, head_sha):
+        derive_calls.append(head_sha)
+        if len(derive_calls) == 1:
+            return bad_head, None
+        return real_derive(config, head_sha)
+
+    monkeypatch.setattr(RD, "_derive_panel_diff_at_head", derive_once_malformed)
 
     def respond(phase, payload, rnd):
         if phase == RD.P_PANEL:
@@ -1251,6 +1262,11 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
     payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
     assert seen["panel_r2"] is True
     assert payload["verdict"] == "converged"
+    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    first = receipt["rounds"][0]
+    assert first["headDiffSource"] == "git", first
+    assert first["headDiffCheck"] == "match", first
 
 
 # =============================================================================
@@ -1403,10 +1419,10 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
     assert any(r.get("headDiffSource") == "path" for r in receipt["rounds"]), receipt["rounds"]
 
 
-def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
-    """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
-    delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
-    over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
+    """An unreadable `headDiffPath` (no inline diff) is never an empty surface. In a run with a
+    repository the path is recorded `supplied-unreadable` and git governs the post-fix diff, so the
+    delta round audits the fixes instead of running a full panel."""
     from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
 
     repo, init_head = _init_ceiling_git_repo(tmp_path)
@@ -1437,18 +1453,24 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
         if phase == RD.P_SCOPED:
             seen["scoped"] = True
             return {"findings": []}
-        if phase in (RD.P_AUDITS, RD.P_GAPSWEEP):
-            return {"results": [], "findings": []}
+        if phase == RD.P_AUDITS:
+            return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
+                                 "auditorVendor": t.get("auditorVendor")}
+                                for t in payload.get("targets", [])],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor")
+                                           for t in payload.get("targets", [])}}
+        if phase == RD.P_GAPSWEEP:
+            return {"findings": []}
         return {}
 
     payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
-    assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
-    assert seen["scoped"] is False
+    assert seen["panel_r2"] is False, "git governs an unreadable head diff path: no full panel"
     assert payload["verdict"] == "converged"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
-    assert any(r.get("headDiffSource") == "unknown" for r in receipt["rounds"]), receipt["rounds"]
-    assert any(dc["kind"] == "unknown-surface" for dc in receipt["decisions"]), receipt["decisions"]
+    assert any(r.get("headDiffSource") == "git" and r.get("headDiffCheck") == "supplied-unreadable"
+               for r in receipt["rounds"]), receipt["rounds"]
+    assert not any(dc["kind"] == "unknown-surface" for dc in receipt["decisions"]), receipt["decisions"]
 
 
 def test_fixer_inline_head_diff_wins_over_path(tmp_path):
