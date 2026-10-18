@@ -252,7 +252,8 @@ def _newest(comments, since, parse):
             found.append((created, comment, parsed))
     if not found:
         return None
-    _, comment, parsed = max(found, key=lambda t: t[0])
+    # same-second ties go to the larger comment id, as the wave watch's lane-terminal reader does
+    _, comment, parsed = max(found, key=lambda t: (t[0], t[1].get("id") if type(t[1].get("id")) is int else -1))
     return {"commentId": comment.get("id"), "url": comment.get("html_url"), "parsed": parsed,
             "createdAt": comment["created_at"]}
 

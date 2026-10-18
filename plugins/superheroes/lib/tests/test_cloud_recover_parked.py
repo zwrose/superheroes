@@ -111,6 +111,17 @@ def test_5_an_answered_park_is_not_current_and_an_older_stop_does_not_replace_it
     assert (out["verdict"], out["evidence"]) == ("stopped", "session-failed") and out["parkComment"] is None
 
 
+@pytest.mark.parametrize("reverse", [False, True], ids=["ascending", "descending"])
+def test_5_two_parks_in_one_second_are_told_apart_by_the_larger_comment_id(w, reverse):
+    _lane(w, "l1")
+    when = _iso_ago(600)
+    parks = [dict(_comment(PARK, cid=cid), created_at=when, updated_at=when) for cid in (21, 22)]
+    w.gh.comments = parks[::-1] if reverse else parks
+    wave_watch.note_answered(w.root, 22)
+    out = _assess(w, state="failed")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "session-failed") and out["parkComment"] is None
+
+
 @pytest.mark.parametrize("footer,verdict,evidence", [("", "stopped", "handover"), ("\n\n" + cloud_builder.CLOUD_FOOTER, "ask-to-push", None)],
                          ids=["bare-handover", "footered-handover"])
 def test_6_a_later_handover_beats_a_park(w, footer, verdict, evidence):

@@ -264,6 +264,15 @@ def test_direct_the_newest_comment_decides_by_time_then_id():
         assert (only["state"], only["commentId"]) == ("handback", 4)
 
 
+def test_direct_a_same_second_tie_is_broken_by_the_larger_comment_id():
+    lanes = _lanes({"cloud-a": (101, 600)})
+    park = _comment(7, 101, _body("park"), age=100)
+    handback = {**_comment(8, 101, _body("handback"), age=100), "created_at": park["created_at"]}
+    for order in ([park, handback], [handback, park]):
+        [only] = ww._cloud_terminals(order, lanes, set())
+        assert (only["state"], only["commentId"]) == ("handback", 8)
+
+
 def test_direct_a_newer_handover_surfaces_nothing():
     lanes = _lanes({"cloud-a": (101, 600)})
     stop = _comment(5, 101, _body("stop"), age=200)
