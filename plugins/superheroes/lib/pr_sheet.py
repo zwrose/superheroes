@@ -154,6 +154,11 @@ def _fill(text, **slots):
     return re.sub(r"\{(\w+)\}", lambda m: str(slots.get(m.group(1), m.group(0))), text)
 
 
+def _short(sha):
+    """A commit as its first 7 characters, empty when it names none."""
+    return sha[:7] if isinstance(sha, str) else ""
+
+
 def _title(finding):
     return finding.get("title") or finding.get("summary") or finding.get("id")
 
@@ -516,13 +521,27 @@ def build(records, advisor, words, place=None, previous=None):
             said = _go_ahead(m.get("goAhead"))
             lines.append(_fill(words["historyMissing"], name=m["name"],
                                goAhead=_fill(words["historyGoAhead"], goAhead=said) if said else words["historyNoGoAhead"]))
-        for m in (r.get("whatIsMissing") or []) if r.get("status") == "not-reviewed" else []:
-            lines.append(_fill(words["historyIncomplete"], what=m))
+        gaps = (r.get("whatIsMissing") or []) if r.get("status") == "not-reviewed" else []
+        owned = [review_record.leftover_line(f) for f in r["findings"] if f.get("outcome") == _LEFT]
+        count, counted = sum(1 for m in gaps if m in owned), False
+        for m in gaps:
+            if m not in owned:
+                lines.append(_fill(words["historyIncomplete"], what=m))
+            elif not counted:
+                counted = True
+                lines.append(_fill(words["historyLeftovers"], count=count) if count > 1 else words["historyLeftover"])
         if stack:
             lines.append(_fill(words["historyChecks"], state=r["ci"]["state"], commit=r["ci"].get("sha") or "no commit"))
+        ran = [v for v in r["reviewers"] if v["ran"] != review_record.RAN_NOT_RUN]
+        behind = [v for v in ran if v.get("coversFinalCommit") is False]
+        if behind:
+            # Axis: a normal multi-round review reads as normal; only a final commit no planned reviewer's run covers is the warning.
+            covered = any(v.get("coversFinalCommit") is True and v.get("planned") is not False for v in ran)
+            commits = list(dict.fromkeys(c for c in (_short(v.get("commit")) for v in behind) if c))
+            noun = ("commit " if len(commits) == 1 else "commits ") + ", ".join(commits) if commits else "an earlier commit"
+            lines.append(_fill(words["historyLaterRounds" if covered else "historyNoFinalReview"], earlier=noun,
+                               final=_short(r["finalCommit"]["sha"]) or "unknown"))
         for v in r["reviewers"]:
-            if v["ran"] != review_record.RAN_NOT_RUN and v.get("coversFinalCommit") is False:
-                lines.append(_fill(words["historyEarlierCommit"], name=v["name"], commit=v.get("commit") or "unknown"))
             shown = {"name": v["name"], "family": v["family"], "ran": v["ran"]}
             # The record's independence fact is carried as it stands: absent stays absent, never read as false.
             if isinstance(v.get("notIndependent"), bool):

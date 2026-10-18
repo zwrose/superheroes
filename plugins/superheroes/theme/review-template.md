@@ -221,6 +221,12 @@ list. Its parts come in this order:
    review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
 5. The merge verdict.
 
+How the review went carries, per review, the rounds. When some reviewers read an earlier commit it adds
+one line: plain when a later round or an audit covered the final commit, a warning when no planned
+reviewer's run covers it. It adds one line counting the findings left for the owner below, in place of
+one line each. It says "the review record is incomplete" only for the record's other gaps. On a stack,
+each line names its PR.
+
 A part with nothing in it is left out, except the items, which then say that the review left nothing
 for the owner. The app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
 block of `sheet-words.json`, the home of the words.

@@ -662,6 +662,11 @@ def _unaccounted(prior, findings):
     return [i.get("id") or _key(i) for i in earlier if _key(i) not in present]
 
 
+def leftover_line(finding):
+    """The one home of the leftover's whatIsMissing wording; the sheet reads it."""
+    return f"finding {_name(finding)} waits for the owner's decision"
+
+
 def _finding_lines(findings):
     lines = []
     for f in findings:
@@ -670,7 +675,7 @@ def _finding_lines(findings):
         elif not f.get("reason"):
             lines.append(f"finding {_name(f)} has no reason")
         elif f["outcome"] == _LEFT_FOR_OWNER:
-            lines.append(f"finding {_name(f)} waits for the owner's decision")
+            lines.append(leftover_line(f))
     return lines
 
 
