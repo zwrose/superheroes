@@ -29,6 +29,8 @@ declaration when present and the declared **Vet checks** block with any malforme
 calibration flagged), the **Sandbox access** block (`all off (offline)` when nothing is set, with any
 malformed or unreadable value flagged), the **Size count exclusions** block (the declared path globs,
 `(none — …)` when nothing is declared, with any malformed or unreadable value flagged), the
+**Break-it interpreter** block (the saved launcher, or `not set` with the `scripts/pinned-python`
+suggestion when that file is present, or a malformed value flagged), the
 **Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
@@ -433,6 +435,57 @@ action that owns it, leaving the rest of the calibration untouched:
   check `action`, not exit status. The read verb never raises: a saved value that cannot be read
   comes back `globs` null with reason `size-exclude-unreadable` and a `detail`, and a malformed
   saved value comes back `size-exclude-malformed`.
+
+- **Name the Python launcher for break-it tests** → write **only** the `breakItInterpreter` key in
+  `core.md`'s JSON block, leaving every other key untouched. The value is a string: a launcher
+  command prefix, split into words like a shell would split them but never run through a shell,
+  such as `scripts/pinned-python` or `uv run python`. It must split into at least one word, and the
+  first word must not start with `-`. A project sets it when its verify command names no Python
+  launcher, such as `pytest -q`, `uv run pytest`, `make test`, `tox` or `poetry run pytest`.
+  Without the key, review-code reads the launcher from the verify command's text, finds none, and
+  its Python break-it tests do not run; a review whose fixer fixes a break-it finding then parks
+  with certification withheld. With the key, a break-it test whose program is `python` or `python3`
+  runs as `<launcher> <args>`, and one whose program is `pytest` or `py.test` runs as
+  `<launcher> -m pytest <args>`. Any other program runs as written, and the verify command is not
+  consulted. The launcher must pass a readiness probe (it runs a one-line Python program), or the
+  test is recorded not-run (`interpreter-unavailable`), never a failed test. A saved value that is
+  not valid records Python and pytest break-it tests not-run (`interpreter-key-invalid`); it never
+  falls back to the verify command. Show the current value from the view's **Break-it interpreter**
+  block first. Stdin carries the launcher text, with surrounding whitespace stripped; empty stdin is
+  refused (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' 'scripts/pinned-python' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-break-it-interpreter --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-break-it-interpreter --cwd . --clear
+  ```
+
+  To read the saved value:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" break-it-interpreter --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-break-it-interpreter` returns `{action,
+  reason?}`. Only `written` or `noop` means the launcher was saved — surface any other `action`
+  (`deferred`, `behind`, or a refusal) to the owner with its `reason`. Refusal reasons are
+  `break-it-interpreter-input-empty` (use `--clear` to remove the key),
+  `break-it-interpreter-malformed`, `core-md-absent`, `core-md-unparseable`, and
+  `break-it-interpreter-round-trip-refused`. The command exits 0 either way, so check `action`, not
+  exit status. A review already running keeps the value it started with, because the driver takes it
+  when the session is minted; an edit applies to the next review. The read verb never raises. It
+  returns `{declared, value, argv, reason, detail, behind, suggestion}`: `reason` is null,
+  `core-md-absent`, `break-it-interpreter-malformed` (a saved value that is not valid), or
+  `break-it-interpreter-unreadable` (with a `detail`), and `suggestion` is `scripts/pinned-python`
+  when that file exists and is executable at the repo root, else null.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are

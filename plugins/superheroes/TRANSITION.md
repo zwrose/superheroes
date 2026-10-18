@@ -23,6 +23,7 @@ Check these in a consuming project when it adopts 0.44.0. Each step names the no
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
 - **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`, though in a cloud session on Linux a builder's implementer orders do not reach that refusal, because they run on the native engine (the channel itself still refuses). See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
 - **After switching.** **In a cloud session on Linux, a `localSockets` project's implementer orders run as native subagents through `native_engine.py`, and `route` decides it.** The builder runs `native_engine.py route --cwd <build worktree>` before each implementer order; `native` sends it through the native engine, any other engine keeps `dispatch-write`. See [Native implementer engine](#native-implementer-engine).
+- **After switching.** **A project whose verify command names no Python launcher can now set `breakItInterpreter` through configure so its Python break-it tests run.** Without it, a verify command such as `pytest -q`, `uv run pytest`, `make test`, `tox` or `poetry run pytest` leaves those tests not-run, and a review whose fixer fixes a break-it finding parks with certification withheld. See [Break-it tests: a calibrated Python launcher](#break-it-tests-a-calibrated-python-launcher).
 
 ### PR sheet: leftovers carry the decision spine
 
@@ -45,6 +46,15 @@ Check these in a consuming project when it adopts 0.44.0. Each step names the no
 ### Review record: carried leftovers are re-checked against the head
 
 - A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
+
+### Break-it tests: a calibrated Python launcher
+
+- `core.md` takes an optional `breakItInterpreter` key: a string naming the launcher break-it tests run under, such as `scripts/pinned-python` or `uv run python`. It is split like a shell would split words and never run through a shell. Absent or `null` means not set, and the launcher is read from the verify command as before.
+- `review_code_config.py` output gains `breakItInterpreter`: `null` when not set, the stored string verbatim when it is a string (valid or not), and `""` for any other type, so it fails closed.
+- `round_driver.py next` takes `--break-it-interpreter <text>` on a fresh state only; an existing session refuses it `break-it-interpreter-not-fresh-state`. The value, an empty string included, becomes the session's `breakItInterpreter`.
+- A break-it run can now be recorded not-run with the new reason `interpreter-key-invalid`: the key is set but is not a valid launcher. It never falls back to the verify command. `interpreter-unavailable` (the launcher failed its readiness probe) and `interpreter-unresolved` (no key, and none found in the verify command) are unchanged.
+- A run record's `interpreter`, for a multi-word launcher, is the shell-joined prefix, such as `uv run python`.
+- `core_md.py` gains the verbs `break-it-interpreter` (read) and `write-break-it-interpreter` (write, or clear with `--clear`). Read the write result's `action`: only `written` or `noop` means saved. See `skills/configure/reference/view-and-tune.md` and `skills/review-code/reference/auto-fix-loop.md` § Break-it tests.
 
 ### Review record: an owner ruling given mid-build reaches the record
 

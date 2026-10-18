@@ -163,7 +163,12 @@ VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
 REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empty')
 [ "$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.reason // empty')" = "verify-command-malformed" ] && { echo "$REFUSAL" >&2; exit 1; }
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
+BREAK_IT_ARGS=()
+[ "$(printf '%s' "$VERIFY_JSON" | jq -r '.breakItInterpreter != null')" = "true" ] && \
+  BREAK_IT_ARGS=("--break-it-interpreter=$(printf '%s' "$VERIFY_JSON" | jq -r '.breakItInterpreter')")
 ```
+
+`BREAK_IT_ARGS` carries the optional `breakItInterpreter` calibration key to the driver. It passes the flag only when calibration sets the key, and it tests for presence, never with `-n`: an empty string still goes through (and the flag and value travel as one `--break-it-interpreter=VALUE` argument, so a stored value that starts with a dash is not read as an option), so a malformed value fails closed in the driver (break-it tests recorded not-run, `interpreter-key-invalid`) instead of silently falling back to the verify command.
 
 `{baseRef}` in the calibrated command is the pinned base commit: the substitution runs in SKILL.md's base-resolution block, after `$BASE_REF` is validated (never here — this block runs before the base is pinned), and only when `$BASE_REF` is a full 40- or 64-hex object id; otherwise the token stays in place and the gate's own unresolvable-ref refusal is the loud failure. The driver binds the same token in its `run-verify` payload (`round_driver._verify_command`).
 
