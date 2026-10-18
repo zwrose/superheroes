@@ -140,19 +140,40 @@ _NEUTRAL_CONFIG = (
 )
 
 
+def _neutral_child_env():
+    """A child environment scrubbed of the routing variables, the neutral pair put back after."""
+    env = launch_ledger.scrub_env(
+        keys=engine_dispatch._GIT_ROUTING_VARS, roots=(engine_dispatch.JOURNAL_ROOT_ENV,))
+    env.update(_NEUTRAL_ENV)
+    return env
+
+
 @contextlib.contextmanager
 def _neutral_git():
     """Run git, and the callees that spawn it, under neutral configuration.
 
     Hides the ambient routing variables, then points the global config at the null device and
     switches the system config off in ``os.environ`` for the duration. The previous values (or their
-    absence) come back afterwards, on an exception too; the context nests."""
+    absence) come back afterwards, on an exception too; the context nests. ``engine_dispatch.
+    _git_scrubbed`` (which the declared-item check spawns git through) would drop the neutral pair
+    from its child, so it is swapped for a runner that keeps it, and put back after."""
     saved = {key: os.environ.get(key) for key, _ in _NEUTRAL_ENV}
+    saved_runner = engine_dispatch._git_scrubbed
+
+    def neutral_scrubbed(cwd, *args, timeout=None):
+        overrides = [part for setting in _NEUTRAL_CONFIG for part in ("-c", setting)]
+        return subprocess.run(
+            ["git", "-C", cwd, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=",
+             *overrides, *args],
+            capture_output=True, text=True, env=_neutral_child_env(), timeout=timeout)
+
     try:
         with engine_dispatch._git_routing_scrubbed_environ():
             os.environ.update(_NEUTRAL_ENV)  # after the scrub: GIT_CONFIG_GLOBAL is a routing var
+            engine_dispatch._git_scrubbed = neutral_scrubbed
             yield
     finally:
+        engine_dispatch._git_scrubbed = saved_runner
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -170,9 +191,7 @@ def _git(cwd, *args):
     overrides = [part for setting in _NEUTRAL_CONFIG for part in ("-c", setting)]
     try:
         with _neutral_git():
-            env = launch_ledger.scrub_env(
-                keys=engine_dispatch._GIT_ROUTING_VARS, roots=(engine_dispatch.JOURNAL_ROOT_ENV,))
-            env.update(_NEUTRAL_ENV)
+            env = _neutral_child_env()
             proc = subprocess.run(
                 ["git", "-C", cwd, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=",
                  *overrides, *args],

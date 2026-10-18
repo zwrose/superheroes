@@ -1178,6 +1178,38 @@ def test_collect_carries_a_staged_gitlink_despite_submodule_diff_settings(
     assert "160000" in _git(r.B, "ls-files", "-s", "sub")
 
 
+def test_hostile_global_git_config_never_reaches_declared_item_grading(
+        tmp_path, monkeypatch, capsys):
+    # axis: configuration — a global diff.orderFile naming a missing file cannot forfeit a delivery
+    r = _make_repo(tmp_path, a_text="one\ntwo\nthree\nfour\nfive\n")
+    home = tmp_path / "hostile-home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[diff]\n\torderFile = %s\n\tignoreSubmodules = all\n" % (home / "no-such-order"),
+        encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL")
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    _routed(monkeypatch)
+    code, out = _open(capsys, r, items=("a.txt", "new/n.txt"))
+    assert code == 0, out
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    _enrolled(r)
+    _write(os.path.join(r.T, "a.txt"), "one\ntwo\nTHREE\nfour\nfive\n")
+    _write(os.path.join(r.T, "new", "n.txt"), "fresh\n")
+    _result(r)
+    _transcript(r)
+    original = NE.engine_dispatch._git_scrubbed
+    code, out = _close(capsys, r)
+    assert NE.engine_dispatch._git_scrubbed is original
+    assert code == 0, out
+    assert out["ok"] is True
+    assert out["itemCheck"]["missing"] == []
+    assert out["collected"]["files"] == ["a.txt", "new/n.txt"]
+
+
 # --- E11 / E12 one neutral-config chokepoint (#1949) ----------------------------------------
 
 
