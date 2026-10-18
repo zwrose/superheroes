@@ -406,7 +406,9 @@ def test_refusal_text_other_reasons_and_no_secret_words():
 
 
 def _git(cwd, *args, env=None):
-    clean = {k: v for k, v in (env or os.environ).items() if not k.startswith("GIT_")}
+    pinned = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")
+    clean = {k: v for k, v in (env or os.environ).items()
+             if not k.startswith("GIT_") or k in pinned}
     done = subprocess.run(["git", "-C", str(cwd)] + list(args), capture_output=True, text=True,
                           env=clean)
     assert done.returncode == 0, (args, done.stderr)

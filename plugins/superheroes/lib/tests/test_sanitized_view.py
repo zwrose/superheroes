@@ -5467,7 +5467,9 @@ def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
     identical clone is reported ``missing`` under the variable and is silently fetched
     without it. The origin is local, so the 'fetches' branch completes immediately —
     on a stalled remote it is the hang PR #761 recorded, which is why the assertion is
-    on the reply and never on a live stalled remote.
+    on the reply and never on a live stalled remote. Under the variable git either replies
+    ``missing`` (newer git) or refuses with a nonzero exit and ``lazy fetching disabled`` on
+    stderr (git 2.43); both mean no fetch happened.
     """
     clone, _origin = _partial_clone_fixture(tmp_path, "env-var-bite")
     blob = _git(clone, "ls-tree", "-r", "HEAD").stdout.split()[2]
@@ -5478,12 +5480,29 @@ def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
             input=("%s\n" % blob).encode("ascii"),
             capture_output=True,
             env={**os.environ, **env_extra},
-        ).stdout.split()
+        )
 
-    guarded = batch_check({"GIT_NO_LAZY_FETCH": "1"})
-    assert guarded == [blob.encode("ascii"), b"missing"]
+    def refused_without_fetching(result):
+        # newer git replies "<oid> missing"; git 2.43 exits nonzero with nothing on stdout.
+        replied_missing = result.stdout.split() == [blob.encode("ascii"), b"missing"]
+        refused_fatally = (
+            result.returncode != 0
+            and result.stdout == b""
+            and b"lazy fetching disabled" in result.stderr
+        )
+        return replied_missing or refused_fatally
 
-    unguarded = batch_check({"GIT_NO_LAZY_FETCH": "0"})
+    guarded_result = batch_check({"GIT_NO_LAZY_FETCH": "1"})
+    assert refused_without_fetching(guarded_result), guarded_result
+    assert b"blob" not in guarded_result.stdout.split()
+
+    still_absent = batch_check({"GIT_NO_LAZY_FETCH": "1"})
+    assert refused_without_fetching(still_absent), (
+        "the guarded call fetched the object from the promisor remote"
+    )
+    assert b"blob" not in still_absent.stdout.split()
+
+    unguarded = batch_check({"GIT_NO_LAZY_FETCH": "0"}).stdout.split()
     assert unguarded[:2] == [blob.encode("ascii"), b"blob"], (
         "without the variable git fetched the object from the promisor remote"
     )
@@ -5492,6 +5511,26 @@ def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
 def test_ordinary_clone_is_not_refused(tmp_path):
     """Ordinary repositories still build a sanitized view."""
     repo = _init_repo(tmp_path / "ordinary", files={"a.txt": "a\n"})
+    view = None
+    try:
+        view = _build(repo)
+        assert os.path.isfile(os.path.join(view["path"], "a.txt"))
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+
+
+def test_view_commit_never_asks_for_a_signature(tmp_path, monkeypatch):
+    """The view's disposable repository commits without a signature, whatever the host config says."""
+    repo = _init_repo(tmp_path / "signing-source", files={"a.txt": "a\n"})
+    home = tmp_path / "signing-home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = /bin/false\n",
+        encoding="utf-8",
+    )
+    # _git_env strips the session's GIT_CONFIG_GLOBAL pin, so HOME's config is what the view's commit reads.
+    monkeypatch.setenv("HOME", str(home))
     view = None
     try:
         view = _build(repo)
