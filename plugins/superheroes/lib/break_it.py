@@ -313,9 +313,9 @@ def _is_separator(token):
 
 
 def _chain_chdir(current, operand):
-    """The directory after one more ``env -C operand``: GNU env applies the last ``-C``/``--chdir``
-    alone, so the new operand replaces the earlier one rather than composing onto it."""
-    return operand
+    """The directory after one more ``env -C operand``: a relative operand composes onto the earlier
+    one; an absolute operand is kept as it is."""
+    return operand if current is None else posixpath.join(current, operand)
 
 
 def _rebase_launcher(chdir, launcher):
