@@ -5520,6 +5520,26 @@ def test_ordinary_clone_is_not_refused(tmp_path):
             sv.destroy_sanitized_view(view["path"])
 
 
+def test_view_commit_never_asks_for_a_signature(tmp_path, monkeypatch):
+    """The view's disposable repository commits without a signature, whatever the host config says."""
+    repo = _init_repo(tmp_path / "signing-source", files={"a.txt": "a\n"})
+    home = tmp_path / "signing-home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = /bin/false\n",
+        encoding="utf-8",
+    )
+    # _git_env strips the session's GIT_CONFIG_GLOBAL pin, so HOME's config is what the view's commit reads.
+    monkeypatch.setenv("HOME", str(home))
+    view = None
+    try:
+        view = _build(repo)
+        assert os.path.isfile(os.path.join(view["path"], "a.txt"))
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+
+
 def test_ordinary_clone_failure_keeps_its_own_detail(tmp_path):
     """An unrelated fault in a normal repository is never renamed after a checkout shape."""
     repo = _init_repo(tmp_path / "ordinary-failure", files={"a.txt": "a\n"})
