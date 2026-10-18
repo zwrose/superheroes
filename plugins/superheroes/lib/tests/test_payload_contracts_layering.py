@@ -24,6 +24,7 @@ import round_adapters  # noqa: E402
 _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "audits",
     "break_it",  # the break-it contract vocabulary (marker, taxonomy) the adapter reads
+    "break_it_key",  # stdlib-free leaf: the interpreter key name's one home, break_it's import
     "claude_modes",
     "dispatch_allowlist",
     "dispatch_outcome",
