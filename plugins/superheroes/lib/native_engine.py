@@ -335,9 +335,10 @@ def _cmd_enroll(args):
     if rc != 0 or out.strip():
         return _enroll_refusal("native-worktree-dirty")
     try:
-        top = store_core.repo_root(here)
-        git_dir = store_core.get_worktree_gitdir(top)
-        common_dir = store_core.get_gitdir(top)
+        with engine_dispatch._git_routing_scrubbed_environ():  # same worktree `_git` sees
+            top = store_core.repo_root(here)
+            git_dir = store_core.get_worktree_gitdir(top)
+            common_dir = store_core.get_gitdir(top)
     except Exception:  # fail closed: a resolver failure leaves isolation unproven
         return _enroll_refusal("native-worktree-not-isolated")
     if not all(isinstance(p, str) and p for p in (top, git_dir, common_dir)):
@@ -484,7 +485,8 @@ class _Close(object):
         target = os.path.realpath(args.worktree)
         into = os.path.realpath(args.into)
         try:
-            top = store_core.repo_root(into)
+            with engine_dispatch._git_routing_scrubbed_environ():  # same root `_git` will use
+                top = store_core.repo_root(into)
         except Exception:
             return self._forfeit("native-collect-failed")
         if not top:

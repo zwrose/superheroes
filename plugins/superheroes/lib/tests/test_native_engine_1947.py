@@ -496,6 +496,28 @@ def test_enroll_checks_out_the_base_when_head_sits_ahead(tmp_path, monkeypatch, 
     assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
 
 
+def test_enroll_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
+    # axis: preservation — ambient GIT_DIR/GIT_WORK_TREE naming a sibling never moves the sibling
+    r = _make_repo(tmp_path)
+    _write(os.path.join(r.main, "ahead.txt"), "ahead\n")
+    _git(r.main, "add", "-A")
+    _git(r.main, "commit", "-q", "-m", "ahead")
+    ahead = _git(r.main, "rev-parse", "HEAD").strip()
+    _git(r.T2, "checkout", "-q", "--detach", ahead)
+    sibling_dir = _git(r.T2, "rev-parse", "--absolute-git-dir").strip()
+    _routed(monkeypatch)
+    _open(capsys, r)
+    monkeypatch.setenv("GIT_DIR", sibling_dir)
+    monkeypatch.setenv("GIT_WORK_TREE", r.T2)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert code == 0, out
+    assert out == {"ok": True, "head": r.base}
+    assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
+    assert _git(r.T2, "rev-parse", "HEAD").strip() == ahead
+
+
 def test_enroll_refuses_a_dirty_worktree(tmp_path, monkeypatch, capsys):
     # axis: refusal — a worktree with uncommitted files never enrolls
     r = _make_repo(tmp_path)
@@ -1020,6 +1042,20 @@ def test_close_into_a_subdirectory_collects_against_the_worktree_root(
     assert code == 0, out
     assert out["collected"]["files"] == ["a.txt"]
     assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+
+
+def test_close_into_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
+    # axis: preservation — ambient GIT_DIR/GIT_WORK_TREE naming a sibling never redirects --into
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    monkeypatch.setenv("GIT_DIR", _git(r.T2, "rev-parse", "--absolute-git-dir").strip())
+    monkeypatch.setenv("GIT_WORK_TREE", r.T2)
+    code, out = _close(capsys, r)
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert code == 0, out
+    assert _git(r.B, "show", ":a.txt") == "alpha\nbeta\n"
+    assert _git(r.T2, "diff", "--cached", "--name-only") == ""
 
 
 def test_close_lock_reclaims_a_dead_holder(tmp_path, monkeypatch, capsys):
