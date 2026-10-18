@@ -629,6 +629,7 @@ def test_every_new_word_comes_from_the_words_file():
         "laneLine", "describesCommit", "changedHeading", "changed", "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading",
         "craftHeading", "decidedHeading", "reviewHeading", "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel",
         "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "historyCap",
+        "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro", "decidedGround",
     ]
     words = copy.deepcopy(WORDS)
     for key in new_keys:
@@ -651,6 +652,14 @@ def test_every_new_word_comes_from_the_words_file():
     collect(_emptied(PR_SAMPLE))
     collect(PR_SAMPLE)
     collect(_carried_from(PR_SAMPLE))
+    collect(_with_decided(PR_SAMPLE, DECIDED_1, DECIDED_2), DECIDED_JS + """
+      t.click(mineButton(D1));
+      await t.tick();
+      const one = t.everyText();
+      t.click(mineButton(D2));
+      await t.tick();
+      return one.concat(t.everyText());
+    """)
     missing = set(new_keys) - shown
     assert not missing, "words typed in the page, or never shown: %s" % sorted(missing)
     assert {"accept", "discuss", "something-else"} <= shown
@@ -683,7 +692,8 @@ def test_the_template_types_none_of_the_new_words():
     script = "\n".join(line for line in _template_text().splitlines() if not line.strip().startswith("//"))
     for key in ("whatChangedHeading", "changedHeading", "carriedHeading", "carried", "walkHeading", "acceptingHeading", "craftHeading", "decidedHeading",
                 "reviewHeading", "prsHeading", "verdictHeading", "verdictCaption", "nothingToAcceptCount", "familyUnknown",
-                "notIndependentMark", "caughtHeading", "changed"):
+                "notIndependentMark", "caughtHeading", "changed", "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro",
+                "decidedGround"):
         assert PW[key] not in script, "the template types the words of %s" % key
     assert '"Accept"' not in script
 
@@ -1698,3 +1708,346 @@ def test_a_changed_answer_under_a_carried_merge_writes_null_to_the_own_digest_fi
     assert [item["path"] for item in result["after"]] == ["verdict/" + mine, "answers/" + CARD_A]
     assert result["after"][0]["body"]["verdict"] is None and result["after"][0]["body"]["sheet"] == mine
     assert result["after"][1]["body"]["answer"] == "discuss"
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The "Decided for you" list and Make this mine (#1969).
+# ---------------------------------------------------------------------------------------------------------------------
+
+DECIDED_1, DECIDED_2 = "d-flaky-retry-3fa9", "d-log-level-91bc"
+MINE = PW["mineOption"]
+MINE_ONE = PW["mineLockedOne"]
+
+
+def _decided_entry(entry_id, pr=None):
+    entry = {
+        "id": entry_id,
+        "finding": ("%d:" % pr if pr is not None else "") + "finding-" + entry_id,
+        "title": "Title of " + entry_id,
+        "ground": "Ground of " + entry_id,
+        "reason": "Reason for " + entry_id,
+    }
+    if pr is not None:
+        entry["pr"] = pr
+    return entry
+
+
+def _with_decided(sheet, *entry_ids):
+    """The sheet with these decided-for-you entries (each carrying its PR on a stack sheet)."""
+    def mutate(clone):
+        pr = clone["prSheet"]["prs"][0]["number"] if clone["kind"] == "stack" else None
+        clone["prSheet"]["decidedForYou"] = [_decided_entry(entry_id, pr) for entry_id in entry_ids]
+    return _with(sheet, mutate)
+
+
+# What a scenario can read of the list: an entry's part, its one control, its note and save line, the verdict's mine line, and the writes to an entry's document.
+DECIDED_JS = r"""
+const D1 = "d-flaky-retry-3fa9", D2 = "d-log-level-91bc";
+const decidedPart = () => part("pr-decided-for-you");
+const decidedEntry = (id) => decidedPart().children.find((node) => node.id === "decided-" + id);
+const decidedRow = (id) => decidedEntry(id).children.find((child) => hasClass(child, "answer-row"));
+const mineButton = (id) => decidedRow(id).children[0];
+const decidedNote = (id) => decidedEntry(id).children.find((child) => child.tagName === "textarea");
+const decidedSave = (id) => decidedEntry(id).children.find((child) => hasClass(child, "save-line"));
+const mineLine = () => verdict().children.find((child) => child.id === "verdict-mine");
+const mineView = (id) => ({
+  labels: decidedRow(id).children.map((button) => button.textContent),
+  pressed: mineButton(id).getAttribute("aria-pressed"),
+  disabled: mineButton(id).disabled,
+  noteDisabled: decidedNote(id).disabled,
+  note: decidedNote(id).value,
+  save: t.text(decidedSave(id)),
+  line: mineLine() === undefined || mineLine().hidden ? null : mineLine().textContent,
+});
+const entryWrites = (id) => t.sets.filter((call) => call.path === "answers/" + id);
+const entryRetry = (id) => decidedSave(id).children.find((child) => child.tagName === "button");
+const both = (id) => ({ view: lockView(), mine: mineView(id) });
+"""
+
+DECIDED_SHEET = _with_decided(PR_SAMPLE, DECIDED_1, DECIDED_2)
+
+
+def _mine_many(count):
+    return _fill(PW["mineLockedMany"], count=count)
+
+
+def _store(sheet, *extra, merge=False):
+    """The documents a reopened sheet reads: every card accepted and saved (with revisions), the extra answers, and a Merge over the cards when asked."""
+    cards = _accepted_answers(sheet)
+    collections = {"answers": cards + list(extra)}
+    if merge:
+        digest = _sheet_digest(sheet)
+        collections["verdict"] = [{"id": digest, "data": {"verdict": "merge", "note": "", "sheet": digest, "covers": _covers(cards)}}]
+    return {"collections": collections}
+
+
+def _mine_doc(entry_id, note="mine note"):
+    return {"id": entry_id, "data": {"answer": "option", "optionId": MINE["id"], "note": note}}
+
+
+def _locked_with(view, line):
+    assert view["view"]["disabled"] is True and view["view"]["label"] == _locked_label(), view
+    assert view["mine"]["line"] == line, view
+
+
+def _unlocked(view):
+    assert view["view"]["disabled"] is False and view["view"]["label"] == "Merge #214", view
+    assert view["mine"]["line"] is None, view
+
+
+# Bites on (E1): a list, a mine line or a lock appearing on a sheet that has no decided-for-you entries.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_a_sheet_without_decided_entries_has_no_list_and_no_mine_line(kind):
+    page = _lock(SAMPLES[kind], """
+      return { order: order(), mine: verdict().children.some((child) => child.id === "verdict-mine"), text: t.everyText() };
+    """)
+    result = page["result"]
+    assert result["order"] == _expected_order(SAMPLES[kind]) and "pr-decided-for-you" not in result["order"]
+    assert result["mine"] is False
+    assert not any(PW[key] in "\n".join(result["text"]) for key in ("decidedForYouHeading", "decidedForYouIntro"))
+
+
+# Bites on: the list drawn anywhere but first among the parts below the cards, folded, or missing the heading, intro, title, ground, reason or its one control.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_the_decided_for_you_list_is_the_first_part_below_the_cards_and_is_not_folded(kind):
+    sheet = _with_decided(SAMPLES[kind], DECIDED_1, DECIDED_2)
+    page = _lock(sheet, DECIDED_JS + """
+      const entries = decidedPart().children.filter((node) => node.tagName === "article");
+      return {
+        order: order(),
+        head: decidedPart().children.slice(0, 2).map((node) => [node.tagName, node.textContent]),
+        entries: entries.map((node) => [node.id, node.children.slice(0, 3).map((child) => [child.tagName, child.textContent])]),
+        folded: t.all(decidedPart()).some((node) => hasClass(node, "sheet-folded")) || [decidedPart(), decidedEntry(D1), decidedRow(D1), decidedNote(D1)].some((node) => node.hidden),
+        view: [mineView(D1), mineView(D2)],
+      };
+    """)
+    result = page["result"]
+    expected = _expected_order(SAMPLES[kind])
+    expected.insert(expected.index("sheet-verdict") - len([part for part in expected if part in ("pr-craft", "pr-decided", "pr-review", "pr-prs")]), "pr-decided-for-you")
+    assert result["order"] == expected
+    assert result["head"] == [["h2", PW["decidedForYouHeading"]], ["p", PW["decidedForYouIntro"]]]
+    prefix = _fill(PW["walkStopPr"], pr=sheet["prSheet"]["prs"][0]["number"]) + ": " if kind == "stack" else ""
+    assert result["entries"] == [
+        ["decided-" + entry_id, [["h3", prefix + "Title of " + entry_id], ["p", _fill(PW["decidedGround"], ground="Ground of " + entry_id)], ["p", "Reason for " + entry_id]]]
+        for entry_id in (DECIDED_1, DECIDED_2)
+    ]
+    assert result["folded"] is False
+    for view in result["view"]:
+        assert view["labels"] == [MINE["label"]] and view["pressed"] == "false" and view["disabled"] is False and view["noteDisabled"] is False and view["line"] is None
+
+
+# Bites on (E2): a stored taken-back entry not shown picked, not holding Merge, or the line missing; and the unlock line and the accepted count, which decided entries must not change.
+def test_a_stored_make_this_mine_is_shown_picked_and_holds_merge():
+    page = _lock(DECIDED_SHEET, DECIDED_JS + "return { ...both(D1), second: mineView(D2), count: elements['sheet-count'].textContent };", host=_store(DECIDED_SHEET, _mine_doc(DECIDED_1)))
+    result = page["result"]
+    _locked_with(result, MINE_ONE)
+    assert result["mine"]["pressed"] == "true" and result["mine"]["note"] == "mine note" and "Saved" in result["mine"]["save"]
+    assert result["second"]["pressed"] == "false" and result["second"]["line"] == MINE_ONE
+    assert result["view"]["line"] is None
+    assert result["count"] == _fill(PW["acceptedCount"], accepted=3, total=3)
+
+
+# Bites on (E3): a stored cleared answer counted as taken back.
+def test_a_stored_cleared_answer_is_not_taken_back_and_holds_nothing():
+    cleared = {"id": DECIDED_1, "data": {"answer": None, "optionId": None, "note": "just a note", "revision": _revision_at(7)}}
+    page = _lock(DECIDED_SHEET, DECIDED_JS + "return both(D1);", host=_store(DECIDED_SHEET, cleared))
+    _unlocked(page["result"])
+    assert page["result"]["mine"]["pressed"] == "false" and page["result"]["mine"]["note"] == "just a note"
+
+
+# Bites on (E4): a stored answer that fits the answer rule but is not Make this mine restored as not taken back.
+@pytest.mark.parametrize("data", [
+    {"answer": "accept", "optionId": None, "note": "kept"},
+    {"answer": "discuss", "optionId": None, "note": "kept"},
+    {"answer": "option", "optionId": "some-other-option", "note": "kept"},
+], ids=["accept", "discuss", "another-option"])
+def test_a_stored_fitting_answer_naming_another_answer_restores_as_mine(data):
+    page = _lock(DECIDED_SHEET, DECIDED_JS + "return both(D1);", host=_store(DECIDED_SHEET, {"id": DECIDED_1, "data": data}))
+    _locked_with(page["result"], MINE_ONE)
+    assert page["result"]["mine"]["pressed"] == "true" and page["result"]["mine"]["note"] == "kept"
+
+
+# Bites on (E5): a stored document that does not fit the answer rule restored as not taken back, or losing its text note.
+@pytest.mark.parametrize("data, note", [
+    ({"note": "kept"}, "kept"),
+    ({"answer": 5, "optionId": None, "note": "kept"}, "kept"),
+    ({"answer": None, "optionId": "x", "note": "kept"}, "kept"),
+    ({"answer": None, "optionId": None, "note": 7}, ""),
+    ({"answer": None, "optionId": None, "note": "kept", "extra": True}, "kept"),
+    ({}, ""),
+], ids=["no-answer", "answer-not-text", "cleared-with-option", "note-not-text", "extra-property", "empty-object"])
+def test_a_stored_non_fitting_object_restores_as_mine_keeping_a_text_note(data, note):
+    page = _lock(DECIDED_SHEET, DECIDED_JS + "return both(D1);", host=_store(DECIDED_SHEET, {"id": DECIDED_1, "data": data}))
+    _locked_with(page["result"], MINE_ONE)
+    assert page["result"]["mine"]["pressed"] == "true" and page["result"]["mine"]["note"] == note
+
+
+# Bites on (E6): a stored document whose data is not an object (a string, null, a list, a number) dropped on restore instead of restoring as taken back.
+@pytest.mark.parametrize("data", ["taken", None, ["x"], 3], ids=["string", "null", "list", "number"])
+def test_a_stored_non_object_document_restores_as_mine(data):
+    page = _lock(DECIDED_SHEET, DECIDED_JS + "return { ...both(D1), writes: t.sets.length };", host=_store(DECIDED_SHEET, {"id": DECIDED_1, "data": data}))
+    _locked_with(page["result"], MINE_ONE)
+    assert page["result"]["mine"]["pressed"] == "true" and page["result"]["mine"]["note"] == "" and page["result"]["writes"] == 0
+
+
+# Bites on (E7): a tap on Make this mine over a saved Merge leaving the Merge standing, writing before the clear lands, or writing the wrong document.
+def test_make_this_mine_clears_a_saved_merge_through_the_verdict_and_writes_after_the_clear_lands():
+    digest = _sheet_digest(DECIDED_SHEET)
+    page = _lock(DECIDED_SHEET, DECIDED_JS + MERGE_SAVED + """
+      const merged = lockView();
+      t.click(mineButton(D1));
+      await t.tick();
+      const waiting = { ...both(D1), entry: entryWrites(D1).length, verdict: verdictWrites() };
+      lastVerdictCall().resolve();
+      await t.tick();
+      const afterClear = entryWrites(D1).length;
+      entryWrites(D1)[0].resolve();
+      await t.tick();
+      return { merged: merged, waiting: waiting, afterClear: afterClear, done: both(D1), body: entryWrites(D1).map((call) => call.body) };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["merged"]["pressed"] == ["true", "false"]
+    assert result["waiting"]["view"]["pressed"] == ["false", "false"]
+    _locked_with(result["waiting"], MINE_ONE)
+    assert result["waiting"]["mine"]["pressed"] == "true" and result["waiting"]["entry"] == 0
+    assert _without_covers(result["waiting"]["verdict"][-1], DECIDED_SHEET) == {"verdict": None, "note": "", "sheet": digest}
+    assert result["afterClear"] == 1
+    _locked_with(result["done"], MINE_ONE)
+    assert "Saved" in result["done"]["mine"]["save"]
+    assert [_without_revision(body) for body in result["body"]] == [{"answer": "option", "optionId": MINE["id"], "note": ""}]
+
+
+# Bites on (E8): a Make this mine write that was rejected or stalled unlocking Merge.
+@pytest.mark.parametrize("how", ["rejected", "stalled"])
+def test_a_make_this_mine_write_that_is_rejected_or_stalls_keeps_merge_locked(how):
+    settle_it = 'entryWrites(D1)[0].reject(new Error("no")); await t.tick();' if how == "rejected" else "await t.advance(10000);"
+    page = _lock(DECIDED_SHEET, DECIDED_JS + """
+      await acceptAll();
+      await settle(3);
+      const before = both(D1);
+      t.click(mineButton(D1));
+      await t.tick();
+      const pending = both(D1);
+      %s
+      return { before: before, pending: pending, failed: both(D1) };
+    """ % settle_it, host=dict(PENDING, **TIMED))
+    result = page["result"]
+    _unlocked(result["before"])
+    _locked_with(result["pending"], MINE_ONE)
+    _locked_with(result["failed"], MINE_ONE)
+    assert "Not saved" in result["failed"]["mine"]["save"]
+
+
+# Bites on (E9): a rejected clear of Make this mine unlocking Merge while the store may still hold it; only a landed clear unlocks.
+def test_a_rejected_clear_of_make_this_mine_keeps_merge_locked_until_a_non_mine_state_lands():
+    page = _lock(DECIDED_SHEET, DECIDED_JS + """
+      await acceptAll();
+      await settle(3);
+      t.click(mineButton(D1));
+      await t.tick();
+      entryWrites(D1)[0].resolve();
+      await t.tick();
+      const saved = both(D1);
+      t.click(mineButton(D1));
+      await t.tick();
+      const clearing = both(D1);
+      entryWrites(D1)[1].reject(new Error("no"));
+      await t.tick();
+      const failed = both(D1);
+      t.click(entryRetry(D1));
+      await t.tick();
+      const retrying = both(D1);
+      entryWrites(D1)[2].resolve();
+      await t.tick();
+      return { saved: saved, clearing: clearing, failed: failed, retrying: retrying, landed: both(D1), body: entryWrites(D1).map((call) => call.body) };
+    """, host=PENDING)
+    result = page["result"]
+    for name in ("saved", "clearing", "failed", "retrying"):
+        _locked_with(result[name], MINE_ONE)
+    assert result["clearing"]["mine"]["pressed"] == "false" and "Not saved" in result["failed"]["mine"]["save"]
+    _unlocked(result["landed"])
+    assert result["landed"]["mine"]["pressed"] == "false"
+    assert [_without_revision(body) for body in result["body"]] == [
+        {"answer": "option", "optionId": MINE["id"], "note": ""},
+        {"answer": None, "optionId": None, "note": ""},
+        {"answer": None, "optionId": None, "note": ""},
+    ]
+
+
+# Bites on (E10): the line counting entries wrong, or not switching to the many-line.
+def test_two_taken_back_entries_show_the_many_line_with_their_count():
+    page = _lock(DECIDED_SHEET, DECIDED_JS + "return both(D1);", host=_store(DECIDED_SHEET, _mine_doc(DECIDED_1), _mine_doc(DECIDED_2)))
+    _locked_with(page["result"], _mine_many(2))
+    tapped = _lock(DECIDED_SHEET, DECIDED_JS + """
+      await acceptAll();
+      await t.tick();
+      const none = both(D1);
+      t.click(mineButton(D1));
+      await t.tick();
+      const one = both(D1);
+      t.click(mineButton(D2));
+      await t.tick();
+      return { none: none, one: one, two: both(D1) };
+    """)["result"]
+    _unlocked(tapped["none"])
+    _locked_with(tapped["one"], MINE_ONE)
+    _locked_with(tapped["two"], _mine_many(2))
+
+
+# Bites on (E11): the stack's entry titles missing the PR's number.
+def test_a_stack_sheets_entry_titles_carry_their_pr():
+    sheet = _with_decided(STACK_SAMPLE, DECIDED_1)
+    pr = sheet["prSheet"]["prs"][0]["number"]
+    page = _lock(sheet, DECIDED_JS + "return decidedEntry(D1).children[0].textContent;")
+    assert page["result"] == _fill(PW["walkStopPr"], pr=pr) + ": Title of " + DECIDED_1 and page["result"].startswith("#%d: " % pr)
+
+
+# Bites on (E12): a viewer who cannot edit getting a live control.
+@pytest.mark.parametrize("host", [{"user": "reader"}, {"claude": "missing"}], ids=["non-owner", "no-host"])
+def test_a_read_only_viewer_sees_the_list_with_the_control_off(host):
+    page = _lock(DECIDED_SHEET, DECIDED_JS + """
+      const before = mineView(D1);
+      const clicked = t.click(mineButton(D1));
+      t.fire(mineButton(D1), "click");
+      await t.tick();
+      return { before: before, clicked: clicked, after: mineView(D1), sets: t.sets.length };
+    """, host=dict(host, collections=_store(DECIDED_SHEET, _mine_doc(DECIDED_2))["collections"]))
+    result = page["result"]
+    assert result["before"]["disabled"] is True and result["before"]["noteDisabled"] is True and result["before"]["labels"] == [MINE["label"]]
+    assert result["clicked"] is False and result["sets"] == 0 and result["after"]["pressed"] == "false"
+
+
+# Bites on (E13): a decided entry counted in the accepted total, or named by a Merge's covers, so that a Merge over the cards alone no longer holds or a written Merge names the entry.
+def test_decided_entries_are_not_counted_or_covered_and_a_merge_over_the_cards_holds():
+    reopened = _lock(DECIDED_SHEET, DECIDED_JS + "return { ...both(D1), count: elements['sheet-count'].textContent, writes: verdictWrites() };", host=_store(DECIDED_SHEET, merge=True))
+    result = reopened["result"]
+    _unlocked(result)
+    assert result["view"]["pressed"] == ["true", "false"] and result["writes"] == []
+    assert result["count"] == _fill(PW["acceptedCount"], accepted=3, total=3)
+    written = _lock(DECIDED_SHEET, DECIDED_JS + """
+      await acceptAll();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { count: elements['sheet-count'].textContent, writes: verdictWrites(), view: both(D1) };
+    """)["result"]
+    assert written["count"] == _fill(PW["acceptedCount"], accepted=3, total=3)
+    assert len(written["writes"]) == 1 and _without_covers(written["writes"][0], DECIDED_SHEET)["verdict"] == "merge"
+    _unlocked(written["view"])
+
+
+# Bites on (E14): the mine line showing beside the send-back message instead of being hidden with the other lines.
+def test_a_send_back_pick_hides_the_mine_line_and_shows_the_send_back_message():
+    page = _lock(DECIDED_SHEET, DECIDED_JS + """
+      const before = both(D1);
+      t.click(t.button(B, "Fix before merge"));
+      await t.tick();
+      const sentBack = both(D1);
+      t.click(t.button(B, "Fix before merge"));
+      await t.tick();
+      return { before: before, sentBack: sentBack, back: both(D1) };
+    """, host=_store(DECIDED_SHEET, _mine_doc(DECIDED_1)))
+    result = page["result"]
+    assert result["before"]["mine"]["line"] == MINE_ONE
+    assert result["sentBack"]["view"]["sendBack"] == {"row": True, "note": True, "message": PW["sendBack"]}
+    assert result["sentBack"]["mine"]["line"] is None
+    assert result["back"]["mine"]["line"] == MINE_ONE

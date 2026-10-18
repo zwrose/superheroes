@@ -400,6 +400,23 @@ def test_prose_script_carries_no_provenance():
         assert not re.search(pattern, source), "sheet_prose.py matches %s" % pattern
 
 
+def _decided_fixtures():
+    """(name, sheet, refused, the problems both readers must give): a stack sheet with decided-for-you entries, valid and then breaking the rule that their ids are unique and are not card ids."""
+    def entry(entry_id):
+        return {"id": entry_id, "finding": "1724:" + entry_id, "title": "Title " + entry_id, "ground": "A ground.", "reason": "A reason.", "pr": 1724}
+
+    def decided(*entry_ids):
+        sheet = _pr_kind_sheet("stack")
+        sheet["prSheet"]["decidedForYou"] = [entry(entry_id) for entry_id in entry_ids]
+        return sheet
+
+    return [
+        ("valid stack with decided entries", decided("decided-one", "decided-two"), False, []),
+        ("two decided entries share an id", decided("decided-one", "decided-one"), True, ['Decided entry id "decided-one" is used more than once.']),
+        ("a decided entry id is also a card id", decided("decided-one", "leftover"), True, ['Decided entry id "leftover" is also a card id.']),
+    ]
+
+
 # Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the cross-field rules the schema description lists (or about a valid sheet).
 def test_cross_field_rules_agree_between_page_and_prose():
     import importlib.util
@@ -429,6 +446,7 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
         ("valid stack with a walk", _pr_kind_sheet("stack"), False),
         ("two walk stops share an id", mutated_stack(lambda s: s["prSheet"]["walk"]["stops"][1].update(id="schema")), True),
+        *[(name, sheet, refused) for name, sheet, refused, _ in _decided_fixtures()],
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -1394,3 +1412,14 @@ def test_repeated_index_row_numbers_are_refused(tmp_path):
 ], ids=lambda value: value if isinstance(value, str) and len(value) < 12 else None)
 def test_a_stored_document_fits_when_its_schema_definition_says_so(name, document, fits):
     assert _load_prose_module().fits_definition(name, document) is fits
+
+
+# Bites on: the page's checkSheet and the prose renderer's check giving different words for the decided-for-you id rule (a repeated entry id, an entry id that is also a card's).
+def test_decided_entry_id_problems_read_the_same_on_the_page_and_in_prose():
+    from test_review_template import _run_check_sheet
+
+    module = _load_prose_module()
+    fixtures = _decided_fixtures()
+    page = _run_check_sheet([sheet for _, sheet, _, _ in fixtures])
+    for (name, sheet, _, expected), page_problems in zip(fixtures, page):
+        assert page_problems == module.check_sheet(sheet) == expected, name

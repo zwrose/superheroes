@@ -491,6 +491,23 @@
       stopIds.add(stop.id);
     });
 
+    // A decided-for-you entry shares the answers collection with the cards: its id is unique among the entries and is not a card's.
+    const decidedIds = new Set();
+    const reportedDecided = new Set();
+    const reportedAlsoCard = new Set();
+    ((isObject(sheet.prSheet) && Array.isArray(sheet.prSheet.decidedForYou)) ? sheet.prSheet.decidedForYou : []).forEach((entry) => {
+      if (!isObject(entry)) return;
+      if (decidedIds.has(entry.id) && !reportedDecided.has(entry.id)) {
+        reportedDecided.add(entry.id);
+        problems.push('Decided entry id "' + entry.id + '" is used more than once.');
+      }
+      decidedIds.add(entry.id);
+      if (cardIds.has(entry.id) && !reportedAlsoCard.has(entry.id)) {
+        reportedAlsoCard.add(entry.id);
+        problems.push('Decided entry id "' + entry.id + '" is also a card id.');
+      }
+    });
+
     return problems;
   }
 </script>
@@ -1459,6 +1476,11 @@
       return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
     }
 
+    // A decided-for-you entry is taken back while its pick is Make this mine: one home for the rule, read by lockVerdict.
+    function isMine(pick) {
+      return pick.answer === "option" && pick.optionId === prWords.mineOption.id;
+    }
+
     // True when this browser can make a revision: the schema says how wide one is and a random source exists.
     function canMakeRevision() {
       return answerShape !== null && answerShape.revisionBytes !== 0
@@ -1647,8 +1669,12 @@
 
     // The walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
     let walkStops = [];
+    // The ids of the decided-for-you entries, in order; each has a saver in `controllers` under its id. Empty when the sheet has none.
+    let decidedEntries = [];
     let walkCount = textElement("span", "sh-label", "");
     let walkLines = [];
+    // The verdict card's line that says Merge waits on taken-back decided entries (null when the sheet has no decided entries).
+    let mineLine = null;
     let walkRule = null;
     // The answers each kind of stop offers, in button order, from the schema's walkAnswersByKind (null leaves the walk's answers off).
     let walkOffered = null;
@@ -1843,6 +1869,7 @@
     // is an option that sends the PR back replaces the verdict's buttons, note and unlock line with the send-back message.
     // A Merge held while the sheet is locked is cleared through the verdict saver, so it queues behind any write in flight.
     // A walk stop whose latest answer is a Problem with no fix chosen, or with anything of its saver unsaved, locks the merge too; stops not walked never do.
+    // So does a decided-for-you entry taken back (Make this mine); decided entries never count toward the accepted items or a Merge's covers.
     function lockVerdict(states) {
       const total = items.length;
       const optionOf = function (index, optionId) {
@@ -1870,7 +1897,13 @@
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
       // An accepted answer saved without a revision (an earlier page, or no random source) cannot be named by a Merge's covers, so Merge stays off until it is answered again.
       const uncovered = coveredAnswers().length < total;
-      const locked = incomplete || uncovered || clearUnsaved || open > 0;
+      // A decided entry counts as taken back while its current pick, or any state its saver may have left in the store, is Make this mine
+      // (a document restored that is not a well-formed null answer is restored as Make this mine, so it is counted here too).
+      const mine = decidedEntries.filter(function (id) {
+        const controller = controllers.get(id);
+        return isMine(controller.current()) || controller.acknowledged().some(isMine);
+      }).length;
+      const locked = incomplete || uncovered || clearUnsaved || open > 0 || mine > 0;
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -1884,6 +1917,10 @@
         walkLines[index].textContent = counts[index] === 0 ? "" : fill(prWords[name + (counts[index] === 1 ? "One" : "Many")], { count: counts[index] });
         walkLines[index].hidden = counts[index] === 0 || sendsBack;
       });
+      if (mineLine !== null) {
+        mineLine.textContent = mine === 0 ? "" : mine === 1 ? prWords.mineLockedOne : fill(prWords.mineLockedMany, { count: mine });
+        mineLine.hidden = mine === 0 || sendsBack;
+      }
       walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return prWords.walkedAnswers.includes(item.saved.answer); }), total: walked.length });
       walkCount.hidden = !ready;
       const mergeLabel = verdictLabel("merge");
@@ -2035,9 +2072,19 @@
       });
     }
 
-    function hasPrWords(words, offered) {
+    // The words a sheet with decided-for-you entries also needs; a sheet without any is drawn without them.
+    const DECIDED_WORD_KEYS = ["decidedForYouHeading", "decidedForYouIntro", "decidedGround", "mineLockedOne", "mineLockedMany"];
+
+    function hasDecidedWords(pr) {
+      const mine = pr.mineOption;
+      return DECIDED_WORD_KEYS.every(function (key) { return typeof pr[key] === "string"; })
+        && mine !== null && typeof mine === "object" && typeof mine.id === "string" && typeof mine.label === "string";
+    }
+
+    function hasPrWords(words, offered, decided) {
       return words !== null && typeof words === "object" && typeof words.roundNoun === "string" && words.pr !== null
-        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr, offered);
+        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr, offered)
+        && (!decided || hasDecidedWords(words.pr));
     }
 
     // The words under "index" in sheet-words.json that the index is drawn from, the three zoom words it takes from "pr", and the shapes of groups and ordinals.
@@ -2359,6 +2406,51 @@
       return wrap;
     }
 
+    // One decided-for-you entry: its title (with its PR on a stack sheet), ground and reason, and one saver that offers Make this mine,
+    // written whole at answers/<entry id> like a card's answer. The pick is restored fail-closed: only a well-formed null answer restores
+    // as not taken back; any other document under the id (another answer, a malformed object, data that is not an object) restores as taken back, keeping its note when that is text.
+    function addDecidedParts(entry, article) {
+      addSaver({
+        choices: answerShape === null ? [] : [{ label: prWords.mineOption.label, answer: "option", optionId: prWords.mineOption.id }],
+        rowLabel: "Your answer",
+        noteId: "note-" + entry.id,
+        path: "answers/" + entry.id,
+        live: canEdit,
+        mayWrite: cardMayWrite,
+        revised: revisedKind(sheetKind),
+        document: function (body, revision) {
+          const doc = { answer: body.answer, optionId: body.optionId, note: body.note };
+          if (revision !== null) doc.revision = revision;
+          return doc;
+        },
+        revisionOf: function (data, state) { return state.answer !== null && data !== null && typeof data === "object" && typeof data.revision === "string" ? data.revision : null; },
+        state: function (data) {
+          const object = data !== null && typeof data === "object" && !Array.isArray(data);
+          const note = object && typeof data.note === "string" ? data.note : "";
+          if (object && answerShape !== null && fitsAnswerRule(data) && data.answer === null) return { answer: null, optionId: null, note: note };
+          return { answer: "option", optionId: prWords.mineOption.id, note: note };
+        },
+        keep: function (controller) { controllers.set(entry.id, controller); },
+      }, article);
+    }
+
+    // The list of findings the advisor re-graded as craft, shown without a fold so the owner sees it, each with the control that takes it back.
+    function buildDecidedForYou(entries, titleOf) {
+      const section = prSection("section", "pr-decided-for-you", "sh-box");
+      section.appendChild(textElement("h2", "", prWords.decidedForYouHeading));
+      section.appendChild(textElement("p", "", prWords.decidedForYouIntro));
+      entries.forEach(function (entry) {
+        const article = prSection("article", "decided-" + entry.id, "sh-box");
+        article.appendChild(textElement("h3", "sh-heading", titleOf(entry)));
+        article.appendChild(textElement("p", "sh-caption", fill(prWords.decidedGround, { ground: entry.ground })));
+        article.appendChild(textElement("p", "", entry.reason));
+        decidedEntries.push(entry.id);
+        addDecidedParts(entry, article);
+        section.appendChild(article);
+      });
+      return section;
+    }
+
     function buildVerdict() {
       const article = prSection("article", "sheet-verdict", "sh-card");
       article.appendChild(textElement("h2", "", prWords.verdictHeading));
@@ -2373,6 +2465,7 @@
       sendBackLine.hidden = true;
       article.appendChild(unlockLine);
       walkLines = ["walk-problems", "follow-ups", "not-walked"].map(function (name) { return article.appendChild(prSection("p", "verdict-" + name, "sh-caption")); });
+      mineLine = decidedEntries.length > 0 ? article.appendChild(prSection("p", "verdict-mine", "sh-caption")) : null;
       article.appendChild(sendBackLine);
       article.appendChild(textElement("p", "sh-caption", prWords.verdictCaption));
       return article;
@@ -2398,8 +2491,10 @@
 
     // The parts below the cards: the folded parts that have something in them, then the merge verdict.
     function prTail(prSheet) {
-      const entryLine = function (entry) { return (sheetKind === "stack" && entry.pr !== undefined ? fill(prWords.walkStopPr, { pr: entry.pr }) + ": " : "") + entry.title + " — " + entry.detail; };
+      const entryTitle = function (entry) { return (sheetKind === "stack" && entry.pr !== undefined ? fill(prWords.walkStopPr, { pr: entry.pr }) + ": " : "") + entry.title; };
+      const entryLine = function (entry) { return entryTitle(entry) + " — " + entry.detail; };
       const parts = [];
+      if (prSheet.decidedForYou !== undefined) parts.push(buildDecidedForYou(prSheet.decidedForYou, entryTitle));
       if (prSheet.craft.length > 0) parts.push(buildFolded("pr-craft", prWords.craftHeading, prSheet.craft.map(entryLine)));
       if (prSheet.alreadyDecided.length > 0) parts.push(buildFolded("pr-decided", prWords.decidedHeading, prSheet.alreadyDecided.map(entryLine)));
       if (prSheet.history.length > 0) parts.push(buildFolded("pr-review", prWords.reviewHeading, prSheet.history));
@@ -2420,6 +2515,8 @@
       unlockLine = null;
       sendBackLine = null;
       walkStops = [];
+      decidedEntries = [];
+      mineLine = null;
       historyBox.replaceChildren();
       finalHost.replaceChildren();
       // The kind is set before the cards are built: a card's saver reads it to decide whether its answers carry a revision.
@@ -2475,8 +2572,13 @@
 
     function applyDocument(doc, key) {
       const controller = controllers.get(key);
+      if (controller === undefined) return;
       const data = documentData(doc);
-      if (controller === undefined || data === null) return;
+      if (data === null) {
+        // Any document under a decided entry's id is the owner taking it back, even one whose data is not an object (see its saver's state).
+        if (decidedEntries.includes(key) && doc !== undefined && doc.exists !== false) controller.restore(null);
+        return;
+      }
       controller.restore(data);
     }
 
@@ -2660,7 +2762,7 @@
         }
       }
       const offered = readWalkOffered(schema);
-      if ((revisedKind(sheet.kind) && !hasPrWords(words, offered)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
+      if ((revisedKind(sheet.kind) && !hasPrWords(words, offered, sheet.prSheet.decidedForYou !== undefined)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
         showErrors(["The sheet's wording file lacks words this sheet needs."]);
         return;
       }

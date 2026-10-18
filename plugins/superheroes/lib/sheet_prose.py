@@ -312,6 +312,9 @@ def _check_cross_fields(sheet):
     problems += ['remainder.unsettled names "%s", which is not a card.' % i for i in unsettled if i not in card_ids]
     stops = sheet.get("prSheet", {}).get("walk", {}).get("stops", [])
     problems += ['Stop id "%s" is used more than once in the walk.' % i for i in _duplicates([stop["id"] for stop in stops])]
+    decided_ids = [entry["id"] for entry in sheet.get("prSheet", {}).get("decidedForYou", [])]
+    problems += ['Decided entry id "%s" is used more than once.' % i for i in _duplicates(decided_ids)]
+    problems += ['Decided entry id "%s" is also a card id.' % i for i in sorted(set(decided_ids)) if i in card_ids]
     rows = sheet.get("index", {}).get("rows", [])
     return problems + ['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
 
