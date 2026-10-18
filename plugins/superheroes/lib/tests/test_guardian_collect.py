@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import guardian_collect as gc
+import guardian_tools as gt
 import pytest
 
 
@@ -406,3 +407,54 @@ def test_run_tool_injected_surfaces_realpath_cwd(tmp_path):
 
     out = gc.run_tool(["tool"], ctx={"run": run}, cwd=repo)
     assert out["collectorCwd"] == os.path.realpath(repo)
+
+
+def _stdout_run(text, returncode=0):
+    def run(argv, **kwargs):
+        class R:
+            stderr = ""
+        R.stdout = text
+        R.returncode = returncode
+        return R()
+    return run
+
+
+def test_run_tool_seam_applies_collector_output_cap(monkeypatch):
+    """Production parity: stdout over gt.MAX_OUTPUT_BYTES (read at call time) is a
+    truncated-output failure even on an ok exit; at/under the cap it is not."""
+    monkeypatch.setattr(gt, "MAX_OUTPUT_BYTES", 10)
+
+    over = gc.run_tool(["lizard"], ctx={"run": _stdout_run("x" * 11)})
+    assert over["ok"] is False
+    assert over["truncated"] is True
+    assert over["reason"] == "lizard failed (truncated-output)"
+
+    at_cap = gc.run_tool(["lizard"], ctx={"run": _stdout_run("x" * 10)})
+    assert at_cap["ok"] is True
+    assert at_cap["truncated"] is False
+
+
+def test_run_tool_truncated_false_on_every_other_path():
+    ok = gc.run_tool(["t"], ctx={"run": _stdout_run("ok")})
+    bad = gc.run_tool(["t"], ctx={"run": _stdout_run("", returncode=1)})
+
+    def boom(argv, **kwargs):
+        raise FileNotFoundError("t")
+
+    missing = gc.run_tool(["t"], ctx={"run": boom})
+    assert ok["truncated"] is False
+    assert bad["truncated"] is False and "exited 1" in bad["reason"]
+    assert missing["truncated"] is False
+
+
+def test_translate_invoke_result_flags_only_truncated_output():
+    trunc = gc._translate_invoke_result(
+        dict(outcome="truncated-output", returncode=0, stdout="x"), ["lizard"], (0,))
+    assert trunc["ok"] is False and trunc["truncated"] is True
+    assert trunc["reason"] == "lizard failed (truncated-output)"
+    timeout = gc._translate_invoke_result(
+        dict(outcome="timeout", returncode=None), ["lizard"], (0,))
+    assert timeout["ok"] is False and timeout["truncated"] is False
+    fine = gc._translate_invoke_result(
+        dict(outcome="ok", returncode=0, stdout="x"), ["lizard"], (0,))
+    assert fine["ok"] is True and fine["truncated"] is False
