@@ -6286,3 +6286,73 @@ def test_iphone_e9_refused_lane_still_folds_its_id():
     assert lane["terminalKind"] == "refused"
     assert lane["iphoneId"] == _IPHONE_UUID
     assert lane["iphoneCheck"] is True
+
+
+_IPHONE_UUID_2 = "B2A6D795-5E90-4141-B8DF-2CAFAB0A264B"
+_IPHONES_PREMISE = {"iphoneCheck": True, "iphoneModels": ["iPhone 17", "iPhone 17e"]}
+
+
+def test_iphone_ids_consistent_record_folds_with_both_phones():
+    # axis: iphoneIds on a premise that named iphoneModels folds as given, first the one iphoneId names
+    rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(_IPHONES_PREMISE),
+                    iphoneId=_IPHONE_UUID, iphoneIds=[_IPHONE_UUID, _IPHONE_UUID_2])
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["iphoneIds"] == [_IPHONE_UUID, _IPHONE_UUID_2]
+    assert result["launches"]["l1"]["iphoneId"] == _IPHONE_UUID
+
+
+@pytest.mark.parametrize(
+    "premise,fields",
+    [
+        # axis: iphoneIds that is not a list, or an empty one, is not a record this ledger produced
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": _IPHONE_UUID}),
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": []}),
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": None}),
+        # axis: an id in the list that is not a canonical simctl UUID
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID, "not-a-uuid"]}),
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID,
+                            "iphoneIds": [_IPHONE_UUID, _IPHONE_UUID_2.lower()]}),
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID, 5]}),
+        # axis: a phone listed twice
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID, _IPHONE_UUID]}),
+        # axis: the list's first id must be iphoneId (mismatch, or iphoneId absent)
+        (_IPHONES_PREMISE, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID_2, _IPHONE_UUID]}),
+        (_IPHONES_PREMISE, {"iphoneIds": [_IPHONE_UUID]}),
+        # axis: a phone list on a premise that did not name iphoneModels as a list
+        ({"iphoneCheck": True}, {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID]}),
+        ({"iphoneCheck": True, "iphoneModels": "iPhone 17"},
+         {"iphoneId": _IPHONE_UUID, "iphoneIds": [_IPHONE_UUID]}),
+    ],
+)
+def test_iphone_ids_bad_shape_refuses_fold(premise, fields):
+    rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(premise), **fields)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:iphoneIds"
+
+
+@pytest.mark.parametrize("premise", [{"iphoneModels": ["iPhone 17"]}, {}])
+def test_phone_fields_on_a_premise_without_the_check_refuse_at_iphoneId(premise):
+    # axis: phone fields on a premise that did not ask for the check are refused first, at iphoneId
+    rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(premise),
+                    iphoneId=_IPHONE_UUID, iphoneIds=[_IPHONE_UUID])
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:iphoneId"
+
+
+def test_iphone_ids_legacy_single_id_folds_as_a_one_phone_list():
+    # axis: a record written with only iphoneId reads as a one-phone list, so old ledgers reap as before
+    rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(_IPHONE_PREMISE), iphoneId=_IPHONE_UUID)
+    lane = ll.fold([rec])["launches"]["l1"]
+    assert lane["iphoneIds"] == [_IPHONE_UUID]
+    assert lane["iphoneId"] == _IPHONE_UUID
+
+
+def test_iphone_ids_record_without_any_phone_folds_empty():
+    # axis: a record with no phone folds an empty list, never a missing key
+    for premise in ({}, dict(_IPHONE_PREMISE)):
+        lane = ll.fold([_reserved("l1", "b1", ["a"], "/r", premise=premise)])["launches"]["l1"]
+        assert lane["iphoneIds"] == []
+        assert lane["iphoneId"] is None

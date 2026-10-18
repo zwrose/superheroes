@@ -79,6 +79,8 @@ Produce a **dispositions JSON** — exactly one entry per surfaced `id`:
 
 Verdicts: `validated` | `rejected` | `degraded`. A `validated` entry requires non-empty `consequence`, `receipt`, `effort`, and `ledgerJoin`.
 
+An entry may also carry an optional **`ledger`** object recording the triage decision, e.g. `{"id": "<surfaced-id>", "verdict": "rejected", "reason": "…", "ledger": {"disposition": "declined", "reason": "…", "reraiseWhen": "…"}}`. `disposition` is `filed` (requires `issue`) | `accepted` | `declined` (both require `reason`) | `triaged-out`; optional keys are `issue`, `reason`, `reraiseWhen`; anything else is refused, and a `degraded` entry cannot carry one. A `rejected` entry with no `ledger` means `{"disposition": "triaged-out", "reason": <the entry's reason>}`; a `validated` entry with no `ledger` writes nothing (the decision is still pending). The ledger record's id is the surfaced `id` (not `ledgerJoin`).
+
 **Ledger-first rule.** The collect step already moved filed/tracked items into `ledgerStatus` and suppressed settled trades. The model never re-opens those — only the `surfaced` list gets validated.
 
 Write dispositions to a temp file:
@@ -116,8 +118,10 @@ python3 -B "$ROOT_DIR/lib/guardian_sweep.py" commit-ledger --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
 
-This is the **only** place `ledger.md` is written — filed-item closures **and** the
-per-lens report card share this one write path. It is **safe to re-run** (idempotent). It
+This is the **only** place `ledger.md` is written — filed-item closures, the triage
+decisions from step 2's `ledger` objects (written as records at the decided state, which is
+how a settled decision stays settled next sweep), **and** the per-lens report card share
+this one write path. It is **safe to re-run** (idempotent). It
 **fails closed** on an opaque/unreadable ledger and on a stale bundle (`stale-bundle` — a
 newer sweep advanced the baseline since this bundle) and on a roster-read failure
 (`roster-read-failed`, retryable) — in each case leaving on-disk bytes untouched. The

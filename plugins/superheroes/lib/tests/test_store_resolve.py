@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import subprocess
@@ -580,20 +581,28 @@ def test_resolve_layer_without_config_block_refusal_none(tmp_path):
     assert r["refusal"] is None
 
 
-def test_resolve_pointer_unreadable_refusal(tmp_path):
+def _refuse_pointer_open(monkeypatch, pointer):
+    real_open = builtins.open
+
+    def refuse_open(name, *a, **kw):
+        if str(name) == pointer:
+            raise PermissionError("refused")
+        return real_open(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", refuse_open)
+
+
+def test_resolve_pointer_unreadable_refusal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
     root = str(tmp_path / "store")
     store.create(repo, "global", root)
     ident = store.derive_identifiers(repo)
     pointer = os.path.join(root, "keys", ident["gitdir_hash"])
-    os.chmod(pointer, 0o000)
-    try:
-        r = store.resolve(repo, root)
-        assert r["location"] == "none"
-        assert r["refusal"] is not None
-        assert r["refusal"]["reason"] == store.STORE_REASON_POINTER_UNREADABLE
-    finally:
-        os.chmod(pointer, 0o644)
+    _refuse_pointer_open(monkeypatch, pointer)
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["refusal"] is not None
+    assert r["refusal"]["reason"] == store.STORE_REASON_POINTER_UNREADABLE
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
@@ -674,20 +683,17 @@ def test_resolve_refusal_unreadable_global_layer_carries_path(tmp_path, monkeypa
     assert r["refusal"]["source"] == "layer"
 
 
-def test_resolve_refusal_pointer_unreadable_carries_path(tmp_path):
+def test_resolve_refusal_pointer_unreadable_carries_path(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
     root = str(tmp_path / "store")
     store.create(repo, "global", root)
     ident = store.derive_identifiers(repo)
     pointer = os.path.join(root, "keys", ident["gitdir_hash"])
-    os.chmod(pointer, 0o000)
-    try:
-        r = store.resolve(repo, root)
-        assert r["refusal"] is not None
-        assert r["refusal"]["reason"] == store.STORE_REASON_POINTER_UNREADABLE
-        assert r["refusal"]["path"] == pointer
-    finally:
-        os.chmod(pointer, 0o644)
+    _refuse_pointer_open(monkeypatch, pointer)
+    r = store.resolve(repo, root)
+    assert r["refusal"] is not None
+    assert r["refusal"]["reason"] == store.STORE_REASON_POINTER_UNREADABLE
+    assert r["refusal"]["path"] == pointer
 
 
 def test_resolve_every_refusal_carries_path_key(tmp_path, monkeypatch):
@@ -722,11 +728,8 @@ def test_resolve_every_refusal_carries_path_key(tmp_path, monkeypatch):
     store.create(repo4, "global", root4)
     ident = store.derive_identifiers(repo4)
     pointer = os.path.join(root4, "keys", ident["gitdir_hash"])
-    os.chmod(pointer, 0o000)
-    try:
-        cases.append(store.resolve(repo4, root4))
-    finally:
-        os.chmod(pointer, 0o644)
+    _refuse_pointer_open(monkeypatch, pointer)
+    cases.append(store.resolve(repo4, root4))
 
     for r in cases:
         refusal = r["refusal"]

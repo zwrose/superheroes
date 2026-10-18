@@ -137,3 +137,39 @@ def operand_payload_bytes(cwd, files):
     """
     abs_prefix_bytes = len(os.path.realpath(cwd).encode("utf-8")) + 1
     return sum(len(p.encode("utf-8")) + abs_prefix_bytes for p in files)
+
+
+def batch_operands(cwd, files, budget_bytes):
+    """Split repo-relative ``files`` into argv-safe batches.
+
+    Returns ``(batches, oversize)``. ``batches`` is a list of lists of ``files`` in sorted
+    input order, each batch's ``operand_payload_bytes(cwd, batch) <= budget_bytes``, filled
+    greedily. ``oversize`` is the sorted list of files whose own payload exceeds the budget;
+    they are never placed in a batch. ``budget_bytes <= 0`` → ``([], sorted(files))`` so
+    callers degrade rather than spawn. Pure; never raises; no subprocess.
+    """
+    ordered = sorted(files)
+    try:
+        budget = int(budget_bytes)
+    except (TypeError, ValueError):
+        return [], ordered
+    if budget <= 0:
+        return [], ordered
+    batches = []
+    oversize = []
+    current = []
+    current_bytes = 0
+    for path in ordered:
+        size = operand_payload_bytes(cwd, [path])
+        if size > budget:
+            oversize.append(path)
+            continue
+        if current and current_bytes + size > budget:
+            batches.append(current)
+            current = []
+            current_bytes = 0
+        current.append(path)
+        current_bytes += size
+    if current:
+        batches.append(current)
+    return batches, oversize

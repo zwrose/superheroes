@@ -32,8 +32,10 @@ Guidance in this section overrides the original suggestion for the named finding
    `break-it-test v1` block that names the file's `path` and its `run` command, followed by the
    file content after the `---` line. Write that file at that path with exactly that content. It
    is not a probe: keep it and commit it with the fix. Then fix the code the finding names until
-   the block's `run` command passes. Never edit or weaken the test to make it pass; if the test
-   itself is wrong, escalate it (see Escalation).
+   the block's `run` command passes. When the finding's `breakItRun` record names an `interpreter`,
+   run the command with that interpreter in place of its Python program, as the loop did. Never
+   edit or weaken the test to make it pass; if the test itself is wrong, escalate it (see
+   Escalation).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
 3. Run the scoped verify budget above — the tests that reference your target files plus the
    project's static validators, at most once each; never the project's full verify command (the

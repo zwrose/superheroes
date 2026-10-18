@@ -45,16 +45,25 @@ from capture_goldens import normalize  # noqa: E402
 #   fixContexts — the harness cites file/line for mechanical_compile scope; fix-context shape + fix
 #                 count follow the delta schedule
 #   fixResults  — fix-round numbering follows the driver's delta legs, not the JS round numbers
+#   no-survivor synthesis (tokenTotal, telemetry on telemetry_failure) — a round whose verification
+#                 leaves no survivors dispatches no synthesis seat, so the synthesis token leaf is absent
 _SEEN = ("driver scoped-finder delta scans + re-armed confirmation panels replace the JS "
          "per-dimension intermediate/confirmation seat schedule")
 _TOK = "the delta schedule dispatches a different set of reviewer leaves than the JS roster schedule"
 _TELEM = "expectedLeaves / dimensionCounts / roundCount follow the driver's delta-round seats, not the JS schedule"
 _FIXCTX = "harness cites file/line for mechanical_compile scope; fix-context shape + count follow the delta schedule"
 _FIXRES = "fix-round numbering follows the driver's delta legs, not the JS round numbers"
+_NO_SURVIVOR_SYNTH = ("a round whose verification leaves no survivors dispatches no synthesis seat, "
+                      "so the synthesis token leaf is absent")
 
 ALLOWLIST: dict[str, dict[str, str]] = {
-    "telemetry_failure.golden.json": {},
-    "telemetry_failure.fail-telemetry.golden.json": {},
+    "telemetry_failure.golden.json": {
+        "tokenTotal": _NO_SURVIVOR_SYNTH,
+        "telemetry": _NO_SURVIVOR_SYNTH,
+    },
+    "telemetry_failure.fail-telemetry.golden.json": {
+        "tokenTotal": _NO_SURVIVOR_SYNTH,
+    },
     "plan_120_replay.golden.json": {
         "roundCount": "audited-chain certifies after delta rounds; the JS shell reached the confirmation panel at a later round",
         "seen": _SEEN,
@@ -161,6 +170,34 @@ def test_golden_parity(golden_name, fixture_name, fail_telemetry):
         assert golden[key] == got[key], (
             f"{golden_name}: field {key} differs and is not allowlisted\n"
             f"  golden={golden[key]!r}\n  got={got[key]!r}")
+
+
+@pytest.mark.parametrize("fail_telemetry", [False, True], ids=["telemetry-ok", "fail-telemetry"])
+def test_telemetry_failure_no_survivor_difference_is_exactly_the_synthesis_leaf(fail_telemetry):
+    """Bounds the ``tokenTotal`` / ``telemetry`` allowlist on telemetry_failure: the only permitted
+    difference is the absent synthesis leaf, at exactly these values."""
+    golden_name = ("telemetry_failure.fail-telemetry.golden.json" if fail_telemetry
+                   else "telemetry_failure.golden.json")
+    golden = json.loads((GOLDENS / golden_name).read_text(encoding="utf-8"))
+    got = normalize(_public(harness.run_fixture(
+        FIXTURES / "telemetry_failure.json", fail_telemetry=fail_telemetry)))
+
+    assert got["tokenTotal"] == 1000, got["tokenTotal"]
+    if fail_telemetry:
+        # the failed telemetry write carries no token usage; the whole field equals the golden's
+        assert got["telemetry"] == golden["telemetry"], got["telemetry"]
+        return
+    usage = got["telemetry"]["tokenUsage"]
+    assert usage["expectedLeaves"] == ["test-reviewer:r1"], usage
+    assert usage["present"] == ["test-reviewer:r1"], usage
+    assert usage["missing"] == [], usage
+    assert usage["total"] == 1000, usage
+    # every other telemetry key (and every other tokenUsage key) is the golden's
+    assert {k: v for k, v in got["telemetry"].items() if k != "tokenUsage"} == \
+        {k: v for k, v in golden["telemetry"].items() if k != "tokenUsage"}
+    assert {k: v for k, v in usage.items() if k not in ("expectedLeaves", "present", "missing", "total")} == \
+        {k: v for k, v in golden["telemetry"]["tokenUsage"].items()
+         if k not in ("expectedLeaves", "present", "missing", "total")}
 
 
 def test_allowlist_covers_every_golden():
