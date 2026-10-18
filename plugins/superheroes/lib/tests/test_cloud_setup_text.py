@@ -232,6 +232,13 @@ def _stubs(tmp_path, code=0, apt_install_fails_first=False):
         path = stub / name
         path.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit %d\n' % (name, log, code))
         path.chmod(0o755)
+    # `uv` also records whether UV_PYTHON reached it, and (in a second log) where it ran.
+    (stub / "uv").write_text(
+        '#!/bin/bash\n'
+        'echo "uv $* UV_PYTHON=${UV_PYTHON-unset}" >> "%s"\n'
+        'echo "$PWD" >> "%s"\n'
+        'exit %d\n' % (log, tmp_path / "uv-cwd.log", code)
+    )
     if apt_install_fails_first:
         # `apt-get install` fails the first time it is run and succeeds after; every other
         # `apt-get` verb (`update`) succeeds. A counter file carries the count between runs.
@@ -250,15 +257,21 @@ def _stubs(tmp_path, code=0, apt_install_fails_first=False):
     return stub, log
 
 
-def _run_script(w, text, code=0, pinned=False, apt_install_fails_first=False):
+def _run_script(w, text, code=0, pinned=False, apt_install_fails_first=False, pin_in=None,
+                extra_env=None, pin_text="3.12\n"):
     """Runs the script from a working directory of its own, with every tool stubbed to exit `code`
-    (or, with `apt_install_fails_first`, `apt-get install` failing once and then succeeding)."""
+    (or, with `apt_install_fails_first`, `apt-get install` failing once and then succeeding).
+    `pinned` puts a `.python-version` in the working directory; `pin_in` puts it in that named
+    directory inside the working directory instead; `extra_env` is added to the script's env."""
     stub, log = _stubs(w.tmp, code, apt_install_fails_first)
     work = w.tmp / "work"
     work.mkdir()
-    if pinned:
-        (work / ".python-version").write_text("3.12\n")
-    env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
+    if pin_in is not None:
+        (work / pin_in).mkdir()
+        (work / pin_in / ".python-version").write_text(pin_text)
+    elif pinned:
+        (work / ".python-version").write_text(pin_text)
+    env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub, **(extra_env or {})}
     proc = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60,
                           cwd=str(work))
     return proc, log
@@ -342,7 +355,7 @@ def test_working_sandbox_tools_and_pinned_python_are_logged_ok(tmp_path):
     setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
     assert "sandbox tools ok" in setup_log and "pinned python ok" in setup_log
     calls = log.read_text().splitlines()
-    assert "uv python install" in calls
+    assert "uv python install UV_PYTHON=unset" in calls
     assert "apt-get install -y bubblewrap socat" in calls
     assert "apt-get update" not in calls
 
@@ -369,9 +382,70 @@ def test_no_python_version_file_is_logged_by_directory_and_uv_is_never_called(tm
     proc, log = _run_script(w, _compose(w)["text"])
     assert proc.returncode == 0, proc.stderr
     setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
-    assert "pinned python: no .python-version in %s" % (w.tmp / "work") in setup_log
+    work = w.tmp / "work"
+    assert "pinned python: no .python-version in %s or %s/corner-shop" % (work, work) in setup_log
     assert "pinned python ok" not in setup_log and "pinned python FAILED" not in setup_log
     assert "uv " not in log.read_text()
+
+
+def test_pinned_python_is_installed_from_the_clone_when_the_script_runs_from_its_parent(tmp_path):
+    # axis: the pin is found from the clone's parent directory
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop")
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "pinned python ok" in setup_log and "pinned python FAILED" not in setup_log
+    assert "uv python install UV_PYTHON=unset" in log.read_text().splitlines()
+
+
+def test_an_inherited_uv_python_does_not_change_the_installed_pin(tmp_path):
+    # axis: the installed version is the file's, not the environment's — an inherited UV_PYTHON
+    # never reaches uv, and uv runs in the clone directory where it reads the file
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop",
+                            extra_env={"UV_PYTHON": "3.11"})
+    assert proc.returncode == 0, proc.stderr
+    uv_calls = [line for line in log.read_text().splitlines() if line.startswith("uv ")]
+    assert uv_calls == ["uv python install UV_PYTHON=unset"], uv_calls
+    assert (w.tmp / "uv-cwd.log").read_text().splitlines() == [str(w.tmp / "work" / "corner-shop")]
+
+
+def test_a_commented_python_version_file_is_read_by_uv_not_flattened(tmp_path):
+    # axis: uv parses the version file itself (comments and all), not the shell
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop",
+                            pin_text="3.12\n# project interpreter\n")
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "pinned python ok" in setup_log and "pinned python FAILED" not in setup_log
+    calls = log.read_text()
+    assert [line for line in calls.splitlines() if line.startswith("uv ")] == [
+        "uv python install UV_PYTHON=unset"
+    ]
+    assert "3.12#projectinterpreter" not in calls
+
+
+@pytest.mark.parametrize("pin_text", [" \n\t\n", "# nothing\n\n"])
+def test_an_empty_python_version_file_fails_the_step_without_calling_uv(tmp_path, pin_text):
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pin_in="corner-shop", pin_text=pin_text)
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "pinned python FAILED" in setup_log and "pinned python ok" not in setup_log
+    assert "uv " not in log.read_text()
+
+
+def test_clone_dir_is_the_remote_repo_name_or_none(tmp_path):
+    w = _inside(tmp_path)
+    assert CS._clone_dir(w.cwd) == "corner-shop"
+    bare = tmp_path / "no-remote"
+    bare.mkdir()
+    _git(bare, "init", "-q")
+    assert CS._clone_dir(str(bare)) is None
+    for url in ("https://github.com/acme/a b", "https://github.com/acme/a$b",
+                "https://github.com/acme/.."):
+        _git(w.repo, "remote", "set-url", "origin", url)
+        assert CS._clone_dir(w.cwd) is None, url
 
 
 @pytest.mark.parametrize("build", [_outside, _inside])

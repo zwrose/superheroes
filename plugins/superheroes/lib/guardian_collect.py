@@ -40,7 +40,7 @@ def tool_available(name):
     return shutil.which(name) is not None
 
 
-def _result(ok, exit_code, stdout, stderr, reason, collector_cwd=None):
+def _result(ok, exit_code, stdout, stderr, reason, collector_cwd=None, truncated=False):
     return {
         "ok": ok,
         "exit": exit_code,
@@ -48,6 +48,7 @@ def _result(ok, exit_code, stdout, stderr, reason, collector_cwd=None):
         "stderr": stderr or "",
         "reason": reason,
         "collectorCwd": collector_cwd,
+        "truncated": truncated,
     }
 
 
@@ -85,7 +86,8 @@ def _translate_invoke_result(res, argv, ok_exits):
     if outcome in ("tool-absent", "timeout", "spawn-failed",
                    "truncated-output", "capture-incomplete"):
         reason = res.get("reason") or "%s failed (%s)" % (argv0, outcome)
-        return _result(False, returncode, stdout, stderr, reason, collector_cwd)
+        return _result(False, returncode, stdout, stderr, reason, collector_cwd,
+                       truncated=(outcome == "truncated-output"))
 
     # Unknown / unexpected outcome — fail closed with a clear reason.
     return _result(False, returncode, stdout, stderr,
@@ -98,7 +100,8 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
     """Run `argv` and normalize the outcome. Never raises.
 
     Returns {"ok": bool, "exit": int|None, "stdout": str, "stderr": str, "reason": str|None,
-    "collectorCwd": str|None}.
+    "collectorCwd": str|None, "truncated": bool}. ``truncated`` is True exactly when the
+    output tripped the collector cap (``truncated-output``); the reason string is unchanged.
 
     Two paths, split on whether a `run` was injected via `ctx["run"]`:
 
@@ -162,6 +165,12 @@ def run_tool(argv, ctx=None, timeout=DEFAULT_TIMEOUT, cwd=None, ok_exits=(0,),
         stdout = getattr(r, "stdout", "")
         stderr = getattr(r, "stderr", "")
         collector_cwd = os.path.realpath(cwd) if cwd else None
+        # Production parity: invoke trips truncated-output when stdout exceeds the
+        # collector cap, even on an ok exit. gt.MAX_OUTPUT_BYTES is read at call time.
+        if len(stdout or "") > gt.MAX_OUTPUT_BYTES:
+            return _result(False, exit_code, stdout, stderr,
+                           "%s failed (truncated-output)" % argv0, collector_cwd,
+                           truncated=True)
         if exit_code in ok_exits:
             return _result(True, exit_code, stdout, stderr, None, collector_cwd)
         return _result(False, exit_code, stdout, stderr,

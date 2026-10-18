@@ -1023,6 +1023,8 @@ def _init_view_git(view_root):
             "-C",
             view_root,
             *_GIT_IDENTITY,
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-q",
             "--allow-empty",

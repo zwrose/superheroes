@@ -697,6 +697,11 @@ def _unaccounted(prior, findings):
     return [i.get("id") or _key(i) for i in earlier if _key(i) not in present]
 
 
+def leftover_line(finding):
+    """The one home of the leftover's whatIsMissing wording; the sheet reads it."""
+    return f"finding {_name(finding)} waits for the owner's decision"
+
+
 def _finding_lines(findings):
     lines = []
     for f in findings:
@@ -705,7 +710,7 @@ def _finding_lines(findings):
         elif not f.get("reason"):
             lines.append(f"finding {_name(f)} has no reason")
         elif f["outcome"] == _LEFT_FOR_OWNER:
-            lines.append(f"finding {_name(f)} waits for the owner's decision")
+            lines.append(leftover_line(f))
     return lines
 
 
@@ -792,7 +797,7 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
             out.append(f)
             continue
         settled, commit, seen, evidence, old = c["settled"], c.get("commit"), c.get("checkedHead"), c["evidence"], f.get("reason")
-        shown, result, why = (head or "unknown")[:7], "kept", None
+        shown, result, why, moved = (head or "unknown")[:7], "kept", None, False
         if f.get("outcome") != _LEFT_FOR_OWNER:
             result, why = "unchanged", "not left for the owner"
         elif settled == "applies":
@@ -804,7 +809,7 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
             why = "not carried from an earlier record"
         # axis: a check counts only for the commit the record names as final, so a head that moved after it keeps the finding — see bite-proof record wo_b_1933_carried-recheck
         elif seen != head:
-            why = f"checked on {seen[:7]}, not the final commit {shown}"
+            why, moved = f"checked on {seen[:7]}, not the final commit {shown}", True
         else:
             # axis: the fix commit counts as in the history only when the read returns exactly True; unknown keeps the finding — see bite-proof record wo_b_1933_carried-recheck
             in_history = is_ancestor(commit, head)
@@ -818,7 +823,11 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
                       f"(checked against the final commit {shown} when this record was written)")
             out.append(dict(f, outcome="fixed", reason=f"{reason}; earlier: {old}" if old else reason))
         elif result == "kept":
-            kept = f"a check against the final commit kept it for the owner: {why}"
+            # axis: a kept reason never claims the final commit unless the check ran on it
+            on = ("a check on no named commit" if seen is None else "a check" if moved
+                  else "a check against the final commit" if seen == head
+                  else f"a check on {seen[:7]} (not the final commit {shown})")
+            kept = f"{on} kept it for the owner: {why}"
             out.append(dict(f, reason=f"{old}; {kept}" if old else kept))
         else:
             out.append(f)

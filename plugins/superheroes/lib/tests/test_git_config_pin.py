@@ -1,0 +1,32 @@
+import os
+import pwd
+import subprocess
+
+_REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
+
+
+def _git(cwd, *args):
+    return subprocess.run(["git", "-C", str(cwd)] + list(args), capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+def test_session_pins_git_config_to_the_session_temp_dir(tmp_path_factory):
+    config = os.environ["GIT_CONFIG_GLOBAL"]
+    assert os.path.isfile(config)
+    base = os.path.realpath(str(tmp_path_factory.getbasetemp()))
+    assert os.path.commonpath([os.path.realpath(config), base]) == base
+    assert os.path.realpath(config) != os.path.realpath(os.path.join(_REAL_HOME, ".gitconfig"))
+    assert os.environ.get("GIT_CONFIG_NOSYSTEM") == "1"
+
+
+def test_commit_without_inline_options_uses_session_config(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "commit", "-q", "--allow-empty", "-m", "x")
+    assert _git(tmp_path, "config", "--get", "commit.gpgsign") == "false"
+
+
+def test_repository_local_setting_beats_session_config(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.name", "local-wins")
+    _git(tmp_path, "commit", "-q", "--allow-empty", "-m", "x")
+    assert _git(tmp_path, "log", "-1", "--format=%an") == "local-wins"

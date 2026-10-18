@@ -7,6 +7,7 @@ outlives the call. Every outcome is a record — ``failed``, ``passed`` or ``not
 and the caller decides from the record; nothing is raised."""
 import hashlib
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -48,7 +49,10 @@ BLOCK_TEMPLATE = "\n".join([
 RUN_RULES = (
     "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
     "files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
-    "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run.")
+    "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run. A `run` "
+    "whose program is `python` or `python3` (or another Python interpreter path) runs under the "
+    "project's own interpreter launcher, the one its verify command uses, and is not run when that "
+    "launcher cannot be found.")
 
 _TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
 _HEADER = _TEMPLATE_LINES[0]
@@ -60,6 +64,10 @@ _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
 _SHELL_PROGRAMS = frozenset(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "busybox"])
 _REGULAR_MODES = ("100644", "100755")
+_PYTHON_PROGRAM = re.compile(r"^python(\d+(\.\d+)?)?$")
+_SEPARATOR_CHARS = frozenset(";&|()\n")
+_COMMAND_WORDS = frozenset(["if", "then", "else", "elif", "do", "while", "until", "!", "{"])
+_UNSET = object()
 _TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
 _DRAIN_JOIN = 5
 _TERM_GRACE = 5
@@ -237,13 +245,181 @@ def parse_command(run):
     return tokens, env, None
 
 
-def _record(head, block, outcome, reason=None, exit_code=None, output=""):
+def _is_python_program(program):
+    return bool(_PYTHON_PROGRAM.match(os.path.basename(program)))
+
+
+_ENV_OPERAND_OPTIONS = frozenset(["-u", "--unset", "-C", "--chdir"])
+_ENV_SPLIT_OPTIONS = ("-S", "--split-string")
+
+
+def _env_split_words(tok, tokens, i):
+    """The words an env ``-S``/``--split-string`` option at ``tokens[i]`` splices into the command,
+    and how many tokens it consumed, or ``None`` when ``tok`` is no split-string option or its
+    operand cannot be split."""
+    if tok in _ENV_SPLIT_OPTIONS:
+        if i + 1 >= len(tokens) or _is_separator(tokens[i + 1]):
+            return None
+        operand, used = tokens[i + 1], 2
+    elif tok.startswith("--split-string="):
+        operand, used = tok[len("--split-string="):], 1
+    elif tok.startswith("-S"):
+        operand, used = tok[2:], 1
+    else:
+        return None
+    try:
+        return shlex.split(operand), used
+    except ValueError:
+        return None
+
+
+def _strip_comments(text):
+    """``text`` with each unquoted shell comment removed up to (not including) its newline, so the
+    newline stays a command boundary. An unquoted ``#`` starts a comment wherever it falls, as the
+    resolver's lexer always treated it."""
+    out = []
+    quote = None
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote != "'" and text[i + 1:i + 2] == "\n":
+            # axis: a backslash-newline outside single quotes is a line continuation, joined out so it is never a command boundary
+            i += 2
+            continue
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < len(text):
+                out.append(c)
+                i += 1
+                c = text[i]
+            elif c == quote:
+                quote = None
+        elif c == "\\" and i + 1 < len(text):
+            out.append(c)
+            i += 1
+            c = text[i]
+        elif c in "'\"":
+            quote = c
+        elif c == "#":
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _is_separator(token):
+    return bool(token) and all(c in _SEPARATOR_CHARS for c in token)
+
+
+def _chain_chdir(current, operand):
+    """The directory after one more ``env -C operand``: a relative operand composes onto the earlier
+    one; an absolute operand is kept as it is."""
+    return operand if current is None else posixpath.join(current, operand)
+
+
+def _rebase_launcher(chdir, launcher):
+    """``launcher`` (a relative path) as seen from the repository root after ``env -C chdir``: the
+    normalised ``chdir/launcher`` (kept an explicit ``./`` path when it lands directly under the root, so
+    it never reads as a bare PATH program), or ``None`` when ``chdir`` is absolute or the path climbs out of the root."""
+    if os.path.isabs(chdir):
+        return None
+    rebased = posixpath.normpath(posixpath.join(chdir, launcher))
+    if rebased == ".." or rebased.startswith("../") or posixpath.isabs(rebased):
+        return None
+    if "/" not in rebased:
+        # axis: a launcher rebased onto the repository root stays an explicit path, never a bare name the runner would look up on PATH
+        rebased = "./" + rebased
+    return rebased
+
+
+def project_interpreter(verify_command):
+    """The Python launcher token the project's verify command runs, or ``None``. Reads the command
+    text only and never executes anything. A launcher is the program at a command position when it
+    is a ``python`` interpreter, or a path given a ``-m`` or ``.py`` argument (a launcher script
+    such as ``scripts/pinned-python``); a bare generic runner such as ``uv run`` or ``make`` is not."""
+    if not isinstance(verify_command, str) or verify_command.strip() in ("", "none"):
+        return None
+    try:
+        # axis: an unquoted newline is a command boundary, so it is a separator token, never whitespace
+        lexer = shlex.shlex(_strip_comments(verify_command), posix=True, punctuation_chars=";&|()<>\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    at_command = True
+    after_env = False
+    skip_operand = False
+    env_chdir = None
+    chdir_next = False
+    i = -1
+    while i + 1 < len(tokens):
+        i += 1
+        tok = tokens[i]
+        if _is_separator(tok):
+            at_command = True
+            after_env = False
+            skip_operand = False
+            env_chdir = None
+            chdir_next = False
+            continue
+        if not at_command:
+            continue
+        # axis: an absolute env wrapper is skipped (with its options and their operands) so the python it launches is the launcher, never the wrapper
+        if skip_operand:
+            skip_operand = False
+            if chdir_next:
+                chdir_next = False
+                env_chdir = _chain_chdir(env_chdir, tok)
+            continue
+        if after_env and tok.startswith("-"):
+            # axis: an env split-string operand is spliced back in as words, so the python it names is still the launcher
+            split = _env_split_words(tok, tokens, i)
+            if split is not None:
+                words, used = split
+                tokens[i:i + used] = words
+                i -= 1
+                continue
+            # axis: env -C/--chdir moves the working directory the launcher path resolves from; a relative launcher after it is rebased onto that directory
+            if tok in ("-C", "--chdir"):
+                chdir_next = True
+            elif tok.startswith("--chdir="):
+                env_chdir = _chain_chdir(env_chdir, tok[len("--chdir="):])
+            elif tok.startswith("-C"):
+                env_chdir = _chain_chdir(env_chdir, tok[2:])
+            skip_operand = tok in _ENV_OPERAND_OPTIONS or tok in _ENV_SPLIT_OPTIONS
+            continue
+        if os.path.basename(tok) == "env":
+            after_env = True
+            continue
+        if tok in _COMMAND_WORDS or _ENV_TOKEN.match(tok):
+            continue
+        at_command = False
+        if env_chdir is not None and not os.path.isabs(tok) and "/" in tok:
+            tok = _rebase_launcher(env_chdir, tok)
+            if tok is None:
+                return None
+        if _is_python_program(tok):
+            return tok
+        if "/" in tok:
+            for arg in tokens[i + 1:]:
+                if _is_separator(arg):
+                    break
+                if arg == "-m" or arg.endswith(".py"):
+                    return tok
+    return None
+
+
+def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None):
     block = block if isinstance(block, dict) else {}
     # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
     output = readout.scrub(output)[0] if output else ""
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
-            "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output}
+            "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
+            "interpreter": interpreter}
 
 
 def _git(repo_root, *args):
@@ -433,34 +609,10 @@ def _already_kept(copy, rel, sha):
     return hashlib.sha256(data).hexdigest() == sha
 
 
-def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
-    def rec(outcome, reason=None, exit_code=None, output=""):
-        return _record(head, block, outcome, reason, exit_code, output)
-
-    try:
-        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
-        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
-                     "--", os.path.abspath(repo_root), copy)
-        if added.returncode == 0:
-            added = _git(copy, "remote", "remove", "origin")
-        if added.returncode == 0:
-            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
-    if added.returncode != 0:
-        return rec(OUTCOME_NOT_RUN, "copy-failed",
-                   output=_tail_text(added.stderr, True))
-    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
-    if write and _already_kept(copy, block["path"], block.get("sha256")):
-        write = False
-    if write:
-        try:
-            refusal = _write_confined(copy, block["path"], block["content"])
-        except OSError:
-            refusal = "write-failed"
-        if refusal:
-            return rec(OUTCOME_NOT_RUN, refusal)
-    token = uuid.uuid4().hex
+def _run_contained(argv, env, copy, repo_root, token, timeout):
+    """Run ``argv`` in ``copy`` under the reaper, with the token and working-directory sweeps, keeping only the
+    output tail. Returns ``(launch_failed, timed_out, returncode, output)``. Every process a break-it run starts,
+    the readiness probe included, goes through here."""
     status_r, status_w = os.pipe()
     try:
         # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
@@ -472,7 +624,7 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     except (FileNotFoundError, PermissionError):
         os.close(status_r)
         os.close(status_w)
-        return rec(OUTCOME_NOT_RUN, "command-not-found")
+        return True, False, None, ""
     os.close(status_w)
     drain = _TailDrain(proc.stdout)
     timed_out = False
@@ -502,21 +654,73 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
             proc.stdout.close()
         except OSError:
             pass
-    output = drain.tail()
+    return launch_failed, timed_out, proc.returncode, drain.tail()
+
+
+_PROBE_CODE = "import sys; sys.stdout.write(str(6 * 7) + 'ok')"
+_PROBE_MARKER = "42ok"
+
+
+def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, interpreter=None):
+    def rec(outcome, reason=None, exit_code=None, output=""):
+        return _record(head, block, outcome, reason, exit_code, output, interpreter)
+
+    try:
+        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
+        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
+                     "--", os.path.abspath(repo_root), copy)
+        if added.returncode == 0:
+            added = _git(copy, "remote", "remove", "origin")
+        if added.returncode == 0:
+            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    if added.returncode != 0:
+        return rec(OUTCOME_NOT_RUN, "copy-failed",
+                   output=_tail_text(added.stderr, True))
+    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
+    if write and _already_kept(copy, block["path"], block.get("sha256")):
+        write = False
+    if write:
+        try:
+            refusal = _write_confined(copy, block["path"], block["content"])
+        except OSError:
+            refusal = "write-failed"
+        if refusal:
+            return rec(OUTCOME_NOT_RUN, refusal)
+    if interpreter:
+        # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
+        failed, timed, status, tail = _run_contained(
+            [interpreter, "-c", _PROBE_CODE], env, copy, repo_root, uuid.uuid4().hex, timeout)
+        # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
+        if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
+            return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
+    token = uuid.uuid4().hex
+    launch_failed, timed_out, code, output = _run_contained(argv, env, copy, repo_root, token, timeout)
     if launch_failed and not timed_out:
         return rec(OUTCOME_NOT_RUN, "command-not-found")
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
-    code = proc.returncode
     return rec(OUTCOME_PASSED if code == 0 else OUTCOME_FAILED, exit_code=code, output=output)
 
 
-def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
-    """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record."""
+def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, interpreter=_UNSET):
+    """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record.
+    Given ``interpreter`` (the project's launcher, or ``None`` when it could not be resolved), a
+    command whose program is a Python interpreter runs under that launcher, and is not run when
+    there is none or it does not start. Left ``_UNSET``, the command runs as written."""
     block = dict(block) if isinstance(block, dict) else {}
     argv, env, refusal = parse_command(block.get("run"))
     if refusal:
         return _record(head, block, OUTCOME_NOT_RUN, refusal)
+    substituted = None
+    if interpreter is not _UNSET and _is_python_program(argv[0]):
+        # axis: no launcher means not-run, never a PATH python the project does not use — see bite-proof record wo_3_1910_break_it_interpreter
+        if not interpreter:
+            return _record(head, block, OUTCOME_NOT_RUN, "interpreter-unresolved")
+        # axis: a python run executes under the supplied launcher — see bite-proof record wo_3_1910_break_it_interpreter
+        substituted = interpreter
+        argv = [interpreter] + argv[1:]
     if (not isinstance(head, str) or not head or head.startswith("-")
             or not isinstance(repo_root, str) or not repo_root):
         return _record(head, block, OUTCOME_NOT_RUN, "head-unresolved")
@@ -525,9 +729,10 @@ def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
     d = tempfile.mkdtemp(prefix="break-it-")
     copy = os.path.join(d, "copy")
     try:
-        result = _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write)
+        result = _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, substituted)
     except Exception as exc:  # the caller decides from the record; nothing is raised
-        result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+        result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:],
+                         interpreter=substituted)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return result
@@ -537,7 +742,9 @@ def _not_run(head, block, reason):
     return _record(head, block, OUTCOME_NOT_RUN, reason)
 
 
-def _safe_run(runner, repo_root, head, block, **kwargs):
+def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, **kwargs):
+    if interpreter is not _UNSET:
+        kwargs["interpreter"] = interpreter
     try:
         got = runner(repo_root, head, block, **kwargs)
     except Exception:  # the caller decides from the record; nothing is raised
@@ -548,7 +755,7 @@ def _safe_run(runner, repo_root, head, block, **kwargs):
     return got
 
 
-def intercept(findings, repo_root, head, *, runner=run_one):
+def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET):
     """Run every break-it finding (each run is bounded by its timeout; how many to write is the test
     role's policy, stated in its agent file) and fold the results in. Returns ``(kept, runs, exempt_ids)``:
     ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
@@ -575,7 +782,7 @@ def intercept(findings, repo_root, head, *, runner=run_one):
         elif block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
-            record = _safe_run(runner, repo_root, head, block)
+            record = _safe_run(runner, repo_root, head, block, interpreter)
         runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
         # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
         if record["outcome"] == OUTCOME_PASSED:
@@ -594,7 +801,7 @@ def _coerce_line(value):
     return coerce_line(value)
 
 
-def check_kept(repo_root, base, head, record, *, runner=run_one):
+def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET):
     """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
     Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
     record = record if isinstance(record, dict) else {}
@@ -634,7 +841,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one):
         return res(KEPT_CHANGED, "sha256-differs")
     run = _safe_run(runner, repo_root, head,
                     {"path": path, "run": record["command"], "content": "",
-                     "sha256": record["sha256"]}, write=False)
+                     "sha256": record["sha256"]}, interpreter, write=False)
     if run["outcome"] == OUTCOME_PASSED:
         return res(KEPT, run=run)
     return res(KEPT_FAILING, run.get("reason"), run)

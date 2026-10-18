@@ -137,7 +137,7 @@ go through GraphQL. Use these in their place:
 |---|---|
 | `gh pr list --head` and `gh pr view --json …` | `cloud_builder.py pr-json --repo <o>/<r> --branch <b> --out <file>` (same field names) |
 | `gh repo view --json nameWithOwner` | `cloud_builder.py repo-json --repo <o>/<r>` |
-| a PR body | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
+| a PR body | `gh api repos/<o>/<r>/pulls/<n> --jq .body`; `lib/vet_slot.py` reads it this way |
 | an issue and its comments | `gh api repos/<o>/<r>/issues/<n>` and `gh api "repos/<o>/<r>/issues/<n>/comments?per_page=100&page=<N>"` for N = 1, 2, … until a page holds fewer than 100 rows (an empty page ends it); a page that fails fails the read (every page, so a late advisor reply is seen) |
 
 Writes go one per call: one comment, one edit.
@@ -304,7 +304,7 @@ off a cloud build's path:
 |---|---|---|
 | `skills/review-code/SKILL.md`, PR mode setup | `gh pr list --head`, `gh pr view --json`, `gh repo view --json nameWithOwner` | the stand-ins in § GitHub reads |
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
-| `lib/vet_slot.py handback`, `--pr <n> --repo <owner/name>` | `gh pr view` | `--body-file <body.md>` on the body read through `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
+| `lib/vet_slot.py`, `--pr <n> --repo <owner/name>` | the PR body through `gh api repos/<o>/<r>/pulls/<n>` (REST); `write` also edits it with `gh pr edit` | the body read works; `write` is the advisor's, not a builder's path |
 | `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `rubric/native-stacks.md`, linking a layer | `gh stack link` | the advisor's, at handback: § Workspace, "A stack layer" |
