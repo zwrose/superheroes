@@ -30,6 +30,7 @@ SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
+INTERPRETER_KEY = "breakItInterpreter"
 REDACTED_FIELD = "suggestionRedacted"
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
@@ -50,9 +51,11 @@ RUN_RULES = (
     "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
     "files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
     "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run. A `run` "
-    "whose program is `python` or `python3` (or another Python interpreter path) runs under the "
-    "project's own interpreter launcher, the one its verify command uses, and is not run when that "
-    "launcher cannot be found.")
+    "whose program is `python` or `python3` (or another Python interpreter path), or, when the "
+    "project's `breakItInterpreter` calibration is set, `pytest` or `py.test` (run as "
+    "`<launcher> -m pytest`), runs under the project's own interpreter launcher: the "
+    "`breakItInterpreter` calibration when set, else the one its verify command uses. It is not run "
+    "when that launcher cannot be found.")
 
 _TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
 _HEADER = _TEMPLATE_LINES[0]
@@ -412,6 +415,33 @@ def project_interpreter(verify_command):
     return None
 
 
+def launcher_argv(value):
+    """The launcher prefix a ``breakItInterpreter`` value names: its shell words as a non-empty
+    list, or ``None`` when it is not a string, does not split, is empty, or leads with an option.
+    The one validator of the key; never raises."""
+    if not isinstance(value, str):
+        return None
+    try:
+        words = shlex.split(value, posix=True)
+    except ValueError:
+        return None
+    if not words or not words[0] or words[0].startswith("-"):
+        return None
+    return words
+
+
+def resolve_interpreter(config):
+    """The launcher a break-it run of ``config``'s session uses: the ``breakItInterpreter`` prefix
+    (a list) when that key is set, ``[]`` when it is set but invalid, else what the verify command
+    names (``project_interpreter``: a string or ``None``). Executes nothing."""
+    config = config if isinstance(config, dict) else {}
+    value = config.get(INTERPRETER_KEY)
+    if value is not None:
+        # axis: a set key never falls back to the verify command's launcher; an invalid one is the empty prefix, which reads not-run — see bite-proof record wo_1_1961_break_it_interpreter_key
+        return launcher_argv(value) or []
+    return project_interpreter(config.get("verifyCommand"))
+
+
 def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None):
     block = block if isinstance(block, dict) else {}
     # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
@@ -419,7 +449,7 @@ def _record(head, block, outcome, reason=None, exit_code=None, output="", interp
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
-            "interpreter": interpreter}
+            "interpreter": shlex.join(interpreter) if isinstance(interpreter, list) else interpreter}
 
 
 def _git(repo_root, *args):
@@ -691,7 +721,8 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
     if interpreter:
         # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
         failed, timed, status, tail = _run_contained(
-            [interpreter, "-c", _PROBE_CODE], env, copy, repo_root, uuid.uuid4().hex, timeout)
+            (interpreter if isinstance(interpreter, list) else [interpreter]) + ["-c", _PROBE_CODE],
+            env, copy, repo_root, uuid.uuid4().hex, timeout)
         # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
         if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
             return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
@@ -708,13 +739,24 @@ def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, inte
     """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record.
     Given ``interpreter`` (the project's launcher, or ``None`` when it could not be resolved), a
     command whose program is a Python interpreter runs under that launcher, and is not run when
-    there is none or it does not start. Left ``_UNSET``, the command runs as written."""
+    there is none or it does not start. A ``list`` is the calibrated launcher prefix: it also runs a
+    ``pytest`` program as ``prefix -m pytest``, and the empty list (an invalid key) is not run.
+    Left ``_UNSET``, the command runs as written."""
     block = dict(block) if isinstance(block, dict) else {}
     argv, env, refusal = parse_command(block.get("run"))
     if refusal:
         return _record(head, block, OUTCOME_NOT_RUN, refusal)
     substituted = None
-    if interpreter is not _UNSET and _is_python_program(argv[0]):
+    if isinstance(interpreter, list):
+        is_pytest = os.path.basename(argv[0]) in ("pytest", "py.test")
+        if _is_python_program(argv[0]) or is_pytest:
+            # axis: a calibrated key that is set but invalid reads not-run, never the verify command's launcher or a PATH python — see bite-proof record wo_1_1961_break_it_interpreter_key
+            if not interpreter:
+                return _record(head, block, OUTCOME_NOT_RUN, "interpreter-key-invalid")
+            # axis: a python or pytest run executes under the calibrated launcher prefix, the pytest one as `-m pytest` — see bite-proof record wo_1_1961_break_it_interpreter_key
+            substituted = interpreter
+            argv = interpreter + (["-m", "pytest"] if is_pytest else []) + argv[1:]
+    elif interpreter is not _UNSET and _is_python_program(argv[0]):
         # axis: no launcher means not-run, never a PATH python the project does not use — see bite-proof record wo_3_1910_break_it_interpreter
         if not interpreter:
             return _record(head, block, OUTCOME_NOT_RUN, "interpreter-unresolved")

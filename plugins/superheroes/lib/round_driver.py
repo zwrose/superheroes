@@ -3305,10 +3305,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
-    # axis: a break-it python run executes under the project's own interpreter launcher read from the verify command, never a PATH python — see bite-proof record wo_3_1910_break_it_interpreter
+    # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
     intercepted, runs, exempt = break_it.intercept(
         break_it_raw, repo_root, head,
-        interpreter=break_it.project_interpreter(config.get("verifyCommand")))
+        interpreter=break_it.resolve_interpreter(config))
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
     # test role's first finding, so the original order holds.
     break_it_ids = {id(g) for g in break_it_raw}
@@ -6758,7 +6758,7 @@ def _break_it_kept_step(state, config):
                          "reason": disposition})
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
-                                  interpreter=break_it.project_interpreter(config.get("verifyCommand")))
+                                  interpreter=break_it.resolve_interpreter(config))
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}
         rows.append(row)
@@ -13278,6 +13278,10 @@ def build_parser():
                                    "labels a self-audit independent. Unknown vendor / on non-fresh "
                                    "state → fails loud (nonzero), never a silent default")
     cli_contract.add_argument(pn, "--verify-command", contract="free-text", default=None)
+    cli_contract.add_argument(pn, "--break-it-interpreter", contract="free-text", default=None,
+                              help="the Python launcher break-it runs use (fresh state only): "
+                                   "stored as config breakItInterpreter and read instead of the "
+                                   "verify command. On non-fresh state → fails loud (nonzero)")
     cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int)
     cli_contract.add_argument(pn, "--fix-batch-cap", contract="integer", default=None, type=int)
     cli_contract.add_argument(pn, "--max-rounds-absolute", contract="integer", default=None,
@@ -13461,6 +13465,16 @@ def _dispatch(args):
                                              "value": args.seat_map}) + "\n")
                 return 1
             overrides["seatMap"] = seat_map_obj
+        if args.break_it_interpreter is not None:
+            # Same fresh-state-only discipline as `--seat-map`: the calibration is read ONCE at
+            # new_state, so accepting it on existing state would silently ignore it (#1961).
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False,
+                                             "reason": "break-it-interpreter-not-fresh-state",
+                                             "value": args.break_it_interpreter}) + "\n")
+                return 1
+            overrides[break_it.INTERPRETER_KEY] = args.break_it_interpreter
         if args.verify_command is not None:
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
