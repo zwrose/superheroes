@@ -677,3 +677,100 @@ def test_cli_unknown_kind_reports_kind_token(tmp_path):
     assert run.returncode == 1
     out = json.loads(run.stdout)
     assert out["findings"][0]["token"] == OL.TOKEN_KIND_UNKNOWN
+
+
+# --- order-timeout-missing warning (#1913) ---
+
+
+def _timeout_order(command):
+    return (
+        "# WO\n\n"
+        "Budget: at most 5 commands.\n\n"
+        "Run %s once.\n" % command
+    )
+
+
+def test_timeout_warning_for_inline_backtick_command(tmp_path):
+    # axis: an implementer order naming a suite in inline backticks with no --timeout warns
+    repo = _mk_repo(tmp_path)
+    text = _timeout_order("`scripts/pinned-python -m pytest test_y.py -q`")
+    r = OL.check_text(text, str(repo))
+    assert r["ok"] is True and r["findings"] == []
+    assert [w["token"] for w in r["warnings"]] == [OL.WARN_TIMEOUT_MISSING]
+    assert r["warnings"][0]["detail"] == "pytest"
+
+
+def test_timeout_warning_for_fenced_command_block(tmp_path):
+    # axis: a command inside a fenced block is seen (fences are kept, not masked)
+    repo = _mk_repo(tmp_path)
+    text = "# WO\n\nBudget: at most 5 commands.\n\n```bash\npytest -q\n```\n"
+    r = OL.check_text(text, str(repo))
+    assert r["ok"] is True
+    assert [w["token"] for w in r["warnings"]] == [OL.WARN_TIMEOUT_MISSING]
+
+
+def test_timeout_set_means_no_warning(tmp_path):
+    # axis: --timeout in any form silences the warning
+    repo = _mk_repo(tmp_path)
+    for flag in ("--timeout 600", "--timeout=600"):
+        text = _timeout_order("`scripts/pinned-python -m pytest test_y.py -q %s`" % flag)
+        r = OL.check_text(text, str(repo))
+        assert r["ok"] is True and r["warnings"] == []
+
+
+def test_bare_test_path_is_not_a_command(tmp_path):
+    # axis: a file path (or pytest.ini) is not a command
+    repo = _mk_repo(tmp_path)
+    text = _timeout_order("`test_y.py`, and read `pytest.ini`")
+    r = OL.check_text(text, str(repo))
+    assert r["warnings"] == []
+
+
+def test_fixer_kind_gets_no_timeout_warning(tmp_path):
+    # axis: the warning is implementer-only
+    repo = _mk_repo(tmp_path)
+    r = OL.check_text("# Fix\n\nRun `pytest -q`.\n", str(repo), kind="fixer")
+    assert r["ok"] is True and r["warnings"] == []
+
+
+def test_refusal_carries_empty_warnings():
+    # axis: _refuse results keep the warnings key
+    assert OL.check_text("#\n", "/tmp")["warnings"] == []
+    assert OL.check_text("pytest\n", "/tmp", kind="pilot")["warnings"] == []
+    assert OL.check_text(None, "/tmp")["warnings"] == []
+
+
+def test_warning_is_not_a_refusal_token():
+    # axis: warnings are a separate vocabulary from the refusal tokens
+    assert OL.WARNINGS == (OL.WARN_TIMEOUT_MISSING,)
+    assert OL.WARN_TIMEOUT_MISSING not in OL.TOKENS
+
+
+def test_cli_warning_only_order_exits_zero_and_prints_warnings(tmp_path, capsys):
+    # axis: a warning never changes the CLI exit code
+    repo = _mk_repo(tmp_path)
+    order = tmp_path / "order.md"
+    order.write_text(_timeout_order("`go test ./...`"), encoding="utf-8")
+    code = OL.main(["check", "--order", str(order), "--repo-root", str(repo)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["ok"] is True
+    assert [w["token"] for w in out["warnings"]] == ["order-timeout-missing"]
+
+
+def test_cli_refusal_still_exits_one_with_empty_warnings(tmp_path, capsys):
+    # axis: a refusal keeps exit 1 and an empty warnings list
+    repo = _mk_repo(tmp_path)
+    order = tmp_path / "order.md"
+    order.write_text("# no budget\n", encoding="utf-8")
+    code = OL.main(["check", "--order", str(order), "--repo-root", str(repo)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["ok"] is False and out["warnings"] == []
+
+
+def test_inlined_template_alone_yields_no_timeout_warning(tmp_path):
+    # axis: the shipped template names suites but is masked before the warning check
+    repo = _mk_repo(tmp_path)
+    body = OL._template_body()
+    r = OL.check_text("Budget: at most 5 commands.\n\n" + body + "\n", str(repo))
+    assert r["templateCopiesMasked"] == 1
+    assert r["warnings"] == []
