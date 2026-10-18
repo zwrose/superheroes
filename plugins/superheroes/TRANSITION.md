@@ -34,6 +34,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
 
+### Review record: survives the cloud egress, and an unreadable one names where
+
+- The record's JSON writes `/` as `\/`, so a cloud session's URL rewrite cannot change it. Records already posted read as before.
+- `read`'s `review-record-unreadable` detail now names the comment and character offset of the break with an excerpt, after the URL it already gave; the reason token and keys are unchanged.
+
 ## 0.43.1
 
 ### Before you upgrade
