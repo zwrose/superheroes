@@ -114,8 +114,10 @@ positive instruction so attention lands on what to do.
   rendered page, so backtick it.
 - A paragraph that follows a nested bullet list with no blank line between them becomes part of
   the last bullet, so leave a blank line.
+- A bare `#N` links to issue or PR N of the repository the text sits in, so write a reference to
+  another repository's issue or PR as `owner/repo#N`.
 
-Both render wrong while the source looks right, and no validator checks either.
+Each renders wrong while the source looks right, and no validator checks any of them.
 
 ## The sentence layer
 

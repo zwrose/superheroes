@@ -84,7 +84,12 @@ These obligations attach to the order on your side, when you write it.
 - **Run the order's rule against every measured row it cites before it goes out.** An order whose
   rule disagrees with its own measurements is an order defect; fix the order first. The implementer
   cannot satisfy both, so it invents a reconciliation, and that invention is what the next review
-  blocks on.
+  blocks on. Better still, never state a rule and a measured number that can disagree.
+- **A new member of an enum or a kind-set comes with a census of its consumers.** List every site
+  that compares against the old members, because a site that checks only the old ones silently
+  mishandles the new one.
+- **Before porting a fix shape from elsewhere, verify the condition that made it right there.** A
+  fix that fit one surface's condition is wrong on a surface where that condition does not hold.
 
 ## Declared deliverables
 
