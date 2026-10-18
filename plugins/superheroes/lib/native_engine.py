@@ -483,9 +483,13 @@ class _Close(object):
             return self._forfeit("native-not-enrolled")
         target = os.path.realpath(args.worktree)
         into = os.path.realpath(args.into)
-        rc, top, _ = _git(into, "rev-parse", "--show-toplevel")
-        if rc == 0 and top.strip():
-            into = os.path.realpath(top.strip())  # patch paths are root-relative
+        try:
+            top = store_core.repo_root(into)
+        except Exception:
+            return self._forfeit("native-collect-failed")
+        if not top:
+            return self._forfeit("native-collect-failed")
+        into = os.path.realpath(top)  # patch paths are root-relative
         agent_id = enrolled.get("agentId")
         if (target != os.path.realpath(enrolled.get("worktree") or "")
                 or not isinstance(agent_id, str) or not agent_id
