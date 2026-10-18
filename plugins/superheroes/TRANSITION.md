@@ -144,7 +144,7 @@ Check these in a consuming project when it adopts 0.44.0. Each step names the no
 ### Review-code: a round with nothing left to verify, and break-it runs on the project's interpreter
 
 - A round whose verification leaves no findings now journals the decision kind `synthesis-no-survivors` and sends no `dispatch-synthesis` order; the round folds as if the grouping were empty. Before, it still sent a synthesis order.
-- A break-it record's `breakItRun` gains `interpreter`. Python break-it tests now run under the launcher the project's `verifyCommand` names, not a `python` on the PATH. A run that cannot use it ends `outcome: not-run` with the new reason `interpreter-unavailable`, or `interpreter-unresolved` when the verify command names no launcher.
+- A break-it record's `breakItRun` gains `interpreter`. When `breakItInterpreter` is not set (see [Break-it tests: a calibrated Python launcher](#break-it-tests-a-calibrated-python-launcher)), Python break-it tests now run under the launcher the project's `verifyCommand` names, not a `python` on the PATH. A run that cannot use it ends `outcome: not-run` with the new reason `interpreter-unavailable`, or `interpreter-unresolved` when the verify command names no launcher.
 - A fixer order may name a break-it test file that does not exist yet, as long as it resolves inside a root; the fixer runs the record's `run` command with its `interpreter`.
 - A verifier phase accepted by hand with nothing to verify no longer adds a planned-reviewer row to the review record.
 
