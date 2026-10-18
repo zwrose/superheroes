@@ -1050,6 +1050,32 @@ def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_pa
         assert out.index(PR_WORDS["nothingToAccept"]) < out.index("**%s**" % PR_WORDS["verdictHeading"]) < out.index("Answer Merge"), kind
 
 
+def _decided(stack):
+    """Two decided-for-you entries as the builder writes them; on a stack sheet each names its PR."""
+    return [{"id": "d-0123456789ab", "finding": "retry/no-notice", "title": "Customers are not told a retry happened",
+             "ground": "fail-direction is always craft", "reason": "It fails closed either way.", **({"pr": 5} if stack else {})},
+            {"id": "d-ba9876543210", "finding": "retry/no-final-email", "title": "No email after the third failure",
+             "ground": "wording is craft", "reason": "The words are the maker's to pick.", **({"pr": 6} if stack else {})}]
+
+
+# Bites on: the chat prose leaving out the decided-for-you list, its count, a ground or reason, a D-label the owner answers by, or the hint on how to take one back.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_lists_the_decided_for_you_entries_with_labels_and_the_chat_hint(tmp_path, kind):
+    # Axis: the heading carries the count, each entry is a D-numbered line with its title, ground and reason (a stack entry names its PR), the intro and the hint frame the list, and the list follows the cards and precedes the folded parts.
+    sheet = _sample(kind)
+    stack = kind == "stack"
+    sheet["prSheet"]["decidedForYou"] = _decided(stack)
+    out = _prose_of(tmp_path, sheet)
+    lines = ["**%s (2)**" % PR_WORDS["decidedForYouHeading"], "", PR_WORDS["decidedForYouIntro"], "",
+             "- D1 · %sCustomers are not told a retry happened — Ground: fail-direction is always craft. It fails closed either way." % ("#5: " if stack else ""),
+             "- D2 · %sNo email after the third failure — Ground: wording is craft. The words are the maker's to pick." % ("#6: " if stack else ""),
+             "", PR_WORDS["decidedInChat"], "", ""]
+    assert "\n".join(lines) in out
+    assert out.index("**%s" % PR_WORDS["acceptingHeading"]) < out.index("**%s (2)**" % PR_WORDS["decidedForYouHeading"]) < out.index("**%s**" % PR_WORDS["verdictHeading"])
+    assert out.index("**%s (2)**" % PR_WORDS["decidedForYouHeading"]) < out.index(PR_WORDS["craftHeading"])
+    assert PR_WORDS["decidedForYouHeading"] not in _prose_of(tmp_path, _sample(kind))
+
+
 def test_prose_leaves_out_each_empty_part(tmp_path):
     # Axis: an empty caught list, walk, craft list, decided list and history leave out their headings; a stack still lists its PRs.
     for kind in ("pr", "stack"):

@@ -555,6 +555,14 @@ def _pr_body(sheet):
         lines += [PR["nothingToAccept"], ""]
     for number, card in enumerate(sheet["cards"], 1):
         lines += _render_card(number, card, PR_ANSWERS) + [""]
+    decided = prsheet.get("decidedForYou", [])
+    if decided:
+        lines += ["**%s (%d)**" % (PR["decidedForYouHeading"], len(decided)), "", PR["decidedForYouIntro"], ""]
+        for number, found in enumerate(decided, 1):
+            where = _fill(PR["walkStopPr"], pr=str(found["pr"])) + ": " if stack and "pr" in found else ""
+            lines.append("- D%d · %s%s — %s. %s" % (number, where, _text(found["title"]),
+                                                   _fill(PR["decidedGround"], ground=_text(found["ground"])), _text(found["reason"])))
+        lines += ["", PR["decidedInChat"], ""]
     stacked = [_fill(PR["walkStopPr"], pr=str(found["number"])) + " %s · %s" % (_text(found["title"]), _short(found["commit"]))
                for found in prsheet["prs"]] if stack else []
     for heading, entries in ((PR["craftHeading"], [_pr_entry(found, stack) for found in prsheet["craft"]]),

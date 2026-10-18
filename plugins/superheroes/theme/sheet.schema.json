@@ -383,6 +383,12 @@
           "type": "array",
           "items": {"$ref": "#/$defs/entry"}
         },
+        "decidedForYou": {
+          "description": "The left-for-owner findings the advisor re-graded as craft at vet, each with the ground of that call and a reason. They are not cards; the owner can take one back, and a taken-back one returns as a card on the next sheet. Present only when there is at least one.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/decided"}
+        },
         "history": {
           "description": "How the review went, one line each.",
           "type": "array",
@@ -418,6 +424,43 @@
               }
             }
           }
+        }
+      }
+    },
+    "decided": {
+      "description": "One finding the advisor re-graded as craft, with the ground and the reason for that call.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "finding", "title", "ground", "reason"],
+      "properties": {
+        "id": {
+          "description": "The entry's identifier, kept the same across republishes so a saved answer at answers/<id> still matches. It depends on the PR and the finding only, never on the words.",
+          "$ref": "#/$defs/id"
+        },
+        "finding": {
+          "description": "The finding's key: its findingKey, or its id when it has none; on a stack sheet the PR number and a colon come first.",
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "description": "The finding in one line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "ground": {
+          "description": "The ground of the owner-vs-craft line that makes this craft.",
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "description": "Why the advisor re-graded it, in one line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "pr": {
+          "description": "On a stack sheet, the number of the PR the finding came from.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
