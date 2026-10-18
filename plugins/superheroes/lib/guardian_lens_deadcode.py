@@ -164,7 +164,8 @@ def _norm_repo_path(repo, path):
     p = path.replace("\\", "/")
     if os.path.isabs(p):
         try:
-            p = os.path.relpath(p, os.path.realpath(repo)).replace("\\", "/")
+            p = os.path.relpath(
+                os.path.realpath(p), os.path.realpath(repo)).replace("\\", "/")
         except ValueError:
             pass
     while p.startswith("./"):
