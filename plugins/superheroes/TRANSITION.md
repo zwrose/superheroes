@@ -34,6 +34,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
 
+### Fix audit: a same-round fix or a revert is not an unnamed change
+
+- A fix audit that reports a change its finding does not name now clears the fix when the auditor attributes every such change to the review's own record: `unnamedChangeFixes` names findings raised in the same round outside the fix batch (not skipped, ruled out of scope or refuted), and `unnamedChangeReverts` names an unnamed change an earlier audit of the review reported and this fix undoes. The driver checks each id and ref against that record.
+- An unnamed change with no claim, or with a claim the record does not bear out, still refuses as before, and an owner ruling that allows the change works as before.
+- Audit results take the two optional members `unnamedChangeFixes` and `unnamedChangeReverts` (lists of strings). An audit entry gains `reportedUnnamedChange`, and, when attributed, `attributedChange`, `sameRoundFixes` and `revertedChanges`; the round gains `auditAttributedChange`.
+- A review no longer stops at the owner gate when a fix round also fixed a small same-round finding or reverted such an edit.
+
 ## 0.43.1
 
 ### Before you upgrade

@@ -46,6 +46,14 @@ _STRICT_MODE_REFINEMENTS = {
     ("ruling", "reason"): {
         "type": "string",
     },
+    ("ruling", "unnamedChangeFixes"): {
+        "type": "array",
+        "items": {"type": "string"},
+    },
+    ("ruling", "unnamedChangeReverts"): {
+        "type": "array",
+        "items": {"type": "string"},
+    },
 }
 
 _CHANNEL_BY_ENGINE = {

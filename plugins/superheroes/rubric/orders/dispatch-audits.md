@@ -30,7 +30,19 @@ sibling's) allows it. Then, in the field for the allowing decision, give the seq
 `batchFindings`) whose guidance text explicitly names the behaviour you reported. Leave that field
 out when no carried decision's guidance names it, and when this finding's own decision forbids it; a
 decision about some other behaviour does not permit this one. The fold verifies the named decision and
-makes the call. Leave both fields out when every change in `fixerDelta` is named by a finding of the batch.
+makes the call.
+A target's `roundFindings` are the round's findings outside the batch (identifier, file, line, title,
+body, suggestion, any owner guidance), and its `reportedUnnamedChanges` are the unnamed changes earlier
+audits in this review reported (round, finding identifier, text). When you report an unnamed change,
+also say what it is, in the two result fields named for the fixes and the reverts of an unnamed
+change, which may be given together: in the fixes field, the identifiers of `roundFindings` entries
+whose text names the change as their fix and whose guidance it follows (audit that part of the change
+against those findings as you audit this fix, and report any new issue it introduces); in the reverts
+field, the `ref` of each `reportedUnnamedChanges` entry the change undoes. Give them only when every
+unnamed change you reported is covered by one of them; when any part is covered by neither, leave both
+out. The fold checks that every identifier and ref you name is in the review's own record, and makes
+the call; whether the change really is that fix or that undo is your judgment. Leave all four of
+these fields out when every change in `fixerDelta` is named by a finding of the batch.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
