@@ -493,6 +493,33 @@ def _size_exclude_view_lines(payload):
     return lines
 
 
+def _break_it_interpreter_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    lines = ["### Break-it interpreter"]
+    if reason == core_md.BREAK_IT_INTERPRETER_REASON_MALFORMED:
+        lines.append(
+            "⚠ malformed: %s — Python break-it tests will not run until it is fixed or cleared"
+            % json.dumps(payload.get("value")))
+    elif reason and reason != core_md.BUILDER_DISPATCH_REASON_ABSENT:
+        lines.append("⚠ break-it interpreter unreadable: %s" % reason)
+        if isinstance(payload.get("detail"), str):
+            token = payload["detail"].split(":", 1)[0].strip()
+            if token:
+                lines.append("cause: %s" % token)
+    elif payload.get("declared") and isinstance(payload.get("value"), str):
+        lines.append("set: %s" % payload["value"])
+    else:
+        lines.append(
+            "(not set — Python break-it tests take their launcher from the verify command, "
+            "and do not run when it names none)")
+        if payload.get("suggestion"):
+            lines.append("suggested: %s" % payload["suggestion"])
+    lines.append(
+        'set it: /superheroes:configure → "Name the Python launcher for break-it tests"')
+    return lines
+
+
 def _risk_area_view_lines(payload):
     payload = payload if isinstance(payload, dict) else {}
     reason = payload.get("reason")
@@ -611,6 +638,11 @@ def collect(cwd, root=None):
     except Exception:
         size_exclude = {"reason": "size-exclude-read-failed", "declared": False, "globs": None}
     try:
+        break_it_interpreter = core_md.read_break_it_interpreter(cwd, root)
+    except Exception:
+        break_it_interpreter = {"reason": "break-it-interpreter-read-failed", "declared": False,
+                                "value": None, "argv": None, "suggestion": None}
+    try:
         risk_areas = core_md.read_risk_areas(cwd, root)
     except Exception:
         risk_areas = {"reason": "risk-areas-unreadable", "declared": False, "areas": None}
@@ -621,7 +653,7 @@ def collect(cwd, root=None):
             "enginePrefs": engine_prefs, "guardian": guardian,
             "reviewGatePolicy": review_gate, "vetChecks": vet_checks,
             "sandboxAccess": sandbox_access, "sizeExclude": size_exclude,
-            "riskAreas": risk_areas}
+            "breakItInterpreter": break_it_interpreter, "riskAreas": risk_areas}
 
 
 def _health_line(counts):
@@ -704,6 +736,9 @@ def render(cwd, *, root=None):
         for line in _size_exclude_view_lines(data.get("sizeExclude")):
             out.append(line)
         out.append("")
+        for line in _break_it_interpreter_view_lines(data.get("breakItInterpreter")):
+            out.append(line)
+        out.append("")
         for line in _spec_reviewer_lines(data.get("enginePrefs")):
             out.append(line)
         out.append("")
@@ -736,6 +771,9 @@ def render(cwd, *, root=None):
             out.append(line)
         out.append("")
         for line in _size_exclude_view_lines(data.get("sizeExclude")):
+            out.append(line)
+        out.append("")
+        for line in _break_it_interpreter_view_lines(data.get("breakItInterpreter")):
             out.append(line)
         prefs = core.get("enginePreferences")
         prefs = prefs if isinstance(prefs, dict) else {}
