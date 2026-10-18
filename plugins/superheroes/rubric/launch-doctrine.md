@@ -158,6 +158,12 @@ the poll contract for external engine dispatches the builder invokes directly (s
 and native subagents keep their own lifecycle), the park escape, the concurrent-batch shape, and
 the invariant it preserves, so a launched builder receives them in its composed prompt.
 
+## Unattended windows
+
+While the owner is away, a session uses only command shapes already approved, writes orders by
+file, and parks rather than improvise around a block. It makes no cleanup deletions until the owner
+is back.
+
 ## Recovery — taking over a build that stopped
 
 A launched builder can stop for reasons unrelated to its work — the account it burns hits a limit,
