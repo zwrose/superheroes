@@ -565,66 +565,10 @@ def _already_kept(copy, rel, sha):
     return hashlib.sha256(data).hexdigest() == sha
 
 
-def _probe_interpreter(interpreter, copy, env, timeout):
-    """``(True, "")`` when ``interpreter -c pass`` starts and exits 0 in ``copy``, else ``(False, output tail)``."""
-    try:
-        proc = subprocess.Popen([interpreter, "-c", "pass"], cwd=copy, env=env,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, start_new_session=True)
-    except OSError as exc:
-        return False, str(exc)[-OUTPUT_TAIL_BYTES:]
-    try:
-        try:
-            out, _ = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_group(proc.pid)
-            # axis: a detached helper can hold the pipe open past the group kill, so the drain is bounded and never waits for EOF; the caller's sweeps close it
-            try:
-                out, _ = proc.communicate(timeout=_DRAIN_JOIN)
-            except subprocess.TimeoutExpired:
-                out = b""
-            return False, _tail_text(out[-OUTPUT_TAIL_BYTES:], True) or "timed out"
-        return proc.returncode == 0, _tail_text(out[-OUTPUT_TAIL_BYTES:], True)
-    finally:
-        _kill_group(proc.pid)
-
-
-def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, interpreter=None):
-    def rec(outcome, reason=None, exit_code=None, output=""):
-        return _record(head, block, outcome, reason, exit_code, output, interpreter)
-
-    try:
-        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
-        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
-                     "--", os.path.abspath(repo_root), copy)
-        if added.returncode == 0:
-            added = _git(copy, "remote", "remove", "origin")
-        if added.returncode == 0:
-            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
-    if added.returncode != 0:
-        return rec(OUTCOME_NOT_RUN, "copy-failed",
-                   output=_tail_text(added.stderr, True))
-    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
-    if write and _already_kept(copy, block["path"], block.get("sha256")):
-        write = False
-    if write:
-        try:
-            refusal = _write_confined(copy, block["path"], block["content"])
-        except OSError:
-            refusal = "write-failed"
-        if refusal:
-            return rec(OUTCOME_NOT_RUN, refusal)
-    token = uuid.uuid4().hex
-    if interpreter:
-        # axis: a launcher that cannot start reads not-run, never a failed test — see bite-proof record wo_3_1910_break_it_interpreter
-        ready, tail = _probe_interpreter(
-            interpreter, copy, _clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root), timeout)
-        _kill_tagged(token)
-        _kill_in_dir(copy)
-        if not ready:
-            return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail)
+def _run_contained(argv, env, copy, repo_root, token, timeout):
+    """Run ``argv`` in ``copy`` under the reaper, with the token and working-directory sweeps, keeping only the
+    output tail. Returns ``(launch_failed, timed_out, returncode, output)``. Every process a break-it run starts,
+    the readiness probe included, goes through here."""
     status_r, status_w = os.pipe()
     try:
         # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
@@ -636,7 +580,7 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
     except (FileNotFoundError, PermissionError):
         os.close(status_r)
         os.close(status_w)
-        return rec(OUTCOME_NOT_RUN, "command-not-found")
+        return True, False, None, ""
     os.close(status_w)
     drain = _TailDrain(proc.stdout)
     timed_out = False
@@ -666,12 +610,48 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
             proc.stdout.close()
         except OSError:
             pass
-    output = drain.tail()
+    return launch_failed, timed_out, proc.returncode, drain.tail()
+
+
+def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, interpreter=None):
+    def rec(outcome, reason=None, exit_code=None, output=""):
+        return _record(head, block, outcome, reason, exit_code, output, interpreter)
+
+    try:
+        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
+        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
+                     "--", os.path.abspath(repo_root), copy)
+        if added.returncode == 0:
+            added = _git(copy, "remote", "remove", "origin")
+        if added.returncode == 0:
+            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    if added.returncode != 0:
+        return rec(OUTCOME_NOT_RUN, "copy-failed",
+                   output=_tail_text(added.stderr, True))
+    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
+    if write and _already_kept(copy, block["path"], block.get("sha256")):
+        write = False
+    if write:
+        try:
+            refusal = _write_confined(copy, block["path"], block["content"])
+        except OSError:
+            refusal = "write-failed"
+        if refusal:
+            return rec(OUTCOME_NOT_RUN, refusal)
+    if interpreter:
+        # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
+        failed, timed, status, tail = _run_contained(
+            [interpreter, "-c", "pass"], env, copy, repo_root, uuid.uuid4().hex, timeout)
+        if failed or timed or status != 0:
+            return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
+    token = uuid.uuid4().hex
+    launch_failed, timed_out, code, output = _run_contained(argv, env, copy, repo_root, token, timeout)
     if launch_failed and not timed_out:
         return rec(OUTCOME_NOT_RUN, "command-not-found")
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
-    code = proc.returncode
     return rec(OUTCOME_PASSED if code == 0 else OUTCOME_FAILED, exit_code=code, output=output)
 
 
