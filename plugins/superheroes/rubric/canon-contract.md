@@ -309,10 +309,14 @@ header text and carries no meaning to a reader. If two branches each created the
 merge kept both headers, the file is still valid: readers ignore the repeated header, and no session
 edits it away.
 
-**Canon never gets a pull request of its own.** A ruling rides the pull request of the branch it was
-committed on, so a spec's rulings ride the spec's pull request. A ruling the advisor receives
-outside any open pull request is committed to the branch of the next pull request it opens. How the
-advisor holds it until then is the [advisor charter's](../skills/showrunner/SKILL.md) to say.
+**Which pull request a ruling rides.** A ruling made inside a piece of work rides that work's pull
+request, the pull request of the branch it was committed on, so a spec's rulings ride the spec's
+pull request. A ruling the advisor holds outside any open pull request goes into a **Canon-only
+pull request**, one where only Canon's paths change, whenever no pull request of the advisor's own
+is coming soon, and whenever the owner asks for one. Otherwise it is committed to the branch of the
+next pull request the advisor opens. A Canon-only pull request merges on a sheet like any other.
+How the advisor holds a ruling until it is committed is the
+[advisor charter's](../skills/showrunner/SKILL.md) to say.
 
 In the store home, each commit binds at once every session that shares that store on the machine.
 

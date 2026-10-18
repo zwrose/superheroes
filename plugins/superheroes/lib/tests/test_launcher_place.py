@@ -532,6 +532,34 @@ def test_a_base_refusal_before_the_cloud_command_runs_the_build_locally(
     assert cloud_calls == [] and len(machine.calls) == 1
 
 
+@pytest.mark.parametrize("prepare,reason", [
+    (lambda monkeypatch, world: _git(world.repo, "checkout", "-q", "-b", "never-pushed"),
+     "launch-cloud-checkout-branch-not-on-remote"),
+    (lambda monkeypatch, world: _git(world.repo, "checkout", "-q", "--detach"),
+     "launch-cloud-checkout-unreadable"),
+    (lambda monkeypatch, world: monkeypatch.setattr(
+        L, "_remote_branch_head_fn", lambda *a, **k: (None, "unchecked")),
+     "launch-cloud-checkout-remote-unchecked"),
+    (lambda monkeypatch, world: monkeypatch.setattr(
+        L, "_remote_branch_head_fn", lambda *a, **k: ("f" * 40, None)),
+     "launch-cloud-checkout-off-base"),
+], ids=["branch-not-on-remote", "unreadable", "remote-unchecked", "off-base"])
+def test_a_checkout_refusal_stops_for_the_owner_and_never_runs_the_build_locally(
+    tmp_path, monkeypatch, capsys, machine, prepare, reason,
+):
+    # axis: a cloud launch whose checkout is off its base is the owner's to fix, so no second builder starts here
+    world = _world(tmp_path, monkeypatch)
+    cloud_calls = _cloud(monkeypatch)
+    prepare(monkeypatch, world)
+    code, result = _launch(world, capsys, 284)
+
+    assert code == 1
+    assert result["ok"] is False and result["reason"] == reason
+    assert "fellBack" not in result and "cloudAttempt" not in result
+    assert result["placeCall"]["place"] == "cloud"
+    assert cloud_calls == [] and machine.calls == []
+
+
 @pytest.mark.parametrize("prepare", [_remote_not_asked, _base_off_the_remote],
                          ids=["remote-unchecked", "base-not-on-remote"])
 def test_a_base_refusal_whose_lane_could_not_be_ended_does_not_fall_back(
