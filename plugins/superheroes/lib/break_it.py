@@ -7,6 +7,7 @@ outlives the call. Every outcome is a record — ``failed``, ``passed`` or ``not
 and the caller decides from the record; nothing is raised."""
 import hashlib
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -311,6 +312,23 @@ def _is_separator(token):
     return bool(token) and all(c in _SEPARATOR_CHARS for c in token)
 
 
+def _chain_chdir(current, operand):
+    """The directory after one more ``env -C operand``: a relative operand composes onto the earlier
+    one; an absolute operand is kept as it is."""
+    return operand if current is None else posixpath.join(current, operand)
+
+
+def _rebase_launcher(chdir, launcher):
+    """``launcher`` (a relative path) as seen from the repository root after ``env -C chdir``: the
+    normalised ``chdir/launcher``, or ``None`` when ``chdir`` is absolute or the path climbs out of the root."""
+    if os.path.isabs(chdir):
+        return None
+    rebased = posixpath.normpath(posixpath.join(chdir, launcher))
+    if rebased == ".." or rebased.startswith("../") or posixpath.isabs(rebased):
+        return None
+    return rebased
+
+
 def project_interpreter(verify_command):
     """The Python launcher token the project's verify command runs, or ``None``. Reads the command
     text only and never executes anything. A launcher is the program at a command position when it
@@ -330,7 +348,8 @@ def project_interpreter(verify_command):
     at_command = True
     after_env = False
     skip_operand = False
-    env_chdir = False
+    env_chdir = None
+    chdir_next = False
     i = -1
     while i + 1 < len(tokens):
         i += 1
@@ -339,13 +358,17 @@ def project_interpreter(verify_command):
             at_command = True
             after_env = False
             skip_operand = False
-            env_chdir = False
+            env_chdir = None
+            chdir_next = False
             continue
         if not at_command:
             continue
         # axis: an absolute env wrapper is skipped (with its options and their operands) so the python it launches is the launcher, never the wrapper
         if skip_operand:
             skip_operand = False
+            if chdir_next:
+                chdir_next = False
+                env_chdir = _chain_chdir(env_chdir, tok)
             continue
         if after_env and tok.startswith("-"):
             # axis: an env split-string operand is spliced back in as words, so the python it names is still the launcher
@@ -355,9 +378,13 @@ def project_interpreter(verify_command):
                 tokens[i:i + used] = words
                 i -= 1
                 continue
-            # axis: env -C/--chdir moves the working directory the launcher path resolves from; a relative launcher after it is not modelled, so it fails closed to unresolved
-            if tok.startswith("-C") or tok.startswith("--chdir"):
-                env_chdir = True
+            # axis: env -C/--chdir moves the working directory the launcher path resolves from; a relative launcher after it is rebased onto that directory
+            if tok in ("-C", "--chdir"):
+                chdir_next = True
+            elif tok.startswith("--chdir="):
+                env_chdir = _chain_chdir(env_chdir, tok[len("--chdir="):])
+            elif tok.startswith("-C"):
+                env_chdir = _chain_chdir(env_chdir, tok[2:])
             skip_operand = tok in _ENV_OPERAND_OPTIONS or tok in _ENV_SPLIT_OPTIONS
             continue
         if os.path.basename(tok) == "env":
@@ -366,8 +393,10 @@ def project_interpreter(verify_command):
         if tok in _COMMAND_WORDS or _ENV_TOKEN.match(tok):
             continue
         at_command = False
-        if env_chdir and not os.path.isabs(tok) and "/" in tok:
-            return None
+        if env_chdir is not None and not os.path.isabs(tok) and "/" in tok:
+            tok = _rebase_launcher(env_chdir, tok)
+            if tok is None:
+                return None
         if _is_python_program(tok):
             return tok
         if "/" in tok:
