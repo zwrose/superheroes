@@ -616,6 +616,10 @@ whether the PR moved after the review. The owner-ratified scope rule (§1) defer
 unrelated to the behavior the diff introduces or worsens. A blocking correctness or security finding
 on that behavior is fixed or honestly parked, never deferred as out of scope.
 
+When the owner rules on a leftover during the build, record the ruling as the standard chat-ruling record
+composed by `lib/canon.py ruling-record`. Hand its permalink and the owner's words to the next record write in `ownerRulings`, as
+`skills/review-code/reference/review-record.md` says, so the PR sheet files it as already decided. A ruling with no resolvable link stays a card.
+
 **Bounded acceptance for prose-contract DoDs.** When the contract under review is prose, the bounded form applies, with the round bound that the advisor at vet, or the owner before review begins, states and records in the PR body or the vet receipt.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Bounded acceptance — prose-contract DoDs when the DoD under review is prose.**
