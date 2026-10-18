@@ -6,7 +6,8 @@ A [sheet](../rubric/glossary.md#sheet) is the review template page (`review-temp
 file that holds the sheet's [cards](../rubric/glossary.md#card). The page draws the sheet's title and one card per call, in the
 plugin's theme (`comic-panel.css`).
 
-A session never edits the template's code to make a sheet. It writes a data file.
+A session never edits the template's code to make a sheet. It writes a data file, and
+`lib/sheet_title.py` sets the staged page's title (§ Publishing a sheet).
 
 ## Who uses it
 
@@ -46,11 +47,31 @@ On Claude Code, the Artifact tool publishes only files under the working directo
 session's scratchpad. So:
 
 1. Make one folder under the scratchpad.
-2. Copy `review-template.html`, `comic-panel.css`, `sheet.schema.json` and `sheet-words.json` into it, unchanged.
+2. Copy `comic-panel.css`, `sheet.schema.json` and `sheet-words.json` into it, unchanged.
 3. Write the data file into the same folder as `sheet.json`.
-4. Copy every picture a card names by a relative `src` into the staged folder at that same relative
+4. Stage the page with its title:
+
+   ```
+   python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/sheet_title.py" stage --sheet <staged sheet.json> --project <project> [--slug <work-item slug>] --out <staged folder>/review-template.html
+   ```
+
+   It writes `review-template.html` with its `<title>` set to the sheet's title and changes nothing
+   else. The page's `<title>` is the artifact's title in the sidebar and the gallery, so the publish
+   call passes no `title`. `<project>` is the project's name as its repository names it, without the
+   owner. A plain, remainder or final sheet passes `--slug` with its work item's slug; no other kind
+   does. The titles:
+
+   - a PR sheet: `<project> PR #<number> review sheet`, for example `superheroes PR #7 review sheet`;
+   - a stack sheet: `<project> stack PR #<bottom>–#<top> review sheet`;
+   - the index: `<project> open decisions review sheet`;
+   - a plain, remainder or final sheet: `<project> <work-item slug> review sheet`.
+
+   The app bar still shows the data file's own `title`, and the data file is never touched, so its
+   digest, answers and verdict are the same as before. A sheet published before titles were set keeps
+   "Review sheet" until it is next republished.
+5. Copy every picture a card names by a relative `src` into the staged folder at that same relative
    path, and add it to `files` under that path.
-5. Publish the template as the page, with the stylesheet, the schema, the data file and every picture
+6. Publish the staged page, with the stylesheet, the schema, the data file and every picture
    as supporting files, so the published paths are `comic-panel.css`, `sheet.schema.json`,
    `sheet-words.json`, `sheet.json` and each picture's relative path.
 
@@ -418,7 +439,7 @@ Another session can take a sheet over by reading its data file and its store.
 ## Updating a sheet
 
 Republish to the same link with the changed `sheet.json`, and with the same template and
-stylesheet. Never fork a second copy of the page: the owner's link must keep pointing at the
+stylesheet, the page staged again with its title as § Publishing a sheet says. Never fork a second copy of the page: the owner's link must keep pointing at the
 current sheet. Answers are keyed by card id, so a republished sheet keeps the answers to its
 unchanged cards.
 
