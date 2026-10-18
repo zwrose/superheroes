@@ -97,6 +97,14 @@ def test_terminal_kind_reads_a_handover_comment(footer):
     assert cb.terminal_kind(body) == "handover"
 
 
+@pytest.mark.parametrize("footers", [0, 1, 2])
+def test_terminal_kind_agrees_with_handover_sha_on_a_footered_handover(footers):
+    # axis: the watch's reader and recovery's reader judge a handover alike; a second footer is never stripped
+    body = cb.handover_text("a" * 40) + ("\n\n" + cb.CLOUD_FOOTER) * footers
+    assert (cb.terminal_kind(body) == "handover") == (cb.handover_sha(body) is not None)
+    assert (cb.terminal_kind(body) == "handover") == (footers < 2)
+
+
 @pytest.mark.parametrize("body", [
     pytest.param("I looked first.\n\n" + cb.STOP_HEADER + "\n\nx", id="prose-before-header"),
     pytest.param("Notes.\n" + cb.PARK_HEADER, id="header-not-on-first-line"),

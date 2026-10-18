@@ -470,7 +470,8 @@ def terminal_kind(body):
     text = strip_cloud_footer(body)
     if text is None:
         return None
-    if handover_sha(text) is not None:
+    # handover_sha strips its own one footer, so it reads the raw body: a second footer is never dropped here
+    if handover_sha(body) is not None:
         return "handover"
     first = text.split("\n", 1)[0].rstrip()
     for kind, header in TERMINAL_HEADERS.items():
