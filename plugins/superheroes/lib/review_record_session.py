@@ -94,7 +94,7 @@ def _check_extras(x):
         raise Refusal(BAD_EXTRAS, "schema")
     if not (_int(x.get("pr")) and x["pr"] > 0):
         raise Refusal(BAD_EXTRAS, "pr")
-    for k in ("runDirs", "goAheads", "makers", "checked"):
+    for k in ("runDirs", "goAheads", "makers", "checked", "carriedChecks"):
         if not isinstance(x.get(k, []), list):
             raise Refusal(BAD_EXTRAS, k)
     if not all(isinstance(d, str) and d for d in x.get("runDirs", [])):
@@ -541,7 +541,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
-            "goAheads": extras.get("goAheads", []), "checked": checked}
+            "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []), "checked": checked}
 
 
 def _carried(account, extras, repo_root, readers):

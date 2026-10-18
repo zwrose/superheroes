@@ -294,9 +294,10 @@ def test_cards_keep_their_parts_and_offer_accept_discuss_or_the_options():
     cards = page["result"]
     none, options, picked = cards
     note_and_save = ["div.answer-row", "label:Note", "textarea.sh-field", "div.save-line"]
-    assert none["parts"] == ["span.sh-badge", "h2", "label:If left", "p", "label:Recommendation", "div.sheet-recommendation"] + note_and_save
+    spine = ["label:Why it's yours", "p", "label:What happened", "p", "label:If left", "p"]
+    assert none["parts"] == ["span.sh-badge", "h2", *spine, "label:Recommendation", "div.sheet-recommendation"] + note_and_save
     assert none["labels"] == ["Accept", "Discuss"]
-    assert options["parts"] == ["span.sh-badge", "h2", "label:If left", "p", "label:Options", "ul", "label:Recommendation", "div.sheet-recommendation"] + note_and_save
+    assert options["parts"] == ["span.sh-badge", "h2", *spine, "label:Options", "ul", "label:Recommendation", "div.sheet-recommendation"] + note_and_save
     assert options["labels"] == ["Keep it", "Fix in a follow-up", "Fix before merge", "Something else"]
     assert picked["labels"][-1] == "Something else" and len(picked["labels"]) == 3
     assert all(not any(card["disabled"]) for card in cards)
@@ -317,18 +318,18 @@ def test_pr_cards_take_their_answer_words_from_prAnswers():
 # Bites on: a card that cannot be answered with its note empty, or an Accept that writes anything but the whole answer document.
 def test_accept_saves_with_an_empty_note_and_an_option_saves_its_id():
     page = _page(PR_SAMPLE, """
-      t.click(t.button("f-e490915872bd", "Accept"));
+      t.click(t.button("f-2503412501bb", "Accept"));
       await t.tick();
-      t.click(t.button("f-a5cb88b79507", "Fix in a follow-up"));
+      t.click(t.button("f-042c23fe7f58", "Fix in a follow-up"));
       await t.tick();
       t.click(t.button("i-6f4a068f1373", "Something else"));
       await t.tick();
-      return { sets: t.setLog(), save: t.saveText("f-e490915872bd"), pressed: t.state("f-e490915872bd").pressed };
+      return { sets: t.setLog(), save: t.saveText("f-2503412501bb"), pressed: t.state("f-2503412501bb").pressed };
     """)
     bodies = [(item["path"], _without_revision(item["body"])) for item in page["result"]["sets"]]
     assert bodies == [
-        ("answers/f-e490915872bd", {"answer": "accept", "optionId": None, "note": ""}),
-        ("answers/f-a5cb88b79507", {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""}),
+        ("answers/f-2503412501bb", {"answer": "accept", "optionId": None, "note": ""}),
+        ("answers/f-042c23fe7f58", {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""}),
         ("answers/i-6f4a068f1373", {"answer": "something-else", "optionId": None, "note": ""}),
     ]
     assert page["result"]["save"] == "Saved" and page["result"]["pressed"] == ["true", "false"]
@@ -389,9 +390,9 @@ def test_a_stored_answer_restores_only_when_the_card_offers_it():
     discovery = _sheet(cards=[_plain_card("plan-day")])
     stored_accept = _page(discovery, "return t.state('plan-day');", host={"docs": _docs_for("plan-day", "accept")})
     assert stored_accept["result"]["pressed"] == ["false", "false"] and stored_accept["result"]["note"] == "kept note"
-    stored_aligned = _page(PR_SAMPLE, "return t.state('f-e490915872bd');", host={"docs": _docs_for("f-e490915872bd", "aligned")})
+    stored_aligned = _page(PR_SAMPLE, "return t.state('f-2503412501bb');", host={"docs": _docs_for("f-2503412501bb", "aligned")})
     assert stored_aligned["result"]["pressed"] == ["false", "false"] and stored_aligned["result"]["note"] == "kept note"
-    restored = _page(PR_SAMPLE, "return t.state('f-e490915872bd');", host={"docs": _docs_for("f-e490915872bd", "accept")})
+    restored = _page(PR_SAMPLE, "return t.state('f-2503412501bb');", host={"docs": _docs_for("f-2503412501bb", "accept")})
     assert restored["result"]["pressed"] == ["true", "false"] and restored["result"]["note"] == "kept note"
     restored = _page(discovery, "return t.state('plan-day');", host={"docs": _docs_for("plan-day", "aligned")})
     assert restored["result"]["pressed"] == ["true", "false"]
@@ -413,7 +414,7 @@ def test_discovery_controls_stay_on_with_the_pr_schema_and_an_unlabelled_value_s
     assert all(off["result"]["a"]["disabled"]) and all(off["result"]["b"]["disabled"])
     pr_files = _sample_files(PR_SAMPLE)
     pr_files["sheet.schema.json"] = files["sheet.schema.json"]
-    pr_off = _run_page(pr_files, scenario=PRELUDE + "return t.state('f-e490915872bd').disabled;")
+    pr_off = _run_page(pr_files, scenario=PRELUDE + "return t.state('f-2503412501bb').disabled;")
     assert all(pr_off["result"])
 
 
@@ -511,7 +512,7 @@ def test_a_verdict_outside_the_sheets_kind_restores_only_its_note():
 
 # Bites on: a PR sheet's verdict controls left on when the browser cannot compute the digest, or the no-digest caption not shown.
 def test_without_a_digest_the_verdict_controls_are_off_and_the_caption_says_why():
-    page = _page(PR_SAMPLE, "return { verdict: verdictState(), captions: verdictCaptions(), card: t.state('f-e490915872bd').disabled };", host={"noCrypto": True})
+    page = _page(PR_SAMPLE, "return { verdict: verdictState(), captions: verdictCaptions(), card: t.state('f-2503412501bb').disabled };", host={"noCrypto": True})
     assert all(page["result"]["verdict"]["disabled"])
     assert page["result"]["captions"][0] == {"hidden": False, "text": NO_DIGEST_LINE}
     assert not any(page["result"]["card"])
@@ -521,19 +522,19 @@ def test_without_a_digest_the_verdict_controls_are_off_and_the_caption_says_why(
 def test_the_count_line():
     page = _page(PR_SAMPLE, """
       const counts = [t.count()];
-      t.click(t.button("f-e490915872bd", "Accept"));
+      t.click(t.button("f-2503412501bb", "Accept"));
       await t.tick();
       counts.push(t.count());
-      t.click(t.button("f-a5cb88b79507", "Keep it"));
+      t.click(t.button("f-042c23fe7f58", "Keep it"));
       await t.tick();
       counts.push(t.count());
       t.click(t.button("i-6f4a068f1373", "Something else"));
       await t.tick();
       counts.push(t.count());
-      t.click(t.button("f-e490915872bd", "Discuss"));
+      t.click(t.button("f-2503412501bb", "Discuss"));
       await t.tick();
       counts.push(t.count());
-      t.click(t.button("f-a5cb88b79507", "Fix before merge"));
+      t.click(t.button("f-042c23fe7f58", "Fix before merge"));
       await t.tick();
       counts.push(t.count());
       return counts;
@@ -545,7 +546,7 @@ def test_the_count_line():
     assert waiting["result"] == "3 items · answers not loaded"
     empty = _page(_emptied(PR_SAMPLE), "return t.count();")
     assert empty["result"] == PW["nothingToAcceptCount"] == "Nothing to accept"
-    one = _page(_with(PR_SAMPLE, lambda clone: clone.__setitem__("cards", clone["cards"][:1])), "return t.count();", host={"docs": _docs_for("f-e490915872bd", "accept", note="")})
+    one = _page(_with(PR_SAMPLE, lambda clone: clone.__setitem__("cards", clone["cards"][:1])), "return t.count();", host={"docs": _docs_for("f-2503412501bb", "accept", note="")})
     assert one["result"] == "1 of 1 accepted"
 
 
@@ -643,7 +644,7 @@ def test_every_new_word_comes_from_the_words_file():
     stack = _with_previous(STACK_SAMPLE)
     stack = _with(stack, lambda clone: clone["prSheet"]["whatChanged"]["reviewers"][0].__setitem__("family", None))
     collect(stack, """
-      t.click(t.button("f-a64d7a0d1734", "Keep it"));
+      t.click(t.button("f-8bd7e2d907ef", "Keep it"));
       await t.tick();
       return t.everyText();
     """)
@@ -691,12 +692,12 @@ def test_the_template_types_none_of_the_new_words():
 # The merge verdict's lock, send-back and clear (C9 layer 1b).
 # ---------------------------------------------------------------------------------------------------------------------
 
-CARD_A, CARD_B, CARD_C = "f-e490915872bd", "f-a5cb88b79507", "i-6f4a068f1373"
+CARD_A, CARD_B, CARD_C = "f-2503412501bb", "f-042c23fe7f58", "i-6f4a068f1373"
 
 # What a lock scenario can read and do: the three cards of the pr sample (A: Accept / Discuss; B: Keep it, Fix in a follow-up,
 # Fix before merge; C: Ten minutes, One minute (sends the PR back)), and the verdict card's lock, unlock line and send-back message.
 LOCK = r"""
-const A = "f-e490915872bd", B = "f-a5cb88b79507", C = "i-6f4a068f1373";
+const A = "f-2503412501bb", B = "f-042c23fe7f58", C = "i-6f4a068f1373";
 const rowNode = () => verdict().children.find((child) => hasClass(child, "answer-row"));
 const unlockLine = () => verdict().children.find((child) => child.id === "verdict-unlocks");
 const sendBackLine = () => verdict().children.find((child) => child.id === "verdict-send-back");
