@@ -16,6 +16,7 @@ import pytest
 import guardian_census as gcensus
 import guardian_lens as gl
 import guardian_lens_hotspots as hot
+import guardian_tools as gt
 from test_guardian_conformance import assert_lens_conformance
 
 
@@ -1204,3 +1205,273 @@ def test_no_subprocess_import_in_module():
         src = fh.read()
     assert "import subprocess" not in src
     assert "guardian_collect" in src
+
+
+# ---------------------------------------------------------------------------
+# Batched lizard / radon + collector-cap honesty (#1754 F3)
+# ---------------------------------------------------------------------------
+
+
+_LOG = "2026-05-01T00:00:00+00:00\n"
+
+
+def _lizard_row(path, ccn=15, name="hot"):
+    return "20,%d,10,0,20,%s@1-20@%s,%s,%s,sig,1,20\n" % (ccn, name, path, path, name)
+
+
+class PerFileTools(Tools):
+    """lizard / radon emit one row per file operand, so batching is observable.
+
+    ``rows`` maps a file basename to the literal stdout lizard returns when that file is
+    the only operand it owns (``""`` = empty); ``fail_on`` basenames make any run that
+    includes them exit 1. Unlisted files get a CCN-15 row keyed by the operand path.
+    """
+
+    def __init__(self, *, rows=None, fail_on=(), **kw):
+        super().__init__(**kw)
+        self.rows = rows or {}
+        self.fail_on = set(fail_on)
+
+    def __call__(self, argv, **kwargs):
+        argv = [str(a) for a in argv]
+        prog = os.path.basename(argv[0])
+        if prog not in ("lizard", "radon"):
+            return super().__call__(argv, **kwargs)
+        self.calls.append(argv)
+        ops = [a for a in argv[1:] if a.endswith((".js", ".py"))]
+        if any(os.path.basename(o) in self.fail_on for o in ops):
+            return self._R("", 1)
+        if prog == "radon":
+            return self._R(json.dumps({
+                o: [{"complexity": 12, "name": "f", "lineno": 1}] for o in ops}))
+        return self._R("".join(
+            self.rows.get(os.path.basename(o), _lizard_row(o)) for o in ops))
+
+
+def _repo(tmp_path, n, ext="js"):
+    names = ["f%d.%s" % (i, ext) for i in range(n)]
+    for name in names:
+        _write(tmp_path, name, 20)
+    return names
+
+
+def _per_file_run(names, **kw):
+    return PerFileTools(
+        shallow="false\n", log=_LOG,
+        numstat="".join("20\t0\t%s\n" % n for n in names), lsfiles=names, **kw)
+
+
+def _tool_calls(run, prog):
+    return [c for c in run.calls if os.path.basename(c[0]) == prog]
+
+
+def _operand_names(call):
+    return [os.path.basename(a) for a in call if a.endswith((".js", ".py"))]
+
+
+def _set_budget(monkeypatch, budget, env_failed=False):
+    monkeypatch.setattr(
+        gcensus, "argv_operand_budget_detail", lambda repo, fixed: (budget, env_failed))
+
+
+def test_lizard_batches_to_argv_budget_and_matches_unbatched(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 6)
+    whole = _per_file_run(names)
+    unbatched = hot.HotspotsLens().collect(_ctx(tmp_path, whole))
+    assert len(_tool_calls(whole, "lizard")) == 1  # under the budget: one call, as before
+
+    one = gcensus.operand_payload_bytes(str(tmp_path), [names[0]])
+    budget = one * 2 + 1  # two files per run
+    _set_budget(monkeypatch, budget)
+    run = _per_file_run(names)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    calls = _tool_calls(run, "lizard")
+    assert len(calls) == 3
+    for call in calls:
+        assert call[:4] == ["lizard", "--csv", "-l", "javascript"]  # argv shape unchanged
+        assert "--" not in call
+        assert gcensus.operand_payload_bytes(str(tmp_path), _operand_names(call)) <= budget
+    assert gl.classify_collect(out)[0] == "collected"
+    assert len(out["candidates"]) == 6
+    assert out["candidates"] == unbatched["candidates"]
+
+
+def test_radon_batches_to_argv_budget(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 4, ext="py")
+    one = gcensus.operand_payload_bytes(str(tmp_path), [names[0]])
+    budget = one * 2 + 1
+    _set_budget(monkeypatch, budget)
+    run = _per_file_run(names)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    calls = _tool_calls(run, "radon")
+    assert len(calls) == 2
+    for call in calls:
+        assert call[:4] == ["radon", "cc", "-s", "-j"]
+        assert gcensus.operand_payload_bytes(str(tmp_path), _operand_names(call)) <= budget
+    assert gl.classify_collect(out)[0] == "collected"
+    assert sorted(c["path"] for c in out["candidates"]) == sorted(names)
+
+
+def test_truncated_multi_file_batch_is_split_and_retried(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 4)
+    row_len = len(_lizard_row(os.path.join(str(tmp_path), names[0])))
+    # one file's rows fit the cap, two files' rows do not (git output stays under it)
+    monkeypatch.setattr(gt, "MAX_OUTPUT_BYTES", row_len)
+    run = _per_file_run(names)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    calls = _tool_calls(run, "lizard")
+    assert len(_operand_names(calls[0])) == 4  # the first attempt was the whole batch
+    assert len(calls) > 1
+    assert gl.classify_collect(out)[0] == "collected"
+    assert sorted(c["path"] for c in out["candidates"]) == sorted(names)
+    assert out["diagnostics"]["complexityCoverage"]["javascript"] == "collected"
+
+
+def test_single_file_over_collector_cap_fails_js_naming_cap(tmp_path, monkeypatch):
+    _write(tmp_path, "hot.js", 20)
+    row_len = len(_lizard_row(os.path.join(str(tmp_path), "hot.js")))
+    monkeypatch.setattr(gt, "MAX_OUTPUT_BYTES", row_len - 1)
+    run = _per_file_run(["hot.js"])
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status != "collected"
+    assert status == "not-collected"
+    assert "collector cap" in reason
+    assert "hot.js" in reason and "truncated-output" in reason
+    assert out["candidates"] == []
+    assert out["digest"] is None
+
+
+def test_single_file_over_cap_in_mixed_repo_is_partial_not_clean_js(tmp_path, monkeypatch):
+    _write(tmp_path, "a.py", 20)
+    _write(tmp_path, "hot.js", 20)
+    row_len = len(_lizard_row(os.path.join(str(tmp_path), "hot.js")))
+    monkeypatch.setattr(gt, "MAX_OUTPUT_BYTES", row_len - 1)
+    run = _per_file_run(["a.py", "hot.js"])
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "collector cap" in reason
+    cov = out["diagnostics"]["complexityCoverage"]
+    assert cov["python"] == "collected"
+    assert cov["javascript"] == "failed"
+    assert "hotspots:hot.js" not in {c["id"] for c in out["candidates"]}
+
+
+def test_aggregate_empty_guard_one_empty_batch_with_rows_collects(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 2)
+    _set_budget(monkeypatch, gcensus.operand_payload_bytes(str(tmp_path), [names[0]]))
+    run = _per_file_run(names, rows={"f0.js": ""})
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert len(_tool_calls(run, "lizard")) == 2
+    assert gl.classify_collect(out)[0] == "collected"
+    assert [c["path"] for c in out["candidates"]] == ["f1.js"]
+
+
+def test_aggregate_empty_guard_all_batches_empty_fails_js(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 2)
+    _set_budget(monkeypatch, gcensus.operand_payload_bytes(str(tmp_path), [names[0]]))
+    run = _per_file_run(names, rows={"f0.js": "", "f1.js": ""})
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert len(_tool_calls(run, "lizard")) == 2
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "lizard returned empty output" in reason
+
+
+def test_batch_with_nonempty_output_parsing_to_zero_fails_js(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 2)
+    _set_budget(monkeypatch, gcensus.operand_payload_bytes(str(tmp_path), [names[0]]))
+    run = _per_file_run(names, rows={"f1.js": "1,2,3\n"})
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "reported-nonzero-parsed-zero" in reason
+    assert out["candidates"] == []
+
+
+def test_other_batch_failure_fails_js_without_partial_merge(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 2)
+    _set_budget(monkeypatch, gcensus.operand_payload_bytes(str(tmp_path), [names[0]]))
+    run = _per_file_run(names, fail_on={"f1.js"})
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "lizard failed" in reason and "exited 1" in reason
+    assert out["candidates"] == []  # f0.js's good batch is not merged in
+
+
+@pytest.mark.parametrize("env_failed", [False, True])
+def test_zero_argv_budget_fails_js_naming_budget_and_spawns_nothing(
+        tmp_path, monkeypatch, env_failed):
+    names = _repo(tmp_path, 2)
+    _set_budget(monkeypatch, 0, env_failed=env_failed)
+    run = _per_file_run(names)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "argv operand budget is 0 bytes" in reason
+    assert ("child-env measurement failed" in reason) is env_failed
+    assert _tool_calls(run, "lizard") == []
+
+
+def test_file_over_argv_budget_fails_js_naming_it(tmp_path, monkeypatch):
+    names = _repo(tmp_path, 2)
+    _set_budget(monkeypatch, gcensus.operand_payload_bytes(str(tmp_path), [names[0]]) - 1)
+    run = _per_file_run(names)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "argv operand budget" in reason and "f0.js" in reason
+    assert _tool_calls(run, "lizard") == []
+
+
+@pytest.mark.parametrize("tool, ext, prefix", [
+    ("lizard", "js", ["lizard", "--csv", "-l", "javascript"]),
+    ("radon", "py", ["radon", "cc", "-s", "-j"]),
+])
+def test_budget_prefix_and_run_prefix_are_byte_identical_per_tool(
+        tmp_path, monkeypatch, tool, ext, prefix):
+    names = _repo(tmp_path, 2, ext=ext)
+    measured = []
+
+    def capture_budget(repo, fixed):
+        measured.append(list(fixed))
+        return (10 ** 9, False)
+
+    monkeypatch.setattr(gcensus, "argv_operand_budget_detail", capture_budget)
+    run = _per_file_run(names)
+    outputs, err = hot._run_batched(_ctx(tmp_path, run), str(tmp_path), names, tool)
+
+    assert err is None
+    assert hot._fixed_argv_for(tool) == prefix
+    assert measured == [prefix]
+    calls = _tool_calls(run, tool)
+    assert len(calls) == 1
+    assert calls[0][:len(prefix)] == measured[0]
+
+
+def test_unknown_hotspot_tool_fails_without_spawning(tmp_path):
+    names = _repo(tmp_path, 1)
+    run = _per_file_run(names)
+    ctx = _ctx(tmp_path, run)
+
+    assert hot._fixed_argv_for("eslint") is None
+    outputs, err = hot._run_batched(ctx, str(tmp_path), names, "eslint")
+    assert outputs is None and "eslint" in err and "unknown hotspot tool" in err
+    sink = []
+    err = hot._run_batch(ctx, str(tmp_path), names, "eslint", sink)
+    assert "eslint" in err and "unknown hotspot tool" in err
+    assert sink == []
+    assert run.calls == []

@@ -850,16 +850,20 @@ def test_sweep_malformed_expires_at_unrecoverable(tmp_path):
     )
 
 
-def test_sweep_listdir_failure_warns(tmp_path):
+def test_sweep_listdir_failure_warns(tmp_path, monkeypatch):
     artifacts = _artifacts_dir(tmp_path)
     key = store.artifact_key(_BRANCH, _SLOT)
     class_dir = os.path.join(artifacts, key, pa.CLASS_STEP_LOG)
     os.makedirs(class_dir, mode=0o700)
-    os.chmod(class_dir, 0o000)
-    try:
-        out = pa.sweep(artifacts, now=_NOW)
-    finally:
-        os.chmod(class_dir, 0o700)
+    real_listdir = pa.os.listdir
+
+    def refuse_listdir(path=".", *a, **kw):
+        if str(path) == class_dir:
+            raise PermissionError("refused")
+        return real_listdir(path, *a, **kw)
+
+    monkeypatch.setattr(pa.os, "listdir", refuse_listdir)
+    out = pa.sweep(artifacts, now=_NOW)
     assert any(
         e["artifactKey"] == key and e["class"] == pa.CLASS_STEP_LOG
         and e["reason"] == pa.REASON_SWEEP_FAILED
@@ -867,16 +871,20 @@ def test_sweep_listdir_failure_warns(tmp_path):
     )
 
 
-def test_sweep_failed_unlink_warns_and_retains_not_removed(tmp_path):
+def test_sweep_failed_unlink_warns_and_retains_not_removed(tmp_path, monkeypatch):
     artifacts = _artifacts_dir(tmp_path)
     kept = _retain_step_log(artifacts, retention_hours=1)
     later = pa._add_hours_iso8601(_NOW, 2)
-    class_dir = os.path.dirname(kept["path"])
-    os.chmod(class_dir, 0o500)
-    try:
-        out = pa.sweep(artifacts, now=later)
-    finally:
-        os.chmod(class_dir, 0o700)
+    refused_paths = {kept["path"], kept["sidecar"]}
+    real_unlink = pa.os.unlink
+
+    def refuse_unlink(path, *a, **kw):
+        if str(path) in refused_paths:
+            raise PermissionError("refused")
+        return real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(pa.os, "unlink", refuse_unlink)
+    out = pa.sweep(artifacts, now=later)
     assert os.path.exists(kept["path"])
     assert any(
         e["artifactId"] == kept["artifactId"] and e["reason"] == pa.REASON_SWEEP_FAILED

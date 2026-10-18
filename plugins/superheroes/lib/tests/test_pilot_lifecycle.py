@@ -453,23 +453,20 @@ def test_create_slot_twice_refuses_record_exists():
         shutil.rmtree(tmp)
 
 
-def test_mutate_oserror_returns_lock_unavailable():
+def test_mutate_oserror_returns_lock_unavailable(monkeypatch):
     tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
-        os.makedirs(slots_path, mode=0o555)
-        slot_dir = os.path.join(slots_path, SLOT)
-        try:
-            os.makedirs(slot_dir)
-        except OSError:
-            pass
-        try:
-            with open(os.path.join(slot_dir, ".probe"), "w", encoding="utf-8") as fh:
-                fh.write("probe")
-        except OSError:
-            pytest.skip(
-                "read-only slots directory did not prevent writes for this user"
-            )
+        os.makedirs(os.path.join(slots_path, SLOT))
+        lock_file = pl.lock_path(slots_path, SLOT)
+        real_open = pl.os.open
+
+        def refuse_open(name, flags, *a, **kw):
+            if str(name) == lock_file:
+                raise PermissionError("refused")
+            return real_open(name, flags, *a, **kw)
+
+        monkeypatch.setattr(pl.os, "open", refuse_open)
         result = pl.mutate(slots_path, SLOT, lambda r: r)
         assert result == {
             "ok": False,
@@ -948,7 +945,7 @@ def test_read_record_unhashable_history_refuses(field, value):
         shutil.rmtree(tmp)
 
 
-def test_create_slot_refuses_unreadable_existing_record():
+def test_create_slot_refuses_unreadable_existing_record(monkeypatch):
     tmp = _tmp_dir()
     try:
         slots_path = os.path.join(tmp, "slots")
@@ -959,28 +956,23 @@ def test_create_slot_refuses_unreadable_existing_record():
             json.dump(rec, fh)
         original_ino = os.stat(path).st_ino
         original_bytes = open(path, "rb").read()
-        os.chmod(path, 0o000)
-        try:
-            with open(path, "rb") as probe_fh:
-                probe_fh.read(1)
-        except OSError:
-            pytest.skip(
-                "mode 0o000 record file did not prevent read for this user"
-            )
+        real_open = pl.os.open
+
+        def refuse_open(name, flags, *a, **kw):
+            if str(name) == path:
+                raise PermissionError("refused")
+            return real_open(name, flags, *a, **kw)
+
+        monkeypatch.setattr(pl.os, "open", refuse_open)
         result = pl.create_slot(slots_path, SLOT, ACCOUNTS, now=NOW)
         assert result == {
             "ok": False,
             "reason": pl.REASON_RECORD_UNREADABLE,
             "record": None,
         }
-        os.chmod(path, 0o644)
         assert os.stat(path).st_ino == original_ino
         assert open(path, "rb").read() == original_bytes
     finally:
-        try:
-            os.chmod(path, 0o644)
-        except OSError:
-            pass
         shutil.rmtree(tmp)
 
 

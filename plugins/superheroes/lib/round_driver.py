@@ -128,6 +128,26 @@ GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
+def _fixer_create_items(batch):
+    """The ``file`` of each batch row that is a break-it finding the driver itself stamped for that path.
+
+    The test file such a finding names is written by the fixer, so it does not exist when the
+    order is linted. The stamp is the driver's: compile strips a seat-supplied one and only the
+    break-it intercept stamps a copy, so an unstamped row, or one stamped for another path, is
+    never exempted.
+    """
+    out = []
+    for row in batch if isinstance(batch, list) else []:
+        if not isinstance(row, dict) or not break_it.is_break_it(row):
+            continue
+        stamp = row.get(break_it.RUN_FIELD)
+        # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
+        if (isinstance(stamp, dict) and isinstance(stamp.get("path"), str) and stamp["path"]
+                and stamp["path"] == row.get("file")):
+            out.append(row["file"])
+    return out
+
+
 def _order_lint_text(order_text, context):
     """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's.
 
@@ -3285,7 +3305,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
-    intercepted, runs, exempt = break_it.intercept(break_it_raw, repo_root, head)
+    # axis: a break-it python run executes under the project's own interpreter launcher read from the verify command, never a PATH python — see bite-proof record wo_3_1910_break_it_interpreter
+    intercepted, runs, exempt = break_it.intercept(
+        break_it_raw, repo_root, head,
+        interpreter=break_it.project_interpreter(config.get("verifyCommand")))
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
     # test role's first finding, so the original order holds.
     break_it_ids = {id(g) for g in break_it_raw}
@@ -3740,6 +3763,12 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
+    # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors
+    if not state["_verified"]:
+        _decision(state, "synthesis-no-survivors",
+                  "verification left no findings, so no grouping seat was dispatched")
+        _fold_synthesis(state, config, {"grouping": []})
+        return
     if _nonpanel_unseatable(state, session_dir, P_SYNTHESIS):
         # No grouping seat outside the makers' families on a proven synthesis cell: no order is
         # emitted and the round folds exactly as an empty grouping would — every verified finding
@@ -6804,7 +6833,8 @@ def _break_it_kept_step(state, config):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
                          "reason": disposition})
             continue
-        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
+                                  interpreter=break_it.project_interpreter(config.get("verifyCommand")))
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}
         rows.append(row)
@@ -10904,7 +10934,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             lint_text = _order_lint_text(order_text, context)
             lint = order_lint.check_text(
                 lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
-                allow_payload_contract=context.get("host_seat") is True)
+                allow_payload_contract=context.get("host_seat") is True,
+                create_items=_fixer_create_items(pending.get("batch") or []))
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"
