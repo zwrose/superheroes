@@ -43,6 +43,13 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
 - **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
 - **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
 
+### Hooks: the plugin approves its own iPhone commands
+
+- A third `PreToolUse` command on the `Bash` matcher, `hooks/iphone_allow.py`, runs after the worktree guard. It approves (`permissionDecision: "allow"`) only one plain call, `python3 [-B] <plugin root>/lib/iphone_check.py <verb> …`, where the verb is `preflight`, `boot`, `open`, `drive`, `shot`, `read`, `judge` or `render`. A `drive` call needs an AXe step after `--` that is `tap`, `type`, `button`, `swipe` or `describe-ui`. `judge` may read its step as `judge < <file>`.
+- It never denies. Any other command gets no decision from it, so the normal permission flow applies, and the worktree guard still denies what it denies. Direct `axe` calls are not covered.
+- It is wired on Claude Code only. The Codex hooks file stays empty.
+- A pilot call gets the approval only when it writes the absolute plugin root, one call per command, with no `$ROOT_DIR` variable and no chaining.
+
 ### Launcher: cloud launch
 
 - A cloud launch now refuses unless the launching checkout is on a named branch whose local head and whose tip on `origin` are both the premise's `baseCommit`. The new refusal reasons are `launch-cloud-checkout-unreadable`, `launch-cloud-checkout-off-base`, `launch-cloud-checkout-branch-not-on-remote` and `launch-cloud-checkout-remote-unchecked`. Each refusal result carries `checkout`, `checkoutBranch`, `checkoutHead` and `baseCommit`, and `remoteBranchHead` once the remote was asked. These refusals do not fall back to the owner's machine. Put the checkout on the base, pushed, and launch again.
