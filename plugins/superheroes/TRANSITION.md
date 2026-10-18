@@ -17,7 +17,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
-- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`. See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
+- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS outside a cloud container; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; a non-cloud Linux host with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`. See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
+- **After switching.** **A cloud build with `localSockets` on now opens claude write dispatches, with every Unix socket reachable from the sandbox, the session's messaging socket included.** See [Claude write sandbox: localSockets opens in a cloud container](#claude-write-sandbox-localsockets-opens-in-a-cloud-container).
 
 ### PR sheet: leftovers carry the decision spine
 
@@ -29,6 +30,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - The unsupported-platform refusal now names only `localSockets` off macOS; the token `engine-config:sandbox-access-unsupported-platform` and the result keys are unchanged.
 - A Linux run with `localPorts` journals `access.localPorts: true` and writes `network.allowLocalBinding: true`.
+
+### Claude write sandbox: localSockets opens in a cloud container
+
+- A Linux open with `localSockets` on, run in a cloud container (`CLAUDE_CODE_REMOTE` exactly `true`), journals a new `access.allUnixSockets` key: a plain-language string, present only when the block is lifted. `access.localSocketDirs` is then `[]` and no `claudeTmpBase` is journaled.
+- The spawned settings carry `network.allowAllUnixSockets: true` and no `allowUnixSockets`; every Unix socket is reachable from the sandbox, the session's own messaging socket included. File-write and network bounds stay.
+- The unsupported-platform refusal off macOS now names only non-cloud hosts; the token `engine-config:sandbox-access-unsupported-platform` is unchanged.
 
 ### Review record: carried leftovers are re-checked against the head
 

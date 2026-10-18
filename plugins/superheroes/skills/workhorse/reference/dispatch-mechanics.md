@@ -782,7 +782,8 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   under `strictAllowlist`); `localPorts` allows listening and connecting on loopback, including a bind
   on 0.0.0.0 (`sandbox.network.allowLocalBinding`); `localSockets` allows Unix-domain sockets under
   the sandbox's per-user temp dir and nothing else, so no Docker socket
-  (`sandbox.network.allowUnixSockets`); `extraWritePaths` adds writable roots
+  (`sandbox.network.allowUnixSockets`) outside a cloud container; in a cloud container on Linux it
+  allows every path (`sandbox.network.allowAllUnixSockets`); `extraWritePaths` adds writable roots
   (`sandbox.filesystem.allowWrite`). The deny list (the git hooks, the git config files, the worktree
   identity files) wins over any extra path. Localhost binding is already on for every run on macOS,
   so setting `localPorts` adds nothing there; on Linux it opens (loopback inside the sandbox's own
@@ -799,11 +800,13 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   a `sandboxAccess` the open cannot use: `engine-config:sandbox-access-malformed`, or
   `engine-config:sandbox-access-unreadable` when a `core.md` that exists cannot be read, parsed, or
   resolved (an absent `core.md` is all off). `localPorts` works on every host (on Linux the
-  sandbox's own network namespace gives loopback, with no reach to the host's); `localSockets` is
-  macOS-only, because the Linux sandbox blocks Unix sockets on every path and its only switch lifts
-  the block for all of them, so an open off macOS that asks for it refuses
-  `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
-  An `extraWritePaths` entry that resolves to `/` through a symlink refuses
+  sandbox's own network namespace gives loopback, with no reach to the host's); `localSockets` on
+  macOS is the bounded per-user temp-dir grant. In a cloud container (`CLAUDE_CODE_REMOTE` exactly
+  `true`) on Linux, the open lifts the Unix-socket block for every path (the record's
+  `access.allUnixSockets` says so and why, and the session's own messaging socket is then reachable
+  from the sandbox). Elsewhere off macOS it still refuses
+  `engine-config:sandbox-access-unsupported-platform`, because the Linux sandbox blocks Unix sockets
+  on every path and its only switch lifts the block for all of them. An `extraWritePaths` entry that resolves to `/` through a symlink refuses
   `engine-config:sandbox-access-malformed`. A `/tmp` whose realpath resolves to `/` is not journaled.
 - **`ps` is blocked** inside the sandbox (measured on macOS), although `ps` is among the allow rules:
   the rule only skips the approval prompt and the sandbox itself still blocks it. Pass `--requires-process-listing`

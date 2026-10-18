@@ -17,6 +17,12 @@ Detector axes (bite-proof):
 - test_*_unsupported_platform_* — refusal: local access on a host that cannot grant it
 - test_extra_write_path_resolving_to_root_* — refusal: an alias of / never reaches allowWrite
 - test_local_socket_dir_* — mapping: the grant follows the CLI's own temp-dir rule
+- test_cloud_local_sockets_* — mapping: a cloud open lifts the socket block and the record says so
+- test_non_cloud_local_sockets_* — refusal: only CLAUDE_CODE_REMOTE exactly "true" lifts the block
+- test_cloud_without_local_sockets_* — mapping: a cloud open without localSockets grants no socket
+- test_macos_cloud_local_sockets_* — preservation: macOS keeps the bounded grant in a cloud container
+- test_settings_follow_the_recorded_all_unix_sockets_* — mapping, purity: settings read the record
+- test_access_validity_*_all_unix_sockets* — journal validity: a contradictory or ill-typed lift refuses
 """
 import json
 import os
@@ -97,6 +103,8 @@ def _pin_store_root(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_TMPDIR", raising=False)
     # local access is macOS-only; the tests that exercise it must not depend on the host running them
     monkeypatch.setattr(ED, "_host_platform", lambda: "darwin")
+    # the suite may run inside a cloud container; the cloud branch is opted into per test
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
 
 
 # --- harness: a core.md in the linked worktree the open resolves from ------------------------
@@ -154,7 +162,8 @@ def _opened_settings(run_dir, fake):
     return opened, settings
 
 
-def _assert_options(opened, settings, *, domains=None, ports=False, sockets=None, extra=None):
+def _assert_options(opened, settings, *, domains=None, ports=False, sockets=None, extra=None,
+                    all_sockets=False):
     """Every option not named stays absent or off in the settings."""
     network = settings["sandbox"]["network"]
     allow_write = settings["sandbox"]["filesystem"]["allowWrite"]
@@ -173,6 +182,11 @@ def _assert_options(opened, settings, *, domains=None, ports=False, sockets=None
         assert network["allowLocalBinding"] is True
     else:
         assert "allowLocalBinding" not in network
+    if all_sockets:
+        assert network["allowAllUnixSockets"] is True
+        assert "allowUnixSockets" not in network
+    else:
+        assert "allowAllUnixSockets" not in network
     if sockets is None:
         assert "allowUnixSockets" not in network
     else:
@@ -431,7 +445,8 @@ def test_unreadable_calibration_refuses_before_open(tmp_path, monkeypatch):
 
 
 # axis: refusal — off macOS a calibration that turns on localSockets refuses, with or without
-# localPorts beside it; the Linux sandbox has no path-bounded Unix-socket grant (#1944)
+# localPorts beside it; the Linux sandbox has no path-bounded Unix-socket grant (#1944). This is the
+# non-cloud case: CLAUDE_CODE_REMOTE is unset here (the autouse fixture), see the cloud tests below.
 @pytest.mark.parametrize("block", [
     pytest.param({"localSockets": True}, id="local-sockets"),
     pytest.param({"localSockets": True, "localPorts": True}, id="local-sockets-and-ports"),
@@ -484,6 +499,112 @@ def test_non_local_access_on_unsupported_platform_still_opens(tmp_path, monkeypa
         tmp_path, monkeypatch, _core_text({"allowedDomains": ["pypi.org"]}))
     opened, settings = _opened_settings(run_dir, fake)
     _assert_options(opened, settings, domains=["pypi.org"])
+
+
+def _set_cloud(monkeypatch, value):
+    """Set CLAUDE_CODE_REMOTE to ``value``, or delete it when ``value`` is None."""
+    if value is None:
+        monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_REMOTE", value)
+
+
+# axis: mapping — in a cloud container on Linux a localSockets calibration opens, the record names
+# the lift in plain language with no path list or temp base, and the spawned settings carry the
+# all-sockets switch and no bounded list (#1947)
+@pytest.mark.parametrize("block", [
+    pytest.param({"localSockets": True}, id="local-sockets"),
+    pytest.param({"localSockets": True, "localPorts": True}, id="local-sockets-and-ports"),
+])
+def test_cloud_local_sockets_open_lifts_the_socket_block(tmp_path, monkeypatch, block):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    _set_cloud(monkeypatch, "true")
+    wt, run_dir, res, fake = _open_with_core(tmp_path, monkeypatch, _core_text(block))
+    opened, settings = _opened_settings(run_dir, fake)
+    recorded = opened["claudeWriteSandbox"]
+    assert recorded["access"]["allUnixSockets"] == (
+        "all Unix sockets allowed, including this session's own messaging socket: the Linux "
+        "sandbox cannot bound Unix sockets by path, and a cloud container "
+        "(CLAUDE_CODE_REMOTE=true) already contains what the socket block guards; file-write "
+        "and network bounds stay"
+    )
+    assert recorded["access"]["localSocketDirs"] == []
+    assert "claudeTmpBase" not in recorded
+    network = settings["sandbox"]["network"]
+    assert network["allowAllUnixSockets"] is True
+    assert "allowUnixSockets" not in network
+    _assert_options(opened, settings, ports=block.get("localPorts", False), all_sockets=True)
+
+
+# axis: refusal — off macOS the block lifts only when CLAUDE_CODE_REMOTE is exactly "true"; any
+# other spelling, or none, still refuses before anything opens (#1947)
+@pytest.mark.parametrize("remote", [
+    pytest.param(None, id="absent"),
+    pytest.param("True", id="capitalized"),
+    pytest.param("1", id="one"),
+    pytest.param("yes", id="yes"),
+    pytest.param(" true", id="leading-space"),
+    pytest.param("true ", id="trailing-space"),
+    pytest.param("", id="empty"),
+])
+def test_non_cloud_local_sockets_refuses_before_open(tmp_path, monkeypatch, remote):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    _set_cloud(monkeypatch, remote)
+    wt, run_dir, res, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text({"localSockets": True}))
+    assert res["detail"] == "engine-config:sandbox-access-unsupported-platform"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+    assert _no_run_opened(run_dir)
+
+
+# axis: mapping — a cloud open whose calibration does not turn on localSockets grants no Unix
+# socket of either kind and records no lift (#1947)
+@pytest.mark.parametrize("core", [
+    pytest.param(_core_text(), id="no-sandbox-access-key"),
+    pytest.param(_core_text({"localSockets": False}), id="local-sockets-off"),
+    pytest.param(_core_text({"localPorts": True}), id="local-ports-only"),
+])
+def test_cloud_without_local_sockets_grants_no_socket(tmp_path, monkeypatch, core):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    _set_cloud(monkeypatch, "true")
+    wt, run_dir, res, fake = _open_with_core(tmp_path, monkeypatch, core)
+    opened, settings = _opened_settings(run_dir, fake)
+    assert "allUnixSockets" not in opened["claudeWriteSandbox"]["access"]
+    ports = opened["claudeWriteSandbox"]["access"]["localPorts"]
+    _assert_options(opened, settings, ports=ports)
+
+
+# axis: preservation — macOS keeps the path-bounded grant whether or not the cloud flag is set;
+# the all-sockets switch is never emitted there (#1947)
+def test_macos_cloud_local_sockets_keeps_the_bounded_grant(tmp_path, monkeypatch):
+    cc_tmp = "/tmp/cc-tmp"  # short enough for the CLI to honor
+    monkeypatch.setenv("CLAUDE_CODE_TMPDIR", cc_tmp)
+    monkeypatch.setattr(ED, "_host_platform", lambda: "darwin")
+    _set_cloud(monkeypatch, "true")
+    wt, run_dir, res, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text({"localSockets": True}))
+    opened, settings = _opened_settings(run_dir, fake)
+    expected = os.path.realpath(os.path.join(cc_tmp, "claude-%d" % os.getuid()))
+    assert opened["claudeWriteSandbox"]["access"]["localSocketDirs"] == [expected]
+    assert "allUnixSockets" not in opened["claudeWriteSandbox"]["access"]
+    assert settings["sandbox"]["network"]["allowUnixSockets"] == [expected]
+    assert "allowAllUnixSockets" not in settings["sandbox"]["network"]
+    _assert_options(opened, settings, sockets=[expected])
+
+
+# axis: mapping, purity — the settings follow the journaled record alone: a record without
+# allUnixSockets gets no switch even with the cloud flag set, one with it gets the switch (#1947)
+def test_settings_follow_the_recorded_all_unix_sockets_not_the_environment(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    plain = dict(_SANDBOX, access=dict(_ALL_OFF_ACCESS))
+    assert "allUnixSockets" not in plain["access"]
+    network = json.loads(EA.claude_write_sandbox_settings(plain))["sandbox"]["network"]
+    assert "allowAllUnixSockets" not in network
+    lifted = dict(_SANDBOX, access=dict(_ALL_OFF_ACCESS, allUnixSockets="why"))
+    network = json.loads(EA.claude_write_sandbox_settings(lifted))["sandbox"]["network"]
+    assert network["allowAllUnixSockets"] is True
+    assert "allowUnixSockets" not in network
 
 
 def test_extra_write_path_resolving_to_root_refuses_before_open(tmp_path, monkeypatch):
@@ -617,6 +738,29 @@ def test_access_validity_accepts_absent_none_and_wellformed():
     pytest.param(dict(_VALID_ACCESS, allowedDomains=[7]), id="domain-not-str"),
 ])
 def test_access_validity_rejects_malformed_and_refuses_roots_missing(bad):
+    sandbox = dict(_SANDBOX, access=bad)
+    assert EA.claude_write_sandbox_valid(sandbox) is False
+    res = _write_argv(sandbox)
+    assert res["reason"] == "sandbox-roots-missing"
+    assert res["argv"] == []
+
+
+# axis: journal validity — a journaled allUnixSockets must be a non-empty string and sit beside no
+# per-path socket grant; anything else is an invalid journal (#1947)
+def test_access_validity_accepts_all_unix_sockets():
+    lifted = dict(_SANDBOX, access=dict(_ALL_OFF_ACCESS, allUnixSockets="why"))
+    assert EA.claude_write_sandbox_valid(lifted) is True
+
+
+@pytest.mark.parametrize("bad", [
+    pytest.param(dict(_ALL_OFF_ACCESS, allUnixSockets=""), id="empty-string"),
+    pytest.param(dict(_ALL_OFF_ACCESS, allUnixSockets=True), id="true"),
+    pytest.param(dict(_ALL_OFF_ACCESS, allUnixSockets=None), id="none"),
+    pytest.param(
+        dict(_ALL_OFF_ACCESS, allUnixSockets="why", localSocketDirs=["/tmp/claude-0"]),
+        id="beside-socket-dirs"),
+])
+def test_access_validity_rejects_a_bad_all_unix_sockets(bad):
     sandbox = dict(_SANDBOX, access=bad)
     assert EA.claude_write_sandbox_valid(sandbox) is False
     res = _write_argv(sandbox)

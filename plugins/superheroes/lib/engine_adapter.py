@@ -284,8 +284,15 @@ def _sandbox_access_valid(access):
     """The journaled ``access`` object (#1562): absent or None is all-off, a pre-field run."""
     if access is None:
         return True
-    if not isinstance(access, dict) or set(access) != _SANDBOX_ACCESS_KEYS:
+    if not isinstance(access, dict):
         return False
+    if set(access) not in (_SANDBOX_ACCESS_KEYS, _SANDBOX_ACCESS_KEYS | {"allUnixSockets"}):
+        return False
+    if "allUnixSockets" in access:
+        # the lifted block names itself in prose and leaves no per-path grant beside it (#1947)
+        why = access["allUnixSockets"]
+        if not isinstance(why, str) or not why or access["localSocketDirs"] != []:
+            return False
     domains = access["allowedDomains"]
     if not isinstance(domains, list) or not all(isinstance(d, str) and d for d in domains):
         return False
@@ -343,6 +350,8 @@ def claude_write_sandbox_settings(sandbox):
         network["allowLocalBinding"] = True
     if socket_dirs:
         network["allowUnixSockets"] = list(socket_dirs)
+    if access.get("allUnixSockets"):
+        network["allowAllUnixSockets"] = True
     obj = {
         "env": env,
         "permissions": {"allow": list(CLAUDE_WRITE_BASH_ALLOW), "deny": ["WebFetch", "WebSearch"]},

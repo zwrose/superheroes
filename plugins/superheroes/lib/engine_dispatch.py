@@ -1705,8 +1705,16 @@ def _git_scrubbed(cwd, *args, timeout=None):
 # The platform whose sandbox wrapper honors network.allowLocalBinding and network.allowUnixSockets.
 # On Linux the sandbox's own network namespace already gives loopback, so localPorts opens there;
 # its seccomp filter blocks Unix sockets on every path and its only switch lifts the block for all
-# paths, so a bounded socket grant would be recorded but not honored.
+# paths, so a bounded socket grant would be recorded but not honored. In a cloud container the open
+# lifts the block for all paths instead (#1947).
 _LOCAL_ACCESS_PLATFORM = "darwin"
+
+# The plain-language record of a lifted Unix-socket block (#1947), journaled as access.allUnixSockets.
+_ALL_UNIX_SOCKETS_WHY = (
+    "all Unix sockets allowed, including this session's own messaging socket: the Linux sandbox "
+    "cannot bound Unix sockets by path, and a cloud container (CLAUDE_CODE_REMOTE=true) already "
+    "contains what the socket block guards; file-write and network bounds stay"
+)
 
 # Claude Code 2.1.284 builds the sandboxed shell's per-user temp dir, <base>/claude-<uid>, from
 # CLAUDE_CODE_TMPDIR (else /tmp) only when that whole path is at most this many UTF-8 bytes; a
@@ -1798,12 +1806,16 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
         if reason == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
         return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
-    # axis: refusal — off macOS only localSockets refuses; localPorts opens (#1944)
+    # axis: refusal — off macOS only localSockets refuses, unless in a cloud container (#1947);
+    # localPorts opens (#1944)
+    all_unix_sockets = None
     if calibrated["localSockets"] and _host_platform() != _LOCAL_ACCESS_PLATFORM:
-        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM
+        if not cloud_pass._is_cloud(os.environ):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM
+        all_unix_sockets = _ALL_UNIX_SOCKETS_WHY
     socket_dirs = []
     tmp_base = None
-    if calibrated["localSockets"]:
+    if calibrated["localSockets"] and all_unix_sockets is None:
         if not hasattr(os, "getuid"):
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
         # the sandboxed shell's TMPDIR, not the CLI's internal temp dir: a per-user path longer
@@ -1874,6 +1886,8 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
             "extraWritePaths": extra_write_paths,
         },
     }
+    if all_unix_sockets is not None:
+        sandbox["access"]["allUnixSockets"] = all_unix_sockets
     if tmp_base is not None:
         # frozen with the socket grant: every spawn pins it as the child's CLAUDE_CODE_TMPDIR
         sandbox["claudeTmpBase"] = tmp_base

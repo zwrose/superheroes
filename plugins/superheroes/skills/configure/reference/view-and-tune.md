@@ -352,8 +352,9 @@ action that owns it, leaving the rest of the calibration untouched:
   Unix-domain sockets in the sandbox's per-user temp dir; `extraWritePaths` adds writable paths, and
   the deny list (the git hooks, the git config files, the worktree identity files) still wins over
   any extra path. Writes under `/tmp` and localhost binding (macOS) are already on by default for
-  every project, so `localPorts` is redundant on macOS and opens on Linux; `localSockets` is still refused off
-  macOS with `sandbox-access-unsupported-platform`. The Claude Code setting each one maps to is in
+  every project, so `localPorts` is redundant on macOS and opens on Linux; `localSockets` is a bounded
+  grant on macOS, lifts the Unix-socket block for every path on Linux in a cloud container, and is
+  refused on other Linux hosts with `sandbox-access-unsupported-platform`. The Claude Code setting each one maps to is in
   `skills/workhorse/reference/dispatch-mechanics.md` § The claude write sandbox.
   Show the current value from the view's **Sandbox access** block first. Stdin carries a JSON
   object; empty stdin is refused (use `--clear` to remove the key):
