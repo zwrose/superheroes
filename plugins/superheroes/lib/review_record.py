@@ -47,6 +47,7 @@ import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
 import store_core  # noqa: E402
@@ -285,6 +286,11 @@ def _create_comment(pr, repo, body):
     return _send("POST", _api(repo, f"issues/{pr}/comments"), body)
 
 
+def _withheld_paths(repo_root, head_sha, paths):
+    """The changed paths no external reviewer could read in full, from the one rule that builds the view."""
+    return sanitized_view.withheld_review_paths(repo_root, head_sha, paths)
+
+
 def _readers(overrides):
     cloud = cloud_pass._is_cloud(os.environ)
     return {"pr_meta": _pr_meta_rest if cloud else _pr_meta, "issue_body": _issue_body_rest if cloud else _issue_body,
@@ -292,7 +298,7 @@ def _readers(overrides):
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
-            "changed_paths": changed_paths, "decision_sources": finding_outcomes.decision_sources,
+            "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
             **(overrides or {})}
 
 
@@ -823,6 +829,15 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
 
 def build_record(account, readers, prior=None):
     a, rd, dis = _validate(account), _readers(readers), []
+    read_paths, seen = rd["changed_paths"], {}
+
+    def cached_paths(pr, repo):
+        # The PR's changed files are read once per write, so the lane basis and the withheld list agree.
+        if (pr, repo) not in seen:
+            seen[(pr, repo)] = read_paths(pr, repo)
+        return seen[(pr, repo)]
+
+    rd = dict(rd, changed_paths=cached_paths)
     meta = rd["pr_meta"](a["pr"], a["repo"])
     fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
     ci, lane = _ci(rd, a["repo"], fc["sha"]), _lane(a, rd, meta)
@@ -874,9 +889,13 @@ def build_record(account, readers, prior=None):
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
+    # An account that names no repository reads no changed files, so the list is unknown.
+    paths = rd["changed_paths"](a["pr"], a["repo"]) if a.get("repoRoot") else None
+    withheld = rd["withheld_paths"](a.get("repoRoot"), fc["sha"], paths) if isinstance(paths, list) else None
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
+        "withheldFromReviewers": withheld,
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
         "refused": a["refused"], "unreadFiles": unread, "rawOutputs": [],
@@ -1229,6 +1248,18 @@ def _findings_listed(rec):
     return isinstance(earlier, list) and all(isinstance(i, dict) for i in earlier)
 
 
+def _withheld_line(lst, level):
+    """The summary line for the paths no external reviewer read in full; None means they could not be read."""
+    if not isinstance(lst, list):
+        return "Withheld from reviewers: could not be read; the vet checks every changed agent-config path by hand."
+    if not lst:
+        return "Withheld from reviewers: none."
+    lead = "Withheld from reviewers (not readable in full; the vet checks these by hand): "
+    if level >= 1:
+        return f"{lead}{_plural(len(lst), 'path', 'paths')} {LISTED}."
+    return lead + ", ".join(lst) + "."
+
+
 def _summary(r, level):
     """The summary text. Level 0 lists everything; level 1 turns each unbounded list (what is left, who ran,
     which findings wait, which were not taken) into a count; level 2 also turns the per-seat reviewer bullets
@@ -1267,12 +1298,14 @@ def _summary(r, level):
         who = ["Reviewers:", *_reviewer_bullets(r)]
     rounds_line = _rounds_line(r.get("rounds"))
     refused = r.get("refused") or []
+    withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     lines = [
         f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
         waits_text,
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
         floor_line,
+        withheld_line,
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
@@ -1285,8 +1318,10 @@ def _summary(r, level):
     # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.
-    # The wider lines carry the driver's own reason text, literal data like the floor line.
-    _assert_no_bug_free_claim("\n".join(l for l in lines if l is not floor_line and l not in wider_lines))
+    # The wider lines carry the driver's own reason text, and the withheld line carries literal path data,
+    # like the floor line.
+    _assert_no_bug_free_claim(
+        "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l not in wider_lines))
     return "\n".join(lines)
 
 
