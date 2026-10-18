@@ -129,7 +129,7 @@ Check these in a consuming project when it adopts 0.44.0. Each step names the no
 
 ### Removed: the handback gate and orphaned review code
 
-- `lib/handback_gate.py`, its hook `hooks/handback_receipt_gate.py` (never switched on) and `lib/loop_plan_common.py` are deleted, with about a dozen uncalled functions from the review redesign. The gate had allowed every command for several releases. A project that wired the hook in its own settings removes that entry.
+- `lib/handback_gate.py` and its hook `hooks/handback_receipt_gate.py` (never switched on) are deleted, with about a dozen uncalled functions from the review redesign (some of them in `lib/loop_plan_common.py`, which stays). The gate had allowed every command for several releases. A project that wired the hook in its own settings removes that entry.
 
 ### Review-code: a round with nothing left to verify, and break-it runs on the project's interpreter
 
