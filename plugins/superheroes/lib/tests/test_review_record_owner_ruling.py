@@ -419,3 +419,27 @@ def test_wo_e_a_mark_naming_an_id_two_rows_share_adds_no_entry(tmp_path):
     rec = _later_write(tmp_path, fake, rep["findingKey"])
     assert {f["outcome"] for f in rec["findings"] if f["id"] == "m-1"} == {"left-for-owner"}
     assert sorted(f["outcome"] for f in rec["findings"] if f["id"] == "rep-1") == ["left-for-owner", "ruling"]
+
+
+def _carried_out(member_reason):
+    rep = {"id": "rep-1", "findingKey": "k-rep", "outcome": "left-for-owner", "reason": "waits for the owner"}
+    member = {"id": "m-1", "findingKey": "k-m", "outcome": "left-for-owner", "reason": member_reason}
+    given = [{"key": "k-rep", "url": U, "words": W}]
+    return [e["key"] for e in rs._carried_rulings(given, [rep, member], [member])]
+
+
+def test_wo_f_a_mark_followed_by_a_later_suffix_still_makes_the_carried_row_a_member():
+    # Axis: the mark can sit before text `_recheck_decisions` appends, so membership is containment, not the end of the reason.
+    reason = "waits for the owner (merged into rep-1); the owner ruling it cites is not on record (the link is gone)" + rs.CARRIED
+    assert _carried_out(reason) == ["k-rep", "k-m"]
+
+
+def test_wo_f_a_mark_naming_a_longer_id_does_not_match_a_shorter_representative():
+    # Axis: the mark includes the closing parenthesis, so rep-1 never matches rep-10.
+    assert _carried_out("waits for the owner (merged into rep-10)" + rs.CARRIED) == ["k-rep"]
+
+
+@pytest.mark.parametrize("reason", [None, 7], ids=["none", "not-a-string"])
+def test_wo_f_a_carried_row_with_no_string_reason_gets_no_entry(reason):
+    # Axis: fail closed; a reason that is not a string holds no mark.
+    assert _carried_out(reason) == ["k-rep"]

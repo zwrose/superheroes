@@ -584,8 +584,8 @@ def _owner_rulings(entries, findings, merged):
 def _carried_rulings(entries, findings, carried):
     """`entries` plus one entry per carried member row of each finding an entry names, over the account's final findings.
 
-    A carried row has no ledger merge to follow, so it is covered only when its reason's mark
-    (`merged_into`) names the representative's id and that id names exactly one of `findings`; any other case
+    A carried row has no ledger merge to follow, so it is covered only when its reason holds the representative's
+    mark (`MERGED_INTO_FORMAT`, anywhere in the reason) and that id names exactly one of `findings`; any other case
     adds no entry, and the member stays a card. An entry already naming the member, or one that would name
     more than that one row, is not added (the writer refuses an entry that names two rows or a row twice)."""
     out = list(entries)
@@ -596,8 +596,11 @@ def _carried_rulings(entries, findings, carried):
         for i in review_record._ruling_hits(findings, key):
             rep = findings[i]
             for row in carried:
-                mark = merged_into(row.get("reason"))
-                if row is rep or mark is None or mark != rep["id"] or sum(f["id"] == mark for f in findings) != 1:
+                reason = row.get("reason")
+                # the exact mark includes the closing parenthesis, so rep-1 never matches rep-10; it may sit before a later suffix
+                if row is rep or not isinstance(reason, str) or not isinstance(rep["id"], str) \
+                        or MERGED_INTO_FORMAT.format(rep["id"]) not in reason \
+                        or sum(f["id"] == rep["id"] for f in findings) != 1:
                     continue
                 member = row.get(sc.FINDING_KEY_FIELD) if isinstance(row.get(sc.FINDING_KEY_FIELD), str) else None
                 if member is None or review_record._ruling_hits(findings, member) != {j for j, f in enumerate(findings) if f is row}:

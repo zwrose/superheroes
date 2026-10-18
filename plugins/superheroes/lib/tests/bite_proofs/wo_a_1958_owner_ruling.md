@@ -876,3 +876,49 @@ FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo
 .                                                                        [100%]
 1 passed in 0.36s
 ```
+
+## Review session 2 round 2 fix (WO-F)
+
+### MA: the mark-anywhere test in `_carried_rulings` (`review_record_session.py`)
+
+- **file:** `plugins/superheroes/lib/review_record_session.py` (`_carried_rulings`)
+- **axis:** a carried member is found by the exact merge mark wherever it sits in its reason, so a suffix `_recheck_decisions` appended after the mark does not hide the member
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_f_a_mark_followed_by_a_later_suffix_still_makes_the_carried_row_a_member`
+- **neutralization:** the containment test (`reason = row.get("reason")`, its comment, and the four-line `if` that tests `MERGED_INTO_FORMAT.format(rep["id"]) not in reason`) replaced by the two earlier lines `mark = merged_into(row.get("reason"))` and `if row is rep or mark is None or mark != rep["id"] or sum(f["id"] == mark for f in findings) != 1:`
+
+**raw red** (exit code 1, the failure block as the run printed it):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_wo_f_a_mark_followed_by_a_later_suffix_still_makes_the_carried_row_a_member _
+
+    def test_wo_f_a_mark_followed_by_a_later_suffix_still_makes_the_carried_row_a_member():
+        # Axis: the mark can sit before text `_recheck_decisions` appends, so membership is containment, not the end of the reason.
+        reason = "waits for the owner (merged into rep-1); the owner ruling it cites is not on record (the link is gone)" + rs.CARRIED
+>       assert _carried_out(reason) == ["k-rep", "k-m"]
+E       AssertionError: assert ['k-rep'] == ['k-rep', 'k-m']
+E         
+E         Right contains one more item: 'k-m'
+E         Use -v to get more diff
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:434: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo_f_a_mark_followed_by_a_later_suffix_still_makes_the_carried_row_a_member
+1 failed in 0.45s
+```
+
+**restore** (the inverse replacement) and the restored lines quoted back (`review_record_session.py:599-604`):
+```
+                reason = row.get("reason")
+                # the exact mark includes the closing parenthesis, so rep-1 never matches rep-10; it may sit before a later suffix
+                if row is rep or not isinstance(reason, str) or not isinstance(rep["id"], str) \
+                        or MERGED_INTO_FORMAT.format(rep["id"]) not in reason \
+                        or sum(f["id"] == rep["id"] for f in findings) != 1:
+                    continue
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 1.96s
+```
