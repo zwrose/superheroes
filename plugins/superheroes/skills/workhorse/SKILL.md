@@ -386,9 +386,11 @@ judgment, so "this fix is tiny" is no reason to type in a full-lane build. Every
 order goes to an implementer under the one implementer template,
 `${CLAUDE_PLUGIN_ROOT}/agents/implementer.md`:
 
-Every implementer order goes through `dispatch-write` on the engine the project's calibrated
-implementation engine names, `claude` included (`claude` runs the sandboxed Claude write channel);
-inline `agents/implementer.md`, minus its frontmatter, verbatim into the dispatch prompt.
+Before every implementer order, run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/native_engine.py" route --cwd <build worktree>`:
+`native` (only ever for a calibrated claude implementer) runs the order as a native `superheroes:implementer` subagent through the native engine
+(`skills/workhorse/reference/dispatch-mechanics.md` § The native implementer engine); any other
+engine goes through `dispatch-write`, `claude` included. Inline `agents/implementer.md`, minus its
+frontmatter, verbatim into the dispatch prompt.
 
 **Cited paths in every dispatched seat resolve in the build's own worktree** when the cited file is
 part of the change. `${CLAUDE_PLUGIN_ROOT}` resolves to the installed cache and would hand an
@@ -613,6 +615,10 @@ on the PR as a durable receipt that names the head commit it reviewed, so a late
 whether the PR moved after the review. The owner-ratified scope rule (§1) defers only proposals
 unrelated to the behavior the diff introduces or worsens. A blocking correctness or security finding
 on that behavior is fixed or honestly parked, never deferred as out of scope.
+
+When the owner rules on a leftover during the build, record the ruling as the standard chat-ruling record
+composed by `lib/canon.py ruling-record`. Hand its permalink and the owner's words to the next record write in `ownerRulings`, as
+`skills/review-code/reference/review-record.md` says, so the PR sheet files it as already decided. A ruling with no resolvable link stays a card.
 
 **Bounded acceptance for prose-contract DoDs.** When the contract under review is prose, the bounded form applies, with the round bound that the advisor at vet, or the owner before review begins, states and records in the PR body or the vet receipt.
 
