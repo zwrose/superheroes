@@ -252,8 +252,14 @@ Each item shows, in this order, its kind, its title, what happens if it is left,
 each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
 note left empty.
 
-- An item with a real choice offers its options and **Something else**. A leftover's options are Keep
-  it, Fix in a follow-up and Fix before merge, unless the item calls for others.
+- An item with a real choice offers its options and **Something else**.
+- A leftover shows, in order, its kind, its title, **Why it's yours**, **What happened**, **If left**,
+  its options each with this leftover's consequence, the recommendation, the answer buttons and the note
+  box. The advisor writes the spine in its `leftovers` input (`skills/showrunner/reference/owner-decisions.md`
+  § The per-item spine): `why`, `context`, an optional `ifLeft` when the reviewer's text is no longer
+  true, `options` as the three leftover options (Keep it, Fix in a follow-up, Fix before merge) with
+  their consequences for this finding, or `"none"` when nothing is left to decide, and a recommendation
+  whose reason names the why and the cost. The input's exact shape is in `lib/pr_sheet.py`'s docstring.
 - An item with no real choice offers **Accept** and **Discuss** and shows no options list.
 - When the merge closes a spec's last open piece, the spec's closure receipt is one of the items.
 
