@@ -98,7 +98,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > materializes a fresh single-commit git repo at `headSha` holding the reviewed tree, with the named
 > repo-local agent-config surface removed (`AGENTS.md`, `.cursor/`, `CLAUDE.md`, and the other basenames
 > the runner strips at every directory level). That config is **not discoverable** from the seat's cwd —
-> which is the point of the view. Reading ordinary source files and `git grep` work; **`git log`,
+> which is the point of the view. The project's own conventions still reach the seat by path: every
+> reviewer order the driver renders (panel, verifiers, synthesis, gap-sweep, audits, scoped finder)
+> names the core calibration, the review-crew layer and the project's `CLAUDE.md` by absolute paths
+> into the live checkout, resolved once when the order renders, and the view's notice tells the seat
+> that a file its order names by an absolute path is readable there. A project with no `CLAUDE.md`
+> gets the sentence `(this project has no CLAUDE.md at <repo root>)` in its place. Never paste a
+> calibration file or `CLAUDE.md` into a seat prompt by hand.
+> Reading ordinary source files and `git grep` work; **`git log`,
 > `git blame`, `git diff <ref>`, and `git show <ref>` do not** — the view has no `origin/main`, no
 > remote, and no parent commit (one synthetic commit, no history). The dispatch prompt's auto-prepended
 > notice states this prohibition to the seat explicitly. Paths the runner stripped are **unreadable**
