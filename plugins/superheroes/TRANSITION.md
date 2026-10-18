@@ -37,7 +37,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Review record: an owner ruling given mid-build reaches the record
 
 - A review account (and the full lane's extras file) takes an optional `ownerRulings` list of `{key, url, words}`, and a decision can now be cited as the new `owner-ruling` kind, with `ref` `{url, words}`.
-- A ruling counts only when the writer reads its link as the repository owner's comment, in the PR's own repository, holding the words. Otherwise the finding stays, or becomes, left-for-owner and the sheet still shows it as a card.
+- A ruling counts only when the writer reads its link as the repository owner's comment, in the PR's own repository, and that comment is a standard chat-ruling record holding the words (see the next bullet). Otherwise the finding stays, or becomes, left-for-owner and the sheet still shows it as a card.
+- Only a standard chat-ruling record counts (composed by `lib/canon.py ruling-record`), with the words matched inside its quoted block. A ruling typed as a plain comment, even from the owner's account, is asked again at merge.
 - A leftover the owner ruled on during a build no longer comes back on the sheet, provided the ruling's link resolves. See `skills/review-code/reference/review-record.md`.
 
 ## 0.43.1

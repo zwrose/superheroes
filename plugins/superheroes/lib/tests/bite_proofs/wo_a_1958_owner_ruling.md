@@ -972,3 +972,182 @@ FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_wo
 .                                                                        [100%]
 1 passed in 0.91s
 ```
+
+## Vet 545 fix leg (WO-H)
+
+Run from `/home/user/wt-1958` with `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-h-pyc -m pytest <node> -q -p no:cacheprovider`. Every red and green is the whole output of a single-node run, less the leading `UV_NATIVE_TLS` deprecation warning line.
+
+### Pre-change reds (unchanged code at `06cd70a5`, tests written first)
+
+- **N1** `test_n1_an_owner_comment_that_is_not_a_chat_ruling_record_stays_a_card`: red, `AssertionError: assert ('ruling' == 'left-for-owner'` at `test_review_record_owner_ruling.py:421` (1 failed).
+- **N2** `test_n2_words_only_in_the_what_it_rules_on_line_stay_a_card`: red, `AssertionError: assert ('ruling' == 'left-for-owner'` at `:433` (1 failed).
+- **N4** `test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once`: red, the reason stayed `belongs to a follow-up (ruled by owner, chat)` where `owner ruling "ship it as is" (https://github.com/o/r/issues/12#issuecomment-555); belongs to a follow-up (ruled by owner, chat)` was expected, at `:451` (1 failed).
+
+### RM: a comment that is not a chat-ruling record is no ruling (`finding_outcomes._owner_ruling_on_record`, the `None` check)
+
+- **axis:** only a standard chat-ruling record is a ruling.
+- **neutralization:** `quoted = canon.ruling_record_words(body)` became `quoted = canon.ruling_record_words(body) or body`, so a body that is no record falls back to the whole body and the `None` check never fires.
+- **detector:** N1.
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_n1_an_owner_comment_that_is_not_a_chat_ruling_record_stays_a_card ____
+
+    def test_n1_an_owner_comment_that_is_not_a_chat_ruling_record_stays_a_card():
+        # Axis: RM, every session posts as the owner, so a plain owner comment holding the words is no ruling.
+        rec = build([entry()], doc=dict(DOC, body=BUILDER_NOTE))
+        f = the_finding(rec)
+>       assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
+E       AssertionError: assert ('ruling' == 'left-for-owner'
+E         
+E         - left-for-owner
+E         + ruling)
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:421: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_n1_an_owner_comment_that_is_not_a_chat_ruling_record_stays_a_card
+1 failed in 0.45s
+```
+
+**restore** (the inverse edit) and the restored line quoted back (`finding_outcomes.py:195`):
+```
+    quoted = canon.ruling_record_words(body)
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.45s
+```
+
+### QB: the words count only inside the quoted block (`finding_outcomes._owner_ruling_on_record`, leg L5)
+
+- **axis:** the quoted block of the record holds the words; nothing else in the body counts.
+- **neutralization:** `_squash(words) not in _squash(quoted)` became `_squash(words) not in _squash(body)`, the raw body.
+- **detector:** N2.
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_n2_words_only_in_the_what_it_rules_on_line_stay_a_card __________
+
+    def test_n2_words_only_in_the_what_it_rules_on_line_stay_a_card():
+        # Axis: QB, the words count only inside the quoted block, never in the context line of a real record.
+        body = canon.ruling_record("2026-10-18", "12:00", "something else entirely", f"finding f-1, which says {W}")
+        assert W in body
+        rec = build([entry()], doc=dict(DOC, body=body))
+        f = the_finding(rec)
+>       assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
+E       AssertionError: assert ('ruling' == 'left-for-owner'
+E         
+E         - left-for-owner
+E         + ruling)
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:433: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_n2_words_only_in_the_what_it_rules_on_line_stay_a_card
+1 failed in 0.45s
+```
+
+**restore** (the inverse edit) and the restored line quoted back (`finding_outcomes.py:200`):
+```
+    if _squash(words) not in _squash(quoted):
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.36s
+```
+
+### PF: an already-ruling finding takes the new reason (`review_record._recheck_decisions`)
+
+- **axis:** a `ruling` whose owner-ruling citation resolves leads its reason with the citation.
+- **neutralization:** `refreshed = text` became `refreshed = None`.
+- **detector:** N4.
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once ______
+
+    def test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once():
+        # Axis: PF and ND, an already-ruling finding takes the citation's text as its reason prefix, once, and its outcome never moves.
+        text = f'owner ruling "{W}" ({U})'
+        prose = "belongs to a follow-up (ruled by owner, chat)"
+        rec = build([entry()], [dict(X, outcome="ruling", reason=prose)])
+        f = the_finding(rec)
+>       assert f["outcome"] == "ruling" and f["reason"] == f"{text}; {prose}" and rec["decisionRechecks"] == []
+E       assert ('ruling' == 'ruling'
+E         
+E           ruling and 'belongs to a... owner, chat)' == 'owner ruling... owner, chat)'
+E         
+E         - owner ruling "ship it as is" (https://github.com/o/r/issues/12#issuecomment-555); belongs to a follow-up (ruled by owner, chat)
+E         + belongs to a follow-up (ruled by owner, chat))
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:451: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once
+1 failed in 0.45s
+```
+
+**restore** (the inverse edit) and the restored line quoted back (`review_record.py:817`):
+```
+                refreshed = text
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.44s
+```
+
+### ND: the reason is not prefixed twice (`review_record._recheck_decisions`)
+
+- **axis:** a reason that already starts with the citation's text keeps a single prefix.
+- **neutralization:** `elif isinstance(reason, str) and not reason.startswith(refreshed):` became `elif isinstance(reason, str):`.
+- **detector:** N4's second case (a reason already starting with the text).
+
+**raw red** (exit code 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once ______
+
+    def test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once():
+        # Axis: PF and ND, an already-ruling finding takes the citation's text as its reason prefix, once, and its outcome never moves.
+        text = f'owner ruling "{W}" ({U})'
+        prose = "belongs to a follow-up (ruled by owner, chat)"
+        rec = build([entry()], [dict(X, outcome="ruling", reason=prose)])
+        f = the_finding(rec)
+        assert f["outcome"] == "ruling" and f["reason"] == f"{text}; {prose}" and rec["decisionRechecks"] == []
+        again = build([entry()], [dict(X, outcome="ruling", reason=f"{text}; {prose}")])
+>       assert the_finding(again)["outcome"] == "ruling" and the_finding(again)["reason"] == f"{text}; {prose}"
+E       assert ('ruling' == 'ruling'
+E         
+E           ruling and 'owner ruling... owner, chat)' == 'owner ruling... owner, chat)'
+E         
+E         Skipping 72 identical leading characters in diff, use -v to show
+E         - ent-555); belongs to a follow-up (ruled by owner, chat)
+E         + ent-555); owner ruling "ship it as is" (https://github.com/o/r/issues/12#issuecomment-555); belongs to a follow-up (ruled by owner, chat))
+
+/home/user/wt-1958/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:453: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once
+1 failed in 0.50s
+```
+
+**restore** (the inverse edit) and the restored line quoted back (`review_record.py:826`):
+```
+                elif isinstance(reason, str) and not reason.startswith(refreshed):
+```
+
+**raw green** (exit code 0):
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```

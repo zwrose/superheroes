@@ -799,12 +799,13 @@ def _recheck_decisions(findings, sources):
     """Check every cited decision against what is on record now. A ruling whose cited decision is not on record
     goes to the owner; a finding left for the owner whose cited decision is on record becomes the ruling. A ruling
     with no cited decision names its basis in prose, which the record cannot check, so it stays as it is. A
-    finding with no reason keeps none (its missing reason still counts against the record).
+    ruling whose cited owner ruling resolves stays a ruling and its reason leads with the citation, once. A
+    finding with no reason keeps none (its missing reason still counts against the record), except that one.
     Returns the findings and one entry per change."""
     out, changes = [], []
     for f in findings:
         by, outcome, reason = f.get("decidedBy"), f.get("outcome"), f.get("reason")
-        new, unmet = None, None
+        new, unmet, refreshed = None, None, None
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             ok, text = finding_outcomes.on_record(by, sources())
@@ -812,10 +813,20 @@ def _recheck_decisions(findings, sources):
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
                 new, why = _RULING, text
+            elif outcome == _RULING and ok and by.get("kind") == finding_outcomes.OWNER_RULING:
+                refreshed = text
             elif outcome == _LEFT_FOR_OWNER and by.get("kind") == finding_outcomes.OWNER_RULING and not ok:
                 # axis: a finding whose owner ruling does not resolve says so in its reason, and stays for the owner — see bite-proof record wo_a_1958_owner_ruling
                 unmet = f"the owner ruling it cites is not on record ({text})"
         if new is None:
+            if refreshed:
+                # axis: an already-ruling finding whose owner-ruling citation resolves shows the citation as its reason, once, and keeps its outcome — see bite-proof record wo_a_1958_owner_ruling
+                if not reason:
+                    f = dict(f, reason=refreshed)
+                elif isinstance(reason, str) and not reason.startswith(refreshed):
+                    f = dict(f, reason=f"{refreshed}; {reason}")
+                out.append(f)
+                continue
             out.append(dict(f, reason=f"{reason}; {unmet}") if unmet and reason else f)
             continue
         out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason else reason))

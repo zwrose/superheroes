@@ -16,7 +16,7 @@ WORDS = json.loads((Path(__file__).resolve().parents[2] / "theme" / "sheet-words
 U = "https://github.com/o/r/issues/12#issuecomment-555"
 W = "ship it as is"
 DOC = {"id": 555, "issue_url": "https://api.github.com/repos/o/r/issues/12", "html_url": U, "author_association": "OWNER",
-       "user": {"login": "o"}, "body": "<!-- superheroes:chat-ruling -->\n**Owner ruling given in chat**\nI say: ship it   as\nis, thanks"}
+       "user": {"login": "o"}, "body": canon.ruling_record("2026-10-18", "12:00", W, "finding f-1")}
 X = {"id": "f-1", "title": "Unchecked index", "severity": "Important", "file": "a.py", "line": 9, "body": "b",
      "consequence": "the total on the page is wrong", "outcome": "left-for-owner", "reason": "waits for the owner",
      "reviewer": "r1"}
@@ -83,6 +83,7 @@ L2 = "the ruling's link is not in this repository"
 L3 = "the ruling's comment could not be read"
 L4 = "the ruling's comment is not the owner's"
 L5 = "the ruling's comment does not hold the owner's words"
+L6 = "the ruling's comment is not a chat-ruling record"
 NOT_ON_RECORD = "; the owner ruling it cites is not on record (%s)"
 FAILS = [
     pytest.param({"url": "https://github.com/o/r/pull/12#issuecomment-555"}, {}, L1, id="L1-not-a-comment-permalink"),
@@ -101,9 +102,11 @@ FAILS = [
     pytest.param({}, {"doc": dict(DOC, author_association="COLLABORATOR")}, L4, id="L4-collaborator"),
     pytest.param({}, {"doc": dict(DOC, author_association="NONE")}, L4, id="L4-none"),
     pytest.param({}, {"doc": dict(DOC, author_association="owner")}, L4, id="L4-lowercase"),
-    pytest.param({}, {"doc": dict(DOC, body="I think otherwise")}, L5, id="L5-words-absent"),
-    pytest.param({}, {"doc": dict(DOC, body="Ship it as is")}, L5, id="L5-case-differs"),
-    pytest.param({}, {"doc": dict(DOC, body=None)}, L5, id="L5-body-not-text"),
+    pytest.param({}, {"doc": dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "I think otherwise", "finding f-1"))}, L5,
+                 id="L5-words-absent"),
+    pytest.param({}, {"doc": dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "Ship it as is", "finding f-1"))}, L5,
+                 id="L5-case-differs"),
+    pytest.param({}, {"doc": dict(DOC, body=None)}, L6, id="L5-body-not-text"),
 ]
 
 
@@ -314,7 +317,7 @@ def test_v2_the_standard_record_of_multiline_words_holds_the_words():
 
 
 def test_v2_words_that_occur_in_neither_form_stay_a_card():
-    # Axis: E5, the de-quote widens nothing; words absent from the raw and the de-quoted body stay a card.
+    # Axis: E5, the de-quote widens nothing; words absent from the quoted block stay a card.
     doc = dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "ship it\nas is", "finding f-1"))
     rec = build([entry(words="ship it\nas was")], doc=doc)
     assert the_finding(rec)["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
@@ -406,3 +409,67 @@ def test_wo_g_a_ruling_on_a_carried_representative_does_not_cover_its_carried_me
     rec = _later_write(tmp_path, fake, before["rep-1"]["findingKey"])
     assert {f["id"]: f["outcome"] for f in rec["findings"]} == {"m-1": "left-for-owner", "rep-1": "ruling"}
     assert rs.CARRIED in next(f for f in rec["findings"] if f["id"] == "m-1")["reason"]
+
+
+BUILDER_NOTE = "**Builder note** (issue 12)\n\nThe owner said in chat that we should %s, so I am treating this as decided.\n" % W
+
+
+def test_n1_an_owner_comment_that_is_not_a_chat_ruling_record_stays_a_card():
+    # Axis: RM, every session posts as the owner, so a plain owner comment holding the words is no ruling.
+    rec = build([entry()], doc=dict(DOC, body=BUILDER_NOTE))
+    f = the_finding(rec)
+    assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
+    assert f["reason"] == "waits for the owner" + NOT_ON_RECORD % L6
+    sheet, found = cards(rec, {"f-1": CARD})
+    assert len(found) == 1 and sheet["prSheet"]["alreadyDecided"] == []
+
+
+def test_n2_words_only_in_the_what_it_rules_on_line_stay_a_card():
+    # Axis: QB, the words count only inside the quoted block, never in the context line of a real record.
+    body = canon.ruling_record("2026-10-18", "12:00", "something else entirely", f"finding f-1, which says {W}")
+    assert W in body
+    rec = build([entry()], doc=dict(DOC, body=body))
+    f = the_finding(rec)
+    assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
+    assert f["reason"] == "waits for the owner" + NOT_ON_RECORD % L5
+
+
+@pytest.mark.parametrize("words", [W, "ship it\nas is", "ship it\n\nas is"])
+def test_n3_a_real_chat_ruling_record_still_resolves_to_ruling(words):
+    # Axis: the standard record of single-line, multiline and blank-interior-line words resolves.
+    doc = dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", words, "finding f-1"))
+    rec = build([entry(words=words)], doc=doc)
+    assert the_finding(rec)["outcome"] == "ruling" and rec["leftForOwner"] == []
+
+
+def test_n4_a_ruling_whose_citation_resolves_shows_the_new_reason_once():
+    # Axis: PF and ND, an already-ruling finding takes the citation's text as its reason prefix, once, and its outcome never moves.
+    text = f'owner ruling "{W}" ({U})'
+    prose = "belongs to a follow-up (ruled by owner, chat)"
+    rec = build([entry()], [dict(X, outcome="ruling", reason=prose)])
+    f = the_finding(rec)
+    assert f["outcome"] == "ruling" and f["reason"] == f"{text}; {prose}" and rec["decisionRechecks"] == []
+    again = build([entry()], [dict(X, outcome="ruling", reason=f"{text}; {prose}")])
+    assert the_finding(again)["outcome"] == "ruling" and the_finding(again)["reason"] == f"{text}; {prose}"
+    assert the_finding(again)["reason"].count(text) == 1 and again["decisionRechecks"] == []
+    bare = build([entry()], [dict(X, outcome="ruling", reason="")])
+    assert the_finding(bare)["reason"] == text
+
+
+def test_n5_ruling_record_words_round_trips_what_ruling_record_writes():
+    # Axis: the parser undoes exactly the quoting ruling_record applies.
+    for words in (W, "ship it\nas is", "ship it\n\nas is", "> already quoted\nplain"):
+        body = canon.ruling_record("2026-10-18", "12:00", words, "finding f-1")
+        assert canon.ruling_record_words(body) == words
+
+
+def test_n5_ruling_record_words_is_none_unless_it_is_a_standard_record():
+    # Axis: E1 to E4 and E6, no marker on the first line, no heading, no quoted block, or no text is no record.
+    good = canon.ruling_record("2026-10-18", "12:00", W, "finding f-1")
+    assert canon.ruling_record_words(good) == W
+    assert canon.ruling_record_words(good.replace(canon.RULING_MARKER + "\n", "", 1)) is None
+    assert canon.ruling_record_words("intro\n" + good) is None
+    assert canon.ruling_record_words(good.replace(canon.RULING_WORDS_HEADING, "The owner said:")) is None
+    assert canon.ruling_record_words(f"{canon.RULING_MARKER}\n{canon.RULING_WORDS_HEADING}\n\nWhat it rules on: x\n") is None
+    for bad in (None, 3, b"x", ["a"], {"body": good}):
+        assert canon.ruling_record_words(bad) is None
