@@ -559,7 +559,7 @@ class _Close(object):
                 self.run_dir, {"kind": "native-collecting", "patchSha256": patch_sha,
                                "at": _stamp(_now())}):
             return self._result(ok=False, terminal=True, reason="journal-write-failed")
-        if files and _git(into, "apply", "--index", patch_path)[0] != 0:
+        if files and _git(into, "apply", "--index", "--whitespace=nowarn", patch_path)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         for item in self.opened.get("expectedItems") or []:
             mine = _staged_entry(into, item)

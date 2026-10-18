@@ -958,6 +958,20 @@ def test_close_collects_an_interior_edit_under_diff_context_zero(tmp_path, monke
     assert _git(r.B, "show", ":a.txt") == "one\ntwo\nTHREE\nfour\nfive\n"
 
 
+@pytest.mark.parametrize("setting", ["error", "fix"])
+def test_close_preserves_trailing_whitespace_under_apply_whitespace(
+        tmp_path, monkeypatch, capsys, setting):
+    # axis: configuration — repo-level apply.whitespace must not forfeit or alter the delivered bytes
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r, edit=False)
+    _write(os.path.join(r.T, "a.txt"), "alpha\nfixture \n")
+    _git(r.T, "config", "apply.whitespace", setting)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert _git(r.B, "show", ":a.txt") == "alpha\nfixture \n"
+
+
 def test_route_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, capsys):
     # axis: environment — GIT_DIR/GIT_WORK_TREE naming another worktree must not override --cwd
     r = _make_repo(tmp_path / "a")
