@@ -140,7 +140,7 @@ def test_parts_record_refusal_names_the_part_and_offset(tmp_path):
     fake = two_part_record(tmp_path)
     parts = parts_of(fake)
     body = parts[1]["body"]
-    at = body.index("\n", len(rr.PART_MARKER) + 1) + 1 + 5
+    at = body.rindex("}")  # the record's closing brace: a backtick before it sits outside every string
     parts[1]["body"] = body[:at] + "`" + body[at:]
     out = rr.read(7, readers=fake.readers())
     assert out["reason"] == "review-record-unreadable"
