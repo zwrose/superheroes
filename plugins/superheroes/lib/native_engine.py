@@ -346,7 +346,14 @@ def _cmd_enroll(args):
     if not all(isinstance(p, str) and p for p in (top, git_dir, common_dir)):
         return _enroll_refusal("native-worktree-not-isolated")
     top = os.path.realpath(top)
-    if git_dir == common_dir or top == os.path.realpath(opened.get("cwd") or ""):
+    try:
+        with engine_dispatch._git_routing_scrubbed_environ():
+            builder_top = store_core.repo_root(opened.get("cwd") or "")
+    except Exception:  # fail closed: the builder's root unresolved leaves isolation unproven
+        return _enroll_refusal("native-worktree-not-isolated")
+    if not isinstance(builder_top, str) or not builder_top:
+        return _enroll_refusal("native-worktree-not-isolated")
+    if git_dir == common_dir or top == os.path.realpath(builder_top):
         return _enroll_refusal("native-worktree-not-isolated")
     base = opened.get("baseSha")
     rc, _, _ = _git(top, "checkout", "--detach", base)
@@ -438,10 +445,14 @@ def _sha256_file(path):
 def _staged_entry(cwd, path):
     """The index entry (mode, object id, stage) of ``path``; "" when absent, None on a git failure.
     Compared by object id and mode, so a symlink is never followed."""
-    rc, out, _ = _git(cwd, "ls-files", "-s", "-z", "--", path)
+    rc, out, _ = _git(cwd, "ls-files", "-s", "-z", "--", ":(literal)" + path)
     if rc != 0:
         return None
-    return out.strip("\0").split("\t", 1)[0]
+    for record in out.split("\0"):
+        head, _, name = record.partition("\t")
+        if name == path:  # exactly the declared file, never a sibling the pathspec matched
+            return head
+    return ""
 
 
 def _in_tree(cwd, rev, path):

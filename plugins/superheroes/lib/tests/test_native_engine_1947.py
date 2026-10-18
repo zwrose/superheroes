@@ -552,6 +552,22 @@ def test_enroll_refuses_the_builders_own_worktree(tmp_path, monkeypatch, capsys)
     assert _git(r.B, "rev-parse", "HEAD").strip() == r.base
 
 
+def test_enroll_refuses_the_builders_worktree_when_the_run_opened_in_a_subdirectory(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — a recorded cwd below the builder's root still names the builder's worktree
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    sub = os.path.join(r.B, "subdir")
+    os.makedirs(sub)
+    code, out = _cli(capsys, "open", "--run-dir", r.run, "--order-path", r.order, "--cwd", sub,
+                     "--base-sha", r.base, "--deadline-seconds", "600", "--seat", _SEAT)
+    assert code == 0, out
+    code, out = _enroll(capsys, monkeypatch, r, r.B)
+    assert code == 1
+    assert out == {"ok": False, "reason": "native-worktree-not-isolated"}
+    assert _git(r.B, "rev-parse", "HEAD").strip() == r.base
+
+
 def test_enroll_refuses_the_main_checkout(tmp_path, monkeypatch, capsys):
     # axis: refusal — the main checkout is not a linked worktree
     r = _make_repo(tmp_path)
@@ -821,6 +837,16 @@ def test_close_grading_forfeits_a_declared_file_the_patch_cannot_carry(
     assert out["itemCheck"]["missing"] == []
     assert _git(r.B, "diff", "--cached", "--name-only").split() == ["a.txt"]
     assert "native-collecting" in _kinds(r)
+
+
+def test_staged_entry_treats_a_bracketed_name_as_a_literal_path(tmp_path):
+    # axis: refusal — a glob-like declared name never matches a tracked sibling
+    r = _make_repo(tmp_path)
+    _write(os.path.join(r.main, "rep1.log"), "tracked\n")
+    _git(r.main, "add", "-f", "rep1.log")
+    _write(os.path.join(r.main, "rep[1].log"), "ignored\n")
+    assert NE._staged_entry(r.main, "rep[1].log") == ""
+    assert NE._staged_entry(r.main, "rep1.log").startswith("100644 ")
 
 
 # --- E8 success ----------------------------------------------------------------------------
