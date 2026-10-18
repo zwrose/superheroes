@@ -507,6 +507,18 @@ def test_enroll_refuses_a_dirty_worktree(tmp_path, monkeypatch, capsys):
     assert out == {"ok": False, "reason": "native-worktree-dirty"}
 
 
+def test_enroll_refuses_untracked_files_even_when_status_hides_them(tmp_path, monkeypatch, capsys):
+    # axis: refusal — status.showUntrackedFiles=no must not let a stray untracked file enroll
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    _git(r.T, "config", "status.showUntrackedFiles", "no")
+    _write(os.path.join(r.T, "stray.txt"), "x")
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 1
+    assert out == {"ok": False, "reason": "native-worktree-dirty"}
+
+
 def test_enroll_refuses_the_builders_own_worktree(tmp_path, monkeypatch, capsys):
     # axis: refusal — the subagent never runs in the run's own cwd, even a linked worktree
     r = _make_repo(tmp_path)

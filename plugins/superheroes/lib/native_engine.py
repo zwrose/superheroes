@@ -331,7 +331,7 @@ def _cmd_enroll(args):
     if deadline is None or _now() > deadline:
         return _enroll_refusal("native-deadline")
     here = os.getcwd()
-    rc, out, _ = _git(here, "status", "--porcelain")
+    rc, out, _ = _git(here, "status", "--porcelain", "--untracked-files=all")
     if rc != 0 or out.strip():
         return _enroll_refusal("native-worktree-dirty")
     try:
