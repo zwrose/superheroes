@@ -138,9 +138,16 @@ def _git(cwd, *args):
 # --- route ---------------------------------------------------------------------------------
 
 
+_CALIBRATION_ERROR = object()
+
+
 def _calibrated_implementer(cwd):
+    """The calibrated implementer engine, or None; a calibration read error is ``_CALIBRATION_ERROR``."""
     rows = preflight_probe.dispatch_calibration(cwd=cwd)
-    for row in rows if isinstance(rows, list) else []:
+    rows = rows if isinstance(rows, list) else []
+    if any(isinstance(row, dict) and row.get("readError") for row in rows):
+        return _CALIBRATION_ERROR
+    for row in rows:
         if isinstance(row, dict) and row.get("role") == "implementer" and row.get("engine"):
             return row["engine"]
     return None
@@ -158,10 +165,12 @@ def route(cwd):
             if read.get("reason") == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
                 return {"ok": False, "reason": "sandbox-access-malformed"}
             return {"ok": False, "reason": "sandbox-access-unreadable"}
-        if access.get("localSockets") is True and calibrated in (None, "claude"):
+        if calibrated is _CALIBRATION_ERROR:
+            return {"ok": False, "reason": "calibration-unreadable"}
+        if access.get("localSockets") is True and calibrated == "claude":
             return {"ok": True, "engine": "native", "reason": ROUTE_REASON_NATIVE,
                     "why": NATIVE_WHY}
-    if calibrated:
+    if calibrated and calibrated is not _CALIBRATION_ERROR:
         return {"ok": True, "engine": calibrated, "reason": ROUTE_REASON_CALIBRATED}
     return {"ok": False, "reason": "calibration-unreadable"}
 
@@ -261,6 +270,8 @@ def _cmd_open(args):
         return _refusal("run-dir-locked")
     prompt_path = os.path.join(run_dir, _PROMPT_NAME)
     try:
+        if engine_dispatch._journal_read_raw(run_dir)[2] != "absent":
+            return _refusal("run-dir-journal-exists")
         opened_at = int(_now())
         enroll = "python3 -B %s enroll --run-dir %s" % (
             shlex.quote(os.path.join(_LIB_DIR, "native_engine.py")), shlex.quote(run_dir))
@@ -420,12 +431,13 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def _read_bytes(path):
-    try:
-        with open(path, "rb") as fh:
-            return fh.read()
-    except OSError:
+def _staged_entry(cwd, path):
+    """The index entry (mode, object id, stage) of ``path``; "" when absent, None on a git failure.
+    Compared by object id and mode, so a symlink is never followed."""
+    rc, out, _ = _git(cwd, "ls-files", "-s", "-z", "--", path)
+    if rc != 0:
         return None
+    return out.strip("\0").split("\t", 1)[0]
 
 
 def _in_tree(cwd, rev, path):
@@ -524,11 +536,13 @@ class _Close(object):
         if files and _git(into, "apply", "--index", patch_path)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         for item in self.opened.get("expectedItems") or []:
-            mine = _read_bytes(os.path.join(into, item))
-            theirs = _read_bytes(os.path.join(target, item))
-            if mine is None and theirs is None and _in_tree(target, base, item):
+            mine = _staged_entry(into, item)
+            theirs = _staged_entry(target, item)
+            if mine is None or theirs is None:
+                return self._forfeit("native-collect-incomplete", **extra)
+            if mine == "" and theirs == "" and _in_tree(target, base, item):
                 continue  # a declared deletion (or rename source), applied on both sides
-            if mine is None or mine != theirs:
+            if mine == "" or mine != theirs:
                 return self._forfeit("native-collect-incomplete", **extra)
         return self._finish(self._result(
             ok=True, terminal=True, signal="ok", itemCheck=item_check,

@@ -327,6 +327,33 @@ def test_open_refuses_a_run_dir_that_is_not_empty(tmp_path, monkeypatch, capsys)
     assert _records(r) == []
 
 
+def test_open_refuses_a_run_path_that_already_has_a_journal(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a cleaned run dir reusing a journaled path never reopens
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _ = _open(capsys, r)
+    assert code == 0
+    for name in os.listdir(r.run):
+        os.unlink(os.path.join(r.run, name))
+    before = _records(r)
+    code, out = _open(capsys, r)
+    assert code == 1
+    assert out == {"ok": False, "terminal": True, "reason": "run-dir-journal-exists"}
+    assert _records(r) == before
+
+
+def test_route_refuses_when_the_calibration_cannot_be_read(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a calibration read error never selects the native engine
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    monkeypatch.setattr(
+        NE.preflight_probe, "dispatch_calibration",
+        lambda cwd=None, **kw: [{"role": "*", "engine": None, "model": None, "readError": "x"}])
+    code, out = _cli(capsys, "route", "--cwd", r.B)
+    assert code == 1
+    assert out == {"ok": False, "reason": "calibration-unreadable"}
+
+
 def test_open_refuses_a_short_base_sha(tmp_path, monkeypatch, capsys):
     # axis: refusal — only a full 40-hex sha pins the base
     r = _make_repo(tmp_path)
@@ -738,6 +765,17 @@ def test_close_accepts_a_declared_deletion(tmp_path, monkeypatch, capsys):
     assert not os.path.exists(os.path.join(r.B, "a.txt"))
 
 
+def test_close_collects_a_declared_symlink_to_a_missing_target(tmp_path, monkeypatch, capsys):
+    # axis: preservation — a new symlink is compared by object id, never followed
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r, items=["a.txt", "link"])
+    os.symlink("nowhere", os.path.join(r.T, "link"))
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["a.txt", "link"]
+    assert os.path.islink(os.path.join(r.B, "link"))
+
+
 def test_close_grading_forfeits_a_declared_file_the_patch_cannot_carry(
         tmp_path, monkeypatch, capsys):
     # axis: refusal — an ignored declared file is not in the patch, so collection is incomplete
@@ -904,8 +942,9 @@ def test_wait_never_loops_past_the_deadline(tmp_path, monkeypatch, capsys):
     clock = _clocked(monkeypatch, _opened_epoch(r))
     code, out = _cli(capsys, "wait", "--run-dir", r.run, "--max-wait", "540")
     assert code == 0
-    assert clock.sleeps <= 60 + 5
+    assert 60 <= clock.now - _opened_epoch(r) <= 65
     assert out["resultPresent"] is False and out["deadlinePassed"] is True
+    assert out["secondsLeft"] == 0
 
 
 def test_wait_stops_at_the_max_wait(tmp_path, monkeypatch, capsys):
