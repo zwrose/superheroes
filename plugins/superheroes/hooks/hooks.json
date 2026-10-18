@@ -10,6 +10,14 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/native_enroll.py\" || true" }
+        ]
+      }
+    ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\" --host claude || true" } ] }
     ],

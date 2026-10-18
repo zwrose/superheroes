@@ -156,6 +156,43 @@ def _enrolled(r, worktree=None, agent=_AGENT):
         "worktree": os.path.realpath(worktree or r.T), "at": "2026-10-18T00:00:00Z"})
 
 
+def _hook_enroll(r, enrolled, agent=_AGENT, cwd=None):
+    """Run the shipped PostToolUse hook on the real enroll command; True when it journaled."""
+    import importlib.util
+    hook = os.path.join(os.path.dirname(NE.__file__), "..", "hooks", "native_enroll.py")
+    spec = importlib.util.spec_from_file_location("native_enroll", hook)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    with open(os.path.join(r.run, "agent-prompt.md"), encoding="utf-8") as fh:
+        command = next(line.strip() for line in fh if "native_engine.py" in line and " enroll " in line)
+    return mod.record({
+        "tool_name": "Bash", "tool_input": {"command": command}, "agent_id": agent,
+        "cwd": cwd or r.T, "tool_response": {"stdout": json.dumps(enrolled) + "\n"}})
+
+
+def test_enroll_hook_records_the_binding_only_for_a_successful_enroll(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a failed enroll, or a payload without an agent id, journals nothing
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    assert not _hook_enroll(r, {"ok": False, "reason": "native-worktree-dirty"})
+    assert not _hook_enroll(r, {"ok": True, "head": r.base}, agent="")
+    assert "native-enrolled" not in _kinds(r)
+    assert _hook_enroll(r, {"ok": True, "head": r.base})
+    rec = [x for x in _records(r) if x["kind"] == "native-enrolled"][0]
+    assert rec["agentId"] == _AGENT and rec["worktree"] == os.path.realpath(r.T)
+    assert not _hook_enroll(r, {"ok": True, "head": r.base}, agent="other")
+
+
+def test_enroll_hook_is_registered_on_post_tool_use_bash():
+    hooks = os.path.join(os.path.dirname(NE.__file__), "..", "hooks", "hooks.json")
+    with open(hooks, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    cmds = [h["command"] for g in cfg["hooks"]["PostToolUse"] if g["matcher"] == "Bash"
+            for h in g["hooks"]]
+    assert any("native_enroll.py" in c for c in cmds)
+
+
 def _re_enroll(r, worktree):
     """Replace the stand-in enrolled record with one naming another worktree."""
     run = os.path.realpath(r.run)
@@ -800,7 +837,7 @@ def test_close_success_lands_the_change_in_the_builders_index(tmp_path, monkeypa
     assert code == 0
     code, enrolled = _enroll(capsys, monkeypatch, r, r.T)
     assert code == 0 and enrolled["head"] == r.base
-    _enrolled(r)
+    _hook_enroll(r, enrolled)
     _write(os.path.join(r.T, "a.txt"), "alpha\nbeta\n")
     _write(os.path.join(r.T, "src", "new.txt"), "fresh\n")
     _result(r)
