@@ -94,7 +94,7 @@ def _check_extras(x):
         raise Refusal(BAD_EXTRAS, "schema")
     if not (_int(x.get("pr")) and x["pr"] > 0):
         raise Refusal(BAD_EXTRAS, "pr")
-    for k in ("runDirs", "goAheads", "makers", "checked", "carriedChecks"):
+    for k in ("runDirs", "goAheads", "makers", "checked", "carriedChecks", "ownerRulings"):
         if not isinstance(x.get(k, []), list):
             raise Refusal(BAD_EXTRAS, k)
     if not all(isinstance(d, str) and d for d in x.get("runDirs", [])):
@@ -424,6 +424,15 @@ def _id(row, key):
 
 
 def _findings(state):
+    """The account's findings list."""
+    return _findings_and_merges(state)[0]
+
+
+def _findings_and_merges(state):
+    """(the account's findings, a map of each merged member row's findingKey to its representative's findingKey).
+
+    The map is the ledger's own resolved merge, the one `_decide` follows; a member whose merge does not
+    resolve is not in it."""
     owned = state.get(sc.DISPOSITION_LEDGER_OWNER_FIELD) == sc.DISPOSITION_LEDGER_OWNER_VALUE
     ledger, fault = sc.read_disposition_ledger(state, required=owned)  # an owned session's ledger is never optional
     if fault:
@@ -443,11 +452,13 @@ def _findings(state):
             for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
                 if isinstance(d, dict) and d.get("disposition") == "skip" and isinstance(d.get("id"), str):
                     rulings.setdefault(d["id"], {"ruling": "out-of-scope", "provenance": prov})
-    out = []
+    out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
             continue
         outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings)
+        if rep is not None and sc.finding_identity_key(rep) != key:
+            merged[key] = sc.finding_identity_key(rep)
         if rep is not None and reason and sc.finding_identity_key(rep) != key:
             reason += MERGED_INTO_FORMAT.format(_id(rep, sc.finding_identity_key(rep)))
         dim = row.get("dimension")
@@ -456,7 +467,7 @@ def _findings(state):
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail"))})
-    return out
+    return out, merged
 
 
 def _original_maker_families(state, fix_round):
@@ -518,7 +529,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
-    findings = _findings(state)
+    findings, merged = _findings_and_merges(state)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
     else:
@@ -555,7 +566,33 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
-            "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []), "checked": checked}
+            "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
+            "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked}
+
+
+def _owner_rulings(entries, findings, merged):
+    """The extras' ownerRulings, plus one entry per merged member of each finding an entry names.
+
+    `merged` is `_findings_and_merges`' map of each member row's findingKey to its representative's findingKey, from the
+    ledger's resolved merge, never from a reason's text or a display id (ids repeat across rounds). An entry
+    names a row as the writer reads it (`review_record._ruling_hits`: raw findingKey, stored key or id); the
+    ruling on the representative covers the members, unless an entry already names that member. A member whose
+    merge did not resolve is not in `merged` and gets no entry. The writer validates the entries; one that is
+    not a dict, or names no row here, is passed through unchanged. Rows carried from an earlier record are never
+    expanded: the session names each one it means."""
+    out = list(entries)
+    for e in entries:
+        key = e.get("key") if isinstance(e, dict) else None
+        for i in review_record._ruling_hits(findings, key):
+            rep = findings[i]
+            for row in findings:
+                # axis: a ruling on a merged group's representative covers its members — see bite-proof record wo_a_1958_owner_ruling
+                if row is rep or merged.get(row["findingKey"]) != rep["findingKey"]:
+                    continue
+                if any(isinstance(o, dict) and review_record._ruling_hits([row], o.get("key")) for o in out):
+                    continue
+                out.append({"key": row["findingKey"], "url": e.get("url"), "words": e.get("words")})
+    return out
 
 
 def _carried(account, extras, repo_root, readers):

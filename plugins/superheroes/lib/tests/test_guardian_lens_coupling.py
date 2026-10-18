@@ -2958,3 +2958,160 @@ def test_digest_argv_summarizes_file_operands(tmp_path):
     run_argv = captured[0]
     run_sep = run_argv.index("--")
     assert len(run_argv[run_sep + 1:]) == 30
+
+
+# ======================================================================================
+# 20. permanent boundary (#1960): only a flat Python layout is structural
+# ======================================================================================
+
+def _weekly_eats_repo(tmp_path, pairs=2):
+    """Flat Python (`lib/one.py`, no __init__ anywhere) beside a two-cluster TS tree."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "lib/one.py", "x = 1\n")
+    _grow_ts_tree(repo, pairs)
+    return repo
+
+
+def _grow_ts_tree(repo, pairs):
+    for i in range(pairs):
+        write(repo, "src/a/m%d.ts" % i)
+        write(repo, "src/b/m%d.ts" % i)
+
+
+def _cross_cluster_run(pairs, parsed_pairs=None):
+    """A fake depcruise reporting `parsed_pairs` (default: all) a/m<i> -> b/m<i> edges."""
+    n = pairs if parsed_pairs is None else parsed_pairs
+    edges = [("src/a/m%d.ts" % i, "src/b/m%d.ts" % i) for i in range(n)]
+    return depcruise_run(dc_report(edges=edges))
+
+
+def _packaged_py_with_a_parse_failure(repo):
+    write(repo, "pkg/__init__.py", "")
+    write(repo, "pkg/mod.py", "x = 1\n")
+    write(repo, "pkg/bad.py", "def (:\n")
+
+
+class _RecordingLens(glc.CouplingLens):
+    """The real lens, remembering the prior digest each sweep threaded to it."""
+
+    def __init__(self):
+        super().__init__()
+        self.seen_prev = []
+
+    def collect(self, ctx):
+        self.seen_prev.append(ctx.get("prevDigest"))
+        return super().collect(ctx)
+
+
+def _coupling_flat_layout_lines(report_path):
+    """The report's degraded-lens lines for coupling that name the flat Python layout."""
+    with open(report_path, encoding="utf-8") as fh:
+        return [ln for ln in fh.read().splitlines()
+                if ln.startswith("- coupling:") and "flat layout" in ln]
+
+
+def test_flat_python_beside_collected_js_is_a_permanent_boundary(tmp_path):
+    # axis: the lens sets permanentBoundary on a partial whose only degraded half is flat Python
+    repo = _weekly_eats_repo(tmp_path)
+    out = lens().collect(ctx(repo, tmp_path, run=_cross_cluster_run(2)))
+    assert st(out) == "partial"
+    assert out["permanentBoundary"] is True
+    assert gl.permanent_boundary(out) is True
+    assert "py" in out["reason"]
+    assert "flat layout" in out["reason"]
+    assert glc.PERMANENT_BOUNDARY_NOTE in out["reason"]
+    assert out["digest"]["ecosystems"]["js"]["status"] == "collected"
+
+
+def test_a_python_parse_failure_beside_collected_js_is_transient(tmp_path):
+    # axis: a transient Python degradation (parse failure, packaged layout) never sets the key
+    repo = init_calibrated_repo(tmp_path)
+    _grow_ts_tree(repo, 2)
+    _packaged_py_with_a_parse_failure(repo)
+    out = lens().collect(ctx(repo, tmp_path, run=_cross_cluster_run(2)))
+    assert st(out) == "partial"
+    assert "could not be opened or parsed" in out["reason"]
+    assert "permanentBoundary" not in out
+    assert gl.permanent_boundary(out) is False
+    assert glc.PERMANENT_BOUNDARY_NOTE not in out["reason"]
+
+
+def test_an_absent_js_tool_beside_collected_python_is_transient(tmp_path):
+    # axis: a transient JS degradation (tool absent) never sets the key, even with Python collected
+    repo = init_calibrated_repo(tmp_path)
+    _grow_ts_tree(repo, 2)
+    write(repo, "pkg/__init__.py", "")
+    write(repo, "pkg/mod.py", "x = 1\n")
+    run = make_run(lambda argv, kw: FileNotFoundError("depcruise"))
+    out = lens().collect(ctx(repo, tmp_path, run=run))
+    assert st(out) == "partial"
+    assert out["digest"]["ecosystems"]["py"]["status"] == "collected"
+    assert out["digest"]["ecosystems"]["js"]["status"] == "not-collected"
+    assert "permanentBoundary" not in out
+    assert gl.permanent_boundary(out) is False
+    assert glc.PERMANENT_BOUNDARY_NOTE not in out["reason"]
+
+
+def test_a_permanent_partial_seeds_the_js_baseline_and_drift_runs_against_it(tmp_path):
+    # axis: through the sweep a first-seed flat-Python partial saves the JS baseline, and the
+    # second sweep reads it back as prevDigest and reports coupling drift against it
+    repo = _weekly_eats_repo(tmp_path, pairs=2)
+    root = store(tmp_path)
+    the_lens = _RecordingLens()
+
+    bundle = gsw.collect(repo, lenses=[the_lens], root=root, run=_cross_cluster_run(2))
+    saved = bundle["nextSnapshot"]["lenses"]["coupling"]
+    assert saved["collectorVersion"] == glc.COLLECTOR_VERSION
+    assert saved["digest"]["ecosystems"]["js"]["status"] == "collected"
+    degraded = {d["lens"]: d for d in bundle["funnel"]["degradedLenses"]}
+    assert "py" in degraded["coupling"]["reason"]
+    assert "flat layout" in degraded["coupling"]["reason"]
+    result = gsw.finalize(repo, bundle, [], root=root)
+    assert result["ok"] is True
+    lines = _coupling_flat_layout_lines(result["reportPath"])
+    assert len(lines) == 1 and " py: " in lines[0]
+    assert the_lens.seen_prev == [None]
+
+    _grow_ts_tree(repo, 6)
+    bundle2 = gsw.collect(repo, lenses=[the_lens], root=root, run=_cross_cluster_run(6))
+    assert the_lens.seen_prev[1] == saved["digest"]
+    crossed = [c["vital"] for c in bundle2["vitalsDelta"]["crossings"]]
+    assert "couplingEdges" in crossed
+    degraded2 = {d["lens"]: d for d in bundle2["funnel"]["degradedLenses"]}
+    assert "py" in degraded2["coupling"]["reason"]
+    assert "flat layout" in degraded2["coupling"]["reason"]
+    result2 = gsw.finalize(repo, bundle2, [], root=root)
+    assert result2["ok"] is True
+    lines2 = _coupling_flat_layout_lines(result2["reportPath"])
+    assert len(lines2) == 1 and " py: " in lines2[0]
+
+
+def test_the_module_count_cliff_arms_against_a_baseline_saved_past_flat_python(tmp_path):
+    # axis: the JS module-count cliff fires on sweep two because sweep one saved a baseline
+    repo = _weekly_eats_repo(tmp_path, pairs=12)
+    root = store(tmp_path)
+    the_lens = glc.CouplingLens()
+    # 24 JS sources on disk; 4 parsed is above the collapse floor and below the cliff line.
+    assert 24 >= glc.COLLAPSE_MIN_SOURCES and 4 > 24 * glc.COLLAPSE_RATIO
+    assert 4 < 24 * glc.CLIFF_RATIO
+
+    bundle = gsw.collect(repo, lenses=[the_lens], root=root, run=_cross_cluster_run(12))
+    assert "coupling" in bundle["nextSnapshot"]["lenses"]
+    assert gsw.finalize(repo, bundle, [], root=root)["ok"] is True
+
+    bundle2 = gsw.collect(
+        repo, lenses=[the_lens], root=root, run=_cross_cluster_run(12, parsed_pairs=2))
+    degraded = {d["lens"]: d for d in bundle2["funnel"]["degradedLenses"]}
+    assert "coupling" in degraded
+    assert "cliff" in degraded["coupling"]["reason"]
+
+
+def test_a_transient_partial_on_a_first_sweep_saves_no_baseline(tmp_path):
+    # axis: through the sweep a transient partial (Python parse failure) saves nothing on a first seed
+    repo = init_calibrated_repo(tmp_path)
+    _grow_ts_tree(repo, 2)
+    _packaged_py_with_a_parse_failure(repo)
+    bundle = gsw.collect(
+        repo, lenses=[glc.CouplingLens()], root=store(tmp_path), run=_cross_cluster_run(2))
+    assert "coupling" not in bundle["nextSnapshot"]["lenses"]
+    assert "coupling" in {d["lens"] for d in bundle["funnel"]["degradedLenses"]}

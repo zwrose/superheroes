@@ -17,7 +17,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
-- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`. See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
+- **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`, though in a cloud session on Linux a builder's implementer orders do not reach that refusal, because they run on the native engine (the channel itself still refuses). See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
+- **After switching.** **In a cloud session on Linux, a `localSockets` project's implementer orders run as native subagents through `native_engine.py`, and `route` decides it.** The builder runs `native_engine.py route --cwd <build worktree>` before each implementer order; `native` sends it through the native engine, any other engine keeps `dispatch-write`. See [Native implementer engine](#native-implementer-engine).
 - **After switching.** **A project whose verify command names no Python launcher can now set `breakItInterpreter` through configure so its Python break-it tests run.** Without it, a verify command such as `pytest -q`, `uv run pytest`, `make test`, `tox` or `poetry run pytest` leaves those tests not-run, and a review whose fixer fixes a break-it finding parks with certification withheld. See [Break-it tests: a calibrated Python launcher](#break-it-tests-a-calibrated-python-launcher).
 
 ### PR sheet: leftovers carry the decision spine
@@ -30,6 +31,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - The unsupported-platform refusal now names only `localSockets` off macOS; the token `engine-config:sandbox-access-unsupported-platform` and the result keys are unchanged.
 - A Linux run with `localPorts` journals `access.localPorts: true` and writes `network.allowLocalBinding: true`.
+
+### Native implementer engine
+
+- `native_engine.py` takes five verbs. `route --cwd` returns `ok`, `engine`, `reason` and, for `native`, `why`; `open` returns `ok`, `terminal`, `runDir`, `deadlineAt` and `agent` (`subagent_type`, `model`, `isolation`, `run_in_background`, `promptPath`); `enroll` returns `ok` and `head`; `wait` returns `ok`, `resultPresent`, `deadlinePassed` and `secondsLeft`; `close` returns `ok`, `terminal`, `signal` or `reason`, `forfeited`, `engine`, `bounds`, `servedModel`, and on success `itemCheck` and `collected` (`files`, `patchSha256`).
+- A native run's `run-opened` record carries `engine: "native"`, `bounds`, `effectiveEffort` (always null, because the host's subagent dispatch takes no effort), `expectedServedModel` and `deadlineAt`, and no `claudeWriteSandbox`. The run also journals `native-enrolled`, `native-collecting` and `run-closed` records.
+- Close tokens, in check order: `native-deadline`, `native-not-enrolled`, `native-binding-mismatch`, `native-worktree-not-isolated`, `native-base-mismatch`, `native-model-unread`, `native-model-mismatch`, `native-result-invalid`; then `items-undelivered`, `item-evidence-unavailable:<cause>`, `native-collect-failed`, `native-collect-incomplete`, `native-collect-interrupted` and `journal-write-failed`. `needs_context` and `blocked` close unforfeited.
+- A new PreToolUse hook, `implementer_fence.py`, runs on the `Bash` and `Edit|Write` matchers. It acts only on a `superheroes:implementer` subagent: it records the binding on a native run's enroll command and fences only an implementer enrolled that way (install and network commands, a closed run, a passed deadline). Every other agent, the builder included, is untouched.
 
 ### Review record: carried leftovers are re-checked against the head
 
@@ -44,6 +52,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A run record's `interpreter`, for a multi-word launcher, is the shell-joined prefix, such as `uv run python`.
 - `core_md.py` gains the verbs `break-it-interpreter` (read) and `write-break-it-interpreter` (write, or clear with `--clear`). Read the write result's `action`: only `written` or `noop` means saved. See `skills/configure/reference/view-and-tune.md` and `skills/review-code/reference/auto-fix-loop.md` § Break-it tests.
 
+### Review record: an owner ruling given mid-build reaches the record
+
+- A review account (and the full lane's extras file) takes an optional `ownerRulings` list of `{key, url, words}`, and a decision can now be cited as the new `owner-ruling` kind, with `ref` `{url, words}`.
+- A ruling counts only when the writer reads its link as the repository owner's comment, in the PR's own repository, and that comment is a standard chat-ruling record holding the words (see the next bullet). Otherwise the finding stays, or becomes, left-for-owner and the sheet still shows it as a card.
+- Only a standard chat-ruling record counts (composed by `lib/canon.py ruling-record`), with the words matched inside its quoted block. A ruling typed as a plain comment, even from the owner's account, is asked again at merge.
+- A leftover the owner ruled on during a build no longer comes back on the sheet, provided the ruling's link resolves. See `skills/review-code/reference/review-record.md`.
+
 ### Review record: survives the cloud egress, and an unreadable one names where
 
 - The record's JSON writes `/` as `\/`, so a cloud session's URL rewrite cannot change it. Records already posted read as before.
@@ -55,6 +70,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - An unnamed change with no claim, or with a claim the record does not bear out, still refuses as before, and an owner ruling that allows the change works as before.
 - Audit results take the two optional members `unnamedChangeFixes` and `unnamedChangeReverts` (lists of strings). An audit entry gains `reportedUnnamedChange`, and, when attributed, `attributedChange`, `sameRoundFixes` and `revertedChanges`; the round gains `auditAttributedChange`.
 - A review no longer stops at the owner gate when a fix round also fixed a small same-round finding or reverted such an edit.
+
+### Guardian: the coupling lens keeps a baseline past a flat Python layout
+
+- A repo with a flat Python layout (no `__init__.py` under any Python source root) and collectable JS/TS now has its coupling baseline saved on the first sweep. Drift and the JS module-count cliff run against it from the next sweep on. The degraded line naming the Python half still shows on every sweep.
+- Any other degradation (a missing tool, a Python file that will not parse, a cliff) is still transient: a transient partial on a first sweep saves nothing, as before.
+- The lens's `collectorVersion` is unchanged, so repos that already hold a coupling baseline keep it.
 
 ## 0.43.1
 

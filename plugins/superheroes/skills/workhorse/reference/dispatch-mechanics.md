@@ -682,11 +682,13 @@ foreign contract's rules at brief time would have cost minutes.
 
 ## Supervised write dispatch
 
-The sanctioned way to dispatch every implementer order, on whichever engine the calibration names, `claude` included, is the supervised runner. For
+The sanctioned way to dispatch an implementer order, on every engine `native_engine.py route` names except `native`, `claude` included, is the supervised runner; `native` follows § The native implementer engine. For
 the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+# Route first: "engine":"native" means run the seat resolution through the IMPL_SEAT line below, then skip the dispatch-write calls and follow § The native implementer engine (its open takes "$IMPL_SEAT")
+python3 -B "$ROOT_DIR/lib/native_engine.py" route --cwd "$BUILD_WORKTREE"
 # Resolve implementer cell from dispatch calibration + registry (honor configured model pin)
 read -r IMPL_ENGINE IMPL_ENGINE_MODEL IMPL_EFFORT <<<"$(python3 -B -c "
 import sys
@@ -803,6 +805,9 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   macOS-only, because the Linux sandbox blocks Unix sockets on every path and its only switch lifts
   the block for all of them, so an open off macOS that asks for it refuses
   `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
+  In a cloud session on Linux the builder never reaches that refusal for an implementer order,
+  because `route` names the native engine (§ The native implementer engine). The channel itself
+  still refuses.
   An `extraWritePaths` entry that resolves to `/` through a symlink refuses
   `engine-config:sandbox-access-malformed`. A `/tmp` whose realpath resolves to `/` is not journaled.
 - **`ps` is blocked** inside the sandbox (measured on macOS), although `ps` is among the allow rules:
@@ -832,6 +837,31 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   stops at the time budget `CC_WRITES_SWEEP_BUDGET_SECONDS` in
   `lib/engine_dispatch.py`. The folded result reports it as `ccWritesSweep`
   (`removed`, `incomplete`, `error`). An abandoned run is not swept.
+
+### The native implementer engine
+
+A cloud session on Linux cannot serve `localSockets` in the sandbox, so an implementer order for a project whose calibration turns it on runs as a native `superheroes:implementer` subagent, bounded by the platform's auto mode and the plugin's fence, not a sandbox. `route` resolves it (cloud, Linux and `localSockets` on; `native` is never a hand-set calibration value). `E="$ROOT_DIR/lib/native_engine.py"`; every verb prints one JSON object. `$IMPL_SEAT` comes from the seat resolution at the top of § Supervised write dispatch; run it in the same shell first, because `open` refuses `seat-empty` on an unset seat.
+
+1. **Open.** Snapshot the build head first, per order: `ORDER_BASE_SHA=$(git -C "$BUILD_WORKTREE" rev-parse HEAD)`, so a later order sees earlier orders' commits (the original build base stays the size-accounting base). `python3 -B "$E" open --run-dir "$RUN_DIR" --order-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --base-sha "$ORDER_BASE_SHA" --deadline-seconds N [--expect-item <path>]... --seat "$IMPL_SEAT"`. The seat must be vendor `claude`. It refuses, with nothing journaled, `native-engine-not-routed`, `run-dir-not-empty`, `base-sha-invalid`, `deadline-invalid` (N outside 60 to 7200), `expect-item-invalid` (an absolute path or `..`), or the model gate's own refusal. It journals one `run-opened` record: `engine: "native"`, `bounds`, `baseSha`, `expectedItems`, `deadlineAt`, `resolvedSeat`, `expectedServedModel`, and `effectiveEffort: null` with an `effortNote`, because the host's subagent dispatch takes no effort and the subagent runs at its default. It writes no `claudeWriteSandbox` key. It writes `agent-prompt.md` (the native preamble, then the order verbatim) and prints `agent`: the agent type, `model`, `isolation`, `run_in_background` and `promptPath`.
+2. **Launch.** Dispatch the printed agent as a background subagent with exactly the printed agent type, `model`, worktree isolation and background flag, and the prompt read from `promptPath`. Change none of them.
+3. **Enroll.** The preamble's first instruction runs `native_engine.py enroll --run-dir <D>` as the subagent's first Bash command, and to stop and report if it fails. The isolated worktree branches from the default remote branch, not the order's base, so `enroll` checks it out detached at `baseSha`. It refuses `native-run-not-open`, `native-deadline`, `native-worktree-dirty`, `native-worktree-not-isolated` (not a linked worktree, or the build worktree itself) or `native-base-checkout-failed`. It writes nothing; the hook (below) records the binding, `native-enrolled`, from the subagent's `agent_id` and worktree.
+4. **Wait.** `wait --run-dir "$RUN_DIR" --max-wait S` (S at most 540) polls until `result.json` exists, `deadlineAt` passes or S elapses, and prints `resultPresent`, `deadlinePassed` and `secondsLeft`. Re-invoke while neither is true. It never blocks past `deadlineAt` plus 5 seconds.
+5. **Deadline.** At `deadlineAt`, stop the subagent with the host's stop action, then `close --forfeit deadline`.
+6. **Close.** `close --run-dir "$RUN_DIR" --worktree <subagent worktree> --transcript <subagent transcript> --into "$BUILD_WORKTREE"`, under the run-dir lock. The first failed check journals `run-closed` with `ok: false`, `forfeited: true` and `reason: "forfeited"`, with the token as `detail`, in this order:
+   - `native-deadline`: `--forfeit deadline`, or past `deadlineAt`;
+   - `native-not-enrolled`: no `native-enrolled` record;
+   - `native-binding-mismatch`: the worktree is not the enrolled one, or the enrolled `agentId` is not in the transcript's file name;
+   - `native-worktree-not-isolated`: not in the build worktree's `git worktree list`, or the build worktree itself;
+   - `native-base-mismatch`: `baseSha` is not an ancestor of the subagent's `HEAD`;
+   - `native-model-unread` (no assistant record carries a `model`) or `native-model-mismatch` (any differs from `expectedServedModel`);
+   - `native-result-invalid`: `result.json` is missing, malformed, or its status is outside `done`, `needs_context` and `blocked`.
+
+   `needs_context` and `blocked` return `{"ok": false, "terminal": true, "reason": <status>, "forfeited": false}` and collect nothing. On `done`, declared items are graded as the marker channel grades them (`items-undelivered` with `itemCheck`, or `item-evidence-unavailable:<cause>`, both forfeits). Collection then stages the worktree (`git add -A`), takes `git diff --cached --binary <baseSha>`, journals `native-collecting` with the patch's sha256 (an append failure refuses `journal-write-failed` before the apply), and runs `git apply --index` in the build worktree: the work arrives in its index. A failed apply forfeits `native-collect-failed`; a declared item absent from the build worktree or differing from the subagent's bytes forfeits `native-collect-incomplete`. Success journals `run-closed` with `ok: true`, `signal: "ok"`, `itemCheck`, `servedModel`, `collected` (`files`, `patchSha256`) and `bounds`; every result carries `engine`, `bounds` and `servedModel` (or null). Close is idempotent: a closed run returns its record unchanged, and a `native-collecting` record with no `run-closed` closes `native-collect-interrupted` and never reapplies.
+7. **Commit.** The builder commits the build worktree's index from its own shell; the engine never commits.
+
+**The fence.** `implementer_fence.py` is a PreToolUse hook on the `Bash` and `Edit|Write` matchers. It acts only on a `superheroes:implementer` subagent: the builder and every other agent are untouched, and an implementer outside a native run is too. It records the binding on a native run's enroll command (denied unless the run is open, before its deadline and not yet enrolled) and fences only an implementer enrolled that way. For that implementer it refuses every tool call once the run is closed or past `deadlineAt`, and refuses a Bash command whose leading word is an installer (`pip`, `uv`, `npm`, `pnpm`, `yarn`, `brew`, the system package managers, and the like) or a network command (`curl`, `wget`, `ssh`, `git push`, `fetch`, `pull`, `clone`, `gh`, and the like), or that it cannot parse. A refusal reaches the subagent as a tool error, never a prompt, so a run never waits on an approval.
+
+**Residuals, disclosed.** The subagent can write any path its auto mode allows, the run's journal and `result.json` included, so grading rests on git and on the harness's transcript and journal records, which a hostile subagent could alter. The fence is a command-prefix fence, not a sandbox. The hook runs with `|| true`, so one that cannot start fences nothing; the worktree guard's fail-closed wrapper on the same matcher then denies every Bash call, and an un-enrolled run forfeits `native-not-enrolled` at close.
 
 ### Write-report contract
 
@@ -907,6 +937,18 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
 | write run, either snapshot indeterminate | `{"status": "indeterminate", "reason": "<why>"}` |
 | **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
 | review run | **key absent** |
+
+### The native implementer fence
+
+The fence (`lib/native_fence.py`, the `hooks/implementer_fence.py` hook) is a command-prefix fence
+on an enrolled native implementer's Bash calls, not a sandbox. It reads each segment's leading
+command after assignments, the shell keywords and grouping (`if then elif else while until do ! {`)
+and the wrappers with their option arguments (`env`, `command -p`, `nice`, `timeout`, `stdbuf`,
+`nohup`, `sudo`, `exec`, `time`; `command -v` passes). It fences installers (an unknown global
+option fails closed), fetch-and-run runners, and network commands. A local tool runs via
+`npx --no-install <bin>` (or `npx --no`, `npm exec --no`; `--yes` cancels it, `--offline` alone
+does not qualify) or `npm run <script>`. The documented passes — command substitution, subshells,
+here-strings, `eval`, `sh -c`/`bash -c`, `xargs`, `find -exec`, variable indirection — are not fenced.
 
 ## Refusal streak — shell health
 
