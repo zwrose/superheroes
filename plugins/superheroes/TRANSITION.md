@@ -53,6 +53,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - Audit results take the two optional members `unnamedChangeFixes` and `unnamedChangeReverts` (lists of strings). An audit entry gains `reportedUnnamedChange`, and, when attributed, `attributedChange`, `sameRoundFixes` and `revertedChanges`; the round gains `auditAttributedChange`.
 - A review no longer stops at the owner gate when a fix round also fixed a small same-round finding or reverted such an edit.
 
+### Guardian: the coupling lens keeps a baseline past a flat Python layout
+
+- A repo with a flat Python layout (no `__init__.py` under any Python source root) and collectable JS/TS now has its coupling baseline saved on the first sweep. Drift and the JS module-count cliff run against it from the next sweep on. The degraded line naming the Python half still shows on every sweep.
+- Any other degradation (a missing tool, a Python file that will not parse, a cliff) is still transient: a transient partial on a first sweep saves nothing, as before.
+- The lens's `collectorVersion` is unchanged, so repos that already hold a coupling baseline keep it.
+
 ## 0.43.1
 
 ### Before you upgrade
