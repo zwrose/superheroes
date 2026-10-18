@@ -157,3 +157,23 @@ def test_sanitized_view_notice_points_seats_at_absolute_paths_outside_the_view()
     assert "readable at that path" in notice
     assert "their absence is NOT a finding" not in notice
     assert "Where your instructions name" in notice
+    assert "CLAUDE.md or its core and review-crew files" in notice
+    assert "calibration" not in notice
+
+
+@pytest.mark.parametrize("line", [
+    "- CLAUDE.md (project conventions): CLAUDE.md",
+    "- Project conventions: CLAUDE.md and the project profile.",
+])
+def test_bare_slot_regex_matches_bare_relative_claude_md(line):
+    assert _BARE_SLOT.search(line)
+
+
+@pytest.mark.parametrize("line", [
+    "- CLAUDE.md (project conventions): {{" + "CLAUDE_MD_PATH}}",
+    "- Project conventions: CLAUDE.md at /abs/CLAUDE.md, and the project profile.",
+    "and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and",
+    "Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)",
+])
+def test_bare_slot_regex_ignores_placeholder_absolute_and_prose_mentions(line):
+    assert not _BARE_SLOT.search(line)
