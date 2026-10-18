@@ -410,6 +410,11 @@ def _id(row, key):
 
 
 def _findings(state):
+    """The account's findings list."""
+    return _findings_and_merges(state)[0]
+
+
+def _findings_and_merges(state):
     """(the account's findings, a map of each merged member row's findingKey to its representative's findingKey).
 
     The map is the ledger's own resolved merge, the one `_decide` follows; a member whose merge does not
@@ -510,7 +515,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
-    findings, merged = _findings(state)
+    findings, merged = _findings_and_merges(state)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
     else:
@@ -554,7 +559,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
 def _owner_rulings(entries, findings, merged):
     """The extras' ownerRulings, plus one entry per merged member of each finding an entry names.
 
-    `merged` is `_findings`' map of each member row's findingKey to its representative's findingKey, from the
+    `merged` is `_findings_and_merges`' map of each member row's findingKey to its representative's findingKey, from the
     ledger's resolved merge, never from a reason's text or a display id (ids repeat across rounds). An entry
     names a row as the writer reads it (`review_record._ruling_hits`: raw findingKey, stored key or id); the
     ruling on the representative covers the members, unless an entry already names that member. A member whose
