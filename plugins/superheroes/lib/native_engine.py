@@ -24,6 +24,7 @@ refusal or a forfeit. Grading rests on git and on the harness's transcript and j
 """
 import argparse
 import calendar
+import contextlib
 import hashlib
 import json
 import os
@@ -126,10 +127,44 @@ def _refusal(reason, **extra):
 # --- git -----------------------------------------------------------------------------------
 
 
+# Every git subprocess this module causes runs under `_neutral_git`: the owner's global and system
+# git config never reaches it (#1949). The env pair does not reach the repository's own or the
+# worktree's config, and `engine_dispatch._git_scrubbed` strips GIT_CONFIG_GLOBAL from its child, so
+# `_git` also pins each setting the engine's porcelain parsing depends on.
+_NEUTRAL_ENV = (("GIT_CONFIG_GLOBAL", os.devnull), ("GIT_CONFIG_NOSYSTEM", "1"))
+_NEUTRAL_CONFIG = (
+    "diff.noprefix=false", "diff.context=3", "apply.whitespace=nowarn",
+    "status.showUntrackedFiles=all", "diff.submodule=short", "status.submoduleSummary=false",
+    "color.ui=false", "core.quotePath=false", "diff.external=", "diff.renames=false",
+)
+
+
+@contextlib.contextmanager
+def _neutral_git():
+    """Run git, and the callees that spawn it, under neutral configuration.
+
+    Hides the ambient routing variables, then points the global config at the null device and
+    switches the system config off in ``os.environ`` for the duration. The previous values (or their
+    absence) come back afterwards, on an exception too; the context nests."""
+    saved = {key: os.environ.get(key) for key, _ in _NEUTRAL_ENV}
+    try:
+        with engine_dispatch._git_routing_scrubbed_environ():
+            os.environ.update(_NEUTRAL_ENV)  # after the scrub: GIT_CONFIG_GLOBAL is a routing var
+            yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _git(cwd, *args):
     """(returncode, stdout, stderr); returncode -1 when git cannot run or times out."""
+    overrides = [part for setting in _NEUTRAL_CONFIG for part in ("-c", setting)]
     try:
-        proc = engine_dispatch._git_scrubbed(cwd, *args, timeout=GIT_TIMEOUT)
+        with _neutral_git():
+            proc = engine_dispatch._git_scrubbed(cwd, *overrides, *args, timeout=GIT_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError):
         return -1, "", ""
     return proc.returncode, proc.stdout or "", proc.stderr or ""
@@ -156,7 +191,7 @@ def _calibrated_implementer(cwd):
 def route(cwd):
     """native exactly when cloud, linux, a calibration that turns localSockets on and a claude
     implementer; any other calibrated engine keeps its own dispatch path."""
-    with engine_dispatch._git_routing_scrubbed_environ():  # both reads name cwd's repository
+    with _neutral_git():  # both reads name cwd's repository
         calibrated = _calibrated_implementer(cwd)
         cloud_linux = (cloud_pass._is_cloud(os.environ)
                        and engine_dispatch._host_platform() == "linux")
@@ -344,7 +379,7 @@ def _cmd_enroll(args):
     if rc != 0 or out.strip():
         return _enroll_refusal("native-worktree-dirty")
     try:
-        with engine_dispatch._git_routing_scrubbed_environ():  # same worktree `_git` sees
+        with _neutral_git():  # same worktree `_git` sees
             top = store_core.repo_root(here)
             git_dir = store_core.get_worktree_gitdir(top)
             common_dir = store_core.get_gitdir(top)
@@ -354,7 +389,7 @@ def _cmd_enroll(args):
         return _enroll_refusal("native-worktree-not-isolated")
     top = os.path.realpath(top)
     try:
-        with engine_dispatch._git_routing_scrubbed_environ():
+        with _neutral_git():
             builder_top = store_core.repo_root(opened.get("cwd") or "")
     except Exception:  # fail closed: the builder's root unresolved leaves isolation unproven
         return _enroll_refusal("native-worktree-not-isolated")
@@ -505,7 +540,7 @@ class _Close(object):
         target = os.path.realpath(args.worktree)
         into = os.path.realpath(args.into)
         try:
-            with engine_dispatch._git_routing_scrubbed_environ():  # same root `_git` will use
+            with _neutral_git():  # same root `_git` will use
                 top = store_core.repo_root(into)
         except Exception:
             return self._forfeit("native-collect-failed")
@@ -537,11 +572,12 @@ class _Close(object):
         return self._collect(target, into, base)
 
     def _collect(self, target, into, base):
-        item_check = engine_dispatch._item_delivery_check(
-            target,
-            {"expectedItems": self.opened.get("expectedItems"), "baseSha": base,
-             "baselineDirty": {}},
-            timeout=GIT_TIMEOUT)
+        with _neutral_git():
+            item_check = engine_dispatch._item_delivery_check(
+                target,
+                {"expectedItems": self.opened.get("expectedItems"), "baseSha": base,
+                 "baselineDirty": {}},
+                timeout=GIT_TIMEOUT)
         extra = {} if item_check is None else {"itemCheck": item_check}
         if item_check is not None:
             if item_check.get("evidenceUnavailable"):

@@ -18,7 +18,11 @@ Detector axes (bite-proof):
 - E8 test_close_success_* — preservation: the subagent's change lands in the builder's index
 - E9 test_close_idempotent_* / _interrupted_ / _journal_write_failed — idempotence: no second apply
 - E10 test_wait_* — bound: the wait ends at result.json, the deadline, or the cap
+- E11 test_every_git_call_* / test_neutral_git_* — containment: every git subprocess runs inside
+  ``_neutral_git``, which sets and restores the neutral environment
+- E12 test_hostile_global_git_config_* — configuration: the owner's own git config never reaches a collection
 """
+import ast
 import calendar
 import json
 import os
@@ -1172,3 +1176,216 @@ def test_collect_carries_a_staged_gitlink_despite_submodule_diff_settings(
     assert code == 0, out
     assert out["collected"]["files"] == ["sub"]
     assert "160000" in _git(r.B, "ls-files", "-s", "sub")
+
+
+# --- E11 / E12 one neutral-config chokepoint (#1949) ----------------------------------------
+
+
+_GUARDED_MODULES = {"subprocess", "engine_dispatch", "store_core"}
+_GUARDED_ATTRS = {
+    "engine_dispatch": {"_git_scrubbed", "_git_scrubbed_bytes", "_item_delivery_check"},
+    "store_core": {"repo_root", "get_gitdir", "get_worktree_gitdir"},
+}
+_GUARDED_BARE = {"_git_scrubbed", "_git_scrubbed_bytes", "_item_delivery_check", "repo_root",
+                 "get_gitdir", "get_worktree_gitdir"}
+
+
+def _is_guarded_call(func):
+    if isinstance(func, ast.Name):
+        return func.id in _GUARDED_BARE
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        if func.value.id == "subprocess":
+            return True
+        return func.attr in _GUARDED_ATTRS.get(func.value.id, ())
+    return False
+
+
+def _calls_outside_neutral_git(source):
+    """``(line, text)`` of every guarded call that sits outside ``_neutral_git``'s definition and
+    outside a ``with _neutral_git():`` block, plus every import form that would hide one."""
+    found = []
+
+    def neutral_with(node):
+        return any(isinstance(item.context_expr, ast.Call)
+                   and isinstance(item.context_expr.func, ast.Name)
+                   and item.context_expr.func.id == "_neutral_git" for item in node.items)
+
+    def walk(node, covered):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_neutral_git":
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            covered = False  # a nested body may run after the enclosing block has exited
+        if isinstance(node, ast.ImportFrom) and node.module in _GUARDED_MODULES:
+            found.append((node.lineno, "from %s import ..." % node.module))
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _GUARDED_MODULES and alias.asname:
+                    found.append((node.lineno, "import %s as %s" % (alias.name, alias.asname)))
+        if isinstance(node, ast.Call) and not covered and _is_guarded_call(node.func):
+            found.append((node.lineno, ast.unparse(node.func)))
+        if isinstance(node, (ast.With, ast.AsyncWith)) and neutral_with(node):
+            for item in node.items:
+                walk(item, covered)
+            for stmt in node.body:
+                walk(stmt, True)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child, covered)
+
+    walk(ast.parse(source), False)
+    return found
+
+
+def test_every_git_call_in_native_engine_runs_inside_the_neutral_context():
+    # axis: containment — a git call added outside `_neutral_git` runs under the owner's config
+    with open(NE.__file__.replace(".pyc", ".py"), encoding="utf-8") as fh:
+        stray = _calls_outside_neutral_git(fh.read())
+    assert stray == [], "git called outside `with _neutral_git():` — %s" % stray
+
+
+@pytest.mark.parametrize("source", [
+    "import subprocess\nsubprocess.run(['git', '--version'])\n",
+    "def f():\n    engine_dispatch._git_scrubbed('.', 'status')\n",
+    "def f():\n    engine_dispatch._git_scrubbed_bytes('.', 'status')\n",
+    "def f():\n    store_core.repo_root('.')\n",
+    "def f():\n    store_core.get_gitdir('.')\n",
+    "def f():\n    store_core.get_worktree_gitdir('.')\n",
+    "def f():\n    engine_dispatch._item_delivery_check('.', None)\n",
+    "from subprocess import run\n",
+    "import subprocess as sp\n",
+    "def f():\n    with _neutral_git():\n        pass\n    store_core.repo_root('.')\n",
+    "def f():\n    with _neutral_git():\n        def g():\n            store_core.repo_root('.')\n",
+    "def f():\n    with other():\n        store_core.repo_root('.')\n",
+])
+def test_the_census_flags_a_git_call_outside_the_neutral_context(source):
+    # axis: containment — the scanner itself sees each guarded call form
+    assert _calls_outside_neutral_git(source)
+
+
+def test_the_census_accepts_calls_inside_the_context_and_the_helper_definition():
+    # axis: containment — the scanner does not flag the sanctioned places
+    source = (
+        "def _neutral_git():\n    subprocess.run(['git'])\n"
+        "def f():\n    with _neutral_git():\n        store_core.repo_root('.')\n"
+        "        engine_dispatch._git_scrubbed('.', 'status')\n"
+    )
+    assert _calls_outside_neutral_git(source) == []
+
+
+def test_neutral_git_sets_the_pair_and_restores_their_absence(monkeypatch):
+    # axis: environment — the pair is set inside the context and gone again after it
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    with NE._neutral_git():
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert os.environ["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert "GIT_CONFIG_GLOBAL" not in os.environ
+    assert "GIT_CONFIG_NOSYSTEM" not in os.environ
+
+
+def test_neutral_git_restores_the_environment_after_an_exception(monkeypatch):
+    # axis: environment — an exception inside the context still restores every variable
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "0")
+    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
+    with pytest.raises(RuntimeError):
+        with NE._neutral_git():
+            assert "GIT_DIR" not in os.environ
+            raise RuntimeError("boom")
+    assert "GIT_CONFIG_GLOBAL" not in os.environ
+    assert os.environ["GIT_CONFIG_NOSYSTEM"] == "0"
+    assert os.environ["GIT_DIR"] == "/elsewhere/.git"
+
+
+def test_neutral_git_restores_a_preexisting_global_config_value(monkeypatch):
+    # axis: environment — the owner's GIT_CONFIG_GLOBAL is hidden inside and back afterwards
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+    with NE._neutral_git():
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+
+
+def test_neutral_git_nests_safely(monkeypatch):
+    # axis: environment — the inner exit leaves the outer context neutral; the outer exit restores
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
+    with NE._neutral_git():
+        with NE._neutral_git():
+            assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert os.environ["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert "GIT_DIR" not in os.environ
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+    assert "GIT_CONFIG_NOSYSTEM" not in os.environ
+    assert os.environ["GIT_DIR"] == "/elsewhere/.git"
+
+
+def test_enroll_maps_a_raising_resolver_inside_the_context_to_its_refusal(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — a store_core call that raises under the context is still the existing token
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+
+    def boom(*_args, **_kw):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(NE.store_core, "repo_root", boom)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 1
+    assert out == {"ok": False, "reason": "native-worktree-not-isolated"}
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+
+
+def test_close_maps_a_raising_resolver_inside_the_context_to_its_forfeit(
+        tmp_path, monkeypatch, capsys):
+    # axis: refusal — the same raise at close is still `native-collect-failed`
+    r = _make_repo(tmp_path)
+    _ready(capsys, monkeypatch, r)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/owner/gitconfig")
+
+    def boom(*_args, **_kw):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(NE.store_core, "repo_root", boom)
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "native-collect-failed")
+    assert os.environ["GIT_CONFIG_GLOBAL"] == "/owner/gitconfig"
+    _b_clean(r)
+
+
+def test_hostile_global_git_config_never_reaches_the_collection(tmp_path, monkeypatch, capsys):
+    # axis: configuration — the owner's own global git config cannot reshape open -> enroll -> close
+    r = _make_repo(tmp_path, a_text="one\ntwo\nthree\nfour\nfive\n")
+    home = tmp_path / "hostile-home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[diff]\n\tnoprefix = true\n\tcontext = 0\n\tsubmodule = log\n"
+        "[apply]\n\twhitespace = error\n"
+        "[status]\n\tshowUntrackedFiles = no\n"
+        "[color]\n\tui = always\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL")
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    _routed(monkeypatch)
+    code, out = _open(capsys, r)
+    assert code == 0, out
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    _enrolled(r)
+    interior = "one\ntwo\nTHREE\nfour\nfive\nfixture \n"
+    _write(os.path.join(r.T, "a.txt"), interior)
+    _write(os.path.join(r.T, "new", "n.txt"), "fresh\n")
+    _result(r)
+    _transcript(r)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert out["collected"]["files"] == ["a.txt", "new/n.txt"]
+    for rel, text in (("a.txt", interior), ("new/n.txt", "fresh\n")):
+        with open(os.path.join(r.B, rel), "rb") as fh:
+            assert fh.read() == text.encode("utf-8")
+        assert _git(r.B, "show", ":" + rel) == text
