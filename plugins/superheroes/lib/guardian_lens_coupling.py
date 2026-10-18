@@ -51,6 +51,7 @@ if _LIB_DIR not in sys.path:
 import guardian_census  # noqa: E402
 import guardian_collect as gc                  # noqa: E402
 import guardian_coupling_adapters as adapters  # noqa: E402
+import guardian_lens as gl                     # noqa: E402
 import guardian_tools as gt                    # noqa: E402
 import store_core                              # noqa: E402
 
@@ -115,6 +116,15 @@ COLLAPSE_RATIO = 0.1
 # Secondary signal: a cliff vs the prior digest. A genuine repo shrink drops sources too,
 # so the current source census is what distinguishes shrink from parser collapse.
 CLIFF_RATIO = 0.5
+
+# --- permanent boundary ---------------------------------------------------------------
+# Appended to the partial reason when every degraded ecosystem degraded for a structural
+# reason (today: only the Python flat layout). The sweep reads `permanentBoundary` from
+# the partial and saves the baseline for the half that collects.
+PERMANENT_BOUNDARY_NOTE = (
+    "a permanent boundary of this repo's layout, not a collection failure: the coupling "
+    "baseline is kept for the half that collects, and this note repeats on every sweep "
+    "while the boundary holds")
 
 # --- language census -----------------------------------------------------------------
 JS_EXT_LANG = {
@@ -809,6 +819,7 @@ class CouplingLens(object):
         ecosystems = {}
         all_rows = []
         reasons = []
+        permanence = []
         any_collected = False
         versions = {}
         per_workspace = {}
@@ -820,6 +831,7 @@ class CouplingLens(object):
                 "js", "%s js: git ls-files failed: %s" % (self.name, js_census_err))
             ecosystems["js"] = js_fail["section"]
             reasons.append(js_fail["reason"])
+            permanence.append(bool(js_fail.get("permanent", False)))
         elif js_total > 0:
             js = self._measure_js(ctx, repo, js_census, prev)
             ecosystems["js"] = js["section"]
@@ -832,6 +844,7 @@ class CouplingLens(object):
                 per_workspace.update(js.get("per_workspace") or {})
             if js.get("reason"):
                 reasons.append(js["reason"])
+                permanence.append(bool(js.get("permanent", False)))
         # else: ecosystem absent — not a degradation
 
         if py_census_err:
@@ -839,6 +852,7 @@ class CouplingLens(object):
                 "py", "%s py: git ls-files failed: %s" % (self.name, py_census_err))
             ecosystems["py"] = py_fail["section"]
             reasons.append(py_fail["reason"])
+            permanence.append(bool(py_fail.get("permanent", False)))
         elif py_total > 0:
             py = self._measure_py(ctx, repo, py_census, prev)
             ecosystems["py"] = py["section"]
@@ -851,6 +865,7 @@ class CouplingLens(object):
                 per_workspace.update(py.get("per_workspace") or {})
             if py.get("reason"):
                 reasons.append(py["reason"])
+                permanence.append(bool(py.get("permanent", False)))
 
         if not any_collected:
             return dict(
@@ -881,7 +896,11 @@ class CouplingLens(object):
         safe_candidates = self._sanitize_candidates(candidates)
         out = dict(candidates=safe_candidates, digest=digest)
         if reasons:
-            out.update(gc.partial("; ".join(reasons)))
+            reason = "; ".join(reasons)
+            if all(permanence):
+                out[gl.PERMANENT_BOUNDARY_KEY] = True
+                reason = "%s — %s" % (reason, PERMANENT_BOUNDARY_NOTE)
+            out.update(gc.partial(reason))
         else:
             out.update(gc.collected())
         return out
@@ -1187,7 +1206,7 @@ class CouplingLens(object):
             reason = (
                 "%s py: %s — %s. Reporting honestly rather than faking a clean result."
                 % (self.name, adapters.OUTCOMES["flat-layout"][1], why))
-            return self._eco_fail("py", reason)
+            return self._eco_fail("py", reason, permanent=True)
 
         edges = _python_edges(repo, src_census)
         if edges.get("capped"):
@@ -1278,7 +1297,8 @@ class CouplingLens(object):
     @staticmethod
     def _eco_fail(
             ecosystem, reason, typescript_toolchain_provided=None,
-            operand_payload_bytes=None, argv_operand_budget_bytes=None):
+            operand_payload_bytes=None, argv_operand_budget_bytes=None,
+            permanent=False):
         section = {
             "status": "not-collected",
             "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
@@ -1300,6 +1320,7 @@ class CouplingLens(object):
             "parsed_total": 0,
             "per_workspace": {},
             "section": section,
+            "permanent": bool(permanent),
         }
 
     # --------------------------------------------------------------- candidates/digest
