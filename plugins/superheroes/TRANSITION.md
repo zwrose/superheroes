@@ -12,22 +12,6 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
-
-### Before you upgrade
-
-- **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
-
-### PR sheet: leftovers carry the decision spine
-
-- `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
-- A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
-- A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
-
-### Review record: carried leftovers are re-checked against the head
-
-- A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
-
 ## 0.43.1
 
 ### Before you upgrade
@@ -36,6 +20,7 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
 
 - **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
 - **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
+- **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
 
 ### Launcher: cloud launch
 
@@ -58,6 +43,36 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
   is coming soon, and whenever the owner asks for one. It merges on a sheet like any other. The
   held comment (`superheroes:canon-held`) still carries a held ruling until it is committed. No CLI,
   result key or refusal changes.
+
+### PR sheet: leftovers carry the decision spine
+
+- `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
+- A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
+- A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
+
+### Review record: carried leftovers are re-checked against the head
+
+- A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
+
+### Review: a changed calibration file is shown to reviewers, and the record lists what they could not read
+
+- In the cleaned copy a review dispatch builds with `--diff-base`, a changed regular file under exactly `.claude/superheroes/` (a project's calibration, such as `core.md`) is now in full and kept in the review patch. Every other `.claude/` path, a lookalike folder, a case variant, a symlink, and a deleted or renamed-away calibration file stay withheld, as before. A brief check (no `--diff-base`) shows none. The view's result gains `calibrationShown` (the paths shown, or `null` without `--diff-base`); `diffWithheldCount` no longer counts them. The six `sanitizedView` receipt keys are unchanged.
+- The review record gains `withheldFromReviewers`: each changed path no outside reviewer could read in full, `[]` when none, `null` when the changed files were not read. It never changes the record's status. The vet reads each listed file by hand (`skills/showrunner/reference/vet-receipt.md`, the review record checks).
+
+### Cloud builders: fixed handback, stop and park comments; recovery can answer `parked`
+
+- A cloud builder posts its handback, stop and park on the issue under one fixed first line each: `Builder handback (cloud build).`, `Builder stop (cloud build).`, `Builder park (cloud build).` (`cloud_builder.py terminal --kind handback|stop|park --text-file <file>`; refusals `kind-invalid`, `text-empty`). The cloud's own footer is tolerated.
+- `wave_watch.py` reports `lane-terminal` for a cloud lane as soon as one of those comments is on its issue, not after the quiet window. Several lanes ending together are all reported.
+- `cloud_recover.py assess` has a new verdict, `parked` (evidence `builder-stop` or `builder-park`), when the lane's newest terminal comment is an unanswered stop or park newer than anything the builder pushed since. The result gains `parkComment` (the comment's id, url, kind and time) and `parkRead` (`ok`, `failed`, or `null` when not read). A `parked` lane is never recovered: repair a stop, answer a park. Any doubtful read falls back to the answers it gave before.
+- Builders on an older plugin still post free-form endings, which the quiet alarm still catches. Builders pick up the headers once the cloud environment runs 0.43.1's setup text (the first step above).
+
+### Publishing a sheet: stage its title
+
+- `lib/sheet_title.py stage --sheet <sheet.json> --project <project> [--slug <slug>] --out <folder>/review-template.html` writes the page with its `<title>` set from the sheet: a PR sheet reads `<project> PR #<number> review sheet`. Publish the staged page and pass no `title`. `theme/review-template.md` § Publishing a sheet adds the step. A sheet published before titles were set keeps "Review sheet" until it is republished.
+
+### Removed: the handback gate and orphaned review code
+
+- `lib/handback_gate.py`, its hook `hooks/handback_receipt_gate.py` (never switched on) and `lib/loop_plan_common.py` are deleted, with about a dozen uncalled functions from the review redesign. The gate had allowed every command for several releases. A project that wired the hook in its own settings removes that entry.
 
 ## 0.43.0
 
