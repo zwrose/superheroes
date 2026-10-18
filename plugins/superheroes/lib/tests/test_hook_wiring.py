@@ -72,18 +72,12 @@ def test_iphone_allow_hook_is_wired_fail_soft_after_worktree_guard():
         "iphone_allow must be listed after the worktree guard on the Bash matcher"
 
 
-def test_handback_receipt_gate_is_not_wired_shipped_dark():
-    """#954: the review-receipt handback refusal class ships dark — unwired from PreToolUse.
-
-    Re-arming requires deleting or inverting this test deliberately.
-    """
+def test_bash_pretooluse_chain_is_exactly_guard_timeout_then_iphone():
+    """The Bash PreToolUse chain is pinned: adding a hook requires changing this test deliberately."""
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
     assert bash, "no Bash PreToolUse matcher"
     cmds = [h["command"] for entry in bash for h in entry["hooks"]]
-
-    handback = [c for c in cmds if "handback_receipt_gate.py" in c]
-    assert not handback, "handback_receipt_gate.py must not be wired on the Bash matcher (shipped dark, #954)"
 
     expected = [
         "worktree_guard_gate.py",

@@ -413,6 +413,16 @@ def test_a_handover_comment_after_the_start_stops_the_lane_and_names_its_head(w)
     assert _state(w)["assessed"]["l1"]["handoverSha"] == sha
 
 
+def test_a_footered_handover_comment_stops_the_lane(w):
+    _lane(w, "l1")
+    sha = "c" * 40
+    w.gh.comments = [_comment(cloud_builder.handover_text(sha) + "\n\n" + cloud_builder.HANDOVER_FOOTER, 500, 3)]
+    out = _assess(w, state="idle")
+    assert out["verdict"] == "stopped" and out["evidence"] == "handover"
+    assert out["handover"]["sha"] == sha
+    assert _state(w)["assessed"]["l1"]["handoverSha"] == sha
+
+
 def test_e16_a_handover_comment_older_than_the_lane_is_ignored(w):
     _lane(w, "l1", start_age=7200)
     w.gh.comments = [_comment(_handover_body("a" * 40), 9000)]
@@ -422,7 +432,8 @@ def test_e16_a_handover_comment_older_than_the_lane_is_ignored(w):
 
 @pytest.mark.parametrize("body", ["Builder handover (cloud build). I pushed.", "see " + _handover_body("a" * 40),
                                   HEADER + "\n\nMy pushed head is " + "a" * 39 + ".",
-                                  _handover_body("a" * 40).replace("stopped working", "am still working")])
+                                  _handover_body("a" * 40).replace("stopped working", "am still working"),
+                                  _handover_body("a" * 40) + "\n\n" + HEADER])
 def test_a_comment_that_is_not_a_whole_handover_does_not_count(w, body):
     _lane(w, "l1")
     w.gh.comments = [_comment(body)]
