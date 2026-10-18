@@ -275,6 +275,12 @@ def _cmd_open(args):
     try:
         if engine_dispatch._journal_read_raw(run_dir)[2] != "absent":
             return _refusal("run-dir-journal-exists")
+        pointer_path = os.path.join(run_dir, "journal-root.txt")
+        try:  # survive the loss of a command-scoped journal-root override
+            with open(pointer_path, "w", encoding="utf-8") as fh:
+                fh.write(engine_dispatch._journal_root_for_run_dir(run_dir) + "\n")
+        except OSError:
+            return _refusal("journal-write-failed")
         opened_at = int(_now())
         enroll = "python3 -B %s enroll --run-dir %s" % (
             shlex.quote(os.path.join(_LIB_DIR, "native_engine.py")), shlex.quote(run_dir))
@@ -306,6 +312,7 @@ def _cmd_open(args):
         }
         if not engine_dispatch._journal_append(run_dir, record):
             os.unlink(prompt_path)
+            os.unlink(pointer_path)
             return _refusal("journal-write-failed")
     finally:
         file_lock.release(lock)
@@ -545,14 +552,15 @@ class _Close(object):
         patch_path = os.path.join(self.run_dir, _PATCH_NAME)
         if _git(target, "add", "-A")[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
-        rc, names, _ = _git(target, "diff", "--cached", "--name-only", "-z", base)
+        rc, names, _ = _git(target, "diff", "--cached", "--name-only", "-z",
+                            "--ignore-submodules=none", base)
         if rc != 0:
             return self._forfeit("native-collect-failed", **extra)
         files = sorted(name for name in names.split("\0") if name)
         if _git(
                 target, "diff", "--cached", "--binary", "--unified=3", "--src-prefix=a/",
                 "--dst-prefix=b/", "--no-color", "--no-ext-diff", "--no-textconv",
-                "--output=" + patch_path, base)[0] != 0:
+                "--ignore-submodules=none", "--submodule=short", "--output=" + patch_path, base)[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         patch_sha = _sha256_file(patch_path)
         if not engine_dispatch._journal_append(

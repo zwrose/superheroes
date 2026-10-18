@@ -1136,3 +1136,39 @@ def test_close_lock_reclaims_a_dead_holder(tmp_path, monkeypatch, capsys):
     code, out = _close(capsys, r)
     assert code == 0, out
     assert seen.get("reclaim_dead_holder") is True
+
+
+def test_open_persists_the_journal_root_so_later_commands_survive_the_env_removal(
+        tmp_path, monkeypatch, capsys):
+    # axis: preservation — a command-scoped journal-root override is recorded in journal-root.txt
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _ = _open(capsys, r)
+    assert code == 0
+    run = os.path.realpath(r.run)
+    expected = str(tmp_path / "journals")
+    with open(os.path.join(run, "journal-root.txt"), encoding="utf-8") as fh:
+        assert fh.read().strip() == expected
+    monkeypatch.delenv("SUPERHEROES_DISPATCH_JOURNAL_ROOT")
+    assert _kinds(r) == ["run-opened"]
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert out.get("reason") != "native-run-not-open"
+
+
+def test_collect_carries_a_staged_gitlink_despite_submodule_diff_settings(
+        tmp_path, monkeypatch, capsys):
+    # axis: mapping — diff.ignoreSubmodules=all / diff.submodule=diff never hide or reshape a gitlink
+    r = _make_repo(tmp_path)
+    _git(r.main, "config", "diff.ignoreSubmodules", "all")
+    _git(r.main, "config", "diff.submodule", "diff")
+    _ready(capsys, monkeypatch, r, edit=False)
+    sub = os.path.join(r.T, "sub")
+    os.makedirs(sub)
+    _git(sub, "init", "-q", "-b", "main")
+    _write(os.path.join(sub, "f.txt"), "x\n")
+    _git(sub, "add", "-A")
+    _git(sub, "commit", "-q", "-m", "sub")
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["sub"]
+    assert "160000" in _git(r.B, "ls-files", "-s", "sub")
