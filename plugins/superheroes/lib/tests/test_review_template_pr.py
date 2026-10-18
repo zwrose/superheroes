@@ -1917,6 +1917,26 @@ def test_make_this_mine_clears_a_saved_merge_through_the_verdict_and_writes_afte
     assert [_without_revision(body) for body in result["body"]] == [{"answer": "option", "optionId": MINE["id"], "note": ""}]
 
 
+# Bites on: a note edit on a decided entry that is not taken back held for good (or clearing the Merge) while a Merge is saved; it must go out at once and leave the Merge standing.
+def test_a_note_edit_on_a_decided_entry_saves_while_merge_is_saved():
+    page = _lock(DECIDED_SHEET, DECIDED_JS + """
+      const before = both(D1);
+      t.type(decidedNote(D1), "worth a second look", "change");
+      await t.tick();
+      const writing = { entry: entryWrites(D1).map((call) => call.body), save: both(D1).mine.save };
+      entryWrites(D1)[0].resolve();
+      await t.tick();
+      return { before: before, writing: writing, after: both(D1), sets: t.setLog().map((item) => item.path), verdict: verdictWrites() };
+    """, host=dict(PENDING, **_store(DECIDED_SHEET, merge=True)))
+    result = page["result"]
+    assert result["before"]["view"]["pressed"] == ["true", "false"] and result["before"]["mine"]["pressed"] == "false"
+    assert [_without_revision(body) for body in result["writing"]["entry"]] == [{"answer": None, "optionId": None, "note": "worth a second look"}]
+    assert result["sets"] == ["answers/" + DECIDED_1] and result["verdict"] == []
+    assert "Saved" in result["after"]["mine"]["save"]
+    assert result["after"]["view"]["pressed"] == ["true", "false"] and result["after"]["view"]["disabled"] is False
+    assert result["after"]["mine"]["note"] == "worth a second look" and result["after"]["mine"]["line"] is None
+
+
 # Bites on (E8): a Make this mine write that was rejected or stalled unlocking Merge.
 @pytest.mark.parametrize("how", ["rejected", "stalled"])
 def test_a_make_this_mine_write_that_is_rejected_or_stalls_keeps_merge_locked(how):

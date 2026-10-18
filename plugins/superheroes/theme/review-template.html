@@ -2407,7 +2407,8 @@
     }
 
     // One decided-for-you entry: its title (with its PR on a stack sheet), ground and reason, and one saver that offers Make this mine,
-    // written whole at answers/<entry id> like a card's answer. The pick is restored fail-closed: only a well-formed null answer restores
+    // written whole at answers/<entry id> like a card's answer. A write that is not Make this mine goes out at once (it cannot put a Merge beside a take-back);
+    // Make this mine waits on cardMayWrite, which holds it until a held Merge is cleared. The pick is restored fail-closed: only a well-formed null answer restores
     // as not taken back; any other document under the id (another answer, a malformed object, data that is not an object) restores as taken back, keeping its note when that is text.
     function addDecidedParts(entry, article) {
       addSaver({
@@ -2416,7 +2417,7 @@
         noteId: "note-" + entry.id,
         path: "answers/" + entry.id,
         live: canEdit,
-        mayWrite: cardMayWrite,
+        mayWrite: function (latest) { return !isMine(latest) || cardMayWrite(); },
         revised: revisedKind(sheetKind),
         document: function (body, revision) {
           const doc = { answer: body.answer, optionId: body.optionId, note: body.note };

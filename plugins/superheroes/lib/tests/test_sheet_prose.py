@@ -1084,9 +1084,10 @@ def test_prose_lists_the_decided_for_you_entries_with_labels_and_the_chat_hint(t
     stack = kind == "stack"
     sheet["prSheet"]["decidedForYou"] = _decided(stack)
     out = _prose_of(tmp_path, sheet)
+    ground = lambda text: PR_WORDS["decidedGround"].replace("{ground}", text)
     lines = ["**%s (2)**" % PR_WORDS["decidedForYouHeading"], "", PR_WORDS["decidedForYouIntro"], "",
-             "- D1 · %sCustomers are not told a retry happened — Ground: fail-direction is always craft. It fails closed either way." % ("#5: " if stack else ""),
-             "- D2 · %sNo email after the third failure — Ground: wording is craft. The words are the maker's to pick." % ("#6: " if stack else ""),
+             "- D1 · %sCustomers are not told a retry happened — %s. It fails closed either way." % ("#5: " if stack else "", ground("fail-direction is always craft")),
+             "- D2 · %sNo email after the third failure — %s. The words are the maker's to pick." % ("#6: " if stack else "", ground("wording is craft")),
              "", PR_WORDS["decidedInChat"], "", ""]
     assert "\n".join(lines) in out
     assert out.index("**%s" % PR_WORDS["acceptingHeading"]) < out.index("**%s (2)**" % PR_WORDS["decidedForYouHeading"]) < out.index("**%s**" % PR_WORDS["verdictHeading"])

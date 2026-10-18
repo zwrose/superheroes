@@ -238,9 +238,11 @@ list. Its parts come in this order:
    picture store does not answer in time, the next tap asks again; when this view cannot store pictures at
    all, the button stays off. On a stack each stop names its PR.
 3. The items, under the accepting heading.
-4. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
+4. The Decided for you list, when the sheet has one, unfolded: each entry's title, ground, reason and
+   **Make this mine**. See `### Decided for you` for the rest.
+5. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
    review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
-5. The merge verdict.
+6. The merge verdict.
 
 How the review went carries, per review, the rounds. When some reviewers read an earlier commit it adds
 one line: plain when a later round or an audit covered the final commit, a warning when no planned
