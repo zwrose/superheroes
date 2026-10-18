@@ -438,3 +438,119 @@ def test_expanded_here_document_body_text_stays_data_around_substitutions():
     assert native_fence.fence_word("cat <<EOF\nIt's $(printf today)\nEOF") is None
     assert native_fence.fence_word("cat <<EOF\ncurl is docs `date`\nEOF") is None
     assert native_fence.fence_word("cat <<EOF\ncurl docs\n$(printf a)\nEOF\ncurl x") == "curl"
+
+
+# --- fix leg (#1950): the command-prefix fence's in-scope gaps ---------------------------------
+
+def _rows(deny, allow):
+    return [(c, True) for c in deny] + [(c, False) for c in allow]
+
+
+def _assert_fence(tmp_path, command, denied):
+    _enrolled_run(tmp_path)
+    reason = _decide(_payload(command=command))
+    if denied:
+        assert reason is not None, command
+        assert reason.startswith("installs and network commands are refused for a native implementer: "), command
+    else:
+        assert reason is None, command
+
+
+# --- fix leg (#1950): class 1 — wrappers with valued options ---
+@pytest.mark.parametrize("command,denied", _rows(
+    ["env -u FOO curl https://example.com", "env -C /tmp curl x", "env --unset=FOO curl x",
+     "command -p curl https://example.com", "nice -n 5 curl x", "timeout 5 curl x",
+     "timeout -s KILL 5 curl x", "stdbuf -oL curl x", "stdbuf -o L curl x", "nohup curl x",
+     "sudo -u root pip install x", 'env -S "curl x"', "env --frobnicate curl x"],
+    ["command -v curl", "command -V curl", "timeout 5 pytest", "nice -n 5 make test",
+     "env -u FOO pytest"]))
+def test_fix_leg_class_1_wrappers_with_valued_options(tmp_path, command, denied):
+    # axis: parsing — a wrapper's option arguments are skipped by its own table, so the command behind is read
+    _assert_fence(tmp_path, command, denied)
+
+
+def test_fix_leg_class_1_unparseable_wrapper_options_are_not_an_enroll():
+    # axis: parsing — env -S and an unknown wrapper option are the one unparseable channel
+    assert native_fence.fence_word('env -S "curl x"') == "unparseable"
+    assert native_fence.fence_word("env --frobnicate curl x") == "unparseable"
+    assert native_fence.fence_word("command -v curl") is None
+    enroll = "env --frobnicate python3 -B /x/native_engine.py enroll --run-dir /r"
+    assert native_fence.enroll_run_dir(enroll) is None
+    assert native_fence.enroll_run_dir(enroll.replace("--frobnicate", "-i")) == "/r"
+
+
+# --- fix leg (#1950): class 2 — installer subcommands behind valued global options ---
+@pytest.mark.parametrize("command,denied", _rows(
+    ["npm --prefix . install x", "npm -w pkg install x", "npm --workspace=pkg install x",
+     "pnpm --filter a add x", "pnpm -F a add x", "pnpm -C dir install", "yarn --cwd dir add x",
+     "npm --frobnicate install x", "npm -C . install x"],
+    ["npm --prefix . test", "npm -C . test", "npm --loglevel silent test", "bun --cwd . test",
+     "uv --directory . run pytest", "pnpm --filter a test", "pnpm -r run build",
+     "yarn --cwd dir test"]))
+def test_fix_leg_class_2_installers_behind_valued_global_options(tmp_path, command, denied):
+    # axis: installers — the subcommand is found past the per-tool valued options, not the first non-dash token
+    _assert_fence(tmp_path, command, denied)
+
+
+def test_fix_leg_class_2_unknown_global_option_is_fenced_by_name():
+    # axis: installers — an option in neither table fails closed with the option named
+    assert native_fence.fence_word("npm --frobnicate test") == "npm (unknown option --frobnicate)"
+    assert native_fence.fence_word("uv --frobnicate=1 run pytest") == "uv (unknown option --frobnicate)"
+
+
+# --- fix leg (#1950): class 3 — joined and clustered python module form ---
+@pytest.mark.parametrize("command,denied", _rows(
+    ["python3 -mpip install x", "python3 -m ensurepip", "python3 -mensurepip",
+     "python3 -Bm pip install x", "python -Bmpip install x",
+     "python3 --check-hash-based-pycs always -m pip install x", "python3 -BW ignore -m pip install x",
+     "python3 -BWignore -m pip install x"],
+    ["python3 -mpytest -q", "python3 -Bm pytest", 'python3 -c "import pip"',
+     "python3 -m pip list", "python3 script.py -m pip install x"]))
+def test_fix_leg_class_3_joined_and_clustered_python_module_form(tmp_path, command, denied):
+    # axis: installers — python's -m is found inside a short-option cluster and when joined to its module
+    _assert_fence(tmp_path, command, denied)
+
+
+# --- fix leg (#1950): class 4 — shell keywords and grouping ---
+@pytest.mark.parametrize("command,denied", _rows(
+    ["if true; then curl https://x; fi", "for u in a; do curl $u; done", "! curl https://x",
+     "{ curl https://x; }", "while true; do wget x; done", "if env -u X curl y; then :; fi"],
+    ["if true; then ls; fi", "{ git status; }"]))
+def test_fix_leg_class_4_shell_keywords_and_grouping(tmp_path, command, denied):
+    # axis: parsing — the command behind if/then/do/!/{ is the segment's leading command
+    _assert_fence(tmp_path, command, denied)
+
+
+# --- fix leg (#1950): class 5 — fetch-and-run runners ---
+@pytest.mark.parametrize("command,denied", _rows(
+    ["npx some-pkg", "npm exec some-pkg", "npm x some-pkg", "pnpm dlx x", "yarn dlx x", "bunx x",
+     "bun add x", "bun install", "bun i", "bun x cowsay", "uv sync", "uv run --with x pytest",
+     "uv run --with-requirements r.txt pytest", "uv run -w requests python -V", "uv run --with=x pytest",
+     "uv --directory . sync", "uv --project . run --with x pytest", "bun a lodash",
+     "npx --offline some-pkg", "npx prettier --no-install", "npx --yes -- prettier --no-install",
+     "npm exec --no --yes -- prettier", "npx --no-install --yes prettier"],
+    ["npx --no-install eslint .", "npx --no eslint .", "npx --offline --no-install eslint .",
+     "npm exec --no eslint", "uv run pytest", "uv run pytest --with-foo",
+     "uv run --python 3.12 pytest", "bun test", "bun run build"]))
+def test_fix_leg_class_5_fetch_and_run_runners(tmp_path, command, denied):
+    # axis: installers — a runner that fetches and runs is refused unless it is npx/npm exec held to --no-install
+    _assert_fence(tmp_path, command, denied)
+
+
+def test_fix_leg_class_5_runner_reason_points_at_the_local_tool_forms(tmp_path):
+    # axis: installers — a runner deny names the local-tool alternatives; an installer deny does not
+    _enrolled_run(tmp_path)
+    reason = _decide(_payload(command="npx some-pkg"))
+    assert reason.startswith("installs and network commands are refused for a native implementer: npx")
+    assert "npx --no-install <bin>" in reason and "npm run <script>" in reason
+    assert "npm run <script>" not in _decide(_payload(command="npm install x"))
+
+
+# --- fix leg (#1950): class 6 — over-refusal of the installers' informational flags ---
+@pytest.mark.parametrize("command,denied", _rows(
+    ["yarn", "yarn --cwd x"],
+    ["yarn --version", "yarn -v", "yarn --help", "yarn -h", "npm --version", "pnpm -v",
+     "bun --version"]))
+def test_fix_leg_class_6_informational_flags_are_not_installs(tmp_path, command, denied):
+    # axis: installers — no subcommand and an informational flag passes; bare yarn still installs
+    _assert_fence(tmp_path, command, denied)

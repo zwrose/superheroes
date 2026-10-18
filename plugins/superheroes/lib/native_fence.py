@@ -30,20 +30,56 @@ UNPARSEABLE = "unparseable"
 
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_WRAPPERS = ("sudo", "env", "command", "exec", "time", "nohup")
+_KEYWORDS = ("if", "then", "elif", "else", "while", "until", "do", "!", "{")
+# wrapper -> (valued options, boolean options). A short option joins its value (-uFOO) or takes the next token; a long
+# one takes `=value` or the next token. An option in neither list fails closed (ValueError): env -S is in neither.
+_WRAPPERS = {
+    "sudo": ("-u -g -C -h -p -D -U -T -R -r -t", ""),  # every other short sudo flag is boolean
+    "env": ("-u --unset -C --chdir -P", "-i -0 --null -v --ignore-environment -"),
+    "command": ("", "-p"),
+    "exec": ("-a", "-c -l"),
+    "time": ("-f -o", "-p -a -v"),
+    "nohup": ("", ""),
+    "nice": ("-n --adjustment", ""),  # -N (digits) is boolean
+    "timeout": ("-s --signal -k --kill-after", "--preserve-status --foreground -v --verbose"),
+    "stdbuf": ("-i -o -e --input --output --error", ""),
+}
+_PKG_FLAGS = "--version -v --help -h --silent -s --quiet -q --verbose --json --offline -g --global -y --yes"
+_GLOBAL_OPTIONS = {  # installer -> (valued, boolean) options that may precede its subcommand
+    "npm": ("--prefix -C -w --workspace --registry --cache --userconfig --loglevel",
+            _PKG_FLAGS + " --ws --workspaces --include-workspace-root"),
+    "pnpm": ("--filter -F -C --dir", _PKG_FLAGS + " -r --recursive -w --workspace-root"),
+    "yarn": ("--cwd", _PKG_FLAGS),
+    "bun": ("--cwd", _PKG_FLAGS),
+    "uv": ("--directory --project --config-file --cache-dir",
+           "--version -V --help -h -q --quiet -v --verbose --offline --no-cache -n --native-tls --frozen "
+           "--locked --no-progress"),
+}
+_INFO = ("--version", "-v", "--help", "-h")
+# the options of `uv run` that take a value (from `uv run --help`)
+_UV_RUN_VALUED = (
+    "--python -p --env-file --group --no-group --only-group --extra --no-extra --package --directory --project "
+    "--index --default-index -i --index-url --extra-index-url -f --find-links --index-strategy --keyring-provider "
+    "-P --upgrade-package --upgrade-group --resolution --prerelease --fork-strategy --exclude-newer "
+    "--exclude-newer-package --no-sources-package --reinstall-package --link-mode -C --config-setting "
+    "--config-settings-package --no-build-isolation-package --no-build-package --no-binary-package "
+    "--refresh-package --no-editable-package --python-platform --color --allow-insecure-host --config-file "
+    "--cache-dir").split()
+_RUNNERS = ("npx", "npm exec", "npm x", "pnpm dlx", "yarn dlx", "bunx", "bun x")
 _PIP_RE = re.compile(r"^pip[0-9.]*$")
 _PYTHON_RE = re.compile(r"^(python[0-9.]*|pinned-python)$")
 
 _INSTALLER_SUBS = {
-    "npm": ("install", "i", "ci", "add", "update"),
-    "pnpm": ("add", "install", "i", "update"),
+    "npm": ("install", "i", "ci", "add", "update", "exec", "x"),
+    "pnpm": ("add", "install", "i", "update", "dlx"),
+    "bun": ("add", "a", "install", "i", "x"),
     "gem": ("install",),
     "cargo": ("install",),
     "go": ("install", "get"),
     "conda": ("install",),
     "poetry": ("add", "install"),
 }
-_INSTALLER_ANY = ("uvx", "pipx", "brew", "apt", "apt-get", "dnf", "yum", "apk")
+_INSTALLER_ANY = ("uvx", "pipx", "bunx", "brew", "apt", "apt-get", "dnf", "yum", "apk")
 _NETWORK_ANY = ("curl", "wget", "ssh", "scp", "sftp", "nc", "ncat", "netcat", "telnet", "ftp",
                 "gh")
 _GIT_NETWORK_SUBS = ("push", "fetch", "pull", "clone", "ls-remote")
@@ -198,21 +234,38 @@ def _split_segments(command):
 
 
 def _leading_tokens(tokens):
-    """Drop leading NAME=value words and the wrappers (with their option flags)."""
+    """Drop leading NAME=value words, shell keywords and wrappers with their option arguments. An option outside a
+    wrapper's table raises ValueError (unparseable); `command -v`/`-V` only prints, so it leaves no tokens."""
     i = 0
     while i < len(tokens):
-        tok = tokens[i]
-        if _ASSIGNMENT_RE.match(tok):
+        wrapper = os.path.basename(tokens[i])
+        i += 1
+        if _ASSIGNMENT_RE.match(tokens[i - 1]) or tokens[i - 1] in _KEYWORDS:
+            continue
+        if wrapper not in _WRAPPERS:
+            return tokens[i - 1:]
+        valued, boolean = (s.split() for s in _WRAPPERS[wrapper])
+        while i < len(tokens) and tokens[i].startswith("-"):
+            opt = tokens[i]
             i += 1
-        elif os.path.basename(tok) in _WRAPPERS:
-            wrapper = os.path.basename(tok)
-            i += 1
-            if wrapper != "command":
-                while i < len(tokens) and tokens[i].startswith("-"):
-                    i += 1
-        else:
-            break
-    return tokens[i:]
+            if opt == "--":
+                break
+            if opt.startswith("--"):
+                name = opt.split("=")[0]
+                if name not in valued and name not in boolean:
+                    raise ValueError("unknown %s option %s" % (wrapper, name))
+                i += name in valued and "=" not in opt
+                continue
+            for k, c in enumerate(opt[1:], 1):
+                if wrapper == "command" and c in "vV":
+                    return []
+                if "-" + c in valued:
+                    i += k + 1 == len(opt)
+                    break
+                if "-" + c not in boolean and wrapper != "sudo" and not (wrapper == "nice" and c.isdigit()):
+                    raise ValueError("unknown %s option %s" % (wrapper, opt))
+        i += wrapper == "timeout"  # the DURATION
+    return []
 
 
 def _subcommands(args):
@@ -233,18 +286,39 @@ def _git_subcommand(args):
 
 
 def _python_m_pip(args):
+    """(module, rest) of the `-m MODULE` a python command runs, read through short-option clusters (-Bm pip, -mpip)
+    and the options that take a value; (None, []) when `-c`, a script, `-` or `--` comes first."""
     i = 0
     while i < len(args):
         tok = args[i]
-        if tok == "-m":
-            return i + 1 < len(args) and _PIP_RE.match(args[i + 1]) is not None, args[i + 2:]
-        if tok in ("-W", "-X"):
-            i += 2
-        elif tok.startswith("-"):
+        i += 1
+        if tok == "--check-hash-based-pycs":
             i += 1
-        else:
+        elif tok[:1] != "-" or tok in ("-", "--"):
             break
-    return False, []
+        elif not tok.startswith("--"):
+            for k, c in enumerate(tok[1:], 1):
+                if c == "c":
+                    return None, []
+                if c == "m":
+                    if tok[k + 1:]:
+                        return tok[k + 1:], args[i:]
+                    return (args[i] if i < len(args) else None), args[i + 1:]
+                if c in "WX":
+                    i += k + 1 == len(tok)
+                    break
+    return None, []
+
+
+def _no_install(args):
+    """True when a runner's effective options (before the first positional or `--`) hold --no-install or --no and no
+    --yes: the one form of npx / npm exec that runs a local binary without fetching."""
+    opts = set()
+    for a in args:
+        if a == "--" or a[:1] != "-":
+            break
+        opts.add(a)
+    return bool(opts & {"--no-install", "--no"}) and not opts & {"--yes", "-y", "--yes=true"}
 
 
 def _segment_word(tokens):
@@ -253,27 +327,51 @@ def _segment_word(tokens):
         return None
     word = os.path.basename(tokens[0])
     args = tokens[1:]
+    if word in _GLOBAL_OPTIONS:
+        valued, boolean = (s.split() for s in _GLOBAL_OPTIONS[word])
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            opt = args[i].split("=")[0]
+            if opt not in valued and opt not in boolean:
+                return "%s (unknown option %s)" % (word, opt)
+            i += 2 if opt in valued and "=" not in args[i] else 1
+        args = args[i:]
     subs = _subcommands(args)
     first = subs[0] if subs else None
 
+    if word == "npx" and not _no_install(args):
+        return word
+    if word == "npm" and first in ("exec", "x") and _no_install(args[1:]):
+        return None
     if _PIP_RE.match(word):
         if first in ("install", "download"):
             return "%s %s" % (word, first)
     elif _PYTHON_RE.match(word):
-        is_pip, rest = _python_m_pip(args)
+        module, rest = _python_m_pip(args)
         rest_subs = _subcommands(rest)
-        if is_pip and rest_subs and rest_subs[0] in ("install", "download"):
+        if module == "ensurepip":
+            return "%s -m ensurepip" % word
+        if module and _PIP_RE.match(module) and rest_subs and rest_subs[0] in ("install", "download"):
             return "%s -m pip %s" % (word, rest_subs[0])
     elif word == "uv":
+        if first == "run":
+            j = 1
+            while j < len(args) and args[j].startswith("-") and args[j] != "--":
+                opt = args[j].split("=")[0]
+                if opt in ("--with", "--with-requirements", "--with-editable") or opt[:2] == "-w":
+                    return "uv run --with"
+                j += 2 if opt in _UV_RUN_VALUED and "=" not in args[j] else 1
         if first == "pip" and len(subs) > 1 and subs[1] in ("install", "download"):
             return "uv pip %s" % subs[1]
-        if first == "add":
-            return "uv add"
+        if first in ("add", "sync"):
+            return "uv %s" % first
         if first == "tool" and len(subs) > 1 and subs[1] == "install":
             return "uv tool install"
     elif word == "yarn":
-        if first is None or first in ("add", "install"):
-            return "yarn" if first is None else "yarn %s" % first
+        if first is None:
+            return None if any(a in _INFO for a in tokens[1:]) else "yarn"
+        if first in ("add", "install", "dlx"):
+            return "yarn %s" % first
     elif word in _INSTALLER_SUBS:
         if first in _INSTALLER_SUBS[word]:
             return "%s %s" % (word, first)
@@ -295,10 +393,9 @@ def fence_word(command):
         if not segment.strip():
             continue
         try:
-            tokens = shlex.split(segment)
+            word = _segment_word(shlex.split(segment))
         except ValueError:
             return UNPARSEABLE
-        word = _segment_word(tokens)
         if word is not None:
             return word
     return None
@@ -457,5 +554,6 @@ def fence_decision(payload, now=None):
             return "installs and network commands are refused for a native implementer: " \
                    "unparseable command"
         if word is not None:
-            return "installs and network commands are refused for a native implementer: %s" % word
+            hint = " — for a local tool use `npx --no-install <bin>` or `npm run <script>`" if word in _RUNNERS else ""
+            return "installs and network commands are refused for a native implementer: %s%s" % (word, hint)
     return None
