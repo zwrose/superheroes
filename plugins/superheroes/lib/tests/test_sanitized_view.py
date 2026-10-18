@@ -5579,6 +5579,7 @@ def _calib_repo(tmp_path):
 
 
 def test_changed_calibration_is_shown_and_the_rest_stays_withheld(tmp_path):
+    # axis: a changed calibration file shown in full; it withheld, or a sibling .claude path shown with it
     repo, base, _head, expected_withheld = _calib_repo(tmp_path)
     view = sv.build_sanitized_view(repo, diff_base=base)
     try:
@@ -5603,6 +5604,7 @@ def test_changed_calibration_is_shown_and_the_rest_stays_withheld(tmp_path):
 
 
 def test_calibration_lookalikes_symlinks_deletes_and_renames_stay_withheld(tmp_path):
+    # axis: the shown rule's edges; a lookalike folder, case variant, nested config name, symlink, deletion or rename-away shown
     repo, base, _head, expected_withheld = _calib_repo(tmp_path)
     view = sv.build_sanitized_view(repo, diff_base=base)
     try:
@@ -5623,6 +5625,7 @@ def test_calibration_lookalikes_symlinks_deletes_and_renames_stay_withheld(tmp_p
 
 
 def test_no_diff_base_shows_no_calibration(tmp_path):
+    # axis: no diff base shows nothing; calibration shown in a brief-check or plain view
     repo, _base, _head, _expected = _calib_repo(tmp_path)
     view = _build(repo)
     try:
@@ -5633,6 +5636,7 @@ def test_no_diff_base_shows_no_calibration(tmp_path):
 
 
 def test_withheld_review_paths_agrees_with_the_view_and_fails_closed(tmp_path):
+    # axis: the record's rule is the view's rule; the two disagreeing, or an unreadable head tree treating calibration as shown
     repo, base, head, expected_withheld = _calib_repo(tmp_path)
     changed = sorted(
         _git(repo, "diff", "--name-only", "--no-renames", base, head).stdout.split("\n")[:-1]
@@ -5656,6 +5660,7 @@ def test_withheld_review_paths_agrees_with_the_view_and_fails_closed(tmp_path):
 
 
 def test_is_calibration_rel_exact_prefix_and_remainder():
+    # axis: the exact prefix and the remainder re-check; a lookalike prefix, alias, or nested config name accepted
     shown = [".claude/superheroes/core.md", ".claude/superheroes/sub/a.md"]
     refused = [
         ".claude/superheroes-x/core.md",
@@ -5681,6 +5686,7 @@ def test_is_calibration_rel_exact_prefix_and_remainder():
 
 
 def test_notice_names_shown_calibration_only_when_present():
+    # axis: the notice names shown calibration; it silent when files are shown, or speaking when none are
     base = {"headSha": "abc1234", "stripped": [], "diffPath": "P", "diffWithheldCount": 0}
     with_shown = sv.sanitized_view_notice(
         dict(base, calibrationShown=[".claude/superheroes/core.md"])
