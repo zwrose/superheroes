@@ -34,6 +34,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - A review account (and the full lane's extras file) takes an optional `carriedChecks` list. A left-for-owner finding carried from the earlier record is marked `fixed` only when its check says `fixed`, names the head the record describes as `checkedHead` and a fix commit in that head's history, and gives evidence; every other case keeps it left-for-owner and says why. Each check is listed under the record's new `carriedRechecks`. See `skills/review-code/reference/review-record.md`.
 
+### Review record: an owner ruling given mid-build reaches the record
+
+- A review account (and the full lane's extras file) takes an optional `ownerRulings` list of `{key, url, words}`, and a decision can now be cited as the new `owner-ruling` kind, with `ref` `{url, words}`.
+- A ruling counts only when the writer reads its link as the repository owner's comment, in the PR's own repository, holding the words. Otherwise the finding stays, or becomes, left-for-owner and the sheet still shows it as a card.
+- A leftover the owner ruled on during a build no longer comes back on the sheet, provided the ruling's link resolves. See `skills/review-code/reference/review-record.md`.
+
 ## 0.43.1
 
 ### Before you upgrade
