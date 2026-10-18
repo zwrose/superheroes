@@ -41,7 +41,7 @@ def _ledger_env(tmp_path, monkeypatch):
     return root
 
 
-def _reserved(launch_id, issue, repo_root, udid=None):
+def _reserved(launch_id, issue, repo_root, udid=None, udids=None):
     rec = {
         "event": "reserved",
         "launchId": launch_id,
@@ -60,6 +60,10 @@ def _reserved(launch_id, issue, repo_root, udid=None):
     if udid is not None:
         rec["premise"] = {"iphoneCheck": True}
         rec["iphoneId"] = udid
+    if udids is not None:
+        rec["premise"] = {"iphoneCheck": True, "iphoneModels": ["iPhone 17", "iPhone 17e"]}
+        rec["iphoneId"] = udids[0]
+        rec["iphoneIds"] = list(udids)
     return rec
 
 
@@ -76,9 +80,9 @@ def _started(launch_id):
     }
 
 
-def _launch(repo, launch_id, issue, udid=None, end=None):
+def _launch(repo, launch_id, issue, udid=None, end=None, udids=None):
     """Reserve a launch and end it: "refused" (never ran), "handback" (ran), or None (live)."""
-    reserved = ll.reserve(repo, _reserved(launch_id, issue, repo, udid))
+    reserved = ll.reserve(repo, _reserved(launch_id, issue, repo, udid, udids))
     assert reserved["ok"] is True, reserved
     if end == "refused":
         ended = ll.terminalize(repo, launch_id, stage="spawn", reason="engine-auth")
@@ -515,6 +519,26 @@ def test_reap_duplicate_udid_is_deleted_once_and_amended_twice(repo):
         assert [(a["kind"], a["value"], a["note"]) for a in _reap_amendments(repo, launch_id)] == [
             ("evidence", "reap", note),
         ]
+
+
+def test_reap_launch_with_two_phones_deletes_and_amends_each(repo):
+    # axis: a launch that made two phones (iphoneIds) lists, deletes, reports and amends each one, so a reaper that stops at iphoneId leaks the second phone
+    _launch(repo, "l1", 7, end="handback", udids=[_PHONE_A, _PHONE_B])
+    assert ir.lane_phones(repo, 7)["phones"] == [
+        {"launchId": "l1", "iphoneId": _PHONE_A, "terminal": True},
+        {"launchId": "l1", "iphoneId": _PHONE_B, "terminal": True},
+    ]
+    run = _FakeRun()
+    result = ir.reap_lane(repo, 7, run=run)
+    assert result["ok"] is True
+    assert run.deleted == [_PHONE_A, _PHONE_B]
+    assert [(p["launchId"], p["iphoneId"], p["result"]) for p in result["phones"]] == [
+        ("l1", _PHONE_A, "deleted"), ("l1", _PHONE_B, "deleted"),
+    ]
+    assert [(a["kind"], a["value"], a["note"]) for a in _reap_amendments(repo, "l1")] == [
+        ("evidence", "reap", "reap: phone %s deleted" % _PHONE_A),
+        ("evidence", "reap", "reap: phone %s deleted" % _PHONE_B),
+    ]
 
 
 def test_reap_duplicate_udid_left_running_is_listed_once(repo):

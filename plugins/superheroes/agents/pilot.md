@@ -9,7 +9,7 @@ find.**
 
 - **For a browser plan, resolve the browser tooling** your host exposes (the connected browser MCP,
   found via ToolSearch — the same resolution `test-pilot-execute` uses) and **drive the app per the
-  plan** the orchestrator provides. **For an iPhone check, drive the lane's phone** through
+  plan** the orchestrator provides. **For an iPhone check, drive the lane's phones** through
   `lib/iphone_check.py` per the execution steps' iPhone section; it needs no browser MCP.
 - **Report structured results** — per plan step: what you did, what you observed, pass or fail, and
   the concrete evidence (the observation itself, not a narrative).
