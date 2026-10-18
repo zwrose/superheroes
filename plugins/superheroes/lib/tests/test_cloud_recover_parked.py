@@ -122,10 +122,10 @@ def test_5_two_parks_in_one_second_are_told_apart_by_the_larger_comment_id(w, re
     assert (out["verdict"], out["evidence"]) == ("stopped", "session-failed") and out["parkComment"] is None
 
 
-@pytest.mark.parametrize("footer,verdict,evidence", [("", "stopped", "handover"), ("\n\n" + cloud_builder.CLOUD_FOOTER, "ask-to-push", None)],
+@pytest.mark.parametrize("footer,verdict,evidence", [("", "stopped", "handover"), ("\n\n" + cloud_builder.CLOUD_FOOTER, "stopped", "handover")],
                          ids=["bare-handover", "footered-handover"])
 def test_6_a_later_handover_beats_a_park(w, footer, verdict, evidence):
-    # the footered handover is not read as a handover by assess's own handover pick (cloud_builder.handover_sha wants the bare words), so today's answer stands; the park must still not be believed
+    # since #1930, cloud_builder.handover_sha also reads a handover that carries the cloud's footer, so both shapes are a handover; either way the park must not be believed
     _lane(w, "l1")
     sha = _pushed_at(w, 1500)
     w.gh.comments = [_comment(PARK, age=900, cid=1), _comment(cloud_builder.handover_text(sha) + footer, age=300, cid=2)]
