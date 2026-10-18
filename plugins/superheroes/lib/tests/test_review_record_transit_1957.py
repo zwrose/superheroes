@@ -148,6 +148,23 @@ def test_parts_record_refusal_names_the_part_and_offset(tmp_path):
     assert f"does not parse at character {at} of comment {parts[1]['id']}: " in out["detail"]
 
 
+def test_parts_record_refusal_at_end_of_text_names_the_last_part(tmp_path):
+    # axis: the refusal detail for a parts record whose text ends early; an end-of-text offset clamped one short
+    fake = two_part_record(tmp_path)
+    parts = parts_of(fake)
+    last = parts[-1]
+    body = last["body"]
+    brace = body.rindex("\n`") - 1  # the record's closing brace, last character of the last slice
+    assert body[brace] == "}"
+    last["body"] = body[:brace] + body[brace + 1:]
+    end = last["body"].rindex("\n`")  # the framing newline: one past the slice's last character
+    out = rr.read(7, readers=fake.readers())
+    assert out["reason"] == "review-record-unreadable"
+    assert out["detail"].startswith(fake.marked()[0]["url"])
+    assert f"does not parse at character {end} of comment {last['id']}: " in out["detail"]
+    assert f"character {end - 1} of" not in out["detail"]
+
+
 def test_other_unreadable_causes_name_no_offset(tmp_path):
     # axis: an unreadable cause that is not a parse failure; reported with an invented offset
     fake = two_part_record(tmp_path)
@@ -156,12 +173,21 @@ def test_other_unreadable_causes_name_no_offset(tmp_path):
     start, end = good.rindex("```json\n") + 8, good.rindex("\n```\n</details>")
     head["body"] = good[:start - 8] + "no block here"
     out = rr.read(7, readers=fake.readers())
-    assert out["detail"] == f"{head['url']}: the comment has no JSON block"
+    assert out["reason"] == "review-record-unreadable"
+    assert out["detail"].startswith(head["url"] + ": ")
+    assert "does not parse at character" not in out["detail"]
+    assert "JSON block" in out["detail"]
     head["body"] = good[:start] + json.dumps({"schema": rr.PARTS_SCHEMA, "parts": "x"}) + good[end:]
     out = rr.read(7, readers=fake.readers())
-    assert out["detail"] == f"{head['url']}: the parts index is malformed"
+    assert out["reason"] == "review-record-unreadable"
+    assert out["detail"].startswith(head["url"] + ": ")
+    assert "does not parse at character" not in out["detail"]
+    assert "parts index" in out["detail"]
     head["body"] = good
     gone = parts_of(fake)[0]
     fake.comments.remove(gone)
     out = rr.read(7, readers=fake.readers())
-    assert out["detail"] == f"{head['url']}: part comment {gone['id']} is missing or malformed"
+    assert out["reason"] == "review-record-unreadable"
+    assert out["detail"].startswith(head["url"] + ": ")
+    assert "does not parse at character" not in out["detail"]
+    assert f"part comment {gone['id']}" in out["detail"]

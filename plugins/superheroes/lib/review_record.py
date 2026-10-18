@@ -1565,7 +1565,7 @@ def _unreadable_detail(latest, by_id):
     try:
         rec = json.loads(text)
     except json.JSONDecodeError as e:
-        pos = min(e.pos, len(text) - 1) if text else 0
+        pos = e.pos
         for pid, piece in zip(ids, pieces):
             if pos < len(piece) or pid == ids[-1]:
                 break

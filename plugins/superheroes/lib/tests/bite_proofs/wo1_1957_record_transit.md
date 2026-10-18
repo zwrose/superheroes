@@ -8,10 +8,9 @@
 |---|---|---|---|---|
 | E-offset | the offset in `_unreadable_detail`'s whole-record branch | the refusal names the real character offset of the damage | `test_pr1942_record_refusal_names_the_damaged_span` | proven |
 | E-escape | the escape in `_record_json` | the record's JSON carries no bare `/`, so the URL-wrapping egress cannot change it | `test_one_comment_record_survives_the_url_wrapping_egress` | proven |
+| E-parts-offset | the unclamped end-of-text offset (`pos = e.pos`) in `_unreadable_detail`'s parts branch | the refusal maps the decoder's offset into the comment that holds it, with no clamping | `test_parts_record_refusal_at_end_of_text_names_the_last_part` | proven |
 
-Unproven (no neutralization run, inside the order's seven-command budget): the offset in
-`_unreadable_detail`'s parts-joined branch (`pos = min(e.pos, len(text) - 1) if text else 0` and what
-follows it); the phrase branches (`the comment has no JSON block`, `the JSON is not a review record`,
+Unproven (no neutralization run, inside the order's seven-command budget): the phrase branches (`the comment has no JSON block`, `the JSON is not a review record`,
 `the parts index is malformed`, `part comment <id> is missing or malformed`, `the joined parts are not
 a review record`, `the record could not be read`); the other tests in the file. The proving tests were
 selected with `-k <name>` as the order's budget names them, not by exact node id; each selected one
@@ -116,5 +115,53 @@ After both elements, `git diff HEAD -- plugins/superheroes/lib/review_record.py`
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
 1 passed, 6 deselected in 1.13s
+EXIT=0
+```
+
+## E-parts-offset — the unclamped end-of-text offset in the parts branch
+
+**guarded element:** `pos = e.pos` in the `json.JSONDecodeError` branch of `_unreadable_detail`
+(`review_record.py`, line 1568). **axis:** the refusal maps the decoder's offset into the comment that
+holds it with no clamping, so a text that ends early reports the offset just past the last part's slice.
+
+**neutralization:** in `plugins/superheroes/lib/review_record.py`, `_unreadable_detail`:
+`pos = e.pos` became `pos = min(e.pos, len(text) - 1) if text else 0`.
+
+**raw red:** (run of
+`test_review_record_transit_1957.py -k test_parts_record_refusal_at_end_of_text_names_the_last_part`;
+the pytest source dump of the test body is elided here, the output lines are verbatim)
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_parts_record_refusal_at_end_of_text_names_the_last_part _________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-13/test_parts_record_refusal_at_e0')
+
+[... pytest source dump of the test body elided ...]
+>       assert f"does not parse at character {end} of comment {last['id']}: " in out["detail"]
+E       assert 'does not parse at character 45255 of comment 3: ' in 'http://c/4: the record\'s JSON does not parse at character 45254 of comment 3: "rs\\":[],\\"writtenAt\\":\\"2026-10-18T15:50:40Z\\"\\n```"'
+
+/home/user/sh-1957/plugins/superheroes/lib/tests/test_review_record_transit_1957.py:164: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_transit_1957.py::test_parts_record_refusal_at_end_of_text_names_the_last_part
+1 failed, 7 deselected in 1.15s
+EXIT=1
+```
+
+**restore:** the inverse edit, `pos = min(e.pos, len(text) - 1) if text else 0` back to `pos = e.pos`.
+
+**restore receipt:** `grep -n 'e\.pos' plugins/superheroes/lib/review_record.py` printed
+```
+1549:        return f"{where}: the record's JSON does not parse at character {start + e.pos} of comment " \
+1550:               f"{latest.get('id')}: {_span(body, start + e.pos)}"
+1568:        pos = e.pos
+```
+
+**raw green:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 7 deselected in 1.17s
 EXIT=0
 ```
