@@ -16,6 +16,7 @@ Detector axes (bite-proof):
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -432,12 +433,40 @@ def test_c4_the_launcher_writer_leaves_sibling_keys_intact(tmp_path):
 
 # --- C5: config emission and the documented handoff -------------------------------------------
 
-def _break_it_args(emitted):
-    """The BREAK_IT_ARGS block of skills/review-code/reference/setup.md, in Python: the flag is
-    passed iff `.breakItInterpreter != null` (presence, never `-n`), so "" still goes through, and
-    flag and value travel as ONE `--break-it-interpreter=VALUE` argument so a dash-leading value
-    is never read as an option."""
-    return [] if emitted is None else ["--break-it-interpreter=" + emitted]
+_SETUP_MD = os.path.join(_REPO_ROOT, "plugins/superheroes/skills/review-code/reference/setup.md")
+
+
+def _shipped_handoff_script():
+    """The fenced bash block of skills/review-code/reference/setup.md that builds BREAK_IT_ARGS,
+    minus its `VERIFY_JSON=$(...)` assignment (the test supplies VERIFY_JSON in the environment)."""
+    text = open(_SETUP_MD).read()
+    blocks = [m.group(1) for m in re.finditer(r"```bash\n(.*?)```", text, re.S)]
+    hits = [b for b in blocks if "BREAK_IT_ARGS" in b]
+    assert len(hits) == 1
+    lines = [ln for ln in hits[0].splitlines() if not ln.startswith("VERIFY_JSON=$(")]
+    assert any(ln.startswith("BREAK_IT_ARGS=(") for ln in lines)
+    return "\n".join(lines) + "\nif [ ${#BREAK_IT_ARGS[@]} -gt 0 ]; then printf '%s\\0' \"${BREAK_IT_ARGS[@]}\"; fi\n"
+
+
+def _break_it_args(verify_json):
+    """Run the SHIPPED setup.md shell with VERIFY_JSON and return the argv it hands the driver."""
+    env = dict(os.environ, VERIFY_JSON=verify_json, CLAUDE_PLUGIN_ROOT=os.path.join(_REPO_ROOT, "plugins/superheroes"))
+    proc = subprocess.run(["bash", "-c", _shipped_handoff_script()], env=env,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return [a for a in proc.stdout.split("\0")][:-1]
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, []),
+    ("", ["--break-it-interpreter="]),
+    ("-x", ["--break-it-interpreter=-x"]),
+    ("uv run python", ["--break-it-interpreter=uv run python"]),
+])
+def test_c5_the_shipped_shell_builds_the_handoff_argv(value, expected):
+    # axis: C5 the setup.md snippet itself passes the flag on presence (not non-empty), as one argv element
+    assert _break_it_args(json.dumps({_KEY: value})) == expected
+    assert _break_it_args(json.dumps({})) == []
 
 
 def _driver_state(tmp_path, next_args):
@@ -474,7 +503,7 @@ def test_c5_emission_then_handoff_fails_closed(tmp_path, monkeypatch, case):
     assert out["verifyCommand"] == "pytest -q"
     assert out[_KEY] == emitted
     assert (out[_KEY] is None) == (emitted is None)
-    cfg = _driver_state(tmp_path, _break_it_args(out[_KEY]))
+    cfg = _driver_state(tmp_path, _break_it_args(json.dumps(out)))
     assert (_KEY in cfg) == (emitted is not None)
     if emitted is not None:
         assert cfg[_KEY] == emitted
