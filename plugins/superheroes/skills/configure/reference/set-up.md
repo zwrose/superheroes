@@ -89,6 +89,13 @@ verify command via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-verify-command -->
 
+Set-up does not write `breakItInterpreter`. When the verify command names no Python launcher (for
+example `pytest -q`, `make test` or `tox`), state in the set-up output that break-it Python tests
+will not run until that key is set. Name `scripts/pinned-python` when that file is present. Point to
+view-and-tune's "Name the Python launcher for break-it tests"
+(`skills/configure/reference/view-and-tune.md` § 2). Set-up detects and discloses this only; it
+never prompts for the value.
+
 ## 3.5 — Who it's for, and Risk and trust — one sitting
 
 This step is asked, not detected. The advisor leads this sitting with the owner, in product terms:
