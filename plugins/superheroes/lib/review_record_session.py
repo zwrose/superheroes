@@ -251,6 +251,17 @@ def _audit_reviewers(state, rnd, audits, later=frozenset()):
     return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
 
 
+_VERIFY_COUNTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED", "unverified", "ambiguous")
+
+
+def _nothing_to_verify(state, rnd):
+    """Whether the round's verifier phase had no staged finding: `verifyPasses` is a non-empty list and every entry is a dict whose
+    verdict and unanswered counts are all present zeros. Anything else, a missing or malformed record included, had something to verify."""
+    passes = (state["rounds"].get(str(rnd)) or {}).get("verifyPasses")
+    return isinstance(passes, list) and bool(passes) and all(
+        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS) for p in passes)
+
+
 def _status_reviewers(state, setup=None, rows=()):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
@@ -288,6 +299,9 @@ def _status_reviewers(state, setup=None, rows=()):
         out += _audit_reviewers(state, rnd, audits, later)
     for rnd, phase in sorted({(r["round"], r["phase"]) for r in rows if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
                               and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, *_RAW_PHASES[1:])}):
+        # axis: a hand-accepted verifier phase with no staged finding is not a planned reviewer — see bite-proof record wo_6_1910_empty_verifier
+        if phase == round_phases.P_VERIFIERS and _nothing_to_verify(state, rnd):
+            continue
         prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)
                 and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
         head = _panel_head(state, rnd, setup, phase)
