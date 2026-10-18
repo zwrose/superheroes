@@ -7,11 +7,19 @@
   "previousCommit": null,
   "leftovers": {
     "F6": {
+      "why": "How much a customer should hear about a retry is a promise to your customers, and only you can decide how much to promise.",
+      "context": "When a payment fails and is tried again, the customer is not told. The retry shows on their card statement as a second charge attempt.",
       "options": "none",
       "recommendation": {"text": "Leave it as is", "reason": "The statement line already names the shop."}
     },
     "F7": {
-      "options": "leftover",
+      "why": "Who tells a customer that their payment could not be taken is a customer-service call, and only you can decide who it comes from and in what words.",
+      "context": "After the third failed try the order is given up, and nothing is sent. The customer is left on the checkout page with no message.",
+      "options": {
+        "keep-it": "Customers whose card keeps failing hear nothing and may think the order went through; support gets the questions.",
+        "fix-in-a-follow-up": "This ships with customers hearing nothing for now; a follow-up adds the email, once you have chosen its wording.",
+        "fix-before-merge": "The PR goes back to have the email written first, and returns with a new sheet; the retry ships later."
+      },
       "recommendation": {"text": "Fix it in a follow-up", "reason": "The email needs wording the owner has not chosen yet.", "optionId": "fix-in-a-follow-up"}
     }
   },

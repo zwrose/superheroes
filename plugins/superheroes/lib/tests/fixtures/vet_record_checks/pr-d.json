@@ -30,6 +30,7 @@
       "unit": "reviewer-minutes"
     },
     "decisionRechecks": [],
+    "carriedRechecks": [],
     "earlierRecordsNotChecked": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
@@ -136,6 +137,7 @@
     "whatIsMissing": [
       "security-reviewer did not run"
     ],
+    "withheldFromReviewers": null,
     "writtenAt": "2026-01-01T00:00:00Z"
   }
 }
