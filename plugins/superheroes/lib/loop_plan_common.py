@@ -131,54 +131,6 @@ def read_findings_file(path, tier):
 
 # --- plans --------------------------------------------------------------------
 
-def _run_all_plan(dimensions, reason):
-    return {"roundKind": "intermediate",
-            "dimensions": {d: {"action": "run", "tier": DEEP, "reason": reason}
-                           for d in dimensions},
-            "escalationPolicy": "deep-only"}
-
-
-def _plan_lists(plan, dimensions):
-    dims_to_run, skipped = [], []
-    scheduled = plan.get("dimensions") or {}
-    for d in dimensions:
-        info = scheduled.get(d) or {"action": "run", "tier": DEEP, "reason": "unscheduled — fail toward run"}
-        if info.get("action") == "skip":
-            skipped.append({"dimension": d, "reason": info.get("reason"),
-                            "carriedFromRound": info.get("carriedFromRound")})
-        else:
-            dims_to_run.append({"dimension": d, "tier": info.get("tier") or DEEP,
-                                "reason": info.get("reason")})
-    return dims_to_run, skipped
-
-
-def _overlay_escalations(plan, escalations):
-    """Return a copy of *plan* with pending escalations emitted at reviewer-deep."""
-    if not escalations:
-        return plan
-    overlay = {"roundKind": plan.get("roundKind"),
-               "dimensions": dict(plan.get("dimensions") or {}),
-               "escalationPolicy": plan.get("escalationPolicy")}
-    for d in escalations:
-        info = overlay["dimensions"].get(d)
-        if isinstance(info, dict) and info.get("action") == "run":
-            updated = dict(info)
-            updated["tier"] = DEEP
-            reason = updated.get("reason") or ""
-            if " (pending escalation)" not in reason:
-                updated["reason"] = "%s (pending escalation)" % reason
-            overlay["dimensions"][d] = updated
-    return overlay
-
-
-def _persist_plan(session_dir, state, round_no, plan, state_ok):
-    if not state_ok:
-        state = {"schemaVersion": 1, "rounds": {}, "rebuilt": True}
-    _round_entry(state, round_no)["plan"] = plan
-    save_state(session_dir, state)
-    return state
-
-
 # --- per-dimension records ----------------------------------------------------
 
 def _subjects(dimension, findings):
@@ -237,22 +189,6 @@ def _full_deep_executed(state, round_no, dimensions):
     return True
 
 
-def _confirmation_rounds(state, dimensions):
-    """(round_no, entry) for every QUALIFYING full confirmation panel — a round whose plan kind was
-    'confirmation' AND whose recorded dims all ran fresh at reviewer-deep with high confidence
-    (#167 bar, #174 finding 3). A degraded confirmation neither satisfies the panel obligation nor
-    consumes the hard cap, so it is excluded here for BOTH the owed and certify decisions."""
-    out = []
-    for key in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
-        if not str(key).isdigit():
-            continue
-        entry = (state["rounds"][key] or {})
-        plan = entry.get("plan") or {}
-        if plan.get("roundKind") == "confirmation" and _full_deep_executed(state, int(key), dimensions):
-            out.append((int(key), entry))
-    return out
-
-
 def _surfaced_severities(entry):
     """The blocking severities one round surfaced — 'Critical' when a dimension flagged a Critical,
     else 'Important' for any other blocker. Carried/skipped dims never count. #174 finding 5: a
@@ -270,14 +206,3 @@ def _surfaced_severities(entry):
             sevs.append("Important")
     return sevs
 
-
-def _surfaced_severities_since(state, since_round):
-    """#174 finding 2: the blocking severities surfaced on EVERY round from `since_round` onward —
-    the confirmation panel itself plus every later scoped round — so a Critical raised by a
-    post-confirmation scoped round is not missed."""
-    out = []
-    for key in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
-        if not str(key).isdigit() or int(key) < since_round:
-            continue
-        out.extend(_surfaced_severities(state["rounds"][key] or {}))
-    return out

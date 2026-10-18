@@ -39,7 +39,6 @@ its shape). The confirmation economics (`review_round_policy.confirmation_follow
 not re-implemented.
 """
 import argparse
-import binascii
 import copy
 import difflib
 import errno
@@ -4663,21 +4662,6 @@ def _decision_seq(decision):
     return seq if _is_plain_int(seq) else 0
 
 
-def _merge_representative(state, ledger_by_key, key):
-    """The finding that stands for ``key`` once its merges are followed: ``key`` itself unless its
-    live row (with no live row, its ledger row) is merged into another."""
-    seen = {key}
-    while True:
-        row = _live_finding_by_key(state, key)
-        if not isinstance(row, dict):
-            row = ledger_by_key.get(key)
-        into = row.get(session_contract.MERGED_INTO_FIELD) if isinstance(row, dict) else None
-        if not isinstance(into, str) or not into or into in seen:
-            return key
-        seen.add(into)
-        key = into
-
-
 def _ruling_root(state, ledger_by_key, key):
     """The one identity a ruling is matched on: the smallest key of ``key``'s ``_ruling_closure`` —
     the same closure ``_ruled_row`` locates a row by, so every member of the group shares one root."""
@@ -6823,13 +6807,6 @@ def _terminal_converged(state, config, full_panel, note=None):
 # =============================================================================================
 # the driver receipt + its validator
 # =============================================================================================
-
-def _apply_grounded_mode(mapping, mode_resolved):
-    """Record session mode on a mapping only when mode_resolved is grounded."""
-    _mode_key = "mode"
-    if mode_resolved["resolved"]:
-        mapping[_mode_key] = mode_resolved[_mode_key]
-
 
 def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
     """The terminal driver receipt. Per-round schedule (planned vs executed), every finding's
