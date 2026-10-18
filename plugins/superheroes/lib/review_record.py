@@ -282,6 +282,12 @@ def _send(method, path, body):
     return {"id": d["id"], "url": d.get("html_url")} if isinstance(d, dict) and "id" in d else None
 
 
+def _owner_ruling_comment(repo, comment_id):
+    """One issue comment as GitHub returns it (plain REST, so it works in a cloud session too), or None."""
+    doc = _gh_json("api", f"repos/{repo}/issues/comments/{comment_id}")
+    return doc if isinstance(doc, dict) else None
+
+
 def _create_comment(pr, repo, body):
     return _send("POST", _api(repo, f"issues/{pr}/comments"), body)
 
@@ -299,6 +305,7 @@ def _readers(overrides):
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
             "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
+            "owner_ruling_comment": _owner_ruling_comment,
             **(overrides or {})}
 
 
@@ -385,6 +392,17 @@ def _validate(a):
         chk(len(hit) == 1, f"{where}.key names {'no finding' if not hit else 'more than one finding'}")
         chk(hit.isdisjoint(named), f"{where}.key names a finding another entry names")
         named += hit
+    ruled = []
+    for i, r in enumerate(lst("ownerRulings")):
+        where = f"ownerRulings[{i}]"
+        chk(isinstance(r, dict), where)
+        for k in ("key", "url", "words"):
+            chk(ne(r.get(k)) and r[k].strip() != "", f"{where}.{k}")
+        hit = _ruling_hits(a["findings"], r["key"])
+        # axis: an entry must name exactly one finding, and no finding is named twice — see bite-proof record wo_a_1958_owner_ruling
+        chk(len(hit) == 1, f"{where}.key names {'no finding' if not hit else 'more than one finding'}")
+        chk(hit.isdisjoint(ruled), f"{where}.key names a finding another entry names")
+        ruled += hit
     chk(a.get("sheetAnswers") is None or isinstance(a["sheetAnswers"], dict), "sheetAnswers")
     chk(a.get("baseRef") is None or ne(a["baseRef"]), "baseRef")
     rounds = a.get("rounds", {"count": 0, "cap": None, "stoppedAtCap": False})
@@ -395,7 +413,7 @@ def _validate(a):
         and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
-            "carriedChecks": [], "sheetAnswers": None, "baseRef": None, **a,
+            "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
             "makers": makers or [], "rounds": dict(rounds, capKind=rounds.get("capKind", CAP_KINDS[0]))}
 
 
@@ -758,6 +776,25 @@ def _status(rec, unread=(), finding_lines=()):
     return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
+def _ruling_hits(findings, key):
+    """The indexes of the account findings an ownerRulings key names: by raw findingKey, stored identity key or id."""
+    return {j for j, f in enumerate(findings)
+            if key in (f.get(session_contract.FINDING_KEY_FIELD), _key(f), f["id"])}
+
+
+def _apply_owner_rulings(findings, raw, entries):
+    """Set the owner-ruling citation as decidedBy on each ruling or left-for-owner finding an entry names.
+    `raw` is the account's findings as given (an entry may key by the raw findingKey the stamping replaced);
+    `findings` is the same list after the stamping. Every other outcome is left exactly as it is."""
+    out = list(findings)
+    for e in entries:
+        (j,) = _ruling_hits(raw, e["key"])
+        if out[j].get("outcome") in (_RULING, _LEFT_FOR_OWNER):
+            # axis: an entry sets the citation on the finding it names, and on no other outcome — see bite-proof record wo_a_1958_owner_ruling
+            out[j] = dict(out[j], decidedBy={"kind": finding_outcomes.OWNER_RULING, "ref": {"url": e["url"], "words": e["words"]}})
+    return out
+
+
 def _recheck_decisions(findings, sources):
     """Check every cited decision against what is on record now. A ruling whose cited decision is not on record
     goes to the owner; a finding left for the owner whose cited decision is on record becomes the ruling. A ruling
@@ -767,7 +804,7 @@ def _recheck_decisions(findings, sources):
     out, changes = [], []
     for f in findings:
         by, outcome, reason = f.get("decidedBy"), f.get("outcome"), f.get("reason")
-        new = None
+        new, unmet = None, None
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             ok, text = finding_outcomes.on_record(by, sources())
@@ -775,8 +812,11 @@ def _recheck_decisions(findings, sources):
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
                 new, why = _RULING, text
+            elif outcome == _LEFT_FOR_OWNER and by.get("kind") == finding_outcomes.OWNER_RULING and not ok:
+                # axis: a finding whose owner ruling does not resolve says so in its reason, and stays for the owner — see bite-proof record wo_a_1958_owner_ruling
+                unmet = f"the owner ruling it cites is not on record ({text})"
         if new is None:
-            out.append(f)
+            out.append(dict(f, reason=f"{reason}; {unmet}") if unmet and reason else f)
             continue
         out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason else reason))
         changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
@@ -861,14 +901,34 @@ def build_record(account, readers, prior=None):
                            _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
                  for r in a["reviewers"]]
     notes, missing, held = [], [], {}
+    # Identity is stamped on the unredacted account, so a later write compares the stored key.
+    findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
+    findings = _apply_owner_rulings(findings, a["findings"], a["ownerRulings"])
+
+    def owner_ruling_comments():
+        # One read per distinct cited link, and none for a link that is not a comment permalink in this repository.
+        docs = {}
+        for f in findings:
+            by, ref = f.get("decidedBy"), None
+            if isinstance(by, dict) and by.get("kind") == finding_outcomes.OWNER_RULING and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
+                ref = by.get("ref")
+            url = ref.get("url") if isinstance(ref, dict) else None
+            parts = finding_outcomes.comment_permalink(url, a["repo"])[0] if isinstance(url, str) else None
+            if parts is not None and url not in docs:
+                try:
+                    docs[url] = rd["owner_ruling_comment"](a["repo"], parts[3])
+                except Exception:  # noqa: BLE001 — fail closed: a comment that cannot be read is not on record
+                    docs[url] = None
+        return docs
 
     def sources():
         # Read once, and only when a cited decision needs it: Canon and residuals as the repository holds them now.
         if "sources" not in held:
             try:
-                held["sources"] = rd["decision_sources"](a.get("repoRoot"), a.get("baseRef"), a.get("sheetAnswers"), a["pr"])
+                base = rd["decision_sources"](a.get("repoRoot"), a.get("baseRef"), a.get("sheetAnswers"), a["pr"])
             except Exception:  # noqa: BLE001 — fail toward the owner: no sources means no cited decision is on record
-                held["sources"] = {}
+                base = {}
+            held["sources"] = dict(base if isinstance(base, dict) else {}, repo=a["repo"], ownerRulings=owner_ruling_comments())
         return held["sources"]
 
     def canon_on_record(g):
@@ -886,8 +946,6 @@ def build_record(account, readers, prior=None):
                              + (" (its Canon entry is not on record)" if complete else ""))
             missing.append({"name": v["name"], "goAhead": good})
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
-    # Identity is stamped on the unredacted account, so a later write compares the stored key.
-    findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     findings, rechecks = _recheck_decisions(findings, sources)
     findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], prior, fc["sha"],
                                               lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head))

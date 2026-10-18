@@ -94,7 +94,7 @@ def _check_extras(x):
         raise Refusal(BAD_EXTRAS, "schema")
     if not (_int(x.get("pr")) and x["pr"] > 0):
         raise Refusal(BAD_EXTRAS, "pr")
-    for k in ("runDirs", "goAheads", "makers", "checked", "carriedChecks"):
+    for k in ("runDirs", "goAheads", "makers", "checked", "carriedChecks", "ownerRulings"):
         if not isinstance(x.get(k, []), list):
             raise Refusal(BAD_EXTRAS, k)
     if not all(isinstance(d, str) and d for d in x.get("runDirs", [])):
@@ -541,7 +541,28 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
-            "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []), "checked": checked}
+            "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
+            "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings), "checked": checked}
+
+
+def _owner_rulings(entries, findings):
+    """The extras' ownerRulings, plus one entry per merged member of each finding an entry names.
+
+    A merged member row's reason ends with the mark `merged_into` reads, naming the representative's id; the
+    ruling on the representative covers the members, unless an entry already names that member. The writer
+    validates the entries; one that is not a dict, or names no row here, is passed through unchanged."""
+    out = list(entries)
+    for e in entries:
+        key = e.get("key") if isinstance(e, dict) else None
+        for rep in (r for r in findings if key in (r.get("findingKey"), r.get("id"))):
+            for row in findings:
+                # axis: a ruling on a merged group's representative covers its members — see bite-proof record wo_a_1958_owner_ruling
+                if row is rep or merged_into(row.get("reason")) not in (rep.get("id"), rep.get("findingKey")):
+                    continue
+                if any(isinstance(o, dict) and o.get("key") in (row.get("findingKey"), row.get("id")) for o in out):
+                    continue
+                out.append({"key": row["findingKey"], "url": e.get("url"), "words": e.get("words")})
+    return out
 
 
 def _carried(account, extras, repo_root, readers):

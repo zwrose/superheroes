@@ -9,17 +9,22 @@ A finding that is neither fixed nor shown wrong, and whose only consequence is c
 is craft, wherever in the project it sits. Any other consequence is real. An unfixed finding
 with a real consequence is left for the owner, unless a decision on record names it, in which
 case it is decided by a named ruling. A decision is on record only when it is an active Canon
-entry, a recorded residual, or a settled saved sheet answer for the pull request. Severity
-never decides an outcome.
+entry, a recorded residual, a settled saved sheet answer for the pull request, or an owner ruling
+whose pointer resolves: a readable owner-authored comment in the pull request's own repository, at
+the exact permalink, that holds the owner's quoted words. Severity never decides an outcome.
 
 The rules are pure: they read no file, run no git or subprocess and touch no network. Callers
 pass text and dicts in. The one reader is decision_sources, which gathers the Canon and residual
 text the rules are given. Anything missing or malformed fails closed, toward the owner.
 """
+import re
+
 import canon
 import review_findings_schema
 
-DECISION_KINDS = ("canon", "residual", "sheet-answer")
+OWNER_RULING = "owner-ruling"
+DECISION_KINDS = ("canon", "residual", "sheet-answer", OWNER_RULING)
+_COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/issues/([0-9]+)#issuecomment-([0-9]+)")
 
 
 def has_stated_consequence(finding):
@@ -135,7 +140,8 @@ def _sheet_ref_text(ref):
 
 def decided_by_well_formed(decided_by):
     """True only for {"kind": <DECISION_KINDS>, "ref": ...} with nothing else: ref is a non-blank
-    string for canon and residual, and {"pr": int, "card": non-blank string} for a sheet answer."""
+    string for canon and residual, {"pr": int, "card": non-blank string} for a sheet answer, and
+    {"url": non-blank string, "words": non-blank string} for an owner ruling."""
     if not isinstance(decided_by, dict) or set(decided_by) != {"kind", "ref"}:
         return False
     kind, ref = decided_by["kind"], decided_by["ref"]
@@ -144,14 +150,61 @@ def decided_by_well_formed(decided_by):
     if kind == "sheet-answer":
         return (isinstance(ref, dict) and set(ref) == {"pr", "card"} and _is_int(ref["pr"])
                 and isinstance(ref["card"], str) and ref["card"].strip() != "")
+    if kind == OWNER_RULING:
+        return isinstance(ref, dict) and set(ref) == {"url", "words"} and all(
+            isinstance(ref[k], str) and ref[k].strip() != "" for k in ("url", "words"))
     return isinstance(ref, str) and ref.strip() != ""
+
+
+def comment_permalink(url, repo):
+    """The comment a ruling's link points at, as (owner, repo, issue number, comment id), or the reason it cannot be one.
+
+    The link must be an issue-comment permalink (leg L1) in the pull request's own repository, compared
+    case-insensitively (leg L2). Returns (parts, None) or (None, why). Never raises."""
+    # axis: the link must be a comment permalink — see bite-proof record wo_a_1958_owner_ruling
+    found = _COMMENT_PERMALINK.fullmatch(url) if isinstance(url, str) else None
+    if found is None:
+        return None, "the ruling's link is not a comment permalink"
+    owner, name, number, comment = found.groups()
+    # axis: the link must be in the pull request's own repository — see bite-proof record wo_a_1958_owner_ruling
+    if not (isinstance(repo, str) and repo.lower() == f"{owner}/{name}".lower()):
+        return None, "the ruling's link is not in this repository"
+    return (owner, name, number, int(comment)), None
+
+
+def _owner_ruling_on_record(ref, sources):
+    """(True, text) when the ruling's pointer resolves through every leg, else (False, why); see on_record."""
+    url, words = (ref.get("url"), ref.get("words")) if isinstance(ref, dict) else (None, None)
+    if not (isinstance(url, str) and url.strip() and isinstance(words, str) and words.strip()):
+        return False, "the ruling names no link or words"
+    parts, why = comment_permalink(url, sources.get("repo"))
+    if parts is None:
+        return False, why
+    owner, name, number, comment_id = parts
+    read = sources.get("ownerRulings")
+    doc = read.get(url) if isinstance(read, dict) else None
+    # axis: the comment read must be the one the link names, on the issue the link names — see bite-proof record wo_a_1958_owner_ruling
+    if not (isinstance(doc, dict) and _is_int(doc.get("id")) and doc["id"] == comment_id and isinstance(doc.get("issue_url"), str)
+            and doc["issue_url"].lower().endswith(f"/repos/{owner}/{name}/issues/{number}".lower())):
+        return False, "the ruling's comment could not be read"
+    # axis: only the repository owner's own comment is a ruling — see bite-proof record wo_a_1958_owner_ruling
+    if doc.get("author_association") != "OWNER":
+        return False, "the ruling's comment is not the owner's"
+    body = doc.get("body")
+    # axis: the comment must hold the owner's quoted words — see bite-proof record wo_a_1958_owner_ruling
+    if not (isinstance(body, str) and _squash(words) in _squash(body)):
+        return False, "the ruling's comment does not hold the owner's words"
+    return True, 'owner ruling "%s" (%s)' % (words, url)
 
 
 def on_record(decided_by, sources):
     """Decide whether a cited owner decision is on record: (True, what) or (False, why).
 
-    decided_by is {"kind": canon | residual | sheet-answer, "ref": ...}; sources may hold
-    canonText, residualText, residualSource, sheetAnswers and pr. Never raises.
+    decided_by is {"kind": canon | residual | sheet-answer | owner-ruling, "ref": ...}; sources may hold
+    canonText, residualText, residualSource, sheetAnswers, pr, and for an owner ruling repo and ownerRulings
+    ({link: the comment's JSON}). An owner ruling is on record only when its link is an issue-comment permalink in
+    the pull request's own repository, the comment read is that comment on that issue, its author_association is
+    OWNER, and its body holds the quoted words. Never raises.
     """
     if not isinstance(decided_by, dict):
         return False, "no decision was cited"
@@ -163,6 +216,8 @@ def on_record(decided_by, sources):
         return False, "the cited decision kind is not recognised"
     if ref is None or (isinstance(ref, str) and ref.strip() == ""):
         return False, "the cited decision names no reference"
+    if kind == OWNER_RULING:
+        return _owner_ruling_on_record(ref, sources)
     if kind == "canon":
         text = sources.get("canonText")
         if not isinstance(text, str):
