@@ -269,10 +269,16 @@ def _gh_json(run, argv, what):
 
 
 def _read_body(run, pr, repo):
-    payload = _gh_json(run, ["gh", "pr", "view", str(pr), "-R", repo, "--json", "body"], "PR body")
-    if not isinstance(payload, dict) or not isinstance(payload.get("body"), str):
+    payload = _gh_json(run, ["gh", "api", "repos/%s/pulls/%d" % (repo, pr)], "PR body")
+    if not isinstance(payload, dict) or "body" not in payload:
         raise _Refusal("read-failed", "PR body: body is not a string")
-    return payload["body"]
+    body = payload["body"]
+    # axis: a REST null body is an empty body, not a malformed one
+    if body is None:
+        return ""
+    if not isinstance(body, str):
+        raise _Refusal("read-failed", "PR body: body is not a string")
+    return body
 
 
 def _read_comments(run, pr, repo):
