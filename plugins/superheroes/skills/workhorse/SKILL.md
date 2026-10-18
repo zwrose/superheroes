@@ -386,9 +386,11 @@ judgment, so "this fix is tiny" is no reason to type in a full-lane build. Every
 order goes to an implementer under the one implementer template,
 `${CLAUDE_PLUGIN_ROOT}/agents/implementer.md`:
 
-Every implementer order goes through `dispatch-write` on the engine the project's calibrated
-implementation engine names, `claude` included (`claude` runs the sandboxed Claude write channel);
-inline `agents/implementer.md`, minus its frontmatter, verbatim into the dispatch prompt.
+Before every implementer order, run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/native_engine.py" route --cwd <build worktree>`:
+`native` (only ever for a calibrated claude implementer) runs the order as a native `superheroes:implementer` subagent through the native engine
+(`skills/workhorse/reference/dispatch-mechanics.md` § The native implementer engine); any other
+engine goes through `dispatch-write`, `claude` included. Inline `agents/implementer.md`, minus its
+frontmatter, verbatim into the dispatch prompt.
 
 **Cited paths in every dispatched seat resolve in the build's own worktree** when the cited file is
 part of the change. `${CLAUDE_PLUGIN_ROOT}` resolves to the installed cache and would hand an
