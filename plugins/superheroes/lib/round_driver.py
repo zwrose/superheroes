@@ -9638,6 +9638,15 @@ def _calibration_path_placeholder(path, label, root_refusal=None):
     return "(%s calibration not resolved for this project)" % label
 
 
+def _claude_md_path_placeholder(repo_root):
+    """Absolute live-checkout CLAUDE.md path, or a plain no-CLAUDE.md sentence. Never raises."""
+    if isinstance(repo_root, str) and repo_root:
+        path = os.path.join(repo_root, "CLAUDE.md")
+        if os.path.isfile(path):
+            return path
+    return "(this project has no CLAUDE.md at %s)" % (repo_root,)
+
+
 def _resolved_calibration_paths(repo_root):
     """(core_path_or_None, layer_path_or_None, root_refusal_or_None) from calibration_resolve."""
     cwd = repo_root if isinstance(repo_root, str) and repo_root else os.getcwd()
@@ -10111,6 +10120,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "CHANNEL",
     "FOCUS_NOTES",
     "CORE_PATH",
+    "CLAUDE_MD_PATH",
     "LAYER_PATH",
     "VERIFICATION_ROOT",
     "CWD",
@@ -10425,6 +10435,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
     layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
                                               root_refusal)
+    claude_md_path = _claude_md_path_placeholder(repo_root)
     payload = pending_payload if isinstance(pending_payload, dict) else {}
     sidecar_roster = roster if isinstance(roster, list) else [seat_key]
     ph = {}
@@ -10455,6 +10466,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,
             "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % AGENT_SUFFIX.get(
                 seat_key, seat_key)),
         }
@@ -10479,6 +10491,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
         }
     elif phase == P_SYNTHESIS:
         findings = payload.get("findings")
@@ -10493,6 +10506,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RUBRIC_PATH": rubric_path,
             "GROUPING_OUTPUT_PATH": os.path.join(rdir, "grouping.json"),
             "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
         }
     elif phase == P_GAPSWEEP:
         ph = {
@@ -10503,6 +10517,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
             "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
         }
     elif phase == P_AUDITS:
         targets = payload.get("targets")
@@ -10521,6 +10536,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RUBRIC_PATH": rubric_path,
             "TARGET_ID": seat_key,
             "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
         }
     elif phase == P_SCOPED:
         hunks = payload.get("hunks")
@@ -10538,6 +10554,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
             "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
         }
     elif phase == P_FIXER:
         if materialize_shared_inputs:

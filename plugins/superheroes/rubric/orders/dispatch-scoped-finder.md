@@ -8,7 +8,7 @@ driver computed from the fixer's head diff — not the whole repository.
 - Core calibration (threat model, canonical patterns): {{CORE_PATH}}
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
-- Project conventions: CLAUDE.md and the project profile.
+- Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
 
 ## Your assignment
 Review only the hunks named in {{HUNKS_PATH}} at reviewer-deep caliber. Read bounded chunks
