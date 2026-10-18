@@ -432,3 +432,9 @@ def test_shim_fails_closed_on_a_corrupt_index_entry(tmp_path):
     assert r.returncode == 0
     assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecisionReason"] == \
         "superheroes native fence error (fail-closed)"
+
+
+def test_expanded_here_document_body_text_stays_data_around_substitutions():
+    assert native_fence.fence_word("cat <<EOF\nIt's $(printf today)\nEOF") is None
+    assert native_fence.fence_word("cat <<EOF\ncurl is docs `date`\nEOF") is None
+    assert native_fence.fence_word("cat <<EOF\ncurl docs\n$(printf a)\nEOF\ncurl x") == "curl"

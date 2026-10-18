@@ -102,6 +102,33 @@ def _heredoc_operator(command, i):
     return j, "".join(word) or None, strip_tabs, quoted
 
 
+def _substitution_spans(body):
+    """The command substitutions ($(...) with nesting, or backtick pairs) in an expanded here-document body, each
+    as its own text span; the text around them is data and is dropped."""
+    spans, i, n = [], 0, len(body)
+    while i < n:
+        if body.startswith("$(", i):
+            depth, j = 0, i + 1
+            while j < n:
+                if body[j] == "(":
+                    depth += 1
+                elif body[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            spans.append(body[i:j + 1])
+            i = j + 1
+        elif body[i] == "`":
+            j = body.find("`", i + 1)
+            j = n - 1 if j < 0 else j
+            spans.append(body[i:j + 1])
+            i = j + 1
+        else:
+            i += 1
+    return spans
+
+
 def _split_segments(command):
     """Split on ; && || | & and newlines outside quotes, dropping comments. An unterminated quote stays in its segment
     (shlex then refuses it)."""
@@ -146,10 +173,10 @@ def _split_segments(command):
                 i += 1
             elif ch == "\n" and pending:
                 # Skip each here-document body through its terminating delimiter line: the body is data.
-                # An unquoted delimiter's body is expanded by the shell, so a body holding $( or a backtick is
-                # left in the stream as segments. The fence reads only each segment's leading token, so command
-                # substitution ($(...), backticks) and subshells pass it: this keeps the body visible, it does
-                # not make the substitution fail closed.
+                # An unquoted delimiter's body is expanded by the shell, so each command substitution in it
+                # ($(...) or backticks) stays in the stream as its own segment while the surrounding body text
+                # stays data. The fence reads only each segment's leading token, so command substitution and
+                # subshells pass it: this keeps the substitution visible, it does not make it fail closed.
                 pos = i + 1
                 for delim, strip_tabs, quoted in pending:
                     start = pos
@@ -159,9 +186,8 @@ def _split_segments(command):
                         pos = n if nl < 0 else nl + 1
                         if (line.lstrip("\t") if strip_tabs else line) == delim:
                             break
-                    if not quoted and ("$(" in command[start:pos] or "`" in command[start:pos]):
-                        pos = start
-                        break
+                    if not quoted:
+                        segments.extend(_substitution_spans(command[start:pos]))
                 pending = []
                 i = pos - 1
         else:
