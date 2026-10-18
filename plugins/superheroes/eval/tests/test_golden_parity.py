@@ -172,6 +172,34 @@ def test_golden_parity(golden_name, fixture_name, fail_telemetry):
             f"  golden={golden[key]!r}\n  got={got[key]!r}")
 
 
+@pytest.mark.parametrize("fail_telemetry", [False, True], ids=["telemetry-ok", "fail-telemetry"])
+def test_telemetry_failure_no_survivor_difference_is_exactly_the_synthesis_leaf(fail_telemetry):
+    """Bounds the ``tokenTotal`` / ``telemetry`` allowlist on telemetry_failure: the only permitted
+    difference is the absent synthesis leaf, at exactly these values."""
+    golden_name = ("telemetry_failure.fail-telemetry.golden.json" if fail_telemetry
+                   else "telemetry_failure.golden.json")
+    golden = json.loads((GOLDENS / golden_name).read_text(encoding="utf-8"))
+    got = normalize(_public(harness.run_fixture(
+        FIXTURES / "telemetry_failure.json", fail_telemetry=fail_telemetry)))
+
+    assert got["tokenTotal"] == 1000, got["tokenTotal"]
+    if fail_telemetry:
+        # the failed telemetry write carries no token usage; the whole field equals the golden's
+        assert got["telemetry"] == golden["telemetry"], got["telemetry"]
+        return
+    usage = got["telemetry"]["tokenUsage"]
+    assert usage["expectedLeaves"] == ["test-reviewer:r1"], usage
+    assert usage["present"] == ["test-reviewer:r1"], usage
+    assert usage["missing"] == [], usage
+    assert usage["total"] == 1000, usage
+    # every other telemetry key (and every other tokenUsage key) is the golden's
+    assert {k: v for k, v in got["telemetry"].items() if k != "tokenUsage"} == \
+        {k: v for k, v in golden["telemetry"].items() if k != "tokenUsage"}
+    assert {k: v for k, v in usage.items() if k not in ("expectedLeaves", "present", "missing", "total")} == \
+        {k: v for k, v in golden["telemetry"]["tokenUsage"].items()
+         if k not in ("expectedLeaves", "present", "missing", "total")}
+
+
 def test_allowlist_covers_every_golden():
     on_disk = sorted(p.name for p in GOLDENS.glob("*.golden.json"))
     assert on_disk == sorted(ALLOWLIST.keys()), (

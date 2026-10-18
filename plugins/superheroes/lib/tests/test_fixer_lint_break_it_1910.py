@@ -59,6 +59,7 @@ def _emit(session_dir, state, row):
 
 
 def test_t1_a_driver_stamped_break_it_test_still_to_be_created_reaches_the_fixer(tmp_path, monkeypatch):
+    # axis: a driver-stamped break-it row exempts its not-yet-existing test path from the order-path existence check
     row = _break_it_row()
     session_dir, state, repo = _session(tmp_path, monkeypatch, row)
     assert not os.path.exists(os.path.join(repo, NEW_TEST))
@@ -67,6 +68,7 @@ def test_t1_a_driver_stamped_break_it_test_still_to_be_created_reaches_the_fixer
 
 
 def test_t2_an_unresolved_edit_target_still_refuses(tmp_path, monkeypatch):
+    # axis: the exemption is scoped to break-it rows — an ordinary row's missing edit target still refuses
     row = {"file": "src/missing_1910.py", "line": 1, "title": "edit a file that is not there"}
     session_dir, state, _repo = _session(tmp_path, monkeypatch, row)
     with pytest.raises(ValueError) as exc:
@@ -78,6 +80,7 @@ def test_t2_an_unresolved_edit_target_still_refuses(tmp_path, monkeypatch):
 @pytest.mark.parametrize("stamp", ["none", "other-path", "none-path"])
 def test_t3_a_break_it_row_without_the_drivers_stamp_for_its_file_still_refuses(
         tmp_path, monkeypatch, stamp):
+    # axis: the exemption needs the driver's own run stamp naming that same path (no stamp, other path, null path)
     row = _break_it_row(stamp=stamp)
     session_dir, state, _repo = _session(tmp_path, monkeypatch, row)
     with pytest.raises(ValueError) as exc:
@@ -86,6 +89,7 @@ def test_t3_a_break_it_row_without_the_drivers_stamp_for_its_file_still_refuses(
 
 
 def test_t4_a_stamped_path_through_a_symlink_out_of_the_repo_still_refuses(tmp_path, monkeypatch):
+    # axis: the exemption waives existence only — a stamped path resolving outside the repo root still refuses
     path = "tests_link/test_new.py"
     row = _break_it_row(path=path)
     session_dir, state, repo = _session(tmp_path, monkeypatch, row)
@@ -102,6 +106,7 @@ def _lint(text, root, **kw):
 
 
 def test_t5_create_items_exempt_the_existence_check_only(tmp_path):
+    # axis: a `create_items` entry drops only its own existence finding, not other cited paths or the escape check
     root = tmp_path / "proj"
     root.mkdir()
     root = str(root)
@@ -121,6 +126,7 @@ def test_t5_create_items_exempt_the_existence_check_only(tmp_path):
     ("/abs/new.py", "absolute"), ("a\\b.py", "backslash"), ("../up/new.py", "escapes-root"),
     ("", "empty")])
 def test_t5_an_invalid_create_item_is_a_finding(tmp_path, item, reason):
+    # axis: a malformed `create_items` entry (absolute, backslash, escaping, empty) is itself a lint finding
     found = _lint("Nothing cited here.\n", str(tmp_path), kind="fixer",
                   create_items=[item])["findings"]
     assert [(f["token"], f["detail"]) for f in found] == [
@@ -128,6 +134,7 @@ def test_t5_an_invalid_create_item_is_a_finding(tmp_path, item, reason):
 
 
 def test_t5_create_items_alone_do_not_make_the_fixer_literal_ambiguous(tmp_path):
+    # axis: `create_items` leaves the fixer result-shape ambiguity check untouched; `expect_items` still trips it
     text = 'Nothing is cited here. {"fixes": []}\n'
     found = _lint(text, str(tmp_path), kind="fixer", allow_payload_contract=True,
                   create_items=[NEW_TEST])["findings"]

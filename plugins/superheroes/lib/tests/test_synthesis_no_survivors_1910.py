@@ -10,7 +10,7 @@ no runner execution evidence is refused.
 Edges: E1 every finding REFUTED (T2) · E2 the panel reported nothing, so the verifier roster was
 empty (T1) · E3 survivors exist, synthesis is still offered (T3) · E4 a hand-submitted empty grouping
 over survivors is accepted as "nothing to merge" and drops nothing (T3) · E5 a durable empty grouping with no runner execution evidence is
-refused (T4) · E6 the skip sits before the unseatable branch (T2 runs on a seatable cell, so it also
+refused (T4) · E6 the skip sits before the unseatable branch (T2b runs on an unseatable cell, so it
 shows the order is withheld by the skip and not by the unseatable gate).
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_1_1910_synthesis_no_survivors.md
@@ -44,10 +44,10 @@ class _AtSynthesis(Exception):
     """Raised by the responder when the driver offers the synthesis step."""
 
 
-def _drive(tmp_path, verdict, stop_at_synthesis=False, findings=None):
-    """Drive next/submit with the given findings (default one) on a seatable synthesis cell; returns
-    (session dir, the phases offered). With `stop_at_synthesis` the drive halts the moment synthesis
-    is offered."""
+def _drive(tmp_path, verdict, stop_at_synthesis=False, findings=None, **cfg_kw):
+    """Drive next/submit with the given findings (default one) on a seatable synthesis cell (or the
+    `cfg_kw` cell); returns (session dir, the phases offered). With `stop_at_synthesis` the drive halts
+    the moment synthesis is offered."""
     session_dir = str(tmp_path)
     seen = []
     base = TRD._responder(round1_findings=findings or [dict(_FINDING)], verdict=verdict)
@@ -62,7 +62,7 @@ def _drive(tmp_path, verdict, stop_at_synthesis=False, findings=None):
             art = dict(art, verifierVendor=RDT._nonpanel_selection(state, session_dir, phase)[0])
         return art
 
-    cfg = S1858._cfg()
+    cfg = S1858._cfg(**cfg_kw)
     cfg.pop("repoRoot")  # the driven session runs in a real checkout
     try:
         TRD._drive_cli(session_dir, TRD._cfg(**cfg), respond)
@@ -89,7 +89,7 @@ def test_t1_a_panel_with_no_findings_folds_synthesis_and_converges_on_advance(tm
 
 
 def test_t2_a_round_whose_every_finding_is_refuted_never_offers_synthesis(tmp_path):
-    # axis: a round with no survivors emits no synthesis order and folds to its next step (E1, E6)
+    # axis: a round with no survivors emits no synthesis order and folds to its next step (E1)
     session_dir, seen = _drive(tmp_path, "REFUTED")
     ok, state = RDT.load_state(session_dir)
     assert ok and state["terminal"], state.get("terminal")
@@ -100,6 +100,21 @@ def test_t2_a_round_whose_every_finding_is_refuted_never_offers_synthesis(tmp_pa
               for e in state[RDT.session_contract.DISPOSITION_LEDGER_KEY]}
     assert [e["disposition"] for e in ledger.values()] == ["refuted"], ledger
     assert RDT.build_receipt(state)
+
+
+def test_t2b_a_refuted_round_on_an_unseatable_synthesis_cell_records_the_skip_not_the_unseatable_gate(
+        tmp_path):
+    # axis: the zero-survivor skip sits before the unseatable branch — it records no `synthesisUnseatable` (E6)
+    session_dir, seen = _drive(tmp_path, "REFUTED", **S1858._VERIFIER_ONLY)
+    ok, state = RDT.load_state(session_dir)
+    assert ok and state["terminal"], state.get("terminal")
+    # the cell really is unseatable: had survivors existed, the unseatable branch would have claimed it
+    assert RDT._nonpanel_unseatable(state, session_dir, RDT.P_SYNTHESIS) is True
+    assert RDT.P_SYNTHESIS not in seen, seen
+    kinds = [d["kind"] for d in state["decisions"]]
+    assert "synthesis-no-survivors" in kinds, kinds
+    assert "synthesis-unseatable" not in kinds, kinds
+    assert "synthesisUnseatable" not in state["rounds"]["1"], state["rounds"]["1"]
 
 
 def test_t3_an_empty_grouping_over_survivors_is_accepted_and_keeps_every_survivor(tmp_path):
