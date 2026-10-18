@@ -41,6 +41,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - Only a standard chat-ruling record counts (composed by `lib/canon.py ruling-record`), with the words matched inside its quoted block. A ruling typed as a plain comment, even from the owner's account, is asked again at merge.
 - A leftover the owner ruled on during a build no longer comes back on the sheet, provided the ruling's link resolves. See `skills/review-code/reference/review-record.md`.
 
+### Review record: survives the cloud egress, and an unreadable one names where
+
+- The record's JSON writes `/` as `\/`, so a cloud session's URL rewrite cannot change it. Records already posted read as before.
+- `read`'s `review-record-unreadable` detail now names the comment and character offset of the break with an excerpt, after the URL it already gave; the reason token and keys are unchanged.
+
 ## 0.43.1
 
 ### Before you upgrade
