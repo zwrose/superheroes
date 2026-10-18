@@ -313,19 +313,23 @@ def _is_separator(token):
 
 
 def _chain_chdir(current, operand):
-    """The directory after one more ``env -C operand``: a relative operand composes onto the earlier
-    one; an absolute operand is kept as it is."""
-    return operand if current is None else posixpath.join(current, operand)
+    """The directory after one more ``env -C operand``: GNU env applies the last ``-C``/``--chdir``
+    alone, so the new operand replaces the earlier one rather than composing onto it."""
+    return operand
 
 
 def _rebase_launcher(chdir, launcher):
     """``launcher`` (a relative path) as seen from the repository root after ``env -C chdir``: the
-    normalised ``chdir/launcher``, or ``None`` when ``chdir`` is absolute or the path climbs out of the root."""
+    normalised ``chdir/launcher`` (kept an explicit ``./`` path when it lands directly under the root, so
+    it never reads as a bare PATH program), or ``None`` when ``chdir`` is absolute or the path climbs out of the root."""
     if os.path.isabs(chdir):
         return None
     rebased = posixpath.normpath(posixpath.join(chdir, launcher))
     if rebased == ".." or rebased.startswith("../") or posixpath.isabs(rebased):
         return None
+    if "/" not in rebased:
+        # axis: a launcher rebased onto the repository root stays an explicit path, never a bare name the runner would look up on PATH
+        rebased = "./" + rebased
     return rebased
 
 
