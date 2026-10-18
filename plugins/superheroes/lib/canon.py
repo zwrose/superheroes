@@ -32,6 +32,7 @@ CONTRACT = os.path.join(os.path.dirname(_LIB_DIR), "rubric", "canon-contract.md"
 STAYS_OUT = "rubric/canon-contract.md § What stays out, and where it goes"
 HELD_MARKER = "<!-- superheroes:canon-held -->"
 RULING_MARKER = "<!-- superheroes:chat-ruling -->"
+RULING_WORDS_HEADING = "The owner's words, verbatim:"
 SEP = " · "
 GROUNDS = ("owner-call", "principle", "ceded-call", "take-back")
 # A declared ground that names something § What stays out keeps out, mapped to how its home is read.
@@ -448,8 +449,32 @@ def ruling_record(date, time, words, context):
     if not words.strip() or not context.strip():
         raise Refusal("canon-bad-field", "the owner's words and the context are both required")
     quoted = "\n".join("> " + l if l else ">" for l in words.strip("\n").splitlines())
-    return ("%s\n**Owner ruling given in chat** · %s %s UTC\n\nThe owner's words, verbatim:\n\n%s"
-            "\n\nWhat it rules on: %s\n" % (RULING_MARKER, date, time, quoted, context.strip()))
+    return ("%s\n**Owner ruling given in chat** · %s %s UTC\n\n%s\n\n%s"
+            "\n\nWhat it rules on: %s\n" % (RULING_MARKER, date, time, RULING_WORDS_HEADING, quoted, context.strip()))
+
+
+def ruling_record_words(body):
+    """The owner's words a standard chat-ruling record quotes, or None when body is not one.
+
+    A standard record (see ruling_record) has the chat-ruling marker as its first line, then the words heading,
+    then a run of `>` lines. Returns that run de-quoted, joined by newlines. Pure; never raises."""
+    if not isinstance(body, str):
+        return None
+    lines = body.splitlines()
+    if not lines or lines[0].strip() != RULING_MARKER:
+        return None
+    try:
+        at = next(i for i, l in enumerate(lines) if l.strip() == RULING_WORDS_HEADING)
+    except StopIteration:
+        return None
+    i = at + 1
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    block = []
+    while i < len(lines) and lines[i].startswith(">"):
+        block.append(lines[i][2:] if lines[i].startswith("> ") else lines[i][1:])
+        i += 1
+    return "\n".join(block) if block else None
 
 
 def cmd_ruling_record(a):
