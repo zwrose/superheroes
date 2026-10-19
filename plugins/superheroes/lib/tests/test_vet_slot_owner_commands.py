@@ -271,3 +271,13 @@ def test_main_body_file_clean_body_exits_0(tmp_path, capsys):
     path.write_text(_body(_block("scripts/pinned-python -m pytest -q")), encoding="utf-8")
     assert vs.main(["handback", "--body-file", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+@pytest.mark.parametrize("command", [
+    "brew install mongosh",
+    "docker pull mongo",
+    "rg psql README.md",
+    "echo 'security find-generic-password'",
+])
+def test_tool_names_as_ordinary_arguments_pass(command):
+    _passes(_body(_block(command)))

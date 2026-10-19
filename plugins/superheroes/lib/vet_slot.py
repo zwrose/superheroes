@@ -254,31 +254,51 @@ def _code_part(line):
     return line
 
 
+_WRAPPERS = frozenset({"sudo", "doas", "env", "exec", "nohup", "time", "nice", "command", "xargs",
+                       "watch", "timeout", "stdbuf", "su", "runuser"})
+_CONTAINER_WRAPPERS = frozenset({"docker", "podman", "nerdctl", "kubectl", "oc"})
+
+
+def _is_call(code, match):
+    """Whether ``match`` in ``code`` is executed (command position or under a wrapper), not an argument."""
+    prefix = code[:match.start()]
+    # axis: a path-qualified tool (/usr/bin/psql) is judged by where its path word starts
+    path = re.search(r"[^\s\"'|&;(`]*/$", prefix)
+    if path:
+        prefix = prefix[:path.start()]
+    head = prefix.rstrip(" \t\"'")
+    last = head.split()[-1] if head.split() else ""
+    # axis: a tool at command position (line start, after a separator, after -- or -c) is a call
+    if not last or head[-1] in "|&;({`" or last in ("--", "-c"):
+        return True
+    segment = re.split(r"[|&;(`]", prefix)[-1].split()
+    while segment and _ASSIGNMENT_RE.match(segment[0]):
+        segment.pop(0)
+    # axis: a tool after only variable assignments (PGPASSWORD=x psql) is at command position
+    if not segment:
+        return True
+    # axis: a tool named as an argument of echo or printf is text, not a call
+    if segment and segment[0] in ("echo", "printf"):
+        return False
+    # axis: a tool that is the value of an option (-k psql, --filter=psql) is not a call
+    if last.startswith("-") or (re.split(r"\s", prefix)[-1].startswith("-")
+                                     and prefix.endswith("=")):
+        return False
+    command = segment[0].strip("\"'").rsplit("/", 1)[-1] if segment else ""
+    # axis: only a tool run by a wrapper (sudo, docker exec/run, kubectl exec) is a call; any other
+    # command's argument (brew install mongosh, rg psql, docker pull mongo) is not
+    if command in _WRAPPERS:
+        return True
+    return command in _CONTAINER_WRAPPERS and any(word in ("exec", "run") for word in segment[1:])
+
+
 def _calls_owner_tool(line):
     """The database tool (or ``security find-...-password``) ``line`` calls, else None."""
     code = _code_part(line)
-    keychain = _KEYCHAIN_RE.search(code)
-    # axis: a Keychain read anywhere in the code part is a call, with no exemption
-    if keychain:
-        return " ".join(keychain.group(0).split())
-    for match in _DATABASE_TOOL_RE.finditer(code):
-        prefix = code[:match.start()]
-        head = prefix.rstrip(" \t\"'")
-        last = head.split()[-1] if head.split() else ""
-        # axis: a tool at command position (line start, after a separator, after -- or -c) is a call
-        if not last or head[-1] in "|&;({`" or last in ("--", "-c"):
-            return match.group(0)
-        segment = re.split(r"[|&;(`]", prefix)[-1].split()
-        while segment and _ASSIGNMENT_RE.match(segment[0]):
-            segment.pop(0)
-        # axis: a tool named as an argument of echo or printf is text, not a call
-        if segment and segment[0] in ("echo", "printf"):
-            continue
-        # axis: a tool that is the value of an option (-k psql, --filter=psql) is not a call
-        if last.startswith("-") or (re.split(r"\s", prefix)[-1].startswith("-")
-                                         and prefix.endswith("=")):
-            continue
-        return match.group(0)
+    for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
+        for match in pattern.finditer(code):
+            if _is_call(code, match):
+                return " ".join(match.group(0).split())
     return None
 
 
