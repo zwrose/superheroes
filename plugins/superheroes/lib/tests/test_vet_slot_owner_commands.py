@@ -118,6 +118,11 @@ def test_blockquoted_block_refuses():
     _refused(body, 1, "bash", "mongorestore")
 
 
+def test_quoted_fence_ends_when_its_blockquote_ends():
+    body = _body("> ```text\n> prior output\n\n```bash\nmongorestore --drop dump/\n```")
+    _refused(body, 4, "bash", "mongorestore")
+
+
 def test_block_nested_under_numbered_list_item_refuses():
     body = _body("1. Restore the dump:\n\n    ```bash\n    mongorestore dump\n    ```")
     _refused(body, 3, "bash", "mongorestore")

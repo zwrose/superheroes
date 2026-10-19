@@ -208,6 +208,11 @@ def _owner_shell_blocks(body):
     for number, raw in enumerate(body.splitlines(), 1):
         line = raw.rstrip("\r")
         text, depth = _strip_containers(line)
+        # axis: a line with fewer blockquote markers than the opener ends a quoted fence, then is re-read
+        if fence is not None and depth < fence["depth"]:
+            if fence["language"] in SHELL_LANGUAGES:
+                yield fence["line"], fence["language"], fence["lines"]
+            fence = None
         if fence is not None:
             run = text.rstrip(" \t")
             # axis: only a same-character run at least as long as the opener's closes the fence
