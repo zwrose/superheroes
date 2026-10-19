@@ -10,6 +10,7 @@ naming each <rule>: <skill>: <detail>.
 """
 import json
 import os
+import stat
 import sys
 
 try:
@@ -116,6 +117,39 @@ _ABSOLUTE_CITATION = re.compile(
 )
 
 
+# Claude Code's sandboxed shell creates <its working directory>/.claude/.cc-writes (an empty
+# directory) on the host, and inside the sandbox binds read-only /dev/null character devices over the
+# other .claude names (settings.json, skills, ...). That residue is not plugin content, so a plugin's
+# .claude holding only it is not a citation root; any other .claude still counts, as it always did.
+SANDBOX_STAGING_DIR = ".claude"
+SANDBOX_STAGING_MARK = ".cc-writes"
+
+
+def _is_char_device(path):
+    try:
+        return stat.S_ISCHR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _is_sandbox_staging(path):
+    """True only for a real .claude dir holding a real .cc-writes dir and nothing but char devices."""
+    if os.path.basename(path) != SANDBOX_STAGING_DIR:
+        return False
+    try:
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            return False
+        if not stat.S_ISDIR(os.lstat(os.path.join(path, SANDBOX_STAGING_MARK)).st_mode):
+            return False
+        return all(
+            _is_char_device(os.path.join(path, name))
+            for name in os.listdir(path)
+            if name != SANDBOX_STAGING_MARK
+        )
+    except OSError:
+        return False
+
+
 def _top_level_dirs(plugin_dir):
     try:
         entries = os.listdir(plugin_dir)
@@ -124,6 +158,21 @@ def _top_level_dirs(plugin_dir):
     return sorted(
         name for name in entries
         if os.path.isdir(os.path.join(plugin_dir, name))
+        and not _is_sandbox_staging(os.path.join(plugin_dir, name))
+    )
+
+
+def sandbox_staging_dirs(plugins_root):
+    """The <plugin>/.claude paths under plugins_root that are only the claude write sandbox's residue."""
+    try:
+        plugins = os.listdir(plugins_root)
+    except OSError:
+        return []
+    return sorted(
+        path for path in (
+            os.path.join(plugins_root, name, SANDBOX_STAGING_DIR) for name in plugins
+        )
+        if _is_sandbox_staging(path)
     )
 
 
@@ -406,6 +455,15 @@ def main(argv=None):
     import glob as _glob
     for ref in _glob.glob(os.path.join(PLUGINS, "*", "**", "reference", "*.md"), recursive=True):
         errors += check_toc(ref)
+
+    for staging in sandbox_staging_dirs(PLUGINS):
+        rel_staging = os.path.relpath(staging, REPO)
+        if rel_staging.startswith(os.pardir):
+            rel_staging = staging
+        print(
+            f"note: {rel_staging} is the claude write sandbox's staging directory "
+            f"({SANDBOX_STAGING_DIR}/{SANDBOX_STAGING_MARK}), not plugin content; "
+            f"it is not read as a citation root")
 
     # §11.4: plugin-relative citations resolve, in the docs dispatched consumers read.
     for doc in sorted(citation_scan_paths(PLUGINS)):
