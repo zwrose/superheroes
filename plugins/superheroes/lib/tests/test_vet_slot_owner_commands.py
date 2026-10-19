@@ -1,0 +1,273 @@
+"""Units for the ``owner-command-in-body`` handback refusal in vet_slot.py. No gh, no network."""
+import json
+
+import pytest
+
+import vet_slot as vs
+
+SKELETON = """## Advisor vet
+<!-- superheroes:advisor-vet -->
+slot text
+
+<!-- superheroes:build-record -->
+<details><summary>Build record</summary>
+
+### Follow-ups for the advisor
+
+Follow-ups: none
+<!-- superheroes:followups none -->
+</details>
+"""
+
+FENCE = "```"
+
+
+def _body(owner_half="", build_record=""):
+    """A valid handback body; ``owner_half`` sits above the advisor-vet heading."""
+    head = owner_half + "\n" if owner_half else ""
+    return head + SKELETON.replace("</details>\n", build_record + "</details>\n")
+
+
+def _block(*lines, lang="bash", fence=FENCE, close=True):
+    out = [fence + lang] + list(lines)
+    if close:
+        out.append(fence)
+    return "\n".join(out) + "\n"
+
+
+def _refused(body, line, language, tool):
+    result = vs.check_handback(body)
+    assert result["ok"] is False
+    assert result["reason"] == "owner-command-in-body"
+    expected = "the fenced %s block opening at line %d calls %s" % (language, line, tool)
+    assert expected in result["detail"]
+    return result
+
+
+def _passes(body):
+    result = vs.check_handback(body)
+    assert result == {"ok": True, "verb": "handback", "followups": []}
+
+
+# ---- refuse: the DoD rows -------------------------------------------------------------------
+
+def test_dod_row_1_mongorestore_block_refuses():
+    body = _body(_block('mongorestore --drop --uri "$URI" dump/'))
+    _refused(body, 1, "bash", "mongorestore")
+
+
+def test_dod_row_2_keychain_find_generic_password_refuses():
+    body = _body(_block("security find-generic-password -s staging -w"))
+    _refused(body, 1, "bash", "security find-generic-password")
+
+
+def test_keychain_find_internet_password_in_substitution_refuses():
+    body = _body(_block('TOKEN=$(security find-internet-password -s host -w)'))
+    _refused(body, 1, "bash", "security find-internet-password")
+
+
+# ---- refuse: opener forms -------------------------------------------------------------------
+
+@pytest.mark.parametrize("lang,named", [
+    ("sh", "sh"), ("zsh", "zsh"), ("shell", "shell"), ("", "no-language"),
+    ("{.bash}", "bash"), ("{.bash .numberLines}", "bash"), ("BASH", "bash"),
+])
+def test_each_shell_language_refuses(lang, named):
+    body = _body(_block("psql -h host", lang=lang))
+    _refused(body, 1, named, "psql")
+
+
+def test_tilde_fence_refuses():
+    body = _body(_block("psql -h host", fence="~~~"))
+    _refused(body, 1, "bash", "psql")
+
+
+def test_four_backtick_fence_refuses():
+    body = _body(_block("psql -h host", fence="````"))
+    _refused(body, 1, "bash", "psql")
+
+
+def test_unterminated_fence_runs_to_the_end_of_the_body():
+    text = "```bash\nmongosh --eval 'db.x.find()'\n"
+    assert vs.owner_command_blocks(text) == [{"line": 1, "language": "bash", "tool": "mongosh"}]
+
+
+def test_unterminated_fence_below_markers_refuses():
+    body = _body() + FENCE + "bash\nmongosh --eval 'db.x.find()'\n"
+    result = vs.check_handback(body)
+    assert result["ok"] is False
+    assert result["reason"] == "owner-command-in-body"
+    assert "calls mongosh" in result["detail"]
+
+
+@pytest.mark.parametrize("tool", vs.DATABASE_TOOLS)
+def test_each_listed_tool_at_command_position_refuses(tool):
+    body = _body(_block("%s --help" % tool))
+    _refused(body, 1, "bash", tool)
+
+
+@pytest.mark.parametrize("command,tool", [
+    ("cat x | psql", "psql"),
+    ("a && mysql -u root", "mysql"),
+    ("PGPASSWORD=x psql", "psql"),
+    ("sudo -u postgres psql", "psql"),
+    ("kubectl exec -it pod -- psql", "psql"),
+    ("bash -c \"psql -c 'select 1'\"", "psql"),
+    ("/usr/bin/sqlite3 db", "sqlite3"),
+    ("docker exec -it mongo mongosh", "mongosh"),
+    ("echo ok; redis-cli ping", "redis-cli"),
+    ("x=$(pg_dump db)", "pg_dump"),
+])
+def test_command_position_forms_refuse(command, tool):
+    body = _body(_block(command))
+    _refused(body, 1, "bash", tool)
+
+
+# ---- refuse: containers ---------------------------------------------------------------------
+
+def test_blockquoted_block_refuses():
+    body = _body("> ```bash\n> mongorestore dump\n> ```")
+    _refused(body, 1, "bash", "mongorestore")
+
+
+def test_block_nested_under_numbered_list_item_refuses():
+    body = _body("1. Restore the dump:\n\n    ```bash\n    mongorestore dump\n    ```")
+    _refused(body, 3, "bash", "mongorestore")
+
+
+def test_block_inside_build_record_refuses():
+    record = "\n" + _block("psql -c 'select 1'")
+    body = _body(build_record=record)
+    result = vs.check_handback(body)
+    assert result["reason"] == "owner-command-in-body"
+    assert "block opening at line 13 calls psql" in result["detail"]
+
+
+def test_f2_regression_block_after_closed_html_comment_refuses():
+    body = _body("<!--\n```json\n-->\n\n```bash\nmongorestore --drop dump\n```")
+    _refused(body, 5, "bash", "mongorestore")
+
+
+def test_two_offending_blocks_one_refusal_names_both_lines():
+    body = _body(_block("psql -h a") + "\n" + _block("mysql -u root", lang="sh"))
+    result = vs.check_handback(body)
+    assert result["reason"] == "owner-command-in-body"
+    assert "the fenced bash block opening at line 1 calls psql" in result["detail"]
+    assert "the fenced sh block opening at line 5 calls mysql" in result["detail"]
+    assert result["detail"].count("a command the owner is asked to run") == 1
+
+
+# ---- fail-closed edges ----------------------------------------------------------------------
+
+def test_crlf_line_endings_still_refuse():
+    body = _body(_block("psql -h host")).replace("\n", "\r\n")
+    _refused(body, 1, "bash", "psql")
+
+
+def test_fence_inside_fence_is_content():
+    outer = "````text\n```bash\npsql -h host\n```\n````\n"
+    _passes(_body(outer))
+    assert vs.owner_command_blocks(outer) == []
+
+
+def test_inline_triple_backtick_with_backtick_in_info_is_not_a_fence():
+    text = "```bash `psql` ```\nmore prose\n"
+    assert list(vs._owner_shell_blocks(text)) == []
+
+
+def test_closer_shorter_than_opener_is_content():
+    text = "````bash\n```\npsql -h host\n````\n"
+    assert vs.owner_command_blocks(text) == [{"line": 1, "language": "bash", "tool": "psql"}]
+
+
+def test_tilde_fence_not_closed_by_backticks():
+    text = "~~~text\n```\n~~~\n```bash\npsql -h host\n```\n"
+    assert vs.owner_command_blocks(text) == [{"line": 4, "language": "bash", "tool": "psql"}]
+    text = "~~~bash\n```\npsql -h host\n~~~\n"
+    assert vs.owner_command_blocks(text) == [{"line": 1, "language": "bash", "tool": "psql"}]
+    text = "~~~text\n```\n~~~\n"
+    assert vs.owner_command_blocks(text) == []
+
+
+def test_comment_closed_on_its_own_line_enters_no_comment_state():
+    body = _body("<!-- note -->\n```bash\npsql -h host\n```")
+    _refused(body, 2, "bash", "psql")
+
+
+# ---- pass -----------------------------------------------------------------------------------
+
+def test_dod_row_3_pinned_python_pytest_block_passes():
+    body = _body(_block("scripts/pinned-python -m pytest plugins/superheroes/lib/tests/ -q"))
+    _passes(body)
+
+
+def test_non_shell_fences_mentioning_tools_pass():
+    body = _body(_block("mongosh", "psql -h host", lang="json")
+                 + "\n" + _block("mongosh", "psql -h host", lang="text"))
+    _passes(body)
+
+
+def test_inline_code_in_prose_passes():
+    body = _body("Run `psql` or `mongorestore --drop` yourself.\n")
+    _passes(body)
+
+
+@pytest.mark.parametrize("command", [
+    "python3 -m pytest -k psql",
+    'pytest -k "mongosh"',
+    "echo mongosh",
+    "printf '%s\\n' psql",
+    "# then run mongosh by hand",
+    "mytool --filter=psql",
+    "pip install postgresql-client-config",
+    "export URI=mongodb://localhost",
+    "mysql_config --version",
+    "cd mongo/data",
+    "docker pull mongo:7",
+    "ssh root@psql",
+])
+def test_non_invocations_pass(command):
+    _passes(_body(_block(command)))
+
+
+def test_html_comment_hidden_shell_block_passes():
+    body = _body("<!--\n```bash\npsql -h host\n```\n-->")
+    _passes(body)
+
+
+def test_sudo_wrapper_flag_is_a_known_residual_and_passes():
+    _passes(_body(_block("sudo -E psql")))
+
+
+# ---- entry points and unchanged verbs ---------------------------------------------------------
+
+def test_write_and_check_analysis_do_not_refuse_the_body(tmp_path):
+    body = _body(_block("mongorestore dump"))
+    advisor_at, build_at, ids = vs.analyze_body(body)
+    assert advisor_at < build_at
+    assert ids is None
+
+
+def test_run_verb_body_file_refuses(tmp_path):
+    path = tmp_path / "body.md"
+    path.write_text(_body(_block("mongorestore --drop dump/")), encoding="utf-8")
+    result = vs.run_verb("handback", None, None, body_file=str(path))
+    assert result["ok"] is False
+    assert result["reason"] == "owner-command-in-body"
+
+
+def test_main_body_file_exits_1_with_json_reason(tmp_path, capsys):
+    path = tmp_path / "body.md"
+    path.write_text(_body(_block("security find-generic-password -s staging -w")), encoding="utf-8")
+    code = vs.main(["handback", "--body-file", str(path)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert out["ok"] is False
+    assert out["reason"] == "owner-command-in-body"
+
+
+def test_main_body_file_clean_body_exits_0(tmp_path, capsys):
+    path = tmp_path / "body.md"
+    path.write_text(_body(_block("scripts/pinned-python -m pytest -q")), encoding="utf-8")
+    assert vs.main(["handback", "--body-file", str(path)]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
