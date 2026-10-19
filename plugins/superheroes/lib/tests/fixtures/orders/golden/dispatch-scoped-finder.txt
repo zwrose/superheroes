@@ -8,7 +8,7 @@ driver computed from the fixer's head diff — not the whole repository.
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - Verification root (read cited files here ONLY): /home/user/proj
-- Project conventions: CLAUDE.md and the project profile.
+- Project conventions: CLAUDE.md at /home/user/proj/CLAUDE.md, and the project profile.
 
 ## Your assignment
 Review only the hunks named in /tmp/superheroes-session-wo4-golden/round-2/scoped-hunks.json at reviewer-deep caliber. Read bounded chunks

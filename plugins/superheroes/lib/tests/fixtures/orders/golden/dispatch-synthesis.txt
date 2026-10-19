@@ -8,7 +8,7 @@ review. Your job is **not** keep/drop — you group issues that share the same r
 - Diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
 - Verification root (read cited files here ONLY): /home/user/proj
 - Severity rubric (the only tiers; calibration): ${PLUGIN_ROOT}/rubric/review-base.md
-- Project conventions: CLAUDE.md and the project profile.
+- Project conventions: CLAUDE.md at /home/user/proj/CLAUDE.md, and the project profile.
 
 ## Your task
 Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids}`

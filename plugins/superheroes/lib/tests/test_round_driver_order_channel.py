@@ -588,6 +588,7 @@ _KNOWN_REALISTIC_VALUES = {
         "TARGET": "t",
         "DIFF_PATH": _DIFF,
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
         "ROLE_BRIEF_PATH": "/plugin/agents/code-reviewer.md",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
@@ -602,17 +603,20 @@ _KNOWN_REALISTIC_VALUES = {
         "DIFF_PATH": _DIFF,
         "VERIFICATION_ROOT": "/proj",
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
     },
     RD.P_SYNTHESIS: {
         "VERIFIED_FINDINGS_PATH": SESSION + "/round-1/verified.json",
         "DIFF_PATH": _DIFF,
         "VERIFICATION_ROOT": "/proj",
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
         "GROUPING_OUTPUT_PATH": SESSION + "/round-1/grouping.json",
     },
     RD.P_GAPSWEEP: {
         "DIFF_PATH": _DIFF,
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
         "VERIFICATION_ROOT": "/proj",
@@ -624,6 +628,7 @@ _KNOWN_REALISTIC_VALUES = {
         "VERIFICATION_ROOT": "/proj",
         "TARGET_ID": "t1",
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
     },
     RD.P_SCOPED: {
         "HUNKS_PATH": SESSION + "/round-1/scoped-hunks.json",
@@ -633,6 +638,7 @@ _KNOWN_REALISTIC_VALUES = {
         "VERIFICATION_ROOT": "/proj",
         "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/scoped-findings.json",
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
     },
 }
 
