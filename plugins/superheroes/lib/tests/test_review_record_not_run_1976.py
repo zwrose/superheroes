@@ -164,7 +164,7 @@ def test_the_sheet_history_shows_the_seat_not_run_and_makes_no_card(tmp_path):
     assert {k: v for k, v in shown.items() if k != "prSheet"} == {k: v for k, v in plain.items() if k != "prSheet"}
 
 
-@pytest.mark.parametrize("bad", [[{"name": ""}], [{"name": "grounding-seat"}], ["grounding-seat"], "grounding-seat", {}])
+@pytest.mark.parametrize("bad", [[{"name": "", "why": WHY}], [{"name": "grounding-seat"}], ["grounding-seat"], "grounding-seat", {}])
 def test_a_malformed_seats_not_run_is_a_problem(bad):
     # axis: a seatsNotRun that is not a list of {name, why} text entries is refused, never passed silently
     records, advisor = bundle(BIG)
