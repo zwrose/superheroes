@@ -10,6 +10,7 @@
     }
   },
   "record": {
+    "carriedRechecks": [],
     "checked": [
       "CI on ccccccc: green",
       "Reviewers that ran: code-reviewer",
@@ -23,14 +24,14 @@
     "cost": {
       "minutes": 2.0,
       "notCounted": [
-        "security-reviewer"
+        "security-reviewer",
+        "grounding-seat"
       ],
       "source": "engine records",
       "tokens": 100,
       "unit": "reviewer-minutes"
     },
     "decisionRechecks": [],
-    "carriedRechecks": [],
     "earlierRecordsNotChecked": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
@@ -120,6 +121,18 @@
         "ran": "not-run",
         "runDir": "",
         "vendor": "codex"
+      },
+      {
+        "commit": null,
+        "coversFinalCommit": false,
+        "family": "openai",
+        "findingsCoverage": "reported by the session",
+        "model": "gpt-5.6-sol",
+        "name": "grounding-seat",
+        "planned": true,
+        "ran": "not-run",
+        "runDir": "",
+        "vendor": "codex"
       }
     ],
     "rounds": {
@@ -130,6 +143,13 @@
       "stoppedAtCap": false
     },
     "schema": "review-record/1",
+    "seatsNotRun": [
+      {
+        "name": "grounding-seat",
+        "reason": "no-loop-phase",
+        "why": "no loop phase runs it, so no reviewer checked the PR body's claims"
+      }
+    ],
     "sessionDisagreements": [],
     "sessionId": "s1",
     "status": "not-reviewed",
