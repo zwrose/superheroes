@@ -237,7 +237,7 @@ def _ci_workflow(repo_root):
 
         path = core_md.core_path(repo_root, None, persist_backfill=False)
         if core_md.read(repo_root, None, persist_backfill=False) is None:
-            if core_md._classify_core_md_at_path(path).status == core_md.CONFIG_ABSENT:
+            if core_md.gate_config_is_absent(core_md._classify_core_md_at_path(path)):
                 return ("absent", None)
             return ("unreadable", None)
         with open(path, encoding="utf-8") as fh:

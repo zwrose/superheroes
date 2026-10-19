@@ -2909,6 +2909,13 @@ def test_only_the_newest_run_per_workflow_and_event_counts():
                                                 wf_run("pr-title", id=9), ci)) == "green"
 
 
+def test_two_events_of_one_workflow_are_each_current():
+    # axis: supersession is per workflow and event; a newer run of one event hiding an unfinished run of another event of the same workflow
+    pending_pr = wf_run("CI", "in_progress", id=51, workflow_id=7, event="pull_request", run_number=1)
+    passed_push = wf_run("CI", id=52, workflow_id=7, event="push", run_number=2)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(pending_pr, passed_push), DECLARED_CI) == "pending"
+
+
 def test_the_record_names_the_workflow_it_read_ci_from(tmp_path):
     # axis: the record's ci field; a record that hides which workflow CI was read from, or drops the source
     fake = Fake(ci=(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2))))
