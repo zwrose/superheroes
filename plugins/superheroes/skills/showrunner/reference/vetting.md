@@ -202,7 +202,8 @@ iPhone, a phone the Mac imitates in software), or the issue's done-definition na
   the page runs in the browser);
 - (e) its `page` or `where` reads the not-established value — `NOT_ESTABLISHED` in the plugin's
   `lib/iphone_check.py`, the one home of that text (the pilot's tool could not tell what the phone
-  showed).
+  showed);
+- (f) it was taken after a change to a served file but before the page was reloaded or reinstalled.
 
 The ruling lists every invalid piece and its reason.
 
