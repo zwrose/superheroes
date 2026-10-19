@@ -12,6 +12,18 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
+
+### Review seats: CLAUDE.md by absolute path
+
+- The panel, verifier, synthesis, gap-sweep, audit and scoped-finder orders name the project's `CLAUDE.md` through the new placeholder `CLAUDE_MD_PATH`: the absolute path into the live checkout when the project has a `CLAUDE.md` at its root, or `(this project has no CLAUDE.md at <repo root>)` when it has none. Before, they named it by the bare relative path `CLAUDE.md`, which the sanitized view strips, so external-engine seats rarely read it.
+- The sanitized view's notice no longer says only that stripped config's absence is not a finding: it adds that a `CLAUDE.md` or calibration file the instructions name by an absolute path sits outside the view and is readable there, and that such a path is never listed in the investigated array.
+- The fixer order is unchanged; it runs in the live checkout, where the relative path opens.
+
 ## 0.44.0
 
 ### Before you upgrade
