@@ -20,6 +20,7 @@ import round_phases  # noqa: E402
 
 from session_checkout import seed_session_meta  # noqa: E402
 from test_panel_diff_at_head_1419 import _commit_file, _init_two_commit_repo  # noqa: E402
+import test_round_driver as _TRD  # noqa: E402
 from test_round_driver import _cfg, _claim_reviewer, _drive_to_phase, _responder  # noqa: E402
 from test_review_record_session import (  # noqa: E402
     CANON_SOURCES, CODEX, HEAD, KEY, OOS, STANDING, UNFILLED_SEAT, Fake, Session, _by_key, extras, ledger_row, put_extras, send,
@@ -47,9 +48,24 @@ def _hand_session(tmp_path, status, **state):
     return Session(tmp_path, rounds=rounds, **state).save()
 
 
-def _hand_submit_two_panels(base):
+def _refuse_derivation_at_the_fixer_fold(monkeypatch):
+    """The fixer fold's git derivation refuses, so the fold takes the unknown path (a full second panel) and the
+    unknown path's own derivation at the verified head runs for real. Both driver copies a fixture reaches are patched."""
+    for mod in (RD, _TRD.RD):
+        real = mod._derive_panel_diff_at_head
+
+        def derive(config, head_sha, real=real):
+            if sys._getframe(1).f_code.co_name == "_fold_fixer":
+                return None, "forced refusal at the fixer fold"
+            return real(config, head_sha)
+
+        monkeypatch.setattr(mod, "_derive_panel_diff_at_head", derive)
+
+
+def _hand_submit_two_panels(base, monkeypatch):
     """Drive a fixture review with `submit` alone to a terminal: round 1 raises a finding, the round-2 scoped
     read raises a Critical one, so the loop seats a second full panel. Returns the session directory."""
+    _refuse_derivation_at_the_fixer_fold(monkeypatch)
     base.mkdir()
     repo, base_sha, diff = _init_two_commit_repo(base)
     session = str(base / "session")
@@ -84,8 +100,8 @@ def _names(account):
 
 # --- item 1: a session driven by hand submit -------------------------------------------------------
 
-def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(tmp_path):
-    session = _hand_submit_two_panels(tmp_path / "hand")
+def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(tmp_path, monkeypatch):
+    session = _hand_submit_two_panels(tmp_path / "hand", monkeypatch)
     with open(os.path.join(session, "driver-journal.jsonl"), encoding="utf-8") as fh:
         journal = [json.loads(line) for line in fh if line.strip()]
     ok, state = RD.load_state(session)
