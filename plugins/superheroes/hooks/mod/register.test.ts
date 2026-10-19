@@ -624,7 +624,7 @@ test('classic.SessionStart still completes when the state write throws', async (
   expect(res).toEqual({})
 })
 
-const complete = ($: Engine, answer: string, e: { agentId?: string } = {}) =>
+const complete = ($: Engine, answer: string, e: { agentId?: string; turnId?: string } = {}) =>
   $.turn.complete({
     answer,
     durationMs: 10,
@@ -947,6 +947,39 @@ test('a turn in progress holds the automatic run until the turn completes', asyn
   expect(r.commands).toEqual([COMMAND])
 })
 
+test("a subagent's turn starting after the main turn completes leaves the automatic run free to fire", async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await complete($, 'done')
+  // a background agent's turn that never completes
+  await $.turn.start({ text: 'background work', turnId: 'sub-1', agentId: 'agent-7' })
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('a main turn still holds the automatic run while subagent turns start and finish', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await $.turn.start({ text: 'background work', turnId: 'sub-1', agentId: 'agent-7' })
+  await complete($, 'sub done', { agentId: 'agent-7', turnId: 'sub-1' })
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+
+  await complete($, 'done')
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
 test('usage cannot be read: no band change and nothing runs', async ($, on) => {
   const r = rig(on, () => saveAnswer)
 
@@ -1202,6 +1235,29 @@ test('an ordinary user turn completing before the checkpoint command turn starts
     text: `<command-message>superheroes:checkpoint</command-message>\n<command-name>/superheroes:checkpoint</command-name>\n<command-args>auto</command-args>`,
     turnId: 't1',
   })
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.toasts).toEqual([SUCCESS])
+  expect(r.seen).toHaveLength(1)
+})
+
+test("a subagent's turn carrying the checkpoint command tag never binds the pending checkpoint", async ($, on) => {
+  const r = rig(on, () => saveAnswer, { isCommandSilent: true })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  const text = `<command-message>superheroes:checkpoint</command-message>\n<command-name>/superheroes:checkpoint</command-name>\n<command-args>auto</command-args>`
+  await $.turn.start({ text, turnId: 'sub-1', agentId: 'agent-7' })
+
+  const bound = r.sets.some(([key, value]) => key === 'checkpoint' && (value as { turnId?: string } | null)?.turnId !== undefined)
+  expect(bound).toBe(false)
+
+  // the main command turn, in the same text shape, then binds and compacts
+  await $.turn.start({ text, turnId: 't1' })
   await complete($, 'Done.')
   await r.clock.advance(1000)
 

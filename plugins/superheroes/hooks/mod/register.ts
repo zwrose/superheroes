@@ -641,6 +641,12 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
+    // A subagent's turn is not the session's: it never marks the session busy, and never
+    // binds the checkpoint (only the main turn.complete finishes one).
+    if (e.agentId) {
+      return next(e)
+    }
+
     try {
       await $.state.set(isTurnActive, e.turnId)
 

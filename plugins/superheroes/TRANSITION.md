@@ -25,6 +25,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
 - **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body tells the owner to run the file (`bash <path>`) rather than paste its lines; `vet_slot.py handback` refuses a shell block that names a database tool or a Keychain read otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
 - **After switching.** **A project whose cloud builds need its own setup commands lists them through configure (item 17, `cloudSetupCommands`), then writes and pastes new setup text.** A step added by hand under the setup text's marker line is lost the next time setup text is pasted, and a project with no list gets the same setup text as before. See [Cloud setup text: project setup commands](#cloud-setup-text-project-setup-commands).
+- **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
+
+### Checkpoint: a subagent's turn never holds the automatic checkpoint
+
+- A subagent's `turn.start`, a background agent's especially, left the session marked busy after the main turn ended, so the automatic checkpoint never fired in an attended session that ran subagents, until Claude Code compacted the session itself without fresh notes.
+- Only the main turn now marks the session busy or binds the checkpoint turn. The checkpoint fires at the next idle measurement above the trigger whatever subagents are running. Headless builder sessions are unchanged.
 
 ### PR sheet: judge before you build
 
