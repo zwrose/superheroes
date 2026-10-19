@@ -106,8 +106,9 @@ The check is final-diff membership, not proof of authorship:
 - A path already dirty before the run and unchanged after it is not credited.
 - It does not prove which copy of a cited file the implementer read.
 
-Every implementer dispatch also passes `--size-base` and `--size-line`, so the fold reports the
-worktree's non-test size against the build's tripwire line. `crossed: true` is the count past the
+Every implementer dispatch also passes `--size-base`, `--size-line` and `--size-base-ref`, so the fold
+reports the worktree's non-test size against the build's tripwire line, counted from the merge base
+with the base branch once you have merged it into the build. `crossed: true` is the count past the
 line, and what it obliges (including an advisor ruling already recorded) is `rubric/review-discipline.md`
 § Size; `status: "indeterminate"` obliges a hand count first. See `skills/workhorse/reference/dispatch-mechanics.md` § Size tripwire at fold.
 
