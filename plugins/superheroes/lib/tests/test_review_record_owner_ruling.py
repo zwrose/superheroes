@@ -81,7 +81,6 @@ def test_t1_a_ruled_finding_folds_into_already_decided_and_leaves_no_card():
 L1 = "the ruling's link is not a comment permalink"
 L2 = "the ruling's link is not in this repository"
 L3 = "the ruling's comment could not be read"
-L4 = "the ruling's comment is not the owner's"
 L5 = "the ruling's comment does not hold the owner's words"
 L6 = "the ruling's comment is not a chat-ruling record"
 NOT_ON_RECORD = "; the owner ruling it cites is not on record (%s)"
@@ -98,10 +97,6 @@ FAILS = [
     pytest.param({}, {"doc": dict(DOC, issue_url="https://api.github.com/repos/o/r/issues/112")}, L3, id="L3-issue-number-suffix"),
     pytest.param({}, {"doc": dict(DOC, issue_url="https://api.github.com/repos/x/y/issues/12")}, L3, id="L3-another-repo-issue"),
     pytest.param({}, {"doc": {k: v for k, v in DOC.items() if k != "issue_url"}}, L3, id="L3-no-issue-url"),
-    pytest.param({}, {"doc": dict(DOC, author_association="MEMBER")}, L4, id="L4-member"),
-    pytest.param({}, {"doc": dict(DOC, author_association="COLLABORATOR")}, L4, id="L4-collaborator"),
-    pytest.param({}, {"doc": dict(DOC, author_association="NONE")}, L4, id="L4-none"),
-    pytest.param({}, {"doc": dict(DOC, author_association="owner")}, L4, id="L4-lowercase"),
     pytest.param({}, {"doc": dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "I think otherwise", "finding f-1"))}, L5,
                  id="L5-words-absent"),
     pytest.param({}, {"doc": dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "Ship it as is", "finding f-1"))}, L5,
@@ -121,6 +116,21 @@ def test_t2_no_pointer_no_fold_and_the_finding_stays_a_card(over, kw, why):
     assert len(found) == 1 and sheet["prSheet"]["alreadyDecided"] == []
 
 
+@pytest.mark.parametrize("doc", [
+    pytest.param(dict(DOC, author_association="MEMBER"), id="member"),
+    pytest.param(dict(DOC, author_association="COLLABORATOR"), id="collaborator"),
+    pytest.param({k: v for k, v in DOC.items() if k != "author_association"}, id="no-association"),
+])
+def test_t2_a_ruling_counts_whatever_association_its_comment_reads(doc):
+    # Axis: on an organisation-owned repository the owner's comment reads MEMBER; the association is no leg of the pointer.
+    rec = build([entry()], doc=doc)
+    f = the_finding(rec)
+    assert f["outcome"] == "ruling" and rec["leftForOwner"] == []
+    assert f["decidedBy"] == {"kind": "owner-ruling", "ref": {"url": U, "words": W}}
+    assert f["reason"].startswith(f'owner ruling "{W}" ({U})')
+    assert cards(rec, {})[1] == [] and [d["title"] for d in cards(rec, {})[0]["prSheet"]["alreadyDecided"]] == [X["title"]]
+
+
 def test_t2_a_ruling_with_no_link_or_words_in_the_citation_stays_a_card():
     # Axis: E8 on the record path, a hand-built citation with blank words never resolves.
     bad = dict(X, decidedBy={"kind": "owner-ruling", "ref": {"url": U, "words": "  "}})
@@ -132,12 +142,12 @@ def test_t2_a_ruling_with_no_link_or_words_in_the_citation_stays_a_card():
 def test_t3_a_ruling_whose_pointer_fails_is_demoted_and_becomes_a_card():
     # Axis: a ruling stands only while its owner-ruling pointer resolves.
     ruled = dict(X, outcome="ruling", reason="the owner said so")
-    rec = build([entry()], [ruled], doc=dict(DOC, author_association="MEMBER"))
+    rec = build([entry()], [ruled], doc=dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "I think otherwise", "finding f-1")))
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
-    assert f["reason"] == f"the cited decision is not on record ({L4}); the owner said so"
+    assert f["reason"] == f"the cited decision is not on record ({L5}); the owner said so"
     assert rec["decisionRechecks"] == [{"finding": "f-1", "from": "ruling", "to": "left-for-owner",
-                                        "why": f"the cited decision is not on record ({L4})"}]
+                                        "why": f"the cited decision is not on record ({L5})"}]
     assert len(cards(rec, {"f-1": CARD})[1]) == 1
     kept = build([entry()], [ruled])
     assert the_finding(kept)["outcome"] == "ruling" and kept["leftForOwner"] == []
