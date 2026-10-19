@@ -17,7 +17,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 - Base rubric (severity, verification rules, panel output format): {{RUBRIC_PATH}}
 - Core calibration (threat model, canonical patterns): {{CORE_PATH}}
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
-- CLAUDE.md (project conventions): CLAUDE.md
+- CLAUDE.md (project conventions): {{CLAUDE_MD_PATH}}
 {{ROLE_BRIEF_LINE}}
 {{RISK_AREAS_LINE}}
 {{BREAK_IT_GRAMMAR_BLOCK}}

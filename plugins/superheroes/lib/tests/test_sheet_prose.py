@@ -400,6 +400,23 @@ def test_prose_script_carries_no_provenance():
         assert not re.search(pattern, source), "sheet_prose.py matches %s" % pattern
 
 
+def _decided_fixtures():
+    """(name, sheet, refused, the problems both readers must give): a stack sheet with decided-for-you entries, valid and then breaking the rule that their ids are unique and are not card ids."""
+    def entry(entry_id):
+        return {"id": entry_id, "finding": "1724:" + entry_id, "title": "Title " + entry_id, "ground": "A ground.", "reason": "A reason.", "pr": 1724}
+
+    def decided(*entry_ids):
+        sheet = _pr_kind_sheet("stack")
+        sheet["prSheet"]["decidedForYou"] = [entry(entry_id) for entry_id in entry_ids]
+        return sheet
+
+    return [
+        ("valid stack with decided entries", decided("decided-one", "decided-two"), False, []),
+        ("two decided entries share an id", decided("decided-one", "decided-one"), True, ['Decided entry id "decided-one" is used more than once.']),
+        ("a decided entry id is also a card id", decided("decided-one", "leftover"), True, ['Decided entry id "leftover" is also a card id.']),
+    ]
+
+
 # Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the cross-field rules the schema description lists (or about a valid sheet).
 def test_cross_field_rules_agree_between_page_and_prose():
     import importlib.util
@@ -429,6 +446,7 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
         ("valid stack with a walk", _pr_kind_sheet("stack"), False),
         ("two walk stops share an id", mutated_stack(lambda s: s["prSheet"]["walk"]["stops"][1].update(id="schema")), True),
+        *[(name, sheet, refused) for name, sheet, refused, _ in _decided_fixtures()],
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -1050,6 +1068,33 @@ def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_pa
         assert out.index(PR_WORDS["nothingToAccept"]) < out.index("**%s**" % PR_WORDS["verdictHeading"]) < out.index("Answer Merge"), kind
 
 
+def _decided(stack):
+    """Two decided-for-you entries as the builder writes them; on a stack sheet each names its PR."""
+    return [{"id": "d-0123456789ab", "finding": "retry/no-notice", "title": "Customers are not told a retry happened",
+             "ground": "fail-direction is always craft", "reason": "It fails closed either way.", **({"pr": 5} if stack else {})},
+            {"id": "d-ba9876543210", "finding": "retry/no-final-email", "title": "No email after the third failure",
+             "ground": "wording is craft", "reason": "The words are the maker's to pick.", **({"pr": 6} if stack else {})}]
+
+
+# Bites on: the chat prose leaving out the decided-for-you list, its count, a ground or reason, a D-label the owner answers by, or the hint on how to take one back.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_lists_the_decided_for_you_entries_with_labels_and_the_chat_hint(tmp_path, kind):
+    # Axis: the heading carries the count, each entry is a D-numbered line with its title, ground and reason (a stack entry names its PR), the intro and the hint frame the list, and the list follows the cards and precedes the folded parts.
+    sheet = _sample(kind)
+    stack = kind == "stack"
+    sheet["prSheet"]["decidedForYou"] = _decided(stack)
+    out = _prose_of(tmp_path, sheet)
+    ground = lambda text: PR_WORDS["decidedGround"].replace("{ground}", text)
+    lines = ["**%s (2)**" % PR_WORDS["decidedForYouHeading"], "", PR_WORDS["decidedForYouIntro"], "",
+             "- D1 · %sCustomers are not told a retry happened — %s. It fails closed either way." % ("#5: " if stack else "", ground("fail-direction is always craft")),
+             "- D2 · %sNo email after the third failure — %s. The words are the maker's to pick." % ("#6: " if stack else "", ground("wording is craft")),
+             "", PR_WORDS["decidedInChat"], "", ""]
+    assert "\n".join(lines) in out
+    assert out.index("**%s" % PR_WORDS["acceptingHeading"]) < out.index("**%s (2)**" % PR_WORDS["decidedForYouHeading"]) < out.index("**%s**" % PR_WORDS["verdictHeading"])
+    assert out.index("**%s (2)**" % PR_WORDS["decidedForYouHeading"]) < out.index(PR_WORDS["craftHeading"])
+    assert PR_WORDS["decidedForYouHeading"] not in _prose_of(tmp_path, _sample(kind))
+
+
 def test_prose_leaves_out_each_empty_part(tmp_path):
     # Axis: an empty caught list, walk, craft list, decided list and history leave out their headings; a stack still lists its PRs.
     for kind in ("pr", "stack"):
@@ -1368,3 +1413,14 @@ def test_repeated_index_row_numbers_are_refused(tmp_path):
 ], ids=lambda value: value if isinstance(value, str) and len(value) < 12 else None)
 def test_a_stored_document_fits_when_its_schema_definition_says_so(name, document, fits):
     assert _load_prose_module().fits_definition(name, document) is fits
+
+
+# Bites on: the page's checkSheet and the prose renderer's check giving different words for the decided-for-you id rule (a repeated entry id, an entry id that is also a card's).
+def test_decided_entry_id_problems_read_the_same_on_the_page_and_in_prose():
+    from test_review_template import _run_check_sheet
+
+    module = _load_prose_module()
+    fixtures = _decided_fixtures()
+    page = _run_check_sheet([sheet for _, sheet, _, _ in fixtures])
+    for (name, sheet, _, expected), page_problems in zip(fixtures, page):
+        assert page_problems == module.check_sheet(sheet) == expected, name

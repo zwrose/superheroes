@@ -12,6 +12,27 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
+- **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
+
+### PR sheet: craft determinations and the Decided for you list
+
+- A PR or stack sheet input takes the optional key `craftDeterminations`. A key names a left-for-owner finding the way a `leftovers` key does, and a value is `{ground, reason}`, both non-empty strings. The shape is in the docstring of `lib/pr_sheet.py`.
+- A sheet takes the optional field `prSheet.decidedForYou`, one entry for each determination. An entry is no card, and the page lists it below the cards with one control, **Make this mine**. A sheet with no determinations is unchanged byte for byte.
+- `pr_sheet.py build` refuses a determination with no ground, a key that names no left-for-owner finding or more than one, and a finding that has both a `leftovers` entry and a determination.
+- A carried sheet keeps the earlier sheet's entries. `build` refuses a carry that adds a determination, changes one, or turns one back into a `leftovers` card. Make each of those changes on an unsigned republish.
+- **Make this mine** stores an ordinary answer at `answers/<entry id>`. Any document stored there other than a well-formed null answer counts as taken back. While an entry is taken back, Merge is locked and a held Merge is cleared, and `pr_state` reads the PR as `needs-you`. A saved take-back beats a saved Merge after "done".
+
+### Review seats: CLAUDE.md by absolute path
+
+- The panel, verifier, synthesis, gap-sweep, audit and scoped-finder orders name the project's `CLAUDE.md` through the new placeholder `CLAUDE_MD_PATH`: the absolute path into the live checkout when the project has a `CLAUDE.md` at its root, or `(this project has no CLAUDE.md at <repo root>)` when it has none. Before, they named it by the bare relative path `CLAUDE.md`, which the sanitized view strips, so external-engine seats rarely read it.
+- The sanitized view's notice no longer says only that stripped config's absence is not a finding: it adds that a `CLAUDE.md` or calibration file the instructions name by an absolute path sits outside the view and is readable there, and that such a path is never listed in the investigated array.
+- The fixer order is unchanged; it runs in the live checkout, where the relative path opens.
+
 ## 0.44.0
 
 ### Before you upgrade

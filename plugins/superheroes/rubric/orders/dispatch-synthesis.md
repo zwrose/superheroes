@@ -8,7 +8,7 @@ review. Your job is **not** keep/drop — you group issues that share the same r
 - Diff (read cited hunks here): {{DIFF_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
 - Severity rubric (the only tiers; calibration): {{RUBRIC_PATH}}
-- Project conventions: CLAUDE.md and the project profile.
+- Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
 
 ## Your task
 Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids}`
