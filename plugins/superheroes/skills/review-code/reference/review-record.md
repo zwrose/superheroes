@@ -32,6 +32,8 @@ reviewer ran. Those win over your account. A reviewer run counts as run by code 
 run record covers the final commit. A run only you report is marked "reported by the session", and so is
 every reviewer's findings coverage: the code holds no reviewer's findings, only the account and its raw files.
 
+The record's `ci` field holds `state`, `sha`, `source`, `workflow` and `read`: the state (`green`, `pending`, `red` or `none`), the commit it was read on, where it was read from, the declared CI workflow, and one line saying how the state was reached. `green` comes only from the project's declared CI workflow (configuration item 16, `ciWorkflow`, set through configure): its newest run per event on the final commit decides. With no workflow declared, green needs at least one GitHub Actions run on the final commit that succeeded and no run on that commit still unfinished; only runs of the final commit itself count. A project whose CI does not run on GitHub Actions never reads `green`, whether or not a workflow is named: its records read `none` once its checks finish clean, and `red` or `pending` while a check fails or runs, because green needs a GitHub Actions run. A declaration that cannot be read, or a declared workflow with no run on the commit, reads `none` and is named in what is left. Any failing check, status or workflow run reads `red`.
+
 ## Write the account
 
 Write a JSON file with `"schema": "review-account/1"` and these keys:

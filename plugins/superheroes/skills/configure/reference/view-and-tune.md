@@ -131,6 +131,20 @@ action that owns it, leaving the rest of the calibration untouched:
   keeps the cloud setup, so switching back on needs no new setup. To see what the setup record
   holds, run `python3 -B "$ROOT_DIR/lib/cloud_setup.py" read --cwd .`.
 
+- **Name the CI workflow (item 16)** → write only item 16, its workflow name (the `name:` at the top
+  of the workflow file, for example `CI`) as a one-line JSON string on stdin. A review record then
+  reads CI green only from that workflow's runs.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item ciWorkflow --cwd . <<'SUPERHEROES_ANSWER'
+  "CI"
+  SUPERHEROES_ANSWER
+  ```
+
+  Read the result the same way as the `stackingTool` write above: only `written` or `noop` means it
+  was saved.
+
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a
   new example of what counts as a material consequence in Canon as a standing ruling, by
