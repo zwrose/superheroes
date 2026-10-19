@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -259,46 +260,85 @@ _WRAPPERS = frozenset({"sudo", "doas", "env", "exec", "nohup", "time", "nice", "
 _CONTAINER_WRAPPERS = frozenset({"docker", "podman", "nerdctl", "kubectl", "oc"})
 
 
-def _is_call(code, match):
-    """Whether ``match`` in ``code`` is executed (command position or under a wrapper), not an argument."""
-    prefix = code[:match.start()]
-    # axis: a path-qualified tool (/usr/bin/psql) is judged by where its path word starts
-    path = re.search(r"[^\s\"'|&;(`]*/$", prefix)
-    if path:
-        prefix = prefix[:path.start()]
-    head = prefix.rstrip(" \t\"'")
-    last = head.split()[-1] if head.split() else ""
-    # axis: a tool at command position (line start, after a separator, after -- or -c) is a call
-    if not last or head[-1] in "|&;({`" or last in ("--", "-c"):
-        return True
-    segment = re.split(r"[|&;(`]", prefix)[-1].split()
-    while segment and _ASSIGNMENT_RE.match(segment[0]):
-        segment.pop(0)
-    # axis: a tool after only variable assignments (PGPASSWORD=x psql) is at command position
-    if not segment:
-        return True
-    # axis: a tool named as an argument of echo or printf is text, not a call
-    if segment and segment[0] in ("echo", "printf"):
-        return False
-    # axis: a tool that is the value of an option (-k psql, --filter=psql) is not a call
-    if last.startswith("-") or (re.split(r"\s", prefix)[-1].startswith("-")
-                                     and prefix.endswith("=")):
-        return False
-    command = segment[0].strip("\"'").rsplit("/", 1)[-1] if segment else ""
-    # axis: only a tool run by a wrapper (sudo, docker exec/run, kubectl exec) is a call; any other
-    # command's argument (brew install mongosh, rg psql, docker pull mongo) is not
-    if command in _WRAPPERS:
-        return True
-    return command in _CONTAINER_WRAPPERS and any(word in ("exec", "run") for word in segment[1:])
+_SHELLS = frozenset({"bash", "sh", "zsh"})
+_OPERATORS = frozenset({"|", "||", "&&", ";", "&", "(", ")", "|&", ";;"})
+_KEYCHAIN_VERBS = frozenset({"find-generic-password", "find-internet-password"})
+_SUBSTITUTION_RE = re.compile(r"\$\((.*?)\)|`([^`]*)`")
+
+
+def _tool_at(words, i):
+    """The owner tool ``words[i]`` names (``security`` with its verb), else None."""
+    name = words[i].rsplit("/", 1)[-1]
+    if name in DATABASE_TOOLS:
+        return name
+    if name == "security" and words[i + 1:i + 2] and words[i + 1] in _KEYCHAIN_VERBS:
+        return "security " + words[i + 1]
+    return None
+
+
+def _simple_command_tool(tokens):
+    """The owner tool one simple command (operator-free tokens) runs, else None."""
+    words = list(tokens)
+    # axis: only complete NAME=value tokens before the command word are assignments (PGPASSWORD=x psql)
+    while words and _ASSIGNMENT_RE.match(words[0]):
+        words.pop(0)
+    if not words:
+        return None
+    command = words[0].rsplit("/", 1)[-1]
+    # axis: a tool at command position is a call; echo/printf and any other command's arguments never are
+    tool = _tool_at(words, 0)
+    if tool:
+        return tool
+    container = command in _CONTAINER_WRAPPERS and any(word in ("exec", "run") for word in words[1:])
+    if command not in _WRAPPERS and command not in _SHELLS and not container:
+        return None
+    for i in range(1, len(words)):
+        # axis: the argument of -c is a command line; what follows a kubectl/oc exec -- is a command
+        if words[i - 1] == "-c":
+            inner = _calls_owner_tool(words[i])
+        elif words[i - 1] == "--" and command in ("kubectl", "oc"):
+            inner = _simple_command_tool(words[i:])
+        else:
+            inner = None
+        if inner:
+            return inner
+        # axis: a tool run by a wrapper is a call; the value of an option (sudo -E psql) is not
+        if command in _SHELLS or (words[i - 1].startswith("-") and words[i - 1] != "--"):
+            continue
+        tool = _tool_at(words, i)
+        if tool:
+            return tool
+    return None
 
 
 def _calls_owner_tool(line):
     """The database tool (or ``security find-...-password``) ``line`` calls, else None."""
     code = _code_part(line)
-    for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
-        for match in pattern.finditer(code):
-            if _is_call(code, match):
-                return " ".join(match.group(0).split())
+    # axis: substitutions are command lines even inside double quotes
+    for match in _SUBSTITUTION_RE.finditer(code):
+        inner = _calls_owner_tool(match.group(1) or match.group(2) or "")
+        if inner:
+            return inner
+    try:
+        lexer = shlex.shlex(code, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        # axis: a line that cannot be tokenized (unbalanced quote) never silently passes an owner tool
+        for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
+            found = pattern.search(code)
+            if found:
+                return " ".join(found.group(0).split())
+        return None
+    command = []
+    for token in tokens + [";"]:
+        if token in _OPERATORS:
+            tool = _simple_command_tool(command)
+            if tool:
+                return tool
+            command = []
+        else:
+            command.append(token)
     return None
 
 

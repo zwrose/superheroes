@@ -278,6 +278,9 @@ def test_main_body_file_clean_body_exits_0(tmp_path, capsys):
     "docker pull mongo",
     "rg psql README.md",
     "echo 'security find-generic-password'",
+    "rg -- psql README.md",
+    "printf '%s\\n' 'do not run; psql'",
+    "DB_CLIENT=psql",
 ])
 def test_tool_names_as_ordinary_arguments_pass(command):
     _passes(_body(_block(command)))
