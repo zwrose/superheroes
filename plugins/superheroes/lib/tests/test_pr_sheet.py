@@ -815,7 +815,7 @@ def test_a_leftover_with_no_entry_is_refused():
     records, advisor = bundle(BIG)
     advisor["leftovers"].pop("F6")
     assert problems_of(records, advisor) == ["left-for-owner finding 'Customers are not told a retry happened' on PR #214 "
-                                             "has no leftovers entry (key 'retry/no-notice'); give it why, context and options"]
+                                             "has no leftovers entry (key 'retry/no-notice'); give it why, context and options, or a craft determination"]
 
 
 def test_a_leftover_card_carries_the_spine_in_order():
@@ -1834,3 +1834,244 @@ def test_the_input_fixture_is_the_documented_shape():
     assert list(advisor["prs"][0]) == ["number", "link", "sheet", "store"]
     for key in ("index-input/1", "mergeOrder", "{number, link, sheet, store}"):
         assert key in pr_sheet.__doc__
+
+
+# --- craft determinations: a left-for-owner finding the advisor re-graded as craft at vet ---
+
+GROUND, WHY = "fail-direction is always craft", "The retry fails closed either way, so there is nothing for the owner to weigh."
+MINE = {"answer": "option", "optionId": WORDS["mineOption"]["id"], "note": "", "revision": REV_A}
+CLEARED = {"answer": None, "optionId": None, "note": ""}
+THIRD = "Nobody can see which orders were retried"
+
+
+def determination(ground=GROUND, reason=WHY):
+    return {"ground": ground, "reason": reason}
+
+
+def regrade(advisor, *keys, **more):
+    """Moves each leftovers entry named to the craft determinations."""
+    for key in keys:
+        advisor["leftovers"].pop(key)
+        advisor.setdefault("craftDeterminations", {})[key] = determination(**more)
+    return advisor
+
+
+def three_left():
+    """The big record with a third left-for-owner finding, F9, and its leftovers entry."""
+    records, advisor = bundle(BIG)
+    extra = copy.deepcopy(records[0]["findings"][6])
+    extra.update(id="F9", findingKey="retry/no-audit-trail", title=THIRD)
+    records[0]["findings"].append(extra)
+    advisor["leftovers"]["F9"] = copy.deepcopy(advisor["leftovers"]["F7"])
+    return records, advisor
+
+
+def test_a_regraded_finding_is_no_card_and_is_listed_as_decided_for_you():
+    # Bites on: a determined left-for-owner finding still becoming a card, being listed out of record order, or losing its ground or reason.
+    # Axis: the invariant, every left-for-owner finding is a card or a decidedForYou entry; three findings with two determined give one card and two entries.
+    records, advisor = three_left()
+    full = build(records, advisor)
+    assert len(leftover_cards(full)) == 3 and "decidedForYou" not in full["prSheet"]
+    regrade(advisor, "F6", "F7")
+    sheet = build(records, advisor)
+    assert [c["question"] for c in leftover_cards(sheet)] == [THIRD]
+    assert sheet["cards"] == [c for c in full["cards"] if c["question"] not in ("Customers are not told a retry happened", "A payment that fails three times ends with no email")]
+    decided = sheet["prSheet"]["decidedForYou"]
+    assert [(e["finding"], e["title"], e["ground"], e["reason"]) for e in decided] == [
+        ("retry/no-notice", "Customers are not told a retry happened", GROUND, WHY),
+        ("retry/no-final-email", "A payment that fails three times ends with no email", GROUND, WHY)]
+    assert all(set(e) == {"id", "finding", "title", "ground", "reason"} and re.fullmatch(r"d-[0-9a-f]{12}", e["id"]) for e in decided)
+    assert {**sheet, "cards": None, "prSheet": {k: v for k, v in sheet["prSheet"].items() if k != "decidedForYou"}} == {**full, "cards": None}
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_a_sheet_with_no_determination_has_no_decided_for_you():
+    # Axis: the field is emitted only when non-empty, so every existing sheet stays as it was.
+    assert all("decidedForYou" not in built(case)["prSheet"] for case in (BIG, SMALL, STACK, CLOSES, WALK, TWIN))
+
+
+def _ambiguous(records, advisor):
+    left = [f for f in records[0]["findings"] if f["outcome"] == "left-for-owner"]
+    left[1]["id"] = left[0]["id"]
+    entry = {"why": "w", "context": "c", "options": "none"}
+    advisor["leftovers"] = {left[0]["findingKey"]: entry, left[1]["findingKey"]: entry}
+    advisor["craftDeterminations"] = {left[0]["id"]: determination()}
+
+
+GROUND_LINE = "craftDeterminations F6: ground must be a non-empty string; a re-grade names the owner-vs-craft line's ground"
+DETERMINATION_REFUSALS = [
+    pytest.param(lambda r, a: a["craftDeterminations"]["F6"].update(ground=""), GROUND_LINE, id="E1-empty-ground"),
+    pytest.param(lambda r, a: a["craftDeterminations"]["F6"].pop("ground"), GROUND_LINE, id="E2-missing-ground"),
+    pytest.param(lambda r, a: a["craftDeterminations"]["F6"].update(ground=5), GROUND_LINE, id="E3-non-string-ground"),
+    pytest.param(lambda r, a: a["craftDeterminations"]["F6"].update(reason=" "), "craftDeterminations F6: reason must be a non-empty string", id="E4-empty-reason"),
+    pytest.param(lambda r, a: a["craftDeterminations"]["F6"].update(extra=1), "craftDeterminations F6 has an unknown key extra", id="E5-unknown-value-key"),
+    pytest.param(lambda r, a: a["craftDeterminations"].update(F99=determination()), "craftDeterminations key 'F99' names no left-for-owner finding", id="E6-names-no-finding"),
+    pytest.param(_ambiguous, "craftDeterminations key 'F6' names 2 left-for-owner findings; use a finding's findingKey", id="E7-ambiguous-key"),
+    pytest.param(lambda r, a: a["craftDeterminations"].update(F7=determination()),
+                 "left-for-owner finding 'A payment that fails three times ends with no email' on PR #214 has both a leftovers entry and a craft determination; give one",
+                 id="E8-both-entries"),
+    pytest.param(lambda r, a: a["craftDeterminations"].pop("F6"),
+                 "left-for-owner finding 'Customers are not told a retry happened' on PR #214 has no leftovers entry (key 'retry/no-notice'); "
+                 "give it why, context and options, or a craft determination", id="E9-neither-entry"),
+    pytest.param(lambda r, a: a.__setitem__("craftDeterminations", []), "craftDeterminations must be an object", id="E10-not-an-object"),
+]
+
+
+@pytest.mark.parametrize("mutate, expected", DETERMINATION_REFUSALS)
+def test_a_regrade_that_is_not_given_whole_is_refused(mutate, expected):
+    # Bites on: a re-grade with no ground, no reason, a stray key, a key naming no finding or several, both a card and a determination, neither, or the wrong shape being built into a sheet.
+    # Axis: no silent re-grade, each fail-closed edge of the input is a named refusal line.
+    records, advisor = bundle(BIG)
+    regrade(advisor, "F6")
+    mutate(records, advisor)
+    assert expected in problems_of(records, advisor)
+
+
+def test_a_refusal_lists_every_determination_problem_together():
+    # Axis: the determination problems are collected with the others, never raised one at a time.
+    records, advisor = bundle(BIG)
+    regrade(advisor, "F6")
+    advisor["craftDeterminations"]["F6"]["ground"] = ""
+    advisor["craftDeterminations"]["F99"] = determination()
+    advisor["summary"] = ""
+    problems = problems_of(records, advisor)
+    assert {GROUND_LINE, "craftDeterminations key 'F99' names no left-for-owner finding", "summary must be a non-empty string"} <= set(problems)
+
+
+def test_a_determination_id_depends_on_the_pr_and_the_finding_only():
+    # Bites on: the entry id hashing the ground, the reason or the title, so a republish that rewords loses a saved reclaim; or two findings sharing an id.
+    records, advisor = three_left()
+    regrade(advisor, "F6", "F7")
+    first = [e["id"] for e in build(records, advisor)["prSheet"]["decidedForYou"]]
+    advisor["craftDeterminations"]["F6"] = determination("a different ground", "a reworded reason")
+    records[0]["findings"][5]["title"] = "Customers are never told"
+    assert [e["id"] for e in build(records, advisor)["prSheet"]["decidedForYou"]] == first
+    assert len(set(first)) == 2
+    assert first[0] == pr_sheet.card_id("d-", 214, "retry/no-notice", "decided-for-you")
+
+
+def test_twin_stack_findings_decided_get_different_ids_and_carry_their_pr():
+    # Axis: on a stack the finding key is "<pr>:<key>", each entry names its PR, and the same finding on two PRs gives two ids.
+    records, advisor = bundle(TWIN)
+    advisor["craftDeterminations"] = {key: determination() for key in advisor["leftovers"]}
+    advisor["leftovers"] = {}
+    sheet = build(records, advisor)
+    decided = sheet["prSheet"]["decidedForYou"]
+    assert sheet["cards"] == []
+    assert [(e["pr"], e["finding"]) for e in decided] == [(241, "241:cards/kept-after-close"), (242, "242:cards/kept-after-close")]
+    assert decided[0]["id"] != decided[1]["id"]
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def decided_world(*keys):
+    """Records, input and the sheet built with `keys` re-graded, as the earlier sheet of a carry."""
+    records, advisor = three_left()
+    regrade(advisor, *keys)
+    return records, advisor, build(records, advisor)
+
+
+def carry_decided(records, advisor, earlier):
+    carry_input(advisor, {"214": "2" * 40})
+    return records, advisor, sheet_bytes(earlier)
+
+
+def test_a_carried_sheet_inherits_the_earlier_determinations_with_no_input_entry():
+    # Bites on: a carry that drops the earlier sheet's decided entries (turning them into missing cards), or rewrites them.
+    # Axis: the carried sheet's decidedForYou equals the earlier one's when the input omits craftDeterminations.
+    records, advisor, earlier = decided_world("F6", "F7")
+    advisor.pop("craftDeterminations")
+    carried = build(*carry_decided(records, advisor, earlier))
+    assert carried["prSheet"]["decidedForYou"] == earlier["prSheet"]["decidedForYou"] and len(carried["prSheet"]["decidedForYou"]) == 2
+    assert carried["cards"] == earlier["cards"]
+    assert list(Draft202012Validator(SCHEMA).iter_errors(carried)) == [] and check_sheet_problems(carried) == []
+
+
+def test_a_carry_that_restates_the_determinations_unchanged_builds():
+    # Axis: an input determination equal to the earlier entry is accepted.
+    records, advisor, earlier = decided_world("F6", "F7")
+    carried = build(*carry_decided(records, advisor, earlier))
+    assert carried["prSheet"]["decidedForYou"] == earlier["prSheet"]["decidedForYou"]
+
+
+def test_a_carry_drops_an_earlier_entry_whose_finding_is_no_longer_left_for_owner():
+    # Axis: an earlier entry whose finding the record no longer leaves for the owner is dropped with no problem.
+    records, advisor, earlier = decided_world("F6", "F7")
+    advisor.pop("craftDeterminations")
+    records[0]["findings"][5].update(outcome="craft", reason="settled")
+    carried = build(*carry_decided(records, advisor, earlier))
+    assert [e["finding"] for e in carried["prSheet"]["decidedForYou"]] == ["retry/no-final-email"]
+
+
+CARRY_DECIDED_REFUSALS = [
+    pytest.param(lambda a: a["craftDeterminations"].update(F6=determination(reason="reworded")),
+                 "craftDeterminations F6: a carried sheet keeps the earlier sheet's determination unchanged; change it on an unsigned republish", id="E11-changed"),
+    pytest.param(lambda a: (a["leftovers"].pop("F9"), a["craftDeterminations"].update(F9=determination())),
+                 "craftDeterminations F9: a carried sheet cannot add a determination; add it on an unsigned republish", id="E12-added"),
+    pytest.param(lambda a: a["leftovers"].update(F6=copy.deepcopy(a["leftovers"]["F9"])),
+                 "leftovers F6: a carried sheet cannot turn a decided-for-you entry back into a card; do that on an unsigned republish", id="E13-leftovers-over-decided"),
+]
+
+
+@pytest.mark.parametrize("edit, expected", CARRY_DECIDED_REFUSALS)
+def test_a_carry_cannot_change_what_was_decided(edit, expected):
+    # Bites on: a carried sheet that changes, adds or reverses a determination, which would carry a Merge over a call the owner never saw.
+    # Axis: each is a named refusal that points to an unsigned republish.
+    records, advisor, earlier = decided_world("F6", "F7")
+    advisor["craftDeterminations"] = {"F6": determination(), "F7": determination()}
+    edit(advisor)
+    assert expected in problems_of(*carry_decided(records, advisor, earlier))
+
+
+def reclaim_input():
+    """The big case without its items and walk, so the leftovers are its only cards."""
+    records, advisor = bundle(BIG)
+    del advisor["items"], advisor["walk"]
+    return records, advisor
+
+
+def reclaim_world():
+    """A pr sheet with one card (F7, kept) and F6 decided for the owner; returns the sheet bytes, the decided id and a store maker."""
+    records, advisor = reclaim_input()
+    regrade(advisor, "F6")
+    sheet = build(records, advisor)
+    raw = sheet_bytes(sheet)
+    digest, card, entry = hashlib.sha256(raw).hexdigest(), sheet["cards"][0]["id"], sheet["prSheet"]["decidedForYou"][0]["id"]
+
+    def store(*, mine=None, picked=None, merge=True):
+        answers = {card: card_doc("option", picked or "keep-it")}
+        if mine is not None:
+            answers[entry] = mine
+        verdict = {digest: merge_doc([f"answers/{card}@{REV_A}"], digest)} if merge else {}
+        return {"answers": answers, "walk": {}, "verdict": verdict}
+    return raw, entry, store
+
+
+def test_taking_a_decided_finding_back_keeps_the_pr_out_of_ready_and_the_card_comes_back_on_rebuild():
+    # Bites on: pr_state ignoring a stored mine answer so a Merge stands over a finding the owner took back; a rebuild that keeps the entry or loses the card.
+    # Axis: the reversal sequence, decided -> owner takes it back -> advisor moves it to leftovers -> it is a card and no longer decided.
+    raw, entry, store = reclaim_world()
+    assert pr_sheet.pr_state(raw, store(), WORDS)["state"] == "ready"
+    taken = pr_sheet.pr_state(raw, store(mine=MINE), WORDS)
+    assert (taken["state"], taken["accepted"], taken["total"]) == ("needs-you", 1, 1)
+    records, advisor = reclaim_input()
+    again = build(records, advisor)
+    assert len(again["cards"]) == 2 and "decidedForYou" not in again["prSheet"]
+
+
+@pytest.mark.parametrize("mine, picked, merge, expected", [
+    pytest.param(None, None, True, "ready", id="E15-no-document"),
+    pytest.param(CLEARED, None, True, "ready", id="E16-cleared-null-document"),
+    pytest.param(MINE, None, True, "needs-you", id="E17-mine-document"),
+    pytest.param({"answer": "option", "optionId": WORDS["mineOption"]["id"]}, None, True, "needs-you", id="E18-malformed-no-note"),
+    pytest.param("make-this-mine", None, True, "needs-you", id="E18-malformed-bare-string"),
+    pytest.param(None, None, False, "needs-you", id="no-merge-no-reclaim"),
+    pytest.param(MINE, None, False, "needs-you", id="E19-reclaim-and-no-merge"),
+    pytest.param(MINE, "fix-before-merge", True, "being-fixed", id="E20-reclaim-beside-a-send-back"),
+])
+def test_pr_state_reads_a_decided_entrys_stored_document(mine, picked, merge, expected):
+    # Bites on: a stored reclaim, malformed ones included, leaving the PR ready; a cleared one blocking it; a reclaim hiding a send-back.
+    # Axis: absent and well-formed null are not a reclaim; any other present value is; a send-back still wins over needs-you.
+    raw, entry, store = reclaim_world()
+    state = pr_sheet.pr_state(raw, store(mine=mine, picked=picked, merge=merge), WORDS)
+    assert state["state"] == expected
+    assert list(state) == ["state", "accepted", "total", "walked", "walkTotal"] and state["total"] == 1

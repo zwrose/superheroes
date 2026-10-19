@@ -14,7 +14,8 @@ writing fails it removes the pictures that run created. --record is for `build` 
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
-craft in "craft", ruling in "alreadyDecided", shown-wrong in "history", left-for-owner as a card. The words
+craft in "craft", ruling in "alreadyDecided", shown-wrong in "history", left-for-owner as a card (one with a craft
+determination lands in "decidedForYou" instead, and is no card). The words
 come from the "pr" block of theme/sheet-words.json.
 
 The advisor's input is one JSON object; any key not listed is refused.
@@ -32,7 +33,8 @@ The advisor's input is one JSON object; any key not listed is refused.
                  sheet's digest (and the digests it carried) in prSheet.carriedForward. previousCommit, when also given,
                  must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned.
   prs            Required on a stack, refused on a pr: at least 2 {number, title}, bottom PR first.
-  leftovers      An object with an entry for every left-for-owner finding (one with none is refused). A key names a
+  leftovers      An object with an entry for every left-for-owner finding that has no craft determination (one with neither is
+                 refused, and one with both). A key names a
                  finding by its findingKey, or by its id when no other left-for-owner finding shares it ("<pr number>:<key>"
                  on a stack). A value is {why, context, options, ifLeft?, recommendation?}: why (why the call is the owner's)
                  and context (what happened) are non-empty strings, and ifLeft, when given, is a non-empty string shown
@@ -41,6 +43,13 @@ The advisor's input is one JSON object; any key not listed is refused.
                  an object giving each of keep-it, fix-in-a-follow-up and fix-before-merge, and no other key, a non-empty
                  string: this finding's consequence for that option (the words' three options carry them). The bare string
                  "leftover" is refused.
+  craftDeterminations
+                 Optional. An object that re-grades left-for-owner findings as craft: a key names a finding as a leftovers key
+                 does, and a value is {ground, reason}, both non-empty strings (the owner-vs-craft line's ground, and one line
+                 of why). Each lands in prSheet.decidedForYou with an id from its PR and finding alone, and is no card. A key
+                 naming no finding or an ambiguous one is refused. A carried sheet keeps the earlier sheet's decidedForYou
+                 entries as they stand (an entry whose finding the input does not name is inherited), and refuses a changed or
+                 added determination, or a leftovers entry over an earlier one.
   items          Optional list. Each is {id, kind, title, ifLeft, options, recommendation?} with options
                  "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items.
   closesSpec     Optional. Null, or {"spec": ..., "receipt": ...}.
@@ -294,7 +303,7 @@ def _check_list(name, entries, required, optional, problems):
 
 def _check_input(adv, words, problems):
     """Collects the input's problems; returns the PR numbers the sheet covers, or None when unknown."""
-    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "items", "closesSpec", "walk")
+    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "closesSpec", "walk")
     _keys("the advisor's input", adv, ("schema", "kind", "number", "title", "summary"), optional, problems)
     kind, number, prs = adv.get("kind"), adv.get("number"), adv.get("prs")
     if adv.get("schema") != "pr-sheet-input/1":
@@ -325,6 +334,16 @@ def _check_input(adv, words, problems):
             problems.extend(f"leftovers {k}: {t} must be a non-empty string" for t in ("why", "context", "ifLeft")
                             if t in call and not _text(call[t]))
             _check_call(f"leftovers {k}", call, words, problems, True)
+    determined = adv.get("craftDeterminations", {})
+    if not isinstance(determined, dict):
+        problems.append("craftDeterminations must be an object")
+    for k, call in (determined.items() if isinstance(determined, dict) else ()):
+        _keys(f"craftDeterminations {k}", call, ("ground", "reason"), (), problems)
+        if isinstance(call, dict):
+            if not _text(call.get("ground")):
+                problems.append(f"craftDeterminations {k}: ground must be a non-empty string; a re-grade names the owner-vs-craft line's ground")
+            if "reason" in call and not _text(call["reason"]):
+                problems.append(f"craftDeterminations {k}: reason must be a non-empty string")
     for it in _check_list("items", adv.get("items", []), ("id", "kind", "title", "ifLeft", "options"),
                           ("recommendation",), problems):
         _check_call(f"items {it['id']}", it, words, problems, False)
@@ -486,30 +505,57 @@ def build(records, advisor, words, place=None, previous=None):
             problems.extend(f"PR #{n} has more than one record" for n in sorted({n for n in have if have.count(n) > 1}))
             if set(have) != set(allowed):
                 problems.append(f"the records are for PRs {sorted(set(have))}, but the stack lists PRs {sorted(allowed)}")
-    leftovers = advisor.get("leftovers", {})
-    named = {}
+    leftovers, determined = advisor.get("leftovers", {}), advisor.get("craftDeterminations", {})
+    leftovers, determined = (x if isinstance(x, dict) else {} for x in (leftovers, determined))
+    # The earlier sheet's decided-for-you entries by finding: a carried sheet keeps them as they stand.
+    before = {e["finding"]: e for e in earlier["prSheet"].get("decidedForYou", [])} if earlier is not None else {}
+    named, decisions = {}, {}
     for r in recs:
-        for f in r["findings"]:
+        for n, f in enumerate(r["findings"]):
             if isinstance(f, dict) and f.get("outcome") == _LEFT:
                 keys = _lookups(kind, r["pr"], f)
                 for k in keys:
                     named[k] = named.get(k, 0) + 1
-                if keys and isinstance(leftovers, dict) and not any(k in leftovers for k in keys):
+                if not keys:
+                    continue
+                call_at, det_at = next((k for k in keys if k in leftovers), None), next((k for k in keys if k in determined), None)
+                prior = before.get(keys[0])
+                det = determined[det_at] if det_at is not None else prior if prior is not None and call_at is None else None
+                if earlier is not None and det_at is not None:
+                    if prior is None:
+                        problems.append(f"craftDeterminations {det_at}: a carried sheet cannot add a determination; add it on an unsigned republish")
+                    elif not (isinstance(det, dict) and (det.get("ground"), det.get("reason")) == (prior["ground"], prior["reason"])):
+                        problems.append(f"craftDeterminations {det_at}: a carried sheet keeps the earlier sheet's determination unchanged; change it on an unsigned republish")
+                if prior is not None and call_at is not None:
+                    problems.append(f"leftovers {call_at}: a carried sheet cannot turn a decided-for-you entry back into a card; do that on an unsigned republish")
+                if det is not None:
+                    decisions[(r["pr"], n)] = det
+                if det is not None and call_at is not None:
+                    problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} has both a leftovers entry and a craft determination; give one")
+                elif det is None and call_at is None:
                     problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} has no leftovers entry (key {keys[0]!r}); "
-                                    "give it why, context and options")
-    if isinstance(leftovers, dict):
-        problems.extend(f"leftovers key {k!r} names no left-for-owner finding" for k in leftovers if k not in named)
-        problems.extend(f"leftovers key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
-                        for k in leftovers if named.get(k, 0) > 1)
+                                    "give it why, context and options, or a craft determination")
+    for name, given in (("leftovers", leftovers), ("craftDeterminations", determined)):
+        problems.extend(f"{name} key {k!r} names no left-for-owner finding" for k in given if k not in named)
+        problems.extend(f"{name} key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
+                        for k in given if named.get(k, 0) > 1)
     if problems:
         raise Refusal(problems)
     stack = kind == "stack"
     by_pr = {r["pr"]: r for r in recs}
     recs = [by_pr[n] for n in allowed] if stack else recs
     top, tag = recs[-1], (lambda r: f"#{r['pr']}: " if stack else "")
-    cards = []
+    cards, decided_for_you = [], []
     for r in recs:
-        for f in (f for f in r["findings"] if f["outcome"] == _LEFT):
+        for n, f in enumerate(r["findings"]):
+            if f["outcome"] != _LEFT:
+                continue
+            if (r["pr"], n) in decisions:
+                det = decisions[(r["pr"], n)]
+                decided_for_you.append({"id": card_id("d-", r["pr"], f.get("findingKey") or f["id"], "decided-for-you"),
+                                        "finding": _lookups(kind, r["pr"], f)[0], "title": _title(f),
+                                        "ground": det["ground"], "reason": det["reason"], **({"pr": r["pr"]} if stack else {})})
+                continue
             call = _leftover_call(kind, r["pr"], f, leftovers)
             options = _options(call["options"], words, True)
             cards.append(_card("f-", r["pr"], f.get("findingKey") or f["id"],
@@ -527,7 +573,7 @@ def build(records, advisor, words, place=None, previous=None):
                    _section(words["closureReceipt"], "quote", spec["receipt"])]
         cards.append(_card("c-", number, spec["spec"], words["closureKind"],
                            _fill(words["closureQuestion"], spec=spec["spec"]), context, [], None))
-    if len({c["id"] for c in cards}) != len(cards):
+    if len({c["id"] for c in [*cards, *decided_for_you]}) != len(cards) + len(decided_for_you):
         raise Refusal(["two cards would share an id: the same finding or item appears twice"])
     reviewers, caught, craft, decided, history = [], [], [], [], []
     for r in recs:
@@ -584,7 +630,7 @@ def build(records, advisor, words, place=None, previous=None):
             "rounds": sum(r["rounds"]["count"] for r in recs), "stoppedAtCap": any(r["rounds"]["stoppedAtCap"] for r in recs),
             "ci": {"state": top["ci"]["state"], "commit": top["ci"].get("sha")},
             "lane": top["lane"].get("value"), "laneReason": top["lane"].get("reason")},
-        "craft": craft, "alreadyDecided": decided, "history": history}
+        "craft": craft, "alreadyDecided": decided, **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
     if "walk" in advisor:
         sheet["walk"] = _walk(advisor["walk"], place)
     if advisor.get("previousCommit"):
@@ -656,9 +702,11 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
     """Where one PR's published sheet stands, from the sheet's exact bytes and its store dump.
 
     Returns {"state", "accepted", "total", "walked", "walkTotal"}. The state is being-fixed when a counted answer
-    sends the PR back, else ready when a Merge verdict stands, else needs-you. A Merge stands only on this exact
-    sheet, with every item accepted, no walk Problem left without a follow-up fix, and a covers that names exactly
-    the answers the store holds now. words is the "pr" block of sheet-words.json and answer_words its "prAnswers" block,
+    sends the PR back, else needs-you when the owner took back a decided-for-you entry, else ready when a Merge verdict
+    stands, else needs-you. An entry is taken back (reclaimed) when the store holds a document at answers/<its id> that is
+    not a well-formed answer of null; a malformed document counts as taking it back. Decided entries are no cards: they
+    never count in accepted or total and never enter covers. A Merge stands only on this exact sheet, with every item
+    accepted, no walk Problem left without a follow-up fix, and a covers that names exactly the answers the store holds now. words is the "pr" block of sheet-words.json and answer_words its "prAnswers" block,
     each read from the file when not given.
     """
     words = words or _pr_words()
@@ -688,6 +736,9 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
             fix = fixes.get(doc["fix"])
             blocking = blocking or fix is None or fix.get("sendsBack") is not False
             sends_back = sends_back or (fix is not None and fix.get("sendsBack") is True)
+    # A stored document under a decided entry's id that is not a well-formed null answer is the owner taking the finding back; malformed fails closed.
+    reclaimed = any(entry["id"] in answers and not (sheet_prose.fits_definition("answer", answers[entry["id"]]) and answers[entry["id"]]["answer"] is None)
+                    for entry in sheet["prSheet"].get("decidedForYou", []))
     revisions = [counted[card["id"]] and counted[card["id"]].get("revision") for card in cards]
     covered = None if not all(revisions) else {f"answers/{card['id']}@{rev}" for card, rev in zip(cards, revisions)}
     # The verdict is the document of the first revision in the chain (this sheet, then each sheet it carried a verdict forward from) that has one;
@@ -699,7 +750,7 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
     stands = (held is not None and sheet_prose.fits_definition("verdict", verdict) and verdict["sheet"] == held and verdict["verdict"] == "merge"
               and accepted == len(cards) and not blocking
               and covered is not None and set(verdict["covers"]) == covered)
-    state = "being-fixed" if sends_back else "ready" if stands else "needs-you"
+    state = "being-fixed" if sends_back else "needs-you" if reclaimed else "ready" if stands else "needs-you"
     return {"state": state, "accepted": accepted, "total": len(cards), "walked": walked, "walkTotal": len(stops)}
 
 

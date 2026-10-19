@@ -296,12 +296,22 @@ def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
 
 
 # axis: unknown surface — verify then full panel in the new round
-def test_t4_unknown_surface_verify_then_panel(tmp_path):
+def test_t4_unknown_surface_verify_then_panel(tmp_path, monkeypatch):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
     _commit_in_repo(repo, "t4-head")
     d = str(tmp_path)
     seed_session_meta(d, repo)
     bad_head = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
+    real_derive = RD._derive_panel_diff_at_head
+
+    def derive(config, head_sha):
+        # git's answer at the fixer fold is the malformed text too, so the supplied cross-check matches
+        # and the delta split meets the malformed diff (unknown surface); every other caller stays real
+        if sys._getframe(1).f_code.co_name == "_fold_fixer":
+            return bad_head, None
+        return real_derive(config, head_sha)
+
+    monkeypatch.setattr(RD, "_derive_panel_diff_at_head", derive)
     cfg = _cfg(verifyCommand="pytest -q", repoRoot=repo, baseRef=init_head)
 
     def respond(phase, payload, rnd):

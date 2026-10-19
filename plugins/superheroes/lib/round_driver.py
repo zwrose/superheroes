@@ -268,7 +268,7 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
 # version; while it is unfinished, `_upgrade_gate` refuses every command on it.
-SESSION_GENERATION = 5
+SESSION_GENERATION = 6
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
@@ -1351,6 +1351,8 @@ VERIFY_THEN_PANEL = "full-panel"
 VERIFY_THEN_POST_AUDITS = "post-audits"
 DELTA_BASELINE_ABSENT = "delta-baseline-absent"
 PANEL_DIFF_UNDERIVABLE_CAUSE = "panel-diff-underivable"
+HEAD_DIFF_MISMATCH_CAUSE = "head-diff-mismatch"
+HEAD_DIFF_UNVERIFIABLE_CAUSE = "head-diff-unverifiable"
 
 
 def _round_ceiling(config):
@@ -5040,38 +5042,78 @@ def _accumulated_findings(state):
     return out
 
 
-def _resolve_head_diff(artifact):
-    """Resolve the post-fix head diff the delta split reads. The `dispatch-fixer` artifact may carry
-    it INLINE (`headDiff`) or, since a real `git diff BASE...HEAD` can be hundreds of KB and cannot
-    reasonably inline into a JSON submit artifact, as an ABSOLUTE file path (`headDiffPath`) the
-    driver reads itself (#507). Inline WINS when present. A missing / non-absolute / unreadable path,
-    or empty file content, is NOT an empty diff — it is an UNKNOWN surface, so the caller escalates
-    to a full panel (the fail-closed unknown→run-everything rule) rather than silently computing an
-    empty scoped surface. Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
+def _read_supplied_head_diff(artifact):
+    """Read the post-fix diff a `dispatch-fixer` artifact supplies, keeping presence apart from
+    content. Returns (present, text, source, readable). A key holding None is absent. Inline
+    `headDiff` (the empty string included) wins over `headDiffPath`; the path must be absolute and
+    readable text, and an empty file is present with text "". A present value the driver cannot read
+    (a non-absolute or unreadable path, a non-text inline value) is present but not readable."""
     inline = artifact.get("headDiff")
     if inline is not None:
-        return inline, "inline"
+        return True, inline, "inline", isinstance(inline, str)
     path = artifact.get("headDiffPath")
+    if path is None:
+        return False, None, None, True
     if isinstance(path, str) and path and os.path.isabs(path):
         try:
             with open(path, encoding="utf-8") as fh:
-                content = fh.read()
-        except OSError:
-            content = None
-        if content:
-            return content, "path"
+                return True, fh.read(), "path", True
+        except (OSError, UnicodeDecodeError):
+            pass
+    return True, None, "path", False
+
+
+def _resolve_head_diff(artifact):
+    """The supplied post-fix head diff as a run with no repository takes it: inline `headDiff` wins;
+    else an absolute readable non-empty `headDiffPath`; anything else is an UNKNOWN surface, never an
+    empty diff, so the caller escalates to a full panel (the fail-closed unknown→run-everything
+    rule). Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
+    present, text, source, readable = _read_supplied_head_diff(artifact)
+    if present and source == "inline":
+        return text, "inline"
+    if present and readable and text:
+        return text, "path"
     return None, "unknown"
+
+
+def _diff_header_paths(diff_text):
+    """The file paths named by the `diff --git a/X b/Y` headers of a diff (the b side)."""
+    return {m.group(1) for m in re.finditer(r"^diff --git a/.+? b/(.+)$", diff_text or "", re.M)}
+
+
+def _head_diff_mismatch_detail(supplied_source, supplied, git_text):
+    """The `head-diff-mismatch` park detail: the supplied source, sha256 and byte length of each
+    side, and up to ten files whose `diff --git` header appears on one side only."""
+    in_git = _diff_header_paths(git_text)
+    in_supplied = _diff_header_paths(supplied)
+    return (
+        "%s: the supplied %s head diff differs from git diff of the fix-fold head "
+        "(supplied sha256 %s, %d bytes; git sha256 %s, %d bytes); only-in-git=%s only-in-supplied=%s"
+        % (HEAD_DIFF_MISMATCH_CAUSE, supplied_source,
+           _sha256(supplied), len(supplied.encode("utf-8")),
+           _sha256(git_text), len(git_text.encode("utf-8")),
+           sorted(in_git - in_supplied)[:10], sorted(in_supplied - in_git)[:10]))
+
+
+def _norm_newlines(text):
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _nonempty_str(value):
+    return isinstance(value, str) and bool(value)
 
 
 def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None,
                 panel_diff_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
-    the driver sequences + records. The post-fix head diff rides the artifact (git, per the
-    dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
-    (`headDiff`) or as an absolute `headDiffPath` the driver reads (`_resolve_head_diff`); an
-    unresolvable path fails to an unknown surface (full panel), never a silent empty scoped skip. The
-    changed policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from the
-    reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the fixer's
+    the driver sequences + records. In a run with a repository the post-fix head diff is DERIVED
+    from git (`git diff <baseRef>...<fix-fold head>`) and is never text the artifact supplied: a
+    supplied `headDiff` / absolute `headDiffPath` is a cross-check only, so a difference parks
+    `head-diff-mismatch` and a derivation git cannot make beside a supplied diff parks
+    `head-diff-unverifiable`. A derivation that fails with nothing supplied is an unknown surface
+    (full panel). A run with no repository takes the supplied diff as `_resolve_head_diff` reads it.
+    The changed policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from
+    the reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the fixer's
     self-report. The derivation is an injectable seam symmetrical with reviewer/fixer/verify:
     run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
     wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
@@ -5081,11 +5123,48 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state["fixBatch"] = list(slice_)
     else:
         state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
-    head, head_source = _resolve_head_diff(artifact)
+    fold_head, fold_head_err = None, None
+    if session_dir:
+        fold_head, fold_head_err = _resolve_fix_fold_head_sha(session_dir, state)
+    else:
+        cfg_head = config.get(FIX_FOLD_HEAD_KEY)
+        fold_head = cfg_head if _nonempty_str(cfg_head) else None
+    present, supplied, supplied_source, readable = _read_supplied_head_diff(artifact)
+    has_repo = panel_diff_seam is not None or (
+        _nonempty_str(config.get("repoRoot")) and _nonempty_str(config.get("baseRef")))
+    park_detail = None
+    if not has_repo:
+        head, head_source = _resolve_head_diff(artifact)
+        head_check = "no-repository"
+    else:
+        if fold_head or panel_diff_seam is not None:
+            derive_head = panel_diff_seam or _derive_panel_diff_at_head
+            git_text, refuse = derive_head(config, fold_head)
+            if refuse is None and not isinstance(git_text, str):
+                git_text, refuse = None, "derived diff is not text"
+        else:
+            git_text, refuse = None, fold_head_err or "head unresolved"
+        if refuse is None:
+            head, head_source = git_text, "git"
+            if not present:
+                head_check = "none-supplied"
+            elif not readable:
+                head_check = "supplied-unreadable"
+            elif _norm_newlines(supplied) == _norm_newlines(git_text):
+                head_check = "match"
+            else:
+                head, head_check = None, "mismatch"
+                park_detail = _head_diff_mismatch_detail(supplied_source, supplied, git_text)
+        else:
+            head, head_source, head_check = None, "unknown", "unverifiable"
+            if present:
+                park_detail = "%s: git cannot verify the supplied %s head diff: %s" % (
+                    HEAD_DIFF_UNVERIFIABLE_CAUSE, supplied_source, refuse)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
-    state["_headDiffUnknown"] = head_source == "unknown"
+    state["_headDiffUnknown"] = head_source == "unknown" and park_detail is None
     _record_round(state, "headDiffSource", head_source)
+    _record_round(state, "headDiffCheck", head_check)
     derive = changed_subjects_seam or derive_changed_subjects
     state["_changedSubjects"] = derive(
         state.get("reviewedDiff"), state.get("headDiff"), _accumulated_findings(state))
@@ -5130,11 +5209,15 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     _record_round(state, "fixReportedKeys", reported_keys)
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
-        head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
-        if head_err:
-            _record_round(state, "fixFoldHeadRefused", head_err)
+        if fold_head_err:
+            _record_round(state, "fixFoldHeadRefused", fold_head_err)
         else:
-            _record_round(state, "fixFoldHead", head)
+            _record_round(state, "fixFoldHead", fold_head)
+    if park_detail is not None:
+        state.pop("_fixQueue", None)
+        state.pop("_fixBatchIndex", None)
+        _park_cannot_certify(state, park_detail)
+        return
     queue = state.get("_fixQueue") or []
     if queue:
         cap = _fix_batch_cap(config)
@@ -6939,6 +7022,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "auditProvenance": rec.get("auditProvenance"),
               "scopedFinder": rec.get("scopedFinder"),
               "headDiffSource": rec.get("headDiffSource"),
+              "headDiffCheck": rec.get("headDiffCheck"),
               "rulings": rec.get("rulings"),
               "unverified": rec.get("unverified"),
               "authorJustifiedDrops": rec.get("authorJustifiedDrops"),

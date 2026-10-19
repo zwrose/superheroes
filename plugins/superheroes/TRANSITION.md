@@ -16,7 +16,24 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
+- **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
+
+### Review: the post-fix diff comes from git
+
+- The driver derives the post-fix diff itself, from `git diff <pinned baseRef>...<fix-fold head>`. A `headDiff` or `headDiffPath` a fixer submits is a cross-check against that derivation, and submitting none is allowed.
+- A supplied diff that differs from git's (line endings aside) stops the round with `head-diff-mismatch`. Git unable to read the head beside a supplied diff stops it with `head-diff-unverifiable`. A `headDiffPath` that cannot be read is recorded as `supplied-unreadable` and git governs on a hand `submit`; on the durable-record path `record-result` refuses `head-diff-unreadable` at record time, and the remedy is to omit the optional `headDiffPath` or replace it with a readable absolute path, then record again.
+- Each round and its receipt row gain `headDiffCheck` (`match`, `mismatch`, `none-supplied`, `supplied-unreadable`, `unverifiable` or `no-repository`), and `headDiffSource` reads `git` whenever the driver derived the diff.
+- A fix round with no supplied diff audits its fixes instead of running a wider panel.
+
+### PR sheet: craft determinations and the Decided for you list
+
+- A PR or stack sheet input takes the optional key `craftDeterminations`. A key names a left-for-owner finding the way a `leftovers` key does, and a value is `{ground, reason}`, both non-empty strings. The shape is in the docstring of `lib/pr_sheet.py`.
+- A sheet takes the optional field `prSheet.decidedForYou`, one entry for each determination. An entry is no card, and the page lists it below the cards with one control, **Make this mine**. A sheet with no determinations is unchanged byte for byte.
+- `pr_sheet.py build` refuses a determination with no ground, a key that names no left-for-owner finding or more than one, and a finding that has both a `leftovers` entry and a determination.
+- A carried sheet keeps the earlier sheet's entries. `build` refuses a carry that adds a determination, changes one, or turns one back into a `leftovers` card. Make each of those changes on an unsigned republish.
+- **Make this mine** stores an ordinary answer at `answers/<entry id>`. Any document stored there other than a well-formed null answer counts as taken back. While an entry is taken back, Merge is locked and a held Merge is cleared, and `pr_state` reads the PR as `needs-you`. A saved take-back beats a saved Merge after "done".
 
 ### Review seats: CLAUDE.md by absolute path
 
