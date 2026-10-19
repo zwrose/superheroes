@@ -128,6 +128,7 @@ def test_registry_has_thirteen_items_in_order():
         "keepList",
         "materialConsequenceLine",
         "cloudBuilds",
+        "ciWorkflow",
     ]
 
 
@@ -156,7 +157,7 @@ def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
     assert len(plugin_default) == 5
     assert len(derived) == 1
     assert derived[0]["slug"] == "budgetN"
-    assert len(unset) == 9
+    assert len(unset) == 10
 
 
 def test_budget_n_derived_when_absent(tmp_path):

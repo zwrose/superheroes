@@ -431,7 +431,7 @@ def test_unreadable_pr_is_not_reviewed():
     assert rec["status"] == "not-reviewed" and "the final commit could not be read from the PR" in rec["whatIsMissing"]
     fake.meta, fake.ci = None, None
     rec = build(account(finalCommit=None), fake)
-    assert rec["ci"] == {"state": "none", "sha": None, "source": "unavailable"}
+    assert rec["ci"] == {"state": "none", "sha": None, "source": "unavailable", "workflow": None, "read": "CI could not be read"}
 
 
 def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):

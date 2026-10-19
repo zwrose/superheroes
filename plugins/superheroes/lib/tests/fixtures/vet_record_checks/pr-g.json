@@ -10,15 +10,18 @@
     }
   },
   "record": {
+    "carriedRechecks": [],
     "checked": [
       "CI on ccccccc: none",
       "Reviewers that ran: code-reviewer",
       "read the diff"
     ],
     "ci": {
+      "read": "no CI workflow declared; no GitHub Actions run on this commit",
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
       "source": "GitHub checks",
-      "state": "none"
+      "state": "none",
+      "workflow": null
     },
     "cost": {
       "minutes": 2.0,
@@ -28,7 +31,6 @@
       "unit": "reviewer-minutes"
     },
     "decisionRechecks": [],
-    "carriedRechecks": [],
     "earlierRecordsNotChecked": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
@@ -116,7 +118,7 @@
     "status": "not-reviewed",
     "unreadFiles": [],
     "whatIsMissing": [
-      "CI is none on ccccccc"
+      "CI is none on ccccccc (no CI workflow declared; no GitHub Actions run on this commit)"
     ],
     "withheldFromReviewers": null,
     "writtenAt": "2026-01-01T00:00:00Z"
