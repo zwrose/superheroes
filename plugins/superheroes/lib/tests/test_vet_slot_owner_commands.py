@@ -123,6 +123,21 @@ def test_block_nested_under_numbered_list_item_refuses():
     _refused(body, 3, "bash", "mongorestore")
 
 
+def test_list_item_then_blockquote_block_refuses():
+    body = _body("- > ```bash\n  > mongorestore --drop dump/\n  > ```")
+    _refused(body, 1, "bash", "mongorestore")
+
+
+def test_blockquote_then_list_item_block_refuses():
+    body = _body("> - ```bash\n>   mongorestore --drop dump/\n>   ```")
+    _refused(body, 1, "bash", "mongorestore")
+
+
+def test_keychain_read_across_backslash_continuation_refuses():
+    body = _body(_block("security \\", "find-generic-password -s staging -w"))
+    _refused(body, 1, "bash", "security find-generic-password")
+
+
 def test_block_inside_build_record_refuses():
     record = "\n" + _block("psql -c 'select 1'")
     body = _body(build_record=record)

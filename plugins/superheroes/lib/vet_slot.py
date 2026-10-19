@@ -168,14 +168,20 @@ def _strip_containers(line):
     """Return ``(text, quote_depth)``: ``line`` without leading blockquote and list-item markers."""
     text = line.lstrip()
     depth = 0
-    while text.startswith(">"):
-        depth += 1
-        text = text[1:]
-        # axis: one space after a blockquote marker belongs to the marker
-        if text.startswith(" "):
+    while True:
+        # axis: blockquote and list markers are stripped in any order and interleaving
+        if text.startswith(">"):
+            depth += 1
             text = text[1:]
+            # axis: one space after a blockquote marker belongs to the marker
+            if text.startswith(" "):
+                text = text[1:]
+        else:
+            stripped = _LIST_MARKER_RE.sub("", text, count=1)
+            if stripped == text:
+                return text, depth
+            text = stripped
         text = text.lstrip()
-    return _LIST_MARKER_RE.sub("", text, count=1).lstrip(), depth
 
 
 def _strip_quotes(line, depth):
@@ -274,7 +280,19 @@ def owner_command_blocks(body):
     """One ``{"line", "language", "tool"}`` per fenced shell block that names an owner-run tool."""
     found = []
     for number, language, lines in _owner_shell_blocks(body):
+        joined = []
+        carry = None
         for content in lines:
+            # axis: a line ending in a backslash continues onto the next line, joined with a space
+            if content.endswith("\\"):
+                carry = (carry + " " if carry else "") + content[:-1]
+                continue
+            joined.append((carry + " " if carry else "") + content)
+            carry = None
+        # axis: a trailing continuation with no next line is still matched
+        if carry is not None:
+            joined.append(carry)
+        for content in joined:
             tool = _calls_owner_tool(content)
             if tool:
                 found.append({"line": number, "language": language, "tool": tool})
