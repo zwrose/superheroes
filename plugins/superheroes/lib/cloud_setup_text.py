@@ -403,34 +403,104 @@ def _scan(text):
             or _encoded_shape(text))
 
 
-_CREDENTIAL_WORDS = r"(?:TOKEN|AUTH|SECRET|PASSWORD|PASSWD|IDENT|APIKEY|API_KEY)"
-_QUOTE = r"""(?:\\?["'])"""
-_KEY = r"""[^\s=,;"'{}]*?%s[^\s=:,;"'{}]*""" % _CREDENTIAL_WORDS
-_BARE_REFERENCE = (r"""\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"""
-                   r"""(?=$|[\s"'\\,;})&|])""")
-# A credential-named key given a value by `KEY=value`, `KEY: value`, or (after a config-set verb)
-# `KEY value`; group "value" starts the value, after any opening quotes.
-_CREDENTIAL_GIVEN_RE = re.compile(
-    r"(?<![A-Za-z0-9_])%s%s?\s*[:=]\s*%s*(?P<value>.*)$" % (_KEY, _QUOTE, _QUOTE),
-    re.IGNORECASE)
-_CREDENTIAL_SET_RE = re.compile(
-    r"(?:config\s+set|npm\s+set)(?:\s+--?[A-Za-z][\w-]*)*\s+%s*%s%s?\s+%s*(?P<value>\S.*)$"
-    % (_QUOTE, _KEY, _QUOTE, _QUOTE), re.IGNORECASE)
-_BARE_REFERENCE_RE = re.compile(_BARE_REFERENCE)
+# A key is credential-named when one of its name components (split on every non-alphanumeric
+# character and on camelCase boundaries, case-insensitively) is a credential word, or the
+# components "api" and "key" sit side by side. The value is the whole shell word after the
+# separator, quotes removed; only a bare environment reference ($NAME or ${NAME}) is exempt.
+_CREDENTIAL_COMPONENTS = frozenset((
+    "token", "auth", "authtoken", "authident", "ident", "secret", "password", "passwd", "apikey"))
+_CAMEL_LOWER_UPPER_RE = re.compile(r"([a-z0-9])([A-Z])")
+_CAMEL_UPPER_RUN_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
+_KEY_STOP = frozenset(" \t\r\n=,;{}&|()<>")
+_WORD_STOP = frozenset(" \t\r\n;&|")
+_QUOTE_CHARS_RE = re.compile(r"""\\?["']""")
+_WRAPPING_QUOTES_RE = re.compile(r"""\A(?:\\?["'])+|(?:\\?["'])+\Z""")
+_BARE_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})\Z")
+_CONFIG_SET_RE = re.compile(r"(?:config\s+set|npm\s+set)(?:\s+--?[A-Za-z][\w-]*)*\s+",
+                            re.IGNORECASE)
+
+
+def _credential_named(key):
+    spaced = _CAMEL_UPPER_RUN_RE.sub(r"\1 \2", _CAMEL_LOWER_UPPER_RE.sub(r"\1 \2", key))
+    parts = [p.lower() for p in _NON_ALNUM_RE.split(spaced) if p]
+    if any(p in _CREDENTIAL_COMPONENTS for p in parts):
+        return True
+    return any(a == "api" and b == "key" for a, b in zip(parts, parts[1:]))
+
+
+def _shell_word(text, start):
+    """(word, end): the shell word at `start`, up to the first unquoted whitespace, ; & | or the
+    end of the text, quotes still in place."""
+    quote = None
+    end = start
+    while end < len(text):
+        char = text[end]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in _WORD_STOP:
+            break
+        elif char in "\"'":
+            quote = char
+        end += 1
+    return text[start:end], end
+
+
+def _literal_value(word):
+    """True unless the whole `word`, once its wrapping quotes are removed, is exactly $NAME or
+    ${NAME}. A quote inside the word ends the name there, so `"$NAME"literal` is a literal."""
+    inner = _WRAPPING_QUOTES_RE.sub("", word)
+    if not inner:
+        return False
+    return _QUOTE_CHARS_RE.search(inner) is not None or _BARE_REFERENCE_RE.match(inner) is None
+
+
+def _is_assignment(text, at):
+    """True when text[at] is a `:` or a single `=` (never part of ==, >=, <=, ~= or !=)."""
+    char = text[at]
+    if char == ":":
+        return True
+    if char != "=":
+        return False
+    before = text[at - 1] if at else ""
+    after = text[at + 1] if at + 1 < len(text) else ""
+    return before not in "=<>~!" and after != "="
+
+
+def _key_before(text, at):
+    """The key run that ends just before `at`, skipping whitespace and one closing quote."""
+    end = at
+    while end and text[end - 1] in " \t\r\n":
+        end -= 1
+    begin = end
+    while begin and text[begin - 1] not in _KEY_STOP:
+        begin -= 1
+    return text[begin:end]
 
 
 def _gives_credential_value(text):
-    for shape in (_CREDENTIAL_GIVEN_RE, _CREDENTIAL_SET_RE):
-        # every key occurrence is checked, not only the first: the search resumes after each start
-        start = 0
-        while start <= len(text):
-            match = shape.search(text, start)
-            if match is None:
-                break
-            value = match.group("value")
-            if value and not _BARE_REFERENCE_RE.match(value):
-                return True
-            start = match.start() + 1
+    # KEY=value, KEY: value, KEY:value: every assignment separator is checked
+    for at in range(len(text)):
+        if not _is_assignment(text, at):
+            continue
+        if not _credential_named(_key_before(text, at)):
+            continue
+        begin = at + 1
+        while begin < len(text) and text[begin] in " \t\r\n":
+            begin += 1
+        if _literal_value(_shell_word(text, begin)[0]):
+            return True
+    # `config set KEY value` / `npm set KEY value`: every occurrence is checked
+    for verb in _CONFIG_SET_RE.finditer(text):
+        raw_key, end = _shell_word(text, verb.end())
+        if "=" in raw_key or "$" in raw_key or not _credential_named(raw_key):
+            continue
+        begin = end
+        while begin < len(text) and text[begin] in " \t\r\n":
+            begin += 1
+        if begin > end and _literal_value(_shell_word(text, begin)[0]):
+            return True
     return False
 
 
