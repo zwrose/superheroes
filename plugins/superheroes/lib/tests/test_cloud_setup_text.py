@@ -1118,6 +1118,42 @@ def test_setup_commands_run_in_the_clone_and_the_first_failure_skips_the_rest(tm
     assert "setup end" in log
 
 
+def _stamp_file(w):
+    return w.home / ".claude" / "superheroes" / "projects" / w.key / "cloud-setup-stamp"
+
+
+def test_a_failed_setup_command_leaves_no_stamp(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ["exit 3"])
+    result = _compose(w)
+    # axis: a stale stamp is cleared and the failed setup does not publish its own
+    stamp = _stamp_file(w)
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text("stale\n")
+    proc, _ = _run_script(w, result["text"], git_clone=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "setup command 1 FAILED" in _setup_log(w) and "setup end" in _setup_log(w)
+    assert not stamp.exists()
+
+
+def test_a_missing_clone_leaves_no_stamp(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ["true"])
+    proc, _ = _run_script(w, _compose(w)["text"])
+    assert proc.returncode == 0, proc.stderr
+    assert "setup command 1 skipped" in _setup_log(w)
+    assert not _stamp_file(w).exists()
+
+
+def test_setup_commands_that_all_pass_publish_the_stamp(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ["true", "true"])
+    result = _compose(w)
+    proc, _ = _run_script(w, result["text"], git_clone=True)
+    assert proc.returncode == 0, proc.stderr
+    assert _stamp_file(w).read_text() == result["calibration"]["stamp"] + "\n"
+
+
 def test_setup_commands_that_pass_are_each_logged_ok_in_order(tmp_path):
     w = _inside(tmp_path)
     _store_commands(w, ['echo one >> "$PWD/ran.txt"', 'echo two >> "$PWD/ran.txt"'])
@@ -1267,11 +1303,17 @@ def test_a_present_setting_that_is_not_a_valid_list_is_refused(tmp_path, stored)
 
 def test_a_core_that_cannot_be_read_refuses_with_its_own_reason(tmp_path, monkeypatch):
     w = _inside(tmp_path)
+    _store_commands(w, ["npm ci"])
+    unreadable = os.path.realpath(core_md.core_path(w.cwd, w.root, persist_backfill=False))
+    real_open = open
 
-    def unreadable(*args, **kwargs):
-        raise OSError("unreadable")
+    def refusing_open(file, *args, **kwargs):
+        if isinstance(file, (str, bytes, os.PathLike)) and os.path.realpath(file) == unreadable:
+            raise PermissionError("unreadable")
+        return real_open(file, *args, **kwargs)
 
-    monkeypatch.setattr(core_md, "read", unreadable)
+    # core_md.read stays the real one, so its own error handling is what the refusal rests on
+    monkeypatch.setattr("builtins.open", refusing_open)
     _refusal(_compose(w), "setup-commands-unreadable")
 
 

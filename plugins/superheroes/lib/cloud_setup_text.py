@@ -258,6 +258,17 @@ def _setup_commands(cwd, root):
     except Exception:
         raise _Refused("setup-commands-unreadable", "The project's setup commands cannot be read "
                        "from its calibration.")
+    if facts is None:
+        # core_md.read answers None for a file it cannot open as well as for an absent one; a core
+        # that is there but unreadable would otherwise drop the owner's commands without a word
+        path = core_md.core_path(cwd, root, persist_backfill=False)
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb"):
+                    pass
+            except OSError:
+                raise _Refused("setup-commands-unreadable", "The project's setup commands cannot "
+                               "be read from its calibration.")
     settings = facts.get("projectConfiguration") if facts is not None else None
     slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
     if not isinstance(settings, dict) or slug not in settings:
@@ -346,8 +357,10 @@ def _scan(text):
     return _plain_shape(text) or _encoded_shape(text)
 
 
-def _commands_block(commands, clone):
-    """The step that runs the project's setup commands, one at a time, in its clone."""
+def _commands_block(commands, clone, stamp=None, count=0):
+    """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
+    to publish, it publishes it last, and only when the calibration was written and every command
+    ran and succeeded."""
     return [
         "",
         "# Run the project's own setup commands (configure item 17), one at a time, in the order "
@@ -361,16 +374,24 @@ def _commands_block(commands, clone):
         "  fi",
         "  n=0",
         '  failed=""',
+        "  ok=1",
         "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands),
         "    n=$((n + 1))",
-        '    if [ -z "$DIR" ]; then echo "setup command $n skipped: no clone in $PWD%s"'
+        '    if [ -z "$DIR" ]; then ok=0; echo "setup command $n skipped: no clone in $PWD%s"'
         % (" or $PWD/$CLONE" if clone is not None else ""),
         # axis: after a failure every later command is skipped, never run
         '    elif [ -n "$failed" ]; then echo "setup command $n skipped: setup command $failed FAILED"',
         '    elif (cd "$DIR" && bash -c "$cmd" </dev/null); then echo "setup command $n ok"',
-        '    else echo "setup command $n FAILED"; failed=$n',
+        '    else echo "setup command $n FAILED"; failed=$n; ok=0',
         "    fi",
         "  done",
+        *([
+            # axis: the stamp is the receipt for a finished setup, so a failed or skipped command
+            # leaves none
+            '  if [ "$ok" = 1 ] && [ "$wrote" = %d ]; then' % count,
+            "    printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
+            '  else echo "setup stamp withheld: setup did not finish" ; fi',
+        ] if stamp is not None else []),
         ') >> "$LOG" 2>&1',
     ]
 
@@ -442,14 +463,21 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
             out += ['mkdir -p "$(dirname "$DEST/%s")"' % rel,
                     """cat > "$DEST/%s" <<'%s'""" % (rel, tag)]
             out += [data.decode("utf-8")[:-1], tag, '[ "$?" = 0 ] && wrote=$((wrote + 1))']
-        out += ['if [ "$wrote" = %d ]; then' % len(files),
-                "  printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
-                'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
-                % len(files),
-                'echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
+        # axis: with setup commands the stamp is published after they succeed, not here
+        if not commands:
+            out += ['if [ "$wrote" = %d ]; then' % len(files),
+                    "  printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
+                    'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
+                    % len(files)]
+        else:
+            out += ['if [ "$wrote" != %d ]; then' % len(files),
+                    '  echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
+                    % len(files)]
+        out += ['echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
     # axis: only a non-empty list adds a step, so no list leaves the text as it was
     if commands:
-        out += _commands_block(commands, clone)
+        out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
+                               len(files))
     out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', "exit 0", ""]
     return "\n".join(out)
