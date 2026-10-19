@@ -261,6 +261,13 @@ still works, but it may stop on a permission prompt a headless lane cannot answe
   by whether the install succeeded; a failed install is
   `iPhone check did not run — installed-app check: the Home Screen install failed`.
   An installed part needs a reading that reports installed; `render` enforces it.
+- **A served-file change.** An installed Home Screen page keeps the copy of a
+  served file it loaded earlier, so after any change to a served file its
+  readings can describe code that is no longer served. After such a change,
+  reload the page (or reinstall it from the Home Screen) before the first
+  formal reading, and check that first reading's fields against what the
+  served tree should produce before taking more. A reading taken before that
+  reload is not evidence.
 - **No response is never a pass.** Pass each plan step to `judge` with the
   before and after readings and what the screenshot showed. Its fields are
   `kind` (`tap-field`, `type` or `other`), `step`, `before`, `after`,
