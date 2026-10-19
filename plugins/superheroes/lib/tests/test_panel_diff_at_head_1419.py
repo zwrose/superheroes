@@ -95,7 +95,7 @@ _A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 
                "consequence": "a reviewer-found defect stays in the change"}]
 
 
-def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):
+def test_b1_fixer_without_head_diff_derives_git_and_audits(tmp_path):
     repo, base_sha, diff_commit1 = _init_two_commit_repo(tmp_path)
     d = str(tmp_path / "session")
     seed_session_meta(d, repo)
@@ -109,29 +109,37 @@ def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):
         return _responder(round1_findings=_A_FINDING)(phase, payload, rnd)
 
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    fix_round = n["round"]
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       respond(n["phase"], n["payload"], n["round"]))
     assert s["ok"], s
     n2 = RD.cmd_next(d)
-    assert n2["phase"] == RD.P_VERIFY
-    s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"], {"result": "pass"})
-    assert s2["ok"], s2
-    n3 = RD.cmd_next(d)
-    assert n3["phase"] == RD.P_PANEL
+    assert n2["phase"] == RD.P_AUDITS
     ok, state = RD.load_state(d)
     assert ok
-    panel_round = state["round"]
-    assert state["rounds"][str(panel_round)]["panelDiffSource"] == "git-derived"
+    assert state["rounds"][str(fix_round)]["headDiffSource"] == "git"
     diff_commit2 = _git_diff(repo, base_sha)
     assert diff_commit2 != diff_round1
-    rdir = round_records.round_dir(d, panel_round)
-    materialized = open(os.path.join(rdir, "diff.txt"), encoding="utf-8").read()
-    assert materialized == diff_commit2
-    assert materialized != diff_round1
+    assert state["headDiff"] == diff_commit2
+    assert state["reviewedDiff"] == diff_commit2
+    assert state["reviewedDiff"] != diff_round1
 
 
-def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path):
+def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path, monkeypatch):
     repo, base_sha, diff_round1 = _init_two_commit_repo(tmp_path)
+    # The fixer fold derives its post-fix diff from git; to keep this test on the unknown-surface
+    # path (no post-fix diff -> full panel at the verified head) the fold's own derivation is made
+    # to refuse once, on its first call; every later derivation is the real one.
+    real_derive = RD._derive_panel_diff_at_head
+    calls = []
+
+    def refuse_first(config, head_sha):
+        calls.append(head_sha)
+        if len(calls) == 1:
+            return None, "git unavailable: forced for the unknown-surface path"
+        return real_derive(config, head_sha)
+
+    monkeypatch.setattr(RD, "_derive_panel_diff_at_head", refuse_first)
     d = str(tmp_path / "session")
     seed_session_meta(d, repo)
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_round1, repoRoot=repo, baseRef=base_sha)
