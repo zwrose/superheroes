@@ -2911,6 +2911,15 @@ def test_only_the_newest_run_per_workflow_and_event_counts():
                                                 wf_run("pr-title", id=9), ci)) == "green"
 
 
+def test_the_newest_run_wins_whatever_order_the_runs_are_listed_in():
+    # axis: supersession by rank, not list position; an older run listed last taken as the current one
+    def pr_title(number, conclusion):
+        return wf_run("pr-title", conclusion=conclusion, id=50 + number, workflow_id=7, event="pull_request", run_number=number)
+    ci = wf_run("CI", id=2)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(pr_title(2, "failure"), pr_title(1, "success"), ci)) == "red"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(pr_title(2, "success"), pr_title(1, "failure"), ci)) == "green"
+
+
 def test_two_events_of_one_workflow_are_each_current():
     # axis: supersession is per workflow and event; a newer run of one event hiding an unfinished run of another event of the same workflow
     pending_pr = wf_run("CI", "in_progress", id=51, workflow_id=7, event="pull_request", run_number=1)
