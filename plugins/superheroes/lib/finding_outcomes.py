@@ -10,9 +10,9 @@ is craft, wherever in the project it sits. Any other consequence is real. An unf
 with a real consequence is left for the owner, unless a decision on record names it, in which
 case it is decided by a named ruling. A decision is on record only when it is an active Canon
 entry, a recorded residual, a settled saved sheet answer for the pull request, or an owner ruling
-whose pointer resolves: a readable owner-authored comment in the pull request's own repository, at
-the exact permalink, that is a standard chat-ruling record whose quoted block holds the owner's
-words. Severity never decides an outcome.
+whose pointer resolves: a readable comment in the pull request's own repository, at the exact
+permalink, that is a standard chat-ruling record whose quoted block holds the owner's words (its
+author is not checked, since every session posts as the owner). Severity never decides an outcome.
 
 The rules are pure: they read no file, run no git or subprocess and touch no network. Callers
 pass text and dicts in. The one reader is decision_sources, which gathers the Canon and residual
