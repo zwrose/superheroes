@@ -102,7 +102,9 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Cloud setup text: project setup commands
 
 - Configuration item 17, `cloudSetupCommands`, holds an ordered list of one-line shell commands. Its refusals on `set` are `setup-commands-not-a-list`, `setup-command-empty`, `setup-command-multi-line` and `setup-command-secret-shaped`. `[]` clears it.
-- With the list unset or `[]`, the setup text, its stamp and every result key are what they were before.
+- `setup-command-secret-shaped` is the setup text's own secret scan and no stricter rule: an entry is refused exactly when that scan refuses it. A credential never goes in a listed command; put it in the cloud environment's variables and reference it as `$NAME`. The scan catches obvious pastes and is not a guarantee.
+- With the list unset, the setup text, its stamp and every result key are what they were before.
+- With the list stored as `[]`, the stamp and every result key are what they were before, and the setup text removes `cloud-setup-stamp` (it already did so when it places calibration files), so a stamp an earlier list left does not survive a re-paste.
 - With a list, the setup text runs each command once, in order, in the project's clone, after every other step and before the marker line. It logs `setup command <n> ok` or `setup command <n> FAILED`, and the first failure skips the rest.
 - The stamp covers the list under the key `setup-commands`, in both storage modes, so a changed list reads as out of date until new setup text is pasted.
 - A project that keeps its calibration in the repository and lists commands now gets a stamp, and its setup text logs `calibration: 0 of 0 files written` when it writes it.

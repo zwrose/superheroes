@@ -5,6 +5,7 @@ directory is under tmp_path too. No test reads the real home directory or the ne
 token-shaped value is built at run time from small parts.
 """
 import base64
+import difflib
 import hashlib
 import importlib.util
 import json
@@ -23,6 +24,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import architect_config  # noqa: E402
+import cloud_check  # noqa: E402
 import cloud_pass  # noqa: E402
 import cloud_setup  # noqa: E402
 import core_md  # noqa: E402
@@ -1223,11 +1225,8 @@ def test_without_a_clone_name_the_clone_is_looked_for_only_in_the_working_direct
     assert "setup command 1 skipped: no clone in %s" % (w.tmp / "work") in _setup_log(w).splitlines()
 
 
-@pytest.mark.parametrize("mode", ["outside", "inside"])
-@pytest.mark.parametrize("state", ["unset", "empty"])
-def test_no_setup_commands_leave_the_text_as_it_was(tmp_path, mode, state):
-    # axis: an unset or empty list changes nothing: the text is byte for byte today's
-    w = (_outside if mode == "outside" else _inside)(tmp_path)
+def _golden(w, mode):
+    """The no-commands golden for `mode`, with the world pinned to the time it was rendered at."""
     path = os.path.join(_HERE, "fixtures", "cloud_setup_text", "no_commands_%s.sh" % mode)
     with open(path, encoding="utf-8") as fh:
         expected = fh.read().replace("@VERSION@", VERSION)
@@ -1236,22 +1235,78 @@ def test_no_setup_commands_leave_the_text_as_it_was(tmp_path, mode, state):
         # fixture was rendered with
         pinned = re.search(r"<<'SUPERHEROES_END_6'\n(.*?)\nSUPERHEROES_END_6\n", expected, re.S)
         _put(w, "registry.json", pinned.group(1).encode("utf-8") + b"\n")
-    kw = dict(source_dir="/opt/fixture/src", plugin_dir="/opt/fixture/plugin")
-    if state == "empty":
-        _store_commands(w, [])
-        if mode == "outside":
-            # the stored core is now a real one, so its heredoc and the stamp are the core's;
-            # every other line is the fixture's
-            stored = CS.calibration_files(w.cwd, w.root)["config/core.md"].decode("utf-8")
-            old = "# Core\nline two\nSUPERHEROES_END_1\n"
-            assert expected.count(old) == 1
-            expected = expected.replace(old, stored + "SUPERHEROES_END_1\n")
-            expected = re.sub(r"'2026-10-10:[0-9a-f]+'", "'2026-10-10:fixed'", expected)
-            kw["stamp_fn"] = lambda files: "2026-10-10:fixed"
-    result = _compose(w, **kw)
+    return expected
+
+
+_GOLDEN_KW = dict(source_dir="/opt/fixture/src", plugin_dir="/opt/fixture/plugin")
+
+
+@pytest.mark.parametrize("mode", ["outside", "inside"])
+def test_unset_setup_commands_leave_the_text_as_it_was(tmp_path, mode):
+    # axis: an unset list changes nothing: the text is byte for byte today's
+    w = (_outside if mode == "outside" else _inside)(tmp_path)
+    expected = _golden(w, mode)
+    result = _compose(w, **_GOLDEN_KW)
     assert result["action"] == "written"
     assert result["text"] == expected
     assert "setupCommands" not in result["calibration"]
+
+
+def test_an_empty_list_outside_the_repo_changes_only_the_core_and_its_stamp(tmp_path):
+    # axis: the placed calibration already removes the stamp, so an empty list adds no line there
+    w = _outside(tmp_path)
+    expected = _golden(w, "outside")
+    _store_commands(w, [])
+    # the stored core is now a real one, so its heredoc and the stamp are the core's; every other
+    # line is the fixture's
+    stored = CS.calibration_files(w.cwd, w.root)["config/core.md"].decode("utf-8")
+    old = "# Core\nline two\nSUPERHEROES_END_1\n"
+    assert expected.count(old) == 1
+    expected = expected.replace(old, stored + "SUPERHEROES_END_1\n")
+    expected = re.sub(r"'2026-10-10:[0-9a-f]+'", "'2026-10-10:fixed'", expected)
+    result = _compose(w, stamp_fn=lambda files: "2026-10-10:fixed", **_GOLDEN_KW)
+    assert result["action"] == "written"
+    assert result["text"] == expected
+    assert "setupCommands" not in result["calibration"]
+
+
+def test_an_empty_list_in_the_repo_adds_only_the_stamp_removal(tmp_path):
+    # axis: an empty list adds the stamp removal and nothing else to the golden text
+    w = _inside(tmp_path)
+    expected = _golden(w, "inside")
+    _store_commands(w, [])
+    result = _compose(w, **_GOLDEN_KW)
+    assert result["action"] == "written"
+    assert "setupCommands" not in result["calibration"]
+    assert result["calibration"]["stamp"] is None
+    lines = result["text"].splitlines()
+    diff = [ln for ln in difflib.ndiff(expected.splitlines(), lines) if ln[0] in "+-"]
+    assert diff and all(ln[0] == "+" for ln in diff), diff
+    assert 'rm -f "$DEST/%s"' % CS.STAMP_FILE in [ln[2:] for ln in diff]
+    assert lines.index('rm -f "$DEST/%s"' % CS.STAMP_FILE) < lines.index(CS.TOOL_STEPS_MARKER)
+
+
+def test_clearing_the_list_retires_the_stamp_a_longer_list_left(tmp_path):
+    # axis: a list cleared to [] removes the stamp an earlier non-empty list placed
+    w = _inside(tmp_path)
+    store = mode_registry.project_store_dir(w.cwd, str(w.home / ".claude" / "superheroes"))
+    stamp_path = os.path.join(store, CS.STAMP_FILE)
+    _store_commands(w, [])
+    assert project_config.set_item(w.cwd, SLUG, ["true"], root=w.root)["action"] == "written"
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode == 0, proc.stderr
+    assert os.path.isfile(stamp_path)
+    assert project_config.set_item(w.cwd, SLUG, [], root=w.root)["action"] == "written"
+    # a second run, from a working directory of its own, against the same home
+    w.tmp = tmp_path / "second"
+    w.tmp.mkdir()
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode == 0, proc.stderr
+    assert not os.path.exists(stamp_path)
+    # the check's expectation for that state: nothing placed, so no stamp file
+    local = cloud_check._placed_stamp(w.cwd, w.root)
+    assert local == "none"
+    assert cloud_check._stamp_file(w.cwd, str(w.home / ".claude" / "superheroes")) is None
 
 
 def test_the_stamp_moves_with_the_command_list_in_both_storage_modes(tmp_path):

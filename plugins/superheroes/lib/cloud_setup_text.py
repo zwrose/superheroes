@@ -70,7 +70,7 @@ _SECRET_SHAPES = (
         # a bare `$NAME` / `${NAME}` (optionally in matching quotes) is a reference, not a value
         r"""(?!(?:\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"""
         r"""|\\?"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:\\?\"|\\)"""
-        r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\]))"""
+        r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\&|]))"""
         r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
     ("bearer credential", re.compile(r"Bearer \S{16,}")),
@@ -280,8 +280,15 @@ def _refuse_malformed_container(cwd, root):
 
 def _setup_commands(cwd, root):
     """The project's ordered setup commands (configure item 17): a list of strings, possibly empty.
-    A project with no readable core, or no such setting, has none; a setting that is there but
-    invalid is refused, because the text would otherwise quietly leave out what the owner listed."""
+    A project with no readable core, or no such setting, has none."""
+    return _stored_setup_commands(cwd, root) or []
+
+
+def _stored_setup_commands(cwd, root):
+    """The stored list of setup commands, or None when the project does not store the setting at
+    all (so an empty list that was stored is told apart from a setting never set). A setting that
+    is there but invalid is refused, because the text would otherwise quietly leave out what the
+    owner listed."""
     try:
         facts = core_md.read(cwd, root, persist_backfill=False)
     except Exception:
@@ -308,7 +315,7 @@ def _setup_commands(cwd, root):
     settings = facts.get("projectConfiguration") if facts is not None else None
     slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
     if not isinstance(settings, dict) or slug not in settings:
-        return []
+        return None
     item = project_config._item_by_slug(slug)
     # axis: a stored value that is not a valid list is refused, never read as an empty list
     if project_config.validate_item_value(item, settings[slug]) is not None:
@@ -408,164 +415,6 @@ def _scan(text):
             or _encoded_shape(text))
 
 
-# A key is credential-named when one of its name components (split on every non-alphanumeric
-# character and on camelCase boundaries, case-insensitively) is a credential word, or the
-# components "api" and "key" sit side by side. The value is the whole shell word after the
-# separator, quotes removed; only a bare environment reference ($NAME or ${NAME}) is exempt.
-_CREDENTIAL_COMPONENTS = frozenset((
-    "token", "auth", "authtoken", "authident", "ident", "secret", "password", "passwd", "apikey"))
-_CAMEL_LOWER_UPPER_RE = re.compile(r"([a-z0-9])([A-Z])")
-_CAMEL_UPPER_RUN_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
-_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
-_KEY_STOP = frozenset(" \t\r\n=,;{}&|()<>")
-_WORD_STOP = frozenset(" \t\r\n;&|")
-_QUOTE_CHARS_RE = re.compile(r"""\\?["']""")
-_WRAPPING_QUOTES_RE = re.compile(r"""\A(?:\\?["'])+|(?:\\?["'])+\Z""")
-_BARE_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})\Z")
-_CONFIG_SET_RE = re.compile(r"(?:config\s+set|npm\s+set)\s+", re.IGNORECASE)
-_URL_USERINFO_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/@\s]*)@")
-
-
-def _credential_named(key):
-    spaced = _CAMEL_UPPER_RUN_RE.sub(r"\1 \2", _CAMEL_LOWER_UPPER_RE.sub(r"\1 \2", key))
-    parts = [p.lower() for p in _NON_ALNUM_RE.split(spaced) if p]
-    if any(p in _CREDENTIAL_COMPONENTS for p in parts):
-        return True
-    return any(a == "api" and b == "key" for a, b in zip(parts, parts[1:]))
-
-
-def _shell_word(text, start, quote=None):
-    """(word, end): the shell word at `start`, up to the first unquoted whitespace, ; & | or the
-    end of the text, quotes still in place. `quote` is the quote already open at `start`."""
-    end = start
-    while end < len(text):
-        char = text[end]
-        if quote is not None:
-            if char == quote:
-                quote = None
-        elif char in _WORD_STOP:
-            break
-        elif char in "\"'":
-            quote = char
-        end += 1
-    return text[start:end], end
-
-
-def _literal_value(word):
-    """True unless the whole `word`, once its wrapping quotes are removed, is exactly $NAME or
-    ${NAME}. A quote inside the word ends the name there, so `"$NAME"literal` is a literal."""
-    inner = _WRAPPING_QUOTES_RE.sub("", word)
-    if not inner:
-        return False
-    return _QUOTE_CHARS_RE.search(inner) is not None or _BARE_REFERENCE_RE.match(inner) is None
-
-
-def _is_assignment(text, at):
-    """True when text[at] is a `:` or a single `=` (never part of ==, >=, <=, ~= or !=)."""
-    char = text[at]
-    if char == ":":
-        return True
-    if char != "=":
-        return False
-    before = text[at - 1] if at else ""
-    after = text[at + 1] if at + 1 < len(text) else ""
-    return before not in "=<>~!" and after != "="
-
-
-def _open_quote(text, at):
-    """The quote character still open at text[at] (None outside quotes), so an assignment inside
-    a quoted word is parsed with that quote carried in."""
-    quote = None
-    index = 0
-    while index < at:
-        char = text[index]
-        if char == "\\" and quote != "'":
-            index += 2
-            continue
-        if quote is None:
-            if char in "\"'":
-                quote = char
-        elif char == quote:
-            quote = None
-        index += 1
-    return quote
-
-
-def _key_before(text, at):
-    """The key run that ends just before `at`, skipping whitespace and one closing quote."""
-    end = at
-    while end and text[end - 1] in " \t\r\n":
-        end -= 1
-    begin = end
-    while begin and text[begin - 1] not in _KEY_STOP:
-        begin -= 1
-    return text[begin:end]
-
-
-def _assignment_key(key, separator):
-    """The part of `key` that can name a credential. A key inside a URL (`scheme://...`) names
-    nothing unless a query parameter ends it (`...?token`), and a `:` after a path-like key (an
-    image or registry reference such as `ghcr.io/acme/auth-service:latest`) is no separator."""
-    if "://" in key:
-        return key.rpartition("?")[2] if "?" in key else ""
-    if separator == ":" and "/" in key:
-        return ""
-    return key
-
-
-def _gives_credential_value(text):
-    # KEY=value, KEY: value, KEY:value: every assignment separator is checked
-    for at in range(len(text)):
-        if not _is_assignment(text, at):
-            continue
-        if not _credential_named(_assignment_key(_key_before(text, at), text[at])):
-            continue
-        begin = at + 1
-        while begin < len(text) and text[begin] in " \t\r\n":
-            begin += 1
-        if _literal_value(_shell_word(text, begin, _open_quote(text, begin))[0]):
-            return True
-    # `config set KEY value` / `npm set KEY value`: every occurrence is checked
-    for verb in _CONFIG_SET_RE.finditer(text):
-        raw_key, end = _shell_word(text, verb.end())
-        while raw_key.startswith("-"):
-            # option tokens (`--location=project`, `-g`) come before the key
-            begin = end
-            while begin < len(text) and text[begin] in " \t\r\n":
-                begin += 1
-            if begin == end:
-                break
-            raw_key, end = _shell_word(text, begin)
-        if raw_key.startswith("-") or "=" in raw_key or "$" in raw_key or not _credential_named(raw_key):
-            continue
-        begin = end
-        while begin < len(text) and text[begin] in " \t\r\n":
-            begin += 1
-        if begin > end and _literal_value(_shell_word(text, begin)[0]):
-            return True
-    return False
-
-
-def _url_password(text):
-    """True when a URL in `text` carries userinfo `user:password` whose password is not a bare
-    environment reference."""
-    for match in _URL_USERINFO_RE.finditer(text):
-        _user, colon, password = match.group(1).partition(":")
-        if colon and _literal_value(password):
-            return True
-    return False
-
-
-def _command_credential(entry):
-    """True when a setup-command `entry` gives a credential-named key (a name containing TOKEN,
-    AUTH, SECRET, PASSWORD, PASSWD, IDENT or APIKEY/API_KEY) a value that is not a bare environment
-    reference ($NAME or ${NAME}, quoted or not). Command entries only: the shared `_scan` also
-    covers calibration files, and this rule is deliberately stricter than it."""
-    stripped = _without_empty_quotes(entry)
-    return (_gives_credential_value(entry) or _gives_credential_value(stripped)
-            or _url_password(entry) or _url_password(stripped))
-
-
 def _commands_block(commands, clone, stamp=None, count=0):
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
@@ -612,7 +461,7 @@ def _commands_block(commands, clone, stamp=None, count=0):
 
 
 def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
-            commands):
+            commands, cleared=False):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -689,6 +538,11 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
                     '  echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
                     % len(files)]
         out += ['echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
+    elif cleared:
+        # axis: a list stored as empty removes the stamp an earlier list placed, which an unset
+        # list never had to
+        out += ["", "# The project lists no setup commands: retire the stamp an earlier list left.",
+                'DEST="%s"' % dest, 'rm -f "$DEST/%s"' % STAMP_FILE]
     # axis: only a non-empty list adds a step, so no list leaves the text as it was
     if commands:
         out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
@@ -714,7 +568,10 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
             and _plain_relative(subdir)):
         raise invalid
     placed, files = _calibration(cwd, root)
-    commands = _setup_commands(cwd, root)
+    stored = _stored_setup_commands(cwd, root)
+    commands = stored or []
+    # axis: a list stored as empty, in a project that places no files, still has a stamp to retire
+    cleared = stored is not None and not stored and not files
     if placed and not files:
         raise _Refused("calibration-missing", "The project keeps its calibration outside the "
                        "repository but none of its calibration files exists.")
@@ -723,7 +580,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     if placed and not _plain_relative(key):
         bad.append(key)
     dest = mode_registry.project_store_dir(
-        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if files or commands else None
+        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)
+    ) if files or commands or cleared else None
     tags = {rel: _end_tag(i) for i, rel in enumerate(files, 1)}
     for rel, data in files.items():
         try:
@@ -755,7 +613,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
-                   _clone_dir(cwd), commands)
+                   _clone_dir(cwd), commands, cleared)
     shape = _scan(text)
     if shape:
         where = next((rel for rel, data in files.items()

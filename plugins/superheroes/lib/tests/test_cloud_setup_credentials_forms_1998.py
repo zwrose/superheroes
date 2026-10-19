@@ -8,8 +8,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_cloud_setup_text import (  # noqa: E402
-    CS, SLUG, _compose, _edit_core_block, _inside, _outside, _refusal, _store_commands)
+    CS, SLUG, _compose, _edit_core_block, _inside, _outside, _refusal, _run_script,
+    _store_commands)
 
+import mode_registry  # noqa: E402
 import project_config  # noqa: E402
 
 LITERAL = "glpat-" + "t" * 20
@@ -66,15 +68,6 @@ def test_a_literal_value_is_refused_by_set_and_compose(tmp_path, make, command):
 
 
 @pytest.mark.parametrize("make", WORLDS, ids=IDS)
-def test_commands_run_under_pipefail(tmp_path, make):
-    w = make(tmp_path)
-    _store_commands(w, ["curl -fsSL https://example.invalid/i | bash"])
-    text = _compose(w)["text"]
-    assert 'bash -o pipefail -c "$cmd"' in text
-    assert 'bash -c "$cmd"' not in text
-
-
-@pytest.mark.parametrize("make", WORLDS, ids=IDS)
 def test_a_non_object_configuration_container_is_refused(tmp_path, make):
     w = make(tmp_path)
     _store_commands(w, ["npm ci"])
@@ -128,7 +121,44 @@ def test_a_yarn_literal_is_refused_by_set_and_compose(tmp_path, make, command):
     assert LITERAL not in json.dumps(result)
 
 
-def test_a_failed_stamp_write_ends_the_commands_block_non_zero():
-    block = "\n".join(CS._commands_block(["true"], None, "sha256:probe", 0))
-    assert 'setup stamp write FAILED"; ok=0' in block
-    assert "setup did not finish" in block and "ok=0 ; fi" in block
+def _setup_log(w):
+    return (w.home / "superheroes-cloud-setup.log").read_text()
+
+
+def _stamp_path(w):
+    return Path(mode_registry.project_store_dir(w.cwd, str(w.home / ".claude" / "superheroes"))
+                ) / CS.STAMP_FILE
+
+
+def test_a_failed_stamp_write_ends_the_script_non_zero(tmp_path):
+    # axis: the stamp write itself failing, after every command ran, still ends the script non-zero
+    w = _inside(tmp_path)
+    _store_commands(w, ["true"])
+    _stamp_path(w).mkdir(parents=True)
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode != 0, proc.stderr
+    log = _setup_log(w)
+    assert "setup command 1 ok" in log and "setup stamp write FAILED" in log
+    assert _stamp_path(w).is_dir()
+
+
+def test_a_pipeline_failure_fails_the_command_and_leaves_no_stamp(tmp_path):
+    # axis: commands run under pipefail, so a failing stage of a pipeline is the command failing
+    w = _inside(tmp_path)
+    _store_commands(w, ["false | true"])
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode != 0, proc.stderr
+    assert "setup command 1 FAILED" in _setup_log(w)
+    assert not _stamp_path(w).exists()
+
+
+def test_a_calibration_file_that_cannot_be_written_withholds_the_stamp(tmp_path):
+    # axis: commands that all succeed still publish no stamp when the calibration was incomplete
+    w = _outside(tmp_path)
+    _store_commands(w, ["true"])
+    (_stamp_path(w).parent / "doc-policy.json").mkdir(parents=True)
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode != 0, proc.stderr
+    log = _setup_log(w)
+    assert "setup command 1 ok" in log and "setup stamp withheld" in log
+    assert not _stamp_path(w).exists()

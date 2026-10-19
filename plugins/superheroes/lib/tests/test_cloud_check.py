@@ -175,7 +175,9 @@ def _setup_message_literal(header):
         "list them in configure (item 17, cloud setup commands) and write new setup text: a step "
         "added by hand under the line that reads \"# The project's own tool steps, if any, go "
         "below this line.\" is lost the next time setup text is pasted."
-        " The check on listed commands catches common credential shapes and is not a guarantee: a credential never goes in a listed command, so reference it as an environment variable, $NAME or ${NAME}, instead."
+        " A credential never goes in a listed command: put it in the cloud environment's variables "
+        "and reference it as $NAME. The setup text's secret scan catches obvious pastes and is not "
+        "a guarantee."
     )
 
 

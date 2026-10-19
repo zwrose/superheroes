@@ -300,8 +300,7 @@ def _validate_command_list(value):
     import cloud_setup_text  # imports this module at load, so it is imported here
 
     # axis: an entry shaped like a secret is refused, because the setup text carries it in the clear
-    if any(cloud_setup_text._scan(entry) is not None
-           or cloud_setup_text._command_credential(entry) for entry in value):
+    if any(cloud_setup_text._scan(entry) is not None for entry in value):
         return REASON_SETUP_COMMAND_SECRET_SHAPED
     return None
 
