@@ -403,6 +403,46 @@ def _scan(text):
             or _encoded_shape(text))
 
 
+_CREDENTIAL_WORDS = r"(?:TOKEN|AUTH|SECRET|PASSWORD|PASSWD|IDENT|APIKEY|API_KEY)"
+_QUOTE = r"""(?:\\?["'])"""
+_KEY = r"""[^\s=,;"'{}]*?%s[^\s=:,;"'{}]*""" % _CREDENTIAL_WORDS
+_BARE_REFERENCE = (r"""\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"""
+                   r"""(?=$|[\s"'\\,;})&|])""")
+# A credential-named key given a value by `KEY=value`, `KEY: value`, or (after a config-set verb)
+# `KEY value`; group "value" starts the value, after any opening quotes.
+_CREDENTIAL_GIVEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_])%s%s?\s*[:=]\s*%s*(?P<value>.*)$" % (_KEY, _QUOTE, _QUOTE),
+    re.IGNORECASE)
+_CREDENTIAL_SET_RE = re.compile(
+    r"(?:config\s+set|npm\s+set)(?:\s+--?[A-Za-z][\w-]*)*\s+%s*%s%s?\s+%s*(?P<value>\S.*)$"
+    % (_QUOTE, _KEY, _QUOTE, _QUOTE), re.IGNORECASE)
+_BARE_REFERENCE_RE = re.compile(_BARE_REFERENCE)
+
+
+def _gives_credential_value(text):
+    for shape in (_CREDENTIAL_GIVEN_RE, _CREDENTIAL_SET_RE):
+        # every key occurrence is checked, not only the first: the search resumes after each start
+        start = 0
+        while start <= len(text):
+            match = shape.search(text, start)
+            if match is None:
+                break
+            value = match.group("value")
+            if value and not _BARE_REFERENCE_RE.match(value):
+                return True
+            start = match.start() + 1
+    return False
+
+
+def _command_credential(entry):
+    """True when a setup-command `entry` gives a credential-named key (a name containing TOKEN,
+    AUTH, SECRET, PASSWORD, PASSWD, IDENT or APIKEY/API_KEY) a value that is not a bare environment
+    reference ($NAME or ${NAME}, quoted or not). Command entries only: the shared `_scan` also
+    covers calibration files, and this rule is deliberately stricter than it."""
+    return (_gives_credential_value(entry)
+            or _gives_credential_value(_without_empty_quotes(entry)))
+
+
 def _commands_block(commands, clone, stamp=None, count=0):
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
