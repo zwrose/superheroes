@@ -46,19 +46,22 @@ row. The ranked entry-point levels and the presentation standard live in
 
 ## Commands the owner runs
 
-A command block the owner is asked to run that calls a database tool or reads a Keychain item lives
+A command block the owner is asked to run that names a database tool or reads a Keychain item lives
 only in a committed file on the PR's branch, so the review panel reads it like any other changed
-file. The PR body points to that file and names the one command that runs it. Whether the file stays
-after merge (at an existing `ops/` or `scripts/` path) or is removed before merge is the builder's
-call per PR, disclosed in the body. No new home is created.
+file. The PR body points to that file and tells the owner to run the file (`bash <path>`) rather than
+paste its lines, because a pasted block can run differently in the owner's shell. Whether the file
+stays after merge (at an existing `ops/` or `scripts/` path) or is removed before merge is the
+builder's call per PR, disclosed in the body. No new home is created.
 
-`vet_slot.py handback` refuses a body that holds such a fenced shell block (`bash`, `sh`, `zsh`,
-`shell` or no language, including one nested in a list or a blockquote) with `owner-command-in-body`,
-and the refusal names the block. Every other fenced block passes, so "run this test" stays in the
-body. The check reads only fences: inline code and non-shell fences pass, and a tool named as an
-option value, as a wrapper's container or operand, by `echo` or `printf`, in a heredoc body, or in a
-shell comment is not a call. A block wholly inside an
-HTML comment does not render and is not read.
+`vet_slot.py handback` refuses a body that holds a fenced shell block (`bash`, `sh`, `zsh`, `shell`
+or no language, including one nested in a list or a blockquote) whose code names `mongosh`, `mongo`,
+`mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or
+`sqlite3`, or a Keychain read (`security find-generic-password`, `security find-internet-password`),
+with `owner-command-in-body`, and the refusal names the block. Shell comments are not read, except a
+comment that holds a `$(…)` or backtick substitution. Inline code and non-shell fences pass, so "run
+this test" stays in the body. A shell block that only mentions a tool (`pytest -k psql`) is refused
+too, so move it into the file or reword it. A block wholly inside an HTML comment does not render and
+is not read.
 
 ## The advisor-vet slot
 

@@ -39,7 +39,7 @@ def _refused(body, line, language, tool):
     result = vs.check_handback(body)
     assert result["ok"] is False
     assert result["reason"] == "owner-command-in-body"
-    expected = "the fenced %s block opening at line %d calls %s" % (language, line, tool)
+    expected = "the fenced %s block opening at line %d names %s" % (language, line, tool)
     assert expected in result["detail"]
     return result
 
@@ -64,6 +64,17 @@ def test_dod_row_2_keychain_find_generic_password_refuses():
 def test_keychain_find_internet_password_in_substitution_refuses():
     body = _body(_block('TOKEN=$(security find-internet-password -s host -w)'))
     _refused(body, 1, "bash", "security find-internet-password")
+
+
+@pytest.mark.parametrize("tool", ["mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump",
+                                  "pg_restore", "mysql", "mysqldump", "redis-cli", "sqlite3"])
+def test_literal_database_tool_names_refuse(tool):
+    _refused(_body(_block(tool + " --help")), 1, "bash", tool)
+
+
+def test_database_tool_list_is_pinned_to_literals():
+    assert set(vs.DATABASE_TOOLS) == {"mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump",
+                                      "pg_restore", "mysql", "mysqldump", "redis-cli", "sqlite3"}
 
 
 # ---- refuse: opener forms -------------------------------------------------------------------
@@ -97,30 +108,7 @@ def test_unterminated_fence_below_markers_refuses():
     result = vs.check_handback(body)
     assert result["ok"] is False
     assert result["reason"] == "owner-command-in-body"
-    assert "calls mongosh" in result["detail"]
-
-
-@pytest.mark.parametrize("tool", vs.DATABASE_TOOLS)
-def test_each_listed_tool_at_command_position_refuses(tool):
-    body = _body(_block("%s --help" % tool))
-    _refused(body, 1, "bash", tool)
-
-
-@pytest.mark.parametrize("command,tool", [
-    ("cat x | psql", "psql"),
-    ("a && mysql -u root", "mysql"),
-    ("PGPASSWORD=x psql", "psql"),
-    ("sudo -u postgres psql", "psql"),
-    ("kubectl exec -it pod -- psql", "psql"),
-    ("bash -c \"psql -c 'select 1'\"", "psql"),
-    ("/usr/bin/sqlite3 db", "sqlite3"),
-    ("docker exec -it mongo mongosh", "mongosh"),
-    ("echo ok; redis-cli ping", "redis-cli"),
-    ("x=$(pg_dump db)", "pg_dump"),
-])
-def test_command_position_forms_refuse(command, tool):
-    body = _body(_block(command))
-    _refused(body, 1, "bash", tool)
+    assert "names mongosh" in result["detail"]
 
 
 # ---- refuse: containers ---------------------------------------------------------------------
@@ -140,7 +128,7 @@ def test_block_inside_build_record_refuses():
     body = _body(build_record=record)
     result = vs.check_handback(body)
     assert result["reason"] == "owner-command-in-body"
-    assert "block opening at line 13 calls psql" in result["detail"]
+    assert "block opening at line 13 names psql" in result["detail"]
 
 
 def test_f2_regression_block_after_closed_html_comment_refuses():
@@ -152,9 +140,9 @@ def test_two_offending_blocks_one_refusal_names_both_lines():
     body = _body(_block("psql -h a") + "\n" + _block("mysql -u root", lang="sh"))
     result = vs.check_handback(body)
     assert result["reason"] == "owner-command-in-body"
-    assert "the fenced bash block opening at line 1 calls psql" in result["detail"]
-    assert "the fenced sh block opening at line 5 calls mysql" in result["detail"]
-    assert result["detail"].count("a command the owner is asked to run") == 1
+    assert "the fenced bash block opening at line 1 names psql" in result["detail"]
+    assert "the fenced sh block opening at line 5 names mysql" in result["detail"]
+    assert result["detail"].count(vs.OWNER_COMMAND_ADVICE) == 1
 
 
 # ---- fail-closed edges ----------------------------------------------------------------------
@@ -212,36 +200,52 @@ def test_inline_code_in_prose_passes():
     _passes(body)
 
 
-@pytest.mark.parametrize("command", [
-    "python3 -m pytest -k psql",
-    'pytest -k "mongosh"',
-    "echo mongosh",
-    "printf '%s\\n' psql",
-    "# then run mongosh by hand",
-    "mytool --filter=psql",
-    "pip install postgresql-client-config",
-    "export URI=mongodb://localhost",
-    "mysql_config --version",
-    "cd mongo/data",
-    "docker pull mongo:7",
-    "ssh root@psql",
-])
-def test_non_invocations_pass(command):
-    _passes(_body(_block(command)))
-
-
 def test_html_comment_hidden_shell_block_passes():
     body = _body("<!--\n```bash\npsql -h host\n```\n-->")
     _passes(body)
 
 
-def test_sudo_wrapper_flag_is_followed_and_refuses():
-    _refused(_body(_block("sudo -E psql")), 1, "bash", "psql")
+@pytest.mark.parametrize("command", [
+    "pip install postgresql-client-config",
+    "export URI=mongodb://localhost",
+    "mysql_config --version",
+    "cd mongo/data",
+    "ssh root@psql",
+    "mytool --filter=psql_extra",
+])
+def test_whole_word_non_matches_pass(command):
+    _passes(_body(_block(command)))
+
+
+# ---- shell comments -------------------------------------------------------------------------
+
+def test_plain_comment_naming_a_tool_passes():
+    _passes(_body(_block("# then run mongosh by hand")))
+
+
+def test_comment_holding_a_dollar_paren_substitution_refuses():
+    _refused(_body(_block("# $(psql -c 'x')")), 1, "bash", "psql")
+
+
+def test_trailing_comment_holding_a_backtick_substitution_refuses():
+    _refused(_body(_block("echo hi  # see `mongosh`")), 1, "bash", "mongosh")
+
+
+# ---- accepted over-refusal ------------------------------------------------------------------
+
+@pytest.mark.parametrize("lines,tool", [
+    (["python3 -m pytest -k psql"], "psql"),
+    (["brew install mongosh"], "mongosh"),
+    (["echo mongosh"], "mongosh"),
+    (["cat <<'EOF'", "psql", "EOF"], "psql"),
+])
+def test_accepted_over_refusal_a_mere_mention_in_a_shell_block_refuses(lines, tool):
+    _refused(_body(_block(*lines)), 1, "bash", tool)
 
 
 # ---- entry points and unchanged verbs ---------------------------------------------------------
 
-def test_write_and_check_analysis_do_not_refuse_the_body(tmp_path):
+def test_write_and_check_analysis_do_not_refuse_the_body():
     body = _body(_block("mongorestore dump"))
     advisor_at, build_at, ids = vs.analyze_body(body)
     assert advisor_at < build_at
@@ -271,107 +275,3 @@ def test_main_body_file_clean_body_exits_0(tmp_path, capsys):
     path.write_text(_body(_block("scripts/pinned-python -m pytest -q")), encoding="utf-8")
     assert vs.main(["handback", "--body-file", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
-
-
-@pytest.mark.parametrize("command", [
-    "brew install mongosh",
-    "docker pull mongo",
-    "rg psql README.md",
-    "echo 'security find-generic-password'",
-    "rg -- psql README.md",
-    "printf '%s\\n' 'do not run; psql'",
-    "DB_CLIENT=psql",
-])
-def test_tool_names_as_ordinary_arguments_pass(command):
-    _passes(_body(_block(command)))
-
-
-@pytest.mark.parametrize("lines", [
-    ["pytest -k \\", "  psql"],
-    ["cat <<'EOF'", "psql -c 'x'", "EOF"],
-    ["cat <<-EOF", "\tpsql -c 'x'", "\tEOF"],
-    ["docker exec mongo pytest -q"],
-    ["sudo echo psql"],
-])
-def test_shell_context_and_wrapper_operands_pass(lines):
-    _passes(_body(_block(*lines)))
-
-
-@pytest.mark.parametrize("lines,tool", [
-    (["psql <<EOF", "select 1;", "EOF"], "psql"),
-    (["docker run --rm -e X=1 mongo:7 mongosh"], "mongosh"),
-    (["sudo -E psql"], "psql"),
-    (["sudo -u postgres psql"], "psql"),
-    (["docker exec -it mongo mongosh"], "mongosh"),
-    (["pytest \\", "  && psql"], "psql"),
-])
-def test_heredoc_opener_and_wrapped_tools_refuse(lines, tool):
-    _refused(_body(_block(*lines)), 1, "bash", tool)
-
-
-@pytest.mark.parametrize("tool", ["mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump",
-                                  "pg_restore", "mysql", "mysqldump", "redis-cli", "sqlite3"])
-def test_literal_database_tool_names_refuse(tool):
-    _refused(_body(_block(tool + " --help")), 1, "bash", tool)
-
-
-def test_database_tool_list_is_pinned_to_literals():
-    assert set(vs.DATABASE_TOOLS) == {"mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump",
-                                      "pg_restore", "mysql", "mysqldump", "redis-cli", "sqlite3"}
-
-
-@pytest.mark.parametrize("command", [
-    "docker exec app grep -c psql README.md",
-    "env pytest -c psql",
-    "echo '$(psql)'",
-    "printf \"%s\\n\" \"\\$(psql)\"",
-    "echo '`psql`'",
-])
-def test_dash_c_option_and_literal_substitutions_pass(command):
-    assert vs.check_handback(_body(_block(command)))["ok"] is True
-
-
-@pytest.mark.parametrize("command,tool", [
-    ("bash -c \"psql -c 'select 1'\"", "psql"),
-    ("sudo bash -c \"psql\"", "psql"),
-    ("docker exec app sh -c \"psql\"", "psql"),
-    ("su postgres -c \"psql\"", "psql"),
-    ("X=\"$(psql -c 'x')\"", "psql"),
-    ("echo \"$(mongosh --eval 1)\"", "mongosh"),
-])
-def test_shell_string_and_double_quoted_substitutions_refuse(command, tool):
-    _refused(_body(_block(command)), 1, "bash", tool)
-
-
-# ---- heredoc substitutions, command lookup, quote state across lines --------------------------
-
-@pytest.mark.parametrize("opener", ["cat <<EOF", "cat <<-EOF"])
-def test_unquoted_heredoc_body_substitution_refuses(opener):
-    _refused(_body(_block(opener, "$(psql --help)", "EOF")), 1, "bash", "psql")
-
-
-@pytest.mark.parametrize("opener", ["cat <<'EOF'", 'cat <<"EOF"', "cat <<\\EOF"])
-def test_quoted_heredoc_body_substitution_passes(opener):
-    _passes(_body(_block(opener, "$(psql --help)", "EOF")))
-
-
-def test_unquoted_heredoc_body_bare_tool_word_passes():
-    _passes(_body(_block("cat <<EOF", "psql", "EOF")))
-
-
-@pytest.mark.parametrize("command", ["command -v psql", "command -V psql", "command -pv psql",
-                                     "type psql", "which mongosh"])
-def test_command_lookup_passes(command):
-    _passes(_body(_block(command)))
-
-
-def test_plain_command_execution_still_refuses():
-    _refused(_body(_block("command psql")), 1, "bash", "psql")
-
-
-def test_multiline_single_quoted_python_argument_passes():
-    _passes(_body(_block("python3 -B -c '", 'print("psql")', "'")))
-
-
-def test_multiline_single_quoted_shell_argument_refuses():
-    _refused(_body(_block("bash -c '", 'psql -c "select 1"', "'")), 1, "bash", "psql")

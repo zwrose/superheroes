@@ -17,7 +17,7 @@ check is a refusal with one of eleven reasons (``bad-argument``, ``read-failed``
 inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed``,
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
-calls a database tool or reads a Keychain item)) and a detail naming what was wrong; no edit is made, except
+names a database tool or a Keychain read)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal."""
@@ -25,7 +25,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -48,9 +47,10 @@ VERBS = ("write", "check", "handback")
 SHELL_LANGUAGES = frozenset({"bash", "sh", "zsh", "shell", ""})
 DATABASE_TOOLS = ("mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump", "pg_restore",
                   "mysql", "mysqldump", "redis-cli", "sqlite3")
-OWNER_COMMAND_ADVICE = ("a command the owner is asked to run that calls a database tool or reads a"
+OWNER_COMMAND_ADVICE = ("a command the owner is asked to run that names a database tool or reads a"
                         " Keychain item lives in a committed file on the PR branch: move the block"
-                        " into that file and name in the body the one command that runs it")
+                        " into that file and have the body tell the owner to run the file"
+                        " (bash <path>) rather than paste its lines")
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _KEYCHAIN_RE = re.compile(r"(?<![\w-])security\s+find-(?:generic|internet)-password(?![\w-])")
@@ -59,7 +59,6 @@ _DATABASE_TOOL_RE = re.compile(
     % "|".join(re.escape(tool) for tool in sorted(DATABASE_TOOLS, key=len, reverse=True)))
 _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
-_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 class _Refusal(Exception):
@@ -255,269 +254,27 @@ def _code_part(line):
     return line
 
 
-_WRAPPERS = frozenset({"sudo", "doas", "env", "exec", "nohup", "time", "nice", "command", "xargs",
-                       "watch", "timeout", "stdbuf", "su", "runuser"})
-_CONTAINER_WRAPPERS = frozenset({"docker", "podman", "nerdctl", "kubectl", "oc"})
-
-
-_SHELLS = frozenset({"bash", "sh", "zsh"})
-_OPERATORS = frozenset({"|", "||", "&&", ";", "&", "(", ")", "|&", ";;"})
-_KEYCHAIN_VERBS = frozenset({"find-generic-password", "find-internet-password"})
-_SUBSTITUTION_RE = re.compile(r"\$\((.*?)\)|`([^`]*)`")
-
-
-def _substitutions(code):
-    """The command lines of each ``$(...)`` or backtick substitution outside single quotes and escapes."""
-    out = []
-    quote = None
-    i = 0
-    while i < len(code):
-        char = code[i]
-        # axis: a backslash outside single quotes escapes the next character
-        if char == "\\" and quote != "'":
-            i += 2
-            continue
-        # axis: a substitution opener inside single quotes is literal text
-        if quote == "'":
-            if char == "'":
-                quote = None
-        elif char in "$`" and (match := _SUBSTITUTION_RE.match(code, i)):
-            out.append(match.group(1) or match.group(2) or "")
-            i = match.end()
-            continue
-        elif quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        i += 1
-    return out
-
-
-def _tool_at(words, i):
-    """The owner tool ``words[i]`` names (``security`` with its verb), else None."""
-    name = words[i].rsplit("/", 1)[-1]
-    if name in DATABASE_TOOLS:
-        return name
-    if name == "security" and words[i + 1:i + 2] and words[i + 1] in _KEYCHAIN_VERBS:
-        return "security " + words[i + 1]
-    return None
-
-
-_WRAPPER_VALUE_OPTIONS = {
-    "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}),
-    "doas": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}),
-    "env": frozenset({"-u", "-C"}),
-    "nice": frozenset({"-n"}),
-    "watch": frozenset({"-n", "-d"}),
-    "timeout": frozenset({"-s", "-k"}),
-    "xargs": frozenset({"-I", "-n", "-P", "-d", "-L", "-E", "-s", "-a"}),
-}
-_CONTAINER_VALUE_OPTIONS = frozenset({"-e", "--env", "-u", "--user", "-w", "--workdir", "-v", "--volume",
-                                      "--name", "--network", "-p", "--publish", "--entrypoint"})
-
-
-def _skip_options(words, start, value_options):
-    """Index of the first word at or after ``start`` that is not an option or an option's value."""
-    i = start
-    while i < len(words):
-        word = words[i]
-        if word == "--":
-            return i + 1
-        if not word.startswith("-") or word == "-":
-            break
-        i += 2 if word in value_options else 1
-    return i
-
-
-def _wrapped_command(command, words):
-    """The tokens of the command a recognised wrapper hands off to (``words[0]`` is the wrapper)."""
-    if command in ("kubectl", "oc"):
-        # axis: only what follows a kubectl/oc exec -- is the command
-        if "--" in words and any(word in ("exec", "run") for word in words[1:]):
-            return words[words.index("--") + 1:]
-        return []
-    if command in _CONTAINER_WRAPPERS:
-        verbs = [i for i, word in enumerate(words) if i and word in ("exec", "run")]
-        if not verbs:
-            return []
-        # axis: the word after a container's options is the container or image, never the executable
-        i = _skip_options(words, verbs[0] + 1, _CONTAINER_VALUE_OPTIONS)
-        return words[i + 1:]
-    # axis: a wrapper's own options (and sudo -u USER style values) are not the executable
-    i = _skip_options(words, 1, _WRAPPER_VALUE_OPTIONS.get(command, frozenset()))
-    if command == "timeout" and i < len(words):
-        i += 1
-    return words[i:]
-
-
-def _simple_command_tool(tokens):
-    """The owner tool one simple command (operator-free tokens) runs, else None."""
-    words = list(tokens)
-    # axis: only complete NAME=value tokens before the command word are assignments (PGPASSWORD=x psql)
-    while words and _ASSIGNMENT_RE.match(words[0]):
-        words.pop(0)
-    if not words:
-        return None
-    command = words[0].rsplit("/", 1)[-1]
-    # axis: a tool at command position is a call; echo/printf and any other command's arguments never are
-    tool = _tool_at(words, 0)
-    if tool:
-        return tool
-    container = command in _CONTAINER_WRAPPERS and any(word in ("exec", "run") for word in words[1:])
-    if command not in _WRAPPERS and command not in _SHELLS and not container:
-        return None
-    # axis: the argument of -c is a command line only for a shell or su/runuser; elsewhere -c is an option
-    if command in _SHELLS or command in ("su", "runuser"):
-        for i in range(1, len(words)):
-            if words[i - 1] == "-c":
-                inner = _calls_owner_tool(words[i])
-                if inner:
-                    return inner
-    if command in _SHELLS:
-        return None
-    # axis: command -v / -V only looks a command up (it prints, never runs it), including combined flags
-    if command == "command":
-        for word in words[1:]:
-            if word == "--" or not word.startswith("-") or word == "-":
-                break
-            if not word.startswith("--") and ("v" in word or "V" in word):
-                return None
-    rest = _wrapped_command(command, words)
-    # axis: a wrapper hands its remaining command to the same judge
-    return _simple_command_tool(rest) if rest else None
-
-
 def _calls_owner_tool(line):
-    """The database tool (or ``security find-...-password``) ``line`` calls, else None."""
+    """The database tool (or ``security find-...-password``) ``line`` names, else None.
+
+    A mention is enough: no command position, wrapper, quote or heredoc is judged. A shell comment is
+    skipped unless it holds a ``$(`` or a backtick, which a pasted comment can run as a substitution."""
     code = _code_part(line)
-    # axis: substitutions are command lines even inside double quotes
-    for text in _substitutions(code):
-        inner = _calls_owner_tool(text)
-        if inner:
-            return inner
-    try:
-        lexer = shlex.shlex(code, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        # axis: a line that cannot be tokenized (unbalanced quote) never silently passes an owner tool
-        for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
-            found = pattern.search(code)
-            if found:
-                return " ".join(found.group(0).split())
-        return None
-    command = []
-    for token in tokens + [";"]:
-        if token in _OPERATORS:
-            tool = _simple_command_tool(command)
-            if tool:
-                return tool
-            command = []
-        else:
-            command.append(token)
+    comment = line[len(code):]
+    # axis: a comment holding a substitution opener is matched too; any other comment text is not
+    text = line if "$(" in comment or "`" in comment else code
+    for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
+        found = pattern.search(text)
+        if found:
+            return " ".join(found.group(0).split())
     return None
-
-
-_HEREDOC_RE = re.compile(
-    r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|\\([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))")
-
-
-def _heredoc_delimiters(line):
-    """``(word, strip_tabs, quoted)`` for each heredoc ``line`` opens outside quotes and comments."""
-    code = _code_part(line)
-    out = []
-    quote = None
-    i = 0
-    while i < len(code):
-        char = code[i]
-        if char == "\\" and quote != "'":
-            i += 2
-            continue
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif code.startswith("<<<", i):
-            i += 3
-            continue
-        elif code.startswith("<<", i):
-            match = _HEREDOC_RE.match(code, i)
-            if match:
-                word = match.group(2) or match.group(3) or match.group(4) or match.group(5)
-                out.append((word, bool(match.group(1)), bool(match.group(2) or match.group(3) or match.group(4))))
-                i = match.end()
-                continue
-        i += 1
-    return out
-
-
-def _open_quote(line):
-    """The quote character ``line`` leaves open at its end (outside a shell comment), else None."""
-    quote = None
-    i = 0
-    while i < len(line):
-        char = line[i]
-        if char == "\\" and quote != "'":
-            i += 2
-            continue
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char == "#" and (i == 0 or line[i - 1].isspace()):
-            return None
-        i += 1
-    return quote
-
-
-def _body_substitutions(raw):
-    """The command text of each unescaped ``$(...)`` or backtick substitution in an expanded heredoc body line."""
-    return [match.group(1) or match.group(2) or ""
-            for match in _SUBSTITUTION_RE.finditer(raw)
-            if not raw[:match.start()].endswith("\\")]
-
-
-def _logical_lines(lines):
-    """Join continued and quote-spanning lines and drop heredoc bodies; yields the judged logical lines.
-
-    The body of an unquoted-delimiter heredoc is data except for its substitutions, which yield as lines."""
-    pending = None
-    heredocs = []
-    for raw in lines:
-        if heredocs:
-            word, strip_tabs, quoted = heredocs[0]
-            # axis: every line up to the delimiter line is data, not a command
-            if (raw.lstrip("\t") if strip_tabs else raw).rstrip() == word:
-                heredocs.pop(0)
-            # axis: an unquoted heredoc delimiter expands $(...) and backticks in the body, so those still run
-            elif not quoted:
-                yield from _body_substitutions(raw)
-            continue
-        line = raw if pending is None else pending + raw
-        trailing = len(line) - len(line.rstrip("\\"))
-        # axis: a line ending in an odd run of backslashes continues onto the next line
-        if trailing % 2 == 1:
-            pending = line[:-1]
-            continue
-        # axis: a line that leaves a quote open continues, newline included, until the quote closes
-        if _open_quote(line):
-            pending = line + "\n"
-            continue
-        pending = None
-        heredocs = _heredoc_delimiters(line)
-        yield line
-    if pending is not None:
-        yield pending
 
 
 def owner_command_blocks(body):
-    """One ``{"line", "language", "tool"}`` per fenced shell block that calls an owner-run tool."""
+    """One ``{"line", "language", "tool"}`` per fenced shell block that names an owner-run tool."""
     found = []
     for number, language, lines in _owner_shell_blocks(body):
-        for content in _logical_lines(lines):
+        for content in lines:
             tool = _calls_owner_tool(content)
             if tool:
                 found.append({"line": number, "language": language, "tool": tool})
@@ -527,7 +284,7 @@ def owner_command_blocks(body):
 
 def check_handback(body):
     """The builder's handback read: ``analyze_body`` itself, so it agrees with ``write`` and ``check``;
-    it also refuses a fenced shell block that calls a database tool or reads a Keychain item."""
+    it also refuses a fenced shell block that names a database tool or a Keychain read."""
     try:
         ids = analyze_body(body)[2]
     except _Refusal as exc:
@@ -539,9 +296,9 @@ def check_handback(body):
                        " <!-- superheroes:followups FU1 FU2 --> or <!-- superheroes:followups none -->")
         return _refusal(exc.reason, detail)
     blocks = owner_command_blocks(body)
-    # axis: a fenced shell block that calls a database tool or reads a Keychain item refuses owner-command-in-body
+    # axis: a fenced shell block that names a database tool or a Keychain read refuses owner-command-in-body
     if blocks:
-        named = ["the fenced %s block opening at line %d calls %s"
+        named = ["the fenced %s block opening at line %d names %s"
                  % (b["language"] or "no-language", b["line"], b["tool"]) for b in blocks]
         return _refusal("owner-command-in-body", "; ".join(named) + "; " + OWNER_COMMAND_ADVICE)
     return {"ok": True, "verb": "handback", "followups": ids or []}

@@ -20,7 +20,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
-- **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body names the one command that runs it; `vet_slot.py handback` refuses the body otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
+- **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body tells the owner to run the file (`bash <path>`) rather than paste its lines; `vet_slot.py handback` refuses a shell block that names a database tool or a Keychain read otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
 
 ### Review: the post-fix diff comes from git
 
@@ -57,11 +57,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Handback: owner-run commands live in a file
 
-- `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell` or no-language block, nested in a list or a blockquote too, that calls `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or that runs `security find-generic-password` or `security find-internet-password`. The refusal names the block.
-- These pass: other fences, inline code, a tool as an option value such as `pytest -k psql`, a tool in `echo` or `printf` arguments, a shell comment, and a block wholly inside an HTML comment.
+- `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell` or no-language block, nested in a list or a blockquote too, whose code names `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or names `security find-generic-password` or `security find-internet-password`. The refusal names the block.
+- These pass: other fences, inline code, a shell comment (unless it holds a `$(…)` or backtick substitution), and a block wholly inside an HTML comment.
+- A shell block that only mentions a tool, such as `pytest -k psql`, `brew install mongosh` or `echo mongosh`, is refused too. Move it into the file or reword it. The check reads what a block names, not how it is run, and over-refusing is the accepted direction.
+- The body tells the owner to run the file (`bash <path>`) rather than paste its lines, because a pasted block can run differently in the owner's shell.
 - `write` and `check` are unchanged.
-- A wrapper (`sudo`, `env`, `timeout`, `docker exec` and the like) hands its remaining command to the same check, so `sudo -E psql` and `docker exec -it mongo mongosh` refuse while `docker exec mongo pytest -q` and `sudo echo psql` pass. A backslash-continued command is read as one line, and a heredoc body is data (the line that opens it is still read).
-- Known residual: a tool hidden behind an unrecognised wrapper or an indirection such as a shell function or alias passes. The review panel and the vet remain the backstop.
+- Known residual: a tool reached only through an alias, a function or a variable (`$DB`) passes. The review panel and the vet remain the backstop.
 
 ## 0.44.0
 
