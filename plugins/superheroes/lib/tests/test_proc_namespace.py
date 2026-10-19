@@ -11,12 +11,14 @@ from proc_namespace import (MARKER, SANDBOX_MARKER_ENV, in_write_sandbox, proc_i
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# The complete census of tests whose assertion reads or signals processes by pid through /proc.
+# The complete census of tests whose assertion reads a process by its pid through /proc (the _gone oracle or the containment nets).
+# test_git_setup_timeout_kills_the_helper_descendants is deliberately not a member: its assertion matches helpers by command line, which reads correctly from any namespace's procfs.
 _CENSUS = (
     test_break_it.test_t9_run_one_kills_a_lingering_worker,
     test_break_it.test_t9_cwd_net_kills_a_detached_worker_without_the_reaper,
     test_break_it.test_t9_tag_net_kills_a_detached_worker_that_left_the_copy,
     test_break_it.test_exception_after_launch_still_lets_the_reaper_collect_a_detached_worker,
+    test_break_it.test_t9_drain_start_failure_still_reaps_the_launched_process,
     test_break_it_probe_1910.test_e1_the_probes_detached_worker_is_gone_after_run_one,
 )
 
@@ -94,11 +96,11 @@ def test_a_normal_host_does_not_look_foreign():
     assert not proc_is_foreign()
 
 
-# axis: census membership - each of the five /proc-reading tests carries the proc_containment mark; catches a census test left unguarded.
+# axis: census membership - each of the six /proc-reading tests carries the proc_containment mark; catches a census test left unguarded.
 def test_every_census_test_carries_the_proc_containment_mark():
-    assert len(_CENSUS) == 5
+    assert len(_CENSUS) == 6
     for func in _CENSUS:
-        names = [mark.name for mark in func.pytestmark]
+        names = [mark.name for mark in getattr(func, "pytestmark", [])]
         assert MARKER in names, "%s lacks @pytest.mark.%s" % (func.__name__, MARKER)
 
 

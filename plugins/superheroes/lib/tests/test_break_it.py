@@ -308,6 +308,7 @@ def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, m
             os.kill(pid, 9)
 
 
+@pytest.mark.proc_containment
 def test_t9_drain_start_failure_still_reaps_the_launched_process(repo, monkeypatch):
     launched = []
     real = subprocess.Popen
