@@ -409,11 +409,19 @@ def _mk_staging(plugin_dir):
     return staging
 
 
+# axis: the external literals are Claude Code's own names (CONVENTIONS §11.3 external-identifier exception); a drifted constant would make every fixture below follow it silently.
+def test_sandbox_staging_literals_are_the_claude_code_contract():
+    assert vs.SANDBOX_STAGING_DIR == ".claude"
+    assert vs.SANDBOX_STAGING_MARK == ".cc-writes"
+
+
+# axis: residue exclusion - a .claude dir holding the .cc-writes marker is not a citation root; catches it being read as one.
 def test_citations_ignore_sandbox_staging_residue(tmp_path):
     _mk_staging(tmp_path)
     assert vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path)) == []
 
 
+# axis: device classification (_is_char_device) - true for a character device, false for a regular file or a missing path; catches a misclassified entry.
 def test_is_char_device_seam(tmp_path):
     regular = tmp_path / "settings.json"
     regular.write_text("x")
@@ -422,6 +430,7 @@ def test_is_char_device_seam(tmp_path):
     assert vs._is_char_device(str(tmp_path / "missing")) is False
 
 
+# axis: residue exclusion with device siblings - a character device beside the marker is still residue; catches the device being counted as plugin content.
 def test_citations_ignore_sandbox_staging_with_char_device_sibling(tmp_path, monkeypatch):
     staging = _mk_staging(tmp_path)
     device = str(staging / "settings.json")
@@ -430,6 +439,7 @@ def test_citations_ignore_sandbox_staging_with_char_device_sibling(tmp_path, mon
     assert vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path)) == []
 
 
+# axis: regular-content preservation (this and the next test) - a regular file in .claude, with or without the marker, makes it real content; catches real citations being excluded.
 def test_citations_flag_claude_dir_with_marker_and_regular_file(tmp_path):
     staging = _mk_staging(tmp_path)
     (staging / "settings.json").write_text("x")
@@ -445,6 +455,7 @@ def test_citations_flag_claude_dir_with_only_a_regular_file(tmp_path):
     assert out and "review-profile.md" in out[0]
 
 
+# axis: symlink rejection (this and the next test) - a symlinked marker or a symlinked .claude is not residue; catches a link being trusted as the sandbox's own staging.
 def test_citations_flag_claude_dir_when_marker_is_a_symlink(tmp_path):
     staging = tmp_path / vs.SANDBOX_STAGING_DIR
     staging.mkdir()
@@ -464,6 +475,7 @@ def test_citations_flag_claude_dir_when_it_is_a_symlink(tmp_path):
     assert out and "review-profile.md" in out[0]
 
 
+# axis: main's note - main names the skipped staging dir in a note and raises no citation error; catches silent exclusion or the residue being read as a citation root.
 def test_main_notes_sandbox_staging_and_does_not_read_it_as_a_citation_root(
         tmp_path, monkeypatch, capsys):
     root = tmp_path / "plugins"

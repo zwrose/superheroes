@@ -22,18 +22,24 @@ _CENSUS = (
 
 
 def _readlink_returning(target):
-    return lambda path: target
+    def readlink(path):
+        assert path == "/proc/self"
+        return target
+    return readlink
 
 
 def _readlink_raising(path):
+    assert path == "/proc/self"
     raise OSError("no /proc")
 
 
+# axis: sandbox-marker identity - the env name and the pytest mark name are the contract with the sandbox runtime and the census; catches a renamed marker that silently disarms the guard.
 def test_marker_env_name_is_the_sandbox_runtime_variable():
     assert SANDBOX_MARKER_ENV == "SANDBOX_RUNTIME"
     assert MARKER == "proc_containment"
 
 
+# axis: PID comparison (this test and the next) - equal numbers are own, different are foreign, and the path read must be /proc/self; catches an inverted comparison or a wrong proc path.
 def test_equal_numbers_are_not_foreign():
     assert proc_is_foreign(_readlink_returning("3"), lambda: 3) is False
 
@@ -42,6 +48,7 @@ def test_different_numbers_are_foreign():
     assert proc_is_foreign(_readlink_returning("8"), lambda: 3) is True
 
 
+# axis: missing/non-numeric proc (this test and the next) - no /proc or a non-pid /proc/self is not this constraint; catches either being reported as foreign.
 def test_a_missing_proc_is_not_foreign():
     assert proc_is_foreign(_readlink_raising, lambda: 3) is False
 
@@ -50,12 +57,14 @@ def test_a_non_numeric_proc_self_is_not_foreign():
     assert proc_is_foreign(_readlink_returning("thread-self"), lambda: 3) is False
 
 
+# axis: sandbox-marker value - only SANDBOX_RUNTIME=1 means the write sandbox; catches any other value or absence being taken for it.
 def test_in_write_sandbox_reads_only_the_exact_marker_value():
     assert in_write_sandbox({SANDBOX_MARKER_ENV: "1"}) is True
     assert in_write_sandbox({SANDBOX_MARKER_ENV: "0"}) is False
     assert in_write_sandbox({}) is False
 
 
+# axis: skip-vs-fail refusal, inside the sandbox - a foreign /proc skips with a message naming the sandbox and both pids; catches a hard failure or an unexplained skip.
 def test_foreign_proc_in_the_sandbox_skips_naming_the_sandbox():
     with pytest.raises(pytest.skip.Exception) as raised:
         require_own_proc_namespace(_readlink_returning("8"), lambda: 3, {SANDBOX_MARKER_ENV: "1"})
@@ -65,6 +74,7 @@ def test_foreign_proc_in_the_sandbox_skips_naming_the_sandbox():
     assert "cannot be observed here" in message
 
 
+# axis: skip-vs-fail refusal, outside the sandbox - a foreign /proc fails and never skips; catches a skip that would hide a real namespace problem.
 def test_foreign_proc_outside_the_sandbox_fails_never_skips():
     with pytest.raises(pytest.fail.Exception) as raised:
         require_own_proc_namespace(_readlink_returning("8"), lambda: 3, {})
@@ -72,16 +82,19 @@ def test_foreign_proc_outside_the_sandbox_fails_never_skips():
     assert "refuses to skip" in str(raised.value)
 
 
+# axis: skip-vs-fail refusal, own namespace - an own /proc neither skips nor fails; catches the guard firing on a normal host.
 def test_own_proc_namespace_returns_none():
     assert require_own_proc_namespace(_readlink_returning("3"), lambda: 3, {}) is None
 
 
+# axis: host truth - the real /proc on a normal host is not foreign (skipped in the sandbox); catches the detector misreading the live host.
 def test_a_normal_host_does_not_look_foreign():
     if in_write_sandbox():
         pytest.skip("inside the claude write sandbox /proc is foreign by design")
     assert not proc_is_foreign()
 
 
+# axis: census membership - each of the five /proc-reading tests carries the proc_containment mark; catches a census test left unguarded.
 def test_every_census_test_carries_the_proc_containment_mark():
     assert len(_CENSUS) == 5
     for func in _CENSUS:
@@ -118,6 +131,7 @@ def _run_forced_skip(tmp_path, environ):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the guard is Linux-only")
+# axis: pytest outcome hook (this test and the next) - a skip of a marked test fails outside the sandbox and stays skipped inside it; catches a skip hiding an unobserved assertion, or a failure inside the sandbox.
 def test_outcome_guard_turns_a_skip_outside_the_sandbox_into_a_failure(tmp_path):
     done = _run_forced_skip(tmp_path, {})
     output = done.stdout + done.stderr
