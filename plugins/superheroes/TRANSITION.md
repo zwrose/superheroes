@@ -12,13 +12,25 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
+
+### Review: the post-fix diff comes from git
+
+- The driver derives the post-fix diff itself, from `git diff <pinned baseRef>...<fix-fold head>`. A `headDiff` or `headDiffPath` a fixer submits is a cross-check against that derivation, and submitting none is allowed.
+- A supplied diff that differs from git's (line endings aside) stops the round with `head-diff-mismatch`. Git unable to read the head beside a supplied diff stops it with `head-diff-unverifiable`. A `headDiffPath` that cannot be read is recorded as `supplied-unreadable` and git governs on a hand `submit`; on the durable-record path `record-result` refuses `head-diff-unreadable` at record time, and the remedy is to omit the optional `headDiffPath` or replace it with a readable absolute path, then record again.
+- Each round and its receipt row gain `headDiffCheck` (`match`, `mismatch`, `none-supplied`, `supplied-unreadable`, `unverifiable` or `no-repository`), and `headDiffSource` reads `git` whenever the driver derived the diff.
+- A fix round with no supplied diff audits its fixes instead of running a wider panel.
+
 ## 0.44.0
 
 ### Before you upgrade
 
 Check these in a consuming project when it adopts 0.44.0. Each step names the note it comes from.
 
-- **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.44.0, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.44.0 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
 - **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
@@ -31,13 +43,6 @@ Check these in a consuming project when it adopts 0.44.0. Each step names the no
 - `pr_sheet.py build` refuses a left-for-owner finding with no `leftovers` entry. An entry is `{why, context, options, ifLeft?, recommendation?}`; `why` and `context` are required non-empty strings, and `ifLeft` replaces the reviewer's consequence text on the card.
 - A leftover's `options` is `"none"`, a list of options, or an object giving each of `keep-it`, `fix-in-a-follow-up` and `fix-before-merge` its consequence for this finding. The bare `"leftover"`, which showed the generic consequences, is refused.
 - A leftover card's context is now three sections, Why it's yours, What happened and If left, in that order, so its card id changes; sheets already published keep their old cards until republished.
-
-### Review: the post-fix diff comes from git
-
-- The driver derives the post-fix diff itself, from `git diff <pinned baseRef>...<fix-fold head>`. A `headDiff` or `headDiffPath` a fixer submits is a cross-check against that derivation, and submitting none is allowed.
-- A supplied diff that differs from git's (line endings aside) stops the round with `head-diff-mismatch`. Git unable to read the head beside a supplied diff stops it with `head-diff-unverifiable`. A `headDiffPath` that cannot be read is recorded as `supplied-unreadable` and git governs on a hand `submit`; on the durable-record path `record-result` refuses `head-diff-unreadable` at record time, and the remedy is to omit the optional `headDiffPath` or replace it with a readable absolute path, then record again.
-- Each round and its receipt row gain `headDiffCheck` (`match`, `mismatch`, `none-supplied`, `supplied-unreadable`, `unverifiable` or `no-repository`), and `headDiffSource` reads `git` whenever the driver derived the diff.
-- A fix round with no supplied diff audits its fixes instead of running a wider panel.
 
 ### Claude write sandbox: localPorts opens on Linux
 
