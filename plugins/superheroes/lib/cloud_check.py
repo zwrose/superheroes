@@ -84,8 +84,9 @@ _SETUP_MESSAGE = (
     "**Setup text** {header}\n"
     "\n"
     "A block to copy and paste. It holds no secret. The pass never goes in here. If this project "
-    "needs its own tools in the cloud, such as a language runtime or a browser, add their install "
-    "steps directly under the line that reads \"{marker}\""
+    "needs its own setup commands in the cloud, such as installing its dependencies, list them in "
+    "configure (item 17, cloud setup commands) and write new setup text: a step added by hand "
+    "under the line that reads \"{marker}\" is lost the next time setup text is pasted."
 )
 
 _SETUP_TEXT_MESSAGE = (

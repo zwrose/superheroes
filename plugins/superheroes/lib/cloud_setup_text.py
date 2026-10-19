@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from datetime import datetime, timezone
@@ -36,6 +37,7 @@ DUPLICATION_CHECKER_PACKAGE = "jscpd@5.0.12"
 SANDBOX_TOOL_PACKAGES = "bubblewrap socat"
 SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
+SETUP_COMMANDS_STAMP_KEY = "setup-commands"
 TOOL_STEPS_MARKER = "# The project's own tool steps, if any, go below this line."
 # The cloud platform runs nothing before a session starts except this cached script, so a setup
 # made at one plugin version stays at that version until new setup text is pasted.
@@ -247,18 +249,44 @@ def _without_setting(data):
         return data
 
 
-def _stamp_view(files):
+def _setup_commands(cwd, root):
+    """The project's ordered setup commands (configure item 17): a list of strings, possibly empty.
+    A project with no readable core, or no such setting, has none; a setting that is there but
+    invalid is refused, because the text would otherwise quietly leave out what the owner listed."""
+    try:
+        facts = core_md.read(cwd, root, persist_backfill=False)
+    except Exception:
+        raise _Refused("setup-commands-unreadable", "The project's setup commands cannot be read "
+                       "from its calibration.")
+    settings = facts.get("projectConfiguration") if facts is not None else None
+    slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
+    if not isinstance(settings, dict) or slug not in settings:
+        return []
+    item = project_config._item_by_slug(slug)
+    # axis: a stored value that is not a valid list is refused, never read as an empty list
+    if project_config.validate_item_value(item, settings[slug]) is not None:
+        raise _Refused("setup-commands-malformed", "The project's setup commands are stored in a "
+                       "form that is not a list of one-line commands.")
+    return settings[slug]
+
+
+def _stamp_view(files, commands=()):
     view = dict(files)
     core = _core_rel()
     if core in view:
         view[core] = _without_setting(view[core])
+    # axis: the stamp moves whenever the command list does, in both storage modes
+    if commands:
+        view[SETUP_COMMANDS_STAMP_KEY] = (
+            json.dumps(list(commands), ensure_ascii=False) + "\n").encode("utf-8")
     return view
 
 
 def stamped_files(cwd, root=None):
     """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
-    switching cloud builds on or off never changes the stamp."""
-    return _stamp_view(calibration_files(cwd, root))
+    switching cloud builds on or off never changes the stamp, and the project's setup commands
+    when it lists any."""
+    return _stamp_view(calibration_files(cwd, root), _setup_commands(cwd, root))
 
 
 def _project_name(cwd):
@@ -318,7 +346,37 @@ def _scan(text):
     return _plain_shape(text) or _encoded_shape(text)
 
 
-def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone):
+def _commands_block(commands, clone):
+    """The step that runs the project's setup commands, one at a time, in its clone."""
+    return [
+        "",
+        "# Run the project's own setup commands (configure item 17), one at a time, in the order "
+        "listed,",
+        "# in its clone: the working directory, or the clone beside it. The first failure skips "
+        "the rest.",
+        "(",
+        '  DIR=""',
+        '  if [ -e "$PWD/.git" ]; then DIR="$PWD"',
+        *(['  elif [ -e "$PWD/$CLONE/.git" ]; then DIR="$PWD/$CLONE"'] if clone is not None else []),
+        "  fi",
+        "  n=0",
+        '  failed=""',
+        "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands),
+        "    n=$((n + 1))",
+        '    if [ -z "$DIR" ]; then echo "setup command $n skipped: no clone in $PWD%s"'
+        % (" or $PWD/$CLONE" if clone is not None else ""),
+        # axis: after a failure every later command is skipped, never run
+        '    elif [ -n "$failed" ]; then echo "setup command $n skipped: setup command $failed FAILED"',
+        '    elif (cd "$DIR" && bash -c "$cmd" </dev/null); then echo "setup command $n ok"',
+        '    else echo "setup command $n FAILED"; failed=$n',
+        "    fi",
+        "  done",
+        ') >> "$LOG" 2>&1',
+    ]
+
+
+def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
+            commands):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -375,7 +433,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         ') >> "$LOG" 2>&1 &',
         "wait",
     ]
-    if files:
+    if files or stamp is not None:
         out += ["", "# Place the project's calibration.",
                 'DEST="%s"' % dest, 'rm -f "$DEST/%s"' % STAMP_FILE,
                 'mkdir -p "$DEST"', "wrote=0"]
@@ -389,6 +447,9 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
                 'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
                 % len(files),
                 'echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
+    # axis: only a non-empty list adds a step, so no list leaves the text as it was
+    if commands:
+        out += _commands_block(commands, clone)
     out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', "exit 0", ""]
     return "\n".join(out)
@@ -410,6 +471,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
             and _plain_relative(subdir)):
         raise invalid
     placed, files = _calibration(cwd, root)
+    commands = _setup_commands(cwd, root)
     if placed and not files:
         raise _Refused("calibration-missing", "The project keeps its calibration outside the "
                        "repository but none of its calibration files exists.")
@@ -418,7 +480,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     if placed and not _plain_relative(key):
         bad.append(key)
     dest = mode_registry.project_store_dir(
-        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if files else None
+        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if files or commands else None
     tags = {rel: _end_tag(i) for i, rel in enumerate(files, 1)}
     for rel, data in files.items():
         try:
@@ -433,10 +495,10 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
     stamp = date = None
-    if files:
+    if files or commands:
         try:
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _stamp_view(files))
+                _stamp_view(files, commands))
         except Exception:
             stamp = None
         if not (isinstance(stamp, str) and _STAMP_RE.fullmatch(stamp)):
@@ -450,16 +512,18 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
-                   _clone_dir(cwd))
+                   _clone_dir(cwd), commands)
     shape = _scan(text)
     if shape:
         where = next((rel for rel, data in files.items()
                       if _scan(data.decode("utf-8"))), None)
         raise _Refused("secret-shaped-content", "Something shaped like a %s is in the setup text%s; "
                        "it was not returned." % (shape, " (in %s)" % where if where else ""))
+    calibration = {"placed": placed, "files": list(files), "date": date, "stamp": stamp}
+    if commands:
+        calibration["setupCommands"] = len(commands)
     return {"action": "written", "reason": None, "text": text, "header": head,
-            "pluginVersion": version, "pluginCommit": commit,
-            "calibration": {"placed": placed, "files": list(files), "date": date, "stamp": stamp},
+            "pluginVersion": version, "pluginCommit": commit, "calibration": calibration,
             "picksUpVersionByItself": PICKS_UP_VERSION_BY_ITSELF}
 
 
