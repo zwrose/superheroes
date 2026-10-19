@@ -3740,7 +3740,8 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
     _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
-                                    "unverified": applied["unverified"], "ambiguous": applied["ambiguous"]})
+                                    "unverified": applied["unverified"], "ambiguous": applied["ambiguous"],
+                                    "notExecuted": applied["notExecuted"]})
     # axis: each verifier fold appends one verifyPasses entry; a second wave must not overwrite.
     _record_round_append(state, "verifyPasses", {
         "CONFIRMED": sum(1 for f in applied["findings"] if f.get("verdict") == "CONFIRMED"),
@@ -3763,6 +3764,8 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             if key:
                 reason = d.get("reason") or "verifier refuted (no reason recorded)"
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
+    for n in applied["notExecuted"]:
+        _decision(state, "verifier-not-executed", n.get("reason"))
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
     # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors

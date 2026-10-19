@@ -46,6 +46,7 @@ DECISION_KINDS = (
     "synthesis-no-survivors",
     "synthesis-unseatable",
     "unknown-surface",
+    "verifier-not-executed",
     "verifier-refuted",
     "verify-fail",
     "verify-skip-but-configured",
