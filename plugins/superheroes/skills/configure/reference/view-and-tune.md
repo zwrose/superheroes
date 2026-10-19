@@ -148,6 +148,9 @@ action that owns it, leaving the rest of the calibration untouched:
 - **List cloud setup commands (item 17)** → write only item 17, the project's own setup commands
   for the cloud (for example `npm ci`) as a JSON list of one-line shell commands on stdin. The
   setup text runs them in order, in the project's clone, after its other steps.
+  The credential check on these commands catches common credential shapes and is not a guarantee.
+  A credential never goes in a listed command: reference it as an environment variable, `$NAME` or
+  `${NAME}`, instead.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

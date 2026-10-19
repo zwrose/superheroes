@@ -497,12 +497,23 @@ def _key_before(text, at):
     return text[begin:end]
 
 
+def _assignment_key(key, separator):
+    """The part of `key` that can name a credential. A key inside a URL (`scheme://...`) names
+    nothing unless a query parameter ends it (`...?token`), and a `:` after a path-like key (an
+    image or registry reference such as `ghcr.io/acme/auth-service:latest`) is no separator."""
+    if "://" in key:
+        return key.rpartition("?")[2] if "?" in key else ""
+    if separator == ":" and "/" in key:
+        return ""
+    return key
+
+
 def _gives_credential_value(text):
     # KEY=value, KEY: value, KEY:value: every assignment separator is checked
     for at in range(len(text)):
         if not _is_assignment(text, at):
             continue
-        if not _credential_named(_key_before(text, at)):
+        if not _credential_named(_assignment_key(_key_before(text, at), text[at])):
             continue
         begin = at + 1
         while begin < len(text) and text[begin] in " \t\r\n":

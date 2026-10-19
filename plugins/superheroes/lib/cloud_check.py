@@ -87,6 +87,7 @@ _SETUP_MESSAGE = (
     "needs its own setup commands in the cloud, such as installing its dependencies, list them in "
     "configure (item 17, cloud setup commands) and write new setup text: a step added by hand "
     "under the line that reads \"{marker}\" is lost the next time setup text is pasted."
+    " The check on listed commands catches common credential shapes and is not a guarantee: a credential never goes in a listed command, so reference it as an environment variable, $NAME or ${{NAME}}, instead."
 )
 
 _SETUP_TEXT_MESSAGE = (

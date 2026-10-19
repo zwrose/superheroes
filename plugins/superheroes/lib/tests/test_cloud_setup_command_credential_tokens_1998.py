@@ -28,6 +28,9 @@ REFUSED = [
     "npmAuthToken=" + PASSWORD,
     "export apiKey=" + PASSWORD,
     "export API_KEY=" + PASSWORD,
+    # the URL-userinfo password and a query-string credential still refuse
+    "pip install --extra-index-url https://auth:%s@auth.example.com:443/simple" % PASSWORD,
+    "curl https://auth.example.com/x?token=" + PASSWORD,
 ]
 PASSING = [
     "pip install tokenizers==0.20.3",
@@ -40,6 +43,10 @@ PASSING = [
     "NPM_TOKEN='${NPM_TOKEN}' npm ci",
     'NPM_TOKEN=\\"$NPM_TOKEN\\" npm ci',
     "yarn config set 'npmRegistries[\"//registry.example.com\"].npmAuthIdent' \"$NPM_IDENT\"",
+    # a credential word in a URL host or path, or in an image reference, is no credential key
+    "pip install --extra-index-url https://auth.example.com:443/simple -r requirements.txt",
+    "docker pull ghcr.io/acme/auth-service:latest",
+    "git clone https://auth.example.org:443/acme/project.git",
 ]
 WORLDS = [_inside, _outside]
 IDS = ["inside", "outside"]
