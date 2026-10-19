@@ -2,6 +2,7 @@
 
 - [Handback: the ready PR's body](#handback-the-ready-prs-body)
   - [The owner half](#the-owner-half)
+  - [Commands the owner runs](#commands-the-owner-runs)
   - [The advisor-vet slot](#the-advisor-vet-slot)
   - [The build record](#the-build-record)
   - [Follow-ups for the advisor](#follow-ups-for-the-advisor)
@@ -34,13 +35,35 @@ The owner half is the close line, then three fixed headings in this order, then 
   `core.md` for the level and shape, then carry the concrete instance here. An absent declaration
   means level `none`, disclosed. The section carries the entry point (the URL or the command) and
   the drive-to-state instructions: the shortest exact path from the entry point to the thing being
-  judged, transient states included.
+  judged, transient states included. An entry point that is a database or Keychain command is a file
+  on the branch, named by the one command that runs it (§ Commands the owner runs).
 
 An honest entry point of `command`, `attended`, or `none`, or a `core.md` with no `## Show-it
 surface`, is a disclosed degradation. It gets one bullet under the degradations marker and a
 matching consequence under `## What we're accepting`, never a silent **None** on the floor's third
 row. The ranked entry-point levels and the presentation standard live in
 `rubric/review-discipline.md` § Presentation standard (show it / say it / nothing to see).
+
+## Commands the owner runs
+
+A command block the owner is asked to run that names a database tool or reads a Keychain item lives
+only in a committed file on the PR's branch, so the review panel reads it like any other changed
+file. The PR body points to that file and tells the owner to run the file (`bash <path>`) rather than
+paste its lines, because a pasted block can run differently in the owner's shell. Whether the file
+stays after merge (at an existing `ops/` or `scripts/` path) or is removed before merge is the
+builder's call per PR, disclosed in the body. No new home is created.
+
+`vet_slot.py handback` refuses a body that holds a fenced shell block (`bash`, `sh`, `zsh`, `shell`,
+`console`, `shell-session`, `sh-session`, `shellsession`, `terminal`, `shell-script`, `ksh`, `fish`,
+the plain-text labels `text`, `txt` and `plaintext`, or no language, including one nested in a list or
+a blockquote) whose code names `mongosh`, `mongo`,
+`mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or
+`sqlite3`, or a Keychain read (`security find-generic-password`, `security find-internet-password`),
+with `owner-command-in-body`, and the refusal names the block. Shell comments are not read, except a
+comment that holds a `$(…)` or backtick substitution. Inline code and non-shell fences (`json` or `diff`, say) pass, so "run
+this test" stays in the body. A shell block that only mentions a tool (`pytest -k psql`) is refused
+too, so move it into the file or reword it. A block wholly inside an HTML comment does not render and
+is not read.
 
 ## The advisor-vet slot
 
@@ -123,7 +146,8 @@ marker. It trusts the marker as your declaration, and the vet reads both.
 body before you open the ready PR (or `--pr <n> --repo <owner/name>` on an open one). It reads the
 body with the advisor's own parser, so a refusal (`markers-invalid`, naming the marker: missing,
 hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slot tool would refuse
-too. Fix the body and re-run until it prints `"ok": true`; once your lane ends, nobody can.
+too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs). Fix the body and
+re-run until it prints `"ok": true`; once your lane ends, nobody can.
 
 When a PR closes or is superseded before its vet, carry its follow-ups into the superseding build
 record, each under the next unused FU number (in the marker too), with its origin as text:

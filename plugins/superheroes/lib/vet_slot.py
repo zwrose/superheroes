@@ -12,11 +12,12 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of ten reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of eleven reasons (``bad-argument``, ``read-failed``,
 ``markers-invalid``, ``slot-span-foreign-content`` (another ``superheroes:`` marker line
 inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed``,
-``write-unconfirmed``) and a detail naming what was wrong; no edit is made, except
+``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
+names a database tool or a Keychain read)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal."""
@@ -43,8 +44,25 @@ PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
 VERBS = ("write", "check", "handback")
+SHELL_LANGUAGES = frozenset({"bash", "sh", "zsh", "shell", "console", "shell-session", "sh-session",
+                             "shellsession", "terminal", "shell-script", "ksh", "fish", "text", "txt",
+                             "plaintext", ""})
+DATABASE_TOOLS = ("mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump", "pg_restore",
+                  "mysql", "mysqldump", "redis-cli", "sqlite3")
+OWNER_COMMAND_ADVICE = ("a command the owner is asked to run that names a database tool or reads a"
+                        " Keychain item lives in a committed file on the PR branch: move the block"
+                        " into that file and have the body tell the owner to run the file"
+                        " (bash <path>) rather than paste its lines")
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_KEYCHAIN_RE = re.compile(
+    r"""(?<![\w-])['"]?security['"]?\s+['"]?find-(?:generic|internet)-password['"]?(?![\w-])""")
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+_DATABASE_TOOL_RE = re.compile(
+    r"(?<![A-Za-z0-9_.@-])(?:%s)(?![A-Za-z0-9_./:@-])"
+    % "|".join(re.escape(tool) for tool in sorted(DATABASE_TOOLS, key=len, reverse=True)))
+_FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+_LIST_MARKER_RE = re.compile(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
 
 
 class _Refusal(Exception):
@@ -150,8 +168,154 @@ def analyze_body(body):
     return offsets["advisor-vet"], offsets["build-record"], followups
 
 
+def _strip_containers(line):
+    """Return ``(text, quote_depth)``: ``line`` without leading blockquote and list-item markers."""
+    text = line.lstrip()
+    depth = 0
+    while True:
+        # axis: blockquote and list markers are stripped in any order and interleaving
+        if text.startswith(">"):
+            depth += 1
+            text = text[1:]
+            # axis: one space after a blockquote marker belongs to the marker
+            if text.startswith(" "):
+                text = text[1:]
+        else:
+            stripped = _LIST_MARKER_RE.sub("", text, count=1)
+            if stripped == text:
+                return text, depth
+            text = stripped
+        text = text.lstrip()
+
+
+def _strip_quotes(line, depth):
+    """Drop up to ``depth`` leading blockquote markers from a fence content line."""
+    for _ in range(depth):
+        text = line.lstrip()
+        # axis: a content line with fewer markers than the opener keeps what it has
+        if not text.startswith(">"):
+            break
+        line = text[2:] if text[1:2] == " " else text[1:]
+    return line
+
+
+def _owner_shell_blocks(body):
+    """Yield ``(opener_line, language, content_lines)`` for each fenced shell block.
+
+    Lenient on purpose (``md_fence.scan`` is CommonMark-strict): a fence nested in a list or a
+    blockquote at any indent still counts, and an unterminated fence runs to the end of the body.
+    A line inside an HTML comment opens no fence."""
+    fence = None
+    in_comment = False
+    for number, raw in enumerate(body.splitlines(), 1):
+        line = raw.rstrip("\r")
+        text, depth = _strip_containers(line)
+        # axis: a line with fewer blockquote markers than the opener ends a quoted fence, then is re-read
+        if fence is not None and depth < fence["depth"]:
+            if fence["language"] in SHELL_LANGUAGES:
+                yield fence["line"], fence["language"], fence["lines"]
+            fence = None
+        if fence is not None:
+            run = text.rstrip(" \t")
+            # axis: only a same-character run at least as long as the opener's closes the fence
+            if run and not run.strip(fence["char"]) and len(run) >= fence["size"]:
+                if fence["language"] in SHELL_LANGUAGES:
+                    yield fence["line"], fence["language"], fence["lines"]
+                fence = None
+            else:
+                fence["lines"].append(_strip_quotes(line, fence["depth"]))
+            continue
+        # axis: a line inside an HTML comment opens no fence; the line holding --> ends the comment
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        opener = _FENCE_OPEN_RE.match(text)
+        # axis: a backtick run with a backtick in its info string is inline code, not a fence
+        if opener and not (opener.group(1)[0] == "`" and "`" in opener.group(2)):
+            words = opener.group(2).split()
+            language = words[0].lower().lstrip("{").lstrip(".").rstrip("}") if words else ""
+            fence = {"line": number, "language": language, "char": opener.group(1)[0],
+                     "size": len(opener.group(1)), "depth": depth, "lines": []}
+            continue
+        # axis: an HTML comment opener inside an inline-code span is prose, not a comment
+        prose = _INLINE_CODE_RE.sub(lambda m: " " * len(m.group(0)), line)
+        at = prose.rfind("<!--")
+        # axis: a <!-- with no --> after it on its line enters a comment; one closed on its line does not
+        if at >= 0 and "-->" not in prose[at + 4:]:
+            in_comment = True
+    # axis: an unterminated shell fence runs to the end of the body and is still a block
+    if fence is not None and fence["language"] in SHELL_LANGUAGES:
+        yield fence["line"], fence["language"], fence["lines"]
+
+
+def _code_part(line):
+    """``line`` up to the first unquoted ``#`` that starts a shell comment."""
+    quote = None
+    i = 0
+    while i < len(line):
+        char = line[i]
+        # axis: a backslash outside single quotes escapes the next character
+        if char == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        # axis: an unquoted # at line start or after whitespace begins a comment
+        elif char == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i]
+        i += 1
+    return line
+
+
+def _calls_owner_tool(line):
+    """The database tool (or ``security find-...-password``) ``line`` names, else None.
+
+    A mention is enough: no command position, wrapper, quote or heredoc is judged. A shell comment is
+    skipped unless it holds a ``$(`` or a backtick, which a pasted comment can run as a substitution."""
+    code = _code_part(line)
+    comment = line[len(code):]
+    # axis: a comment holding a substitution opener is matched too; any other comment text is not
+    text = line if "$(" in comment or "`" in comment else code
+    for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
+        found = pattern.search(text)
+        if found:
+            return " ".join(found.group(0).replace('"', "").replace("'", "").split())
+    return None
+
+
+def owner_command_blocks(body):
+    """One ``{"line", "language", "tool"}`` per fenced shell block that names an owner-run tool."""
+    found = []
+    for number, language, lines in _owner_shell_blocks(body):
+        joined = []
+        carry = None
+        for content in lines:
+            # axis: a line ending in a backslash continues onto the next line, joined with a space
+            # axis: a backslash ending a shell comment is not a continuation
+            code = _code_part(content).rstrip()
+            if code.endswith("\\"):
+                carry = (carry + " " if carry else "") + code[:-1]
+                continue
+            joined.append((carry + " " if carry else "") + content)
+            carry = None
+        # axis: a trailing continuation with no next line is still matched
+        if carry is not None:
+            joined.append(carry)
+        for content in joined:
+            tool = _calls_owner_tool(content)
+            if tool:
+                found.append({"line": number, "language": language, "tool": tool})
+                break
+    return found
+
+
 def check_handback(body):
-    """The builder's handback read: ``analyze_body`` itself, so it agrees with ``write`` and ``check``."""
+    """The builder's handback read: ``analyze_body`` itself, so it agrees with ``write`` and ``check``;
+    it also refuses a fenced shell block that names a database tool or a Keychain read."""
     try:
         ids = analyze_body(body)[2]
     except _Refusal as exc:
@@ -162,6 +326,12 @@ def check_handback(body):
             detail += ("; a hyphenated <!-- superheroes:follow-ups ... --> line is not it: write"
                        " <!-- superheroes:followups FU1 FU2 --> or <!-- superheroes:followups none -->")
         return _refusal(exc.reason, detail)
+    blocks = owner_command_blocks(body)
+    # axis: a fenced shell block that names a database tool or a Keychain read refuses owner-command-in-body
+    if blocks:
+        named = ["the fenced %s block opening at line %d names %s"
+                 % (b["language"] or "no-language", b["line"], b["tool"]) for b in blocks]
+        return _refusal("owner-command-in-body", "; ".join(named) + "; " + OWNER_COMMAND_ADVICE)
     return {"ok": True, "verb": "handback", "followups": ids or []}
 
 

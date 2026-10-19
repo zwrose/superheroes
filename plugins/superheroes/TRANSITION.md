@@ -23,6 +23,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Advisors trim PR and stack sheets by the "judge before you build" rule; nothing is owed for existing sheets.** See [PR sheet: judge before you build](#pr-sheet-judge-before-you-build).
 - **After switching.** **Pass `--size-base-ref <base branch>` on every new implementer `dispatch-write` run.** A run opened before the upgrade continues with the flags it opened with: adding the ref to its continuation refuses `size-inputs-mismatch`. Without the flag, a build that merges its base branch in mid-build still reads that branch's lines as its own and can read its tripwire crossed when it is not. See [Dispatch: the size fold counts from the merge base](#dispatch-the-size-fold-counts-from-the-merge-base).
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
+- **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body tells the owner to run the file (`bash <path>`) rather than paste its lines; `vet_slot.py handback` refuses a shell block that names a database tool or a Keychain read otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
 
 ### PR sheet: judge before you build
 
@@ -73,6 +74,15 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A review record for an auto-fix loop review whose seat map composes the grounding seat now lists it under `seatsNotRun` as `{name, reason: "no-loop-phase", why}`. Before, the record left it out. A record with no such seat has no `seatsNotRun` key.
 - The entry does not park the PR, does not make the record read not reviewed, and does not hold it at vet. The vet reads the PR body's claims against the diff by hand and says so in its receipt.
 - A hand-written account of a loop review should carry `notRunReason: "no-loop-phase"` on its `grounding-seat` row (planned, not run, no run directory, no commit). The writer refuses the field anywhere else.
+
+### Handback: owner-run commands live in a file
+
+- `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell`, `console`, `shell-session`, `sh-session`, `shellsession`, `terminal`, `shell-script`, `ksh`, `fish`, plain-text (`text`, `txt` or `plaintext`) or no-language block, nested in a list or a blockquote too, whose code names `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or names `security find-generic-password` or `security find-internet-password`. The refusal names the block.
+- These pass: other fences, inline code, a shell comment (unless it holds a `$(…)` or backtick substitution), and a block wholly inside an HTML comment.
+- A shell block that only mentions a tool, such as `pytest -k psql`, `brew install mongosh` or `echo mongosh`, is refused too. Move it into the file or reword it. The check reads what a block names, not how it is run, and over-refusing is the accepted direction.
+- The body tells the owner to run the file (`bash <path>`) rather than paste its lines, because a pasted block can run differently in the owner's shell.
+- `write` and `check` are unchanged.
+- Known residual: a tool reached only through an alias, a function or a variable (`$DB`) passes. The review panel and the vet remain the backstop.
 
 ### Review record: CI green needs the project's CI workflow
 
