@@ -20,6 +20,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
+- **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body names the one command that runs it; `vet_slot.py handback` refuses the body otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
 
 ### Review: the post-fix diff comes from git
 
@@ -53,6 +54,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A review record for an auto-fix loop review whose seat map composes the grounding seat now lists it under `seatsNotRun` as `{name, reason: "no-loop-phase", why}`. Before, the record left it out. A record with no such seat has no `seatsNotRun` key.
 - The entry does not park the PR, does not make the record read not reviewed, and does not hold it at vet. The vet reads the PR body's claims against the diff by hand and says so in its receipt.
 - A hand-written account of a loop review should carry `notRunReason: "no-loop-phase"` on its `grounding-seat` row (planned, not run, no run directory, no commit). The writer refuses the field anywhere else.
+
+### Handback: owner-run commands live in a file
+
+- `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell` or no-language block, nested in a list or a blockquote too, that calls `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or that runs `security find-generic-password` or `security find-internet-password`. The refusal names the block.
+- These pass: other fences, inline code, a tool as an option value such as `pytest -k psql`, a tool in `echo` or `printf` arguments, a shell comment, and a block wholly inside an HTML comment.
+- `write` and `check` are unchanged.
+- Known residual: a tool right after a wrapper's boolean flag, such as `sudo -E psql`, reads as an option value and passes. The review panel and the vet remain the backstop.
 
 ## 0.44.0
 
