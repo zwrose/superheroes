@@ -53,7 +53,9 @@ OWNER_COMMAND_ADVICE = ("a command the owner is asked to run that names a databa
                         " (bash <path>) rather than paste its lines")
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-_KEYCHAIN_RE = re.compile(r"(?<![\w-])security\s+find-(?:generic|internet)-password(?![\w-])")
+_KEYCHAIN_RE = re.compile(
+    r"""(?<![\w-])['"]?security['"]?\s+['"]?find-(?:generic|internet)-password['"]?(?![\w-])""")
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
 _DATABASE_TOOL_RE = re.compile(
     r"(?<![A-Za-z0-9_.@-])(?:%s)(?![A-Za-z0-9_./:@-])"
     % "|".join(re.escape(tool) for tool in sorted(DATABASE_TOOLS, key=len, reverse=True)))
@@ -229,9 +231,11 @@ def _owner_shell_blocks(body):
             fence = {"line": number, "language": language, "char": opener.group(1)[0],
                      "size": len(opener.group(1)), "depth": depth, "lines": []}
             continue
-        at = line.rfind("<!--")
+        # axis: an HTML comment opener inside an inline-code span is prose, not a comment
+        prose = _INLINE_CODE_RE.sub(lambda m: " " * len(m.group(0)), line)
+        at = prose.rfind("<!--")
         # axis: a <!-- with no --> after it on its line enters a comment; one closed on its line does not
-        if at >= 0 and "-->" not in line[at + 4:]:
+        if at >= 0 and "-->" not in prose[at + 4:]:
             in_comment = True
     # axis: an unterminated shell fence runs to the end of the body and is still a block
     if fence is not None and fence["language"] in SHELL_LANGUAGES:
@@ -272,7 +276,7 @@ def _calls_owner_tool(line):
     for pattern in (_KEYCHAIN_RE, _DATABASE_TOOL_RE):
         found = pattern.search(text)
         if found:
-            return " ".join(found.group(0).split())
+            return " ".join(found.group(0).replace('"', "").replace("'", "").split())
     return None
 
 
@@ -284,8 +288,10 @@ def owner_command_blocks(body):
         carry = None
         for content in lines:
             # axis: a line ending in a backslash continues onto the next line, joined with a space
-            if content.endswith("\\"):
-                carry = (carry + " " if carry else "") + content[:-1]
+            # axis: a backslash ending a shell comment is not a continuation
+            code = _code_part(content).rstrip()
+            if code.endswith("\\"):
+                carry = (carry + " " if carry else "") + code[:-1]
                 continue
             joined.append((carry + " " if carry else "") + content)
             carry = None

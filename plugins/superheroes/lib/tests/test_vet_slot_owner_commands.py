@@ -290,3 +290,23 @@ def test_main_body_file_clean_body_exits_0(tmp_path, capsys):
     path.write_text(_body(_block("scripts/pinned-python -m pytest -q")), encoding="utf-8")
     assert vs.main(["handback", "--body-file", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_double_quoted_keychain_subcommand_refuses():
+    body = _body(_block('security "find-generic-password" -s staging -w'))
+    _refused(body, 1, "bash", "security find-generic-password")
+
+
+def test_single_quoted_security_and_subcommand_refuses():
+    body = _body(_block("'security' 'find-internet-password'"))
+    _refused(body, 1, "bash", "security find-internet-password")
+
+
+def test_inline_code_comment_opener_does_not_hide_later_fence():
+    body = _body("The parser recognizes `<!--` comments.\n\n" + _block("mongorestore --drop dump/"))
+    _refused(body, 3, "bash", "mongorestore")
+
+
+def test_backslash_ending_a_shell_comment_does_not_join_next_line():
+    body = _body(_block("# use the existing dump \\", "mongorestore --drop dump/"))
+    _refused(body, 1, "bash", "mongorestore")
