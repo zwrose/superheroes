@@ -307,3 +307,37 @@ def test_shell_context_and_wrapper_operands_pass(lines):
 ])
 def test_heredoc_opener_and_wrapped_tools_refuse(lines, tool):
     _refused(_body(_block(*lines)), 1, "bash", tool)
+
+
+@pytest.mark.parametrize("tool", ["mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump",
+                                  "pg_restore", "mysql", "mysqldump", "redis-cli", "sqlite3"])
+def test_literal_database_tool_names_refuse(tool):
+    _refused(_body(_block(tool + " --help")), 1, "bash", tool)
+
+
+def test_database_tool_list_is_pinned_to_literals():
+    assert set(vs.DATABASE_TOOLS) == {"mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump",
+                                      "pg_restore", "mysql", "mysqldump", "redis-cli", "sqlite3"}
+
+
+@pytest.mark.parametrize("command", [
+    "docker exec app grep -c psql README.md",
+    "env pytest -c psql",
+    "echo '$(psql)'",
+    "printf \"%s\\n\" \"\\$(psql)\"",
+    "echo '`psql`'",
+])
+def test_dash_c_option_and_literal_substitutions_pass(command):
+    assert vs.check_handback(_body(_block(command)))["ok"] is True
+
+
+@pytest.mark.parametrize("command,tool", [
+    ("bash -c \"psql -c 'select 1'\"", "psql"),
+    ("sudo bash -c \"psql\"", "psql"),
+    ("docker exec app sh -c \"psql\"", "psql"),
+    ("su postgres -c \"psql\"", "psql"),
+    ("X=\"$(psql -c 'x')\"", "psql"),
+    ("echo \"$(mongosh --eval 1)\"", "mongosh"),
+])
+def test_shell_string_and_double_quoted_substitutions_refuse(command, tool):
+    _refused(_body(_block(command)), 1, "bash", tool)

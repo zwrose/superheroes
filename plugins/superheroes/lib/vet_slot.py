@@ -266,6 +266,34 @@ _KEYCHAIN_VERBS = frozenset({"find-generic-password", "find-internet-password"})
 _SUBSTITUTION_RE = re.compile(r"\$\((.*?)\)|`([^`]*)`")
 
 
+def _substitutions(code):
+    """The command lines of each ``$(...)`` or backtick substitution outside single quotes and escapes."""
+    out = []
+    quote = None
+    i = 0
+    while i < len(code):
+        char = code[i]
+        # axis: a backslash outside single quotes escapes the next character
+        if char == "\\" and quote != "'":
+            i += 2
+            continue
+        # axis: a substitution opener inside single quotes is literal text
+        if quote == "'":
+            if char == "'":
+                quote = None
+        elif char in "$`" and (match := _SUBSTITUTION_RE.match(code, i)):
+            out.append(match.group(1) or match.group(2) or "")
+            i = match.end()
+            continue
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        i += 1
+    return out
+
+
 def _tool_at(words, i):
     """The owner tool ``words[i]`` names (``security`` with its verb), else None."""
     name = words[i].rsplit("/", 1)[-1]
@@ -339,8 +367,8 @@ def _simple_command_tool(tokens):
     container = command in _CONTAINER_WRAPPERS and any(word in ("exec", "run") for word in words[1:])
     if command not in _WRAPPERS and command not in _SHELLS and not container:
         return None
-    # axis: the argument of -c is a command line
-    if command not in ("kubectl", "oc"):
+    # axis: the argument of -c is a command line only for a shell or su/runuser; elsewhere -c is an option
+    if command in _SHELLS or command in ("su", "runuser"):
         for i in range(1, len(words)):
             if words[i - 1] == "-c":
                 inner = _calls_owner_tool(words[i])
@@ -357,8 +385,8 @@ def _calls_owner_tool(line):
     """The database tool (or ``security find-...-password``) ``line`` calls, else None."""
     code = _code_part(line)
     # axis: substitutions are command lines even inside double quotes
-    for match in _SUBSTITUTION_RE.finditer(code):
-        inner = _calls_owner_tool(match.group(1) or match.group(2) or "")
+    for text in _substitutions(code):
+        inner = _calls_owner_tool(text)
         if inner:
             return inner
     try:
