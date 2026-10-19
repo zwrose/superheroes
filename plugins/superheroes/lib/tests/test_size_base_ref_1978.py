@@ -160,3 +160,10 @@ def test_continuation_ref_mismatch(tmp_path):
             size_base=start, size_line=140, size_base_ref=ref,
         )
         assert res["detail"] == "size-inputs-mismatch", (ref, res)
+
+
+# axis: the merge-base calls share the fold's one budget; a spent budget is a timeout, not a count.
+def test_spent_budget_is_a_timeout(tmp_path):
+    wt, start, main_branch = _merged_build(tmp_path)
+    assert ED._size_count_from(wt, start, main_branch, deadline=0) == (None, "git-timeout")
+    assert ED._size_count_from(wt, start, None, deadline=0) == (start, None)

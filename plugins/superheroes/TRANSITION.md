@@ -17,7 +17,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
-- **After switching.** **Pass `--size-base-ref <base branch>` on every implementer `dispatch-write`.** Without it, a build that merges its base branch in mid-build still reads that branch's lines as its own and can read its tripwire crossed when it is not. See [Dispatch: the size fold counts from the merge base](#dispatch-the-size-fold-counts-from-the-merge-base).
+- **After switching.** **Pass `--size-base-ref <base branch>` on every new implementer `dispatch-write` run.** A run opened before the upgrade continues with the flags it opened with: adding the ref to its continuation refuses `size-inputs-mismatch`. Without the flag, a build that merges its base branch in mid-build still reads that branch's lines as its own and can read its tripwire crossed when it is not. See [Dispatch: the size fold counts from the merge base](#dispatch-the-size-fold-counts-from-the-merge-base).
 
 ### Review seats: CLAUDE.md by absolute path
 

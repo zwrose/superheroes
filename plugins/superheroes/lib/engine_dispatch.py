@@ -2543,26 +2543,35 @@ def _resolve_commit(cwd_real, rev, timeout=None):
     return result.stdout.strip() or None
 
 
-def _size_count_from(cwd, base, base_ref, timeout=None):
+def _size_count_from(cwd, base, base_ref, deadline):
     """The commit the fold counts from: the newer of ``base`` and the merge base of HEAD and
     ``base_ref``, so main merged into the branch mid-build is not the build's own lines (#1978).
-    None when ``base_ref`` or the merge base cannot be resolved."""
+    Returns ``(sha, None)``, or ``(None, reason)`` when ``base_ref`` or the merge base does not
+    resolve (``size-base-unresolvable``) or the budget ends first (``git-timeout``)."""
     if base_ref is None:
-        return base
-    ref_sha = _resolve_commit(cwd, base_ref, timeout=timeout)
-    if ref_sha is None:
-        return None
+        return base, None
+
+    def left():
+        # Axis: the three git calls share the fold's one budget; none starts once it is spent.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("git", 0)
+        return remaining
+
     try:
-        merge_base = _git_scrubbed(cwd, "merge-base", "HEAD", ref_sha, timeout=timeout)
+        ref_sha = _resolve_commit(cwd, base_ref, timeout=left())
+        if ref_sha is None:
+            return None, SIZE_BASE_UNRESOLVABLE
+        merge_base = _git_scrubbed(cwd, "merge-base", "HEAD", ref_sha, timeout=left())
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
-            return None
+            return None, SIZE_BASE_UNRESOLVABLE
         merge_base_sha = merge_base.stdout.strip()
         # Axis: a stale or unrelated base ref never moves the count behind the build's own base.
         newer = _git_scrubbed(cwd, "merge-base", "--is-ancestor", base, merge_base_sha,
-                              timeout=timeout)
+                              timeout=left())
     except subprocess.TimeoutExpired:
-        return None
-    return merge_base_sha if newer.returncode == 0 else base
+        return None, "git-timeout"
+    return (merge_base_sha if newer.returncode == 0 else base), None
 
 
 def _verify_base_sha_resolves(cwd_real, base_sha, timeout=None):
@@ -3233,11 +3242,10 @@ def _fold_size_tripwire(state):
     base_ref = inputs.get("baseRef")
     try:
         deadline = time.monotonic() + SIZE_COUNT_BUDGET_SECONDS
-        counted_from = _size_count_from(opened.get("cwd"), base, base_ref,
-                                        timeout=SIZE_COUNT_BUDGET_SECONDS)
+        counted_from, unresolved = _size_count_from(opened.get("cwd"), base, base_ref, deadline)
         if counted_from is None:
             return {"status": "indeterminate", "base": base, "line": line,
-                    "baseRef": base_ref, "reason": SIZE_BASE_UNRESOLVABLE}
+                    "baseRef": base_ref, "reason": unresolved}
         counted = size_count.collect(opened.get("cwd"), counted_from, head=None, deadline=deadline)
         if not counted.get("ok"):
             field = {"status": "indeterminate", "base": base, "line": line,
