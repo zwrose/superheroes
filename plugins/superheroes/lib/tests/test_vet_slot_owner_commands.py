@@ -341,3 +341,37 @@ def test_dash_c_option_and_literal_substitutions_pass(command):
 ])
 def test_shell_string_and_double_quoted_substitutions_refuse(command, tool):
     _refused(_body(_block(command)), 1, "bash", tool)
+
+
+# ---- heredoc substitutions, command lookup, quote state across lines --------------------------
+
+@pytest.mark.parametrize("opener", ["cat <<EOF", "cat <<-EOF"])
+def test_unquoted_heredoc_body_substitution_refuses(opener):
+    _refused(_body(_block(opener, "$(psql --help)", "EOF")), 1, "bash", "psql")
+
+
+@pytest.mark.parametrize("opener", ["cat <<'EOF'", 'cat <<"EOF"', "cat <<\\EOF"])
+def test_quoted_heredoc_body_substitution_passes(opener):
+    _passes(_body(_block(opener, "$(psql --help)", "EOF")))
+
+
+def test_unquoted_heredoc_body_bare_tool_word_passes():
+    _passes(_body(_block("cat <<EOF", "psql", "EOF")))
+
+
+@pytest.mark.parametrize("command", ["command -v psql", "command -V psql", "command -pv psql",
+                                     "type psql", "which mongosh"])
+def test_command_lookup_passes(command):
+    _passes(_body(_block(command)))
+
+
+def test_plain_command_execution_still_refuses():
+    _refused(_body(_block("command psql")), 1, "bash", "psql")
+
+
+def test_multiline_single_quoted_python_argument_passes():
+    _passes(_body(_block("python3 -B -c '", 'print("psql")', "'")))
+
+
+def test_multiline_single_quoted_shell_argument_refuses():
+    _refused(_body(_block("bash -c '", 'psql -c "select 1"', "'")), 1, "bash", "psql")

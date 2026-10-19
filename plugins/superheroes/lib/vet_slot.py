@@ -376,6 +376,13 @@ def _simple_command_tool(tokens):
                     return inner
     if command in _SHELLS:
         return None
+    # axis: command -v / -V only looks a command up (it prints, never runs it), including combined flags
+    if command == "command":
+        for word in words[1:]:
+            if word == "--" or not word.startswith("-") or word == "-":
+                break
+            if not word.startswith("--") and ("v" in word or "V" in word):
+                return None
     rest = _wrapped_command(command, words)
     # axis: a wrapper hands its remaining command to the same judge
     return _simple_command_tool(rest) if rest else None
@@ -412,11 +419,12 @@ def _calls_owner_tool(line):
     return None
 
 
-_HEREDOC_RE = re.compile(r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*))")
+_HEREDOC_RE = re.compile(
+    r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|\\([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))")
 
 
 def _heredoc_delimiters(line):
-    """``(word, strip_tabs)`` for each heredoc ``line`` opens outside quotes and comments."""
+    """``(word, strip_tabs, quoted)`` for each heredoc ``line`` opens outside quotes and comments."""
     code = _code_part(line)
     out = []
     quote = None
@@ -437,29 +445,66 @@ def _heredoc_delimiters(line):
         elif code.startswith("<<", i):
             match = _HEREDOC_RE.match(code, i)
             if match:
-                out.append((match.group(2) or match.group(3) or match.group(4), bool(match.group(1))))
+                word = match.group(2) or match.group(3) or match.group(4) or match.group(5)
+                out.append((word, bool(match.group(1)), bool(match.group(2) or match.group(3) or match.group(4))))
                 i = match.end()
                 continue
         i += 1
     return out
 
 
+def _open_quote(line):
+    """The quote character ``line`` leaves open at its end (outside a shell comment), else None."""
+    quote = None
+    i = 0
+    while i < len(line):
+        char = line[i]
+        if char == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (i == 0 or line[i - 1].isspace()):
+            return None
+        i += 1
+    return quote
+
+
+def _body_substitutions(raw):
+    """The command text of each unescaped ``$(...)`` or backtick substitution in an expanded heredoc body line."""
+    return [match.group(1) or match.group(2) or ""
+            for match in _SUBSTITUTION_RE.finditer(raw)
+            if not raw[:match.start()].endswith("\\")]
+
+
 def _logical_lines(lines):
-    """Join backslash-continued lines and drop heredoc bodies; yields the judged logical lines."""
+    """Join continued and quote-spanning lines and drop heredoc bodies; yields the judged logical lines.
+
+    The body of an unquoted-delimiter heredoc is data except for its substitutions, which yield as lines."""
     pending = None
     heredocs = []
     for raw in lines:
         if heredocs:
-            word, strip_tabs = heredocs[0]
+            word, strip_tabs, quoted = heredocs[0]
             # axis: every line up to the delimiter line is data, not a command
             if (raw.lstrip("\t") if strip_tabs else raw).rstrip() == word:
                 heredocs.pop(0)
+            # axis: an unquoted heredoc delimiter expands $(...) and backticks in the body, so those still run
+            elif not quoted:
+                yield from _body_substitutions(raw)
             continue
         line = raw if pending is None else pending + raw
         trailing = len(line) - len(line.rstrip("\\"))
         # axis: a line ending in an odd run of backslashes continues onto the next line
         if trailing % 2 == 1:
             pending = line[:-1]
+            continue
+        # axis: a line that leaves a quote open continues, newline included, until the quote closes
+        if _open_quote(line):
+            pending = line + "\n"
             continue
         pending = None
         heredocs = _heredoc_delimiters(line)
