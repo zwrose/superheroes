@@ -56,7 +56,8 @@ call per PR, disclosed in the body. No new home is created.
 `shell` or no language, including one nested in a list or a blockquote) with `owner-command-in-body`,
 and the refusal names the block. Every other fenced block passes, so "run this test" stays in the
 body. The check reads only fences: inline code and non-shell fences pass, and a tool named as an
-option value, by `echo` or `printf`, or in a shell comment is not a call. A block wholly inside an
+option value, as a wrapper's container or operand, by `echo` or `printf`, in a heredoc body, or in a
+shell comment is not a call. A block wholly inside an
 HTML comment does not render and is not read.
 
 ## The advisor-vet slot

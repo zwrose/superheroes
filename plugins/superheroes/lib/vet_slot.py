@@ -276,6 +276,53 @@ def _tool_at(words, i):
     return None
 
 
+_WRAPPER_VALUE_OPTIONS = {
+    "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}),
+    "doas": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}),
+    "env": frozenset({"-u", "-C"}),
+    "nice": frozenset({"-n"}),
+    "watch": frozenset({"-n", "-d"}),
+    "timeout": frozenset({"-s", "-k"}),
+    "xargs": frozenset({"-I", "-n", "-P", "-d", "-L", "-E", "-s", "-a"}),
+}
+_CONTAINER_VALUE_OPTIONS = frozenset({"-e", "--env", "-u", "--user", "-w", "--workdir", "-v", "--volume",
+                                      "--name", "--network", "-p", "--publish", "--entrypoint"})
+
+
+def _skip_options(words, start, value_options):
+    """Index of the first word at or after ``start`` that is not an option or an option's value."""
+    i = start
+    while i < len(words):
+        word = words[i]
+        if word == "--":
+            return i + 1
+        if not word.startswith("-") or word == "-":
+            break
+        i += 2 if word in value_options else 1
+    return i
+
+
+def _wrapped_command(command, words):
+    """The tokens of the command a recognised wrapper hands off to (``words[0]`` is the wrapper)."""
+    if command in ("kubectl", "oc"):
+        # axis: only what follows a kubectl/oc exec -- is the command
+        if "--" in words and any(word in ("exec", "run") for word in words[1:]):
+            return words[words.index("--") + 1:]
+        return []
+    if command in _CONTAINER_WRAPPERS:
+        verbs = [i for i, word in enumerate(words) if i and word in ("exec", "run")]
+        if not verbs:
+            return []
+        # axis: the word after a container's options is the container or image, never the executable
+        i = _skip_options(words, verbs[0] + 1, _CONTAINER_VALUE_OPTIONS)
+        return words[i + 1:]
+    # axis: a wrapper's own options (and sudo -u USER style values) are not the executable
+    i = _skip_options(words, 1, _WRAPPER_VALUE_OPTIONS.get(command, frozenset()))
+    if command == "timeout" and i < len(words):
+        i += 1
+    return words[i:]
+
+
 def _simple_command_tool(tokens):
     """The owner tool one simple command (operator-free tokens) runs, else None."""
     words = list(tokens)
@@ -292,23 +339,18 @@ def _simple_command_tool(tokens):
     container = command in _CONTAINER_WRAPPERS and any(word in ("exec", "run") for word in words[1:])
     if command not in _WRAPPERS and command not in _SHELLS and not container:
         return None
-    for i in range(1, len(words)):
-        # axis: the argument of -c is a command line; what follows a kubectl/oc exec -- is a command
-        if words[i - 1] == "-c":
-            inner = _calls_owner_tool(words[i])
-        elif words[i - 1] == "--" and command in ("kubectl", "oc"):
-            inner = _simple_command_tool(words[i:])
-        else:
-            inner = None
-        if inner:
-            return inner
-        # axis: a tool run by a wrapper is a call; the value of an option (sudo -E psql) is not
-        if command in _SHELLS or (words[i - 1].startswith("-") and words[i - 1] != "--"):
-            continue
-        tool = _tool_at(words, i)
-        if tool:
-            return tool
-    return None
+    # axis: the argument of -c is a command line
+    if command not in ("kubectl", "oc"):
+        for i in range(1, len(words)):
+            if words[i - 1] == "-c":
+                inner = _calls_owner_tool(words[i])
+                if inner:
+                    return inner
+    if command in _SHELLS:
+        return None
+    rest = _wrapped_command(command, words)
+    # axis: a wrapper hands its remaining command to the same judge
+    return _simple_command_tool(rest) if rest else None
 
 
 def _calls_owner_tool(line):
@@ -342,11 +384,67 @@ def _calls_owner_tool(line):
     return None
 
 
+_HEREDOC_RE = re.compile(r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _heredoc_delimiters(line):
+    """``(word, strip_tabs)`` for each heredoc ``line`` opens outside quotes and comments."""
+    code = _code_part(line)
+    out = []
+    quote = None
+    i = 0
+    while i < len(code):
+        char = code[i]
+        if char == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif code.startswith("<<<", i):
+            i += 3
+            continue
+        elif code.startswith("<<", i):
+            match = _HEREDOC_RE.match(code, i)
+            if match:
+                out.append((match.group(2) or match.group(3) or match.group(4), bool(match.group(1))))
+                i = match.end()
+                continue
+        i += 1
+    return out
+
+
+def _logical_lines(lines):
+    """Join backslash-continued lines and drop heredoc bodies; yields the judged logical lines."""
+    pending = None
+    heredocs = []
+    for raw in lines:
+        if heredocs:
+            word, strip_tabs = heredocs[0]
+            # axis: every line up to the delimiter line is data, not a command
+            if (raw.lstrip("\t") if strip_tabs else raw).rstrip() == word:
+                heredocs.pop(0)
+            continue
+        line = raw if pending is None else pending + raw
+        trailing = len(line) - len(line.rstrip("\\"))
+        # axis: a line ending in an odd run of backslashes continues onto the next line
+        if trailing % 2 == 1:
+            pending = line[:-1]
+            continue
+        pending = None
+        heredocs = _heredoc_delimiters(line)
+        yield line
+    if pending is not None:
+        yield pending
+
+
 def owner_command_blocks(body):
     """One ``{"line", "language", "tool"}`` per fenced shell block that calls an owner-run tool."""
     found = []
     for number, language, lines in _owner_shell_blocks(body):
-        for content in lines:
+        for content in _logical_lines(lines):
             tool = _calls_owner_tool(content)
             if tool:
                 found.append({"line": number, "language": language, "tool": tool})

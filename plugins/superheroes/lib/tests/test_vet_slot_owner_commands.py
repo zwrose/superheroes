@@ -235,8 +235,8 @@ def test_html_comment_hidden_shell_block_passes():
     _passes(body)
 
 
-def test_sudo_wrapper_flag_is_a_known_residual_and_passes():
-    _passes(_body(_block("sudo -E psql")))
+def test_sudo_wrapper_flag_is_followed_and_refuses():
+    _refused(_body(_block("sudo -E psql")), 1, "bash", "psql")
 
 
 # ---- entry points and unchanged verbs ---------------------------------------------------------
@@ -284,3 +284,26 @@ def test_main_body_file_clean_body_exits_0(tmp_path, capsys):
 ])
 def test_tool_names_as_ordinary_arguments_pass(command):
     _passes(_body(_block(command)))
+
+
+@pytest.mark.parametrize("lines", [
+    ["pytest -k \\", "  psql"],
+    ["cat <<'EOF'", "psql -c 'x'", "EOF"],
+    ["cat <<-EOF", "\tpsql -c 'x'", "\tEOF"],
+    ["docker exec mongo pytest -q"],
+    ["sudo echo psql"],
+])
+def test_shell_context_and_wrapper_operands_pass(lines):
+    _passes(_body(_block(*lines)))
+
+
+@pytest.mark.parametrize("lines,tool", [
+    (["psql <<EOF", "select 1;", "EOF"], "psql"),
+    (["docker run --rm -e X=1 mongo:7 mongosh"], "mongosh"),
+    (["sudo -E psql"], "psql"),
+    (["sudo -u postgres psql"], "psql"),
+    (["docker exec -it mongo mongosh"], "mongosh"),
+    (["pytest \\", "  && psql"], "psql"),
+])
+def test_heredoc_opener_and_wrapped_tools_refuse(lines, tool):
+    _refused(_body(_block(*lines)), 1, "bash", tool)

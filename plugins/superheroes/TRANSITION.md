@@ -60,7 +60,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell` or no-language block, nested in a list or a blockquote too, that calls `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or that runs `security find-generic-password` or `security find-internet-password`. The refusal names the block.
 - These pass: other fences, inline code, a tool as an option value such as `pytest -k psql`, a tool in `echo` or `printf` arguments, a shell comment, and a block wholly inside an HTML comment.
 - `write` and `check` are unchanged.
-- Known residual: a tool right after a wrapper's boolean flag, such as `sudo -E psql`, reads as an option value and passes. The review panel and the vet remain the backstop.
+- A wrapper (`sudo`, `env`, `timeout`, `docker exec` and the like) hands its remaining command to the same check, so `sudo -E psql` and `docker exec -it mongo mongosh` refuse while `docker exec mongo pytest -q` and `sudo echo psql` pass. A backslash-continued command is read as one line, and a heredoc body is data (the line that opens it is still read).
+- Known residual: a tool hidden behind an unrecognised wrapper or an indirection such as a shell function or alias passes. The review panel and the vet remain the backstop.
 
 ## 0.44.0
 
