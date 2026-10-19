@@ -230,9 +230,17 @@ def test_a_credited_finding_is_not_settled_as_a_leftover():
     assert "settledReason" not in row
 
 
+_FIXER_FOLD_REFUSAL = "forced refusal at the fixer fold"
+
+
+def _called_from_fixer_fold(depth):
+    """True when the frame `depth` levels up from this helper is `_fold_fixer`."""
+    return sys._getframe(depth).f_code.co_name == "_fold_fixer"
+
+
 def _fixed_without_audit_seams():
-    """A loop whose fixer reports a fix and returns no head diff: the next round is a full panel,
-    which does not raise the finding again."""
+    """A loop whose fixer reports a fix and returns no head diff and whose fixer-fold derivation
+    refuses: the next round is a full panel, which does not raise the finding again."""
     def reviewer(dim, tier, rnd, ctx):
         return [_finding()] if rnd == 1 and dim == "code-reviewer" else []
 
@@ -240,8 +248,13 @@ def _fixed_without_audit_seams():
         return {"fixes": [{"file": "f.py", "summary": "guard restored"}],
                 "changedSubjects": ["Code"]}
 
+    def panel_diff(config, head):
+        if _called_from_fixer_fold(2):
+            return None, _FIXER_FOLD_REFUSAL
+        return TRD.HEAD, None
+
     seams = TRD._seams(reviewer=reviewer, fix_step=fix_step)
-    seams["panel_diff"] = lambda config, head: (TRD.HEAD, None)
+    seams["panel_diff"] = panel_diff
     return seams
 
 
@@ -559,9 +572,18 @@ def test_a_guided_fix_audited_then_restaged_and_retried_is_credited_by_a_silent_
                     "changedSubjects": ["Code"]}
         return {"fixes": [{"file": "f.py", "summary": "retry"}], "changedSubjects": ["Code"]}
 
+    fixer_fold_calls = []
+
+    def panel_diff(config, head):
+        if _called_from_fixer_fold(2):
+            fixer_fold_calls.append(head)
+            if len(fixer_fold_calls) > 1:
+                return None, _FIXER_FOLD_REFUSAL
+        return TRD.HEAD, None
+
     seams = TRD._seams(reviewer=reviewer, fix_step=fix_step)
-    seams["panel_diff"] = lambda config, head: (TRD.HEAD, None)
-    _, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    seams["panel_diff"] = panel_diff
+    _, state =TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
     assert state is box["state"]
     row = _ledger(state)[_key()]
     assert state["terminal"] == "converged", (state.get("terminal"), state.get("certification"), row)
