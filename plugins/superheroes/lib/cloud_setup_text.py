@@ -58,11 +58,15 @@ _SECRET_SHAPES = (
         % "|".join(map(re.escape, cloud_setup._SECRET_PREFIXES)))),
     ("registry token", re.compile(
         r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{30,}"
-        # _authToken, then the key's own closing quote, a ':' '=' or whitespace separator, and an
-        # opening quote (plain, or JSON-escaped as in the stored calibration); a value that is only
-        # a bare environment reference ($NAME or ${NAME}) passes, anything else is a literal
-        r"""|(?:_authToken|npmAuthToken)(?:\\?["'])?(?:\s*[:=]\s*|\s+)(?:\\?["'])?"""
-        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\,;})&|])|\s|\\?["'])\S""")),
+        # _authToken, then the key's own closing quote, a ':' '=' separator, and an opening quote
+        # (plain, or JSON-escaped as in the stored calibration); a value that is only a bare
+        # environment reference ($NAME or ${NAME}) passes, anything else is a literal. A
+        # whitespace-separated value counts only after a config-set verb in the same command
+        # (`config set` or `npm set`, optional -options between), so prose and get/delete pass
+        r"""|(?:_authToken|npmAuthToken)(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?%(value)s"""
+        r"""|(?<![A-Za-z0-9_-])(?:config|npm)\s+set(?:\s+-\S*)*\s+\S*?(?:_authToken|npmAuthToken)"""
+        r"""(?:\\?["'])?\s+(?:\\?["'])?%(value)s"""
+        % {"value": r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\,;})&|])|\s|\\?["'])\S"""})),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
