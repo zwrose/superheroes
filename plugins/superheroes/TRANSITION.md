@@ -12,11 +12,15 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.44.0
 
 ### Before you upgrade
 
+Check these in a consuming project when it adopts 0.44.0. Each step names the note it comes from.
+
 - **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
+- **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.44.0, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.44.0 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
+- **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
 - **After switching.** **Every leftover in a PR or stack sheet input now needs its spine.** Before building a sheet, give each left-for-owner finding a `leftovers` entry with `why`, `context` and `options` (each leftover option's consequence for this finding, or `"none"`). An input written for the old shape is refused, naming each finding. See [PR sheet: leftovers carry the decision spine](#pr-sheet-leftovers-carry-the-decision-spine).
 - **After switching.** **A project that turns on `localSockets` still cannot run claude write dispatches off macOS; `localPorts` now can.** A cloud (Linux) build with `localPorts` on opens; one with `localSockets` on still refuses `engine-config:sandbox-access-unsupported-platform`, though in a cloud session on Linux a builder's implementer orders do not reach that refusal, because they run on the native engine (the channel itself still refuses). See [Claude write sandbox: localPorts opens on Linux](#claude-write-sandbox-localports-opens-on-linux).
 - **After switching.** **In a cloud session on Linux, a `localSockets` project's implementer orders run as native subagents through `native_engine.py`, and `route` decides it.** The builder runs `native_engine.py route --cwd <build worktree>` before each implementer order; `native` sends it through the native engine, any other engine keeps `dispatch-write`. See [Native implementer engine](#native-implementer-engine).
@@ -85,15 +89,6 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - Any other degradation (a missing tool, a Python file that will not parse, a cliff) is still transient: a transient partial on a first sweep saves nothing, as before.
 - The lens's `collectorVersion` is unchanged, so repos that already hold a coupling baseline keep it.
 
-## 0.43.1
-
-### Before you upgrade
-
-Check these in a consuming project when it adopts 0.43.1. Each step names the note it comes from.
-
-- **After switching.** **A project with cloud builds on needs new setup text in each cloud environment.** The cloud keeps the plugin version its setup text was made at, so once the advisor's seat runs 0.43.1, every build it sends to the cloud runs on the owner's machine until the owner pastes new setup text for 0.43.1 into each account's environment and the advisor checks again (say "setup text", then "check again"). A project without cloud builds has nothing to do.
-- **After switching.** **Before each cloud launch, put the launching checkout on its base, pushed.** A cloud launch now refuses when the checkout is off its base; on `main`, a `git pull --ff-only` right before the launch is enough. See [Launcher: cloud launch](#launcher-cloud-launch).
-
 ### Launcher: one phone per named iPhone size
 
 - A premise may carry `iphoneModels`, a non-empty list of distinct simulator device-type names (`"iPhone 17"`, `"iPhone 17e"`), valid only beside `"iphoneCheck": true`. Otherwise the launch refuses `premise-iphone-models-invalid`.
@@ -133,6 +128,45 @@ Check these in a consuming project when it adopts 0.43.1. Each step names the no
   is coming soon, and whenever the owner asks for one. It merges on a sheet like any other. The
   held comment (`superheroes:canon-held`) still carries a held ruling until it is committed. No CLI,
   result key or refusal changes.
+
+### Review: a changed calibration file is shown to reviewers, and the record lists what they could not read
+
+- In the cleaned copy a review dispatch builds with `--diff-base`, a changed regular file under exactly `.claude/superheroes/` (a project's calibration, such as `core.md`) is now in full and kept in the review patch. Every other `.claude/` path, a lookalike folder, a case variant, a symlink, and a deleted or renamed-away calibration file stay withheld, as before. A brief check (no `--diff-base`) shows none. The view's result gains `calibrationShown` (the paths shown, or `null` without `--diff-base`); `diffWithheldCount` no longer counts them. The six `sanitizedView` receipt keys are unchanged.
+- The review record gains `withheldFromReviewers`: each changed path no outside reviewer could read in full, `[]` when none, `null` when the changed files were not read. It never changes the record's status. The vet reads each listed file by hand (`skills/showrunner/reference/vet-receipt.md`, the review record checks).
+
+### Cloud builders: fixed handback, stop and park comments; recovery can answer `parked`
+
+- A cloud builder posts its handback, stop and park on the issue under one fixed first line each: `Builder handback (cloud build).`, `Builder stop (cloud build).`, `Builder park (cloud build).` (`cloud_builder.py terminal --kind handback|stop|park --text-file <file>`; refusals `kind-invalid`, `text-empty`). The cloud's own footer is tolerated.
+- `wave_watch.py` reports `lane-terminal` for a cloud lane as soon as one of those comments is on its issue, not after the quiet window. Several lanes ending together are all reported.
+- `cloud_recover.py assess` has a new verdict, `parked` (evidence `builder-stop` or `builder-park`), when the lane's newest terminal comment is an unanswered stop or park newer than anything the builder pushed since. The result gains `parkComment` (the comment's id, url, kind and time) and `parkRead` (`ok`, `failed`, or `null` when not read). A `parked` lane is never recovered: repair a stop, answer a park. Any doubtful read falls back to the answers it gave before.
+- Builders on an older plugin still post free-form endings, which the quiet alarm still catches. Builders pick up the headers once the cloud environment runs 0.44.0's setup text (the first step above).
+
+### Publishing a sheet: stage its title
+
+- `lib/sheet_title.py stage --sheet <sheet.json> --project <project> [--slug <slug>] --out <folder>/review-template.html` writes the page with its `<title>` set from the sheet: a PR sheet reads `<project> PR #<number> review sheet`. Publish the staged page and pass no `title`. `theme/review-template.md` § Publishing a sheet adds the step. A sheet published before titles were set keeps "Review sheet" until it is republished.
+
+### Removed: the handback gate and orphaned review code
+
+- `lib/handback_gate.py` and its hook `hooks/handback_receipt_gate.py` (never switched on) are deleted, with about a dozen uncalled functions from the review redesign (some of them in `lib/loop_plan_common.py`, which stays). The gate had allowed every command for several releases. A project that wired the hook in its own settings removes that entry.
+
+### Review-code: a round with nothing left to verify, and break-it runs on the project's interpreter
+
+- A round whose verification leaves no findings now journals the decision kind `synthesis-no-survivors` and sends no `dispatch-synthesis` order; the round folds as if the grouping were empty. Before, it still sent a synthesis order.
+- A break-it record's `breakItRun` gains `interpreter`. When `breakItInterpreter` is not set (see [Break-it tests: a calibrated Python launcher](#break-it-tests-a-calibrated-python-launcher)), Python break-it tests now run under the launcher the project's `verifyCommand` names, not a `python` on the PATH. A run that cannot use it ends `outcome: not-run` with the new reason `interpreter-unavailable`, or `interpreter-unresolved` when the verify command names no launcher.
+- A fixer order may name a break-it test file that does not exist yet, as long as it resolves inside a root; the fixer runs the record's `run` command with its `interpreter`.
+- A verifier phase accepted by hand with nothing to verify no longer adds a planned-reviewer row to the review record.
+
+### Guardian: the ledger records the sweep's decisions
+
+- Each entry in the dispositions JSON may carry a `ledger` object: `disposition` (`filed`, which needs a non-empty `issue`; `accepted` or `declined`, which need a non-empty `reason`; or `triaged-out`), plus optional `issue`, `reason` and `reraiseWhen`. Any other key is refused, and a `degraded` entry cannot carry one.
+- With no `ledger`, a `rejected` entry writes a `triaged-out` record with the entry's reason, and a `validated` entry writes nothing.
+- `commit-ledger` now writes the sweep's decisions as ledger records, keyed by the surfaced `id` (no longer `ledgerJoin`). Its result gains `decisions` (applied) and `decisionsSkipped` (each with `id`, `from`, `to` and `reason`); an illegal move is skipped and reported, never written.
+- `guardian_ledger.write` takes an optional `recompute` callable, with the failure reasons `recompute-failed` and `invalid-records`. `guardian_collect.run_tool` results gain `truncated`, true when the output hit the collector cap. The lenses now also collect on very large repos.
+
+### Cloud checks: an account's recorded environment
+
+- `cloud_environment.py compare` matches an account whose cloud setup record is ready against its recorded environment id, without reading the `/remote-env` picker: `action: matched, reason: recorded`, or `action: mismatched, reason: recorded-differs` with `environment` the recorded id. The new `--moving` flag restores the picker comparison, for when the owner moves an account to another environment.
+- So the owner picks an environment only at an account's first setup, or when moving it. A later "check again" reads `cloud_setup.py read` and, when `ready: true`, uses the record's `environment` (`skills/configure/reference/set-up.md` § 6).
 
 ## 0.43.0
 
