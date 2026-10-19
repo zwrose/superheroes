@@ -19,7 +19,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
-- **After switching.** **A project names its CI workflow through configure (item 16, `ciWorkflow`).** Until it does, a review record reads CI green only when at least one GitHub Actions run on the final commit succeeded, so a project whose CI is not GitHub Actions reads `none`. See [Review record: CI green needs the project's CI workflow](#review-record-ci-green-needs-the-projects-ci-workflow).
+- **After switching.** **A project names its CI workflow through configure (item 16, `ciWorkflow`).** Until it does, a review record reads CI green only when at least one GitHub Actions run on the final commit succeeded, so a project whose CI is not GitHub Actions reads `none`. A project whose CI is not GitHub Actions never reads CI `green` on a review record (it reads `none` once its checks finish clean), and naming a workflow in `ciWorkflow` cannot change that. See [Review record: CI green needs the project's CI workflow](#review-record-ci-green-needs-the-projects-ci-workflow).
 
 ### Review: the post-fix diff comes from git
 
@@ -48,6 +48,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - `ci_state` reads `none` where it read `green` from third-party statuses alone, and takes the workflow runs and the declaration as two more arguments.
 - `_check_data` returns three parts: the check runs, the combined status and the workflow runs.
 - Configuration item 16, `ciWorkflow`, holds the name of the project's CI workflow.
+- With no workflow declared, an unfinished workflow run on the commit reads `pending`, and only workflow runs whose `head_sha` is the commit count; `_check_data` keeps only workflow runs whose `head_sha` is the commit read.
 
 ## 0.44.0
 

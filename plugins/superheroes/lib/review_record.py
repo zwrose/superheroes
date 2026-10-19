@@ -222,7 +222,8 @@ def _check_data(sha, repo):
     if runs is None or not isinstance(status, dict) or wf_rows is None \
             or not all(isinstance(row, dict) for row in wf_rows):
         return None
-    return runs, status, {"workflow_runs": wf_rows}
+    # Only a run of this exact commit counts; a row with no head_sha does not.
+    return runs, status, {"workflow_runs": [row for row in wf_rows if row.get("head_sha") == sha]}
 
 
 def _ci_workflow(repo_root):
@@ -488,7 +489,7 @@ def ci_reading(check_runs, status, workflow_runs=None, declaration=("absent", No
     states = ([status.get("state")] + [s.get("state") for s in status.get("statuses") or []]
               if (status.get("total_count") or 0) > 0 else [])
     selected = [r for r in effective if r.get("name") == declared] if declared is not None else []
-    if kind == "unreadable":
+    if kind not in ("declared", "absent"):
         read = "the CI workflow declaration could not be read"
     elif declared is not None:
         read = (f"workflow {declared}: " + ", ".join(_run_words(selected))) if selected \
@@ -505,7 +506,7 @@ def ci_reading(check_runs, status, workflow_runs=None, declaration=("absent", No
     if any(r.get("conclusion") in _RED for r in runs) or any(s in ("failure", "error") for s in states) \
             or any(r.get("status") == "completed" and r.get("conclusion") in _RED for r in effective):
         return reading("red")
-    if kind == "unreadable":
+    if kind not in ("declared", "absent"):
         return reading("none")
     if declared is not None:
         if not selected:
@@ -513,6 +514,8 @@ def ci_reading(check_runs, status, workflow_runs=None, declaration=("absent", No
         if any(r.get("status") != "completed" for r in selected):
             return reading("pending")
         return reading("green" if any(r.get("conclusion") == "success" for r in selected) else "none")
+    if any(r.get("status") != "completed" for r in effective):
+        return reading("pending")
     if not runs and not states:
         return reading("none")
     if any(r.get("status") != "completed" for r in runs) or "pending" in states:

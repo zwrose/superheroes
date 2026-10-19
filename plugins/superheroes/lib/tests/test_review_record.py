@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import shutil
 import string
 import subprocess
@@ -11,6 +12,7 @@ import pytest
 import canon
 import core_md
 import gh_pages
+import mode_registry
 import model_registry
 import pr_comment
 import review_record as rr
@@ -3012,13 +3014,26 @@ def test_the_declaration_reader_never_raises(tmp_path, monkeypatch):
     assert rr._ci_workflow(repo) == ("unreadable", None)
 
 
-def test_the_declaration_reader_writes_nothing(tmp_path):
+def test_the_declaration_reader_writes_nothing(tmp_path, monkeypatch):
     # axis: the reader's purity; reading a profile writing the mode record or the profile
     repo = write_core(tmp_path, {"projectConfiguration": {"ciWorkflow": "CI"}})
     core = tmp_path / ".claude" / "superheroes" / "core.md"
     before, text = sorted(str(p) for p in tmp_path.rglob("*")), core.read_text()
     rr._ci_workflow(repo)
     assert sorted(str(p) for p in tmp_path.rglob("*")) == before and core.read_text() == text
+
+    # a profile with only the in-repo review-crew layer: the mode registry is never backfilled
+    repo = tmp_path / "repo"
+    layer = repo / ".claude" / "superheroes"
+    layer.mkdir(parents=True)
+    (layer / "review-crew.md").write_text("# review crew\n")
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    calls = []
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    monkeypatch.setattr(mode_registry, "write_registry", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rr._ci_workflow(str(repo)) == ("absent", None)
+    assert calls == []
 
 
 def test_a_failed_workflow_run_read_makes_check_data_unavailable(monkeypatch):
@@ -3035,18 +3050,47 @@ def test_a_failed_workflow_run_read_makes_check_data_unavailable(monkeypatch):
     for rows in (["x"], [None], [wf_run("CI"), 5], [[1]]):
         monkeypatch.setattr(rr, "_run", cloud_proxy({**routes, "repos/o/r/actions/runs": (rows, "workflow_runs")}))
         assert rr._check_data(HEAD, "o/r") is None, rows
-    monkeypatch.setattr(rr, "_run", cloud_proxy({**routes, "repos/o/r/actions/runs": ([wf_run("CI")], "workflow_runs")}))
-    assert rr._check_data(HEAD, "o/r")[2] == {"workflow_runs": [wf_run("CI")]}
+    monkeypatch.setattr(rr, "_run", cloud_proxy({**routes, "repos/o/r/actions/runs": ([wf_run("CI", head_sha=HEAD)], "workflow_runs")}))
+    assert rr._check_data(HEAD, "o/r")[2] == {"workflow_runs": [wf_run("CI", head_sha=HEAD)]}
 
 
 def test_a_workflow_run_page_that_is_missing_makes_check_data_unavailable(monkeypatch):
     # axis: workflow-run pagination; a failed actions/runs page on a later page treated as the whole list
-    routes = {**three_readers_routes(3), "repos/o/r/actions/runs": ([wf_run("CI")] * 150, "workflow_runs")}
+    routes = {**three_readers_routes(3), "repos/o/r/actions/runs": ([wf_run("CI", head_sha=HEAD)] * 150, "workflow_runs")}
     monkeypatch.setattr(rr, "_run", cloud_proxy(routes))
     assert len(rr._check_data(HEAD, "o/r")[2]["workflow_runs"]) == 150
     serve = cloud_proxy(routes)
     monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: None if "actions/runs" in argv[2] and "page=2" in argv[2] else serve(argv, cwd))
     assert rr._check_data(HEAD, "o/r") is None
+
+
+def test_an_unfinished_run_under_the_fallback_reads_pending():
+    # axis: the fallback's unfinished run; a finished pr-title run reading green while CI is still queued
+    for status in ("queued", "waiting", "in_progress", "requested", "pending"):
+        assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("pr-title", id=1), wf_run("CI", status, id=2))) == "pending", status
+    assert rr.ci_state({"check_runs": []}, NO_STATUS, wfs(wf_run("pr-title", id=1), wf_run("CI", "queued", id=2))) == "pending"
+
+
+def test_a_run_of_another_commit_never_counts(monkeypatch):
+    # axis: the exact sha; a run of another commit, or a run with no head_sha, counted as this commit's run
+    other = "a" * 40
+    runs = [wf_run("CI", head_sha=other, id=1), wf_run("CI", conclusion="failure", head_sha=other, id=2, event="pull_request"),
+            wf_run("CI", head_sha=HEAD, id=3), wf_run("CI", id=4)]
+    monkeypatch.setattr(rr, "_run", cloud_proxy({**three_readers_routes(3), "repos/o/r/actions/runs": (runs, "workflow_runs")}))
+    got = rr._check_data(HEAD, "o/r")
+    assert got[2] == {"workflow_runs": [runs[2]]}
+    assert rr.ci_state(*got) == "green"
+    monkeypatch.setattr(rr, "_run", cloud_proxy({**three_readers_routes(3), "repos/o/r/actions/runs": ([runs[0]], "workflow_runs")}))
+    got = rr._check_data(HEAD, "o/r")
+    assert rr.ci_state(*got) == "none"
+    assert rr.ci_state(*got, DECLARED_CI) == "none"
+
+
+def test_an_unknown_declaration_kind_reads_none():
+    # axis: the declaration kind; a kind other than declared or absent reading as an absent declaration
+    got = rr.ci_reading(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2)), ("misread", "CI"))
+    assert got["state"] == "none" and got["workflow"] is None
+    assert got["read"] == "the CI workflow declaration could not be read"
 
 
 def test_workflow_runs_are_asked_for_by_the_head_sha_page_by_number(monkeypatch):
