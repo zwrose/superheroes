@@ -66,7 +66,12 @@ _SECRET_SHAPES = (
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
-        r"""["']?\s*[:=]\s*(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
+        r"""["']?\s*[:=]\s*"""
+        # a bare `$NAME` / `${NAME}` (optionally in matching quotes) is a reference, not a value
+        r"""(?!(?:\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"""
+        r"""|\\?"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:\\?\"|\\)"""
+        r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\]))"""
+        r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
     ("bearer credential", re.compile(r"Bearer \S{16,}")),
 )
