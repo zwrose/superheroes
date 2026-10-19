@@ -158,7 +158,7 @@ Reading and independence are computed by the record, never taken from the sessio
 ## Map each exit's results to outcomes
 
 **`--review-only` exit.** Branch mode has no PR, so no record is written.
-- A REFUTED drop becomes `shown-wrong`, with the drop reason as the reason.
+- A REFUTED drop becomes `shown-wrong`, with the drop reason as the reason. A REFUTED resting on a check that did not execute is not a drop and never becomes `shown-wrong`; the finding keeps its earlier outcome path and the round's verify record lists it under `notExecuted`.
 - A finding the session decided is code-quality only becomes `craft`, with the reason.
 - A finding put to a human (the undecided set) becomes `left-for-owner`.
 - An approved-to-fix finding has no outcome until it is fixed.

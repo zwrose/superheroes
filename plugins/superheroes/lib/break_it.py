@@ -36,8 +36,28 @@ REDACTED_FIELD = "suggestionRedacted"
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
+REASON_COMMAND_NOT_FOUND = "command-not-found"
+REASON_MODULE_NOT_FOUND = "module-not-found"
+_COMMAND_NOT_FOUND_EXIT = 127
+_COMMAND_NOT_FOUND_RE = re.compile(r"command not found")
+_MODULE_NOT_FOUND_RE = re.compile(
+    r"ERR_MODULE_NOT_FOUND|Cannot find module|Cannot find package|ModuleNotFoundError|No module named")
 KEPT, KEPT_MISSING, KEPT_CHANGED, KEPT_NOT_REGULAR, KEPT_FAILING, KEPT_UNRESOLVED = (
     "kept", "missing", "changed", "not-regular", "failing", "unresolved")
+
+
+def setup_failure_reason(text, exit_code=None):
+    """Why a run never executed the code under test, from its output and exit code: the one home of the
+    setup-failure signature. ``command-not-found`` (exit 127, or ``command not found`` in the output) wins over
+    ``module-not-found``; ``None`` when neither shows. Never raises; a non-str ``text`` reads as empty."""
+    if not isinstance(text, str):
+        text = ""
+    if exit_code == _COMMAND_NOT_FOUND_EXIT or _COMMAND_NOT_FOUND_RE.search(text):
+        return REASON_COMMAND_NOT_FOUND
+    if _MODULE_NOT_FOUND_RE.search(text):
+        return REASON_MODULE_NOT_FOUND
+    return None
+
 
 # The one hand-kept home of the block grammar. The test role's panel order renders it; parse_block
 # reads its header, field prefixes and separator from it.
@@ -490,6 +510,7 @@ class _TailDrain(threading.Thread):
         self.stream = stream
         self.buf = b""
         self.cut = False
+        self.setup = None
 
     def run(self):
         try:
@@ -498,6 +519,9 @@ class _TailDrain(threading.Thread):
                 if not chunk:
                     return
                 self.buf += chunk
+                # axis: a setup-failure signature printed early in a long output is latched before the tail trim drops it — see bite-proof record wo_1_1981_not_executed
+                if self.setup is None:
+                    self.setup = setup_failure_reason(self.buf.decode("utf-8", errors="replace"))
                 # axis: the stored output never exceeds OUTPUT_TAIL_BYTES while the test runs — see bite-proof record wo_a_1800_break-it
                 if len(self.buf) > OUTPUT_TAIL_BYTES:
                     self.buf = self.buf[-OUTPUT_TAIL_BYTES:]
@@ -642,7 +666,8 @@ def _already_kept(copy, rel, sha):
 
 def _run_contained(argv, env, copy, repo_root, token, timeout):
     """Run ``argv`` in ``copy`` under the reaper, with the token and working-directory sweeps, keeping only the
-    output tail. Returns ``(launch_failed, timed_out, returncode, output)``. Every process a break-it run starts,
+    output tail. Returns ``(launch_failed, timed_out, returncode, output, setup)``, ``setup`` being the setup-failure
+    reason the drain latched while the output went by, or ``None``. Every process a break-it run starts,
     the readiness probe included, goes through here."""
     status_r, status_w = os.pipe()
     try:
@@ -655,7 +680,7 @@ def _run_contained(argv, env, copy, repo_root, token, timeout):
     except (FileNotFoundError, PermissionError):
         os.close(status_r)
         os.close(status_w)
-        return True, False, None, ""
+        return True, False, None, "", None
     os.close(status_w)
     drain = _TailDrain(proc.stdout)
     timed_out = False
@@ -685,7 +710,7 @@ def _run_contained(argv, env, copy, repo_root, token, timeout):
             proc.stdout.close()
         except OSError:
             pass
-    return launch_failed, timed_out, proc.returncode, drain.tail()
+    return launch_failed, timed_out, proc.returncode, drain.tail(), drain.setup
 
 
 _PROBE_CODE = "import sys; sys.stdout.write(str(6 * 7) + 'ok')"
@@ -721,18 +746,22 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
             return rec(OUTCOME_NOT_RUN, refusal)
     if interpreter:
         # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
-        failed, timed, status, tail = _run_contained(
+        failed, timed, status, tail, _ = _run_contained(
             (interpreter if isinstance(interpreter, list) else [interpreter]) + ["-c", _PROBE_CODE],
             env, copy, repo_root, uuid.uuid4().hex, timeout)
         # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
         if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
             return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
     token = uuid.uuid4().hex
-    launch_failed, timed_out, code, output = _run_contained(argv, env, copy, repo_root, token, timeout)
+    launch_failed, timed_out, code, output, setup = _run_contained(argv, env, copy, repo_root, token, timeout)
     if launch_failed and not timed_out:
-        return rec(OUTCOME_NOT_RUN, "command-not-found")
+        return rec(OUTCOME_NOT_RUN, REASON_COMMAND_NOT_FOUND)
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
+    reason = setup or setup_failure_reason(output, code)
+    # axis: a run whose output shows a missing command or module, or that exits 127, reads not-run, never failed or passed — see bite-proof record wo_1_1981_not_executed
+    if reason:
+        return rec(OUTCOME_NOT_RUN, reason, exit_code=code, output=output)
     return rec(OUTCOME_PASSED if code == 0 else OUTCOME_FAILED, exit_code=code, output=output)
 
 
