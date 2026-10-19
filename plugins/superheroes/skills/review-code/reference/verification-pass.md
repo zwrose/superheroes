@@ -110,7 +110,12 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
 
 - **REFUTED with reason** — the finding is dropped; the drop is recorded with
   `{id, file, title, reason, was_blocking_tagged}` (`was_blocking_tagged` preserved when the
-  reviewer tagged it Critical/Important).
+  reviewer tagged it Critical/Important), **unless** its reason or evidence shows a check that
+  did not execute the code under test (`command not found`, exit 127, `ERR_MODULE_NOT_FOUND`,
+  `Cannot find module`, `Cannot find package`, `ModuleNotFoundError`, `No module named`, or the
+  tokens `command-not-found` / `module-not-found`): that keeps the finding PLAUSIBLE at its
+  pre-verification severity with `unverified: true`, its id in `unverified`, and an entry in
+  `notExecuted`.
 - **CONFIRMED** — survivor stamped `verdict: "CONFIRMED"`; CONFIRMED evidence from the verdict
   overwrites/sets the finding's `evidence` (the verification evidence).
 - **PLAUSIBLE** — survivor stamped `verdict: "PLAUSIBLE"`.
@@ -238,6 +243,9 @@ Nothing verified away silently:
 - **`unmatched`** — mis-keyed verdict ids (a verdict that matched no finding) disclosed loudly.
 - **`unverified`** — findings that received no verdict this round (verifier silence / a lost
   verdict file); they survive as PLAUSIBLE, but the coverage gap is disclosed, never invisible.
+- **`notExecuted`** — a REFUTED that rested on a check that did not execute the code under test,
+  kept as an unverified PLAUSIBLE finding, each entry `{id, file, title, reason}` with the reason
+  `not-executed: <token>: <the verifier's reason>`; never a drop.
 - **`ambiguous`** — findings whose id carried conflicting duplicate verdicts; honored as none
   (keep-on-uncertain) and disclosed, never a silent last-write-wins drop.
 
