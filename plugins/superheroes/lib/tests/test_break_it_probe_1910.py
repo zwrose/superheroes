@@ -53,6 +53,7 @@ def probe_repo(repo):
 
 # ---- E1: a detached worker the probe's launcher spawns is gone after run_one ----------------
 
+@pytest.mark.proc_containment
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper")
 def test_e1_the_probes_detached_worker_is_gone_after_run_one(probe_repo, tmp_path):
     # bites on: the probe running through `_run_contained`; a worker with its own session, no environment and

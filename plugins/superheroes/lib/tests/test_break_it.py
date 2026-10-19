@@ -242,6 +242,7 @@ def _gone(pid):
 # T9
 # axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
 # A detached worker that also clears its environment is contained by the Linux reaper only.
+@pytest.mark.proc_containment
 @pytest.mark.parametrize("detached,clean_env", [
     (False, False), (True, False),
     pytest.param(True, True, marks=pytest.mark.skipif(
@@ -264,6 +265,7 @@ def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env
             os.kill(pid, 9)
 
 
+@pytest.mark.proc_containment
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc to disable the reaper")
 def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, monkeypatch):
     # The reaper cannot scan (no /proc for it), the worker has its own session and no environment: only the working-directory net can catch it.
@@ -285,6 +287,7 @@ def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, m
             os.kill(pid, 9)
 
 
+@pytest.mark.proc_containment
 def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, monkeypatch):
     # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the copy's directory but kept its environment, so only the environment-tag net can catch it; the worker is a Python child because macOS hides a system program's environment from `ps -E`.
     marker = 'PROC_ROOT = "/proc"'
@@ -612,6 +615,7 @@ def test_clean_env_scrubs_aliased_root_entries_and_keeps_unrelated(repo, tmp_pat
     assert env["BI_EXTRA"] == "1"
 
 
+@pytest.mark.proc_containment
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper")
 def test_exception_after_launch_still_lets_the_reaper_collect_a_detached_worker(repo, tmp_path, monkeypatch):
     pidfile = tmp_path / "worker.pid"
