@@ -417,8 +417,8 @@ _WORD_STOP = frozenset(" \t\r\n;&|")
 _QUOTE_CHARS_RE = re.compile(r"""\\?["']""")
 _WRAPPING_QUOTES_RE = re.compile(r"""\A(?:\\?["'])+|(?:\\?["'])+\Z""")
 _BARE_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})\Z")
-_CONFIG_SET_RE = re.compile(r"(?:config\s+set|npm\s+set)(?:\s+--?[A-Za-z][\w-]*)*\s+",
-                            re.IGNORECASE)
+_CONFIG_SET_RE = re.compile(r"(?:config\s+set|npm\s+set)\s+", re.IGNORECASE)
+_URL_USERINFO_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/@\s]*)@")
 
 
 def _credential_named(key):
@@ -429,10 +429,9 @@ def _credential_named(key):
     return any(a == "api" and b == "key" for a, b in zip(parts, parts[1:]))
 
 
-def _shell_word(text, start):
+def _shell_word(text, start, quote=None):
     """(word, end): the shell word at `start`, up to the first unquoted whitespace, ; & | or the
-    end of the text, quotes still in place."""
-    quote = None
+    end of the text, quotes still in place. `quote` is the quote already open at `start`."""
     end = start
     while end < len(text):
         char = text[end]
@@ -468,6 +467,25 @@ def _is_assignment(text, at):
     return before not in "=<>~!" and after != "="
 
 
+def _open_quote(text, at):
+    """The quote character still open at text[at] (None outside quotes), so an assignment inside
+    a quoted word is parsed with that quote carried in."""
+    quote = None
+    index = 0
+    while index < at:
+        char = text[index]
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote is None:
+            if char in "\"'":
+                quote = char
+        elif char == quote:
+            quote = None
+        index += 1
+    return quote
+
+
 def _key_before(text, at):
     """The key run that ends just before `at`, skipping whitespace and one closing quote."""
     end = at
@@ -489,12 +507,20 @@ def _gives_credential_value(text):
         begin = at + 1
         while begin < len(text) and text[begin] in " \t\r\n":
             begin += 1
-        if _literal_value(_shell_word(text, begin)[0]):
+        if _literal_value(_shell_word(text, begin, _open_quote(text, begin))[0]):
             return True
     # `config set KEY value` / `npm set KEY value`: every occurrence is checked
     for verb in _CONFIG_SET_RE.finditer(text):
         raw_key, end = _shell_word(text, verb.end())
-        if "=" in raw_key or "$" in raw_key or not _credential_named(raw_key):
+        while raw_key.startswith("-"):
+            # option tokens (`--location=project`, `-g`) come before the key
+            begin = end
+            while begin < len(text) and text[begin] in " \t\r\n":
+                begin += 1
+            if begin == end:
+                break
+            raw_key, end = _shell_word(text, begin)
+        if raw_key.startswith("-") or "=" in raw_key or "$" in raw_key or not _credential_named(raw_key):
             continue
         begin = end
         while begin < len(text) and text[begin] in " \t\r\n":
@@ -504,13 +530,24 @@ def _gives_credential_value(text):
     return False
 
 
+def _url_password(text):
+    """True when a URL in `text` carries userinfo `user:password` whose password is not a bare
+    environment reference."""
+    for match in _URL_USERINFO_RE.finditer(text):
+        _user, colon, password = match.group(1).partition(":")
+        if colon and _literal_value(password):
+            return True
+    return False
+
+
 def _command_credential(entry):
     """True when a setup-command `entry` gives a credential-named key (a name containing TOKEN,
     AUTH, SECRET, PASSWORD, PASSWD, IDENT or APIKEY/API_KEY) a value that is not a bare environment
     reference ($NAME or ${NAME}, quoted or not). Command entries only: the shared `_scan` also
     covers calibration files, and this rule is deliberately stricter than it."""
-    return (_gives_credential_value(entry)
-            or _gives_credential_value(_without_empty_quotes(entry)))
+    stripped = _without_empty_quotes(entry)
+    return (_gives_credential_value(entry) or _gives_credential_value(stripped)
+            or _url_password(entry) or _url_password(stripped))
 
 
 def _commands_block(commands, clone, stamp=None, count=0):
