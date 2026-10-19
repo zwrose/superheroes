@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.44.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.43.0...superheroes-v0.44.0) (2026-10-18)
+
+
+### Features
+
+* **superheroes:** a project names its Python launcher for break-it tests in calibration ([#1968](https://github.com/zwrose/superheroes/issues/1968)) ([49a2ee8](https://github.com/zwrose/superheroes/commit/49a2ee825800c16bc2af1f08f7649a12d7e07ac8))
+* **superheroes:** install and network fence for native implementer subagents ([#1947](https://github.com/zwrose/superheroes/issues/1947) L2) ([#1953](https://github.com/zwrose/superheroes/issues/1953)) ([f0fc50a](https://github.com/zwrose/superheroes/commit/f0fc50a0eb7bc15aa392293fb19a52bcfdec0e56))
+* **superheroes:** iPhone lanes approve the plugin's own iPhone commands ([#1899](https://github.com/zwrose/superheroes/issues/1899)) ([7690b72](https://github.com/zwrose/superheroes/commit/7690b723633567a4cd41bfef79775b46e36fc8e0))
+* **superheroes:** iPhone lanes can check more than one phone size ([#1902](https://github.com/zwrose/superheroes/issues/1902)) ([2f35cf3](https://github.com/zwrose/superheroes/commit/2f35cf34f4ecb39ef8f23170c3ddea3ae93104a7))
+* **superheroes:** native implementer engine run wrapper ([#1947](https://github.com/zwrose/superheroes/issues/1947) L1) ([#1952](https://github.com/zwrose/superheroes/issues/1952)) ([57027b5](https://github.com/zwrose/superheroes/commit/57027b5346276a0c07828795ea8415123351a4a0))
+
+
+### Bug Fixes
+
+* **superheroes:** a cloud build can run claude write dispatches when the calibration turns on localPorts ([#1945](https://github.com/zwrose/superheroes/issues/1945)) ([61e1100](https://github.com/zwrose/superheroes/commit/61e1100c15e252c85850da595d96a7235c8516ba))
+* **superheroes:** a cloud build gets an honest green local run and reads its PR body over REST ([#1942](https://github.com/zwrose/superheroes/issues/1942)) ([6df9a0a](https://github.com/zwrose/superheroes/commit/6df9a0aa33abf742bdc71458a58f62975b507599))
+* **superheroes:** a cloud check after first setup uses the account's recorded environment ([#1934](https://github.com/zwrose/superheroes/issues/1934)) ([4e879a1](https://github.com/zwrose/superheroes/commit/4e879a18d90186a77a5027429bbdceaf28f34c8f))
+* **superheroes:** a cloud launch refuses when the launching checkout is off its base ([#1904](https://github.com/zwrose/superheroes/issues/1904)) ([2f3de26](https://github.com/zwrose/superheroes/commit/2f3de2606dd58422deb5f8dccbafeac76182dcaa))
+* **superheroes:** a leftover the owner ruled on mid-build reaches the record and leaves the PR sheet ([#1962](https://github.com/zwrose/superheroes/issues/1962)) ([7f59d1c](https://github.com/zwrose/superheroes/commit/7f59d1c491303694607b2b6c495ed6aafe3b4a8a))
+* **superheroes:** a review sheet's history reads a normal multi-round review as normal ([#1943](https://github.com/zwrose/superheroes/issues/1943)) ([21b6471](https://github.com/zwrose/superheroes/commit/21b6471fdc0e6b821713966d6e64bd5f7becd2df))
+* **superheroes:** a review sheet's leftovers carry the full decision spine ([#1935](https://github.com/zwrose/superheroes/issues/1935)) ([0d09f38](https://github.com/zwrose/superheroes/commit/0d09f38cd7dc8fe5600d5644277faa0463969eea))
+* **superheroes:** adopt-version holds only on before-switching upgrade steps ([#1895](https://github.com/zwrose/superheroes/issues/1895)) ([49f94d3](https://github.com/zwrose/superheroes/commit/49f94d34f78cab8953f6bffc394e784b1f9864af))
+* **superheroes:** cloud recovery reads a handover comment that carries the cloud's footer ([#1930](https://github.com/zwrose/superheroes/issues/1930)) ([dae7c1e](https://github.com/zwrose/superheroes/commit/dae7c1e73c0fee4f51c60eb9eee8061aa09059ec))
+* **superheroes:** every cloud GitHub list read pages by number ([#1905](https://github.com/zwrose/superheroes/issues/1905)) ([04ed0e3](https://github.com/zwrose/superheroes/commit/04ed0e383ca028de5a71a9409b05b110eeb08109))
+* **superheroes:** four tests stop assuming a non-root user ([#1920](https://github.com/zwrose/superheroes/issues/1920)) ([0487686](https://github.com/zwrose/superheroes/commit/0487686b39c884368ba9d7b1ef57eb00cf90c9ea))
+* **superheroes:** guardian's coupling lens keeps a baseline past a flat Python layout ([#1967](https://github.com/zwrose/superheroes/issues/1967)) ([8be8f48](https://github.com/zwrose/superheroes/commit/8be8f48317f3c261dc5a16aef9523eb9bfd23f6d))
+* **superheroes:** review record reads GitHub lists page by number ([#1896](https://github.com/zwrose/superheroes/issues/1896)) ([6f80b67](https://github.com/zwrose/superheroes/commit/6f80b6753a39b0fa3f8554a06f5d6b8256a5aa0b))
+* **superheroes:** review records survive the cloud egress, and read names a damaged span ([#1963](https://github.com/zwrose/superheroes/issues/1963)) ([2eb5771](https://github.com/zwrose/superheroes/commit/2eb5771526e3fb4431542e2033723adfb982889f))
+* **superheroes:** review-code finishes a review with nothing left to verify, and break-it findings reach the fixer ([#1928](https://github.com/zwrose/superheroes/issues/1928)) ([1f8f522](https://github.com/zwrose/superheroes/commit/1f8f522e572ada62efc485690ae72ef2248083d9))
+* **superheroes:** reviewers read a changed calibration file in full, and the record names what they could not read ([#1939](https://github.com/zwrose/superheroes/issues/1939)) ([d731a9f](https://github.com/zwrose/superheroes/commit/d731a9fa6314b0f9f08c94641c5e540596210b15))
+* **superheroes:** the fix audit admits a same-round fix and a revert ([#1964](https://github.com/zwrose/superheroes/issues/1964)) ([8a56b2c](https://github.com/zwrose/superheroes/commit/8a56b2ce1b3fceb390cdb77cd975a6291f9b5eca))
+* **superheroes:** the guardian ledger records the sweep's decisions, and the lenses collect on very large repos ([#1926](https://github.com/zwrose/superheroes/issues/1926)) ([cf0978d](https://github.com/zwrose/superheroes/commit/cf0978d08d8fa066584c0923d822145885cdbf4d))
+* **superheroes:** the session resumes on its own after the mod's compaction or a manual /compact ([#1894](https://github.com/zwrose/superheroes/issues/1894)) ([b5fcdc6](https://github.com/zwrose/superheroes/commit/b5fcdc6c241db86d765869c264c904a093fd21b4))
+* **superheroes:** the watch and cloud recovery read a cloud builder's handback and stop ([#1940](https://github.com/zwrose/superheroes/issues/1940)) ([3412f63](https://github.com/zwrose/superheroes/commit/3412f638b73bcccd04c80d51f277aeea2c139e57))
+* **superheroes:** title a published review sheet by its project and what it reviews ([#1932](https://github.com/zwrose/superheroes/issues/1932)) ([d13d180](https://github.com/zwrose/superheroes/commit/d13d180d737c77855b4dde7a6db25d5159fbd8a6))
+* **superheroes:** UTF-8 clipboard copies, driver-made round folders, order-lint timeout warning ([#1925](https://github.com/zwrose/superheroes/issues/1925)) ([338ac63](https://github.com/zwrose/superheroes/commit/338ac63ba24cd45f87540861becf07c282082075))
+
+
+### Chores
+
+* **superheroes:** remove the dead handback gate and the review redesign's orphaned code ([#1923](https://github.com/zwrose/superheroes/issues/1923)) ([df27a8f](https://github.com/zwrose/superheroes/commit/df27a8f483176c6bdce0857ba156c80221a78020))
+
 ## [0.43.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.42.0...superheroes-v0.43.0) (2026-10-17)
 
 
