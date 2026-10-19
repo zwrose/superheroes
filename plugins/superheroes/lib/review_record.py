@@ -71,6 +71,11 @@ RAN_ENGINE_RECORD = "engine-record"
 RAN_REPORTED_BY_SESSION = "reported-by-session"
 RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
+# The reasons a planned seat is named as not run without being a missing review, its one home: token -> (the only
+# seat name it may label, the words the record carries). The writer refuses the token on any other row, and the
+# session's account and a hand-written one both name the seat through it.
+NOT_RUN_REASONS = {"no-loop-phase": (seat_map_module.GROUNDING_SEAT,
+                                     "no loop phase runs it, so no reviewer checked the PR body's claims")}
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
@@ -358,6 +363,11 @@ def _validate(a):
         chk(_step_ok(r.get("step")), f"reviewers[{i}].step")
         chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
+        why = r.get("notRunReason")
+        # axis: the not-run token labels only its own seat, never run, never attempted — see bite-proof record wo_1_1976_not_run_seat
+        chk(why is None or (isinstance(why, str) and why in NOT_RUN_REASONS and r["name"] == NOT_RUN_REASONS[why][0]
+                            and r["planned"] is True and r["ran"] is False and not r.get("runDir")
+                            and r.get("commit") is None), f"reviewers[{i}].notRunReason")
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
@@ -911,7 +921,7 @@ def build_record(account, readers, prior=None):
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
                            _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
                  for r in a["reviewers"]]
-    notes, missing, held = [], [], {}
+    notes, missing, seats_not_run, held = [], [], [], {}
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     findings = _apply_owner_rulings(findings, a["findings"], a["ownerRulings"])
@@ -946,8 +956,12 @@ def build_record(account, readers, prior=None):
         return g.get("kind") != "standing-ruling" or finding_outcomes.on_record(
             {"kind": "canon", "ref": g["canonId"]}, sources())[0]
 
-    for v in reviewers:
+    for v, row in zip(reviewers, a["reviewers"]):  # built in the account's order
         if v["planned"] and v["ran"] == "not-run":
+            token = row.get("notRunReason")
+            if token:  # the writer checked it labels only its own seat, never run
+                seats_not_run.append({"name": v["name"], "reason": token, "why": NOT_RUN_REASONS[token][1]})
+                continue
             mine = [g for g in a["goAheads"] if g["reviewer"] == v["name"]]
             complete = [g for g in mine if _go_ahead_ok(g)]
             # axis: a standing-ruling go-ahead counts only while its Canon entry is on record — see bite-proof record c7l3_wo1_record_writer
@@ -978,7 +992,8 @@ def build_record(account, readers, prior=None):
         "carriedRechecks": carried_rows,
         "refused": a["refused"], "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
-        "missingReviews": missing, "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
+        "missingReviews": missing, **({"seatsNotRun": seats_not_run} if seats_not_run else {}),
+        "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
                  "tokens": sum(toks) if toks else None, "source": "engine records",
@@ -1390,6 +1405,7 @@ def _summary(r, level):
         *([_refused_line(refused, compact)] if refused else []),
         *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
         *who,
+        *[f"Not run: {n['name']}, because {n['why']}." for n in r.get("seatsNotRun") or []],
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
         *wider_lines]
