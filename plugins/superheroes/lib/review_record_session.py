@@ -612,7 +612,8 @@ def _carried(account, extras, repo_root, readers):
         if review_record._key(f) in present:
             continue
         reason = f.get("reason")
-        out.append(dict(f, reason=reason + CARRIED if isinstance(reason, str) and reason else reason))
+        fresh = isinstance(reason, str) and reason and not reason.endswith(CARRIED)
+        out.append(dict(f, reason=reason + CARRIED if fresh else reason))
     return out
 
 

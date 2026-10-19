@@ -256,6 +256,21 @@ block of `sheet-words.json`, the home of the words.
 
 ### The items
 
+**Judge before you build.** The sheet carries the owner's real calls; everything else is one tap or
+none. Before building a PR or stack sheet, the advisor reads the project's Canon
+(`rubric/canon-contract.md`): a standing ruling that already answers a call makes it craft. Then:
+
+- A leftover the advisor can settle with a stated ground goes to `craftDeterminations`, not to a card.
+  Four grounds count: it duplicates another finding; another layer of the same stack, which merges
+  whole, fixed it; another card's decision settles it; or a Canon ruling already answers it, and the
+  ground cites the entry id. Doubt keeps it a card.
+- An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
+  with the entry id.
+- An item is only for a call that passes Test 1 or Test 2 (showrunner duty 5 in
+  `skills/showrunner/SKILL.md`), and it names which.
+- Disclosures that offer no choice fold into one "What you're accepting" item with a single Accept,
+  its `ifLeft` listing the disclosures, one sentence each (the page shows `ifLeft` as one paragraph).
+
 Each item shows, in this order, its kind, its title, what happens if it is left, its options with what
 each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
 note left empty.

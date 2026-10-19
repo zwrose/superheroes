@@ -787,6 +787,18 @@ def test_a_later_session_relists_the_earlier_records_findings_it_did_not_raise(t
     assert len(fake.marked()) == 2
 
 
+def test_a_finding_carried_across_three_reviews_carries_the_suffix_once(tmp_path):
+    fake = Fake()
+    _first_record(tmp_path, fake)
+    for name in ("second", "third"):
+        root = tmp_path / name
+        root.mkdir()
+        assert send(tmp_path, Session(root).seat("code-reviewer").save(), fake)["ok"]
+    (carried,) = _by_key(fake)
+    # bites on: the suffix appended again on every carry
+    assert carried["reason"].endswith(rs.CARRIED) and carried["reason"].count(rs.CARRIED) == 1
+
+
 def test_a_finding_the_later_session_raises_again_appears_once_with_its_outcome(tmp_path):
     fake = Fake()
     _first_record(tmp_path, fake)

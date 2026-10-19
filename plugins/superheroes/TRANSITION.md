@@ -19,6 +19,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
+- **After switching.** **Advisors trim PR and stack sheets by the "judge before you build" rule; nothing is owed for existing sheets.** See [PR sheet: judge before you build](#pr-sheet-judge-before-you-build).
+
+### PR sheet: judge before you build
+
+- `theme/review-template.md` § The items gains the rule: before building a sheet, the advisor reads the project's Canon, settles a leftover with a stated ground (a duplicate, a fix in another layer of the same stack, another card's decision, or a Canon ruling cited by entry id) as a `craftDetermination` in place of a card, keeps doubt as a card, cites a Canon-covered acceptance once in the `summary` in place of an item, puts up an item only for a call that passes Test 1 or Test 2, and folds disclosures with no choice into one item with a single Accept. `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics points to it.
+- A finding carried from an earlier review record across several later reviews now carries ` (carried from the earlier review record)` once. Before, the suffix repeated once per carry. A reason already written with the suffix repeated keeps it; later carries add no more.
 
 ### Review: the post-fix diff comes from git
 

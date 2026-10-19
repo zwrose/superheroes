@@ -786,7 +786,7 @@ The index and the PR sheets are published on the plugin's shared review template
 and the shape of the advisor's input to a sheet, are the template's, in
 [the review template](../../../theme/review-template.md); this file restates none of it. A PR sheet's
 leftover carries this file's per-item spine, written by the advisor in its sheet input as
-[the review template](../../../theme/review-template.md) § The items says.
+[the review template](../../../theme/review-template.md) § The items says. Before building a sheet, judge what reaches the owner by that section's "judge before you build" rule.
 
 **The first answer the advisor reads counts.** The first answer the advisor reads to a batch-1
 question, in the chat or on the index, is the answer, and it counts at once. A batch-1 answer on the
