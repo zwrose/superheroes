@@ -4,7 +4,9 @@
 Sibling of loop_synthesis.py: applies a review panel's per-finding verification verdicts
 (CONFIRMED / PLAUSIBLE / REFUTED) deterministically so accounting stays reproducible even
 though a model made the judgments. stdlib only; never raises on bad input; fail-closed —
-a model's silence or malformed verdict never drops a finding.
+a model's silence or malformed verdict never drops a finding. A REFUTED that rests on a check
+that did not execute the code under test (a missing command or module, exit 127) is not a drop either:
+the finding is kept unverified and listed under `notExecuted` (#1981).
 """
 import re
 
@@ -18,6 +20,31 @@ VERDICTS = round_phases.VERDICTS
 _DEFAULT_BLOCKING_SEVERITY = "Important"
 CLUSTER_LINE_SPAN = 100
 _BODY_SEP = "\n\n---\n\n"
+# The exit-127 shape a verifier's prose uses ("exit 127", "exited with status 127", "returned code 127").
+_EXIT_127_RE = re.compile(r"\b(?:exit(?:ed)?|status|code|returned)\b[^0-9\n]{0,16}127\b")
+_NOT_EXECUTED_TOKENS = (break_it.REASON_COMMAND_NOT_FOUND, break_it.REASON_MODULE_NOT_FOUND)
+
+
+def _text_not_executed(text):
+    if not isinstance(text, str):
+        return None
+    shown = break_it.setup_failure_reason(text)
+    if shown is not None:
+        return shown
+    for token in _NOT_EXECUTED_TOKENS:
+        if token in text:
+            return token
+    if _EXIT_127_RE.search(text):
+        return break_it.REASON_COMMAND_NOT_FOUND
+    return None
+
+
+def not_executed_reason(verdict):
+    """The reason token (`command-not-found` / `module-not-found`) when a verdict's `reason` or `evidence`
+    shows a check that did not execute the code under test, else `None`. Never raises."""
+    if not isinstance(verdict, dict):
+        return None
+    return _text_not_executed(verdict.get("reason")) or _text_not_executed(verdict.get("evidence"))
 
 
 def stage_ids(findings):
@@ -115,7 +142,7 @@ def apply_verdicts(findings, verdicts):
         findings = []
     matched_ids = set()
     survivors, drops, downgrades = [], [], []
-    unverified = []
+    unverified, not_executed = [], []
     for f in findings:
         if not isinstance(f, dict):
             continue
@@ -132,7 +159,9 @@ def apply_verdicts(findings, verdicts):
             unverified.append(fid)
         verdict = v.get("verdict") if isinstance(v, dict) else None
         reason = v.get("reason") if isinstance(v, dict) else None
-        if verdict == "REFUTED" and isinstance(reason, str) and reason.strip():
+        unrun = not_executed_reason(v) if verdict == "REFUTED" else None
+        # axis: a REFUTED resting on a check that did not execute is kept unverified, never dropped — see bite-proof record wo_1_1981_not_executed
+        if verdict == "REFUTED" and isinstance(reason, str) and reason.strip() and not unrun:
             drops.append({
                 "id": fid,
                 "file": f.get("file"),
@@ -156,6 +185,17 @@ def apply_verdicts(findings, verdicts):
         else:
             kept["verdict"] = "PLAUSIBLE"
         kept["severity"] = _kept_severity(f, v, honored)
+        if unrun:
+            kept["unverified"] = True
+            if fid is not None and fid not in unverified:
+                unverified.append(fid)
+            not_executed.append({
+                "id": fid,
+                "file": f.get("file"),
+                "title": f.get("title"),
+                "reason": "not-executed: %s: %s" % (
+                    unrun, reason.strip() if isinstance(reason, str) and reason.strip() else "no reason given"),
+            })
         if circuit_breaker.severity_rank(kept["severity"]) > circuit_breaker.severity_rank(f.get("severity")):
             kept["severityChange"] = {
                 "from": f.get("severity"),
@@ -183,6 +223,7 @@ def apply_verdicts(findings, verdicts):
         "unmatched": unmatched,
         "unverified": unverified,
         "ambiguous": sorted(ambiguous_ids),
+        "notExecuted": not_executed,
     }
 
 
