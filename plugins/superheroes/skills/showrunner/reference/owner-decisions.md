@@ -74,7 +74,8 @@ never the grading itself**. Earlier routing is input in the same way, **the advi
 owner dressed as a product call, and how a real trade arrives filed as a minor note; in both
 directions the owner pays for someone else's framing. The framing is still worth reading: it is
 evidence about the item, and where it disagrees with the advisor's own read, saying so in the item's
-*why it is yours* is more useful to the owner than a silent re-grade.
+*why it is yours* is more useful to the owner than a silent re-grade. The advisor records a re-grade of a left-for-owner
+finding as a craft determination in the sheet input, as [the review template](../../../theme/review-template.md#decided-for-you) says.
 
 **"Why it is yours" names the ground.** It names which of the line's ten owner categories the item touches, the [material consequence](../../../rubric/glossary.md#material-consequence) it carries, or that the line's sort ended at its last step, unsure, which keeps the call the owner's. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list. An item that ended at unsure stays on the owner's list until a category or consequence can be named.
 
@@ -822,6 +823,13 @@ answers saved and no "done", nothing is merged, sent back, filed, or recorded in
 sheet. After "done", a "Keep it" on a leftover whose note says to fix it first is treated as open:
 the PR is not merged, and the advisor asks the owner which one stands.
 
+After "done", a saved "Make this mine" on a decided-for-you entry takes that determination back. The
+advisor removes the determination, writes the finding a `leftovers` entry (why, context, options) with the
+owner's note in its context, and republishes the sheet unsigned, because the card set changed and the move
+is material. The owner answers the new card in the next "done" cycle. A saved take-back beats a saved
+Merge, so the PR does not merge on that sheet. The stored shape is the template's:
+[Decided for you](../../../theme/review-template.md#decided-for-you).
+
 **The merge verdict.** The owner's word to merge a PR is a saved "Merge" verdict on that PR's current
 sheet together with "done" in the chat. Duty 6 in `skills/showrunner/SKILL.md` ("Coordinate releases
 and drive the merge train") is the one full statement of it. Where no "Merge" verdict can be saved on
@@ -870,7 +878,9 @@ by an unsigned one; neither is a head move.
 the advisor has decided under the standing order since the last sitting — **what it was, what was
 decided, and where the determination is recorded**. **Every line is vetoable on the spot**, and the
 recap exists to make that veto cheap: a decision the owner can only reach by opening artifacts is
-one they will not in practice review. **It is a recap, not a batch** — nothing in it waits on a
+one they will not in practice review. Each decided-for-you entry on a PR sheet is one line of the recap:
+the finding, craft with its ground, and the PR's sheet and its decided-for-you list as the record.
+**It is a recap, not a batch** — nothing in it waits on a
 word, and an item that needs one is not delivered here in place of the filter and the spine.
 
 **State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
@@ -963,7 +973,7 @@ one PR, while executing what batch 1 unblocked; batch 3 = one sheet per PR, buil
 batch-1 and batch-2 rulings are carried out; a PR sheet is read only after "done"; the merge word
 is a saved "Merge" verdict plus "done"; state empty batches plainly.
 **Recap:** every sitting opens or closes with the "what I decided for you" lines — one per craft
-call decided since the last sitting, each vetoable; a recap, not a batch.
+call decided since the last sitting (a decided-for-you entry with its ground and its sheet as the record), each vetoable; a recap, not a batch.
 
 **Formatting:** one block per spine section — never one run-on paragraph.
 <!-- /superheroes:owner-decisions-contract -->
