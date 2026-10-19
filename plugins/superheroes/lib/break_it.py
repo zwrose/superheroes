@@ -520,8 +520,10 @@ class _TailDrain(threading.Thread):
                     return
                 self.buf += chunk
                 # axis: a setup-failure signature printed early in a long output is latched before the tail trim drops it — see bite-proof record wo_1_1981_not_executed
-                if self.setup is None:
-                    self.setup = setup_failure_reason(self.buf.decode("utf-8", errors="replace"))
+                if self.setup != REASON_COMMAND_NOT_FOUND:
+                    found = setup_failure_reason(self.buf.decode("utf-8", errors="replace"))
+                    if found is not None:
+                        self.setup = found
                 # axis: the stored output never exceeds OUTPUT_TAIL_BYTES while the test runs — see bite-proof record wo_a_1800_break-it
                 if len(self.buf) > OUTPUT_TAIL_BYTES:
                     self.buf = self.buf[-OUTPUT_TAIL_BYTES:]
@@ -758,7 +760,8 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
         return rec(OUTCOME_NOT_RUN, REASON_COMMAND_NOT_FOUND)
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
-    reason = setup or setup_failure_reason(output, code)
+    tail_reason = setup_failure_reason(output, code)
+    reason = REASON_COMMAND_NOT_FOUND if REASON_COMMAND_NOT_FOUND in (setup, tail_reason) else (setup or tail_reason)
     # axis: a run whose output shows a missing command or module, or that exits 127, reads not-run, never failed or passed — see bite-proof record wo_1_1981_not_executed
     if reason:
         return rec(OUTCOME_NOT_RUN, reason, exit_code=code, output=output)

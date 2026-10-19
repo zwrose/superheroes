@@ -1,8 +1,8 @@
-# WO-1 (#1981) bite-proof — a check that did not execute the code under test never dismisses a finding
+# WO-1 and WO-3 (#1981) bite-proof — a check that did not execute the code under test never dismisses a finding
 
-**Provenance:** claude / sonnet (implementer, WO-1), `plugins/superheroes/lib/break_it.py` (`_run_in_copy`, `_TailDrain.run`), `plugins/superheroes/lib/verification.py` (`apply_verdicts`); tests in `plugins/superheroes/lib/tests/test_not_executed_1981.py`.
+**Provenance:** claude / sonnet (implementer, WO-1; and WO-3, review round 1 finding `code-001`), `plugins/superheroes/lib/break_it.py` (`_run_in_copy`, `_TailDrain.run`), `plugins/superheroes/lib/verification.py` (`apply_verdicts`); tests in `plugins/superheroes/lib/tests/test_not_executed_1981.py`.
 
-Declared guarded-element set (from the order): **B1**, **B2**, **B3**. Each was neutralized by one targeted edit (the Edit tool, exact-text match), only its proving nodes run, the inverse edit applied, and the same selection run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used. The sha256 of the neutralized file was taken before the edit, with the edit in place, and after the restore.
+Declared guarded-element set (from the order): **B1**, **B2**, **B3** (WO-1), **B4**, **B5** (WO-3). Each was neutralized by one targeted edit (the Edit tool, exact-text match), only its proving nodes run, the inverse edit applied, and the same selection run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used. The sha256 of the neutralized file was taken before the edit, with the edit in place, and after the restore.
 
 ## Guarded elements
 
@@ -11,6 +11,8 @@ Declared guarded-element set (from the order): **B1**, **B2**, **B3**. Each was 
 | B1 | the new `not-run` branch in `break_it.py` `_run_in_copy` (the `if reason:` return) | a setup failure reads not-run, never failed/passed | `test_not_executed_1981.py::test_t2_e1_exit_127_with_empty_output_is_command_not_found`, `::test_t2_e2_exit_1_with_module_not_found_is_not_run`, `::test_t2_e3_exit_0_with_module_not_found_is_not_run_never_passed` |
 | B2 | the drain latch in `break_it.py` `_TailDrain.run` (the `self.setup = setup_failure_reason(...)` assignment) | a signature early in a long output is still seen | `test_not_executed_1981.py::test_t2_e4_an_early_signature_survives_a_long_output[0]` and `[1]`, `::test_t3_intercept_keeps_a_break_it_finding_whose_early_signature_scrolled_off` |
 | B3 | the not-executed keep in `verification.py` `apply_verdicts` (the `not unrun` term of the drop condition) | a REFUTED resting on a check that did not execute is kept unverified, not dropped | `test_not_executed_1981.py::test_t4_*` (five parametrized rows and the identity-key row), `::test_t6_the_round_driver_keeps_a_not_executed_refutation_and_records_it` |
+| B4 | the drain upgrade in `break_it.py` `_TailDrain.run` (the `if self.setup != REASON_COMMAND_NOT_FOUND:` guard together with the `found` assignment) | a later `command not found` read upgrades an earlier module latch | `test_not_executed_1981.py::test_t7_a_later_command_not_found_read_upgrades_an_earlier_module_latch` |
+| B5 | the run-level precedence in `break_it.py` `_run_in_copy` (the `REASON_COMMAND_NOT_FOUND in (setup, tail_reason)` condition) | exit 127 beats a latched module reason | `test_not_executed_1981.py::test_t8_e2_module_signature_with_exit_127_is_command_not_found` |
 
 ## Disclosures
 
@@ -387,4 +389,114 @@ FAILED plugins/superheroes/lib/tests/test_not_executed_1981.py::test_t6_the_roun
 ```
 .......                                                                  [100%]
 7 passed, 25 deselected in 3.43s
+```
+
+---
+
+## B4 — the drain upgrade in `_TailDrain.run` (WO-3)
+
+- **axis:** a later `command not found` read upgrades an earlier module latch
+
+**neutralization** (`plugins/superheroes/lib/break_it.py`, the guard only):
+```diff
+-                if self.setup != REASON_COMMAND_NOT_FOUND:
++                if self.setup is None:
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/pyc-wo3-1981 -m pytest -q -p no:cacheprovider plugins/superheroes/lib/tests/test_not_executed_1981.py -k "test_t7_a_later_command_not_found_read_upgrades_an_earlier_module_latch"
+```
+
+**decisive assertion line (red token):** `test_not_executed_1981.py:271`: `AssertionError: assert 'module-not-found' == 'command-not-found'`
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_t7_a_later_command_not_found_read_upgrades_an_earlier_module_latch ____
+
+    def test_t7_a_later_command_not_found_read_upgrades_an_earlier_module_latch():
+>       assert _drain_two_reads(_MODULE_CHUNK, _COMMAND_CHUNK) == "command-not-found"
+E       AssertionError: assert 'module-not-found' == 'command-not-found'
+E         
+E         - command-not-found
+E         + module-not-found
+
+/home/user/wt-1981/plugins/superheroes/lib/tests/test_not_executed_1981.py:271: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_not_executed_1981.py::test_t7_a_later_command_not_found_read_upgrades_an_earlier_module_latch
+1 failed, 37 deselected in 4.41s
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/break_it.py`; sha256 before the neutralization `400cea8fcc13ffead2df7dcb474af3ba616db79722282c634d486d40d81be915`, with the neutralization in place `0108e2c496d75f3b6c414363d54d64bb6921099d169222f9099149ac7e0c1ca5`, after the restore `400cea8fcc13ffead2df7dcb474af3ba616db79722282c634d486d40d81be915` — identical to before.
+
+**restored lines** (as they stand):
+```
+523:                 if self.setup != REASON_COMMAND_NOT_FOUND:
+524:                     found = setup_failure_reason(self.buf.decode("utf-8", errors="replace"))
+525:                     if found is not None:
+526:                         self.setup = found
+```
+
+**raw green** (exit 0), same command:
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 2.15s
+```
+
+---
+
+## B5 — the run-level precedence in `_run_in_copy` (WO-3)
+
+- **axis:** exit 127 beats a latched module reason
+
+**neutralization** (`plugins/superheroes/lib/break_it.py`):
+```diff
+-    reason = REASON_COMMAND_NOT_FOUND if REASON_COMMAND_NOT_FOUND in (setup, tail_reason) else (setup or tail_reason)
++    reason = setup or tail_reason
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/pyc-wo3-1981 -m pytest -q -p no:cacheprovider plugins/superheroes/lib/tests/test_not_executed_1981.py -k "test_t8_e2_module_signature_with_exit_127_is_command_not_found"
+```
+
+**decisive assertion line (red token):** `test_not_executed_1981.py:286`: `At index 1 diff: 'module-not-found' != 'command-not-found'`
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_t8_e2_module_signature_with_exit_127_is_command_not_found ________
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-14/test_t8_e2_module_signature_wi0/repo')
+
+    def test_t8_e2_module_signature_with_exit_127_is_command_not_found(repo):
+        content = "import sys\nsys.stderr.write(%r + '\\n')\nsys.exit(127)\n" % _MODULE_SIGNATURE
+        record = _run(repo, content)
+>       assert (record["outcome"], record["reason"], record["exitCode"]) == ("not-run", "command-not-found", 127)
+E       AssertionError: assert ('not-run', '...t-found', 127) == ('not-run', '...t-found', 127)
+E         
+E         At index 1 diff: 'module-not-found' != 'command-not-found'
+E         Use -v to get more diff
+
+/home/user/wt-1981/plugins/superheroes/lib/tests/test_not_executed_1981.py:286: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_not_executed_1981.py::test_t8_e2_module_signature_with_exit_127_is_command_not_found
+1 failed, 37 deselected in 3.10s
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/break_it.py`; sha256 before the neutralization `400cea8fcc13ffead2df7dcb474af3ba616db79722282c634d486d40d81be915`, with the neutralization in place `8726dd228d1e8aa6af7f6d1be856f78d90d02c3dc1a1c164fd3f8d24c43beb24`, after the restore `400cea8fcc13ffead2df7dcb474af3ba616db79722282c634d486d40d81be915` — identical to before.
+
+**restored lines** (as they stand):
+```
+763:     tail_reason = setup_failure_reason(output, code)
+764:     reason = REASON_COMMAND_NOT_FOUND if REASON_COMMAND_NOT_FOUND in (setup, tail_reason) else (setup or tail_reason)
+```
+
+**raw green** (exit 0), same command:
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 2.90s
 ```

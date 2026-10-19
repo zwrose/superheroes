@@ -11,10 +11,17 @@ exit 0 and exit 1 (T2, T3) · E5 a genuine assertion failure stays `failed` (T2)
 `passed` (T2) · a verifier REFUTED resting on such a check is kept unverified (T4), a real refutation
 still drops (T5), and the round driver records the kept one without a disposition (T6).
 
+Precedence (review round 1, WO-3): `command-not-found` outranks `module-not-found` however the output is
+read — a module chunk then a command chunk upgrades the drain latch (T7), and exit 127 beats a latched
+module reason (T8: E2 module signature and exit 127, E3 module signature and exit 1 unchanged, E4 an early
+`command not found`, more than the tail of other output, then a module signature).
+
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_1_1981_not_executed.md
 """
 import os
 import sys
+import threading
+import time
 
 import pytest
 
@@ -232,3 +239,66 @@ def test_t6_the_round_driver_keeps_a_not_executed_refutation_and_records_it(tmp_
     assert [d["title"] for d in verify["drops"]] == [_REAL["title"]]
     passes = state["rounds"]["1"]["verifyPasses"][-1]
     assert (passes["PLAUSIBLE"], passes["REFUTED"], passes["unverified"]) == (1, 1, 1), passes
+
+
+# T7
+_MODULE_CHUNK = b"ModuleNotFoundError: No module named 'x'\n"
+_COMMAND_CHUNK = b"sh: 1: vitest: command not found\n"
+_PLAIN_CHUNK = b"all quiet on this read\n"
+
+
+def _drain_two_reads(first, second):
+    """Feed ``first`` then ``second`` to a ``_TailDrain`` as two reads it takes separately: the second write
+    waits until the drain has latched the first chunk's reason, so a pipe cannot coalesce the two."""
+    expected = break_it.setup_failure_reason(first.decode())
+    rfd, wfd = os.pipe()
+    with os.fdopen(rfd, "rb") as stream, os.fdopen(wfd, "wb", buffering=0) as out:
+        drain = break_it._TailDrain(stream)
+        drain.start()
+        out.write(first)
+        deadline = time.monotonic() + 5
+        while drain.setup != expected and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert drain.setup == expected, drain.setup
+        out.write(second)
+        out.close()
+        drain.join(30)
+        assert not drain.is_alive()
+    return drain.setup
+
+
+def test_t7_a_later_command_not_found_read_upgrades_an_earlier_module_latch():
+    assert _drain_two_reads(_MODULE_CHUNK, _COMMAND_CHUNK) == "command-not-found"
+
+
+def test_t7_a_module_read_never_downgrades_an_earlier_command_latch():
+    assert _drain_two_reads(_COMMAND_CHUNK, _MODULE_CHUNK) == "command-not-found"
+
+
+def test_t7_a_signature_free_read_never_clears_a_module_latch():
+    assert _drain_two_reads(_MODULE_CHUNK, _PLAIN_CHUNK) == "module-not-found"
+
+
+# T8
+def test_t8_e2_module_signature_with_exit_127_is_command_not_found(repo):
+    content = "import sys\nsys.stderr.write(%r + '\\n')\nsys.exit(127)\n" % _MODULE_SIGNATURE
+    record = _run(repo, content)
+    assert (record["outcome"], record["reason"], record["exitCode"]) == ("not-run", "command-not-found", 127)
+    assert "vitest" in record["output"]
+
+
+def test_t8_e3_module_signature_with_exit_1_stays_module_not_found(repo):
+    content = "import sys\nsys.stderr.write(%r + '\\n')\nsys.exit(1)\n" % _MODULE_SIGNATURE
+    record = _run(repo, content)
+    assert (record["outcome"], record["reason"], record["exitCode"]) == ("not-run", "module-not-found", 1)
+
+
+def test_t8_e4_an_early_command_not_found_outranks_a_late_module_signature(repo):
+    content = ("import sys\nprint('sh: 1: vitest: command not found', flush=True)\n"
+               "for _ in range(4000):\n    print('y' * 49)\n"
+               "print(%r)\nsys.exit(0)\n" % _MODULE_SIGNATURE)
+    record = _run(repo, content)
+    # the premise: the tail kept the module signature and no trace of the early command line
+    assert "command not found" not in record["output"], record["output"][:200]
+    assert "vitest'" in record["output"]
+    assert (record["outcome"], record["reason"], record["exitCode"]) == ("not-run", "command-not-found", 0)
