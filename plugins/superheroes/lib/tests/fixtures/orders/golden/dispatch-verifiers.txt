@@ -35,15 +35,19 @@ Verdict semantics:
   yet; that is expected, never a reason for REFUTED. Judge it by its `suggestion` block and its
   `breakItRun` record, which is the run the orchestrator made in a throwaway copy of the change.
   CONFIRMED when the recorded output shows the test's own assertion failing on the behaviour the
-  issue names. REFUTED when the output shows a setup failure instead (a missing module or command,
-  or an import or collection error unrelated to the change), or when the test cannot reach the
-  changed code. When the record's outcome is `not-run`, judge the issue from the code alone, as
+  issue names. A setup failure (a missing module or command, exit 127, or an import or collection
+  error unrelated to the change) shows nothing about the issue, so it is judged like `not-run`,
+  from the code alone, and is never REFUTED on that ground; REFUTED only when the test cannot reach
+  the changed code. When the record's outcome is `not-run`, judge the issue from the code alone, as
   for any other issue.
 
 ## Hard rules
 - Judge only the issues in this cluster. Do NOT add new issues, merge issues, or
   decide the run's outcome.
 - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
+- A check that did not execute the code under test (it exited for a missing command or module,
+  or never started) is never evidence for REFUTED: judge from the code. A REFUTED whose reason
+  rests on such a check is kept as an unverified finding, not dropped.
 - **Never change the repository, and never claim a run you did not make.** Quote code
   you read, a read-only command you actually ran (with its output), or an execution
   output the orchestrator captured and handed you — and never imply a run you did not

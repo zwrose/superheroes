@@ -20,6 +20,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
 - **After switching.** **Advisors trim PR and stack sheets by the "judge before you build" rule; nothing is owed for existing sheets.** See [PR sheet: judge before you build](#pr-sheet-judge-before-you-build).
+- **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
 
 ### PR sheet: judge before you build
 
@@ -46,6 +47,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The panel, verifier, synthesis, gap-sweep, audit and scoped-finder orders name the project's `CLAUDE.md` through the new placeholder `CLAUDE_MD_PATH`: the absolute path into the live checkout when the project has a `CLAUDE.md` at its root, or `(this project has no CLAUDE.md at <repo root>)` when it has none. Before, they named it by the bare relative path `CLAUDE.md`, which the sanitized view strips, so external-engine seats rarely read it.
 - The sanitized view's notice no longer says only that stripped config's absence is not a finding: it adds that a `CLAUDE.md` or calibration file the instructions name by an absolute path sits outside the view and is readable there, and that such a path is never listed in the investigated array.
 - The fixer order is unchanged; it runs in the live checkout, where the relative path opens.
+
+### Review: a check that could not run never dismisses a finding
+
+- A break-it run whose output shows a missing command or module reads `not-run`, never `failed` or `passed`, at any exit code. The reason `module-not-found` is new, and `command-not-found` now also covers a run that exits 127 or prints `command not found`, even when the signature was printed early in a long output.
+- `verification.apply_verdicts` returns a new `notExecuted` list, and the round `verify` record carries it. A REFUTED whose reason or evidence shows a check that did not execute is kept as an unverified PLAUSIBLE finding, not dropped.
+- New decision kind `verifier-not-executed`, recorded once per kept finding.
 
 ### Review records name a grounding seat the loop did not run
 
