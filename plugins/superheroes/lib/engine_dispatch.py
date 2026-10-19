@@ -2527,6 +2527,44 @@ def _validate_base_sha(base_sha):
     return True, base_sha
 
 
+def _resolve_commit(cwd_real, rev, timeout=None):
+    """The full sha ``rev`` names as a commit in ``cwd_real``, or None."""
+    if not isinstance(rev, str) or not rev:
+        return None
+    try:
+        result = _git_scrubbed(
+            cwd_real, "rev-parse", "--verify", "--quiet", "--end-of-options", "%s^{commit}" % rev,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _size_count_from(cwd, base, base_ref, timeout=None):
+    """The commit the fold counts from: the newer of ``base`` and the merge base of HEAD and
+    ``base_ref``, so main merged into the branch mid-build is not the build's own lines (#1978).
+    None when ``base_ref`` or the merge base cannot be resolved."""
+    if base_ref is None:
+        return base
+    ref_sha = _resolve_commit(cwd, base_ref, timeout=timeout)
+    if ref_sha is None:
+        return None
+    try:
+        merge_base = _git_scrubbed(cwd, "merge-base", "HEAD", ref_sha, timeout=timeout)
+        if merge_base.returncode != 0 or not merge_base.stdout.strip():
+            return None
+        merge_base_sha = merge_base.stdout.strip()
+        # Axis: a stale or unrelated base ref never moves the count behind the build's own base.
+        newer = _git_scrubbed(cwd, "merge-base", "--is-ancestor", base, merge_base_sha,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    return merge_base_sha if newer.returncode == 0 else base
+
+
 def _verify_base_sha_resolves(cwd_real, base_sha, timeout=None):
     try:
         result = _git_scrubbed(
@@ -3183,22 +3221,29 @@ def _fold_cc_writes_sweep(state):
 
 
 def _fold_size_tripwire(state):
-    """Count a write run's worktree against the base journaled at open. None for a review run
-    or a run opened without size inputs. Never raises."""
+    """Count a write run's worktree against the base journaled at open, or against its merge
+    base with the journaled base ref when that is newer. None for a review run or a run opened
+    without size inputs. Never raises."""
     opened = state.get("opened") or {}
     inputs = opened.get("sizeTripwireInputs")
     if opened.get("runKind") != RUN_KIND_WRITE or not isinstance(inputs, dict):
         return None
     base = inputs.get("base")
     line = inputs.get("line")
+    base_ref = inputs.get("baseRef")
     try:
-        counted = size_count.collect(
-            opened.get("cwd"), base, head=None,
-            deadline=time.monotonic() + SIZE_COUNT_BUDGET_SECONDS,
-        )
+        deadline = time.monotonic() + SIZE_COUNT_BUDGET_SECONDS
+        counted_from = _size_count_from(opened.get("cwd"), base, base_ref,
+                                        timeout=SIZE_COUNT_BUDGET_SECONDS)
+        if counted_from is None:
+            return {"status": "indeterminate", "base": base, "line": line,
+                    "baseRef": base_ref, "reason": SIZE_BASE_UNRESOLVABLE}
+        counted = size_count.collect(opened.get("cwd"), counted_from, head=None, deadline=deadline)
         if not counted.get("ok"):
             field = {"status": "indeterminate", "base": base, "line": line,
                      "reason": counted.get("reason")}
+            if base_ref is not None:
+                field.update(baseRef=base_ref, countedFrom=counted_from)
             if "detail" in counted:
                 field["detail"] = counted["detail"]
             return field
@@ -3212,6 +3257,8 @@ def _fold_size_tripwire(state):
             "binary": counted["binary"],
             "untrackedRepos": counted["untrackedRepos"],
         }
+        if base_ref is not None:
+            field.update(baseRef=base_ref, countedFrom=counted_from)
         if "barExcluded" in counted:
             field["barExcluded"] = counted["barExcluded"]
         if "lockfilesExcluded" in counted:
@@ -6464,7 +6511,8 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
                    expected_items=None, expected_items_file=None,
-                   requires_process_listing=False, size_base=None, size_line=None, **kwargs):
+                   requires_process_listing=False, size_base=None, size_line=None,
+                   size_base_ref=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -6538,7 +6586,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             max_wait_source=max_wait_source, claude_mode=claude_mode,
             expected_items=expected_items, expected_items_file=expected_items_file,
             requires_process_listing=requires_process_listing,
-            size_base=size_base, size_line=size_line,
+            size_base=size_base, size_line=size_line, size_base_ref=size_base_ref,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6564,7 +6612,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
                          claude_mode=None, expected_items=None,
                          expected_items_file=None, requires_process_listing=False,
-                         size_base=None, size_line=None):
+                         size_base=None, size_line=None, size_base_ref=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -6644,7 +6692,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
     run_dir_real = rd_detail
 
     size_refusal = None
-    if (size_base is None) != (size_line is None):
+    if (size_base is None) != (size_line is None) or (size_base_ref is not None and size_line is None):
         size_refusal = SIZE_INPUTS_INCOMPLETE
     elif size_line is not None:
         if not isinstance(size_line, int) or isinstance(size_line, bool) or size_line < 0:
@@ -6659,6 +6707,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         )
     size_inputs_supplied = size_line is not None
     size_tripwire_inputs = {"base": size_base, "line": size_line} if size_inputs_supplied else None
+    if size_tripwire_inputs is not None and size_base_ref is not None:
+        size_tripwire_inputs["baseRef"] = size_base_ref
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
     resolved_claude_mode = {"claudeMode": claude_mode}
@@ -6809,8 +6859,10 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                         run_dir=run_dir_real, argv=argv,
                     )
         else:
-            if size_inputs_supplied and not _verify_base_sha_resolves(
-                cwd_real, size_base, timeout=preflight_timeout,
+            if size_inputs_supplied and not (
+                _verify_base_sha_resolves(cwd_real, size_base, timeout=preflight_timeout)
+                and (size_base_ref is None
+                     or _resolve_commit(cwd_real, size_base_ref, timeout=preflight_timeout))
             ):
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -7567,6 +7619,9 @@ def build_parser():
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
     cc.add_argument(w, "--size-base", contract="free-text", default=None)
     cc.add_argument(w, "--size-line", contract="integer", default=None, type=int)
+    cc.add_argument(w, "--size-base-ref", contract="free-text", default=None,
+                    help="the base branch; the fold counts from its merge base with HEAD "
+                         "when that is newer than --size-base")
     cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=claude_modes.CLAUDE_MODE_INPUTS,
                     help=_CLAUDE_MODE_HELP)
@@ -7631,7 +7686,8 @@ def main(argv):
                                  expected_items=args.expect_item,
                                  expected_items_file=args.expect_items_file,
                                  requires_process_listing=args.requires_process_listing,
-                                 size_base=args.size_base, size_line=args.size_line)
+                                 size_base=args.size_base, size_line=args.size_line,
+                                 size_base_ref=args.size_base_ref)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-poll":
             res, classification = _dispatch_poll_impl(args.run_dir)
