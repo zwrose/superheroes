@@ -220,3 +220,41 @@ def test_head_at_base_still_counts(tmp_path):
         size_base=start, size_line=140, size_base_ref=main_branch,
     )
     assert res["sizeTripwire"]["countedFrom"] == start
+
+
+# axis: an older push of the build's own branch holds some of its commits; that is no count either.
+def test_lagging_push_of_own_branch_is_indeterminate(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    start = _head(wt)
+    _commit_file(wt, "own.py", 50, "build: own lines, pushed")
+    _git(wt, "branch", "-q", "pushed-own")
+    _commit_file(wt, "more.py", 60, "build: own lines since the push")
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / "run"),
+        size_base=start, size_line=140, size_base_ref="pushed-own",
+    )
+    assert res["sizeTripwire"] == {
+        "status": "indeterminate", "base": start, "line": 140, "baseRef": "pushed-own",
+        "reason": "size-base-ref-contains-head"}
+    main_branch = _git(main, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / "run-main"),
+        size_base=start, size_line=140, size_base_ref=main_branch,
+    )
+    assert res["sizeTripwire"]["tripwireCount"] == 110
+
+
+# axis: a fast-forward of the base into a build with no own commits reads indeterminate (a hand
+# count), never a short count — the disclosed, safe direction.
+def test_fast_forward_of_base_is_indeterminate(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    start = _head(wt)
+    _commit_file(main, "mainline.py", 300, "main: moved on")
+    main_branch = _git(main, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _git(wt, "merge", "-q", "--ff-only", main_branch)
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / "run"),
+        size_base=start, size_line=140, size_base_ref=main_branch,
+    )
+    assert res["sizeTripwire"]["status"] == "indeterminate"
+    assert res["sizeTripwire"]["reason"] == "size-base-ref-contains-head"

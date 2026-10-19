@@ -2572,12 +2572,14 @@ def _size_count_from(cwd, base, base_ref, deadline):
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             return None, SIZE_BASE_UNRESOLVABLE
         merge_base_sha = merge_base.stdout.strip()
-        head = _git_scrubbed(cwd, "rev-parse", "--verify", "HEAD", timeout=left())
-        if head.returncode != 0 or not head.stdout.strip():
+        own = _git_scrubbed(cwd, "rev-list", "--first-parent", "%s..HEAD" % base, timeout=left())
+        if own.returncode != 0:
             return None, SIZE_BASE_UNRESOLVABLE
-        # Axis: a ref that already holds the build's own commits (its own branch, HEAD) would
-        # count from HEAD and drop every committed line; that is no count, never a zero.
-        if merge_base_sha == head.stdout.strip() and merge_base_sha != base.lower():
+        # Axis: the count never starts at one of the build's own commits after its base (its
+        # first-parent chain): a ref holding any of them (HEAD, its own branch, an older push of
+        # it) would drop those lines, so that is no count, never a short one. Main merged in
+        # arrives on a merge's second parent, so its merge base is never on this chain.
+        if merge_base_sha in own.stdout.split():
             return None, SIZE_BASE_REF_CONTAINS_HEAD
         # Axis: a stale or unrelated base ref never moves the count behind the build's own base.
         newer = _git_scrubbed(cwd, "merge-base", "--is-ancestor", base, merge_base_sha,
