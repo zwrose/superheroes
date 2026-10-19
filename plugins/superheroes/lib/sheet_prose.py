@@ -312,6 +312,9 @@ def _check_cross_fields(sheet):
     problems += ['remainder.unsettled names "%s", which is not a card.' % i for i in unsettled if i not in card_ids]
     stops = sheet.get("prSheet", {}).get("walk", {}).get("stops", [])
     problems += ['Stop id "%s" is used more than once in the walk.' % i for i in _duplicates([stop["id"] for stop in stops])]
+    decided_ids = [entry["id"] for entry in sheet.get("prSheet", {}).get("decidedForYou", [])]
+    problems += ['Decided entry id "%s" is used more than once.' % i for i in _duplicates(decided_ids)]
+    problems += ['Decided entry id "%s" is also a card id.' % i for i in sorted(set(decided_ids)) if i in card_ids]
     rows = sheet.get("index", {}).get("rows", [])
     return problems + ['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
 
@@ -555,6 +558,14 @@ def _pr_body(sheet):
         lines += [PR["nothingToAccept"], ""]
     for number, card in enumerate(sheet["cards"], 1):
         lines += _render_card(number, card, PR_ANSWERS) + [""]
+    decided = prsheet.get("decidedForYou", [])
+    if decided:
+        lines += ["**%s (%d)**" % (PR["decidedForYouHeading"], len(decided)), "", PR["decidedForYouIntro"], ""]
+        for number, found in enumerate(decided, 1):
+            where = _fill(PR["walkStopPr"], pr=str(found["pr"])) + ": " if stack and "pr" in found else ""
+            lines.append("- D%d · %s%s — %s. %s" % (number, where, _text(found["title"]),
+                                                   _fill(PR["decidedGround"], ground=_text(found["ground"])), _text(found["reason"])))
+        lines += ["", PR["decidedInChat"], ""]
     stacked = [_fill(PR["walkStopPr"], pr=str(found["number"])) + " %s · %s" % (_text(found["title"]), _short(found["commit"]))
                for found in prsheet["prs"]] if stack else []
     for heading, entries in ((PR["craftHeading"], [_pr_entry(found, stack) for found in prsheet["craft"]]),
