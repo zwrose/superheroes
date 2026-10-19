@@ -738,6 +738,9 @@ SHAPE_CASES = [
         "access_token", "id_token", "refresh_token", "OPENAI_API_KEY", cloud_pass.PASS_ENV)],
     ("credential assignment", "shell-pass-env", _assignment(cloud_pass.PASS_ENV, quote=False)),
     ("bearer credential", "bearer", lambda: "Bearer " + "t" * 20),
+    ("registry token", "npm-token", lambda: "npm_" + "a1B2c3D4" * 4),
+    ("registry token", "npm-auth-token",
+     lambda: "//registry.example.com/:_authToken=" + "k" * 12),
 ]
 
 
@@ -1326,3 +1329,13 @@ def test_a_corrupt_core_means_no_commands_and_the_text_is_written(tmp_path):
         result = _compose(w)
         assert result["action"] == "written"
         assert "setup commands" not in result["text"]
+
+
+def test_a_core_that_names_setup_commands_but_cannot_be_parsed_is_refused(tmp_path):
+    for _, w in _both_modes(tmp_path):
+        path = core_md.core_path(w.cwd, w.root, persist_backfill=False)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b'# Core\n```json superheroes-core\n'
+                     b'{"projectConfiguration": {"cloudSetupCommands": ["npm ci"],}}\n```\n')
+        _refusal(_compose(w), "setup-commands-unreadable")

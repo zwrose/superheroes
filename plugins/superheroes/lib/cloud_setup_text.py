@@ -56,6 +56,9 @@ _SECRET_SHAPES = (
     ("provider key", re.compile(
         r"(?<![A-Za-z0-9])(?:(?:%s)[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})"
         % "|".join(map(re.escape, cloud_setup._SECRET_PREFIXES)))),
+    ("registry token", re.compile(
+        r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{30,}"
+        r"""|_authToken["']?\s*[:=]\s*["']?(?![$"'\s])\S""")),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
@@ -264,11 +267,16 @@ def _setup_commands(cwd, root):
         path = core_md.core_path(cwd, root, persist_backfill=False)
         if os.path.isfile(path):
             try:
-                with open(path, "rb"):
-                    pass
+                with open(path, "rb") as fh:
+                    raw = fh.read()
             except OSError:
                 raise _Refused("setup-commands-unreadable", "The project's setup commands cannot "
                                "be read from its calibration.")
+            # axis: a core that names the setting but cannot be parsed would drop the owner's
+            # commands without a word, so it is refused; a core that never names it has none
+            if project_config.CLOUD_SETUP_COMMANDS_SLUG.encode("utf-8") in raw:
+                raise _Refused("setup-commands-unreadable", "The project's calibration names "
+                               "setup commands but cannot be parsed to read them.")
     settings = facts.get("projectConfiguration") if facts is not None else None
     slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
     if not isinstance(settings, dict) or slug not in settings:
