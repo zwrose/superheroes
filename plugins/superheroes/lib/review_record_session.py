@@ -33,6 +33,7 @@ import record_paths  # noqa: E402
 import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
 import round_phases  # noqa: E402
+import seat_map  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract as sc  # noqa: E402
 import verification  # noqa: E402
@@ -360,6 +361,31 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     return out, raw
 
 
+# the not-run token that labels the grounding seat; review_record.NOT_RUN_REASONS is its one home
+NO_LOOP_PHASE = next(t for t, (seat, _) in review_record.NOT_RUN_REASONS.items() if seat == seat_map.GROUNDING_SEAT)
+
+
+def _grounding_reviewers(state, reviewers):
+    """The composed grounding seat as a planned reviewer that never ran: no loop phase runs it, so no journal
+    row or seat status names it. Empty when no panel round's map composes it, or a row already names it."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    entry = None
+    for rnd in sorted((int(n) for n in rounds if str(n).isdigit())) or [1]:
+        seats = seat_map_receipts.round_governing_map(state, rnd).get("seats")
+        if isinstance(seats, dict) and seat_map.GROUNDING_SEAT in seats:
+            entry = seats[seat_map.GROUNDING_SEAT]  # the latest round's map that composes it
+    named = any(r["name"] == seat_map.GROUNDING_SEAT or r["name"].startswith(seat_map.GROUNDING_SEAT + " ")
+                for r in reviewers)
+    if entry is None or named:
+        return []
+    entry = entry if isinstance(entry, dict) else {}
+    unfilled = receipt_disclosures.seat_is_unfilled(entry)
+    return [{"name": seat_map.GROUNDING_SEAT, "planned": True, "ran": False, "commit": None, "runDir": None,
+             "vendor": UNFILLED if unfilled else _text(entry.get("vendor")) or "unknown",
+             "model": UNFILLED if unfilled else _text(entry.get("model")) or "unknown",
+             "notRunReason": NO_LOOP_PHASE}]
+
+
 def _group(rep, by_key):
     """The representative and every ledger row merged into it."""
     return [r for r in by_key.values() if r is rep or sc.resolve_merged_into_entry(r, by_key) is rep]
@@ -535,6 +561,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     else:
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                     review_record._readers(readers)["engine_run"], raw_dir)
+    reviewers += _grounding_reviewers(state, reviewers)
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
