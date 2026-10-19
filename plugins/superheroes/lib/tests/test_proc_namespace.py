@@ -7,11 +7,12 @@ import pytest
 import test_break_it
 import test_break_it_probe_1910
 from proc_namespace import (MARKER, SANDBOX_MARKER_ENV, in_write_sandbox, proc_is_foreign,
-                            require_own_proc_namespace)
+                            require_own_proc_namespace, skip_allowed)
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# The complete census of tests whose assertion reads a process by its pid through /proc (the _gone oracle or the containment nets).
+# The complete census, within test_break_it.py and test_break_it_probe_1910.py, of tests whose assertion reads a process by its pid through /proc (the _gone oracle or the containment nets).
+# Other test files also read /proc (test_launcher_cloud.py, grandchild_probe.py) and are outside this census.
 # test_git_setup_timeout_kills_the_helper_descendants is deliberately not a member: its assertion matches helpers by command line, which reads correctly from any namespace's procfs.
 _CENSUS = (
     test_break_it.test_t9_run_one_kills_a_lingering_worker,
@@ -89,6 +90,23 @@ def test_own_proc_namespace_returns_none():
     assert require_own_proc_namespace(_readlink_returning("3"), lambda: 3, {}) is None
 
 
+# axis: shared skip predicate (the four marker x foreign cases) - a skip is allowed only with the sandbox marker AND a foreign /proc; catches the marker alone, or a foreign /proc alone, allowing a skip.
+def test_skip_allowed_with_the_marker_and_a_foreign_proc():
+    assert skip_allowed(_readlink_returning("8"), lambda: 3, {SANDBOX_MARKER_ENV: "1"}) is True
+
+
+def test_skip_not_allowed_with_the_marker_and_an_own_proc():
+    assert skip_allowed(_readlink_returning("3"), lambda: 3, {SANDBOX_MARKER_ENV: "1"}) is False
+
+
+def test_skip_not_allowed_without_the_marker_and_a_foreign_proc():
+    assert skip_allowed(_readlink_returning("8"), lambda: 3, {}) is False
+
+
+def test_skip_not_allowed_without_the_marker_and_an_own_proc():
+    assert skip_allowed(_readlink_returning("3"), lambda: 3, {}) is False
+
+
 # axis: host truth - the real /proc on a normal host is not foreign (skipped in the sandbox); catches the detector misreading the live host.
 def test_a_normal_host_does_not_look_foreign():
     if in_write_sandbox():
@@ -105,13 +123,24 @@ def test_every_census_test_carries_the_proc_containment_mark():
 
 
 _FORCED_SKIP = """\
+import os
+
 import pytest
+
+import proc_namespace
 
 
 @pytest.fixture(autouse=True)
 def _proc_containment_guard():
     # Shadow the plugin's guard so only the outcome hook is under test, even in a foreign /proc.
     pass
+
+
+@pytest.fixture(autouse=True)
+def _force_foreign(monkeypatch):
+    forced = os.environ.get("PROC_NAMESPACE_FORCE_FOREIGN")
+    if forced in ("1", "0"):
+        monkeypatch.setattr(proc_namespace, "proc_is_foreign", lambda *a, **k: forced == "1")
 
 
 @pytest.mark.proc_containment
@@ -132,19 +161,37 @@ def _run_forced_skip(tmp_path, environ):
         cwd=str(tmp_path), env=env, capture_output=True, text=True, check=False)
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the guard is Linux-only")
-# axis: pytest outcome hook (this test and the next) - a skip of a marked test fails outside the sandbox and stays skipped inside it; catches a skip hiding an unobserved assertion, or a failure inside the sandbox.
-def test_outcome_guard_turns_a_skip_outside_the_sandbox_into_a_failure(tmp_path):
-    done = _run_forced_skip(tmp_path, {})
+_LINUX_ONLY = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the guard is Linux-only")
+_FORCE_FOREIGN = "PROC_NAMESPACE_FORCE_FOREIGN"
+
+
+# axis: pytest outcome hook (the four cases below) - a marked test's skip survives only with the sandbox marker AND a foreign /proc; catches a skip hiding an unobserved assertion, the marker alone allowing a skip, or a failure inside the sandbox.
+@_LINUX_ONLY
+def test_outcome_guard_fails_a_skip_with_no_marker_and_an_own_proc(tmp_path):
+    done = _run_forced_skip(tmp_path, {_FORCE_FOREIGN: "0"})
     output = done.stdout + done.stderr
     assert done.returncode == 1, output
     assert "skipped outside the claude write sandbox" in output, output
     assert "forced" in output, output
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the guard is Linux-only")
-def test_outcome_guard_leaves_a_skip_inside_the_sandbox_skipped(tmp_path):
-    done = _run_forced_skip(tmp_path, {SANDBOX_MARKER_ENV: "1"})
+@_LINUX_ONLY
+def test_outcome_guard_fails_a_skip_with_no_marker_and_a_foreign_proc(tmp_path):
+    done = _run_forced_skip(tmp_path, {_FORCE_FOREIGN: "1"})
+    output = done.stdout + done.stderr
+    assert done.returncode == 1, output
+
+
+@_LINUX_ONLY
+def test_outcome_guard_fails_a_skip_with_the_marker_and_an_own_proc(tmp_path):
+    done = _run_forced_skip(tmp_path, {SANDBOX_MARKER_ENV: "1", _FORCE_FOREIGN: "0"})
+    output = done.stdout + done.stderr
+    assert done.returncode == 1, output
+
+
+@_LINUX_ONLY
+def test_outcome_guard_leaves_a_skip_with_the_marker_and_a_foreign_proc_skipped(tmp_path):
+    done = _run_forced_skip(tmp_path, {SANDBOX_MARKER_ENV: "1", _FORCE_FOREIGN: "1"})
     output = done.stdout + done.stderr
     assert done.returncode == 0, output
     assert "1 skipped" in output, output
