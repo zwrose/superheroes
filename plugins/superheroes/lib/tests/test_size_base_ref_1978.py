@@ -258,3 +258,23 @@ def test_fast_forward_of_base_is_indeterminate(tmp_path):
     )
     assert res["sizeTripwire"]["status"] == "indeterminate"
     assert res["sizeTripwire"]["reason"] == "size-base-ref-contains-head"
+
+
+# axis: a main that merged one of the build's own commits holds it; merging that main back in
+# with --no-ff puts the merge base off the build's first-parent chain, and it is still no count.
+def test_main_holding_an_own_commit_is_indeterminate(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    start = _head(wt)
+    own_branch = _git(wt, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    main_branch = _git(main, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _commit_file(wt, "own.py", 150, "build: own lines")
+    _commit_file(main, "mainline.py", 5, "main: moved on")
+    _git(main, "merge", "--no-ff", "-qm", "main merges the build's commit", own_branch)
+    _git(wt, "merge", "--no-ff", "-qm", "merge main", main_branch)
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / "run"),
+        size_base=start, size_line=140, size_base_ref=main_branch,
+    )
+    assert res["sizeTripwire"] == {
+        "status": "indeterminate", "base": start, "line": 140, "baseRef": main_branch,
+        "reason": "size-base-ref-contains-head"}

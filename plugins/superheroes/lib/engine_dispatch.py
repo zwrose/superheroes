@@ -2572,15 +2572,23 @@ def _size_count_from(cwd, base, base_ref, deadline):
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             return None, SIZE_BASE_UNRESOLVABLE
         merge_base_sha = merge_base.stdout.strip()
-        own = _git_scrubbed(cwd, "rev-list", "--first-parent", "%s..HEAD" % base, timeout=left())
+        own = _git_scrubbed(cwd, "rev-list", "--first-parent", "--reverse", "%s..HEAD" % base,
+                            timeout=left())
         if own.returncode != 0:
             return None, SIZE_BASE_UNRESOLVABLE
-        # Axis: the count never starts at one of the build's own commits after its base (its
-        # first-parent chain): a ref holding any of them (HEAD, its own branch, an older push of
-        # it) would drop those lines, so that is no count, never a short one. Main merged in
-        # arrives on a merge's second parent, so its merge base is never on this chain.
-        if merge_base_sha in own.stdout.split():
-            return None, SIZE_BASE_REF_CONTAINS_HEAD
+        own_commits = own.stdout.split()
+        # Axis: the count never starts at a commit that holds any of the build's own commits
+        # after its base (HEAD, its own branch, an older push of it, or a main that merged one):
+        # that would drop those lines, so it is no count, never a short one. Every own commit
+        # has the oldest one on the first-parent chain in its history, so one ancestry test
+        # decides it. Main merged in arrives on a merge's second parent and holds none of them.
+        if own_commits:
+            holds = _git_scrubbed(cwd, "merge-base", "--is-ancestor", own_commits[0],
+                                  merge_base_sha, timeout=left())
+            if holds.returncode == 0:
+                return None, SIZE_BASE_REF_CONTAINS_HEAD
+            if holds.returncode != 1:
+                return None, SIZE_BASE_UNRESOLVABLE
         # Axis: a stale or unrelated base ref never moves the count behind the build's own base.
         newer = _git_scrubbed(cwd, "merge-base", "--is-ancestor", base, merge_base_sha,
                               timeout=left())
