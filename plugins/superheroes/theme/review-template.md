@@ -256,6 +256,22 @@ block of `sheet-words.json`, the home of the words.
 
 ### The items
 
+**Judge before you build.** The sheet carries the owner's real calls; everything else is one tap or
+none. Before building a PR or stack sheet, the advisor reads the project's Canon
+(`rubric/canon-contract.md`): a standing ruling that already answers a call makes it craft. Then:
+
+- A leftover goes to `craftDeterminations`, not to a card, only on one of the three grounds in
+  § Decided for you, each of which leaves its real consequence with the owner nowhere else: another
+  card on the same sheet carries it; a fix in another layer of the same stack, named in the ground,
+  removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
+- An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
+  with the entry id.
+- An item is only for a call that passes Test 2 (showrunner duty 5 in `skills/showrunner/SKILL.md`),
+  and it names its ground as `skills/showrunner/reference/owner-decisions.md` § The filter says.
+- Disclosures that offer no choice fold into one "What you're accepting" item with a single Accept,
+  its `ifLeft` listing the disclosures, one sentence each (the page shows `ifLeft` as one paragraph).
+  The fold is not a call, so the item bar above does not apply to it.
+
 Each item shows, in this order, its kind, its title, what happens if it is left, its options with what
 each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
 note left empty.
@@ -314,7 +330,10 @@ answer that sends the PR back never counts.
 
 ### Decided for you
 
-A left-for-owner finding the advisor re-graded as craft at vet is no card. It is an entry of the sheet's
+A left-for-owner finding the advisor re-graded as craft at vet is no card, and neither is one whose real
+consequence is left with the owner nowhere else on one of three grounds: another card on the same sheet
+carries it; a fix in another layer of the same stack, named in the ground, removed it; or a Canon
+entry, cited by id, answers it. Each is an entry of the sheet's
 **Decided for you** list (`prSheet.decidedForYou`, `$defs/decided` in `sheet.schema.json`). The list sits
 below the cards, unfolded, and is left out when it is empty. Each entry shows its title, its ground, its
 reason and one control, **Make this mine**. An entry never counts toward the accepted items. The advisor
