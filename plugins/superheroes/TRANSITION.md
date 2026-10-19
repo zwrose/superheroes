@@ -17,12 +17,20 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
+- **After switching.** **Pass `--size-base-ref <base branch>` on every implementer `dispatch-write`.** Without it, a build that merges its base branch in mid-build still reads that branch's lines as its own and can read its tripwire crossed when it is not. See [Dispatch: the size fold counts from the merge base](#dispatch-the-size-fold-counts-from-the-merge-base).
 
 ### Review seats: CLAUDE.md by absolute path
 
 - The panel, verifier, synthesis, gap-sweep, audit and scoped-finder orders name the project's `CLAUDE.md` through the new placeholder `CLAUDE_MD_PATH`: the absolute path into the live checkout when the project has a `CLAUDE.md` at its root, or `(this project has no CLAUDE.md at <repo root>)` when it has none. Before, they named it by the bare relative path `CLAUDE.md`, which the sanitized view strips, so external-engine seats rarely read it.
 - The sanitized view's notice no longer says only that stripped config's absence is not a finding: it adds that a `CLAUDE.md` or calibration file the instructions name by an absolute path sits outside the view and is readable there, and that such a path is never listed in the investigated array.
 - The fixer order is unchanged; it runs in the live checkout, where the relative path opens.
+
+### Dispatch: the size fold counts from the merge base
+
+- `engine_dispatch.py dispatch-write` takes a new optional flag, `--size-base-ref <ref>`, the branch the build merges from. With it, the fold counts from the newer of `--size-base` and the merge base of `HEAD` and that ref, so a mid-build merge of the base branch adds nothing to `sizeTripwire.tripwireCount`; a ref older than `--size-base` never moves the count back past it.
+- A run opened with the flag journals `baseRef` in `sizeTripwireInputs`, and its `sizeTripwire` gains `baseRef` and `countedFrom` (the commit the count ran from). A continuation that passes a different ref refuses `size-inputs-mismatch`.
+- `--size-base-ref` without `--size-base` and `--size-line` refuses `size-inputs-incomplete`; a ref that is not a commit refuses `size-base-unresolvable`, as an unresolvable `--size-base` already did. A ref that stops resolving by fold time folds `status: "indeterminate"` with `reason: "size-base-unresolvable"`.
+- Without the flag nothing changes.
 
 ## 0.44.0
 

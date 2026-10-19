@@ -144,3 +144,19 @@ def test_cli_carries_the_ref(tmp_path):
         "--size-base", "a" * 40, "--size-line", "140", "--size-base-ref", "origin/main",
     ])
     assert args.size_base_ref == "origin/main"
+
+
+# axis: a continuation with a different ref, or none, refuses against the journaled inputs.
+def test_continuation_ref_mismatch(tmp_path):
+    wt, start, main_branch = _merged_build(tmp_path)
+    active = str(tmp_path / "active")
+    _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=active, max_wait=0,
+        size_base=start, size_line=140, size_base_ref=main_branch,
+    )
+    for ref in ("HEAD", None):
+        res = _dispatch_write(
+            tmp_path, FakeRunner([]), cwd=wt, run_dir=active, max_wait=0,
+            size_base=start, size_line=140, size_base_ref=ref,
+        )
+        assert res["detail"] == "size-inputs-mismatch", (ref, res)

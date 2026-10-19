@@ -158,6 +158,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--expect-items-file` | no | `free-text` | none |  |
 | `--size-base` | no | `free-text` | none |  |
 | `--size-line` | no | `integer` | none |  |
+| `--size-base-ref` | no | `free-text` | none | the base branch; the fold counts from its merge base with HEAD when that is newer than --size-base |
 | `--claude-mode` | no | `choices:print,background` | none | print only; background is retired and refuses claude-mode-retired before spawn |
 | `--requires-process-listing` | no | `boolean-flag` | False | declare the order needs process listing (ps); a claude write refuses sandbox-process-listing-unavailable before any run opens |
 
