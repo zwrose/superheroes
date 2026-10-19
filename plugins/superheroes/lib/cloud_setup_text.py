@@ -73,7 +73,10 @@ _SECRET_SHAPES = (
         r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\&|]))"""
         r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
-    ("bearer credential", re.compile(r"Bearer \S{16,}")),
+    ("bearer credential", re.compile(
+        # a token that is only a bare environment reference ($NAME or ${NAME}) passes
+        r"""Bearer (?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\;,}&|]))"""
+        r"\S{16,}")),
 )
 
 
@@ -415,6 +418,11 @@ def _scan(text):
             or _encoded_shape(text))
 
 
+def _for_line(commands):
+    """The loop header that lists the setup commands, each shell-quoted."""
+    return "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands)
+
+
 def _commands_block(commands, clone, stamp=None, count=0):
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
@@ -433,7 +441,7 @@ def _commands_block(commands, clone, stamp=None, count=0):
         "  n=0",
         '  failed=""',
         "  ok=1",
-        "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands),
+        _for_line(commands),
         "    n=$((n + 1))",
         '    if [ -z "$DIR" ]; then ok=0; echo "setup command $n skipped: no clone in $PWD%s"'
         % (" or $PWD/$CLONE" if clone is not None else ""),
@@ -614,7 +622,11 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     head = "%s · plugin %s · %s" % (name, version, part)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
                    _clone_dir(cwd), commands, cleared)
-    shape = _scan(text)
+    # axis: the command list is scanned as written (as `set` scans it), never as the quoted
+    # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
+    # in full
+    shape = next((_scan(c) for c in commands if _scan(c)), None) or _scan(
+        text.replace(_for_line(commands), "  for cmd in ; do", 1) if commands else text)
     if shape:
         where = next((rel for rel, data in files.items()
                       if _scan(data.decode("utf-8"))), None)
