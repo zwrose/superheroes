@@ -58,7 +58,10 @@ _SECRET_SHAPES = (
         % "|".join(map(re.escape, cloud_setup._SECRET_PREFIXES)))),
     ("registry token", re.compile(
         r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{30,}"
-        r"""|_authToken["']?\s*[:=]\s*["']?(?![$"'\s])\S""")),
+        # _authToken, then the key's own closing quote, a ':' '=' or whitespace separator, and an
+        # opening quote (plain, or JSON-escaped as in the stored calibration); a value that opens
+        # with '$' is an environment reference and passes, anything else is a literal
+        r"""|_authToken(?:\\?["'])?(?:\s*[:=]\s*|\s+)(?:\\?["'])?(?!\$|\s|\\?["'])\S""")),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
@@ -252,6 +255,23 @@ def _without_setting(data):
         return data
 
 
+def _refuse_malformed_container(cwd, root):
+    """Refuses a core whose raw projectConfiguration is present but not an object: parse_core reads
+    that as an empty setting, which would drop the owner's commands without a word."""
+    try:
+        path = core_md.core_path(cwd, root, persist_backfill=False)
+        with open(path, encoding="utf-8") as fh:
+            match = core_md._JSON_BLOCK.search(fh.read())
+        block = json.loads(match.group(1)) if match else None
+    except Exception:
+        return
+    # axis: a projectConfiguration that is not an object is refused, never read as absent commands
+    if isinstance(block, dict) and core_md.PROJECT_CONFIGURATION_KEY in block and not isinstance(
+            block[core_md.PROJECT_CONFIGURATION_KEY], dict):
+        raise _Refused("setup-commands-unreadable", "The project's calibration holds its "
+                       "configuration in a form that cannot be read for setup commands.")
+
+
 def _setup_commands(cwd, root):
     """The project's ordered setup commands (configure item 17): a list of strings, possibly empty.
     A project with no readable core, or no such setting, has none; a setting that is there but
@@ -277,6 +297,8 @@ def _setup_commands(cwd, root):
             if project_config.CLOUD_SETUP_COMMANDS_SLUG.encode("utf-8") in raw:
                 raise _Refused("setup-commands-unreadable", "The project's calibration names "
                                "setup commands but cannot be parsed to read them.")
+    else:
+        _refuse_malformed_container(cwd, root)
     settings = facts.get("projectConfiguration") if facts is not None else None
     slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
     if not isinstance(settings, dict) or slug not in settings:
@@ -389,7 +411,7 @@ def _commands_block(commands, clone, stamp=None, count=0):
         % (" or $PWD/$CLONE" if clone is not None else ""),
         # axis: after a failure every later command is skipped, never run
         '    elif [ -n "$failed" ]; then echo "setup command $n skipped: setup command $failed FAILED"',
-        '    elif (cd "$DIR" && bash -c "$cmd" </dev/null); then echo "setup command $n ok"',
+        '    elif (cd "$DIR" && bash -o pipefail -c "$cmd" </dev/null); then echo "setup command $n ok"',
         '    else echo "setup command $n FAILED"; failed=$n; ok=0',
         "    fi",
         "  done",
