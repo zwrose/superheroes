@@ -1400,3 +1400,33 @@ def test_a_core_that_names_setup_commands_but_cannot_be_parsed_is_refused(tmp_pa
             fh.write(b'# Core\n```json superheroes-core\n'
                      b'{"projectConfiguration": {"cloudSetupCommands": ["npm ci"],}}\n```\n')
         _refusal(_compose(w), "setup-commands-unreadable")
+
+
+ENV_REF_COMMAND = 'echo "OPENAI_API_KEY=\\"$BUILD_OPENAI_KEY\\"" > .env'
+
+
+def test_env_reference_command_is_set_and_composes_in_both_modes(tmp_path):
+    for name, w in _both_modes(tmp_path):
+        _store_commands(w, [])
+        done = project_config.set_item(w.cwd, SLUG, [ENV_REF_COMMAND], root=w.root)
+        assert done["action"] == "written", (name, done)
+        result = _compose(w)
+        assert result["action"] == "written", (name, result)
+
+
+def test_literal_credential_in_a_listed_command_is_refused_in_both_modes(tmp_path):
+    command = 'echo "OPENAI_API_KEY=\\"%s\\"" > .env' % ("v" * 20)
+    for name, w in _both_modes(tmp_path):
+        _store_commands(w, [command])
+        result = _compose(w)
+        assert result["action"] == "refused" and "text" not in result, (name, result)
+        assert result["reason"] in ("secret-shaped-content", "setup-commands-malformed"), result
+        assert "v" * 20 not in json.dumps(result)
+
+
+def test_literal_credential_elsewhere_in_the_placed_core_is_still_refused(tmp_path):
+    planted = SHAPE_CASES[0][2]()
+    w = _outside(tmp_path)
+    _store_commands(w, [ENV_REF_COMMAND])
+    _edit_core_block(w, lambda obj: obj.__setitem__("note", planted))
+    _refusal(_compose(w), "secret-shaped-content")

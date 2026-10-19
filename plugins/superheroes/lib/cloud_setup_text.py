@@ -247,15 +247,16 @@ def calibration_files(cwd, root=None):
     return _calibration(cwd, root)[1]
 
 
-def _without_setting(data):
-    """`data` with the cloud-builds setting out of its json block, re-rendered whether or not the
-    key was there; `data` itself when it holds no readable setting."""
+def _without_setting(data, slug=None):
+    """`data` with the cloud-builds setting (or the setting `slug` names) out of its json block,
+    re-rendered whether or not the key was there; `data` itself when it holds no readable
+    setting."""
     try:
         text = data.decode("utf-8")
         obj = json.loads(core_md._json_block_inner_text(text))
         settings = obj.get("projectConfiguration")
         if isinstance(settings, dict):
-            settings.pop(project_config.CLOUD_BUILDS_SLUG, None)
+            settings.pop(slug or project_config.CLOUD_BUILDS_SLUG, None)
             if not settings:
                 del obj["projectConfiguration"]
         body = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False)
@@ -625,8 +626,18 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     # axis: the command list is scanned as written (as `set` scans it), never as the quoted
     # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
     # in full
-    shape = next((_scan(c) for c in commands if _scan(c)), None) or _scan(
-        text.replace(_for_line(commands), "  for cmd in ; do", 1) if commands else text)
+    scanned = text
+    if commands:
+        scanned = scanned.replace(_for_line(commands), "  for cmd in ; do", 1)
+        # the placed core carries the commands' other copy, JSON-escaped; it is left out of the
+        # whole-text scan the same way (the text written is unchanged)
+        core = _core_rel()
+        if core in files:
+            scanned = scanned.replace(
+                files[core].decode("utf-8"),
+                _without_setting(files[core], project_config.CLOUD_SETUP_COMMANDS_SLUG).decode(
+                    "utf-8"), 1)
+    shape = next((_scan(c) for c in commands if _scan(c)), None) or _scan(scanned)
     if shape:
         where = next((rel for rel, data in files.items()
                       if _scan(data.decode("utf-8"))), None)
