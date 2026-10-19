@@ -2594,6 +2594,9 @@ def _size_count_from(cwd, base, base_ref, deadline):
                               timeout=left())
     except subprocess.TimeoutExpired:
         return None, "git-timeout"
+    # Axis: only exit 1 means "not an ancestor"; any other failure is no count, never a guess.
+    if newer.returncode not in (0, 1):
+        return None, SIZE_BASE_UNRESOLVABLE
     return (merge_base_sha if newer.returncode == 0 else base), None
 
 

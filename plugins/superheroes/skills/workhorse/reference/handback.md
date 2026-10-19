@@ -132,9 +132,12 @@ record, each under the next unused FU number (in the marker too), with its origi
 ## The size tripwire row
 
 §4's size step fills this row. After a mid-build merge of the base branch, `N` counts from the merge
-base of the head and that branch (`git merge-base HEAD <base branch>`), never from the build's
-original base, so the base branch's own lines are not the build's. The runner's fold does the same
-when dispatched with `--size-base-ref`. It takes one of these forms:
+base of the head and that branch (`git merge-base HEAD <base branch>`) only when the fold's
+`sizeTripwire` reads `status: "ok"` with `countedFrom`, so the base branch's own lines are not the
+build's. When it reads `indeterminate` with `size-base-ref-contains-head`, or the merge base holds
+the build's own commits (the oldest commit of `git rev-list --first-parent --reverse <base>..HEAD`
+is its ancestor), count from the build's original base instead, which overcounts the merged lines
+(the safe direction), and say why in the row. It takes one of these forms:
 
 - `not crossed (N of estimate M)`
 - `crossed at <commit>; messaged <time>; advisor ruled <split|continue|park> (<issue comment link>)`

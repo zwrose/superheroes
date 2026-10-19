@@ -6,6 +6,7 @@ the branch mid-build are not the build's; the build's own lines, before and afte
 count, and a ref that does not resolve refuses at open and reads indeterminate at fold."""
 import os
 import subprocess
+import time
 
 # The write-dispatch suite's helpers and its autouse tmp-base/journal-root/uv-absent fixture.
 from test_engine_dispatch_write import (  # noqa: F401
@@ -278,3 +279,18 @@ def test_main_holding_an_own_commit_is_indeterminate(tmp_path):
     assert res["sizeTripwire"] == {
         "status": "indeterminate", "base": start, "line": 140, "baseRef": main_branch,
         "reason": "size-base-ref-contains-head"}
+
+
+# axis: a git failure in the newer-of check is no count, never a silent fall back to the base.
+def test_newer_of_git_failure_is_unresolvable(tmp_path, monkeypatch):
+    wt, start, main_branch = _merged_build(tmp_path)
+    real = ED._git_scrubbed
+
+    def failing_newer(cwd, *args, timeout=None):
+        if args[:2] == ("merge-base", "--is-ancestor") and args[2] == start:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: broken\n")
+        return real(cwd, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", failing_newer)
+    assert ED._size_count_from(wt, start, main_branch, deadline=time.monotonic() + 30) == (
+        None, "size-base-unresolvable")
