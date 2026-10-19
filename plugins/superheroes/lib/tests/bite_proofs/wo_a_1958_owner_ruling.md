@@ -9,7 +9,7 @@
 | L1 | leg L1 in `comment_permalink`: the ruling's link must fullmatch an issue-comment permalink | a link that is not `https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>` is not on record | `test_t2_no_pointer_no_fold_and_the_finding_stays_a_card[L1-not-a-comment-permalink]` |
 | L2 | leg L2 in `comment_permalink`: the link's repository must equal the PR's repository | a comment in another repository is not on record | `test_t2_no_pointer_no_fold_and_the_finding_stays_a_card[L2-another-repository]` |
 | L3 | leg L3 in `_owner_ruling_on_record`: the comment read must be the comment (id) on the issue (issue_url) the link names | a missing or mismatched comment document is not on record | `test_t2_no_pointer_no_fold_and_the_finding_stays_a_card[L3-another-comment-id]` |
-| L4 | leg L4 in `_owner_ruling_on_record`: author_association must be exactly OWNER | only the repository owner's own comment is a ruling | `test_t2_no_pointer_no_fold_and_the_finding_stays_a_card[L4-member]` |
+| L4 | **retired by #1991:** leg L4 (author_association must be exactly OWNER) is removed on the owner's ruling | a well-formed chat-ruling record with matching words counts whatever association its comment reads | `test_t2_a_ruling_counts_whatever_association_its_comment_reads[member]` (see [L4, retired by #1991](#l4-retired-by-1991-the-association-is-no-leg-of-the-pointer)) |
 | L5 | leg L5 in `_owner_ruling_on_record`: the body must hold the quoted words | a comment that does not hold the owner's words is not on record | `test_t2_no_pointer_no_fold_and_the_finding_stays_a_card[L5-words-absent]` |
 | H | the hand-off `_apply_owner_rulings` in `review_record.py` that sets decidedBy from an entry | an ownerRulings entry reaches the finding it names | `test_t1_a_ruled_finding_folds_into_already_decided_and_leaves_no_card` |
 | V | the names-exactly-one-finding check in `_validate` (`review_record.py`) | an entry that names no finding, or two, is refused `review-account-invalid` | `test_t5_a_malformed_entry_refuses_the_account[E9-names-no-finding]` |
@@ -194,9 +194,68 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 ---
 
-## L4: leg L4 in `_owner_ruling_on_record`: author_association must be exactly OWNER
+## L4, retired by #1991: the association is no leg of the pointer
 
-- **axis:** only the repository owner's own comment is a ruling
+The owner ruled (option b, recorded at https://github.com/zwrose/superheroes/issues/695#issuecomment-6258893258) that the author-association check goes. On an organisation-owned repository the owner's own comment reads `MEMBER`, and every session posts as the owner, so the association never proved authorship. #1991 removed leg L4 and its four `L4-*` refusal cases; the ruling now stands on L1, L2, L3, the chat-ruling-record check and L5. The #1958 proof below is kept as history: it guarded the removed line. This proof guards the opposite claim.
+
+- **axis:** a well-formed chat-ruling record with matching words counts whatever `author_association` its comment reads (`MEMBER`, `COLLABORATOR`, or none at all)
+- **file:** `plugins/superheroes/lib/finding_outcomes.py`
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_t2_a_ruling_counts_whatever_association_its_comment_reads` (cases `member`, `collaborator`, `no-association`)
+- **provenance:** orchestrator-typed (light lane, cloud build of #1991). The red is the new detector run against the code before #1991 (the check present), the green the same node after the removal; both with `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest "<node>" -q -p no:cacheprovider`.
+- **sha256 red (the check present):** `80867f8f03b492a158eae996f58d24e782b3f85af780602731d9e2799b612669`
+- **sha256 green (the check removed):** `a25a5eacf8aab5b3640990fb031bdf5a2543fa0d8e159c38ef4e896cc0e067df`
+- **redaction:** the captures drop `uv`'s first-run package-download lines and its `UV_NATIVE_TLS` deprecation warning, and elide the `collaborator` and `no-association` tracebacks, which match the `member` one line for line except the `doc` repr; their FAILED lines are kept. Nothing else is changed.
+
+**the removed lines** (present in the red run's file):
+```
+-     # axis: only the repository owner's own comment is a ruling — see bite-proof record wo_a_1958_owner_ruling
+-     if doc.get("author_association") != "OWNER":
+-         return False, "the ruling's comment is not the owner's"
+```
+
+**raw red** (exit code 1):
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+____ test_t2_a_ruling_counts_whatever_association_its_comment_reads[member] ____
+
+doc = {'id': 555, 'issue_url': 'https://api.github.com/repos/o/r/issues/12', 'html_url': 'https://github.com/o/r/issues/12#issuecomment-555', 'author_association': 'MEMBER', ...}
+
+    @pytest.mark.parametrize("doc", [
+        pytest.param(dict(DOC, author_association="MEMBER"), id="member"),
+        pytest.param(dict(DOC, author_association="COLLABORATOR"), id="collaborator"),
+        pytest.param({k: v for k, v in DOC.items() if k != "author_association"}, id="no-association"),
+    ])
+    def test_t2_a_ruling_counts_whatever_association_its_comment_reads(doc):
+        # Axis: on an organisation-owned repository the owner's comment reads MEMBER; the association is no leg of the pointer.
+        rec = build([entry()], doc=doc)
+        f = the_finding(rec)
+>       assert f["outcome"] == "ruling" and rec["leftForOwner"] == []
+E       AssertionError: assert ('left-for-owner' == 'ruling'
+E         
+E         - ruling
+E         + left-for-owner)
+
+/home/user/superheroes/plugins/superheroes/lib/tests/test_review_record_owner_ruling.py:128: AssertionError
+[collaborator and no-association tracebacks elided; see redaction above]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_t2_a_ruling_counts_whatever_association_its_comment_reads[member]
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_t2_a_ruling_counts_whatever_association_its_comment_reads[collaborator]
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_t2_a_ruling_counts_whatever_association_its_comment_reads[no-association]
+3 failed in 0.36s
+```
+
+**raw green** (exit code 0):
+```
+...                                                                      [100%]
+3 passed in 0.39s
+```
+
+---
+
+## L4 (#1958, superseded by the section above): leg L4 in `_owner_ruling_on_record`: author_association must be exactly OWNER
+
+- **axis:** only the repository owner's own comment is a ruling (no longer held; the line this proof guarded was removed by #1991)
 - **file:** `plugins/superheroes/lib/finding_outcomes.py`
 - **detector:** `plugins/superheroes/lib/tests/test_review_record_owner_ruling.py::test_t2_no_pointer_no_fold_and_the_finding_stays_a_card[L4-member]`
 - **sha256 before:** `184a7e5f0a997c65ecb16dd0d1b4fea5fcecf5239ba4c5d082d1691f99df155b`

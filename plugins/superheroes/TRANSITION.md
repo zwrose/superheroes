@@ -50,6 +50,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The sanitized view's notice no longer says only that stripped config's absence is not a finding: it adds that a `CLAUDE.md` or calibration file the instructions name by an absolute path sits outside the view and is readable there, and that such a path is never listed in the investigated array.
 - The fixer order is unchanged; it runs in the live checkout, where the relative path opens.
 
+### Review records: an owner ruling counts on an organisation-owned repository
+
+- An `ownerRulings` entry no longer needs its comment to read `author_association: OWNER`. On an organisation-owned repository the owner's own comments read `MEMBER`, so every chat ruling a finding cited stayed a card with the reason `the ruling's comment is not the owner's`, and the owner was asked again. That reason is gone.
+- The ruling still counts only when its link is a comment permalink in the PR's own repository, the comment read is that comment on that issue, its body is a standard chat-ruling record, and the words sit in its quoted block. A chat-ruling record posted by any account counts; the vet reads the link.
+
 ### Dispatch: the size fold counts from the merge base
 
 - `engine_dispatch.py dispatch-write` takes a new optional flag, `--size-base-ref <ref>`, the branch the build merges from. With it, the fold counts from the newer of `--size-base` and the merge base of `HEAD` and that ref, so a mid-build merge of the base branch adds nothing to `sizeTripwire.tripwireCount`; a ref older than `--size-base` never moves the count back past it.

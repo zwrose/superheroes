@@ -10,9 +10,9 @@ is craft, wherever in the project it sits. Any other consequence is real. An unf
 with a real consequence is left for the owner, unless a decision on record names it, in which
 case it is decided by a named ruling. A decision is on record only when it is an active Canon
 entry, a recorded residual, a settled saved sheet answer for the pull request, or an owner ruling
-whose pointer resolves: a readable owner-authored comment in the pull request's own repository, at
-the exact permalink, that is a standard chat-ruling record whose quoted block holds the owner's
-words. Severity never decides an outcome.
+whose pointer resolves: a readable comment in the pull request's own repository, at the exact
+permalink, that is a standard chat-ruling record whose quoted block holds the owner's words (its
+author is not checked, since every session posts as the owner). Severity never decides an outcome.
 
 The rules are pure: they read no file, run no git or subprocess and touch no network. Callers
 pass text and dicts in. The one reader is decision_sources, which gathers the Canon and residual
@@ -188,9 +188,6 @@ def _owner_ruling_on_record(ref, sources):
     if not (isinstance(doc, dict) and _is_int(doc.get("id")) and doc["id"] == comment_id and isinstance(doc.get("issue_url"), str)
             and doc["issue_url"].lower().endswith(f"/repos/{owner}/{name}/issues/{number}".lower())):
         return False, "the ruling's comment could not be read"
-    # axis: only the repository owner's own comment is a ruling — see bite-proof record wo_a_1958_owner_ruling
-    if doc.get("author_association") != "OWNER":
-        return False, "the ruling's comment is not the owner's"
     body = doc.get("body")
     quoted = canon.ruling_record_words(body)
     # axis: only a standard chat-ruling record is a ruling, since every session posts as the owner — see bite-proof record wo_a_1958_owner_ruling
@@ -208,9 +205,10 @@ def on_record(decided_by, sources):
     decided_by is {"kind": canon | residual | sheet-answer | owner-ruling, "ref": ...}; sources may hold
     canonText, residualText, residualSource, sheetAnswers, pr, and for an owner ruling repo and ownerRulings
     ({link: the comment's JSON}). An owner ruling is on record only when its link is an issue-comment permalink in
-    the pull request's own repository, the comment read is that comment on that issue, its author_association is
-    OWNER, its body is a standard chat-ruling record (canon.ruling_record_words), and that record's quoted block holds
-    the words. Never raises.
+    the pull request's own repository, the comment read is that comment on that issue, its body is a standard
+    chat-ruling record (canon.ruling_record_words), and that record's quoted block holds the words. The comment's
+    author_association is not read: every session posts as the owner, and on an organisation-owned repository the
+    owner's own comment reads MEMBER. Never raises.
     """
     if not isinstance(decided_by, dict):
         return False, "no decision was cited"
