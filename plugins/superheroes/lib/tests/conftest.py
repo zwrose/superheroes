@@ -13,10 +13,10 @@ if _LIB not in sys.path:
 import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
 import round_driver as _round_driver  # noqa: E402
 
-# A non-root conftest may not use pytest_plugins, so the proc_containment marker, guard fixture and
-# outcome hook are imported into this namespace, where pytest collects them by name.
+# A non-root conftest may not use pytest_plugins, so the proc_containment guard fixture and outcome
+# hook are imported into this namespace, where pytest collects them by name.
 from proc_namespace import (  # noqa: E402,F401
-    _proc_containment_guard, pytest_configure, pytest_runtest_makereport)
+    _proc_containment_guard, pytest_runtest_makereport)
 
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
 

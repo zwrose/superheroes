@@ -6,7 +6,8 @@ processes. A test marked `proc_containment` therefore skips there — and only t
 without the sandbox marker fails loudly, and a marked test that skips outside the sandbox on Linux is
 turned into a failure, so the skip can never hide a regression on a normal host.
 
-This module is also a pytest plugin (`-p proc_namespace`); the tests conftest imports its hooks.
+This module is also a pytest plugin (`-p proc_namespace`); the tests conftest imports its fixture and
+outcome hook. The marker is registered in the repo-root pytest.ini.
 """
 import os
 import sys
@@ -48,13 +49,6 @@ def require_own_proc_namespace(readlink=os.readlink, getpid=os.getpid, environ=N
     pytest.fail("/proc belongs to another PID namespace (%s) outside the claude write sandbox (%s is "
                 "not 1), so this containment test refuses to skip" % (seen, SANDBOX_MARKER_ENV),
                 pytrace=False)
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "%s: asserts on processes by pid through /proc; skips in the claude write sandbox (foreign "
-        "/proc), and a skip anywhere else on Linux is a failure" % MARKER)
 
 
 @pytest.fixture(autouse=True)
