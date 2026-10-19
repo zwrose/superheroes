@@ -49,6 +49,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - `--size-base-ref` without `--size-base` and `--size-line` refuses `size-inputs-incomplete`; a ref that is not a commit refuses `size-base-unresolvable`, as an unresolvable `--size-base` already did. A ref that stops resolving by fold time folds `status: "indeterminate"` with `reason: "size-base-unresolvable"`. A ref that already contains any of the build's own commits (the build's own branch, its pushed `origin/<branch>` even one push behind, `HEAD`, or a base branch that merged one of the build's commits), meaning its merge base with `HEAD` has the oldest commit of `git rev-list --first-parent --reverse <base>..HEAD` in its history, folds `status: "indeterminate"` with `reason: "size-base-ref-contains-head"`, never a short count. A fast-forward of the base branch into a build with no commits of its own reads the same way.
 - Without the flag nothing changes.
 
+### Review records name a grounding seat the loop did not run
+
+- A review record for an auto-fix loop review whose seat map composes the grounding seat now lists it under `seatsNotRun` as `{name, reason: "no-loop-phase", why}`. Before, the record left it out. A record with no such seat has no `seatsNotRun` key.
+- The entry does not park the PR, does not make the record read not reviewed, and does not hold it at vet. The vet reads the PR body's claims against the diff by hand and says so in its receipt.
+- A hand-written account of a loop review should carry `notRunReason: "no-loop-phase"` on its `grounding-seat` row (planned, not run, no run directory, no commit). The writer refuses the field anywhere else.
+
 ## 0.44.0
 
 ### Before you upgrade
