@@ -12,6 +12,19 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **A project names its CI workflow through configure (item 16, `ciWorkflow`).** Until it does, a review record reads CI green only when at least one GitHub Actions run on the final commit succeeded, so a project whose CI is not GitHub Actions reads `none`. See [Review record: CI green needs the project's CI workflow](#review-record-ci-green-needs-the-projects-ci-workflow).
+
+### Review record: CI green needs the project's CI workflow
+
+- The record's `ci` field has two new keys: `workflow` (the declared CI workflow, or `null`) and `read` (one line saying how the state was reached).
+- `ci_state` reads `none` where it read `green` from third-party statuses alone, and takes the workflow runs and the declaration as two more arguments.
+- `_check_data` returns three parts: the check runs, the combined status and the workflow runs.
+- Configuration item 16, `ciWorkflow`, holds the name of the project's CI workflow.
+
 ## 0.44.0
 
 ### Before you upgrade
