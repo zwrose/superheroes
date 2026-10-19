@@ -10,15 +10,18 @@
     }
   },
   "record": {
+    "carriedRechecks": [],
     "checked": [
       "CI on ccccccc: green",
       "Reviewers that ran: code-reviewer",
       "read the diff"
     ],
     "ci": {
+      "read": "no CI workflow declared; GitHub Actions runs: CI run 11 success",
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
       "source": "GitHub checks",
-      "state": "green"
+      "state": "green",
+      "workflow": null
     },
     "cost": {
       "minutes": 2.0,
@@ -28,7 +31,6 @@
       "unit": "reviewer-minutes"
     },
     "decisionRechecks": [],
-    "carriedRechecks": [],
     "earlierRecordsNotChecked": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",

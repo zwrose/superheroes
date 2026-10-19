@@ -92,7 +92,7 @@ def _scenarios():
                     consequence=None, outcome="craft", reason="minor cleanup")
     acct, rd = _one(_HEAD, [drops])
     out["pr-f"] = (acct, rd, _pr(_HEAD))
-    no_checks = ({"check_runs": []}, NO_STATUS)
+    no_checks = ({"check_runs": []}, NO_STATUS, {"workflow_runs": []})
     acct, rd = _one(_HEAD, [fixed], ci=no_checks)
     acct["ci"] = "none"
     out["pr-g"] = (acct, rd, _pr(_HEAD))

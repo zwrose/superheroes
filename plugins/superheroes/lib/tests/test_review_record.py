@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import shutil
 import string
 import subprocess
@@ -11,6 +12,7 @@ import pytest
 import canon
 import core_md
 import gh_pages
+import mode_registry
 import model_registry
 import pr_comment
 import review_record as rr
@@ -21,10 +23,13 @@ HEAD = "b" * 40
 EARLIER = "a" * 40
 CODEX = model_registry.codex_models()[0]
 NO_STATUS = {"state": "pending", "total_count": 0, "statuses": []}
+CI_RUN = {"id": 11, "name": "CI", "event": "push", "status": "completed", "conclusion": "success"}
 GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "completed", "conclusion": "success"}]},
-         NO_STATUS)
-PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
-RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
+         NO_STATUS, {"workflow_runs": [CI_RUN]})
+PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS,
+           {"workflow_runs": [CI_RUN]})
+RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS,
+       {"workflow_runs": [CI_RUN]})
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
             "observation": {"tokens": 100, "wallSeconds": 120, "read": "engaged"}, "graded": True, "runKind": "review"}
 PHRASES = ("no bugs", "bug-free", "bug free")
@@ -49,6 +54,7 @@ class Fake:
             "pr_meta": lambda pr, repo: self.meta,
             "issue_body": lambda n, repo: self.issue_bodies.get(n),
             "check_data": lambda sha, repo: self.ci,
+            "ci_workflow": lambda root: ("absent", None),
             "lane_marker": lambda root: self.marker,
             "engine_run": lambda d: self.runs.get(d, (copy.deepcopy(GOOD_RUN), None)),
             "repo_name": lambda root: "o/r",
@@ -406,15 +412,16 @@ def test_read_with_no_record_is_missing():
 def test_ci_state_truth_table():
     # axis: CI state mapping; a check-run or status combination mapped to the wrong state
     done = lambda c: {"check_runs": [{"status": "completed", "conclusion": c}]}  # noqa: E731
+    ran = {"workflow_runs": [CI_RUN]}
     assert rr.ci_state({"check_runs": []}, NO_STATUS) == "none"
-    assert rr.ci_state({"check_runs": []}, {"state": "success", "total_count": 1, "statuses": [{"state": "success"}]}) == "green"
-    assert rr.ci_state(done("success"), NO_STATUS) == "green"
+    assert rr.ci_state({"check_runs": []}, {"state": "success", "total_count": 1, "statuses": [{"state": "success"}]}) == "none"
+    assert rr.ci_state(done("success"), NO_STATUS, ran) == "green"
     assert rr.ci_state({"check_runs": [{"status": "in_progress"}]}, NO_STATUS) == "pending"
     assert rr.ci_state(done("failure"), NO_STATUS) == "red"
     assert rr.ci_state({"check_runs": [{"status": "in_progress"}, {"status": "completed", "conclusion": "timed_out"}]},
                        NO_STATUS) == "red"
-    assert rr.ci_state(done("success"), {"state": "error", "total_count": 1, "statuses": [{"state": "error"}]}) == "red"
-    assert rr.ci_state(done("success"), {"state": "pending", "total_count": 1, "statuses": [{"state": "pending"}]}) == "pending"
+    assert rr.ci_state(done("success"), {"state": "error", "total_count": 1, "statuses": [{"state": "error"}]}, ran) == "red"
+    assert rr.ci_state(done("success"), {"state": "pending", "total_count": 1, "statuses": [{"state": "pending"}]}, ran) == "pending"
 
 
 def test_unreadable_pr_is_not_reviewed():
@@ -426,7 +433,7 @@ def test_unreadable_pr_is_not_reviewed():
     assert rec["status"] == "not-reviewed" and "the final commit could not be read from the PR" in rec["whatIsMissing"]
     fake.meta, fake.ci = None, None
     rec = build(account(finalCommit=None), fake)
-    assert rec["ci"] == {"state": "none", "sha": None, "source": "unavailable"}
+    assert rec["ci"] == {"state": "none", "sha": None, "source": "unavailable", "workflow": None, "read": "CI could not be read"}
 
 
 def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):
@@ -525,16 +532,17 @@ def test_check_runs_are_read_across_every_page_and_a_failed_page_is_unavailable(
     # axis: CI pagination; a failing check on a later page hidden behind a green first page
     ok, bad = {"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}
     path = f"repos/o/r/commits/{HEAD}/check-runs"
+    actions = {"repos/o/r/actions/runs": ([], "workflow_runs")}
     seen = []
-    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs")}, seen))
-    runs, st = rr._check_data(HEAD, "o/r")
-    assert len(runs["check_runs"]) == 101 and rr.ci_state(runs, st) == "red"
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs"), **actions}, seen))
+    runs, st, wf = rr._check_data(HEAD, "o/r")
+    assert len(runs["check_runs"]) == 101 and rr.ci_state(runs, st, wf) == "red"
     # each page is asked for by number on the same repos/... path; --paginate is never passed
     assert [a[2] for a in seen if "/check-runs" in a[2]] == [f"{path}?per_page=100&page=1", f"{path}?per_page=100&page=2"]
     assert not any("--paginate" in argv for argv in seen)
-    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs")}, override={2: "{broken"}))
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs"), **actions}, override={2: "{broken"}))
     assert rr._check_data(HEAD, "o/r") is None
-    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs")}, override={2: None}))
+    monkeypatch.setattr(rr, "_run", cloud_proxy({path: ([ok] * 100 + [bad], "check_runs"), **actions}, override={2: None}))
     assert rr._check_data(HEAD, "o/r") is None
 
 
@@ -2636,9 +2644,10 @@ def test_cloud_check_runs_are_read_page_by_number_and_a_failure_on_page_three_ma
     rows = [{"name": f"c{i}", "status": "completed", "conclusion": "success"} for i in range(249)]
     rows.append({"name": "last", "status": "completed", "conclusion": "failure"})
     seen = []
-    monkeypatch.setattr(rr, "_run", cloud_proxy({path: (rows, "check_runs")}, seen))
-    runs, st = rr._check_data(HEAD, "o/r")
-    assert runs["check_runs"] == rows and rr.ci_state(runs, st) == "red"
+    monkeypatch.setattr(rr, "_run", cloud_proxy(
+        {path: (rows, "check_runs"), "repos/o/r/actions/runs": ([], "workflow_runs")}, seen))
+    runs, st, wf = rr._check_data(HEAD, "o/r")
+    assert runs["check_runs"] == rows and rr.ci_state(runs, st, wf) == "red"
     assert pages_asked(seen, "/check-runs") == [1, 2, 3]
 
 
@@ -2666,7 +2675,8 @@ def three_readers_routes(rows=250):
     ok = {"status": "completed", "conclusion": "success"}
     return {"repos/o/r/issues/7/comments": ([api_comment(n) for n in range(rows)], None),
             "repos/o/r/pulls/7/files": ([{"filename": f"f{n}"} for n in range(rows)], None),
-            f"repos/o/r/commits/{HEAD}/check-runs": ([ok] * rows, "check_runs")}
+            f"repos/o/r/commits/{HEAD}/check-runs": ([ok] * rows, "check_runs"),
+            "repos/o/r/actions/runs": ([], "workflow_runs")}
 
 
 def test_a_page_that_fails_makes_the_whole_read_unavailable_for_every_reader(monkeypatch):
@@ -2815,3 +2825,286 @@ def test_r8_a_head_tree_that_cannot_be_read_lists_every_stripped_path(tmp_path, 
     # axis: the fail-closed head-tree read; an unreadable tree treating a calibration file as shown
     repo_root = str(tmp_path) if root else None
     assert sanitized_view.withheld_review_paths(repo_root, "a" * 40, [CORE_MD, SRC]) == [CORE_MD]
+
+
+# --- CI green reads only the project's CI workflow ---
+
+def wf_run(name, status="completed", conclusion="success", **over):
+    return {"id": over.pop("id", 100), "name": name, "event": "push", "status": status,
+            "conclusion": conclusion if status == "completed" else None, **over}
+
+
+def wfs(*rows):
+    return {"workflow_runs": list(rows)}
+
+
+CHECK_OK = {"check_runs": [{"name": "validate", "status": "completed", "conclusion": "success"}]}
+CHECK_PENDING = {"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}
+VERCEL = {"state": "success", "total_count": 2,
+          "statuses": [{"state": "success", "context": "Vercel"}, {"state": "success", "context": "Vercel Preview Comments"}]}
+DECLARED_CI = ("declared", "CI")
+
+
+def test_third_party_checks_alone_never_make_ci_green():
+    # axis: green needs the project's CI to have run; third-party statuses or non-Actions check runs reading green on their own
+    assert rr.ci_state({"check_runs": []}, VERCEL, wfs()) == "none"
+    assert rr.ci_state({"check_runs": []}, VERCEL) == "none"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs()) == "none"
+    assert rr.ci_state(CHECK_OK, VERCEL, wfs()) == "none"
+    assert rr.ci_reading(CHECK_OK, NO_STATUS, wfs())["read"] == "no CI workflow declared; no GitHub Actions run on this commit"
+
+
+def test_a_declared_workflow_alone_decides_pending_and_green():
+    # axis: the declared workflow's selection; another workflow's run, or a third-party status, deciding the state
+    release = wf_run("Release Please", id=1)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("CI", "in_progress", id=2), release), DECLARED_CI) == "pending"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(release), DECLARED_CI) == "none"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2), release), DECLARED_CI) == "green"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("CI", conclusion="skipped", id=2)), DECLARED_CI) == "none"
+    pending_status = {"state": "pending", "total_count": 1, "statuses": [{"state": "pending", "context": "Vercel"}]}
+    assert rr.ci_state(CHECK_PENDING, pending_status, wfs(wf_run("CI", id=2)), DECLARED_CI) == "green"
+    got = rr.ci_reading(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2), release), DECLARED_CI)
+    assert got == {"state": "green", "workflow": "CI", "read": "workflow CI: run 2 success"}
+    assert rr.ci_reading(CHECK_OK, NO_STATUS, wfs(release), DECLARED_CI)["read"] == "workflow CI: no run on this commit"
+
+
+def test_with_no_declaration_green_needs_a_succeeded_actions_run():
+    # axis: the undeclared reading; green check runs counted as green with no GitHub Actions run that succeeded
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2))) == "green"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("CI", conclusion="skipped", id=2))) == "none"
+    assert rr.ci_state(CHECK_PENDING, NO_STATUS, wfs(wf_run("CI", id=2))) == "pending"
+    got = rr.ci_reading(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2), wf_run("Release Please", id=1)))
+    assert got["workflow"] is None
+    assert got["read"] == "no CI workflow declared; GitHub Actions runs: Release Please run 1 success, CI run 2 success"
+
+
+def test_a_declaration_that_cannot_be_read_never_makes_ci_green():
+    # axis: an unreadable declaration; falling back to the undeclared reading and reading green
+    got = rr.ci_reading(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2)), ("unreadable", None))
+    assert got == {"state": "none", "workflow": None, "read": "the CI workflow declaration could not be read"}
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("CI", conclusion="failure", id=2)), ("unreadable", None)) == "red"
+
+
+def test_any_red_still_reads_red():
+    # axis: red wins; a failed status or workflow run hidden behind a green declared workflow or a succeeded Actions run
+    failed = {"state": "failure", "total_count": 1, "statuses": [{"state": "failure", "context": "Vercel"}]}
+    assert rr.ci_state(CHECK_OK, failed, wfs(wf_run("CI", id=2)), DECLARED_CI) == "red"
+    assert rr.ci_state(CHECK_OK, failed, wfs(wf_run("CI", id=2))) == "red"
+    other_failed = wfs(wf_run("CI", id=2), wf_run("Release Please", conclusion="failure", id=3))
+    assert rr.ci_state(CHECK_OK, NO_STATUS, other_failed, DECLARED_CI) == "red"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, other_failed) == "red"
+
+
+def test_only_the_newest_run_per_workflow_and_event_counts():
+    # axis: supersession; an older failed run of a workflow that re-ran at the same commit holding CI red, or an older success hiding a newer failure
+    def pr_title(number, conclusion):
+        return wf_run("pr-title", conclusion=conclusion, id=50 + number, workflow_id=7, event="pull_request", run_number=number)
+    ci = wf_run("CI", id=2)
+    mended = wfs(pr_title(1, "failure"), pr_title(2, "success"), ci)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, mended, DECLARED_CI) == "green"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, mended) == "green"
+    broken = wfs(pr_title(1, "success"), pr_title(2, "failure"), ci)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, broken, DECLARED_CI) == "red"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, broken) == "red"
+    # without a run number the larger id is the newer run
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("pr-title", conclusion="failure", id=5),
+                                                wf_run("pr-title", id=9), ci)) == "green"
+
+
+def test_the_newest_run_wins_whatever_order_the_runs_are_listed_in():
+    # axis: supersession by rank, not list position; an older run listed last taken as the current one
+    def pr_title(number, conclusion):
+        return wf_run("pr-title", conclusion=conclusion, id=50 + number, workflow_id=7, event="pull_request", run_number=number)
+    ci = wf_run("CI", id=2)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(pr_title(2, "failure"), pr_title(1, "success"), ci)) == "red"
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(pr_title(2, "success"), pr_title(1, "failure"), ci)) == "green"
+
+
+def test_two_events_of_one_workflow_are_each_current():
+    # axis: supersession is per workflow and event; a newer run of one event hiding an unfinished run of another event of the same workflow
+    pending_pr = wf_run("CI", "in_progress", id=51, workflow_id=7, event="pull_request", run_number=1)
+    passed_push = wf_run("CI", id=52, workflow_id=7, event="push", run_number=2)
+    assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(pending_pr, passed_push), DECLARED_CI) == "pending"
+
+
+def test_the_record_names_the_workflow_it_read_ci_from(tmp_path):
+    # axis: the record's ci field; a record that hides which workflow CI was read from, or drops the source
+    fake = Fake(ci=(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2))))
+    declared = dict(fake.readers(), ci_workflow=lambda root: DECLARED_CI)
+    rec = rr.build_record(account(), declared)
+    assert rec["ci"] == {"state": "green", "sha": HEAD, "source": "GitHub checks", "workflow": "CI",
+                         "read": "workflow CI: run 2 success"}
+    rec = build(account(), fake)
+    assert rec["ci"]["source"] == "GitHub checks" and rec["ci"]["workflow"] is None
+    assert rec["ci"]["read"] == "no CI workflow declared; GitHub Actions runs: CI run 2 success"
+    out = rr.write(put(tmp_path, account()), str(tmp_path), declared)
+    assert out["ok"], out
+    read_back = rr.read(7, readers=declared)
+    assert (read_back["ci"]["workflow"], read_back["ci"]["source"]) == ("CI", "GitHub checks")
+    missing = dict(Fake(ci=(CHECK_OK, NO_STATUS, wfs(wf_run("Release Please", id=1)))).readers(),
+                   ci_workflow=lambda root: DECLARED_CI)
+    rec = rr.build_record(account(), missing)
+    assert rec["status"] == "not-reviewed" and rec["ci"]["state"] == "none"
+    assert f"CI is none on {HEAD[:7]} (workflow CI: no run on this commit)" in rec["whatIsMissing"]
+    unavailable = rr.build_record(account(), dict(declared, check_data=lambda sha, repo: None))
+    assert unavailable["ci"] == {"state": "none", "sha": None, "source": "unavailable", "workflow": "CI",
+                                 "read": "CI could not be read"}
+
+
+def test_a_status_line_for_a_record_written_before_the_read_key_keeps_the_old_wording():
+    # axis: the missing-line wording; a record with no read key failing to render, or the old wording changing
+    rec = build(account(), Fake(ci=RED))
+    old = {**rec, "ci": {k: v for k, v in rec["ci"].items() if k not in ("workflow", "read")}}
+    lines = rr._status(old)[2]
+    assert f"CI is red on {HEAD[:7]}" in lines and not any(line.startswith(f"CI is red on {HEAD[:7]} (") for line in lines)
+
+
+def write_core(repo, block_extra=None, raw_block=None, schema=core_md.SCHEMA_VERSION):
+    d = repo / ".claude" / "superheroes"
+    d.mkdir(parents=True, exist_ok=True)
+    block = json.dumps({"schemaVersion": schema, "verifyCommand": "npm test", "stackTags": ["node"],
+                        **(block_extra or {})}, indent=2) if raw_block is None else raw_block
+    (d / "core.md").write_text(
+        f"<!-- superheroes-core: schemaVersion={schema} status=confirmed created=2026-06-26 updated=2026-06-26 -->\n\n"
+        "## Threat model\n\nsingle-user\n\n## Canonical patterns\n\n- x: a.ts:1\n\n"
+        f"```json superheroes-core\n{block}\n```\n")
+    return str(repo)
+
+
+def test_the_declaration_reader_without_a_repo_root_is_unreadable():
+    # axis: the reader's no-root edge; an unknown checkout reading as no declaration
+    assert rr._ci_workflow(None) == ("unreadable", None)
+
+
+def test_the_declaration_reader_reads_an_absent_profile_as_absent(tmp_path):
+    # axis: the reader's absent-profile edge; a project with no profile reading as an unreadable declaration
+    assert rr._ci_workflow(str(tmp_path)) == ("absent", None)
+
+
+def test_the_declaration_reader_reads_a_corrupt_profile_as_unreadable(tmp_path):
+    # axis: the reader's corrupt-profile edge; a profile that cannot be parsed reading as no declaration
+    repo = write_core(tmp_path, raw_block="{not json")
+    assert rr._ci_workflow(repo) == ("unreadable", None)
+
+
+def test_the_declaration_reader_reads_a_missing_declaration_as_absent(tmp_path):
+    # axis: the reader's undeclared edge; a profile with no ciWorkflow key reading as unreadable
+    assert rr._ci_workflow(write_core(tmp_path)) == ("absent", None)
+    other = tmp_path / "other"
+    other.mkdir()
+    assert rr._ci_workflow(write_core(other, {"projectConfiguration": {"budgetN": 3}})) == ("absent", None)
+
+
+def test_the_declaration_reader_reads_a_non_mapping_configuration_as_unreadable(tmp_path):
+    # axis: the reader's non-mapping edge; a projectConfiguration that is not a mapping reading as no declaration
+    assert rr._ci_workflow(write_core(tmp_path, {"projectConfiguration": ["ciWorkflow", "CI"]})) == ("unreadable", None)
+
+
+@pytest.mark.parametrize("value", [None, 5, True, ["CI"], {"name": "CI"}, "", "   "])
+def test_the_declaration_reader_reads_a_bad_value_as_unreadable(tmp_path, value):
+    # axis: the reader's bad-value edge; a declared key holding null, a non-string or a blank string reading as no declaration
+    repo = write_core(tmp_path, {"projectConfiguration": {"ciWorkflow": value}})
+    assert rr._ci_workflow(repo) == ("unreadable", None)
+
+
+def test_the_declaration_reader_reads_the_workflow_name_stripped(tmp_path):
+    # axis: the reader's declared edge; the declared name not reaching the reading, or reaching it unstripped
+    repo = write_core(tmp_path, {"projectConfiguration": {"ciWorkflow": "  CI "}})
+    assert rr._ci_workflow(repo) == ("declared", "CI")
+
+
+def test_the_declaration_reader_never_raises(tmp_path, monkeypatch):
+    # axis: the reader's exception edge; a failing profile read escaping to the record writer
+    repo = write_core(tmp_path, {"projectConfiguration": {"ciWorkflow": "CI"}})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(core_md, "read", boom)
+    assert rr._ci_workflow(repo) == ("unreadable", None)
+
+
+def test_the_declaration_reader_writes_nothing(tmp_path, monkeypatch):
+    # axis: the reader's purity; reading a profile writing the mode record or the profile
+    repo = write_core(tmp_path, {"projectConfiguration": {"ciWorkflow": "CI"}})
+    core = tmp_path / ".claude" / "superheroes" / "core.md"
+    before, text = sorted(str(p) for p in tmp_path.rglob("*")), core.read_text()
+    rr._ci_workflow(repo)
+    assert sorted(str(p) for p in tmp_path.rglob("*")) == before and core.read_text() == text
+
+    # a profile with only the in-repo review-crew layer: the mode registry is never backfilled
+    repo = tmp_path / "repo"
+    layer = repo / ".claude" / "superheroes"
+    layer.mkdir(parents=True)
+    (layer / "review-crew.md").write_text("# review crew\n")
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    calls = []
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    monkeypatch.setattr(mode_registry, "write_registry", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rr._ci_workflow(str(repo)) == ("absent", None)
+    assert calls == []
+
+
+def test_a_failed_workflow_run_read_makes_check_data_unavailable(monkeypatch):
+    # axis: workflow-run pagination; a failed or malformed actions/runs read treated as no workflow runs
+    routes = three_readers_routes(3)
+    serve = cloud_proxy(routes)
+    monkeypatch.setattr(rr, "_run", serve)
+    runs, status, workflow_runs = rr._check_data(HEAD, "o/r")
+    assert workflow_runs == {"workflow_runs": []} and len(runs["check_runs"]) == 3
+    for served in (None, "not json", "{broken", '{"message": "Not Found"}', '{"workflow_runs": "x"}', "[]"):
+        monkeypatch.setattr(rr, "_run", lambda argv, cwd=None, served=served: (
+            served if "actions/runs" in argv[2] else serve(argv, cwd)))
+        assert rr._check_data(HEAD, "o/r") is None, served
+    for rows in (["x"], [None], [wf_run("CI"), 5], [[1]]):
+        monkeypatch.setattr(rr, "_run", cloud_proxy({**routes, "repos/o/r/actions/runs": (rows, "workflow_runs")}))
+        assert rr._check_data(HEAD, "o/r") is None, rows
+    monkeypatch.setattr(rr, "_run", cloud_proxy({**routes, "repos/o/r/actions/runs": ([wf_run("CI", head_sha=HEAD)], "workflow_runs")}))
+    assert rr._check_data(HEAD, "o/r")[2] == {"workflow_runs": [wf_run("CI", head_sha=HEAD)]}
+
+
+def test_a_workflow_run_page_that_is_missing_makes_check_data_unavailable(monkeypatch):
+    # axis: workflow-run pagination; a failed actions/runs page on a later page treated as the whole list
+    routes = {**three_readers_routes(3), "repos/o/r/actions/runs": ([wf_run("CI", head_sha=HEAD)] * 150, "workflow_runs")}
+    monkeypatch.setattr(rr, "_run", cloud_proxy(routes))
+    assert len(rr._check_data(HEAD, "o/r")[2]["workflow_runs"]) == 150
+    serve = cloud_proxy(routes)
+    monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: None if "actions/runs" in argv[2] and "page=2" in argv[2] else serve(argv, cwd))
+    assert rr._check_data(HEAD, "o/r") is None
+
+
+def test_an_unfinished_run_under_the_fallback_reads_pending():
+    # axis: the fallback's unfinished run; a finished pr-title run reading green while CI is still queued
+    for status in ("queued", "waiting", "in_progress", "requested", "pending"):
+        assert rr.ci_state(CHECK_OK, NO_STATUS, wfs(wf_run("pr-title", id=1), wf_run("CI", status, id=2))) == "pending", status
+    assert rr.ci_state({"check_runs": []}, NO_STATUS, wfs(wf_run("pr-title", id=1), wf_run("CI", "queued", id=2))) == "pending"
+
+
+def test_a_run_of_another_commit_never_counts(monkeypatch):
+    # axis: the exact sha; a run of another commit, or a run with no head_sha, counted as this commit's run
+    other = "a" * 40
+    runs = [wf_run("CI", head_sha=other, id=1), wf_run("CI", conclusion="failure", head_sha=other, id=2, event="pull_request"),
+            wf_run("CI", head_sha=HEAD, id=3), wf_run("CI", id=4)]
+    monkeypatch.setattr(rr, "_run", cloud_proxy({**three_readers_routes(3), "repos/o/r/actions/runs": (runs, "workflow_runs")}))
+    got = rr._check_data(HEAD, "o/r")
+    assert got[2] == {"workflow_runs": [runs[2]]}
+    assert rr.ci_state(*got) == "green"
+    monkeypatch.setattr(rr, "_run", cloud_proxy({**three_readers_routes(3), "repos/o/r/actions/runs": ([runs[0]], "workflow_runs")}))
+    got = rr._check_data(HEAD, "o/r")
+    assert rr.ci_state(*got) == "none"
+    assert rr.ci_state(*got, DECLARED_CI) == "none"
+
+
+def test_an_unknown_declaration_kind_reads_none():
+    # axis: the declaration kind; a kind other than declared or absent reading as an absent declaration
+    got = rr.ci_reading(CHECK_OK, NO_STATUS, wfs(wf_run("CI", id=2)), ("misread", "CI"))
+    assert got["state"] == "none" and got["workflow"] is None
+    assert got["read"] == "the CI workflow declaration could not be read"
+
+
+def test_workflow_runs_are_asked_for_by_the_head_sha_page_by_number(monkeypatch):
+    # axis: the workflow-run query; runs read for another commit, or the page query not joined to head_sha
+    seen = []
+    monkeypatch.setattr(rr, "_run", cloud_proxy(three_readers_routes(3), seen))
+    rr._check_data(HEAD, "o/r")
+    assert [a[2] for a in seen if "actions/runs" in a[2]] == [f"repos/o/r/actions/runs?head_sha={HEAD}&per_page=100&page=1"]
