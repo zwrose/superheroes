@@ -24,6 +24,7 @@ from test_break_it_interpreter_1910 import (  # noqa: E402
 PASSING_TEST = "def test_ok():\n    pass\n"
 PYTEST_PATH = "tests/test_pytest_block.py"
 TAG = "TAG1"
+AS_WRITTEN = "AS-WRITTEN"
 
 
 def _echo_launcher(tmp_path):
@@ -38,6 +39,22 @@ def _echo_launcher(tmp_path):
 
 def _pytest_block(path=PYTEST_PATH, program="pytest"):
     return TB._block(path, PASSING_TEST, run="%s %s" % (program, path))
+
+
+def _add_as_written(root, *programs):
+    """Commit each program as a script that prints its own argv and exits zero, so a run at the new
+    head shows whether the argv ran as written. Returns the new head."""
+    for rel in programs:
+        TB._write(root, rel, "#!/bin/sh\necho \"%s: $*\"\n" % AS_WRITTEN)
+        os.chmod(str(root / rel), 0o755)
+    return TB._commit(root, "as-written programs")
+
+
+def _assert_ran_as_written(record):
+    assert (record["outcome"], record["exitCode"]) == ("passed", 0)
+    assert "%s: %s" % (AS_WRITTEN, PYTEST_PATH) in record["output"]
+    assert MARKER not in record["output"]
+    assert record["interpreter"] is None
 
 
 # ---- K1: the key decides ---------------------------------------------------------------------
@@ -109,18 +126,21 @@ def test_k4_a_pytest_block_runs_as_the_prefix_dash_m_pytest(launcher_repo, tmp_p
 
 
 @pytest.mark.parametrize("interpreter", [FAKE, None])
-def test_k4_a_str_or_unset_interpreter_leaves_pytest_as_written(interpreter):
-    # axis: the pytest mapping belongs to the list form only — a str (the walker's) or None launcher records no interpreter for pytest
-    record = break_it.run_one("/nonexistent", "", _pytest_block(), interpreter=interpreter)
-    assert record["reason"] == "head-unresolved"
-    assert record["interpreter"] is None
+def test_k4_a_str_or_unset_interpreter_leaves_pytest_as_written(launcher_repo, interpreter):
+    # axis: the pytest mapping belongs to the list form only — under a str (the walker's) or None launcher a pytest program runs as written, at a real head
+    head = _add_as_written(launcher_repo, "scripts/pytest")
+    record = break_it.run_one(str(launcher_repo), head, _pytest_block(program="scripts/pytest"),
+                              interpreter=interpreter)
+    _assert_ran_as_written(record)
 
 
-def test_k4_a_prefix_leaves_a_pytest_lookalike_alone():
-    # axis: only the exact program names `pytest` and `py.test` are mapped, so `pytest-x` runs as written
-    record = break_it.run_one("/nonexistent", "", _pytest_block(program="pytest-x"), interpreter=[FAKE])
-    assert record["reason"] == "head-unresolved"
-    assert record["interpreter"] is None
+@pytest.mark.parametrize("program", ["scripts/pytest-x", "scripts/py.test-x"])
+def test_k4_a_prefix_leaves_a_pytest_lookalike_alone(launcher_repo, program):
+    # axis: only the exact program names `pytest` and `py.test` are mapped, so a look-alike runs as written at a real head — see bite-proof record wo_1975_lookalike_real_head
+    head = _add_as_written(launcher_repo, program)
+    record = break_it.run_one(str(launcher_repo), head, _pytest_block(program=program),
+                              interpreter=[FAKE])
+    _assert_ran_as_written(record)
 
 
 # ---- K5: an invalid key fails closed ---------------------------------------------------------
