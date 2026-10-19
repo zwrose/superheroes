@@ -116,23 +116,21 @@ def test_unresolvable_ref_refuses(tmp_path):
 
 
 # axis: a ref gone by fold time is no count, never a count from the wrong base.
-def test_ref_gone_at_fold_is_indeterminate(tmp_path, monkeypatch):
+def test_ref_gone_at_fold_is_indeterminate(tmp_path):
     wt, start, main_branch = _merged_build(tmp_path)
-    resolve = ED._resolve_commit
-    calls = []
+    _git(wt, "branch", "-q", "doomed", main_branch)
 
-    def gone_after_open(cwd, rev, timeout=None):
-        calls.append(rev)
-        return resolve(cwd, rev, timeout=timeout) if len(calls) == 1 else None
+    def run(argv, prompt, timeout, progress_cb, cwd):
+        _git(cwd, "branch", "-q", "-D", "doomed")
+        return _implementing_runner({"added.py": 20}).responses[0](argv, prompt, timeout, progress_cb, cwd)
 
-    monkeypatch.setattr(ED, "_resolve_commit", gone_after_open)
     res = _dispatch_write(
-        tmp_path, _implementing_runner({"added.py": 20}), cwd=wt, run_dir=str(tmp_path / "run"),
-        size_base=start, size_line=140, size_base_ref=main_branch,
+        tmp_path, FakeRunner([run]), cwd=wt, run_dir=str(tmp_path / "run"),
+        size_base=start, size_line=140, size_base_ref="doomed",
     )
     assert res["ok"] is True, res
     assert res["sizeTripwire"] == {
-        "status": "indeterminate", "base": start, "line": 140, "baseRef": main_branch,
+        "status": "indeterminate", "base": start, "line": 140, "baseRef": "doomed",
         "reason": "size-base-unresolvable"}
 
 
@@ -167,3 +165,15 @@ def test_spent_budget_is_a_timeout(tmp_path):
     wt, start, main_branch = _merged_build(tmp_path)
     assert ED._size_count_from(wt, start, main_branch, deadline=0) == (None, "git-timeout")
     assert ED._size_count_from(wt, start, None, deadline=0) == (start, None)
+
+
+# axis: a git call that outruns the budget mid-lookup is a timeout too, never an unresolvable ref.
+def test_lookup_timeout_is_a_timeout(tmp_path, monkeypatch):
+    wt, start, main_branch = _merged_build(tmp_path)
+
+    def slow(*_a, **_k):
+        raise subprocess.TimeoutExpired("git", 1)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", slow)
+    assert ED._size_count_from(wt, start, main_branch, deadline=float("inf")) == (
+        None, "git-timeout")

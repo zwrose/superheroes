@@ -2559,8 +2559,12 @@ def _size_count_from(cwd, base, base_ref, deadline):
         return remaining
 
     try:
-        ref_sha = _resolve_commit(cwd, base_ref, timeout=left())
-        if ref_sha is None:
+        resolved = _git_scrubbed(
+            cwd, "rev-parse", "--verify", "--quiet", "--end-of-options", "%s^{commit}" % base_ref,
+            timeout=left(),
+        )
+        ref_sha = resolved.stdout.strip() if resolved.returncode == 0 else ""
+        if not ref_sha:
             return None, SIZE_BASE_UNRESOLVABLE
         merge_base = _git_scrubbed(cwd, "merge-base", "HEAD", ref_sha, timeout=left())
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
