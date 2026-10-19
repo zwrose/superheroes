@@ -23,7 +23,8 @@ THIRD = "c" * 40
 CODEX = model_registry.codex_models()[0]
 NO_STATUS = {"state": "pending", "total_count": 0, "statuses": []}
 GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "completed", "conclusion": "success"}]},
-         NO_STATUS)
+         NO_STATUS,
+         {"workflow_runs": [{"id": 11, "name": "CI", "event": "push", "status": "completed", "conclusion": "success"}]})
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
             "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
 KEY = "a.py::t@L3"
@@ -44,6 +45,7 @@ class Fake:
             "pr_meta": lambda pr, repo: {"head": self.head, "body": "", "issues": []},
             "issue_body": lambda n, repo: None,
             "check_data": lambda sha, repo: GREEN,
+            "ci_workflow": lambda root: ("absent", None),
             "lane_marker": lambda root: None,
             "engine_run": lambda d: self.runs.get(d, (copy.deepcopy(GOOD_RUN), None)),
             "repo_name": lambda root: "o/r",

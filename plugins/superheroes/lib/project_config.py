@@ -39,6 +39,7 @@ REASON_MATERIAL_LINE_IN_CANON = "material-line-in-canon"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
 CLOUD_BUILDS_SLUG = "cloudBuilds"
+CI_WORKFLOW_SLUG = "ciWorkflow"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -178,6 +179,14 @@ ITEMS = (
         "home": HOME_PROJECT_CONFIGURATION,
         "shape": "boolean",
         "plugin_default": False,
+    },
+    {
+        "number": 16,
+        "slug": "ciWorkflow",
+        "name": "CI workflow",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "nonEmptyProse",
+        "plugin_default": None,
     },
 )
 

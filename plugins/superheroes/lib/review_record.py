@@ -217,7 +217,47 @@ def _check_data(sha, repo):
     rows = _read_pages(base + "/check-runs", key="check_runs")
     status = _gh_json("api", base + "/status")
     runs = None if rows is None else {"check_runs": rows}
-    return (runs, status) if runs is not None and isinstance(status, dict) else None
+    # The workflow runs on the head: which workflow ran is what a declared CI workflow is read against.
+    wf_rows = _read_pages(_api(repo, f"actions/runs?head_sha={sha}"), key="workflow_runs")
+    if runs is None or not isinstance(status, dict) or wf_rows is None \
+            or not all(isinstance(row, dict) for row in wf_rows):
+        return None
+    return runs, status, {"workflow_runs": wf_rows}
+
+
+def _ci_workflow(repo_root):
+    """The project's declared CI workflow as (kind, name): "declared" with the workflow's name, "absent"
+    when the profile holds no declaration, "unreadable" when it could not be read whole. Never raises,
+    never writes: a declaration that cannot be read is never read as an absent one."""
+    try:
+        if repo_root is None:
+            return ("unreadable", None)
+        import core_md
+        import project_config
+
+        path = core_md.core_path(repo_root, None, persist_backfill=False)
+        if core_md.read(repo_root, None, persist_backfill=False) is None:
+            if core_md._classify_core_md_at_path(path).status == core_md.CONFIG_ABSENT:
+                return ("absent", None)
+            return ("unreadable", None)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        block = json.loads(core_md._JSON_BLOCK.search(text).group(1))
+        config = block.get(core_md.PROJECT_CONFIGURATION_KEY)
+        if config is None:
+            return ("absent", None)
+        if not isinstance(config, dict):
+            return ("unreadable", None)
+        if project_config.CI_WORKFLOW_SLUG not in config:
+            return ("absent", None)
+        got = project_config.get_item(
+            repo_root, project_config.CI_WORKFLOW_SLUG, persist_backfill=False)
+        value = got.get("effective")
+        if got.get("malformed") is True or not isinstance(value, str) or not value.strip():
+            return ("unreadable", None)
+        return ("declared", value.strip())
+    except Exception:
+        return ("unreadable", None)
 
 
 def _lane_marker(repo_root):
@@ -300,7 +340,7 @@ def _withheld_paths(repo_root, head_sha, paths):
 def _readers(overrides):
     cloud = cloud_pass._is_cloud(os.environ)
     return {"pr_meta": _pr_meta_rest if cloud else _pr_meta, "issue_body": _issue_body_rest if cloud else _issue_body,
-            "check_data": _check_data,
+            "check_data": _check_data, "ci_workflow": _ci_workflow,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
@@ -419,26 +459,81 @@ def _validate(a):
 
 # --- code facts ---
 
-def ci_state(check_runs, status):
+def _effective_runs(rows):
+    """One workflow run per (workflow, event): the newest. A workflow that re-runs on the same commit
+    leaves its older runs listed; only the newest one is current."""
+    newest = {}
+    for row in rows:
+        key = (row.get("workflow_id") or row.get("name"), row.get("event"))
+        rank = (row.get("run_number") or 0, row.get("id") or 0)
+        if key not in newest or rank > newest[key][0]:
+            newest[key] = (rank, row)
+    return [row for _, row in newest.values()]
+
+
+def _run_words(rows):
+    return [f"run {r.get('id')} {r.get('conclusion') or r.get('status')}"
+            for r in sorted(rows, key=lambda r: r.get("id") or 0)]
+
+
+def ci_reading(check_runs, status, workflow_runs=None, declaration=("absent", None)):
+    """CI's state with the declared workflow it was read from and one line saying how: green only when
+    the project's CI ran and passed on the head. ``workflow_runs`` is ``{"workflow_runs": [row, ...]}``."""
     runs = (check_runs or {}).get("check_runs") or []
     status = status or {}
+    effective = _effective_runs((workflow_runs or {}).get("workflow_runs") or [])
+    kind, name = declaration
+    declared = name if kind == "declared" else None
     # A status with total_count 0 reports "pending" while nothing is pending: no statuses at all.
     states = ([status.get("state")] + [s.get("state") for s in status.get("statuses") or []]
               if (status.get("total_count") or 0) > 0 else [])
+    selected = [r for r in effective if r.get("name") == declared] if declared is not None else []
+    if kind == "unreadable":
+        read = "the CI workflow declaration could not be read"
+    elif declared is not None:
+        read = (f"workflow {declared}: " + ", ".join(_run_words(selected))) if selected \
+            else f"workflow {declared}: no run on this commit"
+    elif effective:
+        read = "no CI workflow declared; GitHub Actions runs: " + ", ".join(
+            f"{r.get('name')} {_run_words([r])[0]}" for r in sorted(effective, key=lambda r: r.get("id") or 0))
+    else:
+        read = "no CI workflow declared; no GitHub Actions run on this commit"
+
+    def reading(state):
+        return {"state": state, "workflow": declared, "read": read}
+
+    if any(r.get("conclusion") in _RED for r in runs) or any(s in ("failure", "error") for s in states) \
+            or any(r.get("status") == "completed" and r.get("conclusion") in _RED for r in effective):
+        return reading("red")
+    if kind == "unreadable":
+        return reading("none")
+    if declared is not None:
+        if not selected:
+            return reading("none")
+        if any(r.get("status") != "completed" for r in selected):
+            return reading("pending")
+        return reading("green" if any(r.get("conclusion") == "success" for r in selected) else "none")
     if not runs and not states:
-        return "none"
-    if any(r.get("conclusion") in _RED for r in runs) or any(s in ("failure", "error") for s in states):
-        return "red"
+        return reading("none")
     if any(r.get("status") != "completed" for r in runs) or "pending" in states:
-        return "pending"
-    return "green"
+        return reading("pending")
+    # with no declaration, green also needs an effective GitHub Actions run that concluded success
+    ran_ok = any(r.get("status") == "completed" and r.get("conclusion") == "success" for r in effective)
+    return reading("green" if ran_ok else "none")
 
 
-def _ci(rd, repo, sha):
+def ci_state(check_runs, status, workflow_runs=None, declaration=("absent", None)):
+    return ci_reading(check_runs, status, workflow_runs, declaration)["state"]
+
+
+def _ci(rd, repo, sha, repo_root):
+    declaration = rd["ci_workflow"](repo_root)
     data = rd["check_data"](sha, repo) if sha else None
     if data is None:
-        return {"state": "none", "sha": None, "source": "unavailable"}
-    return {"state": ci_state(*data), "sha": sha, "source": "GitHub checks"}
+        return {"state": "none", "sha": None, "source": "unavailable",
+                "workflow": declaration[1] if declaration[0] == "declared" else None, "read": "CI could not be read"}
+    r = ci_reading(*data, declaration)
+    return {"state": r["state"], "sha": sha, "source": "GitHub checks", "workflow": r["workflow"], "read": r["read"]}
 
 
 def _lane_call(a, rd, meta):
@@ -755,7 +850,7 @@ def _status(rec, unread=(), finding_lines=()):
     if ci["source"] == "unavailable":
         lines.append("CI could not be read")
     elif ci["state"] != "green":
-        lines.append(f"CI is {ci['state']} on {s7(ci['sha'])}")
+        lines.append(f"CI is {ci['state']} on {s7(ci['sha'])}" + (f" ({ci['read']})" if ci.get("read") else ""))
     elif ci["sha"] != fc["sha"]:
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
     lines += finding_lines
@@ -900,7 +995,7 @@ def build_record(account, readers, prior=None):
     rd = dict(rd, changed_paths=cached_paths)
     meta = rd["pr_meta"](a["pr"], a["repo"])
     fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
-    ci, lane = _ci(rd, a["repo"], fc["sha"]), _lane(a, rd, meta)
+    ci, lane = _ci(rd, a["repo"], fc["sha"], a.get("repoRoot")), _lane(a, rd, meta)
     for fact, session, code, from_code in (("lane", a["lane"], lane["value"], lane["source"] != SESSION),
                                            ("finalCommit", a["finalCommit"], fc["sha"], bool(meta)),
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):

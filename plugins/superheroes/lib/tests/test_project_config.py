@@ -110,8 +110,8 @@ def _item_by_slug(payload, slug):
 
 
 def test_registry_has_thirteen_items_in_order():
-    assert len(PC.ITEMS) == 15
-    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15]
+    assert len(PC.ITEMS) == 16
+    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",
         "p0Definition",
@@ -148,7 +148,7 @@ def test_exactly_five_plugin_defaults():
 def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     got = PC.view(repo, root=store)
-    assert len(got["items"]) == 15
+    assert len(got["items"]) == 16
     assert [item["slug"] for item in got["items"]] == [item["slug"] for item in PC.ITEMS]
     plugin_default = [item for item in got["items"] if item["source"] == "plugin-default"]
     derived = [item for item in got["items"] if item["source"] == "derived"]
@@ -405,7 +405,7 @@ def test_cli_view(tmp_path, capsys):
     rc = PC.main(["view", "--cwd", repo, "--root", store])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["items"]) == 15
+    assert len(payload["items"]) == 16
 
 
 def test_cli_get_and_set(tmp_path, capsys, monkeypatch):
@@ -569,3 +569,26 @@ def test_set_item_13_on_non_adopted_project_written_as_today(tmp_path):
     assert stored["raw"] == "plugin default, plus mine"
     again = PC.set_item(repo, "materialConsequenceLine", "a second wording", root=store)
     assert again["action"] == "written"
+
+
+def test_registry_carries_item_16_ci_workflow():
+    # axis: item 16 registration; the declaration item missing, or carrying a default that would read as a declaration
+    item = PC.ITEMS[-1]
+    assert item["slug"] == "ciWorkflow" and item["number"] == 16 and item["name"] == "CI workflow"
+    assert item["shape"] == "nonEmptyProse" and item["plugin_default"] is None
+    assert item["home"] == PC.HOME_PROJECT_CONFIGURATION and PC.CI_WORKFLOW_SLUG == "ciWorkflow"
+
+
+@pytest.mark.parametrize("value", ["", "   ", None, ["CI"]])
+def test_set_item_16_refuses_empty_and_non_string(tmp_path, value):
+    # axis: item 16 validation; a blank or non-string workflow name stored as the declaration
+    repo, store = _setup_repo(tmp_path)
+    assert PC.set_item(repo, "ciWorkflow", value, root=store) == {"action": "refused", "reason": "malformed-value"}
+    assert PC.get_item(repo, "ciWorkflow", root=store)["effective"] is None
+
+
+def test_set_item_16_writes_the_name_to_project_configuration(tmp_path):
+    # axis: item 16 round trip; the name not reading back as the effective value
+    repo, store = _setup_repo(tmp_path)
+    assert PC.set_item(repo, "ciWorkflow", "CI", root=store)["action"] == "written"
+    assert PC.get_item(repo, "ciWorkflow", root=store)["effective"] == "CI"
