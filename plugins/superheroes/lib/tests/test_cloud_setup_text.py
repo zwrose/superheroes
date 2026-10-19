@@ -1109,7 +1109,8 @@ def test_setup_commands_run_in_the_clone_and_the_first_failure_skips_the_rest(tm
     w = _inside(tmp_path)
     _store_commands(w, ['echo first >> "$PWD/ran.txt"; exit 3', 'echo second >> "$PWD/ran.txt"'])
     proc, _ = _run_script(w, _compose(w)["text"], git_clone=True)
-    assert proc.returncode == 0, proc.stderr
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
     log = _setup_log(w)
     assert "setup command 1 FAILED" in log
     # axis: a command after a failed one is skipped, never run
@@ -1134,7 +1135,8 @@ def test_a_failed_setup_command_leaves_no_stamp(tmp_path):
     stamp.parent.mkdir(parents=True)
     stamp.write_text("stale\n")
     proc, _ = _run_script(w, result["text"], git_clone=True)
-    assert proc.returncode == 0, proc.stderr
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
     assert "setup command 1 FAILED" in _setup_log(w) and "setup end" in _setup_log(w)
     assert not stamp.exists()
 
@@ -1143,7 +1145,8 @@ def test_a_missing_clone_leaves_no_stamp(tmp_path):
     w = _inside(tmp_path)
     _store_commands(w, ["true"])
     proc, _ = _run_script(w, _compose(w)["text"])
-    assert proc.returncode == 0, proc.stderr
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
     assert "setup command 1 skipped" in _setup_log(w)
     assert not _stamp_file(w).exists()
 
@@ -1177,11 +1180,12 @@ def test_setup_commands_run_in_the_working_directory_when_it_is_the_clone(tmp_pa
     assert (w.tmp / "work" / "ran.txt").read_text() == "here\n"
 
 
-def test_setup_commands_with_no_clone_are_each_skipped_and_the_script_exits_zero(tmp_path):
+def test_setup_commands_with_no_clone_are_each_skipped_and_the_script_exits_non_zero(tmp_path):
     w = _inside(tmp_path)
     _store_commands(w, ['echo one >> "$PWD/ran.txt"', 'echo two >> "$PWD/ran.txt"'])
     proc, _ = _run_script(w, _compose(w)["text"])
-    assert proc.returncode == 0, proc.stderr
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
     work = w.tmp / "work"
     log = _setup_log(w)
     for n in (1, 2):
@@ -1196,7 +1200,8 @@ def test_a_hostile_setup_command_fails_only_itself(tmp_path):
     assert subprocess.run(["bash", "-n"], input=text, text=True,
                           capture_output=True).returncode == 0
     proc, _ = _run_script(w, text, git_clone=True)
-    assert proc.returncode == 0, proc.stderr
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
     log = _setup_log(w)
     assert "setup command 1 FAILED" in log
     assert "setup command 2 skipped: setup command 1 FAILED" in log
@@ -1213,7 +1218,8 @@ def test_without_a_clone_name_the_clone_is_looked_for_only_in_the_working_direct
     assert subprocess.run(["bash", "-n"], input=text, text=True,
                           capture_output=True).returncode == 0
     proc, _ = _run_script(w, text)
-    assert proc.returncode == 0, proc.stderr
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
     assert "setup command 1 skipped: no clone in %s" % (w.tmp / "work") in _setup_log(w).splitlines()
 
 

@@ -59,9 +59,10 @@ _SECRET_SHAPES = (
     ("registry token", re.compile(
         r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{30,}"
         # _authToken, then the key's own closing quote, a ':' '=' or whitespace separator, and an
-        # opening quote (plain, or JSON-escaped as in the stored calibration); a value that opens
-        # with '$' is an environment reference and passes, anything else is a literal
-        r"""|_authToken(?:\\?["'])?(?:\s*[:=]\s*|\s+)(?:\\?["'])?(?!\$|\s|\\?["'])\S""")),
+        # opening quote (plain, or JSON-escaped as in the stored calibration); a value that is only
+        # a bare environment reference ($NAME or ${NAME}) passes, anything else is a literal
+        r"""|_authToken(?:\\?["'])?(?:\s*[:=]\s*|\s+)(?:\\?["'])?"""
+        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\,;})&|])|\s|\\?["'])\S""")),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
@@ -422,7 +423,12 @@ def _commands_block(commands, clone, stamp=None, count=0):
             "    printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
             '  else echo "setup stamp withheld: setup did not finish" ; fi',
         ] if stamp is not None else []),
+        # axis: the subshell's own status is whether every listed command ran and succeeded
+        '  [ "$ok" = 1 ]',
         ') >> "$LOG" 2>&1',
+        # a listed command's failure ends the script non-zero: an unfinished setup must not be
+        # cached by the platform as a finished one
+        "setup_rc=$?",
     ]
 
 
@@ -509,7 +515,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
                                len(files))
     out += ["", TOOL_STEPS_MARKER,
-            'echo "setup end" >> "$LOG"', "exit 0", ""]
+            'echo "setup end" >> "$LOG"', 'exit "$setup_rc"' if commands else "exit 0", ""]
     return "\n".join(out)
 
 
