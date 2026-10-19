@@ -397,6 +397,90 @@ def test_main_wires_citation_rule(tmp_path, monkeypatch, capsys):
     assert "execution-steps.md" in captured.err
 
 
+# --- the claude write sandbox's .claude/.cc-writes staging residue is not a citation root ---
+
+def _staging_citation():
+    return "Read `" + "/".join([vs.SANDBOX_STAGING_DIR, "review-profile.md"]) + "`."
+
+
+def _mk_staging(plugin_dir):
+    staging = plugin_dir / vs.SANDBOX_STAGING_DIR
+    (staging / vs.SANDBOX_STAGING_MARK).mkdir(parents=True)
+    return staging
+
+
+def test_citations_ignore_sandbox_staging_residue(tmp_path):
+    _mk_staging(tmp_path)
+    assert vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path)) == []
+
+
+def test_is_char_device_seam(tmp_path):
+    regular = tmp_path / "settings.json"
+    regular.write_text("x")
+    assert vs._is_char_device("/dev/null") is True
+    assert vs._is_char_device(str(regular)) is False
+    assert vs._is_char_device(str(tmp_path / "missing")) is False
+
+
+def test_citations_ignore_sandbox_staging_with_char_device_sibling(tmp_path, monkeypatch):
+    staging = _mk_staging(tmp_path)
+    device = str(staging / "settings.json")
+    (staging / "settings.json").write_text("x")
+    monkeypatch.setattr(vs, "_is_char_device", lambda path: path == device)
+    assert vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path)) == []
+
+
+def test_citations_flag_claude_dir_with_marker_and_regular_file(tmp_path):
+    staging = _mk_staging(tmp_path)
+    (staging / "settings.json").write_text("x")
+    out = vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path))
+    assert out and "review-profile.md" in out[0]
+
+
+def test_citations_flag_claude_dir_with_only_a_regular_file(tmp_path):
+    staging = tmp_path / vs.SANDBOX_STAGING_DIR
+    staging.mkdir()
+    (staging / "settings.json").write_text("x")
+    out = vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path))
+    assert out and "review-profile.md" in out[0]
+
+
+def test_citations_flag_claude_dir_when_marker_is_a_symlink(tmp_path):
+    staging = tmp_path / vs.SANDBOX_STAGING_DIR
+    staging.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    os.symlink(str(tmp_path / "elsewhere"), str(staging / vs.SANDBOX_STAGING_MARK))
+    out = vs.check_citations("rubric/x.md", _staging_citation(), str(tmp_path))
+    assert out and "review-profile.md" in out[0]
+
+
+def test_citations_flag_claude_dir_when_it_is_a_symlink(tmp_path):
+    real = tmp_path / "real"
+    (real / vs.SANDBOX_STAGING_MARK).mkdir(parents=True)
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    os.symlink(str(real), str(plugin / vs.SANDBOX_STAGING_DIR))
+    out = vs.check_citations("rubric/x.md", _staging_citation(), str(plugin))
+    assert out and "review-profile.md" in out[0]
+
+
+def test_main_notes_sandbox_staging_and_does_not_read_it_as_a_citation_root(
+        tmp_path, monkeypatch, capsys):
+    root = tmp_path / "plugins"
+    plugin = root / "p"
+    (plugin / "agents").mkdir(parents=True)
+    (plugin / "skills").mkdir()
+    _mk_staging(plugin)
+    (plugin / "agents" / "pilot.md").write_text(_staging_citation() + "\n", encoding="utf-8")
+    monkeypatch.setattr(vs, "PLUGINS", str(root))
+    monkeypatch.setattr(vs, "REPO", str(tmp_path))
+    assert vs.main([]) == 0
+    captured = capsys.readouterr()
+    assert "note: " + os.path.join("plugins", "p", vs.SANDBOX_STAGING_DIR) in captured.out
+    assert "claude write sandbox" in captured.out
+    assert "review-profile.md" not in captured.err
+
+
 def test_main_fails_closed_without_pyyaml(capsys):
     original = vs.yaml
     vs.yaml = None
