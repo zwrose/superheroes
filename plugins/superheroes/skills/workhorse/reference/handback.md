@@ -53,12 +53,14 @@ paste its lines, because a pasted block can run differently in the owner's shell
 stays after merge (at an existing `ops/` or `scripts/` path) or is removed before merge is the
 builder's call per PR, disclosed in the body. No new home is created.
 
-`vet_slot.py handback` refuses a body that holds a fenced shell block (`bash`, `sh`, `zsh`, `shell`
-or no language, including one nested in a list or a blockquote) whose code names `mongosh`, `mongo`,
+`vet_slot.py handback` refuses a body that holds a fenced shell block (`bash`, `sh`, `zsh`, `shell`,
+`console`, `shell-session`, `sh-session`, `shellsession`, `terminal`, `shell-script`, `ksh`, `fish`,
+the plain-text labels `text`, `txt` and `plaintext`, or no language, including one nested in a list or
+a blockquote) whose code names `mongosh`, `mongo`,
 `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or
 `sqlite3`, or a Keychain read (`security find-generic-password`, `security find-internet-password`),
 with `owner-command-in-body`, and the refusal names the block. Shell comments are not read, except a
-comment that holds a `$(…)` or backtick substitution. Inline code and non-shell fences pass, so "run
+comment that holds a `$(…)` or backtick substitution. Inline code and non-shell fences (`json` or `diff`, say) pass, so "run
 this test" stays in the body. A shell block that only mentions a tool (`pytest -k psql`) is refused
 too, so move it into the file or reword it. A block wholly inside an HTML comment does not render and
 is not read.

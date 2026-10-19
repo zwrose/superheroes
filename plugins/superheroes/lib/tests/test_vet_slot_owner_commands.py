@@ -88,6 +88,19 @@ def test_each_shell_language_refuses(lang, named):
     _refused(body, 1, named, "psql")
 
 
+@pytest.mark.parametrize("label", ["console", "shell-session", "sh-session", "shellsession", "terminal",
+                                   "shell-script", "ksh", "fish", "text", "txt", "plaintext", "Console"])
+def test_added_shell_labels_refuse_a_named_tool(label):
+    body = _body(_block("$ mongosh --eval 1", lang=label))
+    _refused(body, 1, label.lower(), "mongosh")
+
+
+@pytest.mark.parametrize("label", ["console", "shell-session", "sh-session", "shellsession", "terminal",
+                                   "shell-script", "ksh", "fish", "text", "txt", "plaintext"])
+def test_added_shell_labels_pass_without_a_named_tool(label):
+    _passes(_body(_block("$ ls -la", lang=label)))
+
+
 def test_tilde_fence_refuses():
     body = _body(_block("psql -h host", fence="~~~"))
     _refused(body, 1, "bash", "psql")
@@ -173,7 +186,7 @@ def test_crlf_line_endings_still_refuse():
 
 
 def test_fence_inside_fence_is_content():
-    outer = "````text\n```bash\npsql -h host\n```\n````\n"
+    outer = "````json\n```bash\npsql -h host\n```\n````\n"
     _passes(_body(outer))
     assert vs.owner_command_blocks(outer) == []
 
@@ -211,8 +224,13 @@ def test_dod_row_3_pinned_python_pytest_block_passes():
 
 def test_non_shell_fences_mentioning_tools_pass():
     body = _body(_block("mongosh", "psql -h host", lang="json")
-                 + "\n" + _block("mongosh", "psql -h host", lang="text"))
+                 + "\n" + _block("mongosh", "psql -h host", lang="diff"))
     _passes(body)
+
+
+@pytest.mark.parametrize("label", ["powershell", "ps1"])
+def test_powershell_labels_naming_a_tool_pass(label):
+    _passes(_body(_block("mongosh --eval 1", lang=label)))
 
 
 def test_inline_code_in_prose_passes():

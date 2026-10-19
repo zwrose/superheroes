@@ -44,7 +44,9 @@ PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
 VERBS = ("write", "check", "handback")
-SHELL_LANGUAGES = frozenset({"bash", "sh", "zsh", "shell", ""})
+SHELL_LANGUAGES = frozenset({"bash", "sh", "zsh", "shell", "console", "shell-session", "sh-session",
+                             "shellsession", "terminal", "shell-script", "ksh", "fish", "text", "txt",
+                             "plaintext", ""})
 DATABASE_TOOLS = ("mongosh", "mongo", "mongodump", "mongorestore", "psql", "pg_dump", "pg_restore",
                   "mysql", "mysqldump", "redis-cli", "sqlite3")
 OWNER_COMMAND_ADVICE = ("a command the owner is asked to run that names a database tool or reads a"

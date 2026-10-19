@@ -71,7 +71,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Handback: owner-run commands live in a file
 
-- `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell` or no-language block, nested in a list or a blockquote too, whose code names `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or names `security find-generic-password` or `security find-internet-password`. The refusal names the block.
+- `vet_slot.py handback` has a new refusal token, `owner-command-in-body`. It refuses a body that holds a fenced `bash`, `sh`, `zsh`, `shell`, `console`, `shell-session`, `sh-session`, `shellsession`, `terminal`, `shell-script`, `ksh`, `fish`, plain-text (`text`, `txt` or `plaintext`) or no-language block, nested in a list or a blockquote too, whose code names `mongosh`, `mongo`, `mongodump`, `mongorestore`, `psql`, `pg_dump`, `pg_restore`, `mysql`, `mysqldump`, `redis-cli` or `sqlite3`, or names `security find-generic-password` or `security find-internet-password`. The refusal names the block.
 - These pass: other fences, inline code, a shell comment (unless it holds a `$(…)` or backtick substitution), and a block wholly inside an HTML comment.
 - A shell block that only mentions a tool, such as `pytest -k psql`, `brew install mongosh` or `echo mongosh`, is refused too. Move it into the file or reword it. The check reads what a block names, not how it is run, and over-refusing is the accepted direction.
 - The body tells the owner to run the file (`bash <path>`) rather than paste its lines, because a pasted block can run differently in the owner's shell.
