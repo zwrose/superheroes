@@ -91,3 +91,44 @@ def test_the_scan_passes_a_reference_in_its_stored_json_form(command):
 @pytest.mark.parametrize("command", LITERALS)
 def test_the_scan_flags_a_literal_in_its_stored_json_form(command):
     assert CS._scan(json.dumps({SLUG: [command]}, indent=2)) is not None
+
+
+YARN_REFERENCES = [
+    "yarn config set npmAuthToken $NPM_TOKEN",
+    'yarn config set npmAuthToken "${NPM_TOKEN}"',
+    "yarn config set -H npmScopes.acme.npmAuthToken $NPM_TOKEN",
+    'yarn config set \'npmRegistries["//registry.example.com"].npmAuthToken\' "$NPM_TOKEN"',
+]
+YARN_LITERALS = [
+    "yarn config set npmAuthToken " + LITERAL,
+    'yarn config set npmAuthToken "%s"' % LITERAL,
+    "yarn config set -H npmScopes.acme.npmAuthToken " + LITERAL,
+    'yarn config set \'npmRegistries["//registry.example.com"].npmAuthToken\' "%s"' % LITERAL,
+]
+
+
+@pytest.mark.parametrize("make", WORLDS, ids=IDS)
+@pytest.mark.parametrize("command", YARN_REFERENCES)
+def test_a_yarn_environment_reference_passes_set_and_compose(tmp_path, make, command):
+    w = make(tmp_path)
+    assert _set(w, command)["action"] != "refused"
+    _store_commands(w, [command])
+    assert _compose(w)["action"] == "written"
+
+
+@pytest.mark.parametrize("make", WORLDS, ids=IDS)
+@pytest.mark.parametrize("command", YARN_LITERALS)
+def test_a_yarn_literal_is_refused_by_set_and_compose(tmp_path, make, command):
+    w = make(tmp_path)
+    assert _set(w, command) == {"action": "refused",
+                                "reason": project_config.REASON_SETUP_COMMAND_SECRET_SHAPED}
+    _store_commands(w, [command])
+    result = _compose(w)
+    assert result["action"] == "refused" and "text" not in result, result
+    assert LITERAL not in json.dumps(result)
+
+
+def test_a_failed_stamp_write_ends_the_commands_block_non_zero():
+    block = "\n".join(CS._commands_block(["true"], None, "sha256:probe", 0))
+    assert 'setup stamp write FAILED"; ok=0' in block
+    assert "setup did not finish" in block and "ok=0 ; fi" in block

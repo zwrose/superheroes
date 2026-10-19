@@ -61,7 +61,7 @@ _SECRET_SHAPES = (
         # _authToken, then the key's own closing quote, a ':' '=' or whitespace separator, and an
         # opening quote (plain, or JSON-escaped as in the stored calibration); a value that is only
         # a bare environment reference ($NAME or ${NAME}) passes, anything else is a literal
-        r"""|_authToken(?:\\?["'])?(?:\s*[:=]\s*|\s+)(?:\\?["'])?"""
+        r"""|(?:_authToken|npmAuthToken)(?:\\?["'])?(?:\s*[:=]\s*|\s+)(?:\\?["'])?"""
         r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\,;})&|])|\s|\\?["'])\S""")),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
@@ -383,9 +383,24 @@ def _encoded_shape(text):
     return None
 
 
+_EMPTY_QUOTES_RE = re.compile(r"""\\"\\"|''|\"\"""")
+
+
+def _without_empty_quotes(text):
+    """`text` with adjacent empty shell quote pairs removed (also JSON-escaped), so shell
+    concatenation cannot split a literal from its key."""
+    while True:
+        shorter = _EMPTY_QUOTES_RE.sub("", text)
+        if shorter == text:
+            return text
+        text = shorter
+
+
 def _scan(text):
-    """The name of the first secret-shaped form in `text`, else None."""
-    return _plain_shape(text) or _encoded_shape(text)
+    """The name of the first secret-shaped form in `text`, else None. The shapes are matched on a
+    normalized copy too, with empty quote pairs removed."""
+    return (_plain_shape(text) or _plain_shape(_without_empty_quotes(text))
+            or _encoded_shape(text))
 
 
 def _commands_block(commands, clone, stamp=None, count=0):
@@ -420,8 +435,9 @@ def _commands_block(commands, clone, stamp=None, count=0):
             # axis: the stamp is the receipt for a finished setup, so a failed or skipped command
             # leaves none
             '  if [ "$ok" = 1 ] && [ "$wrote" = %d ]; then' % count,
-            "    printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
-            '  else echo "setup stamp withheld: setup did not finish" ; fi',
+            "    printf '%%s\\n' '%s' > \"$DEST/%s\" || { echo \"setup stamp write FAILED\"; ok=0; }"
+            % (stamp, STAMP_FILE),
+            '  else echo "setup stamp withheld: setup did not finish" ; ok=0 ; fi',
         ] if stamp is not None else []),
         # axis: the subshell's own status is whether every listed command ran and succeeded
         '  [ "$ok" = 1 ]',
