@@ -8,7 +8,7 @@ new issues.
 - Head diff (read cited hunks here): {{HEAD_DIFF_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
 - Severity rubric (the only tiers; calibration): {{RUBRIC_PATH}}
-- Project conventions: CLAUDE.md and the project profile.
+- Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
 - Target identifier (echo verbatim in your result): {{TARGET_ID}}
 
 ## Independence

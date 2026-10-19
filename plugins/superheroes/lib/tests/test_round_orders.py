@@ -23,6 +23,7 @@ _PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 _PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
 _CORE_UNRESOLVED = "(Core calibration not resolved for this project)"
 _LAYER_UNRESOLVED = "(Review-crew layer calibration not resolved for this project)"
+_CLAUDE_MD = "/home/user/proj/CLAUDE.md"
 
 
 def _base_context(**over):
@@ -64,6 +65,7 @@ def _panel_placeholders(channel="file", pr_checkout=False):
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
         "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
         "PRIOR_COMMENTS_PATH": prior_path,
         "FOCUS_NOTES": "touch auth paths carefully",
@@ -79,6 +81,7 @@ def _verifier_placeholders(channel="file"):
         "CLUSTER_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "clusters", "0.json"),
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CHANNEL": channel,
     }
@@ -89,6 +92,7 @@ def _synthesis_placeholders(channel="file"):
         "VERIFIED_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "verified.json"),
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "GROUPING_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "grouping.json"),
         "CHANNEL": channel,
@@ -122,6 +126,7 @@ def _gapsweep_placeholders(channel="file"):
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "gap-sweep-findings.json"),
         "CHANNEL": channel,
     }
@@ -132,6 +137,7 @@ def _audits_placeholders(channel="file"):
         "TARGET_SUMMARY_PATH": os.path.join(_SESSION, "round-2", "audit-targets", "t0.json"),
         "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
         "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "TARGET_ID": "finding::auth.py::12",
         "CHANNEL": channel,
@@ -146,6 +152,7 @@ def _scoped_placeholders(channel="file"):
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "scoped-findings.json"),
         "CHANNEL": channel,
     }

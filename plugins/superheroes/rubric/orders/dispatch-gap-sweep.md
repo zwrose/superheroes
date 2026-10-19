@@ -8,7 +8,7 @@ concerns.
 - Core calibration (threat model, canonical patterns): {{CORE_PATH}}
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
-- Project conventions: CLAUDE.md and the project profile.
+- Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
 
 ## Your assignment
 Read the full diff at {{DIFF_PATH}} in bounded chunks (<=800 lines): use Read offset/limit when
