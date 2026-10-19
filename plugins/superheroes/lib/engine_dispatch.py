@@ -148,6 +148,7 @@ SIZE_INPUTS_INCOMPLETE = "size-inputs-incomplete"
 SIZE_LINE_INVALID = "size-line-invalid"
 SIZE_BASE_NOT_AN_OBJECT_ID = "size-base-not-an-object-id"
 SIZE_BASE_UNRESOLVABLE = "size-base-unresolvable"
+SIZE_BASE_REF_CONTAINS_HEAD = "size-base-ref-contains-head"
 SIZE_INPUTS_MISMATCH = "size-inputs-mismatch"
 SIZE_TRIPWIRE_ABSENT_NOT_SUPPLIED = "size-inputs-not-supplied"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
@@ -2547,12 +2548,13 @@ def _size_count_from(cwd, base, base_ref, deadline):
     """The commit the fold counts from: the newer of ``base`` and the merge base of HEAD and
     ``base_ref``, so main merged into the branch mid-build is not the build's own lines (#1978).
     Returns ``(sha, None)``, or ``(None, reason)`` when ``base_ref`` or the merge base does not
-    resolve (``size-base-unresolvable``) or the budget ends first (``git-timeout``)."""
+    resolve (``size-base-unresolvable``), the ref already contains the build's own commits
+    (``size-base-ref-contains-head``), or the budget ends first (``git-timeout``)."""
     if base_ref is None:
         return base, None
 
     def left():
-        # Axis: the three git calls share the fold's one budget; none starts once it is spent.
+        # Axis: the lookups share the fold's one budget; none starts once it is spent.
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise subprocess.TimeoutExpired("git", 0)
@@ -2570,6 +2572,13 @@ def _size_count_from(cwd, base, base_ref, deadline):
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             return None, SIZE_BASE_UNRESOLVABLE
         merge_base_sha = merge_base.stdout.strip()
+        head = _git_scrubbed(cwd, "rev-parse", "--verify", "HEAD", timeout=left())
+        if head.returncode != 0 or not head.stdout.strip():
+            return None, SIZE_BASE_UNRESOLVABLE
+        # Axis: a ref that already holds the build's own commits (its own branch, HEAD) would
+        # count from HEAD and drop every committed line; that is no count, never a zero.
+        if merge_base_sha == head.stdout.strip() and merge_base_sha != base.lower():
+            return None, SIZE_BASE_REF_CONTAINS_HEAD
         # Axis: a stale or unrelated base ref never moves the count behind the build's own base.
         newer = _git_scrubbed(cwd, "merge-base", "--is-ancestor", base, merge_base_sha,
                               timeout=left())

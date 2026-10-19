@@ -29,7 +29,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - `engine_dispatch.py dispatch-write` takes a new optional flag, `--size-base-ref <ref>`, the branch the build merges from. With it, the fold counts from the newer of `--size-base` and the merge base of `HEAD` and that ref, so a mid-build merge of the base branch adds nothing to `sizeTripwire.tripwireCount`; a ref older than `--size-base` never moves the count back past it.
 - A run opened with the flag journals `baseRef` in `sizeTripwireInputs`, and its `sizeTripwire` gains `baseRef` and `countedFrom` (the commit the count ran from). A continuation that passes a different ref refuses `size-inputs-mismatch`.
-- `--size-base-ref` without `--size-base` and `--size-line` refuses `size-inputs-incomplete`; a ref that is not a commit refuses `size-base-unresolvable`, as an unresolvable `--size-base` already did. A ref that stops resolving by fold time folds `status: "indeterminate"` with `reason: "size-base-unresolvable"`.
+- `--size-base-ref` without `--size-base` and `--size-line` refuses `size-inputs-incomplete`; a ref that is not a commit refuses `size-base-unresolvable`, as an unresolvable `--size-base` already did. A ref that stops resolving by fold time folds `status: "indeterminate"` with `reason: "size-base-unresolvable"`. A ref that already contains the build's own commits (the build's own branch, its pushed `origin/<branch>`, or `HEAD`) folds `status: "indeterminate"` with `reason: "size-base-ref-contains-head"`, never a count of zero.
 - Without the flag nothing changes.
 
 ## 0.44.0

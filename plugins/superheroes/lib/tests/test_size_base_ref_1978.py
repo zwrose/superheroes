@@ -177,3 +177,46 @@ def test_lookup_timeout_is_a_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(ED, "_git_scrubbed", slow)
     assert ED._size_count_from(wt, start, main_branch, deadline=float("inf")) == (
         None, "git-timeout")
+
+
+# axis: a ref that already holds the build's own commits is no count, never a count from HEAD.
+def test_ref_containing_head_is_indeterminate(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    start = _head(wt)
+    _commit_file(wt, "own.py", 50, "build: own lines")
+    own_branch = _git(wt, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    for index, ref in enumerate((own_branch, "HEAD")):
+        res = _dispatch_write(
+            tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / ("run-%d" % index)),
+            size_base=start, size_line=140, size_base_ref=ref,
+        )
+        assert res["ok"] is True, res
+        assert res["sizeTripwire"] == {
+            "status": "indeterminate", "base": start, "line": 140, "baseRef": ref,
+            "reason": "size-base-ref-contains-head"}, ref
+    main_branch = _git(main, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / "run-main"),
+        size_base=start, size_line=140, size_base_ref=main_branch,
+    )
+    assert res["sizeTripwire"]["tripwireCount"] == 50
+    assert res["sizeTripwire"]["countedFrom"] == start
+
+
+# axis: a build with no commits of its own, at its base, still counts when the ref has moved on.
+def test_head_at_base_still_counts(tmp_path):
+    wt, main = _linked_worktree(tmp_path)
+    start = _head(wt)
+    _commit_file(main, "mainline.py", 300, "main: moved on")
+    main_branch = _git(main, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({"added.py": 20}), cwd=wt, run_dir=str(tmp_path / "run"),
+        size_base=start, size_line=140, size_base_ref="HEAD",
+    )
+    assert res["sizeTripwire"]["status"] == "ok", res["sizeTripwire"]
+    assert res["sizeTripwire"]["tripwireCount"] == 20
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({}), cwd=wt, run_dir=str(tmp_path / "run-main"),
+        size_base=start, size_line=140, size_base_ref=main_branch,
+    )
+    assert res["sizeTripwire"]["countedFrom"] == start
