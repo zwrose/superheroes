@@ -44,6 +44,7 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `finalCommit`: the commit the review ended on. `ci`: CI on it, as you saw it.
 - `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool; accepted and ignored, the record computes it),
   `ownerWord` (`{words, where}`), `commit` (the commit that reviewer reviewed, when it is not the final commit; a row that names none is judged against the final commit). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
+  Optional `notRunReason`: only `"no-loop-phase"`, only on a `grounding-seat` row with `planned: true`, `ran: false`, no `runDir` and no `commit`; any other use is refused `review-account-invalid`. A hand-written account of an auto-fix loop review lists the composed grounding seat with it, exactly as the driver's account does. Never put it on the read-only path, where the seat runs.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
   reviewer, findingKey}`; `consequence`, `findingKey` may be null. Optional `decidedBy`: null, or the decision the outcome rests on, `{kind: "canon" | "residual" | "sheet-answer" | "owner-ruling", ref}` (`ref` is a string, `{pr, card}` for a sheet answer, or `{url, words}` for an owner ruling). The writer checks it against what is on record. `id` is the reviewer's own (never
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
@@ -154,6 +155,7 @@ Reading and independence are computed by the record, never taken from the sessio
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed. A standing-ruling go-ahead counts only when the writer finds its Canon entry on record at write time; an owner's-words go-ahead needs no such check.
 - A finding whose ruling cites a decision that is not on record when the record is written is listed as left for the owner, so the record reads not reviewed until the owner decides.
+- A grounding-seat row carrying `notRunReason: "no-loop-phase"` is listed under `seatsNotRun` (`{name, reason, why}`, present only when non-empty), not under `missingReviews`. It does not park and does not make the record read not reviewed.
 - The record and the PR text never say a change has no bugs; they say what was checked and what
   is left.
 

@@ -42,6 +42,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The sanitized view's notice no longer says only that stripped config's absence is not a finding: it adds that a `CLAUDE.md` or calibration file the instructions name by an absolute path sits outside the view and is readable there, and that such a path is never listed in the investigated array.
 - The fixer order is unchanged; it runs in the live checkout, where the relative path opens.
 
+### Review records name a grounding seat the loop did not run
+
+- A review record for an auto-fix loop review whose seat map composes the grounding seat now lists it under `seatsNotRun` as `{name, reason: "no-loop-phase", why}`. Before, the record left it out. A record with no such seat has no `seatsNotRun` key.
+- The entry does not park the PR, does not make the record read not reviewed, and does not hold it at vet. The vet reads the PR body's claims against the diff by hand and says so in its receipt.
+- A hand-written account of a loop review should carry `notRunReason: "no-loop-phase"` on its `grounding-seat` row (planned, not run, no run directory, no commit). The writer refuses the field anywhere else.
+
 ### Review record: CI green needs the project's CI workflow
 
 - The record's `ci` field has two new keys: `workflow` (the declared CI workflow, or `null`) and `read` (one line saying how the state was reached).

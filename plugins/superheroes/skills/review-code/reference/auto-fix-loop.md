@@ -718,7 +718,8 @@ carries `{vendor, model, effort, tier, family, source}`:
   assignment is recorded in the receipt. On the **read-only path** (`--review-only`) it
   is **live-dispatched** with the PR body staged as seat-readable input — full contract:
   `grounding-seat.md`. The driver-owned auto-fix loop does **not** run SKILL step 8 today,
-  so on that path the seat does not influence certification.
+  so on that path the seat does not influence certification. The review record names the seat under
+  `seatsNotRun` with the reason `no-loop-phase`, so its absence shows.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
   first-party models are ONE family**: the token-efficient implementer and grok judge models both
   carry the `xai` independence-accounting key. A `cursor` review seat is therefore NOT independent of a
