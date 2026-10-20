@@ -618,12 +618,8 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=No
             # means the setup did not finish (no stamp, non-zero exit)
             '  if [ "$ok" = 1 ]; then',
             '    if [ -f "$DIR/%s" ]; then' % cloud_dependency_hook.SCRIPT_REL,
-            # axis: a script the clone's SessionStart settings do not name never runs, so it withholds the stamp as a missing script does
-            '      if ! grep -qF -- "%s" "$DIR/%s" 2>/dev/null; then'
-            % (cloud_dependency_hook.SCRIPT_REL, cloud_dependency_hook.SETTINGS_REL),
-            '        echo "dependency hook not registered in the clone: commit and push %s"; ok=0'
-            % cloud_dependency_hook.SETTINGS_REL,
-            '      elif (cd "$DIR" && bash %s --record %s); then echo "dependency hook recorded"'
+            # axis: the script's own record mode declines (exit 2) when the clone's settings do not register it as an enabled SessionStart hook, so that withholds the stamp as a failed record does
+            '      if (cd "$DIR" && bash %s --record %s); then echo "dependency hook recorded"'
             % (cloud_dependency_hook.SCRIPT_REL, record),
             '      else echo "dependency hook record FAILED"; ok=0; fi',
             '    else echo "dependency hook not in the clone: commit and push it"; ok=0; fi',

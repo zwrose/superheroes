@@ -857,7 +857,7 @@ def _hook_refusal(detail):
     return {"action": "refused", "reason": REASON_DEPENDENCY_HOOK_UNWRITABLE, "detail": detail}
 
 
-def _plan_dependency_hook(cwd, slug, value, facts):
+def _plan_dependency_hook(cwd, slug, value, facts, root=None):
     """Works out, before anything is written, the item 18 fill and the hook state this set leads
     to, and brings the hook files to that state. Returns {"refusal": result} when it cannot, else
     the plan: the stored `old` triple, the `new` triple (with the fill), the `filled` item 18 (or
@@ -902,7 +902,13 @@ def _plan_dependency_hook(cwd, slug, value, facts):
             # axis: a refused sync that already changed files puts them back to the stored state, by reconciling to the stored items — never from a snapshot
             refusal = _hook_refusal(result.get("reason"))
             if result.get("changed"):
-                refusal.update(_reconcile_dependency_hook(repo_root, old))
+                # axis: another set may have stored items since `old` was read, so recovery reads them afresh
+                fresh = core_md.read(cwd, root)
+                if not fresh:
+                    refusal["dependencyHookResyncFailed"] = "stored-config-unreadable"
+                else:
+                    refusal.update(_reconcile_dependency_hook(
+                        repo_root, _hook_triple(_project_config_mapping(fresh))))
             return {"refusal": refusal}
         plan["hookResult"] = result
     return plan
@@ -1042,7 +1048,7 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
 
     plan = None
     if slug in _DEPENDENCY_HOOK_SLUGS:
-        plan = _plan_dependency_hook(cwd, slug, value, facts)
+        plan = _plan_dependency_hook(cwd, slug, value, facts, root)
         if plan.get("refusal") is not None:
             return plan["refusal"]
 

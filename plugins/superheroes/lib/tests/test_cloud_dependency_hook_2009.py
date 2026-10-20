@@ -620,21 +620,55 @@ def test_a_missing_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path)
     assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
 
 
-def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path):
+def _registered_settings(w):
+    return json.loads(w.settings.read_text())
+
+
+@pytest.mark.parametrize("variant", [
+    "absent", "other-event-only", "disabled", "empty-session-start", "permission-only", "not-json"])
+def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path, variant):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
     _set_ok(w, COMMANDS_SLUG, ["true"])
     _set_ok(w, HOOK_SLUG, True)
     block = _setup_block(w, _compose(w)["text"])
-    # the script reached the clone but the settings file naming it did not
-    os.remove(w.settings)
+    # the script reached the clone but the settings file does not register it as a SessionStart hook
+    good = _registered_settings(w)
+    entry = good["hooks"]["SessionStart"]
+    if variant == "absent":
+        os.remove(w.settings)
+    elif variant == "other-event-only":
+        w.settings.write_text(json.dumps({"hooks": {"Stop": entry}}))
+    elif variant == "disabled":
+        w.settings.write_text(json.dumps({**good, "disableAllHooks": True}))
+    elif variant == "empty-session-start":
+        w.settings.write_text(json.dumps({"hooks": {"SessionStart": []}}))
+    elif variant == "permission-only":
+        w.settings.write_text(json.dumps({
+            "hooks": {"SessionStart": []},
+            "permissions": {"allow": ["Bash(bash %s)" % hook.SCRIPT_REL]}}))
+    else:
+        w.settings.write_text("{not json")
     proc = _run_block(w, block)
     assert proc.returncode != 0
-    assert ("dependency hook not registered in the clone: commit and push .claude/settings.json"
-            in proc.stdout)
+    assert ("dependency hook not recorded: not registered as a SessionStart hook in "
+            ".claude/settings.json") in proc.stdout
+    assert "dependency hook record FAILED" in proc.stdout
     assert "dependency hook recorded" not in proc.stdout
     assert "setup stamp withheld" in proc.stdout
     assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
+
+
+def test_a_registered_hook_script_is_recorded_and_the_stamp_published(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    proc = _run_block(w, block)
+    assert proc.returncode == 0, proc.stdout
+    assert "dependency hook recorded" in proc.stdout
+    assert os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
 
 
 def test_the_record_step_failure_withholds_the_stamp_and_fails_the_setup(tmp_path):
@@ -755,4 +789,34 @@ def test_a_concurrent_item_17_set_landing_between_the_sync_and_the_write_leaves_
     assert got["dependencyHookResynced"]["action"] in ("written", "noop")
     assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, INPUTS_SLUG) == ["uv.lock"]
     assert w.script.read_text() == hook.script_text(["make"], ["uv.lock"])
+    _assert_files_match_stored(w)
+
+
+def test_a_partial_sync_failure_recovers_to_the_stored_items_another_set_just_landed(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+    real_remove = os.remove
+    real_write = core_md.write_project_config_item
+    landed = []
+
+    def remove(path, *a, **kw):
+        if str(path) == str(w.script):
+            if not landed:
+                landed.append(True)
+                # another set's stored update lands while this disable is syncing
+                assert real_write(w.cwd, COMMANDS_SLUG, ["make"], root=w.root)["action"] in (
+                    "written", "noop")
+            raise PermissionError("denied")
+        return real_remove(path, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", remove)
+    got = _set(w, HOOK_SLUG, False)
+    monkeypatch.undo()
+    assert landed
+    assert got["action"] == "refused"
+    assert got["reason"] == "dependency-hook-unwritable"
+    assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, HOOK_SLUG) is True
+    assert w.script.read_text() == hook.script_text(["make"], _raw(w, INPUTS_SLUG) or [])
     _assert_files_match_stored(w)
