@@ -2716,6 +2716,75 @@ def _cloud_start_refusal(repo_root, stamped, env):
     return _cloud_checkout_refusal(repo_root, stamped["baseCommit"], env)
 
 
+_ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
+_ADOPT_REMEDY_UNDECIDABLE = (
+    "Ancestry could not be decided in the launching checkout: fetch the adopted branch so its "
+    "head is present, then launch again. If it still does not descend from baseCommit: "
+)
+_ADOPT_REMEDY_STACKED = (
+    "Bring the adopted branch current with the layer below first: merge the layer below's head "
+    "into it and push, then launch again with the same baseCommit. A layer above the bottom "
+    "keeps the layer below's head as its base."
+)
+_ADOPT_REMEDY_BOTTOM = (
+    "Bring the adopted branch current with its base first: merge the base into it and push, then "
+    "launch again with the same baseCommit. Or set baseCommit to the adopted head and launch "
+    "with --repo-root set to a worktree on the adopted branch at that head."
+)
+
+
+def _adopted_head_refusal(repo_root, stamped, env):
+    """None when the premise adopts nothing or its ``adoptsHead`` descends from ``baseCommit``;
+    else ``(reason, detail)``. It only reads the launching checkout.
+
+    The adopted head must resolve to a commit here, and ``merge-base --is-ancestor`` must exit 0
+    for the resolved base (a head equal to the base passes). Exit 1 is ``not-descendant``; a git
+    that could not run, a head not present here, any other exit, or a base that is not a full sha
+    is ``undecidable``. Both refuse, and the ``remedy`` names the fix.
+    """
+    if "adoptsHead" not in stamped:
+        return None
+    head = stamped["adoptsHead"]
+    base = stamped.get("baseCommit")
+    position = stamped.get("layerPosition")
+    stacked = isinstance(position, int) and not isinstance(position, bool) and position >= 2
+    remedy = _ADOPT_REMEDY_STACKED if stacked else _ADOPT_REMEDY_BOTTOM
+
+    def refusal(ancestry):
+        text = remedy if ancestry == "not-descendant" else _ADOPT_REMEDY_UNDECIDABLE + remedy
+        return _ADOPT_HEAD_NOT_ON_BASE, {
+            "adoptsHead": head, "baseCommit": base, "ancestry": ancestry, "remedy": text,
+        }
+
+    # axis: a base that is absent or not a full sha refuses undecidable and git is not run — see bite-proof record i2002_adopt_head_on_base
+    if not isinstance(base, str) or not _HEX40.match(base):
+        return refusal("undecidable")
+    resolved = _git_scrubbed(
+        repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % head,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    # axis: an adopted head git could not read refuses undecidable — see bite-proof record i2002_adopt_head_on_base
+    if resolved is None:
+        return refusal("undecidable")
+    # axis: an adopted head that is not a commit in the launching checkout refuses undecidable — see bite-proof record i2002_adopt_head_on_base
+    if resolved.returncode != 0:
+        return refusal("undecidable")
+    asked = _git_scrubbed(
+        repo_root, "merge-base", "--is-ancestor", base, head,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    # axis: an ancestry read that could not run refuses undecidable — see bite-proof record i2002_adopt_head_on_base
+    if asked is None:
+        return refusal("undecidable")
+    if asked.returncode == 0:
+        return None
+    # axis: a head that does not descend from the base refuses not-descendant — see bite-proof record i2002_adopt_head_on_base
+    if asked.returncode == 1:
+        return refusal("not-descendant")
+    # axis: any ancestry exit other than 0 or 1 refuses undecidable — see bite-proof record i2002_adopt_head_on_base
+    return refusal("undecidable")
+
+
 def _refuse_unreserved(
     ctx, reason, stage, premise, preflight_result, compose_result=None, **extra
 ):
@@ -2770,9 +2839,9 @@ def _check_premises(
 ):
     """Validate every premise a launch rests on, before anything is reserved or made.
 
-    Walks preflight, validates the premise, applies the dependency and stack gates, composes the
-    launch, resolves any named phone sizes through `run`, and checks the cloud base (cloud) or the
-    worktree path (local), in that order. Returns `{"refusal": <accounted failure>}` on the first
+    Walks preflight, validates the premise, applies the dependency and stack gates, checks that an
+    adopted head descends from the base, composes the launch, resolves any named phone sizes
+    through `run`, and checks the cloud base (cloud) or the worktree path (local), in that order. Returns `{"refusal": <accounted failure>}` on the first
     refusal, else `{"refusal": None}` with the `preflight`, `premise` (stamped), `compose`,
     `stackGate` and `dependencyGate` results, plus `iphoneTypes` (the resolved sizes, empty when
     none are named) and `iphoneSpent` (seconds the size lookup took).
@@ -2855,6 +2924,15 @@ def _check_premises(
                 **extra,
             )}
         stack_gate = gate_result["stackGate"]
+
+    # An adopted head must descend from the resolved base, here and now, before anything is spent.
+    # After the stack gate, so a pair off the adopted occupant keeps `adopts-branch-mismatch`.
+    refusal = _adopted_head_refusal(repo_root, stamped_premise, env)
+    if refusal is not None:
+        reason, detail = refusal
+        return {"refusal": _refuse_unreserved(
+            ctx, reason, "premise", stamped_premise, preflight_result, **detail,
+        )}
 
     compose_cloud = (
         {

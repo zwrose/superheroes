@@ -104,7 +104,8 @@ resolved base commit is the current head of the stack member at position `layerP
 An optional `adopts` names the pull request an adoption takes over at its own position; it requires
 the stack pair, a positive integer, and a layer above the bottom (`premise-adopts-without-stack`,
 `premise-adopts-invalid`, `premise-adopts-bottom-layer`) —
-see Recovery for the adoption premise.
+see Recovery for the adoption premise. An `adoptsHead` must descend from `baseCommit`, else launch
+refuses before spend (`premise-adopts-head-not-on-base`).
 An optional `dependency` names an open pull request whose READY vet the launch must be based on
 (`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
 `dependency-read-unavailable`). **`launch` also refuses a

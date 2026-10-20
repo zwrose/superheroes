@@ -25,11 +25,18 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
 - **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body tells the owner to run the file (`bash <path>`) rather than paste its lines; `vet_slot.py handback` refuses a shell block that names a database tool or a Keychain read otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
+- **After switching.** **Nothing is owed.** A launch whose premise adopts a branch (`adoptsBranch`, `adoptsHead`) now refuses before launch when the adopted head does not descend from `baseCommit`; bring the adopted branch current with its base and launch again. See [Launcher: an adoption whose head is not on its base is refused before launch](#launcher-an-adoption-whose-head-is-not-on-its-base-is-refused-before-launch).
 
 ### Checkpoint: a subagent's turn never holds the automatic checkpoint
 
 - A subagent's `turn.start`, a background agent's especially, left the session marked busy after the main turn ended, so the automatic checkpoint never fired in an attended session that ran subagents, until Claude Code compacted the session itself without fresh notes.
 - Only the main turn now marks the session busy or binds the checkpoint turn. The checkpoint fires at the next idle measurement above the trigger whatever subagents are running. Headless builder sessions are unchanged.
+
+### Launcher: an adoption whose head is not on its base is refused before launch
+
+- A premise that adopted a branch whose head was not on its `baseCommit` launched, spent a lane, and only then failed at the cloud intake with `adopted-head-not-on-base`.
+- `launcher.py launch` now refuses it first, with `premise-adopts-head-not-on-base`, before any lane, worktree, cloud command or child exists, for cloud and local launches alike. The result carries `ancestry` (`not-descendant`, or `undecidable` when the adopted head is not present in the launching checkout or git could not answer) and a `remedy` that names the fix; a layer above the bottom is told to bring the adopted branch current with the layer below.
+- The cloud intake's `adopted-head-not-on-base` is unchanged and stays as the second line. `compose` and `preflight` do not run the check.
 
 ### PR sheet: judge before you build
 

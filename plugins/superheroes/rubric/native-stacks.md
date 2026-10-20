@@ -152,6 +152,9 @@ the premise shape change is in `TRANSITION.md`:
   claimed `layerPosition`, so there is nothing to adopt.
 - `adopts-branch-mismatch` — the premise carries an adoption pair (`adoptsBranch`, `adoptsHead`) that
   differs from the adopted member's own `headRefName` or `headRefOid`.
+- `premise-adopts-head-not-on-base` — the premise's `adoptsHead` does not descend from `baseCommit`,
+  or its ancestry could not be decided in the launching checkout. For a layer above the bottom, the
+  remedy is to bring the adopted branch current with the layer below.
 - `premise-adopts-without-stack`, `premise-adopts-invalid`, `premise-adopts-bottom-layer` — `adopts`
   is present without the stack pair, is not a positive integer, or sits on `layerPosition` 1 (the
   bottom layer is never gated).
