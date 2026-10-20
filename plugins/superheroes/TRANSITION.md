@@ -25,6 +25,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
 - **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body tells the owner to run the file (`bash <path>`) rather than paste its lines; `vet_slot.py handback` refuses a shell block that names a database tool or a Keychain read otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
+- **After switching.** **Nothing is owed.** A review orchestrator records its rulings on a round's findings before the `next` call that emits the fixer order. See [Review: rulings land before the fixer order](#review-rulings-land-before-the-fixer-order).
+
+### Review: rulings land before the fixer order
+
+- `skills/review-code/SKILL.md` (the loop's step 3) and `reference/round-driver.md` § Owner and advisor rulings now tell the orchestrator to record every `rule` on a round's folded findings before its next `next` call, which emits the fixer order. A ruling recorded after the order is out reached only the next order, so the fixer built the old direction once and the next round reworked it.
+- No driver change: a late ruling is still accepted and carried into the next order, as the backstop.
 
 ### Checkpoint: a subagent's turn never holds the automatic checkpoint
 
