@@ -1128,3 +1128,32 @@ def test_a_credential_named_assignment_of_a_bare_reference_is_accepted(tmp_path)
     ok = _set(w, HOOK_SLUG, True)
     assert ok["action"] != "refused", ok
     assert w.script.exists()
+
+
+def test_a_set_whose_inputs_another_set_overwrote_in_the_files_still_leaves_the_script_with_the_stored_inputs(
+        tmp_path, monkeypatch):
+    # A syncs ['uv.lock']; B stores and syncs ['requirements.txt'] before A's write; A then stores
+    # ['uv.lock'] -- the stored triple equals A's own, yet the script carries B's inputs
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    _set_ok(w, HOOK_SLUG, True)
+    real = core_md.write_project_config_item
+    landed = []
+
+    def racing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not landed:
+            landed.append(True)
+            monkeypatch.setattr(core_md, "write_project_config_item", real)
+            assert PC.set_item(cwd, INPUTS_SLUG, ["requirements.txt"], root=root)["action"] == "written"
+            monkeypatch.setattr(core_md, "write_project_config_item", racing)
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", racing)
+    got = _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert landed
+    assert _raw(w, INPUTS_SLUG) == ["uv.lock"]
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["uv.lock"])
+    assert got["dependencyHookResynced"]["changed"]
+    _assert_files_match_stored(w)
