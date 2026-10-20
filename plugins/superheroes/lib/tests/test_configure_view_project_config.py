@@ -93,7 +93,7 @@ def test_all_thirteen_items_in_registry_order_unstamped(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 16
+    assert len(rows) == 17
     for item, row in zip(PC.ITEMS, rows):
         assert row.startswith("%d. %s —" % (item["number"], item["name"]))
 
@@ -101,7 +101,7 @@ def test_all_thirteen_items_in_registry_order_unstamped(tmp_path):
 def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     repo, store = _setup_repo(tmp_path)
     extra = {
-        "number": 17,
+        "number": 18,
         "slug": "testOnlyItem",
         "name": "Test-only item",
         "home": PC.HOME_PROJECT_CONFIGURATION,
@@ -111,7 +111,7 @@ def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(CV.project_config, "ITEMS", tuple(list(PC.ITEMS) + [extra]))
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 17
+    assert len(rows) == 18
     assert any("Test-only item" in row for row in rows)
 
 
@@ -133,7 +133,7 @@ def test_no_profile_renders_without_raising(tmp_path):
     block = _project_config_section(screen)
     assert "profile: no core calibration yet" in block
     rows = _numbered_rows(block)
-    assert len(rows) == 16
+    assert len(rows) == 17
     assert all("unset" in row or "plugin default" in row or "derived from dial" in row for row in rows)
 
 
@@ -196,7 +196,7 @@ def test_dependencies_raises_shows_not_available(tmp_path, monkeypatch):
     screen = CV.render(repo, root=store)
     block = _project_config_section(screen)
     assert "dependencies: (not available)" in block
-    assert len(_numbered_rows(block)) == 16
+    assert len(_numbered_rows(block)) == 17
 
 
 def test_dependencies_absent_show_fallback(tmp_path, monkeypatch):
@@ -260,3 +260,12 @@ def test_adopted_item_13_row_survives_a_failed_canon_lookup(tmp_path, monkeypatc
     assert row == (
         "13. Material consequence line — points to the project's Canon standing rulings"
         " (Canon lookup failed: CanonLookupError) — no value of its own")
+
+
+def test_item_17_stamped_list_shows_as_json_on_its_row(tmp_path):
+    # axis: a stamped list is shown as JSON, never as a Python list
+    repo, store = _setup_repo(tmp_path)
+    PC.set_item(repo, "cloudSetupCommands", ["npm ci", "make"], root=store)
+    block = _project_config_section(CV.render(repo, root=store))
+    row = next(r for r in block if r.startswith("17. "))
+    assert row == '17. Cloud setup commands — ["npm ci","make"]'

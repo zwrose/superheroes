@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from datetime import datetime, timezone
@@ -36,6 +37,7 @@ DUPLICATION_CHECKER_PACKAGE = "jscpd@5.0.12"
 SANDBOX_TOOL_PACKAGES = "bubblewrap socat"
 SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
+SETUP_COMMANDS_STAMP_KEY = "setup-commands"
 TOOL_STEPS_MARKER = "# The project's own tool steps, if any, go below this line."
 # The cloud platform runs nothing before a session starts except this cached script, so a setup
 # made at one plugin version stays at that version until new setup text is pasted.
@@ -54,12 +56,31 @@ _SECRET_SHAPES = (
     ("provider key", re.compile(
         r"(?<![A-Za-z0-9])(?:(?:%s)[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})"
         % "|".join(map(re.escape, cloud_setup._SECRET_PREFIXES)))),
+    ("registry token", re.compile(
+        r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{30,}"
+        # _authToken, then the key's own closing quote, a ':' '=' separator, and an opening quote
+        # (plain, or JSON-escaped as in the stored calibration); a value that is only a bare
+        # environment reference ($NAME or ${NAME}) passes, anything else is a literal. A
+        # whitespace-separated value counts only after a config-set verb in the same command
+        # (`config set` or `npm set`, optional -options between), so prose and get/delete pass
+        r"""|(?:_authToken|npmAuthToken)(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?%(value)s"""
+        r"""|(?<![A-Za-z0-9_-])(?:config|npm)\s+set(?:\s+-\S*)*\s+\S*?(?:_authToken|npmAuthToken)"""
+        r"""(?:\\?["'])?\s+(?:\\?["'])?%(value)s"""
+        % {"value": r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\,;})&|])|\s|\\?["'])\S"""})),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
-        r"""["']?\s*[:=]\s*(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
+        r"""["']?\s*[:=]\s*"""
+        # a bare `$NAME` / `${NAME}` (optionally in matching quotes) is a reference, not a value
+        r"""(?!(?:\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"""
+        r"""|\\?"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:\\?\"|\\)"""
+        r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\&|]))"""
+        r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
-    ("bearer credential", re.compile(r"Bearer \S{16,}")),
+    ("bearer credential", re.compile(
+        # a token that is only a bare environment reference ($NAME or ${NAME}) passes
+        r"""Bearer (?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\;,}&|]))"""
+        r"\S{16,}")),
 )
 
 
@@ -230,15 +251,16 @@ def calibration_files(cwd, root=None):
     return _calibration(cwd, root)[1]
 
 
-def _without_setting(data):
-    """`data` with the cloud-builds setting out of its json block, re-rendered whether or not the
-    key was there; `data` itself when it holds no readable setting."""
+def _without_setting(data, slug=None):
+    """`data` with the cloud-builds setting (or the setting `slug` names) out of its json block,
+    re-rendered whether or not the key was there; `data` itself when it holds no readable
+    setting."""
     try:
         text = data.decode("utf-8")
         obj = json.loads(core_md._json_block_inner_text(text))
         settings = obj.get("projectConfiguration")
         if isinstance(settings, dict):
-            settings.pop(project_config.CLOUD_BUILDS_SLUG, None)
+            settings.pop(slug or project_config.CLOUD_BUILDS_SLUG, None)
             if not settings:
                 del obj["projectConfiguration"]
         body = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False)
@@ -247,18 +269,86 @@ def _without_setting(data):
         return data
 
 
-def _stamp_view(files):
+def _refuse_malformed_container(cwd, root):
+    """Refuses a core whose raw projectConfiguration is present but not an object: parse_core reads
+    that as an empty setting, which would drop the owner's commands without a word."""
+    try:
+        path = core_md.core_path(cwd, root, persist_backfill=False)
+        with open(path, encoding="utf-8") as fh:
+            match = core_md._JSON_BLOCK.search(fh.read())
+        block = json.loads(match.group(1)) if match else None
+    except Exception:
+        return
+    # axis: a projectConfiguration that is not an object is refused, never read as absent commands
+    if isinstance(block, dict) and core_md.PROJECT_CONFIGURATION_KEY in block and not isinstance(
+            block[core_md.PROJECT_CONFIGURATION_KEY], dict):
+        raise _Refused("setup-commands-unreadable", "The project's calibration holds its "
+                       "configuration in a form that cannot be read for setup commands.")
+
+
+def _setup_commands(cwd, root):
+    """The project's ordered setup commands (configure item 17): a list of strings, possibly empty.
+    A project with no readable core, or no such setting, has none."""
+    return _stored_setup_commands(cwd, root) or []
+
+
+def _stored_setup_commands(cwd, root):
+    """The stored list of setup commands, or None when the project does not store the setting at
+    all (so an empty list that was stored is told apart from a setting never set). A setting that
+    is there but invalid is refused, because the text would otherwise quietly leave out what the
+    owner listed."""
+    try:
+        facts = core_md.read(cwd, root, persist_backfill=False)
+    except Exception:
+        raise _Refused("setup-commands-unreadable", "The project's setup commands cannot be read "
+                       "from its calibration.")
+    if facts is None:
+        # core_md.read answers None for a file it cannot open as well as for an absent one; a core
+        # that is there but unreadable would otherwise drop the owner's commands without a word
+        path = core_md.core_path(cwd, root, persist_backfill=False)
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+            except OSError:
+                raise _Refused("setup-commands-unreadable", "The project's setup commands cannot "
+                               "be read from its calibration.")
+            # axis: a core that names the setting but cannot be parsed would drop the owner's
+            # commands without a word, so it is refused; a core that never names it has none
+            if project_config.CLOUD_SETUP_COMMANDS_SLUG.encode("utf-8") in raw:
+                raise _Refused("setup-commands-unreadable", "The project's calibration names "
+                               "setup commands but cannot be parsed to read them.")
+    else:
+        _refuse_malformed_container(cwd, root)
+    settings = facts.get("projectConfiguration") if facts is not None else None
+    slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
+    if not isinstance(settings, dict) or slug not in settings:
+        return None
+    item = project_config._item_by_slug(slug)
+    # axis: a stored value that is not a valid list is refused, never read as an empty list
+    if project_config.validate_item_value(item, settings[slug]) is not None:
+        raise _Refused("setup-commands-malformed", "The project's setup commands are stored in a "
+                       "form that is not a list of one-line commands.")
+    return settings[slug]
+
+
+def _stamp_view(files, commands=()):
     view = dict(files)
     core = _core_rel()
     if core in view:
         view[core] = _without_setting(view[core])
+    # axis: the stamp moves whenever the command list does, in both storage modes
+    if commands:
+        view[SETUP_COMMANDS_STAMP_KEY] = (
+            json.dumps(list(commands), ensure_ascii=False) + "\n").encode("utf-8")
     return view
 
 
 def stamped_files(cwd, root=None):
     """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
-    switching cloud builds on or off never changes the stamp."""
-    return _stamp_view(calibration_files(cwd, root))
+    switching cloud builds on or off never changes the stamp, and the project's setup commands
+    when it lists any."""
+    return _stamp_view(calibration_files(cwd, root), _setup_commands(cwd, root))
 
 
 def _project_name(cwd):
@@ -313,12 +403,78 @@ def _encoded_shape(text):
     return None
 
 
+_EMPTY_QUOTES_RE = re.compile(r"""\\"\\"|''|\"\"""")
+
+
+def _without_empty_quotes(text):
+    """`text` with adjacent empty shell quote pairs removed (also JSON-escaped), so shell
+    concatenation cannot split a literal from its key."""
+    while True:
+        shorter = _EMPTY_QUOTES_RE.sub("", text)
+        if shorter == text:
+            return text
+        text = shorter
+
+
 def _scan(text):
-    """The name of the first secret-shaped form in `text`, else None."""
-    return _plain_shape(text) or _encoded_shape(text)
+    """The name of the first secret-shaped form in `text`, else None. The shapes are matched on a
+    normalized copy too, with empty quote pairs removed."""
+    return (_plain_shape(text) or _plain_shape(_without_empty_quotes(text))
+            or _encoded_shape(text))
 
 
-def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone):
+def _for_line(commands):
+    """The loop header that lists the setup commands, each shell-quoted."""
+    return "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands)
+
+
+def _commands_block(commands, clone, stamp=None, count=0):
+    """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
+    to publish, it publishes it last, and only when the calibration was written and every command
+    ran and succeeded."""
+    return [
+        "",
+        "# Run the project's own setup commands (configure item 17), one at a time, in the order "
+        "listed,",
+        "# in its clone: the working directory, or the clone beside it. The first failure skips "
+        "the rest.",
+        "(",
+        '  DIR=""',
+        '  if [ -e "$PWD/.git" ]; then DIR="$PWD"',
+        *(['  elif [ -e "$PWD/$CLONE/.git" ]; then DIR="$PWD/$CLONE"'] if clone is not None else []),
+        "  fi",
+        "  n=0",
+        '  failed=""',
+        "  ok=1",
+        _for_line(commands),
+        "    n=$((n + 1))",
+        '    if [ -z "$DIR" ]; then ok=0; echo "setup command $n skipped: no clone in $PWD%s"'
+        % (" or $PWD/$CLONE" if clone is not None else ""),
+        # axis: after a failure every later command is skipped, never run
+        '    elif [ -n "$failed" ]; then echo "setup command $n skipped: setup command $failed FAILED"',
+        '    elif (cd "$DIR" && bash -o pipefail -c "$cmd" </dev/null); then echo "setup command $n ok"',
+        '    else echo "setup command $n FAILED"; failed=$n; ok=0',
+        "    fi",
+        "  done",
+        *([
+            # axis: the stamp is the receipt for a finished setup, so a failed or skipped command
+            # leaves none
+            '  if [ "$ok" = 1 ] && [ "$wrote" = %d ]; then' % count,
+            "    printf '%%s\\n' '%s' > \"$DEST/%s\" || { echo \"setup stamp write FAILED\"; ok=0; }"
+            % (stamp, STAMP_FILE),
+            '  else echo "setup stamp withheld: setup did not finish" ; ok=0 ; fi',
+        ] if stamp is not None else []),
+        # axis: the subshell's own status is whether every listed command ran and succeeded
+        '  [ "$ok" = 1 ]',
+        ') >> "$LOG" 2>&1',
+        # a listed command's failure ends the script non-zero: an unfinished setup must not be
+        # cached by the platform as a finished one
+        "setup_rc=$?",
+    ]
+
+
+def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
+            commands, cleared=False):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -375,7 +531,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         ') >> "$LOG" 2>&1 &',
         "wait",
     ]
-    if files:
+    if files or stamp is not None:
         out += ["", "# Place the project's calibration.",
                 'DEST="%s"' % dest, 'rm -f "$DEST/%s"' % STAMP_FILE,
                 'mkdir -p "$DEST"', "wrote=0"]
@@ -384,13 +540,28 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
             out += ['mkdir -p "$(dirname "$DEST/%s")"' % rel,
                     """cat > "$DEST/%s" <<'%s'""" % (rel, tag)]
             out += [data.decode("utf-8")[:-1], tag, '[ "$?" = 0 ] && wrote=$((wrote + 1))']
-        out += ['if [ "$wrote" = %d ]; then' % len(files),
-                "  printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
-                'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
-                % len(files),
-                'echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
+        # axis: with setup commands the stamp is published after they succeed, not here
+        if not commands:
+            out += ['if [ "$wrote" = %d ]; then' % len(files),
+                    "  printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
+                    'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
+                    % len(files)]
+        else:
+            out += ['if [ "$wrote" != %d ]; then' % len(files),
+                    '  echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
+                    % len(files)]
+        out += ['echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
+    elif cleared:
+        # axis: a list stored as empty removes the stamp an earlier list placed, which an unset
+        # list never had to
+        out += ["", "# The project lists no setup commands: retire the stamp an earlier list left.",
+                'DEST="%s"' % dest, 'rm -f "$DEST/%s"' % STAMP_FILE]
+    # axis: only a non-empty list adds a step, so no list leaves the text as it was
+    if commands:
+        out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
+                               len(files))
     out += ["", TOOL_STEPS_MARKER,
-            'echo "setup end" >> "$LOG"', "exit 0", ""]
+            'echo "setup end" >> "$LOG"', 'exit "$setup_rc"' if commands else "exit 0", ""]
     return "\n".join(out)
 
 
@@ -410,6 +581,10 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
             and _plain_relative(subdir)):
         raise invalid
     placed, files = _calibration(cwd, root)
+    stored = _stored_setup_commands(cwd, root)
+    commands = stored or []
+    # axis: a list stored as empty, in a project that places no files, still has a stamp to retire
+    cleared = stored is not None and not stored and not files
     if placed and not files:
         raise _Refused("calibration-missing", "The project keeps its calibration outside the "
                        "repository but none of its calibration files exists.")
@@ -418,7 +593,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     if placed and not _plain_relative(key):
         bad.append(key)
     dest = mode_registry.project_store_dir(
-        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if files else None
+        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)
+    ) if files or commands or cleared else None
     tags = {rel: _end_tag(i) for i, rel in enumerate(files, 1)}
     for rel, data in files.items():
         try:
@@ -433,10 +609,10 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
     stamp = date = None
-    if files:
+    if files or commands:
         try:
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _stamp_view(files))
+                _stamp_view(files, commands))
         except Exception:
             stamp = None
         if not (isinstance(stamp, str) and _STAMP_RE.fullmatch(stamp)):
@@ -450,16 +626,32 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
-                   _clone_dir(cwd))
-    shape = _scan(text)
+                   _clone_dir(cwd), commands, cleared)
+    # axis: the command list is scanned as written (as `set` scans it), never as the quoted
+    # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
+    # in full
+    scanned = text
+    if commands:
+        scanned = scanned.replace(_for_line(commands), "  for cmd in ; do", 1)
+        # the placed core carries the commands' other copy, JSON-escaped; it is left out of the
+        # whole-text scan the same way (the text written is unchanged)
+        core = _core_rel()
+        if core in files:
+            scanned = scanned.replace(
+                files[core].decode("utf-8"),
+                _without_setting(files[core], project_config.CLOUD_SETUP_COMMANDS_SLUG).decode(
+                    "utf-8"), 1)
+    shape = next((_scan(c) for c in commands if _scan(c)), None) or _scan(scanned)
     if shape:
         where = next((rel for rel, data in files.items()
                       if _scan(data.decode("utf-8"))), None)
         raise _Refused("secret-shaped-content", "Something shaped like a %s is in the setup text%s; "
                        "it was not returned." % (shape, " (in %s)" % where if where else ""))
+    calibration = {"placed": placed, "files": list(files), "date": date, "stamp": stamp}
+    if commands:
+        calibration["setupCommands"] = len(commands)
     return {"action": "written", "reason": None, "text": text, "header": head,
-            "pluginVersion": version, "pluginCommit": commit,
-            "calibration": {"placed": placed, "files": list(files), "date": date, "stamp": stamp},
+            "pluginVersion": version, "pluginCommit": commit, "calibration": calibration,
             "picksUpVersionByItself": PICKS_UP_VERSION_BY_ITSELF}
 
 

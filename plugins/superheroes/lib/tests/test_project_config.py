@@ -110,8 +110,8 @@ def _item_by_slug(payload, slug):
 
 
 def test_registry_has_thirteen_items_in_order():
-    assert len(PC.ITEMS) == 16
-    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16]
+    assert len(PC.ITEMS) == 17
+    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16, 17]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",
         "p0Definition",
@@ -129,6 +129,7 @@ def test_registry_has_thirteen_items_in_order():
         "materialConsequenceLine",
         "cloudBuilds",
         "ciWorkflow",
+        "cloudSetupCommands",
     ]
 
 
@@ -149,7 +150,7 @@ def test_exactly_five_plugin_defaults():
 def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     got = PC.view(repo, root=store)
-    assert len(got["items"]) == 16
+    assert len(got["items"]) == 17
     assert [item["slug"] for item in got["items"]] == [item["slug"] for item in PC.ITEMS]
     plugin_default = [item for item in got["items"] if item["source"] == "plugin-default"]
     derived = [item for item in got["items"] if item["source"] == "derived"]
@@ -157,7 +158,7 @@ def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
     assert len(plugin_default) == 5
     assert len(derived) == 1
     assert derived[0]["slug"] == "budgetN"
-    assert len(unset) == 10
+    assert len(unset) == 11
 
 
 def test_budget_n_derived_when_absent(tmp_path):
@@ -406,7 +407,7 @@ def test_cli_view(tmp_path, capsys):
     rc = PC.main(["view", "--cwd", repo, "--root", store])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["items"]) == 16
+    assert len(payload["items"]) == 17
 
 
 def test_cli_get_and_set(tmp_path, capsys, monkeypatch):
@@ -574,7 +575,7 @@ def test_set_item_13_on_non_adopted_project_written_as_today(tmp_path):
 
 def test_registry_carries_item_16_ci_workflow():
     # axis: item 16 registration; the declaration item missing, or carrying a default that would read as a declaration
-    item = PC.ITEMS[-1]
+    item = next(entry for entry in PC.ITEMS if entry["number"] == 16)
     assert item["slug"] == "ciWorkflow" and item["number"] == 16 and item["name"] == "CI workflow"
     assert item["shape"] == "nonEmptyProse" and item["plugin_default"] is None
     assert item["home"] == PC.HOME_PROJECT_CONFIGURATION and PC.CI_WORKFLOW_SLUG == "ciWorkflow"
@@ -593,3 +594,66 @@ def test_set_item_16_writes_the_name_to_project_configuration(tmp_path):
     repo, store = _setup_repo(tmp_path)
     assert PC.set_item(repo, "ciWorkflow", "CI", root=store)["action"] == "written"
     assert PC.get_item(repo, "ciWorkflow", root=store)["effective"] == "CI"
+
+
+def test_registry_carries_item_17_cloud_setup_commands():
+    # axis: item 17 registration; the list item missing, or carrying a default that would run commands nobody listed
+    item = PC.ITEMS[-1]
+    assert item["slug"] == "cloudSetupCommands" and item["number"] == 17
+    assert item["name"] == "Cloud setup commands" and item["shape"] == "commandList"
+    assert item["plugin_default"] is None and item["home"] == PC.HOME_PROJECT_CONFIGURATION
+    assert PC.CLOUD_SETUP_COMMANDS_SLUG == "cloudSetupCommands"
+
+
+def _bearer():
+    return "Bearer " + "t" * 20
+
+
+@pytest.mark.parametrize("value,reason", [
+    ("npm ci", "setup-commands-not-a-list"),
+    (None, "setup-commands-not-a-list"),
+    (["npm ci\nrm -rf x"], "setup-command-multi-line"),
+    (["npm ci\rrm -rf x"], "setup-command-multi-line"),
+    ([""], "setup-command-empty"),
+    (["  "], "setup-command-empty"),
+    ([7], "setup-command-empty"),
+    (["token " + _bearer()], "setup-command-secret-shaped"),
+    (["", "a\nb", _bearer()], "setup-command-empty"),
+    (["a\nb", _bearer()], "setup-command-multi-line"),
+], ids=["string", "null", "newline", "carriage-return", "empty", "blank", "non-string",
+        "secret-shaped", "empty-first", "multi-line-before-secret"])
+def test_set_item_17_refuses_each_bad_list_with_its_own_reason_and_stores_nothing(
+        tmp_path, value, reason):
+    # axis: item 17 validation; each refusal carries its own reason and the stored list is untouched
+    repo, store = _setup_repo(tmp_path)
+    assert PC.set_item(repo, "cloudSetupCommands", ["keep"], root=store)["action"] == "written"
+    assert PC.set_item(repo, "cloudSetupCommands", value, root=store) == {
+        "action": "refused", "reason": reason}
+    assert PC.get_item(repo, "cloudSetupCommands", root=store)["raw"] == ["keep"]
+
+
+def test_set_item_17_round_trips_a_list_and_an_empty_list_clears_it(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    assert PC.get_item(repo, "cloudSetupCommands", root=store)["source"] == "unset"
+    commands = ["npm ci", "make 'build all'"]
+    assert PC.set_item(repo, "cloudSetupCommands", commands, root=store)["action"] == "written"
+    got = PC.get_item(repo, "cloudSetupCommands", root=store)
+    assert got["raw"] == commands and got["effective"] == commands
+    assert got["source"] == "stamped" and got["malformed"] is False
+    assert PC.set_item(repo, "cloudSetupCommands", [], root=store)["action"] == "written"
+    assert PC.get_item(repo, "cloudSetupCommands", root=store)["raw"] == []
+
+
+def test_item_17_reads_a_hand_stored_bad_value_as_malformed(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config(repo, {"cloudSetupCommands": "npm ci"}, root=store)
+    got = PC.get_item(repo, "cloudSetupCommands", root=store)
+    assert got["malformed"] is True and got["effective"] is None
+
+
+def test_cli_set_item_17_takes_a_json_list_on_stdin(tmp_path, monkeypatch):
+    repo, store = _setup_repo(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO('["npm ci"]'))
+    rc = PC.main(["set", "--item", "cloudSetupCommands", "--cwd", repo, "--root", store])
+    assert rc == 0
+    assert PC.get_item(repo, "cloudSetupCommands", root=store)["raw"] == ["npm ci"]

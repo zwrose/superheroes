@@ -670,6 +670,11 @@ check records the new environment.
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
 
+The setup text runs the project's own setup commands (item 17) after its other steps, one at a
+time, in order, in the project's clone. Each one is logged `setup command <n> ok` or
+`setup command <n> FAILED`, and the first failure skips the rest. Changing the list means writing
+and pasting new setup text.
+
 A launch that names an id matching no environment lands in the account's default environment
 without an error. The check catches this, because the pass block names its environment and the
 result line repeats that name.
