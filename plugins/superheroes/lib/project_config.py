@@ -951,7 +951,41 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
                 hook_result = {**again, "changed": changed}
     if hook_result is not None:
         write_result = {**write_result, "dependencyHook": hook_result}
+        write_result = _converge_dependency_hook(cwd, root, plan, write_result)
     return write_result
+
+
+def _converge_dependency_hook(cwd, root, plan, write_result):
+    """Brings the hook files to the stored items 17, 18 and 19 when a set that landed between this
+    set's sync and its write left them differing from the triple the sync used (the writers each
+    lock internally, so no lock can span the sync). One more sync runs with the stored triple,
+    validated as before a hook-writing sync, and the result reports it under `dependencyHookResynced`
+    (or `dependencyHookResyncFailed`)."""
+    # accepted under the single-owner threat model: two sets interleaving after this re-read
+    facts = core_md.read(cwd, root)
+    if not facts:
+        return write_result
+    stored = _hook_triple(_project_config_mapping(facts))
+    used = plan["new"]
+    if plan["filled"] is not None and "inputsFillFailed" in write_result:
+        used = (plan["new"][0], plan["old"][1], plan["new"][2])
+    if stored == used:
+        return write_result
+    import cloud_dependency_hook as hook
+
+    if _hook_desired(stored):
+        reason = _validate_command_list(stored[0])
+        if reason is None:
+            reason = _validate_inputs_not_secret_shaped(stored[1])
+        if reason is not None:
+            return {**write_result, "dependencyHookResyncFailed": reason}
+    try:
+        again = hook.sync(plan["repoRoot"], *stored)
+    except Exception as exc:
+        return {**write_result, "dependencyHookResyncFailed": str(exc)}
+    if again.get("action") == "refused":
+        return {**write_result, "dependencyHookResyncFailed": again.get("reason")}
+    return {**write_result, "dependencyHookResynced": again}
 
 
 def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):

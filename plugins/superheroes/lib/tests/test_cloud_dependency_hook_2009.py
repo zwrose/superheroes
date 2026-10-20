@@ -631,3 +631,28 @@ def test_a_refused_sync_puts_back_what_it_already_changed(tmp_path, monkeypatch)
     assert _raw(w, HOOK_SLUG) is True
     assert w.script.read_bytes() == script_before
     assert w.settings.read_bytes() == settings_before
+
+
+def test_a_concurrent_item_17_set_landing_between_the_sync_and_the_write_leaves_files_matching_stored(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    _set_ok(w, HOOK_SLUG, True)
+    real = core_md.write_project_config_item
+    landed = []
+
+    def racing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not landed:
+            landed.append(True)
+            assert real(cwd, COMMANDS_SLUG, ["make"], root=root)["action"] in ("written", "noop")
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", racing)
+    got = _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert landed
+    assert got["dependencyHookResynced"]["action"] in ("written", "noop")
+    assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, INPUTS_SLUG) == ["uv.lock"]
+    assert w.script.read_text() == hook.script_text(["make"], ["uv.lock"])
+    _assert_files_match_stored(w)
