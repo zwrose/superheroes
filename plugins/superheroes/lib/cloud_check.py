@@ -27,6 +27,7 @@ import os
 import re
 import secrets
 import shlex
+import subprocess
 import sys
 import tempfile
 import time
@@ -46,6 +47,7 @@ MARKER = "SUPERHEROES-CLOUD-CHECK"
 REPORT_SCHEMA = "cloud-check-report/1"
 REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp", "stampFile",
                  "repoStamp", "confirmation")
+IDENTITY_FIELD = "identity"
 DIGEST_FIELD = "digest"
 # The failed-check marker's reader lives in cloud_setup; these names stay importable from here.
 FAILED_CHECK_SCHEMA = cloud_setup.FAILED_CHECK_SCHEMA
@@ -128,6 +130,11 @@ _PARTS = (
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
      "paste a fresh pass into the environment"),
+    ("identity",
+     "The cloud session has no git identity to commit with, so a build there would stop at its "
+     "first commit.",
+     "set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL to your "
+     "name and email in the environment's variables"),
     ("record", "The check passed, but I could not finish saving the result on this machine.",
      "tell me so I can look at the store"),
     ("setting", "I could not switch cloud builds off.", cloud_setup.SWITCH_OFF_FIX),
@@ -140,6 +147,7 @@ _PASSED = (
     "- The cloud's plugin is {version}, the same as mine.\n"
     "- Its calibration matches this machine's.\n"
     "- The reviewer answered.\n"
+    "- It has a git identity to commit with.\n"
     "\n"
 )
 _PASSED_OFF = "Cloud builds are ready for {project} and still switched off. " \
@@ -307,8 +315,25 @@ def _stamp_file(cwd, root):
         return fh.read().strip()
 
 
-def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None):
-    """What this cloud session holds, as the object the marked line carries. Never raises."""
+def _git_identity(cwd):
+    """{"author": bool, "committer": bool}: whether git, run in `cwd`, resolves a configured
+    author and committer identity. `user.useConfigOnly` refuses git's guessed identity, so only
+    an identity set in git config or in the GIT_AUTHOR_*/GIT_COMMITTER_* variables counts.
+    Never raises; carries no name or email."""
+    found = {}
+    for role, var in (("author", "GIT_AUTHOR_IDENT"), ("committer", "GIT_COMMITTER_IDENT")):
+        try:
+            got = subprocess.run(["git", "-c", "user.useConfigOnly=true", "var", var], cwd=cwd,
+                                 capture_output=True, text=True, timeout=10)
+            found[role] = got.returncode == 0
+        except Exception:
+            found[role] = False
+    return found
+
+
+def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_fn=None):
+    """What this cloud session holds, as the object the marked line carries. Never raises.
+    `identity_fn(cwd)` is the test seam for the git identity check; it defaults to `_git_identity`."""
     env = os.environ if env is None else env
     cwd = os.getcwd() if cwd is None else cwd
     environment = env.get(cloud_pass.ENVIRONMENT_ENV)
@@ -319,6 +344,10 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None):
     except Exception:
         confirmation = {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                         "passLapses": None, "reason": "confirm-raised"}
+    try:
+        identity = (identity_fn or _git_identity)(cwd)
+    except Exception:
+        identity = {"author": False, "committer": False}
     return {
         "schema": REPORT_SCHEMA,
         "nonce": nonce if isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce) else None,
@@ -328,6 +357,7 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None):
         "stampFile": _or_none(_stamp_file, cwd, root),
         "repoStamp": _or_none(repo_calibration_stamp, cwd),
         "confirmation": confirmation,
+        IDENTITY_FIELD: identity,
     }
 
 
@@ -412,11 +442,16 @@ def _judge_parts(obj, environment, cwd, root, today):
     file_ok = obj["stampFile"] is None if local_placed == "none" else obj["stampFile"] == local_placed
     # axis: the calibration the repository carries must match this machine's
     repo_ok = obj["repoStamp"] == local_repo
+    identity = obj.get(IDENTITY_FIELD)
+    # axis: the cloud session must resolve a configured author and committer identity
+    identity_ok = (isinstance(identity, dict) and identity.get("author") is True
+                   and identity.get("committer") is True)
     return {
         "versionMatches": version_ok,
         "calibrationMatches": computed and placed_ok and file_ok and repo_ok,
         "reviewerAnswered": reviewer,
         "environmentMatches": environment_ok,
+        "identityPresent": identity_ok,
     }, local_placed
 
 
@@ -559,7 +594,7 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                                            ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
                     ("versionMatches", "calibrationMatches", "reviewerAnswered",
-                     "environmentMatches")),
+                     "environmentMatches", "identityPresent")),
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": off,
                 "markerWritten": marked,
                 "message": (_UNREAD_STILL_ON if "setting" in failed
@@ -569,7 +604,8 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
     failed = [part for part, key in (("environment", "environmentMatches"),
                                      ("version", "versionMatches"),
                                      ("calibration", "calibrationMatches"),
-                                     ("reviewer", "reviewerAnswered")) if not results[key]]
+                                     ("reviewer", "reviewerAnswered"),
+                                     ("identity", "identityPresent")) if not results[key]]
     written = False
     if not failed:
         done = False
@@ -632,6 +668,7 @@ def _fallback_line(nonce):
     obj["nonce"] = nonce
     obj["confirmation"] = {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                            "passLapses": None, "reason": "plugin-missing"}
+    obj[IDENTITY_FIELD] = None
     return report_line(obj)
 
 
