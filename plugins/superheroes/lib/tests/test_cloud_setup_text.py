@@ -1492,6 +1492,22 @@ def test_serialized_verify_command_with_a_literal_credential_is_refused(tmp_path
     assert "literal123456" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("command", [
+    'printf AWS_SECRET_ACCESS_KEY=%s "$KEY" > .env && npm test',
+    'printf "AWS_SECRET_ACCESS_KEY=%s\\n" "$KEY" > .env && npm test',
+])
+def test_serialized_verify_command_keeps_the_printf_and_reference_exemptions(tmp_path, command):
+    result = _compose_with_verify_command(tmp_path, command)
+    assert result["action"] == "written", result
+
+
+def test_serialized_verify_command_with_a_quoted_literal_credential_is_refused(tmp_path):
+    result = _compose_with_verify_command(
+        tmp_path, "echo 'AWS_SECRET_ACCESS_KEY=opaque-owner-credential-123456' > .env")
+    _refusal(result, "secret-shaped-content")
+    assert "opaque-owner-credential-123456" not in json.dumps(result)
+
+
 @pytest.mark.parametrize("command,refused", [
     ("echo 'DATABASE_PASSWORD=pa$$word123' > .env", True),
     ("echo 'DATABASE_PASSWORD=pa%ssword123' > .env", True),

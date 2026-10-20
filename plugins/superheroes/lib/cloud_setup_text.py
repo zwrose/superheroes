@@ -389,18 +389,21 @@ class _CredentialAssignment:
                 stack.extend(item.values())
             elif isinstance(item, list):
                 stack.extend(item)
-        if anywhere:
-            # a serialized command (a double-quoted JSON / YAML value holding white space) is read
-            # on its own, decoded, so its shell word boundaries hold and the JSON quotes around it
-            # are never read as shell quoting; the rest of the document is read with it blanked
-            literals, remainder = self._serialized_values(text)
-            if literals:
-                texts[0] = remainder
-                texts += literals
-            # prose and heredocs hold apostrophes that no shell would balance, so a line and a
-            # white-space word are each read on their own
-            texts += [piece for t in list(texts) for piece in t.splitlines() + t.split()]
-        return any(self._search_command_text(t, anywhere) for t in texts)
+        if not anywhere:
+            return any(self._search_command_text(t, False) for t in texts)
+        # a serialized command (a double-quoted JSON / YAML value holding white space) is read on
+        # its own, decoded, with the command-mode scan a stored setup command gets: its shell word
+        # boundaries hold, the JSON quotes around it are never read as shell quoting, and the
+        # assignment / argument rules keep their reference and printf-format exemptions. The rest
+        # of the document is read with those literals blanked, in document mode.
+        literals, remainder = self._serialized_values(text)
+        if literals:
+            texts[0] = remainder
+        # prose and heredocs hold apostrophes that no shell would balance, so a line and a
+        # white-space word are each read on their own
+        texts += [piece for t in list(texts) for piece in t.splitlines() + t.split()]
+        return (any(self._search_command_text(t, True) for t in texts)
+                or any(self._search_command_text(t, False) for t in literals))
 
 
 _ANSI_C_WORD_RE = re.compile(r"""\$'((?:[^'\\]|\\.)*)'""", re.DOTALL)
