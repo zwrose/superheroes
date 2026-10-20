@@ -95,6 +95,10 @@ Each finding below was ruled out of scope by the session's owner or advisor, wit
 
 - src/auth.py:Weak nonce: out of scope — owner deferred it to the hardening milestone
 
+## Refused or denied commands
+
+A refused or denied command is a stop. Report it in your result's refusals list and do not retry it in another form: not another path to the program, another tool, another wrapper, or another command with the same effect. A refused or denied command is one a permission denial, a hook refusal, or a sandbox refusal stopped; a command that ran and failed is not a refusal, and the failure rules cover it. Each refusals entry carries command (the command exactly as you wrote it), refusedBy (permission, hook or sandbox), hook (the hook's name when the refusal gave one, else null), and next (what you did next). An empty list means you met none.
+
 ## Payload contract
 
 Your result must carry a payload matching this shape:

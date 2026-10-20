@@ -43,6 +43,10 @@ _RR = importlib.util.spec_from_file_location(
     "round_records", os.path.join(_HERE, "..", "round_records.py"))
 RR = importlib.util.module_from_spec(_RR)
 _RR.loader.exec_module(RR)
+_CR = importlib.util.spec_from_file_location(
+    "command_refusals", os.path.join(_HERE, "..", "command_refusals.py"))
+CR = importlib.util.module_from_spec(_CR)
+_CR.loader.exec_module(CR)
 
 
 @pytest.fixture(autouse=True)
@@ -117,7 +121,8 @@ def _contracted_fed_prompt(base):
     if order_part and not order_part.endswith("\n"):
         order_part = order_part + "\n"
     prefix = order_part + ("\n" if order_part else "")
-    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + EA.WRITE_REPORT_CONTRACT
+    return (prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + CR.ORDER_TEXT + "\n\n"
+            + EA.WRITE_REPORT_CONTRACT)
 
 
 def _expected_staged_write_prompt(base, contract):
@@ -125,7 +130,7 @@ def _expected_staged_write_prompt(base, contract):
     if order_part and not order_part.endswith("\n"):
         order_part = order_part + "\n"
     prefix = order_part + ("\n" if order_part else "")
-    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
+    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + CR.ORDER_TEXT + "\n\n" + contract
 
 
 _NO_PATTERN_KILL_RULE_LITERAL = (
