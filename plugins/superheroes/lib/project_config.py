@@ -881,8 +881,7 @@ def _plan_dependency_hook(cwd, slug, value, facts):
         filled = _detected_inputs(repo_root)
         after[CLOUD_SETUP_INPUTS_SLUG] = filled
     new = _hook_triple(after)
-    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root,
-            "snap": None}
+    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root}
     if repo_root is None:
         # axis: with no root a sync is impossible, so it refuses only when one is needed
         if _hook_desired(new) or _hook_desired(old):
@@ -898,35 +897,42 @@ def _plan_dependency_hook(cwd, slug, value, facts):
                 reason = _validate_inputs_not_secret_shaped(new[1])
             if reason is not None:
                 return {"refusal": {"action": "refused", "reason": reason}}
-        snap = plan["snap"] = hook.snapshot(repo_root)
         result = hook.sync(repo_root, *new)
         if result.get("action") == "refused":
-            # axis: a refused sync that already changed files puts them back to the stored state
-            failed = hook.restore(repo_root, snap, result.get("changed") or [])
-            detail = result.get("reason")
-            if failed:
-                detail = "%s; not restored: %s" % (detail, ", ".join(failed))
-            return {"refusal": _hook_refusal(detail)}
+            # axis: a refused sync that already changed files puts them back to the stored state, by reconciling to the stored items — never from a snapshot
+            refusal = _hook_refusal(result.get("reason"))
+            if result.get("changed"):
+                refusal.update(_reconcile_dependency_hook(repo_root, old))
+            return {"refusal": refusal}
         plan["hookResult"] = result
     return plan
 
 
-def _roll_back_dependency_hook(plan):
-    """Puts the hook files back to their bytes from before this set, from the snapshot (never
-    regenerated from stored items, so no stored credential can reach a script). Returns
-    {"dependencyHook": {"changed": paths the sync changed, "notRestored": paths not put back}}
-    when any path was not put back, else {}."""
-    if plan is None or plan.get("hookResult") is None:
-        return {}
+def _reconcile_dependency_hook(repo_root, stored):
+    """Brings the hook files to the stored (commands, inputs, enabled) triple, the one way every
+    failure after a sync ends: a triple a hook-writing sync would accept is synced as stored; one it
+    would refuse (a secret-shaped command or input) gets the hook turned off, which removes the
+    files, so no stored credential reaches a script. Returns {"dependencyHookResynced": result} or
+    {"dependencyHookResyncFailed": reason}, and adds `dependencyHookRemovedInvalid` with the reason
+    when the stored triple was invalid."""
     import cloud_dependency_hook as hook
 
-    changed = list(plan["hookResult"].get("changed") or [])
+    target = stored
+    extra = {}
+    if _hook_desired(stored):
+        reason = _validate_command_list(stored[0])
+        if reason is None:
+            reason = _validate_inputs_not_secret_shaped(stored[1])
+        if reason is not None:
+            target = (stored[0], stored[1], False)
+            extra = {"dependencyHookRemovedInvalid": reason}
     try:
-        failed = hook.restore(plan["repoRoot"], plan["snap"], changed)
-    except Exception:
-        failed = changed
-    # a clean restore leaves the result as it was; only a path left changed is reported
-    return {"dependencyHook": {"changed": changed, "notRestored": failed}} if failed else {}
+        again = hook.sync(repo_root, *target)
+    except Exception as exc:
+        return {**extra, "dependencyHookResyncFailed": str(exc)}
+    if again.get("action") == "refused":
+        return {**extra, "dependencyHookResyncFailed": again.get("reason")}
+    return {**extra, "dependencyHookResynced": again}
 
 
 def _finish_dependency_hook(cwd, root, plan, write_result):
@@ -973,28 +979,14 @@ def _converge_dependency_hook(cwd, root, plan, write_result):
     # accepted under the single-owner threat model: two sets interleaving after this re-read
     facts = core_md.read(cwd, root)
     if not facts:
-        return write_result
+        return {**write_result, "dependencyHookResyncFailed": "stored-config-unreadable"}
     stored = _hook_triple(_project_config_mapping(facts))
     used = plan["new"]
     if plan["filled"] is not None and "inputsFillFailed" in write_result:
         used = (plan["new"][0], plan["old"][1], plan["new"][2])
     if stored == used:
         return write_result
-    import cloud_dependency_hook as hook
-
-    if _hook_desired(stored):
-        reason = _validate_command_list(stored[0])
-        if reason is None:
-            reason = _validate_inputs_not_secret_shaped(stored[1])
-        if reason is not None:
-            return {**write_result, "dependencyHookResyncFailed": reason}
-    try:
-        again = hook.sync(plan["repoRoot"], *stored)
-    except Exception as exc:
-        return {**write_result, "dependencyHookResyncFailed": str(exc)}
-    if again.get("action") == "refused":
-        return {**write_result, "dependencyHookResyncFailed": again.get("reason")}
-    return {**write_result, "dependencyHookResynced": again}
+    return {**write_result, **_reconcile_dependency_hook(plan["repoRoot"], stored)}
 
 
 def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
@@ -1071,8 +1063,10 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
 
     if write_result.get("action") not in ("written", "noop"):
-        rolled_back = _roll_back_dependency_hook(plan)
-        return {**write_result, **rolled_back}
+        # axis: a failed write reconciles the hook files to what is stored now, so it never undoes another set's stored update and never writes a stored credential
+        if plan is not None and plan.get("hookResult") is not None:
+            write_result = _converge_dependency_hook(cwd, root, plan, dict(write_result))
+        return write_result
 
     # axis: the write went through here, so a failed or mismatched read-back keeps the synced
     # files (they match what was written) and converges them; only an uncommitted write rolls back

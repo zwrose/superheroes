@@ -301,34 +301,6 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     return "written" if desired else "removed"
 
 
-def snapshot(repo_root):
-    """The hook files as they are now: {repo-relative path: (bytes, mode) or None when absent}."""
-    snap = {}
-    for rel in (SCRIPT_REL, SETTINGS_REL):
-        path = os.path.join(repo_root, *rel.split("/"))
-        data = _read_bytes(path)
-        snap[rel] = None if data is None else (data, _mode_of(path, 0o644))
-    return snap
-
-
-def restore(repo_root, snap, paths):
-    """Puts each of `paths` back to its `snap` state. Returns the paths that could not be put
-    back, sorted."""
-    failed = []
-    for rel in paths:
-        path = os.path.join(repo_root, *rel.split("/"))
-        state = snap.get(rel)
-        try:
-            if state is None:
-                if os.path.lexists(path):
-                    os.remove(path)
-            else:
-                _atomic_write(path, state[0], state[1])
-        except OSError:
-            failed.append(rel)
-    return sorted(failed)
-
-
 def sync(repo_root, commands, inputs, enabled):
     """Makes the hook files match `(commands, inputs, enabled)`; see the module docstring.
     Returns {"action": "written" | "removed" | "noop" | "refused", "reason": token or None,

@@ -438,10 +438,61 @@ def test_a_failing_config_write_after_a_successful_enable_sync_rolls_the_files_b
 
     monkeypatch.setattr(core_md, "write_project_config_item", failing)
     got = _set(w, HOOK_SLUG, True)
-    assert got == {"action": "refused", "reason": "x"}
+    assert got["action"] == "refused" and got["reason"] == "x"
+    assert got["dependencyHookResynced"]["changed"]
     assert not w.script.exists() and not w.settings.exists()
     monkeypatch.undo()
     assert _raw(w, HOOK_SLUG) is None
+    _assert_files_match_stored(w)
+
+
+def test_a_failing_write_never_undoes_another_sets_stored_update(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, HOOK_SLUG, True)
+    real = core_md.write_project_config_item
+    state = {"done": False}
+
+    def interleaved(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not state["done"]:
+            state["done"] = True
+            # set B lands whole (store and files) between A's sync and A's write
+            assert real(cwd, COMMANDS_SLUG, ["make"], root=root)["action"] in ("written", "noop")
+            assert hook.sync(w.cwd, ["make"], _raw(w, INPUTS_SLUG), True)["action"] == "written"
+            return {"action": "refused", "reason": "x"}
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", interleaved)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    assert got["action"] == "refused" and got["reason"] == "x"
+    monkeypatch.undo()
+    assert _raw(w, COMMANDS_SLUG) == ["make"]
+    assert w.script.read_text() == hook.script_text(["make"], _raw(w, INPUTS_SLUG))
+    _assert_files_match_stored(w)
+
+
+def test_a_failing_write_with_a_stored_credential_removes_the_files_and_writes_no_script(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, HOOK_SLUG, True)
+    secret = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789 npm ci"
+    real = core_md.write_project_config_item
+
+    def interleaved(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG:
+            # a hand-edit lands past the validator, then A's own write fails
+            assert real(cwd, COMMANDS_SLUG, [secret], root=root)["action"] in ("written", "noop")
+            return {"action": "refused", "reason": "x"}
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", interleaved)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert got["reason"] == "x"
+    assert got["dependencyHookRemovedInvalid"] == "setup-command-secret-shaped"
+    assert not w.script.exists() and not w.settings.exists()
 
 
 def test_a_failed_readback_after_a_held_write_keeps_the_synced_files(tmp_path, monkeypatch):
@@ -569,6 +620,23 @@ def test_a_missing_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path)
     assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
 
 
+def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    # the script reached the clone but the settings file naming it did not
+    os.remove(w.settings)
+    proc = _run_block(w, block)
+    assert proc.returncode != 0
+    assert ("dependency hook not registered in the clone: commit and push .claude/settings.json"
+            in proc.stdout)
+    assert "dependency hook recorded" not in proc.stdout
+    assert "setup stamp withheld" in proc.stdout
+    assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
+
+
 def test_the_record_step_failure_withholds_the_stamp_and_fails_the_setup(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
@@ -614,9 +682,13 @@ def test_hook_on_a_changed_item_18_moves_the_stamp(tmp_path, mode):
 @pytest.mark.parametrize("mode", MODES)
 def test_enabling_the_hook_without_a_stored_item_18_moves_the_stamp(tmp_path, mode):
     w = _world(tmp_path, mode)
-    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    # stored straight through the core writer: the set path would fill item 18 with `[]`
+    stored = core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    assert stored["action"] in ("written", "noop"), stored
+    assert _raw(w, INPUTS_SLUG) is None
     off = _stamp(w)
     _set_ok(w, HOOK_SLUG, True)
+    assert _raw(w, INPUTS_SLUG) is None
     assert _stamp(w) != off
 
 

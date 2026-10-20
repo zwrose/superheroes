@@ -469,15 +469,3 @@ def test_a_failed_run_does_not_let_a_return_to_the_earlier_inputs_skip_the_setup
     assert _run(script).returncode == 0
     assert (repo / "installed-deps").read_text() == "A\n"
     assert _state(repo) is not None
-
-
-def test_snapshot_and_restore_put_the_hook_files_back(repo):
-    _installed(repo)
-    snap = hook.snapshot(str(repo))
-    settings = repo / hook.SETTINGS_REL.replace("/", os.sep)
-    original = settings.read_bytes()
-    settings.write_text("{}\n")
-    (repo / hook.SCRIPT_REL.replace("/", os.sep)).unlink()
-    assert hook.restore(str(repo), snap, [hook.SETTINGS_REL, hook.SCRIPT_REL]) == []
-    assert settings.read_bytes() == original
-    assert (repo / hook.SCRIPT_REL.replace("/", os.sep)).exists()
