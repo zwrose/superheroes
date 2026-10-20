@@ -802,9 +802,11 @@ def _fill_setup_inputs(cwd, root, write_result):
     except store_core.RepoRootUnavailable:
         # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
         return {**write_result, "inputsFillFailed": "repo-root-unavailable"}
-    toplevel = store_core.run_git_result(repo_root, "rev-parse", "--show-toplevel")
-    if (toplevel.status != store_core.GIT_OK or not toplevel.out
-            or os.path.realpath(toplevel.out) != os.path.realpath(repo_root)):
+    try:
+        is_checkout = store_core.git_dot_entry_ancestor(repo_root) is not None
+    except OSError:
+        is_checkout = False
+    if not is_checkout:
         # axis: a configured directory that is not a git checkout gets no fill — the root fallback names the directory itself, and scanning it would store a list for the wrong tree
         return {**write_result, "inputsFillFailed": "not-a-git-checkout"}
     item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
