@@ -92,6 +92,14 @@ _REDIRECT_CHARS = "<>"
 _KEYWORD_WORDS = {"{", "!", "if", "then", "else", "elif", "do", "while", "until", "time"}
 # commands that pass their leading `NAME=value` words and options on to the command they run
 _WRAPPER_COMMANDS = {"env", "sudo", "command", "exec", "nohup", "nice", "builtin"}
+# the options of a wrapper that take a separate argument (`env -u NAME`, `nice -n N`): that argument
+# is not the wrapped command
+_WRAPPER_OPTION_ARGS = {
+    "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+    "nice": {"-n", "--adjustment"},
+    "sudo": {"-u", "-g", "--user", "--group"},
+    "exec": {"-a"},
+}
 # commands whose every non-option argument that looks like `NAME=value` is an assignment
 _DECLARE_COMMANDS = {"export", "declare", "typeset", "local", "readonly"}
 # shells whose `-c` argument is a script of its own, scanned with the same rules
@@ -271,9 +279,12 @@ class _CredentialAssignment:
         skip_redirect_target = False
         shell = None       # after a shell's name: "opts" reading its options, "optarg", "script"
         printf = None      # after `printf`: "opts" reading its options, "format" for its format
+        wrapper = None     # the wrapper whose options are being read, until its command is named
+        optarg = False     # the next word is the argument of a wrapper's option
         for kind, value in _shell_tokens(text):
             if kind == "sep":
                 at_start, declare, shell, printf = True, False, None, None
+                wrapper, optarg = None, False
                 continue
             if kind == "redir":
                 skip_redirect_target = True
@@ -302,7 +313,11 @@ class _CredentialAssignment:
                     continue
                 shell = None
             if declare or at_start or anywhere:
+                if optarg:
+                    optarg = False
+                    continue
                 if word.startswith("-"):
+                    optarg = word in _WRAPPER_OPTION_ARGS.get(wrapper, ())
                     continue
                 if cls._assignment_is_credential(value):
                     return True
@@ -314,11 +329,11 @@ class _CredentialAssignment:
                 if base in _DECLARE_COMMANDS:
                     declare, at_start = True, False
                 elif base in _WRAPPER_COMMANDS:
-                    at_start = True
+                    at_start, wrapper = True, base
                 elif base in _SHELL_COMMANDS:
                     shell, at_start = "opts", False
                 else:
-                    at_start = False
+                    at_start, wrapper = False, None
                     printf = "opts" if base == "printf" else None
             else:
                 is_format = False

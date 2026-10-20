@@ -1064,7 +1064,20 @@ def _with_dependency_hook(cwd, root, plan, result):
             return {**result, "dependencyHookResyncFailed": "stored-config-unreadable"}
         return {**result, **_reconcile_dependency_hook(
             plan["repoRoot"], _hook_triple(_project_config_mapping(facts)))}
-    if plan is None or plan.get("hookResult") is None:
+    if plan is None:
+        return result
+    if plan.get("hookResult") is None:
+        if plan.get("repoRoot") is None:
+            return result
+        # axis: a plan that ran no sync may have been overtaken by an enable between its plan and its write, so the stored triple is re-read and the hook reconciled when it is wanted or its script exists
+        import cloud_dependency_hook as hook
+
+        facts = core_md.read(cwd, root)
+        if facts:
+            stored = _hook_triple(_project_config_mapping(facts))
+            script = os.path.join(plan["repoRoot"], *hook.SCRIPT_REL.split("/"))
+            if _hook_desired(stored) or os.path.lexists(script):
+                return _converge_dependency_hook(cwd, root, plan, result)
         return result
     result = {**result, "dependencyHook": plan["hookResult"]}
     return _converge_dependency_hook(cwd, root, plan, result)

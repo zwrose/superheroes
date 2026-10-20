@@ -508,6 +508,51 @@ def test_a_failed_readback_after_a_held_write_keeps_the_synced_files(tmp_path, m
     _assert_files_match_stored(w)
 
 
+def test_a_refused_readback_reconciles_an_enable_that_landed_after_a_plan_that_ran_no_sync(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    real = core_md.write_project_config_item
+    state = {"done": False}
+
+    def interleaved(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not state["done"]:
+            state["done"] = True
+            # set B enables the hook (old inputs) between A's plan, which ran no sync, and A's write
+            _set_ok(w, HOOK_SLUG, True)
+            assert real(cwd, slug, value, root=root)["action"] in ("written", "noop")
+            # A's read-back is then refused
+            monkeypatch.setattr(PC, "get_item", lambda *a, **k: {"action": "ok", "raw": None})
+            return real(cwd, slug, value, root=root)
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", interleaved)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert got["action"] == "refused" and got["reason"] == PC.REASON_SET_MISMATCH
+    assert got["dependencyHookResynced"]["changed"]
+    assert _raw(w, INPUTS_SLUG) == ["uv.lock"]
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["uv.lock"])
+    _assert_files_match_stored(w)
+
+
+@pytest.mark.parametrize("command", [
+    "env -u OLD_TOKEN printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "env -C /tmp printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "nice -n 5 printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "sudo -u deploy printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "exec -a name printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+])
+def test_a_wrapper_options_argument_is_not_read_as_the_wrapped_command(tmp_path, command):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, [command])
+    assert _raw(w, COMMANDS_SLUG) == [command]
+    assert CS._scan(command) is None
+    assert _compose(w)["action"] == "written"
+
+
 def test_a_failing_fill_write_reports_inputs_fill_failed_and_the_files_match_what_is_stored(
         tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
