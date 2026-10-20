@@ -253,11 +253,11 @@ def test_a_non_empty_item_17_with_no_lockfiles_stores_an_empty_item_18(tmp_path)
 
 
 def _lose_the_repo_root_for_the_fill(monkeypatch):
-    # every other reader of the root still finds it, so only the fill's own lookup fails
+    # every other reader of the root still finds it, so only the lookup that decides the fill fails
     real_root = store_core.repo_root
 
     def root(cwd, **kw):
-        if sys._getframe(1).f_code.co_name == "_fill_setup_inputs":
+        if sys._getframe(1).f_code.co_name == "_plan_dependency_hook":
             raise store_core.RepoRootUnavailable("not a checkout")
         return real_root(cwd, **kw)
 

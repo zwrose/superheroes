@@ -189,7 +189,31 @@ action that owns it, leaving the rest of the calibration untouched:
   of two reasons, and nothing is stored: `malformed-value` (the value is not a JSON list) and
   `setup-input-unsafe-path` (an entry is not a plain repository-relative path). `[]` stores an
   empty list. A change to the list or to a listed file's contents makes the cloud check report the
-  setup text out of date until new setup text is pasted.
+  setup text out of date until new setup text is pasted. With item 19 on, a change to a listed file
+  does not make the setup text out of date.
+
+- **Keep cloud dependencies current with a hook (item 19)** → write only item 19, `true` to add the
+  project's dependency hook and `false` to remove it. The hook is a start-of-session script that,
+  in a cloud session, re-runs the item 17 commands when the files in item 18 changed. Run the offer
+  first (set-up § 6) so the owner hears the cost before choosing.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudDependencyHook --cwd . <<'SUPERHEROES_ANSWER'
+  true
+  SUPERHEROES_ANSWER
+  ```
+
+  `true` writes a `SessionStart` entry in `.claude/settings.json` and the script
+  `.claude/hooks/superheroes-cloud-dependencies.sh`; `false` removes the entry (and the settings
+  file when nothing else is in it) and the script. While item 19 is on, changing item 17 or 18
+  rewrites the script, and clearing item 17 removes both files. The result's
+  `dependencyHook.changed` names the files written or removed. The owner commits and pushes them,
+  because a cloud session starts from the pushed repository. Read the result the same way as the
+  `stackingTool` write above: only `written` or `noop` means it was saved. A refusal
+  `dependency-hook-unwritable` carries a `detail` (`repo-root-unavailable`, `settings-unreadable`,
+  `hook-files-unwritable` or `invalid-arguments`), and nothing is stored. Turning item 19 on or off changes the stamp, so the owner writes new setup
+  text (set-up § 6, "Setup text") and pastes it.
 
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a
