@@ -41,12 +41,14 @@ REASON_SETUP_COMMAND_EMPTY = "setup-command-empty"
 REASON_SETUP_COMMAND_MULTI_LINE = "setup-command-multi-line"
 REASON_SETUP_COMMAND_SECRET_SHAPED = "setup-command-secret-shaped"
 REASON_SETUP_INPUT_UNSAFE_PATH = "setup-input-unsafe-path"
+REASON_DEPENDENCY_HOOK_UNWRITABLE = "dependency-hook-unwritable"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
 CLOUD_BUILDS_SLUG = "cloudBuilds"
 CI_WORKFLOW_SLUG = "ciWorkflow"
 CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
 CLOUD_SETUP_INPUTS_SLUG = "cloudSetupInputs"
+CLOUD_DEPENDENCY_HOOK_SLUG = "cloudDependencyHook"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -209,6 +211,14 @@ ITEMS = (
         "name": "Cloud setup inputs",
         "home": HOME_PROJECT_CONFIGURATION,
         "shape": "inputPathList",
+        "plugin_default": None,
+    },
+    {
+        "number": 19,
+        "slug": "cloudDependencyHook",
+        "name": "Cloud dependency hook",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "boolean",
         "plugin_default": None,
     },
 )
@@ -787,23 +797,21 @@ def _set_risk_and_trust(cwd, value, root):
     return write_result
 
 
-def _fill_setup_inputs(cwd, root, write_result):
-    """Stores item 18 as the lockfiles at the repository root, after item 17 is stored. A project
-    outside a git checkout has no root to look in, so it gets no fill. The fill never turns a
-    stored item 17 into a refusal: a detected name item 18 would refuse is left out of the list,
-    and when the write or its read-back fails, item 17's result is returned with `inputsFillFailed`
-    carrying the reason (and no `inputsFilled`), leaving item 18 unset."""
+def _detected_inputs(repo_root):
+    """The lockfile names at `repo_root` that item 18 accepts."""
     import cloud_setup_text
-    import store_core
 
-    try:
-        repo_root = store_core.repo_root(cwd)
-    except store_core.RepoRootUnavailable:
-        return write_result
     item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
     # axis: a detected name item 18 would refuse is never stored, so the list stays valid
-    filled = [name for name in cloud_setup_text.detect_inputs(repo_root)
-              if validate_item_value(item, [name]) is None]
+    return [name for name in cloud_setup_text.detect_inputs(repo_root)
+            if validate_item_value(item, [name]) is None]
+
+
+def _fill_setup_inputs(cwd, root, write_result, filled):
+    """Stores the detected `filled` list as item 18, after item 17 is stored. The fill never turns
+    a stored item 17 into a refusal: when the write or its read-back fails, item 17's result is
+    returned with `inputsFillFailed` carrying the reason (and no `inputsFilled`), leaving item 18
+    unset."""
     stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
     if stored.get("action") not in ("written", "noop"):
         return {**write_result, "inputsFillFailed": stored.get("reason")}
@@ -813,6 +821,102 @@ def _fill_setup_inputs(cwd, root, write_result):
     if not _values_equal(reread.get("raw"), filled):
         return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}
     return {**write_result, "inputsFilled": list(filled)}
+
+
+_DEPENDENCY_HOOK_SLUGS = (
+    CLOUD_SETUP_COMMANDS_SLUG, CLOUD_SETUP_INPUTS_SLUG, CLOUD_DEPENDENCY_HOOK_SLUG)
+
+
+def _string_list_or_empty(value):
+    return list(value) if isinstance(value, list) and all(isinstance(v, str) for v in value) else []
+
+
+def _hook_triple(mapping):
+    """(commands, inputs, enabled) as the stored items 17, 18 and 19 give them to the hook."""
+    return (_string_list_or_empty(mapping.get(CLOUD_SETUP_COMMANDS_SLUG)),
+            _string_list_or_empty(mapping.get(CLOUD_SETUP_INPUTS_SLUG)),
+            mapping.get(CLOUD_DEPENDENCY_HOOK_SLUG) is True)
+
+
+def _hook_desired(triple):
+    return triple[2] and bool(triple[0])
+
+
+def _hook_refusal(detail):
+    return {"action": "refused", "reason": REASON_DEPENDENCY_HOOK_UNWRITABLE, "detail": detail}
+
+
+def _plan_dependency_hook(cwd, slug, value, facts):
+    """Works out, before anything is written, the item 18 fill and the hook state this set leads
+    to, and brings the hook files to that state. Returns {"refusal": result} when it cannot, else
+    the plan: the stored `old` triple, the `new` triple (with the fill), the `filled` item 18 (or
+    None), the sync result (`hookResult`, or None when none ran) and the `repoRoot`."""
+    import cloud_dependency_hook as hook
+    import store_core
+
+    mapping = _project_config_mapping(facts)
+    old = _hook_triple(mapping)
+    after = dict(mapping)
+    after[slug] = value
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except store_core.RepoRootUnavailable:
+        repo_root = None
+    filled = None
+    # axis: item 18 is filled only when it was never stored, so an edited list survives; a project
+    # outside a git checkout has no root to look in, so it gets no fill
+    if (slug == CLOUD_SETUP_COMMANDS_SLUG and value and CLOUD_SETUP_INPUTS_SLUG not in mapping
+            and repo_root is not None):
+        filled = _detected_inputs(repo_root)
+        after[CLOUD_SETUP_INPUTS_SLUG] = filled
+    new = _hook_triple(after)
+    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root}
+    if repo_root is None:
+        # axis: with no root a sync is impossible, so it refuses only when one is needed
+        if _hook_desired(new) or _hook_desired(old):
+            return {"refusal": _hook_refusal("repo-root-unavailable")}
+        return plan
+    script = os.path.join(repo_root, *hook.SCRIPT_REL.split("/"))
+    # axis: a project that never opted in has no script, so its settings file is never read
+    if _hook_desired(new) or _hook_desired(old) or os.path.lexists(script):
+        result = hook.sync(repo_root, *new)
+        if result.get("action") == "refused":
+            return {"refusal": _hook_refusal(result.get("reason"))}
+        plan["hookResult"] = result
+    return plan
+
+
+def _restore_dependency_hook(plan, triple):
+    """Best effort: puts the hook files back to `triple` after a write that did not hold. Returns
+    the sync result, or None when no sync had run or this one raised."""
+    if plan is None or plan.get("hookResult") is None:
+        return None
+    import cloud_dependency_hook as hook
+
+    try:
+        return hook.sync(plan["repoRoot"], *triple)
+    except Exception:
+        return None
+
+
+def _roll_back_dependency_hook(plan):
+    """Puts the hook files back to the stored triple from before this set."""
+    if plan is not None:
+        _restore_dependency_hook(plan, plan["old"])
+
+
+def _finish_dependency_hook(cwd, root, plan, write_result):
+    """Stores the filled item 18 (after item 17) and attaches what the sync did to the result."""
+    hook_result = plan["hookResult"]
+    if plan["filled"] is not None:
+        write_result = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
+        if "inputsFillFailed" in write_result and _hook_desired(plan["new"]):
+            # item 18 stays unset, so the script goes back to the inputs that are stored
+            hook_result = _restore_dependency_hook(
+                plan, (plan["new"][0], plan["old"][1], plan["new"][2])) or hook_result
+    if hook_result is not None:
+        write_result = {**write_result, "dependencyHook": hook_result}
+    return write_result
 
 
 def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
@@ -866,6 +970,12 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
                     "message": cloud_setup.switch_message("check-failed", project_name),
                 }
 
+    plan = None
+    if slug in _DEPENDENCY_HOOK_SLUGS:
+        plan = _plan_dependency_hook(cwd, slug, value, facts)
+        if plan.get("refusal") is not None:
+            return plan["refusal"]
+
     if item["home"] == HOME_RISK_AND_TRUST:
         return _set_risk_and_trust(cwd, value, root)
     if item["home"] == HOME_GUARDIAN_CADENCE:
@@ -883,23 +993,24 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
 
     if write_result.get("action") not in ("written", "noop"):
+        _roll_back_dependency_hook(plan)
         return write_result
 
     reread = get_item(cwd, slug, root=root)
     if reread.get("action") == "refused":
+        _roll_back_dependency_hook(plan)
         return reread
     if not _values_equal(reread.get("raw"), value):
+        _roll_back_dependency_hook(plan)
         return {
             "action": "refused",
             "reason": REASON_SET_MISMATCH,
             "expected": value,
             "observed": reread.get("raw"),
         }
-    # axis: item 18 is filled only when it was never stored, so an edited list survives
-    if (slug == CLOUD_SETUP_COMMANDS_SLUG and value
-            and CLOUD_SETUP_INPUTS_SLUG not in _project_config_mapping(facts)):
+    if plan is not None:
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
-        return _fill_setup_inputs(cwd, root, write_result)
+        return _finish_dependency_hook(cwd, root, plan, write_result)
     if slug == CLOUD_BUILDS_SLUG:
         kind = "on" if value else "off"
         return {**write_result, "message": cloud_setup.switch_message(kind, project_name)}

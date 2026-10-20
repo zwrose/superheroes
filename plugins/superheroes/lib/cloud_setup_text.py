@@ -24,6 +24,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import cloud_dependency_hook
 import cloud_pass
 import architect_config
 import cloud_setup
@@ -324,11 +325,21 @@ def _stored_setup_inputs(cwd, root, commands):
          "list of plain repository paths."))
 
 
+def _dependency_hook_on(cwd, root, commands):
+    """Whether the project opted in to the dependency hook (item 19): only an exact true. A project
+    with no setup commands has no hook, and its item 19 is not even read."""
+    if not commands:
+        return False
+    return _stored_setting(
+        cwd, root, project_config.CLOUD_DEPENDENCY_HOOK_SLUG, "dependency hook setting",
+        "setup-commands-unreadable", None) is True
+
+
 def _stored_setting(cwd, root, slug, what, unreadable, malformed):
     """The stored value of the project-configuration item `slug` (named `what` in a refusal), or
     None when it is not stored. A calibration that cannot be read for it is refused with the
     `unreadable` reason, and a stored value that fails the item's own validation with the
-    `malformed` reason and sentence."""
+    `malformed` reason and sentence (with no `malformed`, a stored value is returned as it is)."""
     try:
         facts = core_md.read(cwd, root, persist_backfill=False)
     except Exception:
@@ -356,7 +367,8 @@ def _stored_setting(cwd, root, slug, what, unreadable, malformed):
         return None
     item = project_config._item_by_slug(slug)
     # axis: a stored value that is not a valid list is refused, never read as an empty list
-    if project_config.validate_item_value(item, settings[slug]) is not None:
+    if malformed is not None and project_config.validate_item_value(
+            item, settings[slug]) is not None:
         raise _Refused(*malformed)
     return settings[slug]
 
@@ -414,9 +426,11 @@ def _stamp_view(files, commands=(), inputs_view=None):
     core = _core_rel()
     if core in view:
         view[core] = _without_setting(view[core])
-        # axis: without setup commands item 18 is unused, so it never moves the stamp
+        # axis: without setup commands items 18 and 19 are unused, so they never move the stamp
         if not commands:
-            view[core] = _without_setting(view[core], project_config.CLOUD_SETUP_INPUTS_SLUG)
+            for unused in (project_config.CLOUD_SETUP_INPUTS_SLUG,
+                           project_config.CLOUD_DEPENDENCY_HOOK_SLUG):
+                view[core] = _without_setting(view[core], unused)
     # axis: the stamp moves whenever the command list does, in both storage modes
     if commands:
         view[SETUP_COMMANDS_STAMP_KEY] = (
@@ -426,12 +440,14 @@ def _stamp_view(files, commands=(), inputs_view=None):
     return view
 
 
-def _view_for(cwd, files, commands, inputs):
+def _view_for(cwd, files, commands, inputs, hook_on):
     """The stamp's view of `files`, built for both callers (`stamped_files` and `_compose`): the
-    files the setup depends on join it exactly when commands are listed and item 18 is stored."""
+    files the setup depends on join it exactly when commands are listed, item 18 is stored and the
+    dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
+    files needs no new paste)."""
     inputs_view = None
-    # axis: the input files join the stamp only with commands and stored inputs
-    if commands and inputs is not None:
+    # axis: the input files join the stamp only with commands, stored inputs and no hook
+    if commands and inputs is not None and not hook_on:
         try:
             repo_root = store_core.repo_root(cwd)
         except store_core.RepoRootUnavailable:
@@ -444,10 +460,11 @@ def _view_for(cwd, files, commands, inputs):
 def stamped_files(cwd, root=None):
     """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
     switching cloud builds on or off never changes the stamp, and the project's setup commands
-    when it lists any, with the files they depend on."""
+    when it lists any, with the files they depend on unless the dependency hook is on."""
     commands = _setup_commands(cwd, root)
     return _view_for(cwd, calibration_files(cwd, root), commands,
-                     _stored_setup_inputs(cwd, root, commands))
+                     _stored_setup_inputs(cwd, root, commands),
+                     _dependency_hook_on(cwd, root, commands))
 
 
 def _project_name(cwd):
@@ -552,10 +569,11 @@ def _input_check_lines(expected):
     return out
 
 
-def _commands_block(commands, clone, stamp=None, count=0, expected=()):
+def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=None):
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
-    ran and succeeded."""
+    ran and succeeded. With a `record` fingerprint (the dependency hook is on), a finished run also
+    tells the clone's hook script, so the hook starts from this run."""
     return [
         "",
         "# Run the project's own setup commands (configure item 17), one at a time, in the order "
@@ -586,6 +604,17 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=()):
         "    fi",
         "  done",
         *([
+            # axis: the hook is told of the run only when every command succeeded; none of this
+            # changes whether the setup finished
+            '  if [ "$ok" = 1 ]; then',
+            '    if [ -f "$DIR/%s" ]; then' % cloud_dependency_hook.SCRIPT_REL,
+            '      if (cd "$DIR" && bash %s --record %s); then echo "dependency hook recorded"'
+            % (cloud_dependency_hook.SCRIPT_REL, record),
+            '      else echo "dependency hook record FAILED"; fi',
+            '    else echo "dependency hook not in the clone: commit and push it"; fi',
+            "  fi",
+        ] if record is not None else []),
+        *([
             # axis: the stamp is the receipt for a finished setup, so a failed or skipped command
             # leaves none
             '  if [ "$ok" = 1 ] && [ "$wrote" = %d ]; then' % count,
@@ -603,7 +632,7 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=()):
 
 
 def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
-            commands, cleared=False, expected=()):
+            commands, cleared=False, expected=(), record=None):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -688,7 +717,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
     # axis: only a non-empty list adds a step, so no list leaves the text as it was
     if commands:
         out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
-                               len(files), expected)
+                               len(files), expected, record)
     out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', 'exit "$setup_rc"' if commands else "exit 0", ""]
     return "\n".join(out)
@@ -713,6 +742,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     stored = _stored_setup_commands(cwd, root)
     commands = stored or []
     inputs = _stored_setup_inputs(cwd, root, commands)
+    hook_on = _dependency_hook_on(cwd, root, commands)
     # axis: a list stored as empty, in a project that places no files, still has a stamp to retire
     cleared = stored is not None and not stored and not files
     if placed and not files:
@@ -742,7 +772,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     if files or commands:
         try:
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _view_for(cwd, files, commands, inputs))
+                _view_for(cwd, files, commands, inputs, hook_on))
         except _Refused:
             raise
         except Exception:
@@ -758,10 +788,12 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
     expected = ()
-    if commands and inputs:
+    # axis: with the hook on the inputs are not in the stamp, so the text does not check them
+    if commands and inputs and not hook_on:
         expected = _input_expectations(store_core.repo_root(cwd), inputs)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
-                   _clone_dir(cwd), commands, cleared, expected)
+                   _clone_dir(cwd), commands, cleared, expected,
+                   cloud_dependency_hook.fingerprint(commands, inputs or []) if hook_on else None)
     # axis: the command list is scanned as written (as `set` scans it), never as the quoted
     # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
     # in full
@@ -785,6 +817,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     calibration = {"placed": placed, "files": list(files), "date": date, "stamp": stamp}
     if commands:
         calibration["setupCommands"] = len(commands)
+        if hook_on:
+            calibration["dependencyHook"] = True
     return {"action": "written", "reason": None, "text": text, "header": head,
             "pluginVersion": version, "pluginCommit": commit, "calibration": calibration,
             "picksUpVersionByItself": PICKS_UP_VERSION_BY_ITSELF}
