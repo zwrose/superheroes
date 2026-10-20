@@ -13,8 +13,11 @@ STOP_RULE = (
 )
 
 REFUSAL_MEANING = (
-    "A refused or denied command is one a permission denial, a hook refusal, or a sandbox refusal "
-    "stopped; a command that ran and failed is not a refusal, and the failure rules cover it."
+    "A refused or denied command is one that a permission denial, a hook refusal, a sandbox refusal, "
+    "or the harness's own safety checks (a shell-command checker or an auto-mode classifier) "
+    "stopped, or one held for an approval that nobody answers; record those last two kinds with "
+    "refusedBy permission. A command that ran and failed is not a refusal, and the failure rules "
+    "cover it."
 )
 
 REFUSED_BY = ("permission", "hook", "sandbox")

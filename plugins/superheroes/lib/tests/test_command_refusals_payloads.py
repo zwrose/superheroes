@@ -24,9 +24,14 @@ from test_engine_dispatch_write import (  # noqa: F401  (the autouse pin is a fi
     _valid_native_write_obj, _write_native_obj_at_argv,
 )
 from test_native_engine_1947 import (  # noqa: F401  (the autouse pin is a fixture)
-    _assert_untouched, _close, _forfeited, _kinds, _make_repo, _open, _pin_env, _ready, _routed,
-    _transcript, _write,
+    _assert_untouched, _close, _forfeited, _kinds, _make_repo, _open, _pin_env, _ready, _records,
+    _routed, _transcript, _write,
 )
+
+# a secret-shaped key=value assignment that `pr_comment.scrub` rewrites to `token=[REDACTED]`
+# (its pattern 3, pinned by test_readout.test_build_readout_scrubs_pr_url_secret)
+_SECRET = "supersecretvalue123"
+_SECRET_COMMAND = "curl --fail https://example.test/x?token=" + _SECRET
 
 
 def _entry(**over):
@@ -195,6 +200,16 @@ def test_grade_build_report_refuses_a_malformed_refusals_list(refusals):
         graded = EA._grade_build_report_obj(
             {"ok": ok, "signal": "ok", "evidence": {}, "refusals": refusals})
         assert graded == {"ok": False, "reason": "unreadable"}
+
+
+# axis: _grade_build_report_obj scrubs secret-shaped text in a carried refusal — see bite-proof record wo6_2011_sendback
+def test_grade_build_report_scrubs_a_secret_in_a_refusal_command():
+    obj = {"ok": True, "signal": "ok", "evidence": {},
+           "refusals": [_entry(command=_SECRET_COMMAND)]}
+    graded = EA._grade_build_report_obj(obj)
+    command = graded["refusals"][0]["command"]
+    assert _SECRET not in command
+    assert command == "curl --fail https://example.test/x?token=[REDACTED]"
 
 
 def test_grade_build_report_non_dict_is_unchanged():
@@ -405,6 +420,21 @@ def test_close_forfeit_attaches_nothing_for_a_malformed_list(tmp_path, monkeypat
     code, out = _close(capsys, r)
     _forfeited(code, out, "native-not-enrolled")
     assert "refusals" not in out
+
+
+# axis: the native close scrubs secret-shaped text in a refusal, in its result and in the journal — see bite-proof record wo6_2011_sendback
+def test_close_denied_enrollment_forfeit_scrubs_a_secret_in_a_refusal(tmp_path, monkeypatch, capsys):
+    r = _make_repo(tmp_path)
+    _unenrolled(capsys, monkeypatch, r)
+    _result_with(r, refusals=[_entry(command=_SECRET_COMMAND, refusedBy="permission", hook=None)])
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "native-not-enrolled")
+    assert _SECRET not in json.dumps(out["refusals"])
+    assert out["refusals"][0]["command"] == "curl --fail https://example.test/x?token=[REDACTED]"
+    closed = [rec for rec in _records(r) if rec.get("kind") == "run-closed"]
+    assert len(closed) == 1
+    assert _SECRET not in json.dumps(closed[0])
+    assert closed[0]["refusals"][0]["command"] == out["refusals"][0]["command"]
 
 
 def test_close_forfeit_with_no_result_file_is_unchanged(tmp_path, monkeypatch, capsys):

@@ -91,6 +91,19 @@ def test_order_text_composition():
         assert member in CR.ENTRY_SHAPE
 
 
+@pytest.mark.parametrize("phrase", [
+    "permission denial",
+    "hook refusal",
+    "sandbox refusal",
+    "shell-command checker",
+    "auto-mode classifier",
+    "approval that nobody answers",
+])
+def test_refusal_meaning_names_each_kind(phrase):
+    # axis: the meaning names every kind of refusal — see bite-proof record wo6_2011_sendback
+    assert phrase in CR.REFUSAL_MEANING
+
+
 # --- the census: one test per order surface ------------------------------------------------
 
 

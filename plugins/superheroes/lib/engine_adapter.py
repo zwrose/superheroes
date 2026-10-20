@@ -146,8 +146,8 @@ WRITE_REPORT_FIELD_SEMANTICS = (
     "is wrong, otherwise \"needs_context\" (only those two values).\n"
     "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
     "failing / passing during this attempt; false when not observed.\n"
-    "  refusals — the commands a permission denial, a hook refusal or a sandbox refusal stopped, "
-    "one entry each (command, refusedBy, hook, next); [] when you met none.\n"
+    "  refusals — every refused or denied command you met, as the stop rule in this prompt "
+    "defines it, one entry each (command, refusedBy, hook, next); [] when you met none.\n"
 )
 
 WRITE_REPORT_CONTRACT = (

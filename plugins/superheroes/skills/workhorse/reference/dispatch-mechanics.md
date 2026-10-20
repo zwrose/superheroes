@@ -888,7 +888,7 @@ but whitespace.
 is **not** an acceptance verdict, and the implementer never marks its own work done. `ok: false`
 carries `signal` of `"plan_wrong"` (the order's premise is wrong) or `"needs_context"` (anything
 else). `evidence.testFailed` / `evidence.testPassed` report whether a test was **observed** failing
-/ passing during that attempt. `refusals` lists the commands a permission denial, a hook refusal or a sandbox refusal stopped, one entry each, and is `[]` when none were met; `lib/command_refusals.py` owns the entry shape.
+/ passing during that attempt. `refusals` lists the refused or denied commands, as `lib/command_refusals.py` defines them, one entry each, and is `[]` when none were met; `lib/command_refusals.py` owns the entry shape.
 
 **Grading is strict, and keyed to the prompt.** When the runner contracted the prompt, a report is
 recognised only as a final tail matching this grammar: a line whose trimmed content is the sentinel,

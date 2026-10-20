@@ -61,6 +61,15 @@ def test_two_batches_in_one_round_hold_the_concatenation():
     assert state["rounds"]["1"]["fix"]["refusals"] == [OTHER]
 
 
+@pytest.mark.parametrize("later", [dict(fixes=[]), dict(fixes=[], refusals=[])])
+def test_a_later_batch_reporting_none_keeps_the_earlier_batchs_refusals(later):
+    # axis: the merge keeps the earlier batch's refusals when a later batch reports none — see bite-proof record wo6_2011_sendback
+    state = _state()
+    _fold(state, dict(fixes=[], refusals=[REFUSAL]), index=0)
+    _fold(state, later, index=1)
+    assert state["rounds"]["1"]["fix"]["refusals"] == [REFUSAL]
+
+
 @pytest.mark.parametrize("artifact", [{"fixes": []}, {"fixes": [], "refusals": []}, {"fixes": [], "refusals": "x"}])
 def test_a_payload_with_no_refusals_leaves_no_key(artifact):
     state = _state()
@@ -194,6 +203,11 @@ def test_the_command_is_fenced_longer_than_any_backtick_run_inside_it():
     assert "```echo ``x`` y```" in line
     assert rr._inline_code("a`b") == "``a`b``"
     assert rr._inline_code("`a") == "`` `a ``"
+
+
+def test_the_fence_is_longer_than_the_longest_of_several_backtick_runs():
+    # axis: the fence is one longer than the longest backtick run, not the shortest — see bite-proof record wo6_2011_sendback
+    assert rr._inline_code("echo ``x`` `y` z") == "```echo ``x`` `y` z```"
 
 
 def test_the_compact_level_renders_the_count_form():
