@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audits  # noqa: E402
+import command_refusals  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import round_phases  # noqa: E402
 
@@ -392,8 +393,15 @@ def _scoped_payload_fault(payload, seat_key):
 
 
 def _fixer_payload_fault(payload, seat_key, record_boundary=False):
-    return _payload_fault_from_contract(payload, P_FIXER, seat_key,
-                                        record_boundary=record_boundary)
+    fault = _payload_fault_from_contract(payload, P_FIXER, seat_key,
+                                         record_boundary=record_boundary)
+    if fault:
+        return fault
+    if "refusals" in payload:
+        refusal_fault = command_refusals.refusals_fault(payload["refusals"])
+        if refusal_fault:
+            return "`refusals` — " + refusal_fault
+    return None
 
 
 def _verify_payload_fault(payload, seat_key):
@@ -525,7 +533,7 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_FIXER: {
         "required": ["fixes"],
-        "optional": ["escalated", "headDiff", "headDiffPath", "coverageDecisions"],
+        "optional": ["escalated", "headDiff", "headDiffPath", "coverageDecisions", "refusals"],
         "conditional": {},
         "enums": {},
         "types": {
@@ -534,9 +542,17 @@ _PAYLOAD_FIELD_BINDINGS = {
             "headDiff": "string",
             "headDiffPath": "absolute-path",
             "coverageDecisions": "list-of-objects",
+            "refusals": "list-of-objects",
         },
         "elements": {
             "coverageDecisions": {"required": [], "optional": [], "types": {}, "enums": {}},
+            "refusals": {
+                "required": list(command_refusals.ENTRY_REQUIRED),
+                "optional": list(command_refusals.ENTRY_OPTIONAL),
+                "types": {"command": "non-empty-string", "next": "non-empty-string",
+                          "refusedBy": "string", "hook": "any"},
+                "enums": {"refusedBy": list(command_refusals.REFUSED_BY)},
+            },
         },
         "predicates": [{
             "name": "head-diff-store-path-driver-owned",
