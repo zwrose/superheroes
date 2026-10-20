@@ -1,5 +1,5 @@
 """Tests for #2009: configure item 19 (the cloud dependency hook), the hook wiring in `set_item`,
-the stamp exception, the setup text's record step and the `offer` command.
+the stamp exception, the setup text's record step.
 
 Every fixture project is a real git repository under tmp_path (every git call pins its global and
 system configuration away), and every store, home and Claude config directory is under tmp_path too.
@@ -567,41 +567,3 @@ def test_the_record_step_is_skipped_when_a_command_fails(tmp_path):
     assert proc.returncode != 0
     assert "setup command 1 FAILED" in proc.stdout
     assert "dependency hook" not in proc.stdout
-
-
-# ---------------------------------------------------------------- the offer command
-
-
-def test_offer_refuses_when_no_setup_commands_are_listed(tmp_path, capsys):
-    w = _world(tmp_path, mode_registry.IN_REPO)
-    rc = hook.main(["offer", "--cwd", w.cwd, "--root", w.root])
-    captured = capsys.readouterr()
-    assert rc == 1 and captured.out == ""
-    refusal = json.loads(captured.err)
-    assert refusal["action"] == "refused" and refusal["reason"] == "no-setup-commands"
-    _set_ok(w, COMMANDS_SLUG, [])
-    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 1
-
-
-def test_offer_names_the_detected_inputs_when_item_18_is_unset(tmp_path, capsys):
-    w = _world(tmp_path, mode_registry.IN_REPO)
-    _lock(w)
-    _lock(w, "uv.lock", "x\n")
-    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci", "make"], root=w.root)
-    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
-    got = json.loads(capsys.readouterr().out)
-    assert got == {"action": "offer", "message": hook.offer_message(["npm ci", "make"],
-                                                                    ["package-lock.json", "uv.lock"]),
-                   "commands": 2, "inputs": ["package-lock.json", "uv.lock"],
-                   "inputsSource": "detected"}
-
-
-def test_offer_uses_the_stored_inputs_when_item_18_is_stored(tmp_path, capsys):
-    w = _world(tmp_path, mode_registry.IN_REPO)
-    _lock(w)
-    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
-    _set_ok(w, INPUTS_SLUG, ["other.lock"])
-    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
-    got = json.loads(capsys.readouterr().out)
-    assert got["inputs"] == ["other.lock"] and got["inputsSource"] == "stored"
-    assert got["message"] == hook.offer_message(["npm ci"], ["other.lock"])
