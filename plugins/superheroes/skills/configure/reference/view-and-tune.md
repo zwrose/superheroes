@@ -188,7 +188,8 @@ action that owns it, leaving the rest of the calibration untouched:
   the `stackingTool` write above: only `written` or `noop` means it was saved. A refusal names one
   of two reasons, and nothing is stored: `malformed-value` (the value is not a JSON list) and
   `setup-input-unsafe-path` (an entry is not a plain repository-relative path). `[]` stores an
-  empty list. A change to the list or to a listed file's contents makes the cloud check report the
+  empty list. With item 19 on, an entry shaped like a secret is refused as `setup-input-secret-shaped`
+  (nothing is stored for the hook). A change to the list or to a listed file's contents makes the cloud check report the
   setup text out of date until new setup text is pasted. With item 19 on, a change to a listed file
   does not make the setup text out of date.
 
@@ -213,7 +214,9 @@ action that owns it, leaving the rest of the calibration untouched:
   `stackingTool` write above: only `written` or `noop` means it was saved. A refusal
   `dependency-hook-unwritable` carries a `detail` (`repo-root-unavailable`, `settings-unreadable`,
   `hook-files-unwritable` or `invalid-arguments`), and nothing is stored. Turning item 19 on or off changes the stamp, so the owner writes new setup
-  text (set-up § 6, "Setup text") and pastes it.
+  text (set-up § 6, "Setup text") and pastes it. Commit and push the hook files before pasting the
+  setup text: with no script in the clone, the setup text withholds its stamp and the setup does
+  not finish.
 
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a

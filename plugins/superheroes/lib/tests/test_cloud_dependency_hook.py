@@ -125,7 +125,9 @@ def test_cloud_failed_command_prints_one_line_and_keeps_state(repo):
     assert done.stdout.count("\n") == 1
     assert "command 2 failed" in done.stdout
     assert _ran(repo) == ["one"]
-    assert _state(repo) == recorded
+    # the old success hash goes before the commands run, so a failed run leaves none
+    assert recorded is not None
+    assert _state(repo) is None
 
 
 def test_cloud_pipefail_failure_counts_as_a_failure(repo):
@@ -463,3 +465,18 @@ def test_offer_message_names_what_the_owner_decides(repo):
         assert needle in text, needle
     empty = hook.offer_message(["make"], [])
     assert "no files are listed yet" in empty and "1 listed setup command " in empty
+
+
+def test_a_failed_run_does_not_let_a_return_to_the_earlier_inputs_skip_the_setup(repo):
+    commands = ["cp deps.lock installed-deps", "grep -qx A deps.lock"]
+    script = _installed(repo, commands, ["deps.lock"])
+    (repo / "deps.lock").write_text("A\n")
+    assert _run(script).returncode == 0
+    assert (repo / "installed-deps").read_text() == "A\n"
+    (repo / "deps.lock").write_text("B\n")
+    assert "command 2 failed" in _run(script).stdout
+    assert (repo / "installed-deps").read_text() == "B\n"
+    (repo / "deps.lock").write_text("A\n")
+    assert _run(script).returncode == 0
+    assert (repo / "installed-deps").read_text() == "A\n"
+    assert _state(repo) is not None

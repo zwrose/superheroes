@@ -9,6 +9,7 @@ environment the test builds itself.
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -175,7 +176,8 @@ def test_hook_on_an_input_change_leaves_the_stamp_unchanged(tmp_path, mode):
     assert _stamp(w) == before
     assert _compose(w)["text"] == text_before
     assert _calibration_condition(w) is True
-    assert not any(k.startswith("setup-input") for k in CS.stamped_files(w.cwd, w.root))
+    assert not any(k.startswith(("setup-input/", "setup-input-missing/"))
+                   for k in CS.stamped_files(w.cwd, w.root))
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -436,10 +438,74 @@ def test_a_failing_config_write_after_a_successful_enable_sync_rolls_the_files_b
 
     monkeypatch.setattr(core_md, "write_project_config_item", failing)
     got = _set(w, HOOK_SLUG, True)
-    assert got == {"action": "refused", "reason": "x"}
+    assert got["action"] == "refused" and got["reason"] == "x"
+    assert got["dependencyHookResynced"]["changed"]
     assert not w.script.exists() and not w.settings.exists()
     monkeypatch.undo()
     assert _raw(w, HOOK_SLUG) is None
+    _assert_files_match_stored(w)
+
+
+def test_a_failing_write_never_undoes_another_sets_stored_update(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, HOOK_SLUG, True)
+    real = core_md.write_project_config_item
+    state = {"done": False}
+
+    def interleaved(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not state["done"]:
+            state["done"] = True
+            # set B lands whole (store and files) between A's sync and A's write
+            assert real(cwd, COMMANDS_SLUG, ["make"], root=root)["action"] in ("written", "noop")
+            assert hook.sync(w.cwd, ["make"], _raw(w, INPUTS_SLUG), True)["action"] == "written"
+            return {"action": "refused", "reason": "x"}
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", interleaved)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    assert got["action"] == "refused" and got["reason"] == "x"
+    monkeypatch.undo()
+    assert _raw(w, COMMANDS_SLUG) == ["make"]
+    assert w.script.read_text() == hook.script_text(["make"], _raw(w, INPUTS_SLUG))
+    _assert_files_match_stored(w)
+
+
+def test_a_failing_write_with_a_stored_credential_removes_the_files_and_writes_no_script(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, HOOK_SLUG, True)
+    secret = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789 npm ci"
+    real = core_md.write_project_config_item
+
+    def interleaved(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG:
+            # a hand-edit lands past the validator, then A's own write fails
+            assert real(cwd, COMMANDS_SLUG, [secret], root=root)["action"] in ("written", "noop")
+            return {"action": "refused", "reason": "x"}
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", interleaved)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert got["reason"] == "x"
+    assert got["dependencyHookRemovedInvalid"] == "setup-command-secret-shaped"
+    assert not w.script.exists() and not w.settings.exists()
+
+
+def test_a_failed_readback_after_a_held_write_keeps_the_synced_files(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    monkeypatch.setattr(PC, "get_item", lambda *a, **k: {"action": "ok", "raw": None})
+    got = _set(w, HOOK_SLUG, True)
+    assert got["action"] == "refused" and got["reason"] == PC.REASON_SET_MISMATCH
+    assert got["dependencyHook"]["changed"]
+    assert w.script.exists() and w.settings.exists()
+    monkeypatch.undo()
+    assert _raw(w, HOOK_SLUG) is True
+    _assert_files_match_stored(w)
 
 
 def test_a_failing_fill_write_reports_inputs_fill_failed_and_the_files_match_what_is_stored(
@@ -508,7 +574,10 @@ def _setup_block(w, text):
     lines = text.splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("# Run the project's own"))
     end = next(i for i, ln in enumerate(lines) if ln == "setup_rc=$?")
-    return "\n".join(['LOG="%s"' % (w.tmp / "log.txt"), 'CLONE="repo"', 'wrote=0',
+    body = "\n".join(lines[start:end + 1])
+    count = re.search(r'"\$wrote" = (\d+)', body)
+    return "\n".join(['LOG="%s"' % (w.tmp / "log.txt"), 'CLONE="repo"',
+                      'wrote=%s' % (count.group(1) if count else "0"),
                       'DEST="%s"' % (w.tmp / "dest"), 'mkdir -p "$DEST"', *lines[start:end + 1],
                       'cat "$LOG"; exit "$setup_rc"'])
 
@@ -520,7 +589,7 @@ def _run_block(w, block):
                           text=True, timeout=60)
 
 
-def test_the_record_step_runs_the_clones_script_and_changes_no_status(tmp_path):
+def test_the_record_step_runs_the_clones_script_and_publishes_the_stamp(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
     _set_ok(w, COMMANDS_SLUG, ["true"])
@@ -531,17 +600,98 @@ def test_the_record_step_runs_the_clones_script_and_changes_no_status(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "dependency hook recorded" in proc.stdout
     assert "record FAILED" not in proc.stdout
+    assert os.path.isfile(str(w.tmp / "dest" / CS.STAMP_FILE))
     state = subprocess.run(["git", "-C", str(w.repo), "rev-parse", "--git-path", hook.HASH_NAME],
                            capture_output=True, text=True, env=_GIT_ENV).stdout.strip()
     assert os.path.isfile(os.path.join(str(w.repo), state))
-    # the clone does not hold it: the owner is told, and the setup still finishes
+
+
+def test_a_missing_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
     os.remove(w.script)
     proc = _run_block(w, block)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode != 0
     assert "dependency hook not in the clone: commit and push it" in proc.stdout
+    assert "setup stamp withheld" in proc.stdout
+    assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
 
 
-def test_the_record_step_logs_a_failure_when_the_script_declines_and_still_finishes(tmp_path):
+def _registered_settings(w):
+    return json.loads(w.settings.read_text())
+
+
+@pytest.mark.parametrize("variant", [
+    "absent", "other-event-only", "disabled", "empty-session-start", "permission-only", "not-json",
+    "matcher-resume-only", "matcher-invalid-regex"])
+def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path, variant):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    # the script reached the clone but the settings file does not register it as a SessionStart hook
+    good = _registered_settings(w)
+    entry = good["hooks"]["SessionStart"]
+    if variant == "absent":
+        os.remove(w.settings)
+    elif variant == "other-event-only":
+        w.settings.write_text(json.dumps({"hooks": {"Stop": entry}}))
+    elif variant == "disabled":
+        w.settings.write_text(json.dumps({**good, "disableAllHooks": True}))
+    elif variant == "empty-session-start":
+        w.settings.write_text(json.dumps({"hooks": {"SessionStart": []}}))
+    elif variant == "permission-only":
+        w.settings.write_text(json.dumps({
+            "hooks": {"SessionStart": []},
+            "permissions": {"allow": ["Bash(bash %s)" % hook.SCRIPT_REL]}}))
+    elif variant in ("matcher-resume-only", "matcher-invalid-regex"):
+        matcher = "resume" if variant == "matcher-resume-only" else "start(up"
+        w.settings.write_text(json.dumps({"hooks": {"SessionStart": [{**e, "matcher": matcher} for e in entry]}}))
+    else:
+        w.settings.write_text("{not json")
+    proc = _run_block(w, block)
+    assert proc.returncode != 0
+    assert ("dependency hook not recorded: not registered as a SessionStart hook in "
+            ".claude/settings.json") in proc.stdout
+    assert "dependency hook record FAILED" in proc.stdout
+    assert "dependency hook recorded" not in proc.stdout
+    assert "setup stamp withheld" in proc.stdout
+    assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
+
+
+@pytest.mark.parametrize("matcher", [None, "", "*", "startup|resume", "startup"])
+def test_a_hook_group_whose_matcher_covers_startup_is_recorded(tmp_path, matcher):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    good = _registered_settings(w)
+    if matcher is not None:
+        good["hooks"]["SessionStart"] = [{**e, "matcher": matcher} for e in good["hooks"]["SessionStart"]]
+    w.settings.write_text(json.dumps(good))
+    proc = _run_block(w, block)
+    assert proc.returncode == 0, proc.stdout
+    assert "dependency hook recorded" in proc.stdout
+
+
+def test_a_registered_hook_script_is_recorded_and_the_stamp_published(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    proc = _run_block(w, block)
+    assert proc.returncode == 0, proc.stdout
+    assert "dependency hook recorded" in proc.stdout
+    assert os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
+
+
+def test_the_record_step_failure_withholds_the_stamp_and_fails_the_setup(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
     _set_ok(w, COMMANDS_SLUG, ["true"])
@@ -550,8 +700,9 @@ def test_the_record_step_logs_a_failure_when_the_script_declines_and_still_finis
     # the committed script lists different inputs from the ones the text was written for
     assert hook.sync(str(w.repo), ["true"], ["uv.lock"], True)["action"] == "written"
     proc = _run_block(w, block)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode != 0
     assert "dependency hook record FAILED" in proc.stdout
+    assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
     assert "dependency hook recorded" not in proc.stdout
     state = subprocess.run(["git", "-C", str(w.repo), "rev-parse", "--git-path", hook.HASH_NAME],
                            capture_output=True, text=True, env=_GIT_ENV).stdout.strip()
@@ -605,3 +756,125 @@ def test_offer_uses_the_stored_inputs_when_item_18_is_stored(tmp_path, capsys):
     got = json.loads(capsys.readouterr().out)
     assert got["inputs"] == ["other.lock"] and got["inputsSource"] == "stored"
     assert got["message"] == hook.offer_message(["npm ci"], ["other.lock"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_hook_on_a_changed_item_18_moves_the_stamp(tmp_path, mode):
+    # axis: the input list and the hook flag stay in the stamp when the hook is on
+    w = _world(tmp_path, mode)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    _set_ok(w, HOOK_SLUG, True)
+    before = _stamp(w)
+    _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    assert _stamp(w) != before
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_enabling_the_hook_without_a_stored_item_18_moves_the_stamp(tmp_path, mode):
+    w = _world(tmp_path, mode)
+    # stored straight through the core writer: the set path would fill item 18 with `[]`
+    stored = core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    assert stored["action"] in ("written", "noop"), stored
+    assert _raw(w, INPUTS_SLUG) is None
+    off = _stamp(w)
+    _set_ok(w, HOOK_SLUG, True)
+    assert _raw(w, INPUTS_SLUG) is None
+    assert _stamp(w) != off
+
+
+def test_enabling_the_hook_refuses_a_stored_secret_shaped_command_and_writes_nothing(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    # a hand-edit of the local calibration, past the item 17 validator
+    facts = core_md.read(w.cwd, w.root)
+    assert facts is not None
+    got = core_md.write_project_config_item(
+        w.cwd, COMMANDS_SLUG, ["OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789 npm ci"],
+        root=w.root)
+    assert got["action"] in ("written", "noop"), got
+    refused = _set(w, HOOK_SLUG, True)
+    assert refused["action"] == "refused"
+    assert refused["reason"] == "setup-command-secret-shaped"
+    assert _raw(w, HOOK_SLUG) is None
+    assert not w.script.exists()
+    assert not w.settings.exists()
+
+
+def test_a_refused_sync_puts_back_what_it_already_changed(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+    script_before = w.script.read_bytes()
+    settings_before = w.settings.read_bytes()
+    real_remove = os.remove
+
+    def remove(path, *a, **kw):
+        if str(path) == str(w.script):
+            raise PermissionError("denied")
+        return real_remove(path, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", remove)
+    got = _set(w, HOOK_SLUG, False)
+    monkeypatch.undo()
+    assert got["action"] == "refused"
+    assert got["reason"] == "dependency-hook-unwritable"
+    assert _raw(w, HOOK_SLUG) is True
+    assert w.script.read_bytes() == script_before
+    assert w.settings.read_bytes() == settings_before
+
+
+def test_a_concurrent_item_17_set_landing_between_the_sync_and_the_write_leaves_files_matching_stored(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    _set_ok(w, HOOK_SLUG, True)
+    real = core_md.write_project_config_item
+    landed = []
+
+    def racing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not landed:
+            landed.append(True)
+            assert real(cwd, COMMANDS_SLUG, ["make"], root=root)["action"] in ("written", "noop")
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", racing)
+    got = _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert landed
+    assert got["dependencyHookResynced"]["action"] in ("written", "noop")
+    assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, INPUTS_SLUG) == ["uv.lock"]
+    assert w.script.read_text() == hook.script_text(["make"], ["uv.lock"])
+    _assert_files_match_stored(w)
+
+
+def test_a_partial_sync_failure_recovers_to_the_stored_items_another_set_just_landed(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+    real_remove = os.remove
+    real_write = core_md.write_project_config_item
+    landed = []
+
+    def remove(path, *a, **kw):
+        if str(path) == str(w.script):
+            if not landed:
+                landed.append(True)
+                # another set's stored update lands while this disable is syncing
+                assert real_write(w.cwd, COMMANDS_SLUG, ["make"], root=w.root)["action"] in (
+                    "written", "noop")
+            raise PermissionError("denied")
+        return real_remove(path, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", remove)
+    got = _set(w, HOOK_SLUG, False)
+    monkeypatch.undo()
+    assert landed
+    assert got["action"] == "refused"
+    assert got["reason"] == "dependency-hook-unwritable"
+    assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, HOOK_SLUG) is True
+    assert w.script.read_text() == hook.script_text(["make"], _raw(w, INPUTS_SLUG) or [])
+    _assert_files_match_stored(w)

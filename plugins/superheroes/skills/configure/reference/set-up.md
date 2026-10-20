@@ -703,7 +703,9 @@ changing one, such as a lockfile, makes the check report the setup text out of d
 new setup text. With the dependency hook on (item 19), the files are not in the stamp, so changing
 one needs no new setup text: the hook re-runs the commands at the next cloud session start. The
 setup text then records the hook after the commands finish, logging `dependency hook recorded` or
-`dependency hook record FAILED`.
+`dependency hook record FAILED`. The hook files must be committed and pushed before the setup text
+is pasted: with no script in the clone, or a failed record, the stamp is withheld and the setup
+does not finish.
 
 A launch that names an id matching no environment lands in the account's default environment
 without an error. The check catches this, because the pass block names its environment and the

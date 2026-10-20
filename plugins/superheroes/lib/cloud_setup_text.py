@@ -43,6 +43,7 @@ SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
 SETUP_COMMANDS_STAMP_KEY = "setup-commands"
 SETUP_INPUTS_STAMP_KEY = "setup-inputs"
+SETUP_HOOK_STAMP_KEY = "setup-dependency-hook"
 SETUP_INPUT_STAMP_PREFIX = "setup-input/"
 SETUP_INPUT_MISSING_STAMP_PREFIX = "setup-input-missing/"
 REQUIREMENTS_PATTERN = "requirements*.txt"
@@ -446,8 +447,15 @@ def _view_for(cwd, files, commands, inputs, hook_on):
     dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
     files needs no new paste)."""
     inputs_view = None
+    # axis: with commands and the hook on, the input list (when stored) and the hook flag stay in
+    # the stamp, because they change the generated text; only the files' contents leave it
+    if commands and hook_on:
+        inputs_view = {SETUP_HOOK_STAMP_KEY: b"on\n"}
+        if inputs is not None:
+            inputs_view[SETUP_INPUTS_STAMP_KEY] = (
+                json.dumps(list(inputs), ensure_ascii=False) + "\n").encode("utf-8")
     # axis: the input files join the stamp only with commands, stored inputs and no hook
-    if commands and inputs is not None and not hook_on:
+    elif commands and inputs is not None:
         try:
             repo_root = store_core.repo_root(cwd)
         except store_core.RepoRootUnavailable:
@@ -573,7 +581,8 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=No
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
     ran and succeeded. With a `record` fingerprint (the dependency hook is on), a finished run also
-    tells the clone's hook script, so the hook starts from this run."""
+    tells the clone's hook script, so the hook starts from this run; a missing script or a failed
+    record withholds the stamp and fails the setup, because the stamp stops covering the inputs."""
     return [
         "",
         "# Run the project's own setup commands (configure item 17), one at a time, in the order "
@@ -604,14 +613,16 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=No
         "    fi",
         "  done",
         *([
-            # axis: the hook is told of the run only when every command succeeded; none of this
-            # changes whether the setup finished
+            # axis: the hook is told of the run only when every command succeeded; with the hook
+            # on the stamp no longer covers the inputs, so a missing script or a failed record
+            # means the setup did not finish (no stamp, non-zero exit)
             '  if [ "$ok" = 1 ]; then',
             '    if [ -f "$DIR/%s" ]; then' % cloud_dependency_hook.SCRIPT_REL,
+            # axis: the script's own record mode declines (exit 2) when the clone's settings do not register it as an enabled SessionStart hook, so that withholds the stamp as a failed record does
             '      if (cd "$DIR" && bash %s --record %s); then echo "dependency hook recorded"'
             % (cloud_dependency_hook.SCRIPT_REL, record),
-            '      else echo "dependency hook record FAILED"; fi',
-            '    else echo "dependency hook not in the clone: commit and push it"; fi',
+            '      else echo "dependency hook record FAILED"; ok=0; fi',
+            '    else echo "dependency hook not in the clone: commit and push it"; ok=0; fi',
             "  fi",
         ] if record is not None else []),
         *([

@@ -41,6 +41,7 @@ REASON_SETUP_COMMAND_EMPTY = "setup-command-empty"
 REASON_SETUP_COMMAND_MULTI_LINE = "setup-command-multi-line"
 REASON_SETUP_COMMAND_SECRET_SHAPED = "setup-command-secret-shaped"
 REASON_SETUP_INPUT_UNSAFE_PATH = "setup-input-unsafe-path"
+REASON_SETUP_INPUT_SECRET_SHAPED = "setup-input-secret-shaped"
 REASON_DEPENDENCY_HOOK_UNWRITABLE = "dependency-hook-unwritable"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
@@ -334,6 +335,15 @@ def _validate_input_path_list(value):
     # axis: an entry that is not a plain repo-relative path is refused, since the setup stamp reads it
     if any(not cloud_setup_text._plain_relative(entry) for entry in value):
         return REASON_SETUP_INPUT_UNSAFE_PATH
+    return None
+
+
+def _validate_inputs_not_secret_shaped(inputs):
+    """REASON_SETUP_INPUT_SECRET_SHAPED when an input path is shaped like a secret, else None."""
+    import cloud_setup_text
+
+    if any(cloud_setup_text._scan(entry) is not None for entry in inputs):
+        return REASON_SETUP_INPUT_SECRET_SHAPED
     return None
 
 
@@ -811,16 +821,17 @@ def _fill_setup_inputs(cwd, root, write_result, filled):
     """Stores the detected `filled` list as item 18, after item 17 is stored. The fill never turns
     a stored item 17 into a refusal: when the write or its read-back fails, item 17's result is
     returned with `inputsFillFailed` carrying the reason (and no `inputsFilled`), leaving item 18
-    unset."""
+    unset when the write failed. Returns (result, committed): `committed` is True once the write
+    went through, even when the read-back then failed."""
     stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
     if stored.get("action") not in ("written", "noop"):
-        return {**write_result, "inputsFillFailed": stored.get("reason")}
+        return {**write_result, "inputsFillFailed": stored.get("reason")}, False
     reread = get_item(cwd, CLOUD_SETUP_INPUTS_SLUG, root=root)
     if reread.get("action") == "refused":
-        return {**write_result, "inputsFillFailed": reread.get("reason")}
+        return {**write_result, "inputsFillFailed": reread.get("reason")}, True
     if not _values_equal(reread.get("raw"), filled):
-        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}
-    return {**write_result, "inputsFilled": list(filled)}
+        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}, True
+    return {**write_result, "inputsFilled": list(filled)}, True
 
 
 _DEPENDENCY_HOOK_SLUGS = (
@@ -846,7 +857,7 @@ def _hook_refusal(detail):
     return {"action": "refused", "reason": REASON_DEPENDENCY_HOOK_UNWRITABLE, "detail": detail}
 
 
-def _plan_dependency_hook(cwd, slug, value, facts):
+def _plan_dependency_hook(cwd, slug, value, facts, root=None):
     """Works out, before anything is written, the item 18 fill and the hook state this set leads
     to, and brings the hook files to that state. Returns {"refusal": result} when it cannot, else
     the plan: the stored `old` triple, the `new` triple (with the fill), the `filled` item 18 (or
@@ -879,44 +890,109 @@ def _plan_dependency_hook(cwd, slug, value, facts):
     script = os.path.join(repo_root, *hook.SCRIPT_REL.split("/"))
     # axis: a project that never opted in has no script, so its settings file is never read
     if _hook_desired(new) or _hook_desired(old) or os.path.lexists(script):
+        # axis: a hook about to be written never carries a command the setup text would refuse — a stored command with a credential in it is not committed
+        if _hook_desired(new):
+            reason = _validate_command_list(new[0])
+            if reason is None:
+                reason = _validate_inputs_not_secret_shaped(new[1])
+            if reason is not None:
+                return {"refusal": {"action": "refused", "reason": reason}}
         result = hook.sync(repo_root, *new)
         if result.get("action") == "refused":
-            return {"refusal": _hook_refusal(result.get("reason"))}
+            # axis: a refused sync that already changed files puts them back to the stored state, by reconciling to the stored items — never from a snapshot
+            refusal = _hook_refusal(result.get("reason"))
+            if result.get("changed"):
+                # axis: another set may have stored items since `old` was read, so recovery reads them afresh
+                fresh = core_md.read(cwd, root)
+                if not fresh:
+                    refusal["dependencyHookResyncFailed"] = "stored-config-unreadable"
+                else:
+                    refusal.update(_reconcile_dependency_hook(
+                        repo_root, _hook_triple(_project_config_mapping(fresh))))
+            return {"refusal": refusal}
         plan["hookResult"] = result
     return plan
 
 
-def _restore_dependency_hook(plan, triple):
-    """Best effort: puts the hook files back to `triple` after a write that did not hold. Returns
-    the sync result, or None when no sync had run or this one raised."""
-    if plan is None or plan.get("hookResult") is None:
-        return None
+def _reconcile_dependency_hook(repo_root, stored):
+    """Brings the hook files to the stored (commands, inputs, enabled) triple, the one way every
+    failure after a sync ends: a triple a hook-writing sync would accept is synced as stored; one it
+    would refuse (a secret-shaped command or input) gets the hook turned off, which removes the
+    files, so no stored credential reaches a script. Returns {"dependencyHookResynced": result} or
+    {"dependencyHookResyncFailed": reason}, and adds `dependencyHookRemovedInvalid` with the reason
+    when the stored triple was invalid."""
     import cloud_dependency_hook as hook
 
+    target = stored
+    extra = {}
+    if _hook_desired(stored):
+        reason = _validate_command_list(stored[0])
+        if reason is None:
+            reason = _validate_inputs_not_secret_shaped(stored[1])
+        if reason is not None:
+            target = (stored[0], stored[1], False)
+            extra = {"dependencyHookRemovedInvalid": reason}
     try:
-        return hook.sync(plan["repoRoot"], *triple)
-    except Exception:
-        return None
-
-
-def _roll_back_dependency_hook(plan):
-    """Puts the hook files back to the stored triple from before this set."""
-    if plan is not None:
-        _restore_dependency_hook(plan, plan["old"])
+        again = hook.sync(repo_root, *target)
+    except Exception as exc:
+        return {**extra, "dependencyHookResyncFailed": str(exc)}
+    if again.get("action") == "refused":
+        return {**extra, "dependencyHookResyncFailed": again.get("reason")}
+    return {**extra, "dependencyHookResynced": again}
 
 
 def _finish_dependency_hook(cwd, root, plan, write_result):
-    """Stores the filled item 18 (after item 17) and attaches what the sync did to the result."""
+    """Stores the filled item 18 (after item 17) and attaches what the sync did to the result.
+    After any failure here the stored items and the files on disk agree: a fill whose write held
+    keeps its script (inputs and item 18 both filled); a fill whose write failed gets the script
+    for the stored (unset) item 18."""
     hook_result = plan["hookResult"]
     if plan["filled"] is not None:
-        write_result = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
-        if "inputsFillFailed" in write_result and _hook_desired(plan["new"]):
-            # item 18 stays unset, so the script goes back to the inputs that are stored
-            hook_result = _restore_dependency_hook(
-                plan, (plan["new"][0], plan["old"][1], plan["new"][2])) or hook_result
+        write_result, committed = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
+        if "inputsFillFailed" in write_result and not committed and _hook_desired(plan["new"]):
+            import cloud_dependency_hook as hook
+
+            try:
+                # the commands were validated before the first sync; the old inputs are unset here
+                again = hook.sync(plan["repoRoot"], plan["new"][0], plan["old"][1], plan["new"][2])
+            except Exception:
+                again = None
+            if again is not None:
+                # axis: the paths the first sync changed stay reported beside the recovery's
+                changed = sorted(set(hook_result.get("changed") or []) | set(again.get("changed") or []))
+                hook_result = {**again, "changed": changed}
     if hook_result is not None:
         write_result = {**write_result, "dependencyHook": hook_result}
+        write_result = _converge_dependency_hook(cwd, root, plan, write_result)
     return write_result
+
+
+def _with_dependency_hook(cwd, root, plan, result):
+    """Attaches the sync's result to a read-back failure and runs the convergence step, keeping the
+    synced files."""
+    if plan is None or plan.get("hookResult") is None:
+        return result
+    result = {**result, "dependencyHook": plan["hookResult"]}
+    return _converge_dependency_hook(cwd, root, plan, result)
+
+
+def _converge_dependency_hook(cwd, root, plan, write_result):
+    """Brings the hook files to the stored items 17, 18 and 19 when a set that landed between this
+    set's sync and its write left them differing from the triple the sync used (the writers each
+    lock internally, so no lock can span the sync). One more sync runs with the stored triple,
+    validated as before a hook-writing sync, and the result reports it under `dependencyHookResynced`
+    (or `dependencyHookResyncFailed`)."""
+    # accepted under the single-owner threat model: two sets interleaving after this re-read
+    facts = core_md.read(cwd, root)
+    if not facts:
+        return {**write_result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+    stored = _hook_triple(_project_config_mapping(facts))
+    used = plan["new"]
+    if plan["filled"] is not None and "inputsFillFailed" in write_result:
+        used = (plan["new"][0], plan["old"][1], plan["new"][2])
+    if stored == used:
+        return write_result
+    return {**write_result, **_reconcile_dependency_hook(plan["repoRoot"], stored)}
 
 
 def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
@@ -972,7 +1048,7 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
 
     plan = None
     if slug in _DEPENDENCY_HOOK_SLUGS:
-        plan = _plan_dependency_hook(cwd, slug, value, facts)
+        plan = _plan_dependency_hook(cwd, slug, value, facts, root)
         if plan.get("refusal") is not None:
             return plan["refusal"]
 
@@ -993,21 +1069,23 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
 
     if write_result.get("action") not in ("written", "noop"):
-        _roll_back_dependency_hook(plan)
+        # axis: a failed write reconciles the hook files to what is stored now, so it never undoes another set's stored update and never writes a stored credential
+        if plan is not None and plan.get("hookResult") is not None:
+            write_result = _converge_dependency_hook(cwd, root, plan, dict(write_result))
         return write_result
 
+    # axis: the write went through here, so a failed or mismatched read-back keeps the synced
+    # files (they match what was written) and converges them; only an uncommitted write rolls back
     reread = get_item(cwd, slug, root=root)
     if reread.get("action") == "refused":
-        _roll_back_dependency_hook(plan)
-        return reread
+        return _with_dependency_hook(cwd, root, plan, dict(reread))
     if not _values_equal(reread.get("raw"), value):
-        _roll_back_dependency_hook(plan)
-        return {
+        return _with_dependency_hook(cwd, root, plan, {
             "action": "refused",
             "reason": REASON_SET_MISMATCH,
             "expected": value,
             "observed": reread.get("raw"),
-        }
+        })
     if plan is not None:
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
         return _finish_dependency_hook(cwd, root, plan, write_result)
