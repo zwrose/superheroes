@@ -35,7 +35,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Launcher: an adoption whose head is not on its base is refused before launch
 
 - A premise that adopted a branch whose head was not on its `baseCommit` launched, spent a lane, and only then failed at the cloud intake with `adopted-head-not-on-base`.
-- `launcher.py launch` now refuses it first, with `premise-adopts-head-not-on-base`, before any lane, worktree, cloud command or child exists, for cloud and local launches alike. The result carries `ancestry` (`not-descendant`, or `undecidable` when the adopted head is not present in the launching checkout or git could not answer) and a `remedy` that names the fix; a layer above the bottom is told to bring the adopted branch current with the layer below.
+- `launcher.py launch` now refuses it first, with `premise-adopts-head-not-on-base`, before any lane, worktree, cloud command or child exists, for cloud and local launches alike. The result carries `ancestry` (`not-descendant`, or `undecidable` when the adopted head is not present in the launching checkout, the checkout is shallow, or git could not answer) and a `remedy` that names the fix; a layer above the bottom is told to bring the adopted branch current with the layer below.
 - The cloud intake's `adopted-head-not-on-base` is unchanged and stays as the second line. `compose` and `preflight` do not run the check.
 
 ### PR sheet: judge before you build

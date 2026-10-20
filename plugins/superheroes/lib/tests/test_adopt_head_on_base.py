@@ -33,7 +33,8 @@ TOKEN = "premise-adopts-head-not-on-base"
 BRANCH = "feature/adopted-2002"
 _UNDECIDABLE_PREFIX = (
     "Ancestry could not be decided in the launching checkout: fetch the adopted branch so its "
-    "head is present, then launch again. If it still does not descend from baseCommit: "
+    "head is present, and run git fetch --unshallow when the checkout is shallow, then launch "
+    "again. If it still does not descend from baseCommit: "
 )
 _BOTTOM_REMEDY = (
     "Bring the adopted branch current with its base first: merge the base into it and push, then "
@@ -272,3 +273,72 @@ def test_a_stacked_layer_above_the_bottom_gets_the_stacked_remedy(tmp_path):
     assert L._adopted_head_refusal(repo, bottom, _env())[1]["remedy"] == _BOTTOM_REMEDY
     boolean = dict(stamped, layerPosition=True)
     assert L._adopted_head_refusal(repo, boolean, _env())[1]["remedy"] == _BOTTOM_REMEDY
+
+
+# --- shallow history is undecidable, not "not a descendant" --------------------------------
+
+
+def _shallow_pair(tmp_path):
+    """An origin with `main` at B and `feature/adopted` at H (parent B), and a depth-1 clone.
+
+    Returns `(origin, clone, base, head)`; the clone holds both tips but not H's parent link.
+    """
+    origin, base, _older = _fork_and_main(tmp_path, cloud=False)
+    head = _commit_on(origin, base)
+    _git(origin, "update-ref", "refs/heads/main", base)
+    _git(origin, "update-ref", "refs/heads/feature/adopted", head)
+    clone = str(tmp_path / "clone")
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", "--no-single-branch",
+         "file://" + str(origin), clone],
+        check=True, capture_output=True, text=True,
+    )
+    return origin, clone, base, head
+
+
+def test_a_shallow_checkout_that_cannot_prove_ancestry_refuses_undecidable_shallow(tmp_path):
+    # axis: exit 1 from a shallow checkout is not a verdict — its history may stop short of the base
+    _origin, clone, base, head = _shallow_pair(tmp_path)
+    assert _git(clone, "rev-parse", "--is-shallow-repository").strip() == "true"
+    asked = subprocess.run(
+        ["git", "-C", clone, "merge-base", "--is-ancestor", base, head], capture_output=True,
+    )
+    assert asked.returncode == 1
+    got = L._adopted_head_refusal(clone, _stamped(base, head), None)
+    assert got is not None
+    reason, detail = got
+    assert reason == TOKEN
+    assert detail["ancestry"] == "undecidable"
+    assert detail["remedy"].startswith(_UNDECIDABLE_PREFIX)
+
+
+def test_the_same_pair_in_the_full_origin_repository_passes(tmp_path):
+    # axis: the pair really descends — the shallow refusal above is the checkout's, not the pair's
+    origin, _clone, base, head = _shallow_pair(tmp_path)
+    assert _git(origin, "rev-parse", "--is-shallow-repository").strip() == "false"
+    assert L._adopted_head_refusal(origin, _stamped(base, head), None) is None
+
+
+@pytest.mark.parametrize("answer", [
+    None,
+    types.SimpleNamespace(returncode=128, stdout="", stderr="fatal"),
+    types.SimpleNamespace(returncode=0, stdout="maybe\n", stderr=""),
+], ids=["cannot-run", "non-zero-exit", "unrecognised-answer"])
+def test_an_unreadable_shallow_state_refuses_undecidable(tmp_path, monkeypatch, answer):
+    # axis: ancestry exit 1 is a verdict only when the shallow read positively answers false
+    repo, base, _older = _fork_and_main(tmp_path, cloud=False)
+    head = _commit_on(repo, base)
+    real = L._git_scrubbed
+
+    def fake(repo_root, *args, **kwargs):
+        if args[0] == "merge-base":
+            return _done(1)
+        if args[:2] == ("rev-parse", "--is-shallow-repository"):
+            return answer
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", fake)
+    reason, detail = L._adopted_head_refusal(repo, _stamped(base, head), _env())
+    assert reason == TOKEN
+    assert detail["ancestry"] == "undecidable"
+    assert detail["remedy"].startswith(_UNDECIDABLE_PREFIX)

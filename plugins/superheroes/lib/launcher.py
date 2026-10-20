@@ -2719,7 +2719,8 @@ def _cloud_start_refusal(repo_root, stamped, env):
 _ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
 _ADOPT_REMEDY_UNDECIDABLE = (
     "Ancestry could not be decided in the launching checkout: fetch the adopted branch so its "
-    "head is present, then launch again. If it still does not descend from baseCommit: "
+    "head is present, and run git fetch --unshallow when the checkout is shallow, then launch "
+    "again. If it still does not descend from baseCommit: "
 )
 _ADOPT_REMEDY_STACKED = (
     "Bring the adopted branch current with the layer below first: merge the layer below's head "
@@ -2738,9 +2739,11 @@ def _adopted_head_refusal(repo_root, stamped, env):
     else ``(reason, detail)``. It only reads the launching checkout.
 
     The adopted head must resolve to a commit here, and ``merge-base --is-ancestor`` must exit 0
-    for the resolved base (a head equal to the base passes). Exit 1 is ``not-descendant``; a git
-    that could not run, a head not present here, any other exit, or a base that is not a full sha
-    is ``undecidable``. Both refuse, and the ``remedy`` names the fix.
+    for the resolved base (a head equal to the base passes). Exit 1 is ``not-descendant`` only when
+    the checkout is positively known not to be shallow; a git that could not run, a head not
+    present here, a shallow checkout (its history may be cut short of the base), an unreadable
+    shallow state, any other exit, or a base that is not a full sha is ``undecidable``. Both
+    refuse, and the ``remedy`` names the fix.
     """
     if "adoptsHead" not in stamped:
         return None
@@ -2778,9 +2781,23 @@ def _adopted_head_refusal(repo_root, stamped, env):
         return refusal("undecidable")
     if asked.returncode == 0:
         return None
-    # axis: a head that does not descend from the base refuses not-descendant — see bite-proof record i2002_adopt_head_on_base
     if asked.returncode == 1:
-        return refusal("not-descendant")
+        shallow = _git_scrubbed(
+            repo_root, "rev-parse", "--is-shallow-repository",
+            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        # axis: a shallow state git could not read refuses undecidable — see bite-proof record i2002_adopt_head_on_base
+        if shallow is None:
+            return refusal("undecidable")
+        # axis: a shallow-state read that exits non-zero refuses undecidable — see bite-proof record i2002_adopt_head_on_base
+        if shallow.returncode != 0:
+            return refusal("undecidable")
+        answer = (shallow.stdout or "").strip()
+        # axis: a head that does not descend from the base in a checkout known not shallow refuses not-descendant — see bite-proof record i2002_adopt_head_on_base
+        if answer == "false":
+            return refusal("not-descendant")
+        # axis: a shallow checkout, or any other shallow answer, refuses undecidable since the ancestry may cross the boundary — see bite-proof record i2002_adopt_head_on_base
+        return refusal("undecidable")
     # axis: any ancestry exit other than 0 or 1 refuses undecidable — see bite-proof record i2002_adopt_head_on_base
     return refusal("undecidable")
 
@@ -2841,7 +2858,8 @@ def _check_premises(
 
     Walks preflight, validates the premise, applies the dependency and stack gates, checks that an
     adopted head descends from the base, composes the launch, resolves any named phone sizes
-    through `run`, and checks the cloud base (cloud) or the worktree path (local), in that order. Returns `{"refusal": <accounted failure>}` on the first
+    through `run`, and checks the cloud base (cloud) or the worktree path (local), in that order.
+    Returns `{"refusal": <accounted failure>}` on the first
     refusal, else `{"refusal": None}` with the `preflight`, `premise` (stamped), `compose`,
     `stackGate` and `dependencyGate` results, plus `iphoneTypes` (the resolved sizes, empty when
     none are named) and `iphoneSpent` (seconds the size lookup took).

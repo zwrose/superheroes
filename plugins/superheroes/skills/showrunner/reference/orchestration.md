@@ -411,7 +411,7 @@ report one that is not confirmed as the cleanup's steps say.
 ## Adoption mechanics
 
 The recovery rules live in `rubric/launch-doctrine.md` § Recovery, and the charter keeps the
-advisor's calls. Three of those calls have mechanics beyond the charter:
+advisor's calls. Four of those calls have mechanics beyond the charter:
 
 Follow the doctrine rather than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
 
