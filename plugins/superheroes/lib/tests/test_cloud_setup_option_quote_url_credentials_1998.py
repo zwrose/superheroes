@@ -17,7 +17,6 @@ PASSING = [
     'npm config set --location=project %s "$NPM_TOKEN"' % KEY,
     'echo "%s=$NPM_TOKEN" >> .npmrc' % KEY,
     'echo "%s=${NPM_TOKEN}" >> .npmrc' % KEY,
-    "pip install --index-url https://owner@packages.example/simple",
     "pip install --index-url https://$USER:$PASS@packages.example/simple",
     "pip install --index-url https://${USER}:${PASS}@packages.example/simple",
     "git clone ssh://git@github.com/org/repo.git",

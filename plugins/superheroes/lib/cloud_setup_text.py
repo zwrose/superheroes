@@ -87,10 +87,16 @@ _SECRET_SHAPES = (
         r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
     ("url credential", re.compile(
-        # scheme://user:password@host; a password that is only a bare environment reference
-        # ($NAME or ${NAME}) passes
-        r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'\\]+:"""
-        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})@)[^\s/@"'\\]+@""")),
+        # (1) scheme://<user or empty>:password@host, any scheme; (2) for http/https (and
+        # +-prefixed variants such as git+https) any literal user-info, https://token@host.
+        # A secret that is only a bare environment reference ($NAME or ${NAME}) passes;
+        # user-only forms on other schemes (ssh://git@host) pass.
+        r"""(?<![A-Za-z0-9+.-])(?:"""
+        r"""[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'\\]*:"""
+        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})@)[^\s/@"'\\]+@"""
+        r"""|(?:[A-Za-z][A-Za-z0-9.-]*\+)*https?://"""
+        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})@)[^\s:/@"'\\]+@)""",
+        re.IGNORECASE)),
     ("bearer credential", re.compile(
         # a token that is only a bare environment reference ($NAME or ${NAME}) passes
         r"""Bearer (?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\;,}&|]))"""

@@ -1437,3 +1437,28 @@ def test_literal_credential_elsewhere_in_the_placed_core_is_still_refused(tmp_pa
     _store_commands(w, [ENV_REF_COMMAND])
     _edit_core_block(w, lambda obj: obj.__setitem__("note", planted))
     _refusal(_compose(w), "secret-shaped-content")
+
+
+# --- URL credential shape: token-only and empty-user forms -----------------------------------
+
+@pytest.mark.parametrize("text", [
+    "pip install --index-url https://0123456789abcdef@packages.example.invalid/simple demo",
+    "pip install git+https://0123456789abcdef@host.example.invalid/x.git",
+    "redis-cli -u redis://:fixture-password-1234@cache.example.invalid PING",
+    "curl https://user:fixture-password@host.example.invalid/",
+])
+def test_scan_refuses_url_credential_forms(text):
+    assert CS._scan(text) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "pip install --index-url https://$TOKEN@packages.example.invalid/simple demo",
+    "pip install --index-url https://${TOKEN}@packages.example.invalid/simple demo",
+    "curl https://user:$TOKEN@host.example.invalid/",
+    "git clone ssh://git@github.com/x/y.git",
+    "pip install git+ssh://git@host.example.invalid/x.git",
+    "git clone git@github.com:x/y.git",
+    "pip install --index-url https://packages.example.invalid/simple demo",
+])
+def test_scan_allows_url_forms_without_a_literal_secret(text):
+    assert CS._scan(text) is None
