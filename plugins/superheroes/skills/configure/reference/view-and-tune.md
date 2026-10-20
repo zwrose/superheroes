@@ -182,7 +182,9 @@ action that owns it, leaving the rest of the calibration untouched:
   The first time setup commands are listed, configure fills item 18 from the lockfiles at the
   repository root (the plugin's lockfile list, which includes `package-lock.json`, `yarn.lock`,
   `pnpm-lock.yaml`, `uv.lock`, `poetry.lock`, `Gemfile.lock`, `Cargo.lock` and `go.sum`, and any
-  `requirements*.txt`) and never overwrites a list already stored. Read the result the same way as
+  `requirements*.txt`; a name item 18 would refuse is left out) and never overwrites a list
+  already stored. If that fill fails, item 17 stays saved, the result carries `inputsFillFailed`
+  with the reason, and item 18 stays unset. Read the result the same way as
   the `stackingTool` write above: only `written` or `noop` means it was saved. A refusal names one
   of two reasons, and nothing is stored: `malformed-value` (the value is not a JSON list) and
   `setup-input-unsafe-path` (an entry is not a plain repository-relative path). `[]` stores an

@@ -272,7 +272,7 @@ def test_an_unresolvable_repo_root_skips_the_fill_and_item_17_stays_stored(tmp_p
     assert _raw(w, INPUTS_SLUG) is None
 
 
-def test_a_failed_fill_is_returned_and_item_17_stays_stored(tmp_path, monkeypatch):
+def test_a_failed_fill_reports_inputs_fill_failed_and_item_17_stays_stored(tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
     real_write = core_md.write_project_config_item
@@ -282,7 +282,9 @@ def test_a_failed_fill_is_returned_and_item_17_stays_stored(tmp_path, monkeypatc
         return refusal if slug == INPUTS_SLUG else real_write(cwd, slug, value, **kw)
 
     monkeypatch.setattr(core_md, "write_project_config_item", write)
-    assert _set(w, COMMANDS_SLUG, ["npm ci"]) == refusal
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert done["inputsFillFailed"] == "write-failed", done
+    assert "inputsFilled" not in done
     monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
@@ -321,12 +323,15 @@ def test_the_registry_carries_item_18():
     assert PC.REASON_SETUP_INPUT_UNSAFE_PATH == "setup-input-unsafe-path"
 
 
-def test_a_detected_name_item_18_would_refuse_is_not_stored(tmp_path):
+def test_a_detected_name_item_18_would_refuse_is_left_out_of_the_list(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
     _lock(w, "requirements dev.txt", "flask\n")
-    got = _set(w, COMMANDS_SLUG, ["npm ci"])
-    assert got == dict(action="refused", reason="setup-input-unsafe-path"), got
-    assert _raw(w, INPUTS_SLUG) is None
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert done["inputsFilled"] == ["package-lock.json"], done
+    assert "inputsFillFailed" not in done
+    assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
+    assert _raw(w, INPUTS_SLUG) == ["package-lock.json"]
 
 
 # ---------------------------------------------------------------- the script checks its inputs

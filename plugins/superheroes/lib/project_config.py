@@ -789,7 +789,10 @@ def _set_risk_and_trust(cwd, value, root):
 
 def _fill_setup_inputs(cwd, root, write_result):
     """Stores item 18 as the lockfiles at the repository root, after item 17 is stored. A project
-    outside a git checkout has no root to look in, so it gets no fill."""
+    outside a git checkout has no root to look in, so it gets no fill. The fill never turns a
+    stored item 17 into a refusal: a detected name item 18 would refuse is left out of the list,
+    and when the write or its read-back fails, item 17's result is returned with `inputsFillFailed`
+    carrying the reason (and no `inputsFilled`), leaving item 18 unset."""
     import cloud_setup_text
     import store_core
 
@@ -797,20 +800,18 @@ def _fill_setup_inputs(cwd, root, write_result):
         repo_root = store_core.repo_root(cwd)
     except store_core.RepoRootUnavailable:
         return write_result
-    filled = cloud_setup_text.detect_inputs(repo_root)
+    item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
     # axis: a detected name item 18 would refuse is never stored, so the list stays valid
-    reason = validate_item_value(_item_by_slug(CLOUD_SETUP_INPUTS_SLUG), filled)
-    if reason is not None:
-        return {"action": "refused", "reason": reason}
+    filled = [name for name in cloud_setup_text.detect_inputs(repo_root)
+              if validate_item_value(item, [name]) is None]
     stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
     if stored.get("action") not in ("written", "noop"):
-        return stored
+        return {**write_result, "inputsFillFailed": stored.get("reason")}
     reread = get_item(cwd, CLOUD_SETUP_INPUTS_SLUG, root=root)
     if reread.get("action") == "refused":
-        return reread
+        return {**write_result, "inputsFillFailed": reread.get("reason")}
     if not _values_equal(reread.get("raw"), filled):
-        return {"action": "refused", "reason": REASON_SET_MISMATCH, "expected": filled,
-                "observed": reread.get("raw")}
+        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}
     return {**write_result, "inputsFilled": list(filled)}
 
 
@@ -897,7 +898,7 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
     # axis: item 18 is filled only when it was never stored, so an edited list survives
     if (slug == CLOUD_SETUP_COMMANDS_SLUG and value
             and CLOUD_SETUP_INPUTS_SLUG not in _project_config_mapping(facts)):
-        # a failed fill is returned as it is; item 17 stays stored
+        # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
         return _fill_setup_inputs(cwd, root, write_result)
     if slug == CLOUD_BUILDS_SLUG:
         kind = "on" if value else "off"
