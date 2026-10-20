@@ -625,7 +625,8 @@ def _registered_settings(w):
 
 
 @pytest.mark.parametrize("variant", [
-    "absent", "other-event-only", "disabled", "empty-session-start", "permission-only", "not-json"])
+    "absent", "other-event-only", "disabled", "empty-session-start", "permission-only", "not-json",
+    "matcher-resume-only", "matcher-invalid-regex"])
 def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path, variant):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
@@ -647,6 +648,9 @@ def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp
         w.settings.write_text(json.dumps({
             "hooks": {"SessionStart": []},
             "permissions": {"allow": ["Bash(bash %s)" % hook.SCRIPT_REL]}}))
+    elif variant in ("matcher-resume-only", "matcher-invalid-regex"):
+        matcher = "resume" if variant == "matcher-resume-only" else "start(up"
+        w.settings.write_text(json.dumps({"hooks": {"SessionStart": [{**e, "matcher": matcher} for e in entry]}}))
     else:
         w.settings.write_text("{not json")
     proc = _run_block(w, block)
@@ -657,6 +661,22 @@ def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp
     assert "dependency hook recorded" not in proc.stdout
     assert "setup stamp withheld" in proc.stdout
     assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
+
+
+@pytest.mark.parametrize("matcher", [None, "", "*", "startup|resume", "startup"])
+def test_a_hook_group_whose_matcher_covers_startup_is_recorded(tmp_path, matcher):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    good = _registered_settings(w)
+    if matcher is not None:
+        good["hooks"]["SessionStart"] = [{**e, "matcher": matcher} for e in good["hooks"]["SessionStart"]]
+    w.settings.write_text(json.dumps(good))
+    proc = _run_block(w, block)
+    assert proc.returncode == 0, proc.stdout
+    assert "dependency hook recorded" in proc.stdout
 
 
 def test_a_registered_hook_script_is_recorded_and_the_stamp_published(tmp_path):
