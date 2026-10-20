@@ -67,6 +67,19 @@ _URL_USERINFO_RE = re.compile(
 _URL_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
 _URL_HTTP_SCHEME_RE = re.compile(r"(?:.*\+)?https?", re.IGNORECASE)
 _URL_QUOTES_RE = re.compile(r"""\\?["']""")
+_ANSI_C_WORD_RE = re.compile(r"""\$'((?:[^'\\]|\\.)*)'""", re.DOTALL)
+
+
+def _ansi_c_decode(text):
+    """Bash renders `$'...'` as the literal text its backslash escapes spell; decode those so a
+    quoted password is seen as the literal it is, not as the `$name` it resembles."""
+    def decode(match):
+        body = match.group(1)
+        try:
+            return body.encode("latin-1", "backslashreplace").decode("unicode_escape")
+        except (UnicodeError, ValueError):
+            return body
+    return _ANSI_C_WORD_RE.sub(decode, text)
 
 
 class _UrlCredential:
@@ -110,7 +123,7 @@ class _UrlCredential:
         # shlex drops comments, so the raw white-space words are examined too
         words = list(dict.fromkeys(self._words(text) + text.split()))
         for word in words:
-            for form in (word, word.replace("\\/", "/")):
+            for form in (word, word.replace("\\/", "/"), _ansi_c_decode(word)):
                 if self._refuses(form) or self._refuses(_URL_QUOTES_RE.sub("", form)):
                     return True
         return False

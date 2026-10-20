@@ -29,3 +29,20 @@ def test_a_credential_in_existing_settings_is_never_directed_to_commit(tmp_path)
     assert not world.script.exists()
     assert _raw(world, HOOK_SLUG) is None
     assert secret not in json.dumps(result)
+
+
+def test_a_credential_in_settings_is_never_directed_to_commit_on_removal(tmp_path):
+    # axis: removal rewrites the settings file too, so it is scanned like the enable write.
+    world = _world(tmp_path, mode_registry.GLOBAL)
+    assert hook.sync(str(world.repo), ["npm ci"], [], True)["action"] == "written"
+    secret = "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2"
+    settings = json.loads(world.settings.read_text())
+    settings["env"] = {"OPENAI_API_KEY": secret}
+    world.settings.write_text(json.dumps(settings))
+    before = world.settings.read_text()
+
+    result = hook.sync(str(world.repo), ["npm ci"], [], False)
+    assert result == {"action": "refused", "reason": "settings-secret-shaped", "changed": []}
+    assert world.settings.read_text() == before
+    assert world.script.exists()
+    assert secret not in json.dumps(result)

@@ -346,7 +346,7 @@ def _sync(repo_root, commands, inputs, enabled, changed):
 
     if not os.path.isdir(repo_root) and (write_script is not None or write_settings is not None):
         raise OSError("the repository root does not exist")
-    if write_settings is not None and desired:
+    if write_settings is not None:
         from cloud_setup_text import _scan  # lazy: that module imports this one back
         text = json.dumps(write_settings, indent=2, ensure_ascii=False) + "\n"
         if _scan(text):
