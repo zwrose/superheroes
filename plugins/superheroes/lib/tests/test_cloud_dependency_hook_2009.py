@@ -326,6 +326,19 @@ def test_the_first_item_17_set_with_the_hook_on_writes_a_script_that_lists_the_f
     _assert_files_match_stored(w)
 
 
+def test_saving_the_offered_inputs_as_item_18_then_enabling_item_19_hashes_them(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, [])
+    inputs = ["package-lock.json"]  # the offer's detected `inputs`
+    _set_ok(w, INPUTS_SLUG, inputs)
+    done = _set_ok(w, HOOK_SLUG, True)
+    assert done["dependencyHook"]["action"] == "written"
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["package-lock.json"])
+    assert "package-lock.json" in w.script.read_text()
+
+
 def test_a_project_that_never_opted_in_never_has_its_settings_file_read(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     w.settings.parent.mkdir(parents=True, exist_ok=True)

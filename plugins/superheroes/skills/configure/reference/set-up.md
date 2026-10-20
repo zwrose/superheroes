@@ -541,8 +541,19 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/cloud_dependency_hook.py" offer --cwd .
 ```
 
-A refusal means there is nothing to offer: skip the offer. On the owner's answer, write item 19,
-`true` or `false`:
+A refusal means there is nothing to offer: skip the offer. When the owner says yes and the offer's
+`inputsSource` is `detected`, first save the offer's `inputs` as item 18 (the JSON list), and go on
+only when the result is `written` or `noop`; item 19 alone would leave the hook watching nothing.
+Leave an item 18 the owner already stored as it is.
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudSetupInputs --cwd . <<'SUPERHEROES_ANSWER'
+["package-lock.json"]
+SUPERHEROES_ANSWER
+```
+
+Then write item 19, `true` or `false`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
