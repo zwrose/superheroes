@@ -1492,6 +1492,18 @@ def test_serialized_verify_command_with_a_literal_credential_is_refused(tmp_path
     assert "literal123456" not in json.dumps(result)
 
 
+def test_serialized_verify_command_ending_in_a_quoted_reference_composes(tmp_path):
+    # axis: the JSON delimiters beside a value ending in a quote survive the empty-quote normalization
+    result = _compose_with_verify_command(tmp_path, 'make test DATABASE_PASSWORD="$PW"')
+    assert result["action"] == "written", result
+
+
+def test_serialized_verify_command_ending_in_a_quoted_literal_is_refused(tmp_path):
+    result = _compose_with_verify_command(tmp_path, 'make test DATABASE_PASSWORD="literal123456"')
+    _refusal(result, "secret-shaped-content")
+    assert "literal123456" not in json.dumps(result)
+
+
 @pytest.mark.parametrize("command", [
     'printf AWS_SECRET_ACCESS_KEY=%s "$KEY" > .env && npm test',
     'printf "AWS_SECRET_ACCESS_KEY=%s\\n" "$KEY" > .env && npm test',

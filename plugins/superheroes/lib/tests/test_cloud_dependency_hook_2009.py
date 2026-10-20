@@ -834,6 +834,31 @@ def test_a_concurrent_item_17_set_landing_between_the_sync_and_the_write_leaves_
     _assert_files_match_stored(w)
 
 
+def test_an_enable_landing_between_an_input_updates_plan_and_write_leaves_the_script_on_stored_inputs(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    assert not w.script.exists()
+    real = core_md.write_project_config_item
+    landed = []
+
+    def racing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not landed:
+            landed.append(True)
+            assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", racing)
+    got = _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert landed
+    assert got["dependencyHookResynced"]["action"] in ("written", "noop")
+    assert _raw(w, INPUTS_SLUG) == ["uv.lock"] and _raw(w, HOOK_SLUG) is True
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["uv.lock"])
+    _assert_files_match_stored(w)
+
+
 def test_a_partial_sync_failure_recovers_to_the_stored_items_another_set_just_landed(
         tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)

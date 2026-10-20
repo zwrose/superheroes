@@ -985,8 +985,15 @@ def _scan(text, document=False):
     """The name of the first secret-shaped form in `text`, else None. The shapes are matched on a
     normalized copy too, with empty quote pairs removed. `text` is one setup command unless
     `document` is true (a file or a whole setup text)."""
-    return (_plain_shape(text, document) or _plain_shape(_without_empty_quotes(text), document)
-            or _encoded_shape(text))
+    if document:
+        # axis: the serialized values are decoded from the original text before the empty-quote normalization, which would otherwise eat the JSON delimiters beside a value ending in a quote; only the remainder is normalized
+        literals, remainder = _CredentialAssignment._serialized_values(text)
+        normalized = (_plain_shape(_without_empty_quotes(remainder), True)
+                      or next((s for s in (_plain_shape(_without_empty_quotes(lit))
+                                           for lit in literals) if s), None))
+    else:
+        normalized = _plain_shape(_without_empty_quotes(text))
+    return _plain_shape(text, document) or normalized or _encoded_shape(text)
 
 
 def _for_line(commands):

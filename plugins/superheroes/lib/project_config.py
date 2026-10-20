@@ -1012,6 +1012,16 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
             return {**write_result, **_reconcile_dependency_hook(
                 plan["repoRoot"], _hook_triple(_project_config_mapping(facts)))}
         write_result = _converge_dependency_hook(cwd, root, plan, write_result)
+    elif plan.get("repoRoot") is not None and not plan.get("deferred"):
+        # axis: a set that planned no sync may have been overtaken by an enable between its plan and its write, so the stored triple is re-read and the hook reconciled when it is wanted or its script exists; a project that never opted in has neither, so its settings file is never read
+        import cloud_dependency_hook as hook
+
+        facts = core_md.read(cwd, root)
+        if facts:
+            stored = _hook_triple(_project_config_mapping(facts))
+            script = os.path.join(plan["repoRoot"], *hook.SCRIPT_REL.split("/"))
+            if _hook_desired(stored) or os.path.lexists(script):
+                write_result = _converge_dependency_hook(cwd, root, plan, write_result)
     return write_result
 
 
