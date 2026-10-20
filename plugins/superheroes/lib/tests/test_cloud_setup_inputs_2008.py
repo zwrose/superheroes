@@ -192,10 +192,16 @@ def test_no_setup_commands_means_item_18_changes_nothing_in_the_inside_mode(tmp_
 def test_no_setup_commands_means_item_18_adds_nothing_in_the_outside_mode(tmp_path):
     w = _world(tmp_path, mode_registry.GLOBAL)
     _lock(w)
+    before = _stamp(w)
+    assert before in _compose(w)["text"]
+    _record(w, before)
+    # the placed core carries the stored items, so only the stamp's own view is compared
     _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
-    # the placed core carries the stored items, so only what the stamp adds is compared
-    assert CS.stamped_files(w.cwd, w.root) == CS._stamp_view(CS.calibration_files(w.cwd, w.root))
+    assert _stamp(w) == before
+    # the placed core carries the stored item, but the stamp the text publishes is unchanged
     got = _compose(w)
+    assert before in got["text"] and got["calibration"]["stamp"] == before
+    assert _calibration_condition(w) is True
     assert got["action"] == "written"
     assert "setupCommands" not in got["calibration"]
 
@@ -313,6 +319,67 @@ def test_the_registry_carries_item_18():
                                  plugin_default=None)
     assert PC.CLOUD_SETUP_INPUTS_SLUG == INPUTS_SLUG
     assert PC.REASON_SETUP_INPUT_UNSAFE_PATH == "setup-input-unsafe-path"
+
+
+def test_a_detected_name_item_18_would_refuse_is_not_stored(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w, "requirements dev.txt", "flask\n")
+    got = _set(w, COMMANDS_SLUG, ["npm ci"])
+    assert got == dict(action="refused", reason="setup-input-unsafe-path"), got
+    assert _raw(w, INPUTS_SLUG) is None
+
+
+# ---------------------------------------------------------------- the script checks its inputs
+
+
+def _run_setup(w, text, lock_text):
+    """Runs the text in a stub clone (`work`, with a .git directory) holding the lockfile
+    `lock_text`, every tool stubbed; returns the setup log and the stamp path."""
+    stub = w.tmp / "stubs"
+    stub.mkdir()
+    for name in ("git", "npm", "apt-get", "uv"):
+        (stub / name).write_text("#!/bin/bash\nexit 0\n")
+        (stub / name).chmod(0o755)
+    work = w.tmp / "work"
+    (work / ".git").mkdir(parents=True)
+    (work / "package-lock.json").write_text(lock_text)
+    env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
+    subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60,
+                   cwd=str(work))
+    log = (w.home / "superheroes-cloud-setup.log").read_text()
+    stamp = os.path.join(mode_registry.project_store_dir(
+        w.cwd, str(w.home / ".claude" / "superheroes")), CS.STAMP_FILE)
+    return log, work, stamp
+
+
+def test_the_script_runs_nothing_and_withholds_the_stamp_when_an_input_differs(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w, text="v2\n")
+    _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
+    text = _compose(w)["text"]
+    log, work, stamp = _run_setup(w, text, "v1\n")
+    assert "setup input package-lock.json differs from the setup text" in log
+    assert "setup stamp withheld" in log and "setup command 1 ok" not in log
+    assert not os.path.exists(stamp) and not (work / "ran.txt").exists()
+
+
+def test_the_script_publishes_the_stamp_when_the_inputs_match(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w, text="v2\n")
+    _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
+    log, work, stamp = _run_setup(w, _compose(w)["text"], "v2\n")
+    assert "differs" not in log and "setup command 1 ok" in log
+    assert os.path.exists(stamp) and (work / "ran.txt").exists()
+
+
+def test_the_script_flags_an_input_missing_in_the_clone_and_one_present_when_expected_missing(
+        tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    log, _, stamp = _run_setup(w, _compose(w)["text"], "now present\n")
+    assert "setup input package-lock.json differs" in log and "expected missing" in log
+    assert not os.path.exists(stamp)
 
 
 # ---------------------------------------------------------------- detect_inputs

@@ -798,6 +798,10 @@ def _fill_setup_inputs(cwd, root, write_result):
     except store_core.RepoRootUnavailable:
         return write_result
     filled = cloud_setup_text.detect_inputs(repo_root)
+    # axis: a detected name item 18 would refuse is never stored, so the list stays valid
+    reason = validate_item_value(_item_by_slug(CLOUD_SETUP_INPUTS_SLUG), filled)
+    if reason is not None:
+        return {"action": "refused", "reason": reason}
     stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
     if stored.get("action") not in ("written", "noop"):
         return stored

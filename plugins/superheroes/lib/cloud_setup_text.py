@@ -15,6 +15,7 @@ token and one plain sentence, never a raise.
 import argparse
 import base64
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -400,11 +401,22 @@ def _input_view(repo_root, inputs):
     return view
 
 
+def _input_expectations(repo_root, inputs):
+    """(path, sha256 hex or None) for each setup input as the text is composed: None marks a
+    file that does not exist. The generated script checks the clone against these."""
+    view = _input_view(repo_root, inputs)
+    return [(rel, hashlib.sha256(view[SETUP_INPUT_STAMP_PREFIX + rel]).hexdigest()
+             if SETUP_INPUT_STAMP_PREFIX + rel in view else None) for rel in inputs]
+
+
 def _stamp_view(files, commands=(), inputs_view=None):
     view = dict(files)
     core = _core_rel()
     if core in view:
         view[core] = _without_setting(view[core])
+        # axis: without setup commands item 18 is unused, so it never moves the stamp
+        if not commands:
+            view[core] = _without_setting(view[core], project_config.CLOUD_SETUP_INPUTS_SLUG)
     # axis: the stamp moves whenever the command list does, in both storage modes
     if commands:
         view[SETUP_COMMANDS_STAMP_KEY] = (
@@ -515,7 +527,32 @@ def _for_line(commands):
     return "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands)
 
 
-def _commands_block(commands, clone, stamp=None, count=0):
+def _input_check_lines(expected):
+    """The step that compares each listed input in the clone with the content the text was
+    written for (its sha256, or `missing`), logging one line per input that differs and leaving
+    `ok` at 0 so no stamp is published."""
+    if not expected:
+        return []
+    out = [
+        "  check_input() {",
+        '    if [ ! -e "$DIR/$1" ] && [ ! -L "$DIR/$1" ]; then got=missing',
+        '    elif [ -f "$DIR/$1" ]; then',
+        '      got=$( (sha256sum "$DIR/$1" || shasum -a 256 "$DIR/$1") 2>/dev/null | cut -d" " -f1)',
+        "    else got=unreadable; fi",
+        '    if [ "$got" != "$2" ]; then',
+        '      echo "setup input $1 differs from the setup text: expected $2, found ${got:-unreadable}"',
+        "      ok=0",
+        "    fi",
+        "  }",
+        '  if [ -n "$DIR" ]; then',
+    ]
+    for rel, digest in expected:
+        out.append("    check_input %s %s" % (shlex.quote(rel), digest or "missing"))
+    out.append("  fi")
+    return out
+
+
+def _commands_block(commands, clone, stamp=None, count=0, expected=()):
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
     ran and succeeded."""
@@ -533,10 +570,15 @@ def _commands_block(commands, clone, stamp=None, count=0):
         "  n=0",
         '  failed=""',
         "  ok=1",
+        *_input_check_lines(expected),
         _for_line(commands),
         "    n=$((n + 1))",
         '    if [ -z "$DIR" ]; then ok=0; echo "setup command $n skipped: no clone in $PWD%s"'
         % (" or $PWD/$CLONE" if clone is not None else ""),
+        # axis: inputs that differ from the ones the text was written for run no command
+        *(['    elif [ "$ok" = 0 ] && [ -z "$failed" ]; then '
+           'echo "setup command $n skipped: setup inputs differ from the setup text"']
+          if expected else []),
         # axis: after a failure every later command is skipped, never run
         '    elif [ -n "$failed" ]; then echo "setup command $n skipped: setup command $failed FAILED"',
         '    elif (cd "$DIR" && bash -o pipefail -c "$cmd" </dev/null); then echo "setup command $n ok"',
@@ -561,7 +603,7 @@ def _commands_block(commands, clone, stamp=None, count=0):
 
 
 def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
-            commands, cleared=False):
+            commands, cleared=False, expected=()):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -646,7 +688,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
     # axis: only a non-empty list adds a step, so no list leaves the text as it was
     if commands:
         out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
-                               len(files))
+                               len(files), expected)
     out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', 'exit "$setup_rc"' if commands else "exit 0", ""]
     return "\n".join(out)
@@ -715,8 +757,11 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         part = "calibration in the repository"
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
+    expected = ()
+    if commands and inputs:
+        expected = _input_expectations(store_core.repo_root(cwd), inputs)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
-                   _clone_dir(cwd), commands, cleared)
+                   _clone_dir(cwd), commands, cleared, expected)
     # axis: the command list is scanned as written (as `set` scans it), never as the quoted
     # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
     # in full
