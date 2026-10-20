@@ -93,8 +93,20 @@ class _UrlCredential:
                 return True
         return False
 
+    @staticmethod
+    def _words(text):
+        # one shell word at a time, so a URL never borrows text from a neighbouring argument
+        try:
+            return shlex.split(text)
+        except ValueError:
+            return text.split()
+
     def search(self, text):
-        return self._refuses(text) or self._refuses(_URL_QUOTES_RE.sub("", text))
+        for word in self._words(text):
+            for form in (word, word.replace("\\/", "/")):
+                if self._refuses(form) or self._refuses(_URL_QUOTES_RE.sub("", form)):
+                    return True
+        return False
 
 
 # Axis: each entry bites on one secret-shaped form appearing anywhere in the final text.

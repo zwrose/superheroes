@@ -1029,3 +1029,32 @@ def test_only_invocations_of_the_managed_script_are_ours():
     assert not _is_ours({"command": "sha256sum " + SCRIPT_REL + ".backup"})
     assert not _is_ours({"command": "cat " + SCRIPT_REL})
     assert not _is_ours({"command": 'bash "$CLAUDE_PROJECT_DIR/' + SCRIPT_REL + '.backup"'})
+
+
+def test_an_existing_non_file_input_is_refused_not_hashed_as_missing(tmp_path):
+    # axis: a directory (or other non-regular input) is never recorded as a missing file
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    (w.repo / "plugins").mkdir()
+    script = w.script
+    script.parent.mkdir(parents=True)
+    text = hook.script_text(["true"], ["plugins"])
+    script.write_text(text)
+    fingerprint = re.search(r"^FINGERPRINT=(\S+)$", text, re.M).group(1).strip("'")
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(w.home),
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    proc = subprocess.run(["bash", str(script), "--record", fingerprint], cwd=str(w.repo), env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == (
+        "superheroes: dependency hook skipped: an input could not be read")
+    state = subprocess.run(["git", "-C", str(w.repo), "rev-parse", "--git-path", hook.HASH_NAME],
+                           capture_output=True, text=True, env=_GIT_ENV).stdout.strip()
+    assert not os.path.exists(os.path.join(str(w.repo), state))
+
+
+def test_a_registry_url_with_a_port_beside_a_scoped_package_is_not_a_url_credential(tmp_path):
+    # axis: user-info matching stays inside one shell word
+    w = _world(tmp_path, mode_registry.GLOBAL)
+    command = "npm install --registry https://registry.example.invalid:8443 @acme/widget"
+    done = _set(w, COMMANDS_SLUG, [command])
+    assert done["action"] in ("written", "noop"), done
