@@ -405,6 +405,28 @@ def test_a_configured_directory_that_is_not_a_git_checkout_gets_no_fill(tmp_path
     assert PC.get_item(cwd, INPUTS_SLUG, root=root)["raw"] is None
 
 
+def test_a_checkout_whose_git_metadata_lives_elsewhere_still_gets_the_fill(tmp_path, monkeypatch):
+    # axis: membership follows git's own answer, so a `.git` file naming external metadata is a checkout
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    work = tmp_path / "work"
+    elsewhere = tmp_path / "elsewhere" / "meta.git"
+    elsewhere.parent.mkdir()
+    _git(tmp_path, "init", "-q", "--separate-git-dir", str(elsewhere), str(work))
+    assert (work / ".git").is_file()
+    (work / "package-lock.json").write_text("v1\n")
+    cwd, root = str(work), str(tmp_path / "store-root")
+    assert store_core.get_worktree_gitdir(cwd) == os.path.realpath(elsewhere)
+    assert mode_registry.write_registry(cwd, mode_registry.IN_REPO, None, root=root) is not None
+    done = core_md.write(cwd, dict(CORE_FACTS), "confirmed", root=root, now="2026-06-26")
+    assert done["action"] in ("written", "reused"), done
+    got = PC.set_item(cwd, COMMANDS_SLUG, ["npm ci"], root=root)
+    assert got["action"] in ("written", "noop"), got
+    assert got["inputsFilled"] == ["package-lock.json"], got
+    assert "inputsFillFailed" not in got
+    assert PC.get_item(cwd, INPUTS_SLUG, root=root)["raw"] == ["package-lock.json"]
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_the_cli_sets_item_18_from_stdin_and_the_setup_stamp_moves(tmp_path, monkeypatch, capsys,
                                                                     mode):

@@ -799,14 +799,13 @@ def _fill_setup_inputs(cwd, root, write_result):
 
     try:
         repo_root = store_core.repo_root(cwd)
+        # a checkout answers its real git directory (wherever the metadata lives); the greenfield
+        # fallback answers the directory itself
+        git_dir = store_core.get_worktree_gitdir(repo_root)
     except store_core.RepoRootUnavailable:
         # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
         return {**write_result, "inputsFillFailed": "repo-root-unavailable"}
-    try:
-        is_checkout = store_core.git_dot_entry_ancestor(repo_root) is not None
-    except OSError:
-        is_checkout = False
-    if not is_checkout:
+    if git_dir == os.path.realpath(repo_root):
         # axis: a configured directory that is not a git checkout gets no fill — the root fallback names the directory itself, and scanning it would store a list for the wrong tree
         return {**write_result, "inputsFillFailed": "not-a-git-checkout"}
     item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
