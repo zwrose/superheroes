@@ -537,12 +537,33 @@ def test_a_refused_readback_reconciles_an_enable_that_landed_after_a_plan_that_r
     _assert_files_match_stored(w)
 
 
+def test_a_refused_readback_with_an_unreadable_stored_config_after_a_plan_that_ran_no_sync_reports_it(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    real = core_md.write_project_config_item
+
+    def unreadable_after(cwd, slug, value, root=None):
+        got = real(cwd, slug, value, root=root)
+        monkeypatch.setattr(PC, "get_item", lambda *a, **k: {"action": "ok", "raw": None})
+        monkeypatch.setattr(core_md, "read", lambda *a, **k: {})
+        return got
+
+    monkeypatch.setattr(core_md, "write_project_config_item", unreadable_after)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert got["action"] == "refused" and got["reason"] == PC.REASON_SET_MISMATCH
+    assert got["dependencyHookResyncFailed"] == "stored-config-unreadable"
+
+
 @pytest.mark.parametrize("command", [
     "env -u OLD_TOKEN printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
     "env -C /tmp printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
     "nice -n 5 printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
     "sudo -u deploy printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
     "exec -a name printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "env -S printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
 ])
 def test_a_wrapper_options_argument_is_not_read_as_the_wrapped_command(tmp_path, command):
     w = _world(tmp_path, mode_registry.IN_REPO)

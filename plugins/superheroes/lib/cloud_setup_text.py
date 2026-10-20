@@ -93,9 +93,10 @@ _KEYWORD_WORDS = {"{", "!", "if", "then", "else", "elif", "do", "while", "until"
 # commands that pass their leading `NAME=value` words and options on to the command they run
 _WRAPPER_COMMANDS = {"env", "sudo", "command", "exec", "nohup", "nice", "builtin"}
 # the options of a wrapper that take a separate argument (`env -u NAME`, `nice -n N`): that argument
-# is not the wrapped command
+# is not the wrapped command (`env -S` / `--split-string` carry the wrapped command words themselves,
+# so they are not listed)
 _WRAPPER_OPTION_ARGS = {
-    "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+    "env": {"-u", "-C", "--unset", "--chdir"},
     "nice": {"-n", "--adjustment"},
     "sudo": {"-u", "-g", "--user", "--group"},
     "exec": {"-a"},

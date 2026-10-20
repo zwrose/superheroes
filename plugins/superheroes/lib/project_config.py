@@ -1078,6 +1078,8 @@ def _with_dependency_hook(cwd, root, plan, result):
             script = os.path.join(plan["repoRoot"], *hook.SCRIPT_REL.split("/"))
             if _hook_desired(stored) or os.path.lexists(script):
                 return _converge_dependency_hook(cwd, root, plan, result)
+        else:
+            return {**result, "dependencyHookResyncFailed": "stored-config-unreadable"}
         return result
     result = {**result, "dependencyHook": plan["hookResult"]}
     return _converge_dependency_hook(cwd, root, plan, result)
