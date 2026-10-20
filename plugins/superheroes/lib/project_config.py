@@ -789,7 +789,8 @@ def _set_risk_and_trust(cwd, value, root):
 
 def _fill_setup_inputs(cwd, root, write_result):
     """Stores item 18 as the lockfiles at the repository root, after item 17 is stored. A root that
-    cannot be resolved (no checkout, or git failing) gets no fill and is reported, never silent. The fill never turns a
+    cannot be resolved (git failing), or that is not itself a git checkout, gets no fill and is
+    reported, never silent. The fill never turns a
     stored item 17 into a refusal: a detected name item 18 would refuse is left out of the list,
     and when the write or its read-back fails, item 17's result is returned with `inputsFillFailed`
     carrying the reason (and no `inputsFilled`), leaving item 18 unset."""
@@ -801,6 +802,11 @@ def _fill_setup_inputs(cwd, root, write_result):
     except store_core.RepoRootUnavailable:
         # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
         return {**write_result, "inputsFillFailed": "repo-root-unavailable"}
+    toplevel = store_core.run_git_result(repo_root, "rev-parse", "--show-toplevel")
+    if (toplevel.status != store_core.GIT_OK or not toplevel.out
+            or os.path.realpath(toplevel.out) != os.path.realpath(repo_root)):
+        # axis: a configured directory that is not a git checkout gets no fill — the root fallback names the directory itself, and scanning it would store a list for the wrong tree
+        return {**write_result, "inputsFillFailed": "not-a-git-checkout"}
     item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
     # axis: a detected name item 18 would refuse is never stored, so the list stays valid
     try:

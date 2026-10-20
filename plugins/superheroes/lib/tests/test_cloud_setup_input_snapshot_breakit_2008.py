@@ -43,7 +43,7 @@ def test_rotating_a_credential_input_cannot_publish_an_unchecked_stamp(tmp_path,
         assert "text" not in composed
         return
     assert composed["action"] == "written", composed
-    log, work, stamp_path = _run_setup(world, composed["text"], after)
+    log, work, stamp_path, _ = _run_setup(world, composed["text"], after)
     if not os.path.exists(stamp_path):
         assert "setup input package-lock.json differs" in log
         assert not (work / "ran.txt").exists()
