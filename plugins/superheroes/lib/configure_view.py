@@ -283,7 +283,7 @@ def _config_item_display(item_def, entry, canon_args=None):
     if source == "stamped":
         if shape in _PROSE_CONFIG_SHAPES and isinstance(effective, str):
             return _one_line_prose(effective)
-        if isinstance(effective, dict):
+        if isinstance(effective, (dict, list)):
             return _json_display(effective)
         if effective is None:
             return "null"
