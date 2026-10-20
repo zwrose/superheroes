@@ -673,7 +673,9 @@ check records the new environment.
 The setup text runs the project's own setup commands (item 17) after its other steps, one at a
 time, in order, in the project's clone. Each one is logged `setup command <n> ok` or
 `setup command <n> FAILED`, and the first failure skips the rest. Changing the list means writing
-and pasting new setup text.
+and pasting new setup text. The stamp also covers the files the commands depend on (item 18), so
+changing one, such as a lockfile, makes the check report the setup text out of date; write and paste
+new setup text.
 
 A launch that names an id matching no environment lands in the account's default environment
 without an error. The check catches this, because the pass block names its environment and the
