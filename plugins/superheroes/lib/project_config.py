@@ -41,6 +41,7 @@ REASON_SETUP_COMMAND_EMPTY = "setup-command-empty"
 REASON_SETUP_COMMAND_MULTI_LINE = "setup-command-multi-line"
 REASON_SETUP_COMMAND_SECRET_SHAPED = "setup-command-secret-shaped"
 REASON_SETUP_INPUT_UNSAFE_PATH = "setup-input-unsafe-path"
+REASON_SETUP_INPUT_SECRET_SHAPED = "setup-input-secret-shaped"
 REASON_DEPENDENCY_HOOK_UNWRITABLE = "dependency-hook-unwritable"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
@@ -334,6 +335,15 @@ def _validate_input_path_list(value):
     # axis: an entry that is not a plain repo-relative path is refused, since the setup stamp reads it
     if any(not cloud_setup_text._plain_relative(entry) for entry in value):
         return REASON_SETUP_INPUT_UNSAFE_PATH
+    return None
+
+
+def _validate_inputs_not_secret_shaped(inputs):
+    """REASON_SETUP_INPUT_SECRET_SHAPED when an input path is shaped like a secret, else None."""
+    import cloud_setup_text
+
+    if any(cloud_setup_text._scan(entry) is not None for entry in inputs):
+        return REASON_SETUP_INPUT_SECRET_SHAPED
     return None
 
 
@@ -811,16 +821,17 @@ def _fill_setup_inputs(cwd, root, write_result, filled):
     """Stores the detected `filled` list as item 18, after item 17 is stored. The fill never turns
     a stored item 17 into a refusal: when the write or its read-back fails, item 17's result is
     returned with `inputsFillFailed` carrying the reason (and no `inputsFilled`), leaving item 18
-    unset."""
+    unset when the write failed. Returns (result, committed): `committed` is True once the write
+    went through, even when the read-back then failed."""
     stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
     if stored.get("action") not in ("written", "noop"):
-        return {**write_result, "inputsFillFailed": stored.get("reason")}
+        return {**write_result, "inputsFillFailed": stored.get("reason")}, False
     reread = get_item(cwd, CLOUD_SETUP_INPUTS_SLUG, root=root)
     if reread.get("action") == "refused":
-        return {**write_result, "inputsFillFailed": reread.get("reason")}
+        return {**write_result, "inputsFillFailed": reread.get("reason")}, True
     if not _values_equal(reread.get("raw"), filled):
-        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}
-    return {**write_result, "inputsFilled": list(filled)}
+        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}, True
+    return {**write_result, "inputsFilled": list(filled)}, True
 
 
 _DEPENDENCY_HOOK_SLUGS = (
@@ -870,7 +881,8 @@ def _plan_dependency_hook(cwd, slug, value, facts):
         filled = _detected_inputs(repo_root)
         after[CLOUD_SETUP_INPUTS_SLUG] = filled
     new = _hook_triple(after)
-    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root}
+    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root,
+            "snap": None}
     if repo_root is None:
         # axis: with no root a sync is impossible, so it refuses only when one is needed
         if _hook_desired(new) or _hook_desired(old):
@@ -882,9 +894,11 @@ def _plan_dependency_hook(cwd, slug, value, facts):
         # axis: a hook about to be written never carries a command the setup text would refuse — a stored command with a credential in it is not committed
         if _hook_desired(new):
             reason = _validate_command_list(new[0])
+            if reason is None:
+                reason = _validate_inputs_not_secret_shaped(new[1])
             if reason is not None:
                 return {"refusal": {"action": "refused", "reason": reason}}
-        snap = hook.snapshot(repo_root)
+        snap = plan["snap"] = hook.snapshot(repo_root)
         result = hook.sync(repo_root, *new)
         if result.get("action") == "refused":
             # axis: a refused sync that already changed files puts them back to the stored state
@@ -897,34 +911,44 @@ def _plan_dependency_hook(cwd, slug, value, facts):
     return plan
 
 
-def _restore_dependency_hook(plan, triple):
-    """Best effort: puts the hook files back to `triple` after a write that did not hold. Returns
-    the sync result, or None when no sync had run or this one raised."""
+def _roll_back_dependency_hook(plan):
+    """Puts the hook files back to their bytes from before this set, from the snapshot (never
+    regenerated from stored items, so no stored credential can reach a script). Returns
+    {"dependencyHook": {"changed": paths the sync changed, "notRestored": paths not put back}}
+    when any path was not put back, else {}."""
     if plan is None or plan.get("hookResult") is None:
-        return None
+        return {}
     import cloud_dependency_hook as hook
 
+    changed = list(plan["hookResult"].get("changed") or [])
     try:
-        return hook.sync(plan["repoRoot"], *triple)
+        failed = hook.restore(plan["repoRoot"], plan["snap"], changed)
     except Exception:
-        return None
-
-
-def _roll_back_dependency_hook(plan):
-    """Puts the hook files back to the stored triple from before this set."""
-    if plan is not None:
-        _restore_dependency_hook(plan, plan["old"])
+        failed = changed
+    # a clean restore leaves the result as it was; only a path left changed is reported
+    return {"dependencyHook": {"changed": changed, "notRestored": failed}} if failed else {}
 
 
 def _finish_dependency_hook(cwd, root, plan, write_result):
-    """Stores the filled item 18 (after item 17) and attaches what the sync did to the result."""
+    """Stores the filled item 18 (after item 17) and attaches what the sync did to the result.
+    After any failure here the stored items and the files on disk agree: a fill whose write held
+    keeps its script (inputs and item 18 both filled); a fill whose write failed gets the script
+    for the stored (unset) item 18."""
     hook_result = plan["hookResult"]
     if plan["filled"] is not None:
-        write_result = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
-        if "inputsFillFailed" in write_result and _hook_desired(plan["new"]):
-            # item 18 stays unset, so the script goes back to the inputs that are stored
-            hook_result = _restore_dependency_hook(
-                plan, (plan["new"][0], plan["old"][1], plan["new"][2])) or hook_result
+        write_result, committed = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
+        if "inputsFillFailed" in write_result and not committed and _hook_desired(plan["new"]):
+            import cloud_dependency_hook as hook
+
+            try:
+                # the commands were validated before the first sync; the old inputs are unset here
+                again = hook.sync(plan["repoRoot"], plan["new"][0], plan["old"][1], plan["new"][2])
+            except Exception:
+                again = None
+            if again is not None:
+                # axis: the paths the first sync changed stay reported beside the recovery's
+                changed = sorted(set(hook_result.get("changed") or []) | set(again.get("changed") or []))
+                hook_result = {**again, "changed": changed}
     if hook_result is not None:
         write_result = {**write_result, "dependencyHook": hook_result}
     return write_result
@@ -1004,20 +1028,21 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
 
     if write_result.get("action") not in ("written", "noop"):
-        _roll_back_dependency_hook(plan)
-        return write_result
+        rolled_back = _roll_back_dependency_hook(plan)
+        return {**write_result, **rolled_back}
 
     reread = get_item(cwd, slug, root=root)
     if reread.get("action") == "refused":
-        _roll_back_dependency_hook(plan)
-        return reread
+        rolled_back = _roll_back_dependency_hook(plan)
+        return {**reread, **rolled_back}
     if not _values_equal(reread.get("raw"), value):
-        _roll_back_dependency_hook(plan)
+        rolled_back = _roll_back_dependency_hook(plan)
         return {
             "action": "refused",
             "reason": REASON_SET_MISMATCH,
             "expected": value,
             "observed": reread.get("raw"),
+            **rolled_back,
         }
     if plan is not None:
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
