@@ -24,6 +24,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Pass `--size-base-ref <base branch>` on every new implementer `dispatch-write` run.** A run opened before the upgrade continues with the flags it opened with: adding the ref to its continuation refuses `size-inputs-mismatch`. Without the flag, a build that merges its base branch in mid-build still reads that branch's lines as its own and can read its tripwire crossed when it is not. See [Dispatch: the size fold counts from the merge base](#dispatch-the-size-fold-counts-from-the-merge-base).
 - **After switching.** **Nothing is owed for a check that could not run.** A caller that reads break-it `failed` exit codes or verifier drops sees fewer of them. See [Review: a check that could not run never dismisses a finding](#review-a-check-that-could-not-run-never-dismisses-a-finding).
 - **After switching.** **A PR body no longer carries an owner-run database or Keychain command block.** Such a block goes in a committed file on the branch and the body tells the owner to run the file (`bash <path>`) rather than paste its lines; `vet_slot.py handback` refuses a shell block that names a database tool or a Keychain read otherwise. See [Handback: owner-run commands live in a file](#handback-owner-run-commands-live-in-a-file).
+- **After switching.** **A project whose cloud builds need its own setup commands lists them through configure (item 17, `cloudSetupCommands`), then writes and pastes new setup text.** A step added by hand under the setup text's marker line is lost the next time setup text is pasted, and a project with no list gets the same setup text as before. See [Cloud setup text: project setup commands](#cloud-setup-text-project-setup-commands).
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
 - **After switching.** **Nothing is owed.** A review orchestrator records its rulings on a round's findings before the `next` call that emits the fixer order. See [Review: rulings land before the fixer order](#review-rulings-land-before-the-fixer-order).
 
@@ -103,6 +104,19 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - `_check_data` returns three parts: the check runs, the combined status and the workflow runs.
 - Configuration item 16, `ciWorkflow`, holds the name of the project's CI workflow.
 - With no workflow declared, an unfinished workflow run on the commit reads `pending`, and only workflow runs whose `head_sha` is the commit count; `_check_data` keeps only workflow runs whose `head_sha` is the commit read.
+
+### Cloud setup text: project setup commands
+
+- Configuration item 17, `cloudSetupCommands`, holds an ordered list of one-line shell commands. Its refusals on `set` are `setup-commands-not-a-list`, `setup-command-empty`, `setup-command-multi-line` and `setup-command-secret-shaped`. `[]` clears it.
+- `setup-command-secret-shaped` is the setup text's own secret scan and no stricter rule: an entry is refused exactly when that scan refuses it. A credential never goes in a listed command; put it in the cloud environment's variables and reference it as `$NAME`. The scan catches obvious pastes and is not a guarantee.
+- With the list unset, the setup text, its stamp and every result key are what they were before.
+- With the list stored as `[]`, the stamp and every result key are what they were before, and the setup text removes `cloud-setup-stamp` (it already did so when it places calibration files), so a stamp an earlier list left does not survive a re-paste.
+- With a list, the setup text runs each command once, in order, in the project's clone, after every other step and before the marker line. It logs `setup command <n> ok` or `setup command <n> FAILED`, and the first failure skips the rest.
+- The stamp covers the list under the key `setup-commands`, in both storage modes, so a changed list reads as out of date until new setup text is pasted.
+- A project that keeps its calibration in the repository and lists commands now gets a stamp, and its setup text logs `calibration: 0 of 0 files written` when it writes it.
+- The compose result's `calibration` gains `setupCommands` (the number of commands) when the list is not empty, and has no such key otherwise.
+- `compose` refuses `setup-commands-malformed` when the stored value is not a valid list, and `setup-commands-unreadable` when the project's calibration cannot be read for it.
+- The setup message (`cloud_check.py setup-text`) no longer tells the owner to add steps by hand under the marker line; it points to item 17.
 
 ## 0.44.0
 

@@ -145,6 +145,28 @@ action that owns it, leaving the rest of the calibration untouched:
   Read the result the same way as the `stackingTool` write above: only `written` or `noop` means it
   was saved.
 
+- **List cloud setup commands (item 17)** → write only item 17, the project's own setup commands
+  for the cloud (for example `npm ci`) as a JSON list of one-line shell commands on stdin. The
+  setup text runs them in order, in the project's clone, after its other steps.
+  A credential never goes in a listed command: put it in the cloud environment's variables and
+  reference it as `$NAME`. The setup text's secret scan catches obvious pastes and is not a
+  guarantee.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudSetupCommands --cwd . <<'SUPERHEROES_ANSWER'
+  ["npm ci"]
+  SUPERHEROES_ANSWER
+  ```
+
+  Read the result the same way as the `stackingTool` write above: only `written` or `noop` means it
+  was saved. A refusal names one of four reasons, and nothing is stored: `setup-commands-not-a-list`
+  (the value is not a JSON list), `setup-command-empty` (an entry is blank or not text),
+  `setup-command-multi-line` (an entry spans more than one line) and `setup-command-secret-shaped`
+  (an entry holds something shaped like a secret). `[]` clears the list. After any change, the owner
+  writes new setup text (set-up § 6, "Setup text") and pastes it, because the cloud check reports
+  the old one as out of date.
+
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a
   new example of what counts as a material consequence in Canon as a standing ruling, by
