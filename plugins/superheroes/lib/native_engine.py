@@ -39,6 +39,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_pass  # noqa: E402  _is_cloud
+import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import core_md  # noqa: E402  read_sandbox_access
 import dispatch_outcome  # noqa: E402  REASON_FORFEITED
 import engine_dispatch  # noqa: E402  journal, git, host platform, declared-item check
@@ -75,11 +76,12 @@ do not try another route into the worktree.
 2. Work only in your own worktree. Do not commit. Leave your change in the working tree.
 3. Install nothing and reach no network: no package installs, no curl or wget, no git push, \
 fetch, pull or clone, no gh.
-4. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
+4. """ + command_refusals.ORDER_TEXT + """
+5. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
    {"status": "done" | "needs_context" | "blocked", "summary": "<text>"}
    Use "done" only when the order is carried out; "needs_context" when you need information the \
 order does not give; "blocked" when something outside your reach stops you.
-5. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
+6. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
 
 The order follows, verbatim.
 

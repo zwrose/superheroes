@@ -41,6 +41,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
+import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import cloud_pass  # noqa: E402  PASS_ENV, dropped at every public entry (stdlib-only module)
 import config_dir  # noqa: E402  claude config root resolution (#1273)
@@ -6465,7 +6466,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         if order_part and not order_part.endswith("\n"):
             order_part = order_part + "\n"
         prefix = order_part + ("\n" if order_part else "")
-        content = prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
+        content = (prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + command_refusals.ORDER_TEXT
+                   + "\n\n" + contract)
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()

@@ -32,6 +32,16 @@ This dominates conditionality below; conditionality never licenses
 proceeding on a guessed premise. A **bite-proof red run** is not a missing premise — its failure
 *is* the evidence the premise needs — see **Bite-proof red run is not a rung-2 failure** below.
 
+**Refused or denied commands.** A refused or denied command is a stop. Report it in your result's
+refusals list and do not retry it in another form: not another path to the program, another tool,
+another wrapper, or another command with the same effect. A refused or denied command is one a
+permission denial, a hook refusal, or a sandbox refusal stopped; a command that ran and failed is
+not a refusal, and the failure rules cover it. Each refusals entry carries command (the command
+exactly as you wrote it), refusedBy (permission, hook or sandbox), hook (the hook's name when the
+refusal gave one, else null), and next (what you did next). An empty list means you met none.
+This dominates every rung below: a refused or denied command is never a command you "could not run"
+under rung 3 or rung 4 — you stop and report.
+
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
 another rung decides the command did not run.
@@ -54,7 +64,7 @@ not already stopped you.
 3. **A command you could not run that your order depends on to establish a premise** — an unmeasured
    tool shape you were told to verify (validity rule 1), an interface shape, anything you would
    otherwise have to guess — → stop and report (**never proceed on a guessed premise**).
-4. **A command you could not run that is not premise-establishing** → report what happened and why,
+4. **A command you could not run, for a reason other than a refusal, that is not premise-establishing** → report what happened and why,
    with zero receipts for that command, and carry on with the work; an unscopable wide-gate
    **order defect** still applies per above.
 5. **Scope a full-suite or project-wide gate to your order's surface.** If a sound invocation exists
@@ -106,7 +116,8 @@ overrunning or silently truncating.
   run is lost for nothing.
 - **Short structured return — by running less, never by showing less.** This is the **canonical**
   statement of what your return contains: a short summary, the list of files you changed, **your
-  per-command report as the Reporting obligation above defines it**, any **findings** (needs outside
+  per-command report as the Reporting obligation above defines it**, your refusals list (every
+  refused or denied command you met, in the entry shape above, or none), any **findings** (needs outside
   your scope, failures, ambiguities), and any **echo your order's rules require** — per-edge
   disposition of an enumerated fail-closed surface (validity rule 2), echo of an order-authorized
   test change, and the **bite-proof record for every detector your order adds or changes** — **per
@@ -141,8 +152,9 @@ overrunning or silently truncating.
 - **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–7;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
-  On a sandboxed shell an env-var prefix outside the harness's safe list (`FOO=1 cmd`) is refused;
-  set the variable inside the test instead.
+  On a sandboxed shell an env-var prefix outside the harness's safe list (`FOO=1 cmd`) is refused.
+  That is a sandbox refusal: stop, and report it in your refusals list. Set the variable inside a
+  test only when your order itself tells you to.
   A rejection of one command never suppresses another's receipt; say **you ran nothing** only when
   nothing ran. **A rejected command did not run, and that is different from a command that ran and
   failed.** Never infer, estimate, or describe what a run "would have" shown. **Untested work, clearly labelled
