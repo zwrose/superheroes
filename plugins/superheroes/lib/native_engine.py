@@ -42,6 +42,7 @@ import cloud_pass  # noqa: E402  _is_cloud
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import core_md  # noqa: E402  read_sandbox_access
 import dispatch_outcome  # noqa: E402  REASON_FORFEITED
+import engine_adapter  # noqa: E402  scrub_refusals — the band scrub seam for refusal text
 import engine_dispatch  # noqa: E402  journal, git, host platform, declared-item check
 import file_lock  # noqa: E402  the run-dir lock
 import launch_ledger  # noqa: E402  scrub_env
@@ -512,7 +513,7 @@ def _result_refusals(run_dir):
             data = json.load(fh)
         refusals = data.get("refusals") if isinstance(data, dict) else None
         if refusals and command_refusals.refusals_fault(refusals) is None:
-            return refusals
+            return engine_adapter.scrub_refusals(refusals)
     except (OSError, ValueError, AttributeError):
         pass
     return None

@@ -928,6 +928,12 @@ def _last_json_array(stdout):
     return _last_top_level_json(stdout, list)
 
 
+def scrub_refusals(refusals):
+    """Recursively scrub every string in a validated refusals list (the one scrub seam for the
+    foreground grader and the native close path). Never raises."""
+    return _scrub_mapping(refusals)
+
+
 def _grade_build_report_obj(obj):
     """Single home for build|fix report-object grading (CONVENTIONS §11). Never raises."""
     if not isinstance(obj, dict):
@@ -936,7 +942,7 @@ def _grade_build_report_obj(obj):
     if "refusals" in obj:
         if command_refusals.refusals_fault(obj["refusals"]) is not None:
             return {"ok": False, "reason": "unreadable"}
-        carried["refusals"] = obj["refusals"]
+        carried["refusals"] = scrub_refusals(obj["refusals"])
     ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
     evidence = {"testFailed": bool(ev.get("testFailed")),
                 "testPassed": bool(ev.get("testPassed"))}
