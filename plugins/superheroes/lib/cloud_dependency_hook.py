@@ -79,6 +79,37 @@ def _env_carries_credential(settings):
     return False
 
 
+def _hook_commands(settings, blank=False):
+    """Every `hooks.<Event>[].hooks[].command` string in the settings; with `blank`, those values
+    are replaced by empty strings in place, leaving the rest of the document."""
+    found = []
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    if not isinstance(hooks, dict):
+        return found
+    for groups in hooks.values():
+        for group in groups if isinstance(groups, list) else []:
+            inner = group.get("hooks") if isinstance(group, dict) else None
+            for hook in inner if isinstance(inner, list) else []:
+                if isinstance(hook, dict) and isinstance(hook.get("command"), str):
+                    found.append(hook["command"])
+                    if blank:
+                        hook["command"] = ""
+    return found
+
+
+def _settings_secret_shaped(settings, scan):
+    """True when the settings about to be written carry a credential: each hook command is read as
+    a shell command (the way stored setup commands are, so `NAME=$NAME npm ci` passes), and the
+    rest of the document, with those commands blanked, is read in document mode."""
+    import copy
+    if any(scan(command, False) for command in _hook_commands(settings)):
+        return True
+    rest = copy.deepcopy(settings)
+    _hook_commands(rest, blank=True)
+    text = json.dumps(rest, indent=2, ensure_ascii=False) + "\n"
+    return bool(scan(text, True)) or _env_carries_credential(settings)
+
+
 def _skipped(reason):
     # record mode exits 2 when it declines, so the setup text logs that the record failed
     return 'echo "superheroes: dependency hook skipped: %s"; exit $((RECORD * 2))' % reason
@@ -368,8 +399,7 @@ def _sync(repo_root, commands, inputs, enabled, changed):
         raise OSError("the repository root does not exist")
     if write_settings is not None:
         from cloud_setup_text import _scan  # lazy: that module imports this one back
-        text = json.dumps(write_settings, indent=2, ensure_ascii=False) + "\n"
-        if _scan(text, True) or _env_carries_credential(write_settings):
+        if _settings_secret_shaped(write_settings, _scan):
             # nothing is written, the script included: the owner is told to commit this file
             raise _Refused("settings-secret-shaped")
     if write_script is not None:

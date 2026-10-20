@@ -94,6 +94,8 @@ _KEYWORD_WORDS = {"{", "!", "if", "then", "else", "elif", "do", "while", "until"
 _WRAPPER_COMMANDS = {"env", "sudo", "command", "exec", "nohup", "nice", "builtin"}
 # commands whose every non-option argument that looks like `NAME=value` is an assignment
 _DECLARE_COMMANDS = {"export", "declare", "typeset", "local", "readonly"}
+# shells whose `-c` argument is a script of its own, scanned with the same rules
+_SHELL_COMMANDS = {"bash", "sh", "dash", "zsh"}
 
 
 def _shell_tokens(text):
@@ -213,10 +215,15 @@ class _CredentialAssignment:
     def _assignment_is_credential(cls, segments):
         full = _word_text(segments)
         name, eq, _ = full.partition("=")
+        if name.endswith("+"):    # `NAME+=value` appends, and assigns just as `NAME=value` does
+            name = name[:-1]
+            skip_extra = 1
+        else:
+            skip_extra = 0
         if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not is_credential_env_name(name):
             return False
         # drop the first len(name)+1 characters across segments, keeping each remainder's kind
-        skip = len(name) + 1
+        skip = len(name) + 1 + skip_extra
         value = []
         for kind, part in segments:
             if skip >= len(part):
@@ -231,9 +238,10 @@ class _CredentialAssignment:
         at_start = True    # the next word may be an assignment or the command's name
         declare = False    # inside export / declare / ...: every non-option word is checked
         skip_redirect_target = False
+        shell = None       # after a shell's name: "opts" reading its options, "optarg", "script"
         for kind, value in _shell_tokens(text):
             if kind == "sep":
-                at_start, declare = True, False
+                at_start, declare, shell = True, False, None
                 continue
             if kind == "redir":
                 skip_redirect_target = True
@@ -243,12 +251,30 @@ class _CredentialAssignment:
                 continue
             word = _word_text(value)
             plain = len(value) == 1 and value[0][0] == "plain"
+            if shell == "script":
+                shell = None
+                if cls._search_command_text(word, anywhere):
+                    return True
+                continue
+            if shell == "optarg":
+                shell = "opts"
+                continue
+            if shell == "opts":
+                if word in ("-o", "+o", "-O", "+O"):
+                    shell = "optarg"
+                    continue
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word):
+                    shell = "script"
+                    continue
+                if word.startswith(("-", "+")):
+                    continue
+                shell = None
             if declare or at_start or anywhere:
                 if word.startswith("-"):
                     continue
                 if cls._assignment_is_credential(value):
                     return True
-                if declare or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", word):
+                if declare or re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", word):
                     continue
                 if plain and word in _KEYWORD_WORDS:
                     continue
@@ -257,6 +283,8 @@ class _CredentialAssignment:
                     declare, at_start = True, False
                 elif base in _WRAPPER_COMMANDS:
                     at_start = True
+                elif base in _SHELL_COMMANDS:
+                    shell, at_start = "opts", False
                 else:
                     at_start = False
         return False
