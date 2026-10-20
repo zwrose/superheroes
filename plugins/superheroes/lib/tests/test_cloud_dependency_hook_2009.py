@@ -770,6 +770,22 @@ def test_enabling_the_hook_refuses_a_stored_secret_shaped_command_and_writes_not
     assert not w.settings.exists()
 
 
+def test_enabling_the_hook_refuses_settings_that_disable_all_hooks_and_writes_nothing(tmp_path):
+    # axis: a hook that could not run is never reported as enabled, and no file is written for it
+    w = _world(tmp_path, mode_registry.GLOBAL)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    w.settings.parent.mkdir(parents=True, exist_ok=True)
+    w.settings.write_text(json.dumps({"disableAllHooks": True}))
+    before = w.settings.read_text()
+    got = _set(w, HOOK_SLUG, True)
+    assert got["action"] == "refused", got
+    assert got["reason"] == "dependency-hook-unwritable"
+    assert got["detail"] == "settings-hooks-disabled"
+    assert _raw(w, HOOK_SLUG) is None
+    assert not w.script.exists()
+    assert w.settings.read_text() == before
+
+
 def test_a_refused_sync_puts_back_what_it_already_changed(tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _set_ok(w, COMMANDS_SLUG, ["npm ci"])

@@ -86,57 +86,211 @@ def is_credential_env_name(key):
     return name in CREDENTIAL_ENV_KEYS or name.endswith(CREDENTIAL_ENV_SUFFIXES)
 
 
+_SEPARATOR_CHARS = ";&|()\n"
+_REDIRECT_CHARS = "<>"
+# words that begin a command without being its name: the next word is still a command start
+_KEYWORD_WORDS = {"{", "!", "if", "then", "else", "elif", "do", "while", "until", "time"}
+# commands that pass their leading `NAME=value` words and options on to the command they run
+_WRAPPER_COMMANDS = {"env", "sudo", "command", "exec", "nohup", "nice", "builtin"}
+# commands whose every non-option argument that looks like `NAME=value` is an assignment
+_DECLARE_COMMANDS = {"export", "declare", "typeset", "local", "readonly"}
+
+
+def _shell_tokens(text):
+    """`text` as a shell reads it, as ("word", segments) and ("sep", operator) tokens. A word's
+    segments are (kind, text) pairs after quote removal: kind is "plain" or "dq" (a double-quoted
+    part; both can hold a `$NAME` reference) or "lit" (single-quoted, ANSI-C decoded or
+    backslash-escaped text, never a reference). A redirection operator is ("redir", operator)."""
+    tokens = []
+    segments = []
+    buf = []
+    kind = "plain"
+    has_word = False
+    i, n = 0, len(text)
+
+    def flush_text():
+        if buf:
+            segments.append((kind, "".join(buf)))
+            del buf[:]
+
+    def end_word():
+        nonlocal has_word
+        flush_text()
+        if has_word:
+            tokens.append(("word", list(segments)))
+        del segments[:]
+        has_word = False
+
+    while i < n:
+        c = text[i]
+        if c == "'" or (c == "$" and text[i + 1:i + 2] == "'"):
+            ansi = c == "$"
+            j = i + 2 if ansi else i + 1
+            start = j
+            while j < n and text[j] != "'":
+                j += 2 if ansi and text[j] == "\\" else 1
+            body = text[start:j]
+            flush_text()
+            segments.append(("lit", _ansi_c_decode("$'" + body + "'") if ansi else body))
+            has_word = True
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            part = []
+            while j < n and text[j] != '"':
+                if text[j] == "\\" and j + 1 < n and text[j + 1] in '"\\$`\n':
+                    if text[j + 1] == "$":
+                        flush_text()
+                        segments.append(("dq", "".join(part)))
+                        part = []
+                        segments.append(("lit", "$"))
+                    elif text[j + 1] != "\n":
+                        part.append(text[j + 1])
+                    j += 2
+                else:
+                    part.append(text[j])
+                    j += 1
+            flush_text()
+            segments.append(("dq", "".join(part)))
+            has_word = True
+            i = j + 1
+        elif c == "\\" and i + 1 < n:
+            if text[i + 1] != "\n":
+                flush_text()
+                segments.append(("lit" if text[i + 1] == "$" else "plain", text[i + 1]))
+                has_word = True
+            i += 2
+        elif c in " \t\r":
+            end_word()
+            i += 1
+        elif c in _SEPARATOR_CHARS or c in _REDIRECT_CHARS:
+            digits = [t for k, t in segments if k == "plain"] + ["".join(buf)]
+            if c in _REDIRECT_CHARS and has_word and "".join(digits).isdigit():
+                buf.clear()
+                del segments[:]
+                has_word = False
+            else:
+                end_word()
+            j = i + 1
+            while j < n and text[j] == c and c != "(" and c != ")" and c != "\n":
+                j += 1
+            tokens.append(("redir" if c in _REDIRECT_CHARS else "sep", text[i:j]))
+            i = j
+        else:
+            buf.append(c)
+            has_word = True
+            i += 1
+    end_word()
+    return tokens
+
+
+def _word_text(segments):
+    return "".join(t for _, t in segments)
+
+
 class _CredentialAssignment:
-    """Pattern-like object (`.search(text)`) for a shell word `NAME=value` where NAME is
-    credential-named and the value is non-empty and not a bare `$NAME` / `${NAME}` reference."""
+    """Pattern-like object (`.search(text)`) for a shell word `NAME=value` in assignment position
+    where NAME is credential-named and the value is non-empty and not a bare `$NAME` / `${NAME}`
+    reference. Assignment position is what bash or `env` treats as an assignment: the leading
+    `NAME=value` words of a simple command (at the start of the text or after `;`, `&&`, `||`,
+    `|`, `&`, `(`, `{`, `!` or a newline), and every `NAME=value` argument to `env`, `export`,
+    `declare`, `typeset`, `local` or `readonly`. NAME and value are read after quote removal of the
+    whole word (`$'...'` decoded), so quoting any part of the word cannot hide it. A word that is an
+    argument to another command (`printf 'AWS_SECRET_ACCESS_KEY=%s\\n' "$KEY"`) is not checked."""
 
     @staticmethod
-    def _lex(word, posix):
-        lexer = shlex.shlex(word, posix=posix, punctuation_chars=True)
-        lexer.whitespace_split = True
-        return list(lexer)
+    def _is_literal(segments):
+        # the value as quoted: single-quoted, ANSI-C or escaped text is a literal; only an unquoted
+        # or double-quoted bare `$NAME` / `${NAME}` is the exempt reference
+        parts = [(k, t) for k, t in segments if t]
+        if not _word_text(parts).strip():
+            return False
+        if len(parts) == 1 and parts[0][0] in ("plain", "dq"):
+            return not ENV_REFERENCE_RE.fullmatch(parts[0][1])
+        return True
 
     @classmethod
-    def _real_words(cls, word, syntax):
-        # (word, quotes_are_syntax) pairs. The text is lexed like a shell: quote-aware, with command
-        # separators (`;`, `&&`, `|`, ...) as their own tokens, so `true&&NAME=value` exposes the
-        # assignment and a quoted `&` stays in its value. Posix (quotes removed, no longer syntax)
-        # and non-posix (quotes kept, so a single-quoted value is still seen as the literal it is);
-        # a parse error falls back to white space; a word with neither white space nor a separator
-        # is already one shell word
-        if not re.search(r"[\s;&|<>()]", word):
-            return [(word, syntax)]
-        out = []
-        for posix in (True, False):
-            try:
-                out += [(w, not posix) for w in cls._lex(word, posix)]
-            except ValueError:
-                out += [(w, True) for w in word.split()] or [(word, syntax)]
-        return out
-
-    @staticmethod
-    def _is_literal(raw, syntax):
-        # a value as written: `$'...'` (ANSI-C) is decoded and is a literal; so is a single-quoted
-        # value when its quotes are shell syntax. Only an unquoted or double-quoted bare
-        # `$NAME` / `${NAME}` is the exempt reference
-        value = _URL_QUOTES_RE.sub("", _ansi_c_decode(raw)).strip()
-        if not value:
+    def _assignment_is_credential(cls, segments):
+        full = _word_text(segments)
+        name, eq, _ = full.partition("=")
+        if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not is_credential_env_name(name):
             return False
-        if "$'" in raw or (syntax and re.match(r"\\?'", raw)):
-            return True
-        return not ENV_REFERENCE_RE.fullmatch(value)
+        # drop the first len(name)+1 characters across segments, keeping each remainder's kind
+        skip = len(name) + 1
+        value = []
+        for kind, part in segments:
+            if skip >= len(part):
+                skip -= len(part)
+                continue
+            value.append((kind, part[skip:]))
+            skip = 0
+        return cls._is_literal(value)
+
+    @classmethod
+    def _search_command_text(cls, text, anywhere=False):
+        at_start = True    # the next word may be an assignment or the command's name
+        declare = False    # inside export / declare / ...: every non-option word is checked
+        skip_redirect_target = False
+        for kind, value in _shell_tokens(text):
+            if kind == "sep":
+                at_start, declare = True, False
+                continue
+            if kind == "redir":
+                skip_redirect_target = True
+                continue
+            if skip_redirect_target:
+                skip_redirect_target = False
+                continue
+            word = _word_text(value)
+            plain = len(value) == 1 and value[0][0] == "plain"
+            if declare or at_start or anywhere:
+                if word.startswith("-"):
+                    continue
+                if cls._assignment_is_credential(value):
+                    return True
+                if declare or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", word):
+                    continue
+                if plain and word in _KEYWORD_WORDS:
+                    continue
+                base = word.rsplit("/", 1)[-1]
+                if base in _DECLARE_COMMANDS:
+                    declare, at_start = True, False
+                elif base in _WRAPPER_COMMANDS:
+                    at_start = True
+                else:
+                    at_start = False
+        return False
 
     def search(self, text):
-        candidates = [(w, False) for w in _UrlCredential._words(text)]
-        candidates += [(w, True) for w in text.split()]
-        for candidate, syntax in dict.fromkeys(candidates):
-            for word, quoted in self._real_words(candidate, syntax):
-                match = _ASSIGNMENT_WORD_RE.fullmatch(word)
-                if not match or not is_credential_env_name(match.group(1)):
-                    continue
-                if self._is_literal(match.group(2), quoted):
-                    return True
-        return False
+        return self._search(text, False)
+
+    def search_document(self, text):
+        """Any `NAME=value` word counts, wherever it stands: for a file or a whole setup text,
+        which is prose or markup as much as it is a command."""
+        return self._search(text, True)
+
+    def _search(self, text, anywhere):
+        texts = [text]
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        stack = [data]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, dict):
+                stack.extend(item.values())
+            elif isinstance(item, list):
+                stack.extend(item)
+        if anywhere:
+            # prose and heredocs hold apostrophes that no shell would balance, so a line and a
+            # white-space word are each read on their own
+            texts += [piece for t in list(texts) for piece in t.splitlines() + t.split()]
+        return any(self._search_command_text(t, anywhere) for t in texts)
+
+
 _ANSI_C_WORD_RE = re.compile(r"""\$'((?:[^'\\]|\\.)*)'""", re.DOTALL)
 
 
@@ -676,8 +830,12 @@ def _utc_date(now):
 _ENCODED_RUN_RE = re.compile(r"[A-Za-z0-9+/_-]{40,}={0,2}")
 
 
-def _plain_shape(text):
-    return next((name for name, pattern in _SECRET_SHAPES if pattern.search(text)), None)
+def _plain_shape(text, document=False):
+    # a command text is read with assignment position (see `_CredentialAssignment`); a document is not
+    def hit(pattern):
+        search = getattr(pattern, "search_document", None) if document else None
+        return (search or pattern.search)(text)
+    return next((name for name, pattern in _SECRET_SHAPES if hit(pattern)), None)
 
 
 def _encoded_shape(text):
@@ -708,10 +866,11 @@ def _without_empty_quotes(text):
         text = shorter
 
 
-def _scan(text):
+def _scan(text, document=False):
     """The name of the first secret-shaped form in `text`, else None. The shapes are matched on a
-    normalized copy too, with empty quote pairs removed."""
-    return (_plain_shape(text) or _plain_shape(_without_empty_quotes(text))
+    normalized copy too, with empty quote pairs removed. `text` is one setup command unless
+    `document` is true (a file or a whole setup text)."""
+    return (_plain_shape(text, document) or _plain_shape(_without_empty_quotes(text), document)
             or _encoded_shape(text))
 
 
@@ -1004,10 +1163,10 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                 files[core].decode("utf-8"),
                 _without_setting(files[core], project_config.CLOUD_SETUP_COMMANDS_SLUG).decode(
                     "utf-8"), 1)
-    shape = next((_scan(c) for c in commands if _scan(c)), None) or _scan(scanned)
+    shape = next((_scan(c) for c in commands if _scan(c)), None) or _scan(scanned, True)
     if shape:
         where = next((rel for rel, data in files.items()
-                      if _scan(data.decode("utf-8"))), None)
+                      if _scan(data.decode("utf-8"), True)), None)
         raise _Refused("secret-shaped-content", "Something shaped like a %s is in the setup text%s; "
                        "it was not returned." % (shape, " (in %s)" % where if where else ""))
     calibration = {"placed": placed, "files": list(files), "date": date, "stamp": stamp}

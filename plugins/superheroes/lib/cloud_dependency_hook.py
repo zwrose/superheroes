@@ -336,6 +336,9 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     write_settings = None
     delete_settings = False
     if desired:
+        if isinstance(settings, dict) and settings.get("disableAllHooks") is True:
+            # the hook could not run, and record mode rejects these settings; nothing is written
+            raise _Refused("settings-hooks-disabled")
         wanted = script_text(commands, inputs).encode("utf-8")
         if _read_bytes(script_path) != wanted or _mode_of(script_path, 0) != 0o755:
             write_script = wanted
@@ -366,7 +369,7 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     if write_settings is not None:
         from cloud_setup_text import _scan  # lazy: that module imports this one back
         text = json.dumps(write_settings, indent=2, ensure_ascii=False) + "\n"
-        if _scan(text) or _env_carries_credential(write_settings):
+        if _scan(text, True) or _env_carries_credential(write_settings):
             # nothing is written, the script included: the owner is told to commit this file
             raise _Refused("settings-secret-shaped")
     if write_script is not None:
