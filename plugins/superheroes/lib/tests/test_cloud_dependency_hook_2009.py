@@ -626,7 +626,7 @@ def _registered_settings(w):
 
 @pytest.mark.parametrize("variant", [
     "absent", "other-event-only", "disabled", "empty-session-start", "permission-only", "not-json",
-    "matcher-resume-only", "matcher-invalid-regex"])
+    "matcher-resume-only", "matcher-invalid-regex", "other-script-path", "ours-inside-longer-command"])
 def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path, variant):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
@@ -651,6 +651,12 @@ def test_an_unregistered_hook_script_withholds_the_stamp_and_fails_the_setup(tmp
     elif variant in ("matcher-resume-only", "matcher-invalid-regex"):
         matcher = "resume" if variant == "matcher-resume-only" else "start(up"
         w.settings.write_text(json.dumps({"hooks": {"SessionStart": [{**e, "matcher": matcher} for e in entry]}}))
+    elif variant in ("other-script-path", "ours-inside-longer-command"):
+        # axis: the registered command must be exactly ours, not another script or a longer command holding ours
+        other = ('bash "$CLAUDE_PROJECT_DIR/.claude/hooks/other.sh"' if variant == "other-script-path"
+                 else "echo hi && " + hook.HOOK_COMMAND)
+        w.settings.write_text(json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": other}]}]}}))
     else:
         w.settings.write_text("{not json")
     proc = _run_block(w, block)
@@ -840,3 +846,151 @@ def test_a_partial_sync_failure_recovers_to_the_stored_items_another_set_just_la
     assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, HOOK_SLUG) is True
     assert w.script.read_text() == hook.script_text(["make"], _raw(w, INPUTS_SLUG) or [])
     _assert_files_match_stored(w)
+
+
+def test_a_failed_fill_write_names_every_path_the_first_sync_and_the_recovery_changed(
+        tmp_path, monkeypatch):
+    # axis: the result names the first sync's paths beside the recovery's when the fill write fails
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    real = core_md.write_project_config_item
+
+    def failing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG:
+            return {"action": "refused", "reason": "y"}
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", failing)
+    _set_ok(w, HOOK_SLUG, True)
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    monkeypatch.undo()
+    assert done["inputsFillFailed"] == "y"
+    # the first sync wrote script and settings; the recovery rewrote only the script
+    assert done["dependencyHook"]["changed"] == sorted([hook.SCRIPT_REL, hook.SETTINGS_REL])
+    _assert_files_match_stored(w)
+
+
+def test_a_fill_readback_mismatch_names_every_path_the_first_sync_changed(tmp_path, monkeypatch):
+    # axis: a fill whose read-back mismatches keeps the first sync's paths in the result
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, HOOK_SLUG, True)
+    real_get = PC.get_item
+
+    def get_item(cwd, slug, root=None):
+        if slug == INPUTS_SLUG:
+            return {"action": "ok", "raw": ["somewhere-else.lock"]}
+        return real_get(cwd, slug, root=root)
+
+    monkeypatch.setattr(PC, "get_item", get_item)
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    monkeypatch.undo()
+    assert done["inputsFillFailed"] == PC.REASON_SET_MISMATCH and "inputsFilled" not in done
+    assert done["dependencyHook"]["changed"] == sorted([hook.SCRIPT_REL, hook.SETTINGS_REL])
+    assert _raw(w, INPUTS_SLUG) == ["package-lock.json"]
+    _assert_files_match_stored(w)
+
+
+def test_sync_rewrites_our_hook_out_of_a_group_whose_matcher_excludes_startup(tmp_path):
+    # axis: an already-present hook counts as in place only when its group runs at startup
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
+    other = {"type": "command", "command": "echo hi"}
+    good = _settings(w)
+    good["hooks"]["SessionStart"] = [
+        {"matcher": "resume", "hooks": [other, *good["hooks"]["SessionStart"][0]["hooks"]]}]
+    w.settings.write_text(json.dumps(good))
+    assert _run_block(w, block).returncode != 0
+    synced = hook.sync(str(w.repo), ["true"], _raw(w, INPUTS_SLUG) or [], True)
+    assert synced == {"action": "written", "reason": None, "changed": [hook.SETTINGS_REL]}
+    groups = _settings(w)["hooks"]["SessionStart"]
+    assert groups[0] == {"matcher": "resume", "hooks": [other]}
+    assert len(_ours(_settings(w))) == 1
+    proc = _run_block(w, block)
+    assert proc.returncode == 0, proc.stdout
+    assert "dependency hook recorded" in proc.stdout
+    # a group that runs at startup is left as it is
+    assert hook.sync(str(w.repo), ["true"], _raw(w, INPUTS_SLUG) or [], True)["action"] == "noop"
+
+
+class _Killed(BaseException):
+    """Stands in for the process being killed: nothing in the code under test may catch it."""
+
+
+def _never_on_with_the_files_gone(w):
+    commands, _inputs, enabled = _desired(w)
+    if enabled and commands:
+        assert w.script.exists() and w.settings.exists() and len(_ours(_settings(w))) == 1
+
+
+@pytest.mark.parametrize("slug,value", [(HOOK_SLUG, False), (COMMANDS_SLUG, [])])
+def test_a_kill_after_the_config_write_of_a_removal_leaves_no_on_config_with_the_files_gone(
+        tmp_path, monkeypatch, slug, value):
+    # axis: a set that removes the hook writes the config before the files, so a kill between them is safe
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, HOOK_SLUG, True)
+
+    def killed(*a, **k):
+        raise _Killed()
+
+    monkeypatch.setattr(hook, "sync", killed)
+    with pytest.raises(_Killed):
+        _set(w, slug, value)
+    monkeypatch.undo()
+    assert _raw(w, slug) == value
+    assert w.script.exists() and len(_ours(_settings(w))) == 1
+    _never_on_with_the_files_gone(w)
+
+
+@pytest.mark.parametrize("slug", [HOOK_SLUG, COMMANDS_SLUG])
+def test_a_kill_at_the_file_sync_of_a_write_leaves_no_on_config_with_the_files_gone(
+        tmp_path, monkeypatch, slug):
+    # axis: a set that writes the hook writes the files before the config, so a kill at the file step is safe
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    if slug == HOOK_SLUG:
+        _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+        value = True
+    else:
+        _set_ok(w, HOOK_SLUG, True)
+        value = ["npm ci"]
+
+    def killed(*a, **k):
+        raise _Killed()
+
+    monkeypatch.setattr(hook, "sync", killed)
+    with pytest.raises(_Killed):
+        _set(w, slug, value)
+    monkeypatch.undo()
+    assert _raw(w, slug) != value
+    _never_on_with_the_files_gone(w)
+
+
+@pytest.mark.parametrize("slug", [HOOK_SLUG, COMMANDS_SLUG])
+def test_a_kill_after_the_file_sync_of_a_write_leaves_no_on_config_with_the_files_gone(
+        tmp_path, monkeypatch, slug):
+    # axis: a set that writes the hook writes the files before the config, so a kill between them is safe
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    if slug == HOOK_SLUG:
+        _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+        value = True
+    else:
+        _set_ok(w, HOOK_SLUG, True)
+        value = ["npm ci"]
+    real = core_md.write_project_config_item
+
+    def killed(cwd, key, val, root=None):
+        if key == slug:
+            raise _Killed()
+        return real(cwd, key, val, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", killed)
+    with pytest.raises(_Killed):
+        _set(w, slug, value)
+    monkeypatch.undo()
+    assert w.script.exists() and len(_ours(_settings(w))) == 1
+    assert _raw(w, slug) != value
+    _never_on_with_the_files_gone(w)

@@ -881,7 +881,8 @@ def _plan_dependency_hook(cwd, slug, value, facts, root=None):
         filled = _detected_inputs(repo_root)
         after[CLOUD_SETUP_INPUTS_SLUG] = filled
     new = _hook_triple(after)
-    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root}
+    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root,
+            "slug": slug, "oldValue": mapping.get(slug), "deferred": False}
     if repo_root is None:
         # axis: with no root a sync is impossible, so it refuses only when one is needed
         if _hook_desired(new) or _hook_desired(old):
@@ -889,6 +890,10 @@ def _plan_dependency_hook(cwd, slug, value, facts, root=None):
         return plan
     script = os.path.join(repo_root, *hook.SCRIPT_REL.split("/"))
     # axis: a project that never opted in has no script, so its settings file is never read
+    if _hook_desired(old) and not _hook_desired(new):
+        # axis: a set that removes the hook writes the config first and removes the files after it, so a kill between the two never leaves "on" stored with the files gone
+        plan["deferred"] = True
+        return plan
     if _hook_desired(new) or _hook_desired(old) or os.path.lexists(script):
         # axis: a hook about to be written never carries a command the setup text would refuse — a stored command with a credential in it is not committed
         if _hook_desired(new):
@@ -967,9 +972,41 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
     return write_result
 
 
+def _run_deferred_removal(cwd, root, plan):
+    """Removes the files after the config write that turned the hook off. Returns None once they
+    are removed (the sync result is in the plan); a refusal puts the old value back and reconciles
+    the files to what is stored."""
+    import cloud_dependency_hook as hook
+
+    try:
+        result = hook.sync(plan["repoRoot"], *plan["new"])
+    except Exception:
+        result = {"action": "refused", "reason": "hook-files-unwritable"}
+    if result.get("action") != "refused":
+        plan["hookResult"] = result
+        return None
+    refusal = _hook_refusal(result.get("reason"))
+    restored = core_md.write_project_config_item(cwd, plan["slug"], plan["oldValue"], root=root)
+    if restored.get("action") not in ("written", "noop"):
+        refusal["dependencyHookRestoreFailed"] = restored.get("reason")
+    fresh = core_md.read(cwd, root)
+    if not fresh:
+        refusal["dependencyHookResyncFailed"] = "stored-config-unreadable"
+    else:
+        refusal.update(_reconcile_dependency_hook(
+            plan["repoRoot"], _hook_triple(_project_config_mapping(fresh))))
+    return refusal
+
+
 def _with_dependency_hook(cwd, root, plan, result):
     """Attaches the sync's result to a read-back failure and runs the convergence step, keeping the
     synced files."""
+    if plan is not None and plan.get("deferred"):
+        facts = core_md.read(cwd, root)
+        if not facts:
+            return {**result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+        return {**result, **_reconcile_dependency_hook(
+            plan["repoRoot"], _hook_triple(_project_config_mapping(facts)))}
     if plan is None or plan.get("hookResult") is None:
         return result
     result = {**result, "dependencyHook": plan["hookResult"]}
@@ -1086,6 +1123,10 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
             "expected": value,
             "observed": reread.get("raw"),
         })
+    if plan is not None and plan["deferred"]:
+        refusal = _run_deferred_removal(cwd, root, plan)
+        if refusal is not None:
+            return refusal
     if plan is not None:
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
         return _finish_dependency_hook(cwd, root, plan, write_result)

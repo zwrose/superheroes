@@ -16,6 +16,7 @@ Standard library only. Expected failures are refusals with a `reason` token, nev
 import hashlib
 import json
 import os
+import re
 import shlex
 import tempfile
 
@@ -38,6 +39,23 @@ def fingerprint(commands, inputs):
     body = json.dumps({"commands": list(commands), "inputs": list(inputs)},
                       sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+# Whether a SessionStart group runs at startup. One source, two users: the record-mode check in the
+# script text embeds these lines, and `_sync` runs the same lines, so the two cannot drift.
+_STARTS_LINES = [
+    "def starts(e):",
+    "    m = e.get('matcher')",
+    "    if m is None or m in ('', '*'):",
+    "        return True",
+    "    try:",
+    "        return isinstance(m, str) and re.fullmatch(m, 'startup') is not None",
+    "    except Exception:",
+    "        return False",
+]
+_starts_scope = {"re": re}
+exec("\n".join(_STARTS_LINES), _starts_scope)
+_group_starts = _starts_scope["starts"]
 
 
 def _skipped(reason):
@@ -93,7 +111,7 @@ def script_text(commands, inputs):
         "    for f in %s; do" % quoted_inputs,
         '      if [ -f "$f" ]; then',
         '        printf "file %s %s\\n" "$f" "$(( $(wc -c < "$f") ))"',
-        '        cat "$f" || exit 1',
+        '        cat -- "$f" || exit 1',
         "      else",
         '        printf "missing %s\\n" "$f"',
         "      fi",
@@ -108,14 +126,7 @@ def script_text(commands, inputs):
         # axis: a hook the clone's settings do not register as an enabled SessionStart command never runs, so it is never recorded
         "  python3 - %s %s <<'PY' 2>/dev/null" % (shlex.quote(SETTINGS_REL), shlex.quote(HOOK_COMMAND)),
         "import json, re, sys",
-        "def starts(e):",
-        "    m = e.get('matcher')",
-        "    if m is None or m in ('', '*'):",
-        "        return True",
-        "    try:",
-        "        return isinstance(m, str) and re.fullmatch(m, 'startup') is not None",
-        "    except Exception:",
-        "        return False",
+        *_STARTS_LINES,
         "try:",
         "    with open(sys.argv[1], encoding='utf-8') as fh:",
         "        data = json.load(fh)",
@@ -294,7 +305,10 @@ def _sync(repo_root, commands, inputs, enabled, changed):
         else:
             was_missing = False
         mine = [h for g in _session_groups(settings) for h in g["hooks"] if _is_ours(h)]
-        if was_missing or mine != [new_hook]:
+        # in place also needs the group holding it to run at startup, as record mode requires
+        starts = all(_group_starts(g) for g in _session_groups(settings)
+                     if any(_is_ours(h) for h in g["hooks"]))
+        if was_missing or mine != [new_hook] or not starts:
             _remove_ours(settings)
             hooks = settings.setdefault("hooks", {})
             hooks.setdefault("SessionStart", []).append({"hooks": [new_hook]})
