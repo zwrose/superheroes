@@ -16,6 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **Pass `--landing-dir <the order's landing directory>` on a review fixer's `dispatch-write` on the claude engine.** A run opened before the upgrade continues without it. See [Dispatch: the claude write fixer lands its own payload](#dispatch-the-claude-write-fixer-lands-its-own-payload).
 - **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
@@ -33,6 +34,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - `skills/review-code/SKILL.md` (the loop's step 3) and `reference/round-driver.md` § Owner and advisor rulings now tell the orchestrator to record every `rule` on a round's folded findings before its next `next` call, which emits the fixer order. A ruling recorded after the order is out reached only the next order, so the fixer built the old direction once and the next round reworked it.
 - No driver change: a late ruling is still accepted and carried into the next order, as the backstop.
+
+### Dispatch: the claude write fixer lands its own payload
+
+- `engine_dispatch.py dispatch-write` takes `--landing-dir`, one review landing directory (`<session>/round-<N>/landing/<phase>`). The claude write child's file tools are confined to the working directory, so a host-seat fixer could not write its payload into the session folder outside it; the flag grants that one directory and nothing else.
+- The open refuses `engine-config:sandbox-landing-dir-invalid` for a directory that is not an absolute, glob-free, existing landing-layout directory, and `engine-config:sandbox-landing-dir-denied` for one that overlaps a path the sandbox denies. A continuation that names a different directory refuses `engine-config:sandbox-landing-dir-mismatch`. A run opened without the flag is unchanged, and other engines ignore it.
 
 ### Checkpoint: a subagent's turn never holds the automatic checkpoint
 
