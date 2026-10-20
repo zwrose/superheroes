@@ -994,3 +994,28 @@ def test_a_kill_after_the_file_sync_of_a_write_leaves_no_on_config_with_the_file
     assert w.script.exists() and len(_ours(_settings(w))) == 1
     assert _raw(w, slug) != value
     _never_on_with_the_files_gone(w)
+
+
+@pytest.mark.parametrize("matcher", ["(?i)startup", "(?P<n>startup)", r"\Astartup\Z"])
+def test_a_python_only_matcher_is_not_a_startup_group(matcher):
+    # axis: Claude evaluates matchers as JavaScript regexes; Python-only syntax is unusable
+    assert hook._group_starts({"matcher": matcher}) is False
+
+
+@pytest.mark.parametrize("matcher", ["startup", "start.*", "(?:startup|resume)", "(?=startup)startup"])
+def test_a_javascript_compatible_matcher_still_starts(matcher):
+    assert hook._group_starts({"matcher": matcher}) is True
+
+
+@pytest.mark.parametrize("password", ['"$PIP_PASS"', "'$PIP_PASS'", '"${PIP_PASS}"', "$PIP_PASS"])
+def test_a_quoted_environment_reference_url_password_is_allowed(password):
+    cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
+    assert PC._validate_command_list([cmd]) is None or "secret" not in str(PC._validate_command_list([cmd]))
+    assert CS._SECRET_SHAPES  # scanner present
+    assert not [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]
+
+
+@pytest.mark.parametrize("password", ['"hunter2"', "'hunter2'", '""'])
+def test_a_quoted_literal_url_password_is_refused(password):
+    cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
+    assert [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]

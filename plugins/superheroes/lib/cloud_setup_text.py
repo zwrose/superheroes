@@ -59,7 +59,9 @@ _SOURCE_RE = re.compile(r"https://[A-Za-z0-9][A-Za-z0-9._~:/-]*")
 _PATH_RE = re.compile(r"[A-Za-z0-9._/-]+")
 _STAMP_RE = re.compile(r"[A-Za-z0-9:._-]+")
 
-_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*)://([^\s/@]*)@")
+# white space is part of the user-info only after its ':' (a shell-quoted URL can carry a password
+# with spaces); before it, a space ends the token, so `https://host user@x` is not a URL credential
+_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*)://([^\s/@:]*(?::[^/@\n]*)?)@")
 _URL_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
 _URL_HTTP_SCHEME_RE = re.compile(r"(?:.*\+)?https?", re.IGNORECASE)
 _URL_QUOTES_RE = re.compile(r"""\\?["']""")
@@ -81,6 +83,7 @@ class _UrlCredential:
             if not userinfo:
                 continue
             user, colon, password = userinfo.partition(":")
+            user, password = _URL_QUOTES_RE.sub("", user), _URL_QUOTES_RE.sub("", password)
             if colon:
                 if not _URL_REFERENCE_RE.fullmatch(password):
                     return True

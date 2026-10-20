@@ -49,7 +49,11 @@ _STARTS_LINES = [
     "    if m is None or m in ('', '*'):",
     "        return True",
     "    try:",
-    "        return isinstance(m, str) and re.fullmatch(m, 'startup') is not None",
+    # axis: Claude evaluates matchers as JavaScript regular expressions, so Python-only syntax
+    # (inline flags such as (?i), (?P<n>...), \\A, \\Z) is an unusable matcher, not a match
+    "        if not isinstance(m, str) or re.search(r'\\(\\?(?![:=!]|<[=!A-Za-z_])|\\\\[AZ]', m):",
+    "            return False",
+    "        return re.fullmatch(m, 'startup') is not None",
     "    except Exception:",
     "        return False",
 ]
