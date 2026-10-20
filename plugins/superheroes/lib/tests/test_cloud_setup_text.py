@@ -740,6 +740,8 @@ SHAPE_CASES = [
         "access_token", "id_token", "refresh_token", "OPENAI_API_KEY", cloud_pass.PASS_ENV)],
     ("credential assignment", "shell-pass-env", _assignment(cloud_pass.PASS_ENV, quote=False)),
     ("bearer credential", "bearer", lambda: "Bearer " + "t" * 20),
+    ("credential word assignment", "word-assignment",
+     lambda: "AWS_SECRET" + "_ACCESS_KEY=" + "q" * 12),
     ("url credential", "url-user-info",
      lambda: "https://builder:" + "p" * 12 + "@packages.example.invalid/simple"),
     ("registry token", "npm-token", lambda: "npm_" + "a1B2c3D4" * 4),

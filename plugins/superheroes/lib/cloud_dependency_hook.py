@@ -61,26 +61,19 @@ exec("\n".join(_STARTS_LINES), _starts_scope)
 _group_starts = _starts_scope["starts"]
 
 
-_CREDENTIAL_ENV_KEYS = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
-                        "AWS_SESSION_TOKEN"}
-_CREDENTIAL_ENV_SUFFIXES = ("_TOKEN", "_SECRET", "_PASSWORD", "_API_KEY", "_SECRET_KEY",
-                            "_ACCESS_KEY")
-_ENV_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
-
-
 def _env_carries_credential(settings):
     """True when the settings `env` block gives a credential-named key a populated value that is
     not a bare `$NAME` / `${NAME}` reference (the content scan cannot know an opaque value)."""
+    from cloud_setup_text import ENV_REFERENCE_RE, is_credential_env_name  # lazy: imports us back
     env = settings.get("env") if isinstance(settings, dict) else None
     if not isinstance(env, dict):
         return False
     for key, value in env.items():
-        name = str(key).upper()
-        if name not in _CREDENTIAL_ENV_KEYS and not name.endswith(_CREDENTIAL_ENV_SUFFIXES):
+        if not is_credential_env_name(key):
             continue
         if value is None or value == "":
             continue
-        if isinstance(value, str) and _ENV_REFERENCE_RE.fullmatch(value.strip()):
+        if isinstance(value, str) and ENV_REFERENCE_RE.fullmatch(value.strip()):
             continue
         return True
     return False

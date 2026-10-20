@@ -71,6 +71,35 @@ _URL_WORD_USERINFO_RE = re.compile(
 _URL_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
 _URL_HTTP_SCHEME_RE = re.compile(r"(?:.*\+)?https?", re.IGNORECASE)
 _URL_QUOTES_RE = re.compile(r"""\\?["']""")
+
+# the one home of the credential-name rule: a settings `env` key and a `NAME=value` shell word
+CREDENTIAL_ENV_KEYS = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
+                       "AWS_SESSION_TOKEN"}
+CREDENTIAL_ENV_SUFFIXES = ("_TOKEN", "_SECRET", "_PASSWORD", "_API_KEY", "_SECRET_KEY",
+                           "_ACCESS_KEY")
+ENV_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+_ASSIGNMENT_WORD_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+
+
+def is_credential_env_name(key):
+    name = str(key).upper()
+    return name in CREDENTIAL_ENV_KEYS or name.endswith(CREDENTIAL_ENV_SUFFIXES)
+
+
+class _CredentialAssignment:
+    """Pattern-like object (`.search(text)`) for a shell word `NAME=value` where NAME is
+    credential-named and the value is non-empty and not a bare `$NAME` / `${NAME}` reference."""
+
+    def search(self, text):
+        for word in dict.fromkeys(_UrlCredential._words(text) + text.split()):
+            match = _ASSIGNMENT_WORD_RE.fullmatch(word)
+            if not match or not is_credential_env_name(match.group(1)):
+                continue
+            # the value ends at a command separator glued to the word (`$NAME;`, `$NAME&&`)
+            value = re.split(r"[;&|]", _URL_QUOTES_RE.sub("", match.group(2)), 1)[0].strip()
+            if value and not ENV_REFERENCE_RE.fullmatch(value):
+                return True
+        return False
 _ANSI_C_WORD_RE = re.compile(r"""\$'((?:[^'\\]|\\.)*)'""", re.DOTALL)
 
 
@@ -98,9 +127,12 @@ class _UrlCredential:
     @staticmethod
     def _refuses(text):
         matches = list(_URL_USERINFO_RE.finditer(text))
-        whole = _URL_WORD_USERINFO_RE.match(text)
-        if whole:
-            matches.append(whole)
+        # the scheme may follow an option or assignment prefix inside the word (`--index-url=`,
+        # `X=`), or an opening quote; a scheme after white space belongs to a separate argument
+        for whole in _URL_WORD_USERINFO_RE.finditer(text):
+            prefix = text[:whole.start()]
+            if not re.search(r"\s", prefix) or prefix.endswith(("'", '"')):
+                matches.append(whole)
         for match in matches:
             scheme, userinfo = match.group(1), match.group(2)
             if not userinfo:
@@ -165,6 +197,7 @@ _SECRET_SHAPES = (
         r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
     ("url credential", _UrlCredential()),
+    ("credential word assignment", _CredentialAssignment()),
     ("bearer credential", re.compile(
         # a token that is only a bare environment reference ($NAME or ${NAME}) passes
         r"""Bearer (?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\;,}&|]))"""

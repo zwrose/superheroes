@@ -1059,3 +1059,27 @@ def test_a_registry_url_with_a_port_beside_a_scoped_package_is_not_a_url_credent
     command = "npm install --registry https://registry.example.invalid:8443 @acme/widget"
     done = _set(w, COMMANDS_SLUG, [command])
     assert done["action"] in ("written", "noop"), done
+
+
+def test_enabling_the_hook_refuses_a_literal_credential_named_assignment_and_writes_nothing(tmp_path):
+    # axis: a credential-named NAME=value word in a stored command never reaches the committed hook.
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    got = core_md.write_project_config_item(
+        w.cwd, COMMANDS_SLUG, ["AWS_SECRET_ACCESS_KEY=abc123 npm ci"], root=w.root)
+    assert got["action"] in ("written", "noop"), got
+    refused = _set(w, HOOK_SLUG, True)
+    assert refused["action"] == "refused"
+    assert refused["reason"] == "setup-command-secret-shaped"
+    assert _raw(w, HOOK_SLUG) is None
+    assert not w.script.exists()
+    assert not w.settings.exists()
+
+
+def test_a_credential_named_assignment_of_a_bare_reference_is_accepted(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    got = core_md.write_project_config_item(
+        w.cwd, COMMANDS_SLUG, ["AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY npm ci"], root=w.root)
+    assert got["action"] in ("written", "noop"), got
+    ok = _set(w, HOOK_SLUG, True)
+    assert ok["action"] != "refused", ok
+    assert w.script.exists()
