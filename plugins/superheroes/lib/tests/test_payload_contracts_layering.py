@@ -64,6 +64,7 @@ _REEXPORT_NAMES = (
 # finding_identity and review_memory arrive transitively through audits — not a layering slip.
 _PAYLOAD_CONTRACTS_LIB_CLOSURE = frozenset({
     "audits",
+    "command_refusals",  # stdlib-only leaf: the refused-command rule's one home
     "dispatch_outcome",
     "finding_identity",
     "payload_contracts",

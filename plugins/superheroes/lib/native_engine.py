@@ -78,7 +78,10 @@ do not try another route into the worktree.
 fetch, pull or clone, no gh.
 4. """ + command_refusals.ORDER_TEXT + """
 5. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
-   {"status": "done" | "needs_context" | "blocked", "summary": "<text>"}
+   {"status": "done" | "needs_context" | "blocked", "summary": "<text>", "refusals": [ ... ]}
+   Include refusals, in the entry shape the rule above names, whenever you met a refused or \
+denied command; an empty list or no refusals key means you met none. If your enroll command is \
+refused or denied, still write this result with status "blocked" and that refusal before you stop.
    Use "done" only when the order is carried out; "needs_context" when you need information the \
 order does not give; "blocked" when something outside your reach stops you.
 6. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
@@ -496,7 +499,23 @@ def _read_result(run_dir):
         return None
     if "summary" in data and not isinstance(data["summary"], str):
         return None
+    # axis: a result whose refusals list fails command_refusals.refusals_fault is unreadable (native-result-invalid on the done path).
+    if "refusals" in data and command_refusals.refusals_fault(data["refusals"]) is not None:
+        return None
     return data
+
+
+def _result_refusals(run_dir):
+    """The valid non-empty refusals list in ``result.json``, else ``None``; best-effort, never raises."""
+    try:
+        with open(os.path.join(run_dir, _RESULT_NAME), encoding="utf-8") as fh:
+            data = json.load(fh)
+        refusals = data.get("refusals") if isinstance(data, dict) else None
+        if refusals and command_refusals.refusals_fault(refusals) is None:
+            return refusals
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
 
 
 def _worktree_listed(into, target):
@@ -543,9 +562,13 @@ class _Close(object):
         self.opened = opened
         self.state = state
         self.served = None
+        self.refusals = None
 
     def _result(self, **fields):
         out = {"engine": "native", "bounds": NATIVE_BOUNDS, "servedModel": self.served}
+        # axis: every terminal close result carries the agent's valid refusals, forfeit paths included.
+        if self.refusals:
+            out["refusals"] = self.refusals
         out.update(fields)
         return out
 
@@ -562,6 +585,7 @@ class _Close(object):
 
     def run(self, args):
         opened = self.opened
+        self.refusals = _result_refusals(self.run_dir)
         if self.state["collecting"] is not None:
             return self._forfeit("native-collect-interrupted")
         deadline = _deadline_epoch(opened)

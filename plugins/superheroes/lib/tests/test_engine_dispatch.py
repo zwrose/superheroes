@@ -560,6 +560,7 @@ def _write_native_write_result(argv, stdout, prompt_bytes=None):
             "testFailed": bool(evidence.get("testFailed")),
             "testPassed": bool(evidence.get("testPassed")),
         },
+        "refusals": [],
     }
     with open(result_path, "w", encoding="utf-8") as fh:
         json.dump(native, fh, separators=(",", ":"))
@@ -3709,6 +3710,7 @@ def _native_write_result_json(**overrides):
         "signal": "ok",
         "report": "Receipt prose.",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     }
     obj.update(overrides)
     return json.dumps(obj, separators=(",", ":"))
@@ -14137,6 +14139,7 @@ def test_cursor_write_admits_typed_file_through_injected_seam(tmp_path):
     native = {
         "ok": True, "signal": "ok", "report": "Receipt prose.",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     }
 
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):

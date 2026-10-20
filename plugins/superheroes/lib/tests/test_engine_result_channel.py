@@ -25,6 +25,7 @@ def _load(name):
     return mod
 
 
+CR = _load("command_refusals")
 ERC = _load("engine_result_channel")
 MR = _load("model_registry")
 PC = _load("payload_contracts")
@@ -299,13 +300,18 @@ def test_unrecognised_type_token_raises():
 
 def test_write_schema_matches_grade_build_report():
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
-    assert set(schema["required"]) == {"ok", "signal", "report", "evidence"}
+    assert set(schema["required"]) == {"ok", "signal", "report", "evidence", "refusals"}
+    assert set(schema["properties"]["refusals"]["items"]["required"]) == (
+        set(CR.ENTRY_REQUIRED) | set(CR.ENTRY_OPTIONAL))
+    assert schema["properties"]["refusals"]["items"]["properties"]["refusedBy"]["enum"] == list(
+        CR.REFUSED_BY)
     assert schema["properties"]["signal"]["enum"] == list(ERC.WRITE_SIGNAL_ENUM)
     specimen = {
         "ok": True,
         "signal": "ok",
         "report": "full prose report",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     }
     ok, reason = ERC.validate(schema, specimen)
     assert ok, reason
@@ -396,6 +402,7 @@ def test_differential_agreement_with_jsonschema(run_kind):
             "signal": "plan_wrong",
             "report": "stopped",
             "evidence": {"testFailed": True, "testPassed": False},
+            "refusals": [],
         }
         specimens = _mutate_specimens(valid)
     for value, _ in specimens:
@@ -744,7 +751,7 @@ def test_review_result_contract_from_schema_lists_active_payload_properties():
 def test_write_report_contract_bytes_unchanged_by_field_semantics_lift():
     import hashlib
     assert hashlib.sha256(EA.WRITE_REPORT_CONTRACT.encode()).hexdigest() == (
-        "09e850054142c4f2eee6daee3481061799e4f0584184769f3f9f6b9ebebbd911"
+        "8e449ea44eb09c1a8b152af3b301aa1cb84cdb87e585f0b41c5d5744ed1fc973"
     )
 
 

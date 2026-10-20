@@ -211,6 +211,7 @@ def _write_native_write_result(argv, stdout, prompt_bytes=None):
             "testFailed": bool(evidence.get("testFailed")),
             "testPassed": bool(evidence.get("testPassed")),
         },
+        "refusals": [],
     }
     with open(result_path, "w", encoding="utf-8") as fh:
         json.dump(native, fh, separators=(",", ":"))
@@ -2765,6 +2766,7 @@ def _valid_native_write_obj(**overrides):
         "signal": "ok",
         "report": "Receipt prose.",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     }
     obj.update(overrides)
     return obj
@@ -2967,6 +2969,7 @@ def test_native_write_refusal_carries_report(tmp_path):
         "signal": "plan_wrong",
         "report": "Order premise was wrong.",
         "evidence": {"testFailed": True, "testPassed": False},
+        "refusals": [],
     }
 
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
@@ -2983,11 +2986,12 @@ def test_native_write_refusal_carries_report(tmp_path):
 
 # axis: _admit_native_write_result schema validation forfeits native-result-schema-invalid.
 @pytest.mark.parametrize("obj", [
-    {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}},
-    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}, "extra": 1},
-    {"ok": "yes", "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}},
-    {"ok": True, "signal": "bogus", "report": "x", "evidence": {"testFailed": False, "testPassed": True}},
-    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": "no", "testPassed": True}},
+    {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}, "refusals": []},
+    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}, "refusals": [], "extra": 1},
+    {"ok": "yes", "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}, "refusals": []},
+    {"ok": True, "signal": "bogus", "report": "x", "evidence": {"testFailed": False, "testPassed": True}, "refusals": []},
+    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": "no", "testPassed": True}, "refusals": []},
+    {"ok": True, "signal": "ok", "report": "x", "evidence": {"testFailed": False, "testPassed": True}},
 ])
 def test_native_write_schema_invalid_forfeits(tmp_path, obj):
     run_dir, state = _native_write_grade_state(tmp_path, obj)
@@ -3165,6 +3169,7 @@ def _collapsed_native_write_runner():
         native = {
             "ok": True, "signal": "ok", "report": "Receipt prose.",
             "evidence": {"testFailed": False, "testPassed": True},
+            "refusals": [],
         }
         os.makedirs(os.path.dirname(collapsed), exist_ok=True)
         with open(collapsed, "w", encoding="utf-8") as fh:

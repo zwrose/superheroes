@@ -4840,24 +4840,33 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "detail": "native-result-report-blank",
         }
 
+    # axis: a refusals list that fails command_refusals.refusals_fault (a blank command, say) forfeits native-result-refusals-invalid before grading.
+    if "refusals" in obj and command_refusals.refusals_fault(obj["refusals"]) is not None:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-refusals-invalid",
+        }
+
     # axis: the report reaches the terminal and the journal only through the scrub egress.
     report = engine_adapter._scrub(obj["report"])
     graded = engine_adapter._grade_build_report_obj(obj)
+    carried = {"refusals": graded["refusals"]} if "refusals" in graded else {}
     if graded.get("ok") is True:
-        return {
+        return dict({
             "ok": True,
             "signal": graded["signal"],
             "evidence": graded["evidence"],
             "report": report,
-        }
-    return {
+        }, **carried)
+    return dict({
         "ok": False,
         "terminal_refusal": True,
         "reason": graded["reason"],
         "signal": graded["signal"],
         "evidence": graded["evidence"],
         "report": report,
-    }
+    }, **carried)
 
 
 def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
@@ -5511,6 +5520,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             result["itemCheck"] = item_check
                         if "report" in grade:
                             result["report"] = grade["report"]
+                        # axis: the admitted refusals list reaches the terminal write result, success and post-admission forfeit alike.
+                        if "refusals" in grade:
+                            result["refusals"] = grade["refusals"]
                         if grade.get("admittedAfterTimeout"):
                             # axis: a write attempt hit the wall cap but was admitted (its
                             # result was written before the deadline) — carry that fact onto
@@ -5559,6 +5571,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if "report" in grade:
                         result["report"] = grade["report"]
+                    if "refusals" in grade:
+                        result["refusals"] = grade["refusals"]
                     if grade.get("admittedAfterTimeout"):
                         result["admittedAfterTimeout"] = True
                     return _fold_run(run_dir_real, state, result)
