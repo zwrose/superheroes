@@ -275,6 +275,29 @@ def test_an_unresolvable_repo_root_skips_the_fill_and_item_17_stays_stored(tmp_p
     assert _raw(w, INPUTS_SLUG) is None
 
 
+def test_an_unreadable_root_is_a_failed_scan_not_an_empty_fill(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    real_scandir = os.scandir
+
+    def scandir(path):
+        if str(path) == str(w.repo):
+            raise PermissionError(13, "Permission denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    with pytest.raises(OSError):
+        CS.detect_inputs(str(w.repo))
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert "inputsFilled" not in done
+    assert "Permission denied" in done["inputsFillFailed"], done
+    monkeypatch.undo()
+    assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
+    assert _raw(w, INPUTS_SLUG) is None
+    again = _set_ok(w, COMMANDS_SLUG, ["npm ci", "npm test"])
+    assert again["inputsFilled"] == ["package-lock.json"]
+
+
 def test_a_failed_fill_reports_inputs_fill_failed_and_item_17_stays_stored(tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)

@@ -802,8 +802,14 @@ def _fill_setup_inputs(cwd, root, write_result):
         return write_result
     item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
     # axis: a detected name item 18 would refuse is never stored, so the list stays valid
-    filled = [name for name in cloud_setup_text.detect_inputs(repo_root)
-              if validate_item_value(item, [name]) is None]
+    try:
+        detected = cloud_setup_text.detect_inputs(repo_root)
+    except OSError as exc:
+        # axis: a root that could not be listed is a failed scan, never "found none" — storing []
+        # would freeze input tracking off for good
+        return {**write_result, "inputsFillFailed": "the repository root could not be read (%s)"
+                % (exc.strerror or type(exc).__name__)}
+    filled = [name for name in detected if validate_item_value(item, [name]) is None]
     stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
     if stored.get("action") not in ("written", "noop"):
         return {**write_result, "inputsFillFailed": stored.get("reason")}

@@ -363,10 +363,11 @@ def _stored_setting(cwd, root, slug, what, unreadable, malformed):
 
 def detect_inputs(repo_root):
     """The sorted names of the lockfiles and requirements files directly in `repo_root`; it never
-    looks deeper, and a missing or unreadable root has none."""
+    looks deeper, and a missing root (or one that is not a directory) has none. A root that exists
+    but cannot be read raises `OSError`: "could not look" is not "found none"."""
     try:
         entries = list(os.scandir(repo_root))
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return []
     names = []
     for entry in entries:
@@ -404,7 +405,12 @@ def _input_view(repo_root, inputs):
 def _input_expectations(repo_root, inputs):
     """(path, sha256 hex or None) for each setup input as the text is composed: None marks a
     file that does not exist. The generated script checks the clone against these."""
-    view = _input_view(repo_root, inputs)
+    return _expectations_from_view(_input_view(repo_root, inputs), inputs)
+
+
+def _expectations_from_view(view, inputs):
+    """`_input_expectations` read from an already-taken input view, so the stamp and the checks
+    in the text describe the same bytes."""
     return [(rel, hashlib.sha256(view[SETUP_INPUT_STAMP_PREFIX + rel]).hexdigest()
              if SETUP_INPUT_STAMP_PREFIX + rel in view else None) for rel in inputs]
 
@@ -426,19 +432,24 @@ def _stamp_view(files, commands=(), inputs_view=None):
     return view
 
 
+def _inputs_view_for(cwd, commands, inputs):
+    """The input files' stamp entries, read once; None unless commands are listed and item 18 is
+    stored."""
+    # axis: the input files join the stamp only with commands and stored inputs
+    if not (commands and inputs is not None):
+        return None
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except store_core.RepoRootUnavailable:
+        raise _Refused("setup-inputs-unreadable", "The repository root cannot be found, so the "
+                       "files the setup depends on cannot be read.")
+    return _input_view(repo_root, inputs)
+
+
 def _view_for(cwd, files, commands, inputs):
     """The stamp's view of `files`, built for both callers (`stamped_files` and `_compose`): the
     files the setup depends on join it exactly when commands are listed and item 18 is stored."""
-    inputs_view = None
-    # axis: the input files join the stamp only with commands and stored inputs
-    if commands and inputs is not None:
-        try:
-            repo_root = store_core.repo_root(cwd)
-        except store_core.RepoRootUnavailable:
-            raise _Refused("setup-inputs-unreadable", "The repository root cannot be found, so the "
-                           "files the setup depends on cannot be read.")
-        inputs_view = _input_view(repo_root, inputs)
-    return _stamp_view(files, commands, inputs_view)
+    return _stamp_view(files, commands, _inputs_view_for(cwd, commands, inputs))
 
 
 def stamped_files(cwd, root=None):
@@ -739,10 +750,13 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
     stamp = date = None
+    inputs_view = None
     if files or commands:
         try:
+            # axis: the inputs are read once; the stamp and the checks in the text share the bytes
+            inputs_view = _inputs_view_for(cwd, commands, inputs)
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _view_for(cwd, files, commands, inputs))
+                _stamp_view(files, commands, inputs_view))
         except _Refused:
             raise
         except Exception:
@@ -759,7 +773,9 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     head = "%s · plugin %s · %s" % (name, version, part)
     expected = ()
     if commands and inputs:
-        expected = _input_expectations(store_core.repo_root(cwd), inputs)
+        if inputs_view is None:
+            inputs_view = _inputs_view_for(cwd, commands, inputs)
+        expected = _expectations_from_view(inputs_view, inputs)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
                    _clone_dir(cwd), commands, cleared, expected)
     # axis: the command list is scanned as written (as `set` scans it), never as the quoted
