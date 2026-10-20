@@ -90,15 +90,44 @@ class _CredentialAssignment:
     """Pattern-like object (`.search(text)`) for a shell word `NAME=value` where NAME is
     credential-named and the value is non-empty and not a bare `$NAME` / `${NAME}` reference."""
 
+    @staticmethod
+    def _real_words(word, syntax):
+        # (word, quotes_are_syntax) pairs. A scanned word holding white space (a decoded JSON
+        # command string) is several shell words: split it posix (quotes removed, no longer syntax)
+        # and non-posix (quotes kept, so a single-quoted value is still seen as the literal it is),
+        # falling back to white space
+        if not re.search(r"\s", word):
+            return [(word, syntax)]
+        out = []
+        for posix in (True, False):
+            try:
+                out += [(w, not posix) for w in shlex.split(word, posix=posix)]
+            except ValueError:
+                out += [(w, True) for w in word.split()]
+        return out
+
+    @staticmethod
+    def _is_literal(raw, syntax):
+        # a value as written: `$'...'` (ANSI-C) is decoded and is a literal; so is a single-quoted
+        # value when its quotes are shell syntax. Only an unquoted or double-quoted bare
+        # `$NAME` / `${NAME}` is the exempt reference
+        value = re.split(r"[;&|]", _URL_QUOTES_RE.sub("", _ansi_c_decode(raw)), 1)[0].strip()
+        if not value:
+            return False
+        if "$'" in raw or (syntax and re.match(r"\\?'", raw)):
+            return True
+        return not ENV_REFERENCE_RE.fullmatch(value)
+
     def search(self, text):
-        for word in dict.fromkeys(_UrlCredential._words(text) + text.split()):
-            match = _ASSIGNMENT_WORD_RE.fullmatch(word)
-            if not match or not is_credential_env_name(match.group(1)):
-                continue
-            # the value ends at a command separator glued to the word (`$NAME;`, `$NAME&&`)
-            value = re.split(r"[;&|]", _URL_QUOTES_RE.sub("", match.group(2)), 1)[0].strip()
-            if value and not ENV_REFERENCE_RE.fullmatch(value):
-                return True
+        candidates = [(w, False) for w in _UrlCredential._words(text)]
+        candidates += [(w, True) for w in text.split()]
+        for candidate, syntax in dict.fromkeys(candidates):
+            for word, quoted in self._real_words(candidate, syntax):
+                match = _ASSIGNMENT_WORD_RE.fullmatch(word)
+                if not match or not is_credential_env_name(match.group(1)):
+                    continue
+                if self._is_literal(match.group(2), quoted):
+                    return True
         return False
 _ANSI_C_WORD_RE = re.compile(r"""\$'((?:[^'\\]|\\.)*)'""", re.DOTALL)
 
