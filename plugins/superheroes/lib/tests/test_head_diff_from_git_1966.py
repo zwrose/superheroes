@@ -448,3 +448,20 @@ def test_e10_no_repository_unreadable_path_is_unknown_and_never_an_empty_surface
     assert reason.startswith("panel-diff-underivable")
     assert "repoRoot missing" in reason
     assert "2" not in state["rounds"]
+
+
+_BAD_ENTRY = {"command": "cmd", "refusedBy": "denied", "next": "stopped"}
+
+
+@pytest.mark.parametrize("refusals", ["x", [_BAD_ENTRY]])
+def test_hand_submitted_fixer_refusals_are_refused_before_the_fold(tmp_path, monkeypatch, refusals):
+    cli = _Cli(tmp_path, monkeypatch)
+    cli.supply = lambda c: {"refusals": refusals}
+    n = cli.to_fixer()
+    out = cli.submit(n)
+    assert out["ok"] is False
+    assert out["reason"].startswith("`refusals` — ")
+    ok, state = RD.load_state(cli.d)
+    assert ok
+    assert state["pending"]["phase"] == RD.P_FIXER
+    assert "fix" not in state["rounds"].get(str(n["round"]), {})
