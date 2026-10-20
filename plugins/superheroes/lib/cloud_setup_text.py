@@ -233,6 +233,20 @@ class _CredentialAssignment:
             skip = 0
         return cls._is_literal(value)
 
+    @staticmethod
+    def _argument_is_credential(segments):
+        """A `NAME=value` / `NAME+=value` word outside assignment position (an argument, such as
+        the text an `echo` writes to a file): refused when NAME is credential-named and the value
+        is non-empty and holds neither `$` nor `%`, so a format string or any value that
+        references a variable stays accepted."""
+        full = _word_text(segments)
+        name, eq, value = full.partition("=")
+        if name.endswith("+"):
+            name = name[:-1]
+        if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not is_credential_env_name(name):
+            return False
+        return bool(value.strip()) and "$" not in value and "%" not in value
+
     @classmethod
     def _search_command_text(cls, text, anywhere=False):
         at_start = True    # the next word may be an assignment or the command's name
@@ -287,6 +301,8 @@ class _CredentialAssignment:
                     shell, at_start = "opts", False
                 else:
                     at_start = False
+            elif cls._argument_is_credential(value):
+                return True
         return False
 
     def search(self, text):
