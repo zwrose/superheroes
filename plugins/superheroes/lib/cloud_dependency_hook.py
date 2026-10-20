@@ -346,6 +346,12 @@ def _sync(repo_root, commands, inputs, enabled, changed):
 
     if not os.path.isdir(repo_root) and (write_script is not None or write_settings is not None):
         raise OSError("the repository root does not exist")
+    if write_settings is not None and desired:
+        from cloud_setup_text import _scan  # lazy: that module imports this one back
+        text = json.dumps(write_settings, indent=2, ensure_ascii=False) + "\n"
+        if _scan(text):
+            # nothing is written, the script included: the owner is told to commit this file
+            raise _Refused("settings-secret-shaped")
     if write_script is not None:
         _atomic_write(script_path, write_script, 0o755)
         changed.add(SCRIPT_REL)

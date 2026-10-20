@@ -96,13 +96,20 @@ class _UrlCredential:
     @staticmethod
     def _words(text):
         # one shell word at a time, so a URL never borrows text from a neighbouring argument
-        try:
-            return shlex.split(text)
-        except ValueError:
-            return text.split()
+        # without comments, a `#` word stays visible; with them, an apostrophe inside a comment
+        # cannot make the parse fail and split a quoted URL at its spaces
+        words = []
+        for comments in (False, True):
+            try:
+                words += shlex.split(text, comments=comments)
+            except ValueError:
+                pass
+        return words or text.split()
 
     def search(self, text):
-        for word in self._words(text):
+        # shlex drops comments, so the raw white-space words are examined too
+        words = list(dict.fromkeys(self._words(text) + text.split()))
+        for word in words:
             for form in (word, word.replace("\\/", "/")):
                 if self._refuses(form) or self._refuses(_URL_QUOTES_RE.sub("", form)):
                     return True
