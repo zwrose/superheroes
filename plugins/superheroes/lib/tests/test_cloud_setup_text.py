@@ -740,6 +740,8 @@ SHAPE_CASES = [
         "access_token", "id_token", "refresh_token", "OPENAI_API_KEY", cloud_pass.PASS_ENV)],
     ("credential assignment", "shell-pass-env", _assignment(cloud_pass.PASS_ENV, quote=False)),
     ("bearer credential", "bearer", lambda: "Bearer " + "t" * 20),
+    ("url credential", "url-user-info",
+     lambda: "https://builder:" + "p" * 12 + "@packages.example.invalid/simple"),
     ("registry token", "npm-token", lambda: "npm_" + "a1B2c3D4" * 4),
     ("registry token", "npm-auth-token",
      lambda: "//registry.example.com/:_authToken=" + "k" * 12),
@@ -761,6 +763,11 @@ def test_s9_secret_shaped_content(tmp_path, shape, builder):
     assert shape in result["detail"] and "config/core.md" in result["detail"]
     assert planted not in json.dumps(result)
     assert planted.split(":")[-1].strip(' "}') not in result["detail"]
+
+
+def test_url_credential_env_reference_passes():
+    assert CS._plain_shape("pip install --index-url https://builder:${PIP_PASS}@host/simple x") is None
+    assert CS._plain_shape("git clone https://github.com/a/b.git") is None
 
 
 def test_s9_in_the_head_line_names_the_shape_only(tmp_path):

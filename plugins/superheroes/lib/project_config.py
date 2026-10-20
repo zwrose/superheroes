@@ -882,7 +882,7 @@ def _plan_dependency_hook(cwd, slug, value, facts, root=None):
         after[CLOUD_SETUP_INPUTS_SLUG] = filled
     new = _hook_triple(after)
     plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root,
-            "slug": slug, "oldValue": mapping.get(slug), "deferred": False}
+            "slug": slug, "oldValue": mapping.get(slug), "newValue": value, "deferred": False}
     if repo_root is None:
         # axis: with no root a sync is impossible, so it refuses only when one is needed
         if _hook_desired(new) or _hook_desired(old):
@@ -986,8 +986,12 @@ def _run_deferred_removal(cwd, root, plan):
         plan["hookResult"] = result
         return None
     refusal = _hook_refusal(result.get("reason"))
-    restored = core_md.write_project_config_item(cwd, plan["slug"], plan["oldValue"], root=root)
-    if restored.get("action") not in ("written", "noop"):
+    # only while the slug still holds the value this set wrote: a newer stored value stays, and the
+    # files are reconciled to it below
+    restored = core_md.write_project_config_item_if(
+        cwd, plan["slug"], plan["oldValue"], expected=plan["newValue"], root=root)
+    if (restored.get("action") not in ("written", "noop")
+            and restored.get("reason") != "item-changed"):
         refusal["dependencyHookRestoreFailed"] = restored.get("reason")
     fresh = core_md.read(cwd, root)
     if not fresh:

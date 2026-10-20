@@ -86,6 +86,11 @@ _SECRET_SHAPES = (
         r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\&|]))"""
         r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
+    ("url credential", re.compile(
+        # scheme://user:password@host; a password that is only a bare environment reference
+        # ($NAME or ${NAME}) passes
+        r"""(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'\\]+:"""
+        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})@)[^\s/@"'\\]+@""")),
     ("bearer credential", re.compile(
         # a token that is only a bare environment reference ($NAME or ${NAME}) passes
         r"""Bearer (?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\;,}&|]))"""
