@@ -980,6 +980,8 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
     keeps its script (inputs and item 18 both filled); a fill whose write failed gets the script
     for the stored (unset) item 18."""
     hook_result = plan["hookResult"]
+    carried = plan["new"]    # the triple the hook files carry: the first sync's, unless a recovery lands
+    recovery_failed = False
     if plan.get("fillFailed") is not None:
         # axis: a skipped fill is reported on item 17's result, never silent
         write_result = {**write_result, "inputsFillFailed": plan["fillFailed"]}
@@ -993,13 +995,25 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
                 again = hook.sync(plan["repoRoot"], plan["new"][0], plan["old"][1], plan["new"][2])
             except Exception:
                 again = None
+            if again is not None and again.get("action") == "refused":
+                again = None
             if again is not None:
                 # axis: the paths the first sync changed stay reported beside the recovery's
                 changed = sorted(set(hook_result.get("changed") or []) | set(again.get("changed") or []))
                 hook_result = {**again, "changed": changed}
+                carried = (plan["new"][0], plan["old"][1], plan["new"][2])
+            else:
+                # axis: a recovery that did not land leaves the first sync's files, never the old inputs
+                recovery_failed = True
     if hook_result is not None:
         write_result = {**write_result, "dependencyHook": hook_result}
-        write_result = _converge_dependency_hook(cwd, root, plan, write_result)
+        if recovery_failed:
+            facts = core_md.read(cwd, root)
+            if not facts:
+                return {**write_result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+            return {**write_result, **_reconcile_dependency_hook(
+                plan["repoRoot"], _hook_triple(_project_config_mapping(facts)))}
+        write_result = _converge_dependency_hook(cwd, root, plan, write_result, carried)
     return write_result
 
 
@@ -1048,7 +1062,7 @@ def _with_dependency_hook(cwd, root, plan, result):
     return _converge_dependency_hook(cwd, root, plan, result)
 
 
-def _converge_dependency_hook(cwd, root, plan, write_result):
+def _converge_dependency_hook(cwd, root, plan, write_result, carried=None):
     """Brings the hook files to the stored items 17, 18 and 19 when a set that landed between this
     set's sync and its write left them differing from the triple the sync used (the writers each
     lock internally, so no lock can span the sync). One more sync runs with the stored triple,
@@ -1059,9 +1073,11 @@ def _converge_dependency_hook(cwd, root, plan, write_result):
     if not facts:
         return {**write_result, "dependencyHookResyncFailed": "stored-config-unreadable"}
     stored = _hook_triple(_project_config_mapping(facts))
-    used = plan["new"]
-    if plan["filled"] is not None and "inputsFillFailed" in write_result:
-        used = (plan["new"][0], plan["old"][1], plan["new"][2])
+    used = carried
+    if used is None:
+        used = plan["new"]
+        if plan["filled"] is not None and "inputsFillFailed" in write_result:
+            used = (plan["new"][0], plan["old"][1], plan["new"][2])
     if stored == used:
         return write_result
     return {**write_result, **_reconcile_dependency_hook(plan["repoRoot"], stored)}

@@ -96,6 +96,8 @@ _WRAPPER_COMMANDS = {"env", "sudo", "command", "exec", "nohup", "nice", "builtin
 _DECLARE_COMMANDS = {"export", "declare", "typeset", "local", "readonly"}
 # shells whose `-c` argument is a script of its own, scanned with the same rules
 _SHELL_COMMANDS = {"bash", "sh", "dash", "zsh"}
+# a `printf` format argument holds conversions: `%s`, `%d`, `%b`, `%q`, `%5.2f`, ...
+_PRINTF_CONVERSION_RE = re.compile(r"%[-+ #0']*(?:\d+|\*)?(?:\.(?:\d+|\*)?)?[A-Za-z]")
 
 
 def _shell_tokens(text):
@@ -234,18 +236,33 @@ class _CredentialAssignment:
         return cls._is_literal(value)
 
     @staticmethod
-    def _argument_is_credential(segments):
+    def _argument_is_credential(segments, is_format=False):
         """A `NAME=value` / `NAME+=value` word outside assignment position (an argument, such as
         the text an `echo` writes to a file): refused when NAME is credential-named and the value
-        is non-empty and holds neither `$` nor `%`, so a format string or any value that
-        references a variable stays accepted."""
+        is non-empty, unless one of two exemptions holds. Reference: the value, read segment by
+        segment with its original quoting, holds a `$NAME` / `${NAME}` reference in an unquoted or
+        double-quoted segment (single-quoted, ANSI-C and escaped text is literal). Format: the word
+        is the format argument of `printf` and holds a `%` conversion (`%s`, `%d`, `%b`, ...)."""
         full = _word_text(segments)
-        name, eq, value = full.partition("=")
+        name, eq, _ = full.partition("=")
+        skip = len(name) + 1
         if name.endswith("+"):
             name = name[:-1]
         if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not is_credential_env_name(name):
             return False
-        return bool(value.strip()) and "$" not in value and "%" not in value
+        value = []
+        for kind, part in segments:
+            if skip >= len(part):
+                skip -= len(part)
+                continue
+            value.append((kind, part[skip:]))
+            skip = 0
+        text = _word_text(value)
+        if not text.strip():
+            return False
+        if any(k in ("plain", "dq") and ENV_REFERENCE_RE.search(t) for k, t in value):
+            return False
+        return not (is_format and _PRINTF_CONVERSION_RE.search(text))
 
     @classmethod
     def _search_command_text(cls, text, anywhere=False):
@@ -253,9 +270,10 @@ class _CredentialAssignment:
         declare = False    # inside export / declare / ...: every non-option word is checked
         skip_redirect_target = False
         shell = None       # after a shell's name: "opts" reading its options, "optarg", "script"
+        printf = None      # after `printf`: "opts" reading its options, "format" for its format
         for kind, value in _shell_tokens(text):
             if kind == "sep":
-                at_start, declare, shell = True, False, None
+                at_start, declare, shell, printf = True, False, None, None
                 continue
             if kind == "redir":
                 skip_redirect_target = True
@@ -301,8 +319,26 @@ class _CredentialAssignment:
                     shell, at_start = "opts", False
                 else:
                     at_start = False
-            elif cls._argument_is_credential(value):
-                return True
+                    printf = "opts" if base == "printf" else None
+            else:
+                is_format = False
+                if printf == "opts":
+                    if word == "-v":
+                        printf = "var"
+                        continue
+                    if word == "--":
+                        printf = "format"
+                        continue
+                    if word.startswith("-") and len(word) > 1:
+                        continue
+                    printf = "format"
+                if printf == "var":
+                    printf = "opts"
+                    continue
+                if printf == "format":
+                    is_format, printf = True, None
+                if cls._argument_is_credential(value, is_format):
+                    return True
         return False
 
     def search(self, text):
@@ -312,6 +348,31 @@ class _CredentialAssignment:
         """Any `NAME=value` word counts, wherever it stands: for a file or a whole setup text,
         which is prose or markup as much as it is a command."""
         return self._search(text, True)
+
+    _QUOTED_VALUE_RE = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+    # what may stand before the opening quote of a serialized value: a JSON / YAML key or list
+    # separator, never a shell word (`X="a b"`), which stays part of the document
+    _VALUE_LEAD = ":,[{-"
+
+    @classmethod
+    def _serialized_values(cls, text):
+        """The decoded content of each double-quoted JSON / YAML string literal in `text` whose
+        content holds white space, and `text` with those literals blanked."""
+        literals, pieces, last = [], [], 0
+        for match in cls._QUOTED_VALUE_RE.finditer(text):
+            lead = text[:match.start()].rstrip(" \t")
+            if lead and lead[-1] not in cls._VALUE_LEAD and not lead.endswith("\n"):
+                continue
+            try:
+                decoded = json.loads(match.group(0))
+            except ValueError:
+                continue
+            if isinstance(decoded, str) and re.search(r"\s", decoded):
+                literals.append(decoded)
+                pieces += [text[last:match.start()], " "]
+                last = match.end()
+        pieces.append(text[last:])
+        return literals, "".join(pieces)
 
     def _search(self, text, anywhere):
         texts = [text]
@@ -329,6 +390,13 @@ class _CredentialAssignment:
             elif isinstance(item, list):
                 stack.extend(item)
         if anywhere:
+            # a serialized command (a double-quoted JSON / YAML value holding white space) is read
+            # on its own, decoded, so its shell word boundaries hold and the JSON quotes around it
+            # are never read as shell quoting; the rest of the document is read with it blanked
+            literals, remainder = self._serialized_values(text)
+            if literals:
+                texts[0] = remainder
+                texts += literals
             # prose and heredocs hold apostrophes that no shell would balance, so a line and a
             # white-space word are each read on their own
             texts += [piece for t in list(texts) for piece in t.splitlines() + t.split()]

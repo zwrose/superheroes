@@ -1468,3 +1468,44 @@ def test_scan_refuses_url_credential_forms(text):
 ])
 def test_scan_allows_url_forms_without_a_literal_secret(text):
     assert CS._scan(text) is None
+
+
+# --- a serialized verification command keeps its shell word boundaries (#2009) ----------------
+
+def _compose_with_verify_command(tmp_path, command):
+    w = _outside(tmp_path)
+    _edit_core_block(w, lambda obj: obj.update(verifyCommand=command))
+    return _compose(w)
+
+
+def test_serialized_verify_command_with_an_environment_reference_composes(tmp_path):
+    # axis: the JSON quotes around a command are not shell quotes; `npm test` is a separate word
+    result = _compose_with_verify_command(
+        tmp_path, "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY npm test")
+    assert result["action"] == "written", result
+
+
+def test_serialized_verify_command_with_a_literal_credential_is_refused(tmp_path):
+    result = _compose_with_verify_command(
+        tmp_path, "AWS_SECRET_ACCESS_KEY=literal123456 npm test")
+    _refusal(result, "secret-shaped-content")
+    assert "literal123456" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("command,refused", [
+    ("echo 'DATABASE_PASSWORD=pa$$word123' > .env", True),
+    ("echo 'DATABASE_PASSWORD=pa%ssword123' > .env", True),
+    ("echo DATABASE_PASSWORD=$'pa$$word123' > .env", True),
+    ("echo DATABASE_PASSWORD='$HOME' > .env", True),
+    ("printf 'DATABASE_PASSWORD=pa%ssword\\n' > .env", False),
+    ("env printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env", False),
+    ("builtin printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env", False),
+    ("/usr/bin/printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env", False),
+    ("printf '%s\\n' 'DATABASE_PASSWORD=fixturepassword1' > .env", True),
+    ("printf 'DATABASE_PASSWORD=fixturepassword1\\n' > .env", True),
+    ("printf '%s\\n' DATABASE_PASSWORD=%s > .env", True),
+    ("echo DATABASE_PASSWORD=$PW > .env", False),
+    ("echo \"DATABASE_PASSWORD=${PW}x\" > .env", False),
+])
+def test_argument_credential_exemptions_are_narrow(command, refused):
+    assert bool(CS._CredentialAssignment().search(command)) is refused

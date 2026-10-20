@@ -886,6 +886,35 @@ def test_a_failed_fill_write_names_every_path_the_first_sync_and_the_recovery_ch
     _assert_files_match_stored(w)
 
 
+def test_a_failed_fill_write_and_a_failed_recovery_report_the_resync_failure(tmp_path, monkeypatch):
+    # axis: a recovery sync that raises or is refused never counts as the old inputs being applied
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, HOOK_SLUG, True)
+    real_write = core_md.write_project_config_item
+    real_sync = hook.sync
+    syncs = []
+
+    def failing_write(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG:
+            return {"action": "refused", "reason": "y"}
+        return real_write(cwd, slug, value, root=root)
+
+    def failing_sync(repo_root, commands, inputs, enabled):
+        syncs.append(inputs)
+        if len(syncs) == 1:
+            return real_sync(repo_root, commands, inputs, enabled)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(core_md, "write_project_config_item", failing_write)
+    monkeypatch.setattr(hook, "sync", failing_sync)
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    monkeypatch.undo()
+    assert done["inputsFillFailed"] == "y"
+    assert "disk full" in done["dependencyHookResyncFailed"]
+    assert _raw(w, COMMANDS_SLUG) == ["npm ci"] and _raw(w, INPUTS_SLUG) is None
+
+
 def test_a_fill_readback_mismatch_names_every_path_the_first_sync_changed(tmp_path, monkeypatch):
     # axis: a fill whose read-back mismatches keeps the first sync's paths in the result
     w = _world(tmp_path, mode_registry.IN_REPO)
