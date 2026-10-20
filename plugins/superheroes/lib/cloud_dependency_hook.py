@@ -9,14 +9,19 @@ exactly one hook object of ours and the script holds exactly `script_text(comman
 otherwise neither exists, and no other part of the settings file changes. `sync` is the single
 chokepoint that makes it so.
 
-The module has no command line; callers use `sync`, `fingerprint` and `script_text`.
+  cloud_dependency_hook.py offer [--cwd D] [--root D]
+
+`offer` prints the question configure asks before adding the hook; every other caller uses `sync`,
+`fingerprint`, `script_text` and `offer_message`.
 
 Standard library only. Expected failures are refusals with a `reason` token, never a raise.
 """
+import argparse
 import hashlib
 import json
 import os
 import shlex
+import sys
 import tempfile
 
 SCRIPT_REL = ".claude/hooks/superheroes-cloud-dependencies.sh"
@@ -135,6 +140,22 @@ def script_text(commands, inputs):
         "",
     ]
     return "\n".join(lines)
+
+
+def offer_message(commands, inputs):
+    """What the owner is told before being asked to add the hook."""
+    count = len(commands)
+    files = ", ".join(inputs) if inputs else "no files are listed yet"
+    return (
+        "The dependency hook is optional, and you choose it per project. It adds two files to this "
+        "project's repository: one new start-of-session entry in .claude/settings.json, and a small "
+        "script. You commit and push them, because cloud sessions start from the pushed repository. "
+        "In a cloud session it checks the listed files (%s) and re-runs your %d listed setup "
+        "command%s only when they changed, so a session with nothing changed starts in a few "
+        "seconds. A command that fails never stops the session: it prints one line, and the next "
+        "session tries again. Without the hook, a change to those files makes the cloud check "
+        "report the setup text out of date and ask you to paste it again.\n\n"
+        "Add the dependency hook?" % (files, count, "" if count == 1 else "s"))
 
 
 def _is_ours(hook):
@@ -306,3 +327,54 @@ def sync(repo_root, commands, inputs, enabled):
     except OSError:
         action, reason = "refused", "hook-files-unwritable"
     return {"action": action, "reason": reason, "changed": sorted(changed)}
+
+
+def _offer_refusal(reason, detail):
+    sys.stderr.write(json.dumps({"action": "refused", "reason": reason, "detail": detail}) + "\n")
+    return 1
+
+
+def _offer(cwd, root):
+    """The offer for the project at `cwd`, printed as one json line; 1 when there is none to make."""
+    import project_config
+    import store_core
+    from cloud_setup_text import detect_inputs
+
+    commands_item = project_config.get_item(
+        cwd, project_config.CLOUD_SETUP_COMMANDS_SLUG, root=root, persist_backfill=False)
+    commands = commands_item.get("raw")
+    if not (_valid_list(commands) and commands):
+        return _offer_refusal("no-setup-commands", "The project lists no cloud setup commands "
+                              "(configure item 17), so there is nothing for a hook to keep current.")
+    inputs_item = project_config.get_item(
+        cwd, project_config.CLOUD_SETUP_INPUTS_SLUG, root=root, persist_backfill=False)
+    stored = inputs_item.get("raw")
+    if stored is None:
+        try:
+            repo_root = store_core.repo_root(cwd)
+        except store_core.RepoRootUnavailable:
+            return _offer_refusal("repo-root-unavailable", "The repository root cannot be found, "
+                                  "so the files the setup depends on cannot be detected.")
+        inputs, source = detect_inputs(repo_root), "detected"
+    elif _valid_list(stored):
+        inputs, source = list(stored), "stored"
+    else:
+        return _offer_refusal("setup-inputs-malformed", "The project's setup inputs (configure "
+                              "item 18) are not a list of paths.")
+    sys.stdout.write(json.dumps({
+        "action": "offer", "message": offer_message(commands, inputs), "commands": len(commands),
+        "inputs": inputs, "inputsSource": source}) + "\n")
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="cloud_dependency_hook.py")
+    parser.add_argument("verb", choices=["offer"])
+    parser.add_argument("--cwd", default=None)
+    parser.add_argument("--root", default=None)
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    return _offer(args.cwd or os.getcwd(), args.root)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

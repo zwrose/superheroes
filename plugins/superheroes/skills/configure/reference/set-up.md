@@ -532,6 +532,31 @@ check records the new environment.
    ```
 
    A refusal means the settings cannot be read: say its `message` and stop.
+**The dependency hook offer.** Taken only when item 17 lists commands, and before step 2, because
+the choice changes the setup text. Run `offer`, say its `message` to the owner unchanged, and record
+the answer:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/cloud_dependency_hook.py" offer --cwd .
+```
+
+A refusal means there is nothing to offer: skip the offer. On the owner's answer, write item 19,
+`true` or `false`:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudDependencyHook --cwd . <<'SUPERHEROES_ANSWER'
+true
+SUPERHEROES_ANSWER
+```
+
+Only `written` or `noop` means it was saved. On `true`, the result's `dependencyHook.changed` names
+the two files written. Tell the owner to commit and push them, because a cloud session starts from
+the pushed repository. State the cost plainly: the hook runs at every cloud session start (a few
+seconds when nothing changed; when an input changed, as long as the setup commands take, up to its
+600-second limit), and a failed command prints one line and never stops the session.
+
 2. **Open the sitting.** Run `setup-message` and give the owner its `message`, then its `setupText`
    in one fenced block for them to copy.
 
