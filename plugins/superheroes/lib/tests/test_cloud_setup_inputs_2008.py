@@ -270,6 +270,7 @@ def test_an_unresolvable_repo_root_skips_the_fill_and_item_17_stays_stored(tmp_p
     _lose_the_repo_root_for_the_fill(monkeypatch)
     done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert "inputsFilled" not in done
+    assert done["inputsFillFailed"] == "repo-root-unavailable"
     monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
