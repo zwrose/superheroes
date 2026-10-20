@@ -416,7 +416,7 @@ def test_an_unresolvable_repo_root_refuses_nothing_for_a_project_that_never_opte
     _lose_the_repo_root_for_the_hook(monkeypatch)
     done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert "inputsFilled" not in done and "dependencyHook" not in done
-    assert "inputsFillFailed" not in done
+    assert done.get("inputsFillFailed") == "repo-root-unavailable"
     # turning the hook off needs no sync when it was never on
     assert "dependencyHook" not in _set_ok(w, HOOK_SLUG, False)
     monkeypatch.undo()

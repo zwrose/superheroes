@@ -857,11 +857,39 @@ def _hook_refusal(detail):
     return {"action": "refused", "reason": REASON_DEPENDENCY_HOOK_UNWRITABLE, "detail": detail}
 
 
+def _plan_fill(repo_root):
+    """The item 18 fill for a set that would fill it: (filled, None), or (None, reason) when the
+    fill is skipped. A root that cannot be resolved (git failing), that is not itself a git
+    checkout, or that cannot be listed gets no fill and is reported, never silent."""
+    import store_core
+
+    # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
+    if repo_root is None:
+        return None, "repo-root-unavailable"
+    try:
+        # a checkout answers its real git directory (wherever the metadata lives); the greenfield
+        # fallback answers the directory itself
+        git_dir = store_core.get_worktree_gitdir(repo_root)
+    except store_core.RepoRootUnavailable:
+        return None, "repo-root-unavailable"
+    if git_dir == os.path.realpath(repo_root):
+        # axis: a configured directory that is not a git checkout gets no fill — the root fallback names the directory itself, and scanning it would store a list for the wrong tree
+        return None, "not-a-git-checkout"
+    try:
+        return _detected_inputs(repo_root), None
+    except OSError as exc:
+        # axis: a root that could not be listed is a failed scan, never "found none" — storing []
+        # would freeze input tracking off for good
+        return None, ("the repository root could not be read (%s)"
+                      % (exc.strerror or type(exc).__name__))
+
+
 def _plan_dependency_hook(cwd, slug, value, facts, root=None):
     """Works out, before anything is written, the item 18 fill and the hook state this set leads
     to, and brings the hook files to that state. Returns {"refusal": result} when it cannot, else
     the plan: the stored `old` triple, the `new` triple (with the fill), the `filled` item 18 (or
-    None), the sync result (`hookResult`, or None when none ran) and the `repoRoot`."""
+    None), the `fillFailed` reason when a fill was skipped (or None), the sync result
+    (`hookResult`, or None when none ran) and the `repoRoot`."""
     import cloud_dependency_hook as hook
     import store_core
 
@@ -873,16 +901,16 @@ def _plan_dependency_hook(cwd, slug, value, facts, root=None):
         repo_root = store_core.repo_root(cwd)
     except store_core.RepoRootUnavailable:
         repo_root = None
-    filled = None
-    # axis: item 18 is filled only when it was never stored, so an edited list survives; a project
-    # outside a git checkout has no root to look in, so it gets no fill
-    if (slug == CLOUD_SETUP_COMMANDS_SLUG and value and CLOUD_SETUP_INPUTS_SLUG not in mapping
-            and repo_root is not None):
-        filled = _detected_inputs(repo_root)
-        after[CLOUD_SETUP_INPUTS_SLUG] = filled
+    filled = fill_failed = None
+    # axis: item 18 is filled only when it was never stored, so an edited list survives
+    if slug == CLOUD_SETUP_COMMANDS_SLUG and value and CLOUD_SETUP_INPUTS_SLUG not in mapping:
+        filled, fill_failed = _plan_fill(repo_root)
+        if filled is not None:
+            after[CLOUD_SETUP_INPUTS_SLUG] = filled
     new = _hook_triple(after)
-    plan = {"old": old, "new": new, "filled": filled, "hookResult": None, "repoRoot": repo_root,
-            "slug": slug, "oldValue": mapping.get(slug), "newValue": value, "deferred": False}
+    plan = {"old": old, "new": new, "filled": filled, "fillFailed": fill_failed,
+            "hookResult": None, "repoRoot": repo_root, "slug": slug,
+            "oldValue": mapping.get(slug), "newValue": value, "deferred": False}
     if repo_root is None:
         # axis: with no root a sync is impossible, so it refuses only when one is needed
         if _hook_desired(new) or _hook_desired(old):
@@ -952,6 +980,9 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
     keeps its script (inputs and item 18 both filled); a fill whose write failed gets the script
     for the stored (unset) item 18."""
     hook_result = plan["hookResult"]
+    if plan.get("fillFailed") is not None:
+        # axis: a skipped fill is reported on item 17's result, never silent
+        write_result = {**write_result, "inputsFillFailed": plan["fillFailed"]}
     if plan["filled"] is not None:
         write_result, committed = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
         if "inputsFillFailed" in write_result and not committed and _hook_desired(plan["new"]):

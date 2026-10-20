@@ -488,10 +488,11 @@ def _stored_setting(cwd, root, slug, what, unreadable, malformed):
 
 def detect_inputs(repo_root):
     """The sorted names of the lockfiles and requirements files directly in `repo_root`; it never
-    looks deeper, and a missing or unreadable root has none."""
+    looks deeper, and a missing root (or one that is not a directory) has none. A root that exists
+    but cannot be read raises `OSError`: "could not look" is not "found none"."""
     try:
         entries = list(os.scandir(repo_root))
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return []
     names = []
     for entry in entries:
@@ -512,9 +513,14 @@ def _input_view(repo_root, inputs):
                                      + "\n").encode("utf-8")}
     for rel in inputs:
         path = os.path.join(repo_root, *rel.split("/"))
-        if not os.path.lexists(path):
+        try:
+            os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
             view[SETUP_INPUT_MISSING_STAMP_PREFIX + rel] = b""
             continue
+        except OSError:
+            raise _Refused("setup-inputs-unreadable", "A file the setup depends on (%s) is not a "
+                           "readable file." % rel)
         try:
             if not os.path.isfile(path):
                 raise OSError("not a regular file")
@@ -526,10 +532,10 @@ def _input_view(repo_root, inputs):
     return view
 
 
-def _input_expectations(repo_root, inputs):
-    """(path, sha256 hex or None) for each setup input as the text is composed: None marks a
-    file that does not exist. The generated script checks the clone against these."""
-    view = _input_view(repo_root, inputs)
+def _expectations_from_view(view, inputs):
+    """(path, sha256 hex or None) for each setup input as the text is composed, read from an
+    already-taken input view so the stamp and the checks in the text describe the same bytes:
+    None marks a file that does not exist. The generated script checks the clone against these."""
     return [(rel, hashlib.sha256(view[SETUP_INPUT_STAMP_PREFIX + rel]).hexdigest()
              if SETUP_INPUT_STAMP_PREFIX + rel in view else None) for rel in inputs]
 
@@ -553,28 +559,41 @@ def _stamp_view(files, commands=(), inputs_view=None):
     return view
 
 
+def _inputs_view_for(cwd, commands, inputs):
+    """The input files' stamp entries, read once; None unless commands are listed and item 18 is
+    stored."""
+    # axis: the input files join the stamp only with commands and stored inputs
+    if not (commands and inputs is not None):
+        return None
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except store_core.RepoRootUnavailable:
+        raise _Refused("setup-inputs-unreadable", "The repository root cannot be found, so the "
+                       "files the setup depends on cannot be read.")
+    return _input_view(repo_root, inputs)
+
+
+def _hook_view(inputs):
+    """The stamp entries with the dependency hook on: the hook flag and the input list (when
+    stored), never the input files' contents."""
+    # axis: with commands and the hook on, the input list (when stored) and the hook flag stay in
+    # the stamp, because they change the generated text; only the files' contents leave it
+    view = {SETUP_HOOK_STAMP_KEY: b"on\n"}
+    if inputs is not None:
+        view[SETUP_INPUTS_STAMP_KEY] = (
+            json.dumps(list(inputs), ensure_ascii=False) + "\n").encode("utf-8")
+    return view
+
+
 def _view_for(cwd, files, commands, inputs, hook_on):
     """The stamp's view of `files`, built for both callers (`stamped_files` and `_compose`): the
     files the setup depends on join it exactly when commands are listed, item 18 is stored and the
     dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
     files needs no new paste)."""
-    inputs_view = None
-    # axis: with commands and the hook on, the input list (when stored) and the hook flag stay in
-    # the stamp, because they change the generated text; only the files' contents leave it
     if commands and hook_on:
-        inputs_view = {SETUP_HOOK_STAMP_KEY: b"on\n"}
-        if inputs is not None:
-            inputs_view[SETUP_INPUTS_STAMP_KEY] = (
-                json.dumps(list(inputs), ensure_ascii=False) + "\n").encode("utf-8")
+        return _stamp_view(files, commands, _hook_view(inputs))
     # axis: the input files join the stamp only with commands, stored inputs and no hook
-    elif commands and inputs is not None:
-        try:
-            repo_root = store_core.repo_root(cwd)
-        except store_core.RepoRootUnavailable:
-            raise _Refused("setup-inputs-unreadable", "The repository root cannot be found, so the "
-                           "files the setup depends on cannot be read.")
-        inputs_view = _input_view(repo_root, inputs)
-    return _stamp_view(files, commands, inputs_view)
+    return _stamp_view(files, commands, _inputs_view_for(cwd, commands, inputs))
 
 
 def stamped_files(cwd, root=None):
@@ -672,7 +691,17 @@ def _input_check_lines(expected):
         return []
     out = [
         "  check_input() {",
-        '    if [ ! -e "$DIR/$1" ] && [ ! -L "$DIR/$1" ]; then got=missing',
+        # axis: only an absent component is missing (the Python reader's rule: not-found or
+        # not-a-directory); a symlink that does not resolve, or a directory that cannot be
+        # searched, is unreadable and never matches the expected `missing`
+        '    got=""; probe="$DIR"; IFS=/ read -r -a parts <<< "$1"',
+        '    for part in "${parts[@]}"; do',
+        '      probe="$probe/$part"',
+        '      if [ -L "$probe" ] && [ ! -e "$probe" ]; then got=unreadable; break',
+        '      elif [ ! -e "$probe" ]; then got=missing; break; fi',
+        '      if [ -d "$probe" ] && [ ! -x "$probe" ]; then got=unreadable; break; fi',
+        "    done",
+        '    if [ -n "$got" ]; then :',
         '    elif [ -f "$DIR/$1" ]; then',
         '      got=$( (sha256sum "$DIR/$1" || shasum -a 256 "$DIR/$1") 2>/dev/null | cut -d" " -f1)',
         "    else got=unreadable; fi",
@@ -892,10 +921,15 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
     stamp = date = None
+    inputs_view = None
     if files or commands:
         try:
+            # axis: the inputs are read once; the stamp and the checks in the text share the bytes
+            if not hook_on:
+                inputs_view = _inputs_view_for(cwd, commands, inputs)
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _view_for(cwd, files, commands, inputs, hook_on))
+                _stamp_view(files, commands, _hook_view(inputs)
+                            if commands and hook_on else inputs_view))
         except _Refused:
             raise
         except Exception:
@@ -913,7 +947,9 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     expected = ()
     # axis: with the hook on the inputs are not in the stamp, so the text does not check them
     if commands and inputs and not hook_on:
-        expected = _input_expectations(store_core.repo_root(cwd), inputs)
+        if inputs_view is None:
+            inputs_view = _inputs_view_for(cwd, commands, inputs)
+        expected = _expectations_from_view(inputs_view, inputs)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
                    _clone_dir(cwd), commands, cleared, expected,
                    cloud_dependency_hook.fingerprint(commands, inputs or []) if hook_on else None)
