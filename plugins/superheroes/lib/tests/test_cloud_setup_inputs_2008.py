@@ -271,11 +271,11 @@ def _lose_the_repo_root_for_the_fill(monkeypatch):
 def test_an_unresolvable_repo_root_skips_the_fill_and_item_17_stays_stored(tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
-    _lose_the_repo_root_for_the_fill(monkeypatch)
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        _lose_the_repo_root_for_the_fill(fault)
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert "inputsFilled" not in done
     assert done["inputsFillFailed"] == "repo-root-unavailable"
-    monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
 
@@ -290,13 +290,13 @@ def test_an_unreadable_root_is_a_failed_scan_not_an_empty_fill(tmp_path, monkeyp
             raise PermissionError(13, "Permission denied")
         return real_scandir(path)
 
-    monkeypatch.setattr(os, "scandir", scandir)
-    with pytest.raises(OSError):
-        CS.detect_inputs(str(w.repo))
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        fault.setattr(os, "scandir", scandir)
+        with pytest.raises(OSError):
+            CS.detect_inputs(str(w.repo))
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert "inputsFilled" not in done
     assert "Permission denied" in done["inputsFillFailed"], done
-    monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
     again = _set_ok(w, COMMANDS_SLUG, ["npm ci", "npm test"])
@@ -312,11 +312,11 @@ def test_a_failed_fill_reports_inputs_fill_failed_and_item_17_stays_stored(tmp_p
     def write(cwd, slug, value, **kw):
         return refusal if slug == INPUTS_SLUG else real_write(cwd, slug, value, **kw)
 
-    monkeypatch.setattr(core_md, "write_project_config_item", write)
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        fault.setattr(core_md, "write_project_config_item", write)
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert done["inputsFillFailed"] == "write-failed", done
     assert "inputsFilled" not in done
-    monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
 
@@ -376,11 +376,11 @@ def test_a_fill_whose_read_back_does_not_match_reports_set_read_mismatch(tmp_pat
             return dict(action="written")
         return real_write(cwd, slug, value, **kw)
 
-    monkeypatch.setattr(core_md, "write_project_config_item", write)
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        fault.setattr(core_md, "write_project_config_item", write)
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert done["inputsFillFailed"] == "set-read-mismatch" == PC.REASON_SET_MISMATCH, done
     assert "inputsFilled" not in done
-    monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
 
