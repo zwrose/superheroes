@@ -104,12 +104,20 @@ A refused or denied command is a stop. Report it in your result's refusals list 
 Your result must carry a payload matching this shape:
 
 Required keys: fixes
-Optional keys: escalated, headDiff, headDiffPath, coverageDecisions
+Optional keys: escalated, headDiff, headDiffPath, coverageDecisions, refusals
 coverageDecisions type: list-of-objects
 escalated type: boolean
 fixes type: list
 headDiff type: string
 headDiffPath type: absolute-path
+refusals type: list-of-objects
+refusals[] required keys: command, refusedBy, next
+refusals[] optional keys: hook
+refusals[].command type: non-empty-string
+refusals[].hook type: any
+refusals[].next type: non-empty-string
+refusals[].refusedBy type: string
+refusals[].refusedBy enum: permission | hook | sandbox
 Also enforced — head-diff-store-path-driver-owned: headDiffStorePath is driver-owned at record boundary
 
 ## Return your result

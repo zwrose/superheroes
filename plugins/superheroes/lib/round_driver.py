@@ -5192,15 +5192,22 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
     rec = state.get("rounds", {}).get(str(state["round"]), {})
     prior_fix = rec.get("fix") if isinstance(rec, dict) else None
+    # The refusals the fixer met ride in the round's `fix` dict only when there are some, so a round
+    # with none records what it always did. The payload contract validates the list at submit.
+    refusals = artifact.get("refusals") if isinstance(artifact.get("refusals"), list) else []
     if index >= 1 and isinstance(prior_fix, dict):
         fixes = list(prior_fix.get("fixes") or []) + list(artifact.get("fixes") or [])
         escalated = bool(prior_fix.get("escalated")) or bool(
             artifact.get("escalated") or state.get("_escalatedRung"))
-        _record_round(state, "fix", {"fixes": fixes, "escalated": escalated})
+        fix_rec = {"fixes": fixes, "escalated": escalated}
+        prior_refusals = prior_fix.get("refusals")
+        refusals = (list(prior_refusals) if isinstance(prior_refusals, list) else []) + list(refusals)
     else:
-        _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
-                                     "escalated": bool(artifact.get("escalated")
-                                                       or state.get("_escalatedRung"))})
+        fix_rec = {"fixes": artifact.get("fixes") or [],
+                   "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))}
+    if refusals:
+        fix_rec["refusals"] = refusals
+    _record_round(state, "fix", fix_rec)
     _record_round_append(state, "fixBatches",
                          {"index": index, "size": len(slice_),
                           "fixes": len(artifact.get("fixes") or [])})

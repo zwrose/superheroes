@@ -3377,6 +3377,7 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     native_write = json.dumps({
         "ok": True, "signal": "ok", "report": "receipt",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     })
     tail_json = json.dumps({"ok": True, "signal": "ok", "evidence": {}})
     script = (
@@ -3499,6 +3500,7 @@ def test_cursor_write_dashdash_run_dir_real_child_grades_collapsed_writer(
     native_write = json.dumps({
         "ok": True, "signal": "ok", "report": "receipt",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     })
     script = _cursor_collapsed_native_write_script(native_write)
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
@@ -3590,6 +3592,7 @@ def test_dashdash_link_released_after_attempt(tmp_path, monkeypatch):
     native_write = json.dumps({
         "ok": True, "signal": "ok", "report": "receipt",
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     })
     script = _cursor_collapsed_native_write_script(native_write)
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
@@ -4155,6 +4158,7 @@ def test_write_terminal_refusal_after_timeout_keeps_admitted_after_timeout(tmp_p
         "signal": "plan_wrong",
         "report": "Order premise was wrong.",
         "evidence": {"testFailed": True, "testPassed": False},
+        "refusals": [],
     }
 
     def timeout_refusal_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
