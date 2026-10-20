@@ -5,11 +5,13 @@ directory is under tmp_path too. No test reads the real home directory or the ne
 token-shaped value is built at run time from small parts.
 """
 import base64
+import difflib
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -22,6 +24,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import architect_config  # noqa: E402
+import cloud_check  # noqa: E402
 import cloud_pass  # noqa: E402
 import cloud_setup  # noqa: E402
 import core_md  # noqa: E402
@@ -258,14 +261,20 @@ def _stubs(tmp_path, code=0, apt_install_fails_first=False):
 
 
 def _run_script(w, text, code=0, pinned=False, apt_install_fails_first=False, pin_in=None,
-                extra_env=None, pin_text="3.12\n"):
+                extra_env=None, pin_text="3.12\n", git_clone=False):
     """Runs the script from a working directory of its own, with every tool stubbed to exit `code`
     (or, with `apt_install_fails_first`, `apt-get install` failing once and then succeeding).
     `pinned` puts a `.python-version` in the working directory; `pin_in` puts it in that named
-    directory inside the working directory instead; `extra_env` is added to the script's env."""
+    directory inside the working directory instead; `extra_env` is added to the script's env;
+    `git_clone` puts a stub clone (a `.git` directory) at `work/corner-shop`, or in `work` itself
+    when it is "here"."""
     stub, log = _stubs(w.tmp, code, apt_install_fails_first)
     work = w.tmp / "work"
     work.mkdir()
+    if git_clone == "here":
+        (work / ".git").mkdir()
+    elif git_clone:
+        (work / "corner-shop" / ".git").mkdir(parents=True)
     if pin_in is not None:
         (work / pin_in).mkdir()
         (work / pin_in / ".python-version").write_text(pin_text)
@@ -731,6 +740,9 @@ SHAPE_CASES = [
         "access_token", "id_token", "refresh_token", "OPENAI_API_KEY", cloud_pass.PASS_ENV)],
     ("credential assignment", "shell-pass-env", _assignment(cloud_pass.PASS_ENV, quote=False)),
     ("bearer credential", "bearer", lambda: "Bearer " + "t" * 20),
+    ("registry token", "npm-token", lambda: "npm_" + "a1B2c3D4" * 4),
+    ("registry token", "npm-auth-token",
+     lambda: "//registry.example.com/:_authToken=" + "k" * 12),
 ]
 
 
@@ -1023,3 +1035,398 @@ def test_a_command_under_the_tool_steps_marker_runs(tmp_path):
     proc, _ = _run_script(w, "\n".join(lines))
     assert proc.returncode == 0, proc.stderr
     assert out.read_text() == "toolstepword\n"
+
+
+# --- the project's own setup commands (configure item 17) ------------------------------------
+
+_UNSET = object()
+_CORE_FACTS = {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+               "patterns": "- x: a.ts:1"}
+SLUG = "cloudSetupCommands"
+
+
+def _edit_core_block(w, edit):
+    """Writes a real core when the project has none that parses, then lets `edit` change the
+    parsed json block and writes it back."""
+    if core_md.read(w.cwd, w.root, persist_backfill=False) is None:
+        stale = core_md.core_path(w.cwd, w.root, persist_backfill=False)
+        if os.path.exists(stale):
+            os.remove(stale)
+        done =core_md.write(w.cwd, dict(_CORE_FACTS), "confirmed", root=w.root, now="2026-06-26")
+        assert done["action"] in ("written", "reused"), done
+    path = core_md.core_path(w.cwd, w.root, persist_backfill=False)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    obj = json.loads(core_md._json_block_inner_text(text))
+    edit(obj)
+    spliced = core_md._splice_single_json_block(text, json.dumps(obj, indent=2, sort_keys=True))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(spliced)
+
+
+def _store_commands(w, value):
+    """Stores `value` under item 17 in the project's core, whatever it is (no validation)."""
+    def edit(obj):
+        settings = obj.setdefault("projectConfiguration", {})
+        if value is _UNSET:
+            settings.pop(SLUG, None)
+        else:
+            settings[SLUG] = value
+    _edit_core_block(w, edit)
+
+
+def _both_modes(tmp_path):
+    worlds = []
+    for name, make in (("outside", _outside), ("inside", _inside)):
+        (tmp_path / name).mkdir()
+        worlds.append((name, make(tmp_path / name)))
+    return worlds
+
+
+def test_two_setup_commands_are_one_block_in_order_after_every_step_before_the_marker(tmp_path):
+    commands = ["npm ci", "make 'build all'"]
+    for name, w in _both_modes(tmp_path):
+        _store_commands(w, commands)
+        text = _compose(w)["text"]
+        assert text.count("# Run the project's own setup commands") == 1
+        lines = text.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.startswith("# Run the project's own"))
+        # axis: the commands are listed once, quoted, in the stored order
+        assert "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands) in lines
+        # axis: the block sits after the last step (the wait, and the calibration block when
+        # there is one) and before the marker
+        marker = lines.index(CS.TOOL_STEPS_MARKER)
+        assert lines.index("wait") < start < marker
+        if name == "outside":
+            assert max(i for i, ln in enumerate(lines) if ln.startswith('echo "calibration:')) < start
+        proc = subprocess.run(["bash", "-n"], input=text, text=True, capture_output=True)
+        assert proc.returncode == 0, proc.stderr
+
+
+def _setup_log(w):
+    return (w.home / "superheroes-cloud-setup.log").read_text()
+
+
+def test_setup_commands_run_in_the_clone_and_the_first_failure_skips_the_rest(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ['echo first >> "$PWD/ran.txt"; exit 3', 'echo second >> "$PWD/ran.txt"'])
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone=True)
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
+    log = _setup_log(w)
+    assert "setup command 1 FAILED" in log
+    # axis: a command after a failed one is skipped, never run
+    assert "setup command 2 skipped: setup command 1 FAILED" in log
+    assert "setup command 2 ok" not in log
+    work = w.tmp / "work"
+    assert (work / "corner-shop" / "ran.txt").read_text() == "first\n"
+    assert not (work / "ran.txt").exists()
+    assert "setup end" in log
+
+
+def _stamp_file(w):
+    return w.home / ".claude" / "superheroes" / "projects" / w.key / "cloud-setup-stamp"
+
+
+def test_a_failed_setup_command_leaves_no_stamp(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ["exit 3"])
+    result = _compose(w)
+    # axis: a stale stamp is cleared and the failed setup does not publish its own
+    stamp = _stamp_file(w)
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text("stale\n")
+    proc, _ = _run_script(w, result["text"], git_clone=True)
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
+    assert "setup command 1 FAILED" in _setup_log(w) and "setup end" in _setup_log(w)
+    assert not stamp.exists()
+
+
+def test_a_missing_clone_leaves_no_stamp(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ["true"])
+    proc, _ = _run_script(w, _compose(w)["text"])
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
+    assert "setup command 1 skipped" in _setup_log(w)
+    assert not _stamp_file(w).exists()
+
+
+def test_setup_commands_that_all_pass_publish_the_stamp(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ["true", "true"])
+    result = _compose(w)
+    proc, _ = _run_script(w, result["text"], git_clone=True)
+    assert proc.returncode == 0, proc.stderr
+    assert _stamp_file(w).read_text() == result["calibration"]["stamp"] + "\n"
+
+
+def test_setup_commands_that_pass_are_each_logged_ok_in_order(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ['echo one >> "$PWD/ran.txt"', 'echo two >> "$PWD/ran.txt"'])
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone=True)
+    assert proc.returncode == 0, proc.stderr
+    log = _setup_log(w)
+    assert log.index("setup command 1 ok") < log.index("setup command 2 ok")
+    assert "setup command 1 FAILED" not in log and "setup command 2 skipped" not in log
+    assert (w.tmp / "work" / "corner-shop" / "ran.txt").read_text() == "one\ntwo\n"
+
+
+def test_setup_commands_run_in_the_working_directory_when_it_is_the_clone(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ['echo here >> "$PWD/ran.txt"'])
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode == 0, proc.stderr
+    assert "setup command 1 ok" in _setup_log(w)
+    assert (w.tmp / "work" / "ran.txt").read_text() == "here\n"
+
+
+def test_setup_commands_with_no_clone_are_each_skipped_and_the_script_exits_non_zero(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ['echo one >> "$PWD/ran.txt"', 'echo two >> "$PWD/ran.txt"'])
+    proc, _ = _run_script(w, _compose(w)["text"])
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
+    work = w.tmp / "work"
+    log = _setup_log(w)
+    for n in (1, 2):
+        assert "setup command %d skipped: no clone in %s or %s/corner-shop" % (n, work, work) in log
+    assert not (work / "ran.txt").exists() and "setup end" in log
+
+
+def test_a_hostile_setup_command_fails_only_itself(tmp_path):
+    w = _inside(tmp_path)
+    _store_commands(w, ['echo "unbalanced', 'echo second >> "$PWD/ran.txt"'])
+    text = _compose(w)["text"]
+    assert subprocess.run(["bash", "-n"], input=text, text=True,
+                          capture_output=True).returncode == 0
+    proc, _ = _run_script(w, text, git_clone=True)
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
+    log = _setup_log(w)
+    assert "setup command 1 FAILED" in log
+    assert "setup command 2 skipped: setup command 1 FAILED" in log
+    assert not (w.tmp / "work" / "corner-shop" / "ran.txt").exists() and "setup end" in log
+
+
+def test_without_a_clone_name_the_clone_is_looked_for_only_in_the_working_directory(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(CS, "_clone_dir", lambda cwd: None)
+    w = _inside(tmp_path)
+    _store_commands(w, ["true"])
+    text = _compose(w)["text"]
+    assert "CLONE" not in text
+    assert subprocess.run(["bash", "-n"], input=text, text=True,
+                          capture_output=True).returncode == 0
+    proc, _ = _run_script(w, text)
+    # axis: a listed command that failed or was skipped ends non-zero, so an unfinished setup is not cached
+    assert proc.returncode == 1, proc.stderr
+    assert "setup command 1 skipped: no clone in %s" % (w.tmp / "work") in _setup_log(w).splitlines()
+
+
+def _golden(w, mode):
+    """The no-commands golden for `mode`, with the world pinned to the time it was rendered at."""
+    path = os.path.join(_HERE, "fixtures", "cloud_setup_text", "no_commands_%s.sh" % mode)
+    with open(path, encoding="utf-8") as fh:
+        expected = fh.read().replace("@VERSION@", VERSION)
+    if mode == "outside":
+        # the registry file carries the time it was written, so the world's is set to the one the
+        # fixture was rendered with
+        pinned = re.search(r"<<'SUPERHEROES_END_6'\n(.*?)\nSUPERHEROES_END_6\n", expected, re.S)
+        _put(w, "registry.json", pinned.group(1).encode("utf-8") + b"\n")
+    return expected
+
+
+_GOLDEN_KW = dict(source_dir="/opt/fixture/src", plugin_dir="/opt/fixture/plugin")
+
+
+@pytest.mark.parametrize("mode", ["outside", "inside"])
+def test_unset_setup_commands_leave_the_text_as_it_was(tmp_path, mode):
+    # axis: an unset list changes nothing: the text is byte for byte today's
+    w = (_outside if mode == "outside" else _inside)(tmp_path)
+    expected = _golden(w, mode)
+    result = _compose(w, **_GOLDEN_KW)
+    assert result["action"] == "written"
+    assert result["text"] == expected
+    assert "setupCommands" not in result["calibration"]
+
+
+def test_an_empty_list_outside_the_repo_changes_only_the_core_and_its_stamp(tmp_path):
+    # axis: the placed calibration already removes the stamp, so an empty list adds no line there
+    w = _outside(tmp_path)
+    expected = _golden(w, "outside")
+    _store_commands(w, [])
+    # the stored core is now a real one, so its heredoc and the stamp are the core's; every other
+    # line is the fixture's
+    stored = CS.calibration_files(w.cwd, w.root)["config/core.md"].decode("utf-8")
+    old = "# Core\nline two\nSUPERHEROES_END_1\n"
+    assert expected.count(old) == 1
+    expected = expected.replace(old, stored + "SUPERHEROES_END_1\n")
+    expected = re.sub(r"'2026-10-10:[0-9a-f]+'", "'2026-10-10:fixed'", expected)
+    result = _compose(w, stamp_fn=lambda files: "2026-10-10:fixed", **_GOLDEN_KW)
+    assert result["action"] == "written"
+    assert result["text"] == expected
+    assert "setupCommands" not in result["calibration"]
+
+
+def test_an_empty_list_in_the_repo_adds_only_the_stamp_removal(tmp_path):
+    # axis: an empty list adds the stamp removal and nothing else to the golden text
+    w = _inside(tmp_path)
+    expected = _golden(w, "inside")
+    _store_commands(w, [])
+    result = _compose(w, **_GOLDEN_KW)
+    assert result["action"] == "written"
+    assert "setupCommands" not in result["calibration"]
+    assert result["calibration"]["stamp"] is None
+    lines = result["text"].splitlines()
+    diff = [ln for ln in difflib.ndiff(expected.splitlines(), lines) if ln[0] in "+-"]
+    assert diff and all(ln[0] == "+" for ln in diff), diff
+    assert 'rm -f "$DEST/%s"' % CS.STAMP_FILE in [ln[2:] for ln in diff]
+    assert lines.index('rm -f "$DEST/%s"' % CS.STAMP_FILE) < lines.index(CS.TOOL_STEPS_MARKER)
+
+
+def test_clearing_the_list_retires_the_stamp_a_longer_list_left(tmp_path):
+    # axis: a list cleared to [] removes the stamp an earlier non-empty list placed
+    w = _inside(tmp_path)
+    store = mode_registry.project_store_dir(w.cwd, str(w.home / ".claude" / "superheroes"))
+    stamp_path = os.path.join(store, CS.STAMP_FILE)
+    _store_commands(w, [])
+    assert project_config.set_item(w.cwd, SLUG, ["true"], root=w.root)["action"] == "written"
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode == 0, proc.stderr
+    assert os.path.isfile(stamp_path)
+    assert project_config.set_item(w.cwd, SLUG, [], root=w.root)["action"] == "written"
+    # a second run, from a working directory of its own, against the same home
+    w.tmp = tmp_path / "second"
+    w.tmp.mkdir()
+    proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
+    assert proc.returncode == 0, proc.stderr
+    assert not os.path.exists(stamp_path)
+    # the check's expectation for that state: nothing placed, so no stamp file
+    local = cloud_check._placed_stamp(w.cwd, w.root)
+    assert local == "none"
+    assert cloud_check._stamp_file(w.cwd, str(w.home / ".claude" / "superheroes")) is None
+
+
+def test_the_stamp_moves_with_the_command_list_in_both_storage_modes(tmp_path):
+    states = {"unset": _UNSET, "empty": [], "a": ["a"], "b": ["b"], "ab": ["a", "b"],
+              "ba": ["b", "a"]}
+    for mode, w in _both_modes(tmp_path):
+        stamps = {}
+        for name, value in states.items():
+            _store_commands(w, value)
+            result = _compose(w, stamp_fn=None)
+            stamp = stamps[name] = result["calibration"]["stamp"]
+            if stamp is None:
+                assert CS.stamped_files(w.cwd, w.root) == {}
+            else:
+                assert cloud_setup.calibration_stamp(CS.stamped_files(w.cwd, w.root)) == stamp
+            if name == "empty":
+                # an empty list adds nothing to the stamped files (the placed core, which holds
+                # the empty list, is the same bytes either way)
+                assert CS.SETUP_COMMANDS_STAMP_KEY not in CS.stamped_files(w.cwd, w.root)
+        # axis: any change to the list changes the stamp, its order included
+        assert stamps["a"] != stamps["unset"] and stamps["a"] != stamps["b"]
+        assert stamps["ab"] != stamps["ba"] and stamps["a"] != stamps["ab"]
+        if mode == "inside":
+            # with no calibration file placed, the list alone is what the stamp covers
+            assert stamps["unset"] is None and stamps["empty"] is None
+            assert STAMP_SHAPE.fullmatch(stamps["a"])
+
+
+def test_an_in_repository_project_with_commands_and_no_files_still_writes_its_stamp(tmp_path):
+    w = _inside(tmp_path)
+    assert CS.calibration_files(w.cwd, w.root) == {}
+    _store_commands(w, ["true"])
+    result = _compose(w, stamp_fn=None)
+    assert result["calibration"]["files"] == [] and result["calibration"]["setupCommands"] == 1
+    assert STAMP_SHAPE.fullmatch(result["calibration"]["stamp"])
+    proc, _ = _run_script(w, result["text"], git_clone=True)
+    assert proc.returncode == 0, proc.stderr
+    dest = w.home / ".claude" / "superheroes" / "projects" / w.key
+    # axis: the stamp file is written even when no calibration file is placed
+    assert (dest / "cloud-setup-stamp").read_text() == result["calibration"]["stamp"] + "\n"
+    log = _setup_log(w)
+    assert "calibration: 0 of 0 files written" in log and "calibration FAILED" not in log
+    assert "setup command 1 ok" in log
+
+
+@pytest.mark.parametrize("stored", [None, "npm ci", {"a": "b"}, ["a\nb"], ["a\rb"], [""], ["  "],
+                                    [1], ["ok", None], ["token: Bearer " + "t" * 20]],
+                         ids=["null", "string", "object", "newline", "carriage-return", "empty",
+                              "blank", "non-string", "null-entry", "secret-shaped"])
+def test_a_present_setting_that_is_not_a_valid_list_is_refused(tmp_path, stored):
+    for _, w in _both_modes(tmp_path):
+        _store_commands(w, stored)
+        # axis: a stored value that fails the validator is refused, never read as an empty list
+        _refusal(_compose(w), "setup-commands-malformed")
+        with pytest.raises(CS._Refused):
+            CS.stamped_files(w.cwd, w.root)
+
+
+def test_a_core_that_cannot_be_read_refuses_with_its_own_reason(tmp_path, monkeypatch):
+    w = _inside(tmp_path)
+    _store_commands(w, ["npm ci"])
+    unreadable = os.path.realpath(core_md.core_path(w.cwd, w.root, persist_backfill=False))
+    real_open = open
+
+    def refusing_open(file, *args, **kwargs):
+        if isinstance(file, (str, bytes, os.PathLike)) and os.path.realpath(file) == unreadable:
+            raise PermissionError("unreadable")
+        return real_open(file, *args, **kwargs)
+
+    # core_md.read stays the real one, so its own error handling is what the refusal rests on
+    monkeypatch.setattr("builtins.open", refusing_open)
+    _refusal(_compose(w), "setup-commands-unreadable")
+
+
+def test_a_corrupt_core_means_no_commands_and_the_text_is_written(tmp_path):
+    for _, w in _both_modes(tmp_path):
+        path = core_md.core_path(w.cwd, w.root, persist_backfill=False)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b"# Core\n```json superheroes-core\n{not json\n```\n")
+        result = _compose(w)
+        assert result["action"] == "written"
+        assert "setup commands" not in result["text"]
+
+
+def test_a_core_that_names_setup_commands_but_cannot_be_parsed_is_refused(tmp_path):
+    for _, w in _both_modes(tmp_path):
+        path = core_md.core_path(w.cwd, w.root, persist_backfill=False)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b'# Core\n```json superheroes-core\n'
+                     b'{"projectConfiguration": {"cloudSetupCommands": ["npm ci"],}}\n```\n')
+        _refusal(_compose(w), "setup-commands-unreadable")
+
+
+ENV_REF_COMMAND = 'echo "OPENAI_API_KEY=\\"$BUILD_OPENAI_KEY\\"" > .env'
+
+
+def test_env_reference_command_is_set_and_composes_in_both_modes(tmp_path):
+    for name, w in _both_modes(tmp_path):
+        _store_commands(w, [])
+        done = project_config.set_item(w.cwd, SLUG, [ENV_REF_COMMAND], root=w.root)
+        assert done["action"] == "written", (name, done)
+        result = _compose(w)
+        assert result["action"] == "written", (name, result)
+
+
+def test_literal_credential_in_a_listed_command_is_refused_in_both_modes(tmp_path):
+    command = 'echo "OPENAI_API_KEY=\\"%s\\"" > .env' % ("v" * 20)
+    for name, w in _both_modes(tmp_path):
+        _store_commands(w, [command])
+        result = _compose(w)
+        assert result["action"] == "refused" and "text" not in result, (name, result)
+        assert result["reason"] in ("secret-shaped-content", "setup-commands-malformed"), result
+        assert "v" * 20 not in json.dumps(result)
+
+
+def test_literal_credential_elsewhere_in_the_placed_core_is_still_refused(tmp_path):
+    planted = SHAPE_CASES[0][2]()
+    w = _outside(tmp_path)
+    _store_commands(w, [ENV_REF_COMMAND])
+    _edit_core_block(w, lambda obj: obj.__setitem__("note", planted))
+    _refusal(_compose(w), "secret-shaped-content")

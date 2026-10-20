@@ -36,10 +36,15 @@ REASON_PROFILE_ABSENT = "profile-absent"
 REASON_PROFILE_UNPARSEABLE = "profile-unparseable"
 REASON_SET_MISMATCH = "set-read-mismatch"
 REASON_MATERIAL_LINE_IN_CANON = "material-line-in-canon"
+REASON_SETUP_COMMANDS_NOT_A_LIST = "setup-commands-not-a-list"
+REASON_SETUP_COMMAND_EMPTY = "setup-command-empty"
+REASON_SETUP_COMMAND_MULTI_LINE = "setup-command-multi-line"
+REASON_SETUP_COMMAND_SECRET_SHAPED = "setup-command-secret-shaped"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
 CLOUD_BUILDS_SLUG = "cloudBuilds"
 CI_WORKFLOW_SLUG = "ciWorkflow"
+CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -188,6 +193,14 @@ ITEMS = (
         "shape": "nonEmptyProse",
         "plugin_default": None,
     },
+    {
+        "number": 17,
+        "slug": "cloudSetupCommands",
+        "name": "Cloud setup commands",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "commandList",
+        "plugin_default": None,
+    },
 )
 
 _SLUG_INDEX = {item["slug"]: item for item in ITEMS}
@@ -274,6 +287,24 @@ def _validate_path_list(value):
     return None
 
 
+def _validate_command_list(value):
+    """The first failing reason for a list of one-line setup commands, else None."""
+    if not isinstance(value, list):
+        return REASON_SETUP_COMMANDS_NOT_A_LIST
+    # axis: an entry that is not a string, or is blank, is refused as empty
+    if any(not isinstance(entry, str) or not entry.strip() for entry in value):
+        return REASON_SETUP_COMMAND_EMPTY
+    # axis: an entry that spans lines is refused, so one entry is one command
+    if any("\n" in entry or "\r" in entry for entry in value):
+        return REASON_SETUP_COMMAND_MULTI_LINE
+    import cloud_setup_text  # imports this module at load, so it is imported here
+
+    # axis: an entry shaped like a secret is refused, because the setup text carries it in the clear
+    if any(cloud_setup_text._scan(entry) is not None for entry in value):
+        return REASON_SETUP_COMMAND_SECRET_SHAPED
+    return None
+
+
 def _validate_boolean(value):
     if not isinstance(value, bool):
         return REASON_MALFORMED_VALUE
@@ -349,6 +380,7 @@ _VALIDATORS = {
     "nonEmptyProse": _validate_non_empty_prose,
     "proseList": _validate_prose_list,
     "pathList": _validate_path_list,
+    "commandList": _validate_command_list,
     "boolean": _validate_boolean,
     "dial": _validate_dial,
     "budgetN": _validate_budget_n,
