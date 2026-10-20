@@ -30,6 +30,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
 - **After switching.** **Nothing is owed.** A launch whose premise adopts a branch (`adoptsBranch`, `adoptsHead`) now refuses before launch when the adopted head does not descend from `baseCommit`; bring the adopted branch current with its base and launch again. See [Launcher: an adoption whose head is not on its base is refused before launch](#launcher-an-adoption-whose-head-is-not-on-its-base-is-refused-before-launch).
 - **After switching.** **Nothing is owed.** A review orchestrator records its rulings on a round's findings before the `next` call that emits the fixer order. See [Review: rulings land before the fixer order](#review-rulings-land-before-the-fixer-order).
+- **After switching.** **Paste new setup text and say "check again" in each project with cloud builds, as after any upgrade.** The check now also fails a cloud session with no git commit identity, and its fix names the four `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables to set in the environment. See [Cloud check: a commit identity](#cloud-check-a-commit-identity).
 
 ### Orders: a refused or denied command is a stop
 
@@ -140,6 +141,14 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The compose result's `calibration` gains `setupCommands` (the number of commands) when the list is not empty, and has no such key otherwise.
 - `compose` refuses `setup-commands-malformed` when the stored value is not a valid list, and `setup-commands-unreadable` when the project's calibration cannot be read for it.
 - The setup message (`cloud_check.py setup-text`) no longer tells the owner to add steps by hand under the marker line; it points to item 17.
+
+### Cloud check: a commit identity
+
+- The cloud check's report gains `identity`, `{"author": bool, "committer": bool}`: whether git in the session's repository resolves a configured author and committer identity. It reads them with `user.useConfigOnly`, so a guessed identity never counts. The report carries no name or email.
+- `judge` gains `results.identityPresent` and the failed part `identity`, reported after `reviewer`. Its fix names `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`. A passed check's message gains the line "It has a git identity to commit with."
+- A report without `identity`, from an older cloud plugin, stays readable and fails on `identity` as well as on `version`. `REPORT_FIELDS` is unchanged.
+- `git config` inside a cloud session is refused by the session's permission classifier as persistence. Set a missing identity through the environment's variables.
+- Recovering a stack in the cloud takes one adoption launch per layer, bottom first, each layer brought current with the one below before its launch (`skills/showrunner/reference/orchestration.md` § Adoption mechanics).
 
 ## 0.44.0
 

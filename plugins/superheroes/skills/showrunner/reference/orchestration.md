@@ -457,3 +457,9 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   ancestry it cannot decide, with `premise-adopts-head-not-on-base` before anything is spent, and
   its `remedy` names the fix; the cloud intake's `adopted-head-not-on-base` stays as the second
   line.
+- **Recover a stack in the cloud one layer per launch.** Give each layer its own adoption launch
+  that adopts that layer's branch, bottom layer first, and bring each layer current with the layer
+  below before its launch, as the bullet above says. Never have one cloud session work across
+  several existing layer branches: its launch authorizes only its own branch, so the session's
+  permission classifier refuses its merges and pushes on the others, even after the owner's
+  go-ahead.

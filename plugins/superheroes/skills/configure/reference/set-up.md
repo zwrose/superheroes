@@ -670,6 +670,14 @@ check records the new environment.
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
 
+The check also asks the cloud session's git for a commit identity. It passes only when git, with
+guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity, from
+git config or from the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables. The report line says only
+whether each one resolved, never a name or an email. A missing identity fails the check as its own
+part, and its fix names the four variables to set in the environment's variables. Never set the
+identity with `git config` from inside a cloud session: the session's permission classifier
+refuses that as persistence.
+
 The setup text runs the project's own setup commands (item 17) after its other steps, one at a
 time, in order, in the project's clone. Each one is logged `setup command <n> ok` or
 `setup command <n> FAILED`, and the first failure skips the rest. Changing the list means writing
