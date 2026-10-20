@@ -100,6 +100,29 @@ def test_cloud_changed_hash_runs_commands_in_order_and_records(repo):
     again = _run(script)
     assert (again.returncode, again.stdout) == (0, "")
     assert _ran(repo) == ["one", "two", "three"]
+    # axis: the hash covers the input's bytes, not only its size
+    settled = _state(repo)
+    same_size = '{"changed": nope}\n'
+    assert len(same_size) == len('{"changed": true}\n')
+    (repo / "package-lock.json").write_text(same_size)
+    swapped = _run(script)
+    assert (swapped.returncode, swapped.stdout) == (0, "")
+    assert _ran(repo) == ["one", "two", "three"] * 2
+    assert _state(repo) != settled
+
+
+def test_cloud_an_input_named_like_an_option_is_read_as_a_file(repo):
+    # axis: an input name reaches cat and the size count as an operand, never as an option
+    inputs = ["-n.lock"]
+    (repo / "-n.lock").write_text("v1\n")
+    script = _installed(repo, inputs=inputs)
+    _record(repo, script, inputs=inputs)
+    recorded = _state(repo)
+    (repo / "-n.lock").write_text("v2\n")
+    done = _run(script)
+    assert (done.returncode, done.stdout) == (0, "")
+    assert _ran(repo) == ["one", "two", "three"]
+    assert _state(repo) and _state(repo) != recorded
 
 
 def test_cloud_never_recorded_runs_commands(repo):
