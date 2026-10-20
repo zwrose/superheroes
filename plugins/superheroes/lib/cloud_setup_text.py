@@ -91,19 +91,27 @@ class _CredentialAssignment:
     credential-named and the value is non-empty and not a bare `$NAME` / `${NAME}` reference."""
 
     @staticmethod
-    def _real_words(word, syntax):
-        # (word, quotes_are_syntax) pairs. A scanned word holding white space (a decoded JSON
-        # command string) is several shell words: split it posix (quotes removed, no longer syntax)
-        # and non-posix (quotes kept, so a single-quoted value is still seen as the literal it is),
-        # falling back to white space
-        if not re.search(r"\s", word):
+    def _lex(word, posix):
+        lexer = shlex.shlex(word, posix=posix, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+
+    @classmethod
+    def _real_words(cls, word, syntax):
+        # (word, quotes_are_syntax) pairs. The text is lexed like a shell: quote-aware, with command
+        # separators (`;`, `&&`, `|`, ...) as their own tokens, so `true&&NAME=value` exposes the
+        # assignment and a quoted `&` stays in its value. Posix (quotes removed, no longer syntax)
+        # and non-posix (quotes kept, so a single-quoted value is still seen as the literal it is);
+        # a parse error falls back to white space; a word with neither white space nor a separator
+        # is already one shell word
+        if not re.search(r"[\s;&|<>()]", word):
             return [(word, syntax)]
         out = []
         for posix in (True, False):
             try:
-                out += [(w, not posix) for w in shlex.split(word, posix=posix)]
+                out += [(w, not posix) for w in cls._lex(word, posix)]
             except ValueError:
-                out += [(w, True) for w in word.split()]
+                out += [(w, True) for w in word.split()] or [(word, syntax)]
         return out
 
     @staticmethod
@@ -111,7 +119,7 @@ class _CredentialAssignment:
         # a value as written: `$'...'` (ANSI-C) is decoded and is a literal; so is a single-quoted
         # value when its quotes are shell syntax. Only an unquoted or double-quoted bare
         # `$NAME` / `${NAME}` is the exempt reference
-        value = re.split(r"[;&|]", _URL_QUOTES_RE.sub("", _ansi_c_decode(raw)), 1)[0].strip()
+        value = _URL_QUOTES_RE.sub("", _ansi_c_decode(raw)).strip()
         if not value:
             return False
         if "$'" in raw or (syntax and re.match(r"\\?'", raw)):

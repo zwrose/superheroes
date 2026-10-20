@@ -37,3 +37,24 @@ def test_reference_in_json_command_is_accepted(command):
 def test_literal_is_refused_bare_and_in_json_command(command):
     assert SCAN(command)
     assert SCAN(_as_json(command))
+
+
+@pytest.mark.parametrize("command", [
+    "DATABASE_PASSWORD='&fixture-secret-123' npm ci",
+    'DATABASE_PASSWORD="a;b|c" npm ci',
+    "true&&AWS_SECRET_ACCESS_KEY=%s npm ci" % LITERAL,
+    "true;AWS_SECRET_ACCESS_KEY=%s npm ci" % LITERAL,
+])
+def test_quoted_separator_and_compound_literals_are_refused(command):
+    assert SCAN(command)
+    assert SCAN(_as_json(command))
+
+
+@pytest.mark.parametrize("command", [
+    "X_TOKEN=$TOKEN; npm ci",
+    "X_TOKEN=$TOKEN;",
+    "true&&X_TOKEN=$TOKEN npm ci",
+    "KEY_TOKEN=$KEY&& npm ci",
+])
+def test_reference_beside_separator_is_accepted(command):
+    assert not SCAN(command)
