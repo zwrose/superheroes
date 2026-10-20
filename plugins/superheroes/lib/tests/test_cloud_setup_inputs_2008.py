@@ -124,13 +124,16 @@ def test_an_input_change_moves_the_stamp_and_the_cloud_check_reports_it_stale(tm
     _lock(w)
     done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert done["inputsFilled"] == ["package-lock.json"]
-    before = _stamp(w)
+    before = _compose(w)["calibration"]["stamp"]
+    assert before == _stamp(w)
     _record(w, before)
     assert _calibration_condition(w) is True
     _lock(w, text="v2\n")
-    assert _stamp(w) != before
+    after = _compose(w)["calibration"]["stamp"]
+    assert after == _stamp(w) and after != before
     assert _calibration_condition(w) is False
     _lock(w, text="v1\n")
+    assert _compose(w)["calibration"]["stamp"] == before
     assert _stamp(w) == before and _calibration_condition(w) is True
 
 
