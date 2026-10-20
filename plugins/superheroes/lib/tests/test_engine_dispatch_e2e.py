@@ -167,12 +167,14 @@ def _honest_refusal_stdout():
 _NATIVE_WRITE_OK_JSON = json.dumps({
     "ok": True, "signal": "ok", "report": "receipt prose",
     "evidence": {"testFailed": False, "testPassed": True},
+    "refusals": [],
 }, separators=(",", ":"))
 
 _NATIVE_WRITE_REFUSAL_JSON = json.dumps({
     "ok": False, "signal": "plan_wrong",
     "report": "cannot proceed: honest refusal",
     "evidence": {"testFailed": True, "testPassed": False},
+    "refusals": [],
 }, separators=(",", ":"))
 
 

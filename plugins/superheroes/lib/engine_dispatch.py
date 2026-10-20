@@ -41,6 +41,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
+import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import cloud_pass  # noqa: E402  PASS_ENV, dropped at every public entry (stdlib-only module)
 import config_dir  # noqa: E402  claude config root resolution (#1273)
@@ -4871,24 +4872,33 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "detail": "native-result-report-blank",
         }
 
+    # axis: a refusals list that fails command_refusals.refusals_fault (a blank command, say) forfeits native-result-refusals-invalid before grading.
+    if "refusals" in obj and command_refusals.refusals_fault(obj["refusals"]) is not None:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-refusals-invalid",
+        }
+
     # axis: the report reaches the terminal and the journal only through the scrub egress.
     report = engine_adapter._scrub(obj["report"])
     graded = engine_adapter._grade_build_report_obj(obj)
+    carried = {"refusals": graded["refusals"]} if "refusals" in graded else {}
     if graded.get("ok") is True:
-        return {
+        return dict({
             "ok": True,
             "signal": graded["signal"],
             "evidence": graded["evidence"],
             "report": report,
-        }
-    return {
+        }, **carried)
+    return dict({
         "ok": False,
         "terminal_refusal": True,
         "reason": graded["reason"],
         "signal": graded["signal"],
         "evidence": graded["evidence"],
         "report": report,
-    }
+    }, **carried)
 
 
 def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
@@ -5542,6 +5552,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             result["itemCheck"] = item_check
                         if "report" in grade:
                             result["report"] = grade["report"]
+                        # axis: the admitted refusals list reaches the terminal write result, success and post-admission forfeit alike.
+                        if "refusals" in grade:
+                            result["refusals"] = grade["refusals"]
                         if grade.get("admittedAfterTimeout"):
                             # axis: a write attempt hit the wall cap but was admitted (its
                             # result was written before the deadline) — carry that fact onto
@@ -5590,6 +5603,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if "report" in grade:
                         result["report"] = grade["report"]
+                    if "refusals" in grade:
+                        result["refusals"] = grade["refusals"]
                     if grade.get("admittedAfterTimeout"):
                         result["admittedAfterTimeout"] = True
                     return _fold_run(run_dir_real, state, result)
@@ -6497,7 +6512,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         if order_part and not order_part.endswith("\n"):
             order_part = order_part + "\n"
         prefix = order_part + ("\n" if order_part else "")
-        content = prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
+        content = (prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + command_refusals.ORDER_TEXT
+                   + "\n\n" + contract)
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()

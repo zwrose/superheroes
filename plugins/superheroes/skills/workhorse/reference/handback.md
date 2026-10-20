@@ -120,7 +120,11 @@ The build record holds, below the marker:
   context. Per order it also records whether the order was a rework, and for any blocking review
   finding, whether it is attributed to order quality, implementer execution, or your own
   integration and assembly (external or unknown where none fits). The advisor tracks that
-  attribution as a standing accounting duty.
+  attribution as a standing accounting duty. Each dispatch row also carries a **refusals** column.
+  It lists the refused or denied commands that dispatch reported, taken from the terminal result's
+  `refusals` (a `dispatch-write` or native `close` result) or from an implementer's or seat's
+  returned refusals list. The column reads `none` when the dispatch reported none. A build where no
+  dispatch reported any may write a single line, `Refusals: none`, in place of the column.
 - **In both lanes**, the *Follow-ups for the advisor* section, the size tripwire row, and the
   disclosed degradations section, each described below.
 

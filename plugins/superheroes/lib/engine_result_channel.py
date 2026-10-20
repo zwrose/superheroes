@@ -12,6 +12,7 @@ import json
 import os
 import uuid
 
+import command_refusals
 import engine_adapter
 import model_registry
 import payload_contracts
@@ -701,11 +702,28 @@ def _review_root_schema(expected_result_kind):
     }
 
 
+def _write_refusal_entry_schema():
+    # strict mode needs required == properties, so `hook` is required and nullable here
+    # although command_refusals lists it optional
+    fields = list(command_refusals.ENTRY_REQUIRED) + list(command_refusals.ENTRY_OPTIONAL)
+    order = ["command", "refusedBy", "hook", "next"]
+    assert set(order) == set(fields)
+    properties = {name: {"type": "string"} for name in order}
+    properties["refusedBy"]["enum"] = list(command_refusals.REFUSED_BY)
+    properties["hook"] = {"type": ["string", "null"]}
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": order,
+        "properties": properties,
+    }
+
+
 def _write_root_schema():
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["ok", "signal", "report", "evidence"],
+        "required": ["ok", "signal", "report", "evidence", "refusals"],
         "properties": {
             "ok": {"type": "boolean"},
             "signal": {"type": "string", "enum": list(WRITE_SIGNAL_ENUM)},
@@ -719,6 +737,7 @@ def _write_root_schema():
                     "testPassed": {"type": "boolean"},
                 },
             },
+            "refusals": {"type": "array", "items": _write_refusal_entry_schema()},
         },
     }
 

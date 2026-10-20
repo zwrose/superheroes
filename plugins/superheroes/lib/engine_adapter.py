@@ -36,6 +36,7 @@ TASK_ID_TRAILER = "Task-Id"
 # import this name, never restate the literal.
 import break_it  # noqa: E402  (break-it contract vocabulary home; imports no engine_adapter)
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
+import command_refusals  # noqa: E402  (refusals list shape + validator home; stdlib-only leaf)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
@@ -145,6 +146,8 @@ WRITE_REPORT_FIELD_SEMANTICS = (
     "is wrong, otherwise \"needs_context\" (only those two values).\n"
     "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
     "failing / passing during this attempt; false when not observed.\n"
+    "  refusals — every refused or denied command you met, as the stop rule in this prompt "
+    "defines it, one entry each (command, refusedBy, hook, next); [] when you met none.\n"
 )
 
 WRITE_REPORT_CONTRACT = (
@@ -158,7 +161,7 @@ WRITE_REPORT_CONTRACT = (
     + "Example final two lines (placeholders — compose real JSON literals yourself):\n"
     + WRITE_REPORT_SENTINEL + "\n"
     '{"ok": <true or false>, "signal": "<ok | plan_wrong | needs_context>", '
-    '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}}'
+    '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}, "refusals": []}'
 )
 
 _REVIEW_RESULT_KIND_DESCRIPTIONS = {
@@ -925,18 +928,29 @@ def _last_json_array(stdout):
     return _last_top_level_json(stdout, list)
 
 
+def scrub_refusals(refusals):
+    """Recursively scrub every string in a validated refusals list (the one scrub seam for the
+    foreground grader and the native close path). Never raises."""
+    return _scrub_mapping(refusals)
+
+
 def _grade_build_report_obj(obj):
     """Single home for build|fix report-object grading (CONVENTIONS §11). Never raises."""
     if not isinstance(obj, dict):
         return {"ok": False, "reason": "unreadable"}
+    carried = {}
+    if "refusals" in obj:
+        if command_refusals.refusals_fault(obj["refusals"]) is not None:
+            return {"ok": False, "reason": "unreadable"}
+        carried["refusals"] = scrub_refusals(obj["refusals"])
     ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
     evidence = {"testFailed": bool(ev.get("testFailed")),
                 "testPassed": bool(ev.get("testPassed"))}
     if obj.get("ok") is not True:
         sig = (WRITE_SIGNAL_PLAN_WRONG if obj.get("signal") == WRITE_SIGNAL_PLAN_WRONG
                else WRITE_SIGNAL_NEEDS_CONTEXT)
-        return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
-    return {"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}
+        return dict({"ok": False, "signal": sig, "reason": sig, "evidence": evidence}, **carried)
+    return dict({"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}, **carried)
 
 
 def strip_echoed_prompt(stdout, prompt_text):
