@@ -127,6 +127,12 @@ def test_the_account_collect_skips_what_is_not_a_list_and_never_raises():
     assert rs._command_refusals(rounds) == [dict(REFUSAL, round=5)]
 
 
+def test_command_refusals_collect_in_numeric_round_order():
+    # axis: the collect sorts the round keys numerically, not by insertion or lexical order — see bite-proof record wo5_2011_review_fixes
+    rounds = {"10": _fix(refusals=[REFUSAL]), "2": _fix(refusals=[OTHER]), "1": _fix(refusals=[REFUSAL])}
+    assert rs._command_refusals(rounds) == [dict(REFUSAL, round=1), dict(OTHER, round=2), dict(REFUSAL, round=10)]
+
+
 def _validated(entries):
     return rr._validate(TRR.account(commandRefusals=entries))
 
@@ -172,6 +178,15 @@ def test_a_refusal_whose_text_holds_a_forbidden_claim_does_not_refuse_the_record
     with pytest.raises(rr.Refusal) as e:
         rr._assert_no_bug_free_claim("This change is bug-free.")
     assert e.value.reason == "review-record-forbidden-claim"
+
+
+def test_a_forbidden_claim_elsewhere_still_refuses_the_record_when_a_refusal_is_present(tmp_path):
+    # axis: the summary's claim check still runs over every other line when the refusals line is present — see bite-proof record wo5_2011_review_fixes
+    fake = TRR.Fake()
+    account = TRR.account(commandRefusals=[dict(REFUSAL, round=1)], reviewers=[TRR.reviewer("bug free")])
+    out = rr.write(TRR.put(tmp_path, account), str(tmp_path), fake.readers())
+    assert (out["ok"], out.get("reason")) == (False, "review-record-forbidden-claim")
+    assert fake.comments == [] and fake.writes == []
 
 
 def test_the_command_is_fenced_longer_than_any_backtick_run_inside_it():

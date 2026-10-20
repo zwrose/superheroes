@@ -51,6 +51,7 @@ def _without(key):
     [_entry(refusedBy="permission", hook=None), _entry(refusedBy="sandbox")],
 ])
 def test_refusals_fault_accepts_valid_lists(value):
+    # axis: acceptance of valid refusals — see bite-proof record wo1_2011_stop_rule
     assert CR.refusals_fault(value) is None
 
 
@@ -77,10 +78,12 @@ def test_refusals_fault_accepts_valid_lists(value):
     ([_entry(foo="bar")], "refusals[0] unknown key: foo"),
 ])
 def test_refusals_fault_names_the_fault(value, reason):
+    # axis: malformed-entry diagnostics — see bite-proof record wo1_2011_stop_rule
     assert CR.refusals_fault(value) == reason
 
 
 def test_order_text_composition():
+    # axis: the composition of ORDER_TEXT — see bite-proof record wo1_2011_stop_rule
     assert CR.ORDER_TEXT.startswith(CR.STOP_RULE)
     assert CR.REFUSAL_MEANING in CR.ORDER_TEXT
     assert CR.ENTRY_SHAPE in CR.ORDER_TEXT

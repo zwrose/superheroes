@@ -472,9 +472,12 @@ def test_close_second_close_returns_the_same_record_with_refusals(tmp_path, monk
     code, first = _close(capsys, r)
     _forfeited(code, first, "native-not-enrolled")
     kinds = _kinds(r)
+    # axis: the replay returns the journaled record's refusals, never a fresh read of result.json — see bite-proof record wo5_2011_review_fixes
+    _result_with(r, refusals=[_entry(command="different command")])
     code, second = _close(capsys, r)
     assert code == 1
     assert second == first and second["refusals"] == [_entry()]
+    assert second["refusals"] == first["refusals"]
     assert _kinds(r) == kinds
 
 
@@ -484,6 +487,9 @@ def test_close_done_second_close_returns_the_same_record_with_refusals(tmp_path,
     _result_with(r, status="done", refusals=[_entry()])
     code, first = _close(capsys, r)
     assert code == 0 and first["ok"] is True
+    # axis: the replay returns the journaled record's refusals, never a fresh read of result.json — see bite-proof record wo5_2011_review_fixes
+    _result_with(r, status="done", refusals=[_entry(command="different command")])
     code, second = _close(capsys, r)
     assert code == 0
     assert second == first and second["refusals"] == [_entry()]
+    assert second["refusals"] == first["refusals"]
