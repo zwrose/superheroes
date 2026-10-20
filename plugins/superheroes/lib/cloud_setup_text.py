@@ -388,9 +388,14 @@ def _input_view(repo_root, inputs):
                                      + "\n").encode("utf-8")}
     for rel in inputs:
         path = os.path.join(repo_root, *rel.split("/"))
-        if not os.path.lexists(path):
+        try:
+            os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
             view[SETUP_INPUT_MISSING_STAMP_PREFIX + rel] = b""
             continue
+        except OSError:
+            raise _Refused("setup-inputs-unreadable", "A file the setup depends on (%s) is not a "
+                           "readable file." % rel)
         try:
             if not os.path.isfile(path):
                 raise OSError("not a regular file")
