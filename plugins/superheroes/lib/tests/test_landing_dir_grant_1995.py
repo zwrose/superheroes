@@ -15,6 +15,8 @@ Detector axes (bite-proof):
 - test_malformed_journaled_landing_dir_* — journal reuse: a malformed journaled grant refuses
 - test_no_flag_opens_* — preservation: no flag journals no landingDir and passes no --add-dir
 - test_continuation_* — journal reuse: a continuation holds the journaled grant or refuses mismatch
+- test_resumed_child_spawns_with_the_journaled_landing_grant — journal reuse at spawn: a resumed
+  child's own argv and settings carry the journaled grant, flag omitted or alias-spelled
 - test_non_claude_engine_* — preservation: a non-claude engine ignores the flag
 - test_cli_registers_landing_dir_flag — mapping: the CLI parses --landing-dir
 - test_fixer_writes_* / test_without_the_grant_* — end to end: the grant alone lets the fixer's
@@ -289,6 +291,49 @@ def test_continuation_with_a_different_landing_dir_refuses_mismatch(tmp_path, mo
                                 run_dir=run_dir, seat=_implementer_claude_seat(), **kw)
         assert again.get("detail") != MISMATCH, again
         assert again["argv"] == first["argv"]
+
+
+def _open_without_spawning(tmp_path, monkeypatch, landing):
+    """Open and journal a landing-grant run whose first slice spawns no child."""
+    def fake_supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
+        return ED._with_run_fields(
+            {"ok": False, "terminal": False, "reason": "running", "detail": "captured",
+             "attempts": 0, "forfeited": False},
+            run_dir=run_dir_real, argv=[],
+        )
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(ED, "_supervise", fake_supervise)
+        return _open(tmp_path, monkeypatch, landing_dir=landing, max_wait=1)
+
+
+@pytest.mark.parametrize("how", ["flag-omitted", "symlink-alias"])
+def test_resumed_child_spawns_with_the_journaled_landing_grant(tmp_path, monkeypatch, how):
+    _sd, landing = _landing(tmp_path)
+    real = os.path.realpath(landing)
+    wt, run_dir, first, first_fake = _open_without_spawning(tmp_path, monkeypatch, landing)
+    assert first["terminal"] is False, first
+    # the open step spawned nothing
+    assert first_fake.calls == []
+    assert _write_opened_record(run_dir)["claudeWriteSandbox"]["landingDir"] == real
+    kw = {}
+    if how == "symlink-alias":
+        alias = tmp_path / "alias"
+        alias.symlink_to(landing)
+        kw["landing_dir"] = str(alias)
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir,
+                          seat=_implementer_claude_seat(), **kw)
+    assert res.get("detail") != MISMATCH, res
+    # the continuation spawned a child; it did not read a folded result
+    assert fake.calls, res
+    argv = fake.calls[0]["argv"]
+    # exactly one grant, no duplicate
+    assert argv.count("--add-dir") == 1
+    i = argv.index("--add-dir")
+    assert argv[i + 1] == real
+    assert argv[i + 2] == "--settings"
+    assert real in _settings_of(argv)["sandbox"]["filesystem"]["allowWrite"]
 
 
 def test_continuation_naming_a_grant_when_none_was_journaled_refuses_mismatch(
