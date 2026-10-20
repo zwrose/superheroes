@@ -53,14 +53,93 @@ _STARTS_LINES = [
     "    m = e.get('matcher')",
     "    if m is None or m in ('', '*'):",
     "        return True",
-    "    try:",
-    "        return isinstance(m, str) and re.fullmatch(m, 'startup') is not None",
-    "    except Exception:",
+    # axis: Claude evaluates matchers as JavaScript regular expressions, and Python's regex
+    # dialect differs from that (`start++up` compiles here, not there), so only the plain form is
+    # trusted: a `|`-separated list of literal words, one of which is `startup`; anything with
+    # another metacharacter is treated as not covering startup
+    "    if not isinstance(m, str) or not re.fullmatch(r'[A-Za-z0-9_-]+(\\|[A-Za-z0-9_-]+)*', m):",
     "        return False",
+    "    return 'startup' in m.split('|')",
 ]
 _starts_scope = {"re": re}
 exec("\n".join(_STARTS_LINES), _starts_scope)
 _group_starts = _starts_scope["starts"]
+
+
+def _env_carries_credential(settings):
+    """True when the settings `env` block gives a credential-named key a populated value that is
+    not a bare `$NAME` / `${NAME}` reference (the content scan cannot know an opaque value)."""
+    from cloud_setup_text import ENV_REFERENCE_RE, is_credential_env_name  # lazy: imports us back
+    env = settings.get("env") if isinstance(settings, dict) else None
+    if not isinstance(env, dict):
+        return False
+    for key, value in env.items():
+        if not is_credential_env_name(key):
+            continue
+        if value is None or value == "":
+            continue
+        if isinstance(value, str) and ENV_REFERENCE_RE.fullmatch(value.strip()):
+            continue
+        return True
+    return False
+
+
+def _hook_commands(settings, blank=False):
+    """Every `hooks.<Event>[].hooks[].command` string in the settings; with `blank`, those values
+    are replaced by empty strings in place, leaving the rest of the document."""
+    found = []
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    if not isinstance(hooks, dict):
+        return found
+    for groups in hooks.values():
+        for group in groups if isinstance(groups, list) else []:
+            inner = group.get("hooks") if isinstance(group, dict) else None
+            for hook in inner if isinstance(inner, list) else []:
+                if isinstance(hook, dict) and isinstance(hook.get("command"), str):
+                    found.append(hook["command"])
+                    if blank:
+                        hook["command"] = ""
+    return found
+
+
+def _permission_commands(settings, blank=False):
+    """The command inside each `Bash(<command>)` rule of `permissions.allow|deny|ask`, with a
+    trailing `:*` or `*` pattern suffix dropped; with `blank`, those rule strings are replaced by
+    empty strings in place."""
+    found = []
+    perms = settings.get("permissions") if isinstance(settings, dict) else None
+    if not isinstance(perms, dict):
+        return found
+    for key in ("allow", "deny", "ask"):
+        rules = perms.get(key)
+        if not isinstance(rules, list):
+            continue
+        for i, rule in enumerate(rules):
+            if isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")"):
+                command = rule[len("Bash("):-1]
+                for suffix in (":*", "*"):
+                    if command.endswith(suffix):
+                        command = command[:-len(suffix)]
+                        break
+                found.append(command)
+                if blank:
+                    rules[i] = ""
+    return found
+
+
+def _settings_secret_shaped(settings, scan):
+    """True when the settings about to be written carry a credential: each hook command is read as
+    a shell command (the way stored setup commands are, so `NAME=$NAME npm ci` passes), and the
+    rest of the document, with those commands blanked, is read in document mode."""
+    import copy
+    commands = _hook_commands(settings) + _permission_commands(settings)
+    if any(scan(command, False) for command in commands):
+        return True
+    rest = copy.deepcopy(settings)
+    _hook_commands(rest, blank=True)
+    _permission_commands(rest, blank=True)
+    text = json.dumps(rest, indent=2, ensure_ascii=False) + "\n"
+    return bool(scan(text, True)) or _env_carries_credential(settings)
 
 
 def _skipped(reason):
@@ -108,7 +187,8 @@ def script_text(commands, inputs):
         "fi",
         "",
         "# The hash covers the fingerprint and, in list order, each input's size and bytes (or that it",
-        "# is missing).",
+        "# is missing). An input that exists but is not a regular file fails the hash, so it is never",
+        "# hashed as missing.",
         "compute_hash() (",
         "  set -o pipefail",
         "  {",
@@ -117,6 +197,8 @@ def script_text(commands, inputs):
         '      if [ -f "$f" ]; then',
         '        printf "file %s %s\\n" "$f" "$(( $(wc -c < "$f") ))"',
         '        cat -- "$f" || exit 1',
+        '      elif [ -e "$f" ] || [ -L "$f" ]; then',
+        "        exit 1",
         "      else",
         '        printf "missing %s\\n" "$f"',
         "      fi",
@@ -205,7 +287,23 @@ def offer_message(commands, inputs):
 
 def _is_ours(hook):
     return (isinstance(hook, dict) and isinstance(hook.get("command"), str)
-            and SCRIPT_REL in hook["command"])
+            and _invokes_script(hook["command"]))
+
+
+def _invokes_script(command):
+    """True when `command` runs the managed script: the script path is the program, or the argument
+    of a bare bash/sh. A command that only mentions the path (an argument to another tool, a longer
+    filename such as `...sh.backup`) is not ours."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if tokens and os.path.basename(tokens[0]) in ("bash", "sh"):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    target = tokens[0].replace("${CLAUDE_PROJECT_DIR}", "$CLAUDE_PROJECT_DIR")
+    return target == SCRIPT_REL or target.endswith("/" + SCRIPT_REL)
 
 
 def _load_settings(path):
@@ -317,6 +415,9 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     write_settings = None
     delete_settings = False
     if desired:
+        if isinstance(settings, dict) and settings.get("disableAllHooks") is True:
+            # the hook could not run, and record mode rejects these settings; nothing is written
+            raise _Refused("settings-hooks-disabled")
         wanted = script_text(commands, inputs).encode("utf-8")
         if _read_bytes(script_path) != wanted or _mode_of(script_path, 0) != 0o755:
             write_script = wanted
@@ -344,6 +445,11 @@ def _sync(repo_root, commands, inputs, enabled, changed):
 
     if not os.path.isdir(repo_root) and (write_script is not None or write_settings is not None):
         raise OSError("the repository root does not exist")
+    if write_settings is not None:
+        from cloud_setup_text import _scan  # lazy: that module imports this one back
+        if _settings_secret_shaped(write_settings, _scan):
+            # nothing is written, the script included: the owner is told to commit this file
+            raise _Refused("settings-secret-shaped")
     if write_script is not None:
         _atomic_write(script_path, write_script, 0o755)
         changed.add(SCRIPT_REL)

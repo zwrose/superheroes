@@ -6,6 +6,8 @@ system configuration away), and every store, home and Claude config directory is
 No test reads the real home directory or the network.
 """
 import datetime
+import io
+import json
 import os
 import subprocess
 import sys
@@ -26,7 +28,6 @@ import mode_registry  # noqa: E402
 import project_config as PC  # noqa: E402
 import store_core  # noqa: E402
 
-_GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 ORIGIN = "https://github.com/acme/corner-shop.git"
 SOURCE = "https://github.com/acme/superheroes.git"
 COMMIT = "0123456789abcdef" * 2 + "01234567"
@@ -47,7 +48,10 @@ class World:
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, env=_GIT_ENV)
+    # Built per call from the current (fixture-sanitized) environment, never a collection-time
+    # snapshot: an inherited GIT_DIR would otherwise override `git -C`.
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, env=env)
 
 
 def _world(tmp_path, mode):
@@ -267,12 +271,36 @@ def _lose_the_repo_root_for_the_fill(monkeypatch):
 def test_an_unresolvable_repo_root_skips_the_fill_and_item_17_stays_stored(tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
-    _lose_the_repo_root_for_the_fill(monkeypatch)
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        _lose_the_repo_root_for_the_fill(fault)
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert "inputsFilled" not in done
-    monkeypatch.undo()
+    assert done["inputsFillFailed"] == "repo-root-unavailable"
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
+
+
+def test_an_unreadable_root_is_a_failed_scan_not_an_empty_fill(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    real_scandir = os.scandir
+
+    def scandir(path):
+        if str(path) == str(w.repo):
+            raise PermissionError(13, "Permission denied")
+        return real_scandir(path)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(os, "scandir", scandir)
+        with pytest.raises(OSError):
+            CS.detect_inputs(str(w.repo))
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert "inputsFilled" not in done
+    assert "Permission denied" in done["inputsFillFailed"], done
+    assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
+    assert _raw(w, INPUTS_SLUG) is None
+    again = _set_ok(w, COMMANDS_SLUG, ["npm ci", "npm test"])
+    assert again["inputsFilled"] == ["package-lock.json"]
 
 
 def test_a_failed_fill_reports_inputs_fill_failed_and_item_17_stays_stored(tmp_path, monkeypatch):
@@ -284,11 +312,11 @@ def test_a_failed_fill_reports_inputs_fill_failed_and_item_17_stays_stored(tmp_p
     def write(cwd, slug, value, **kw):
         return refusal if slug == INPUTS_SLUG else real_write(cwd, slug, value, **kw)
 
-    monkeypatch.setattr(core_md, "write_project_config_item", write)
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        fault.setattr(core_md, "write_project_config_item", write)
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert done["inputsFillFailed"] == "write-failed", done
     assert "inputsFilled" not in done
-    monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
 
@@ -348,13 +376,73 @@ def test_a_fill_whose_read_back_does_not_match_reports_set_read_mismatch(tmp_pat
             return dict(action="written")
         return real_write(cwd, slug, value, **kw)
 
-    monkeypatch.setattr(core_md, "write_project_config_item", write)
-    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    with monkeypatch.context() as fault:
+        fault.setattr(core_md, "write_project_config_item", write)
+        done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert done["inputsFillFailed"] == "set-read-mismatch" == PC.REASON_SET_MISMATCH, done
     assert "inputsFilled" not in done
-    monkeypatch.undo()
     assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
     assert _raw(w, INPUTS_SLUG) is None
+
+
+def test_a_configured_directory_that_is_not_a_git_checkout_gets_no_fill(tmp_path, monkeypatch):
+    # axis: the fill scans only a git checkout, so a plain configured directory is reported, not scanned
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "package-lock.json").write_text("v1\n")
+    cwd, root = str(plain), str(tmp_path / "store-root")
+    assert store_core.repo_root(cwd) == os.path.realpath(cwd)
+    assert mode_registry.write_registry(cwd, mode_registry.IN_REPO, None, root=root) is not None
+    done = core_md.write(cwd, dict(CORE_FACTS), "confirmed", root=root, now="2026-06-26")
+    assert done["action"] in ("written", "reused"), done
+    got = PC.set_item(cwd, COMMANDS_SLUG, ["npm ci"], root=root)
+    assert got["action"] in ("written", "noop"), got
+    assert got["inputsFillFailed"] == "not-a-git-checkout", got
+    assert "inputsFilled" not in got
+    assert PC.get_item(cwd, COMMANDS_SLUG, root=root)["raw"] == ["npm ci"]
+    assert PC.get_item(cwd, INPUTS_SLUG, root=root)["raw"] is None
+
+
+def test_a_checkout_whose_git_metadata_lives_elsewhere_still_gets_the_fill(tmp_path, monkeypatch):
+    # axis: membership follows git's own answer, so a `.git` file naming external metadata is a checkout
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    work = tmp_path / "work"
+    elsewhere = tmp_path / "elsewhere" / "meta.git"
+    elsewhere.parent.mkdir()
+    _git(tmp_path, "init", "-q", "--separate-git-dir", str(elsewhere), str(work))
+    assert (work / ".git").is_file()
+    (work / "package-lock.json").write_text("v1\n")
+    cwd, root = str(work), str(tmp_path / "store-root")
+    assert store_core.get_worktree_gitdir(cwd) == os.path.realpath(elsewhere)
+    assert mode_registry.write_registry(cwd, mode_registry.IN_REPO, None, root=root) is not None
+    done = core_md.write(cwd, dict(CORE_FACTS), "confirmed", root=root, now="2026-06-26")
+    assert done["action"] in ("written", "reused"), done
+    got = PC.set_item(cwd, COMMANDS_SLUG, ["npm ci"], root=root)
+    assert got["action"] in ("written", "noop"), got
+    assert got["inputsFilled"] == ["package-lock.json"], got
+    assert "inputsFillFailed" not in got
+    assert PC.get_item(cwd, INPUTS_SLUG, root=root)["raw"] == ["package-lock.json"]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_cli_sets_item_18_from_stdin_and_the_setup_stamp_moves(tmp_path, monkeypatch, capsys,
+                                                                    mode):
+    # axis: item 18 through its public entry point stores the list and the stamp carries it
+    w = _world(tmp_path, mode)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert _raw(w, INPUTS_SLUG) == []
+    before = _stamp(w)
+    _lock(w)
+    monkeypatch.setattr("sys.stdin", io.StringIO('["package-lock.json"]'))
+    rc = PC.main(["set", "--item", INPUTS_SLUG, "--cwd", w.cwd, "--root", w.root])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["action"] == "written"
+    assert _raw(w, INPUTS_SLUG) == ["package-lock.json"]
+    after = _stamp(w)
+    assert after != before and after == _compose(w)["calibration"]["stamp"]
 
 
 # ---------------------------------------------------------------- the script checks its inputs
@@ -362,7 +450,7 @@ def test_a_fill_whose_read_back_does_not_match_reports_set_read_mismatch(tmp_pat
 
 def _run_setup(w, text, lock_text):
     """Runs the text in a stub clone (`work`, with a .git directory) holding the lockfile
-    `lock_text` (no lockfile when it is None), every tool stubbed; returns the setup log and the stamp path."""
+    `lock_text` (no lockfile when it is None), every tool stubbed; returns the setup log, the work directory, the stamp path and the completed process."""
     stub = w.tmp / "stubs"
     stub.mkdir()
     for name in ("git", "npm", "apt-get", "uv"):
@@ -373,12 +461,12 @@ def _run_setup(w, text, lock_text):
     if lock_text is not None:
         (work / "package-lock.json").write_text(lock_text)
     env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
-    subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60,
-                   cwd=str(work))
+    proc = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60,
+                          cwd=str(work))
     log = (w.home / "superheroes-cloud-setup.log").read_text()
     stamp = os.path.join(mode_registry.project_store_dir(
         w.cwd, str(w.home / ".claude" / "superheroes")), CS.STAMP_FILE)
-    return log, work, stamp
+    return log, work, stamp, proc
 
 
 def test_the_script_runs_nothing_and_withholds_the_stamp_when_an_input_differs(tmp_path):
@@ -386,10 +474,11 @@ def test_the_script_runs_nothing_and_withholds_the_stamp_when_an_input_differs(t
     _lock(w, text="v2\n")
     _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
     text = _compose(w)["text"]
-    log, work, stamp = _run_setup(w, text, "v1\n")
+    log, work, stamp, proc = _run_setup(w, text, "v1\n")
     assert "setup input package-lock.json differs from the setup text" in log
     assert "setup stamp withheld" in log and "setup command 1 ok" not in log
     assert not os.path.exists(stamp) and not (work / "ran.txt").exists()
+    assert proc.returncode != 0, (proc.returncode, proc.stdout, proc.stderr)
 
 
 def test_the_script_publishes_the_stamp_when_the_inputs_match(tmp_path):
@@ -398,7 +487,8 @@ def test_the_script_publishes_the_stamp_when_the_inputs_match(tmp_path):
     _lock(w, text="v2\n")
     _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
     composed = _compose(w)
-    log, work, stamp = _run_setup(w, composed["text"], "v2\n")
+    log, work, stamp, proc = _run_setup(w, composed["text"], "v2\n")
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
     assert "differs" not in log and "setup command 1 ok" in log
     assert os.path.exists(stamp) and (work / "ran.txt").exists()
     # the script writes the stamp followed by one newline (`printf '%s\n'`)
@@ -417,7 +507,8 @@ def test_the_script_flags_an_input_missing_in_the_clone_that_was_present_at_comp
     _lock(w, text="v1\n")
     _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
     assert _raw(w, INPUTS_SLUG) == ["package-lock.json"]
-    log, work, stamp = _run_setup(w, _compose(w)["text"], None)
+    log, work, stamp, proc = _run_setup(w, _compose(w)["text"], None)
+    assert proc.returncode != 0, (proc.returncode, proc.stdout, proc.stderr)
     assert not (work / "package-lock.json").exists()
     assert "setup input package-lock.json differs from the setup text" in log
     assert "found missing" in log and "expected missing" not in log
@@ -430,7 +521,8 @@ def test_the_script_flags_an_input_present_in_the_clone_that_was_missing_at_comp
     w = _world(tmp_path, mode_registry.IN_REPO)
     _set_ok(w, COMMANDS_SLUG, ["true"])
     _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
-    log, _, stamp = _run_setup(w, _compose(w)["text"], "now present\n")
+    log, _, stamp, proc = _run_setup(w, _compose(w)["text"], "now present\n")
+    assert proc.returncode != 0, (proc.returncode, proc.stdout, proc.stderr)
     assert "setup input package-lock.json differs" in log and "expected missing" in log
     assert not os.path.exists(stamp)
 
@@ -453,3 +545,24 @@ def test_detect_inputs_missing_root_is_empty(tmp_path):
     assert CS.detect_inputs(str(tmp_path / "nope")) == []
     (tmp_path / "afile").write_text("x")
     assert CS.detect_inputs(str(tmp_path / "afile")) == []
+
+
+# ---------------------------------------------------------------- git environment isolation
+
+
+def test_git_helper_ignores_git_dir_inherited_at_import(tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "-C", str(other), "init", "-q"], check=True, capture_output=True)
+    before = (other / ".git" / "config").read_text()
+    import importlib.util
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    spec = importlib.util.spec_from_file_location("_inputs_2008_fresh", __file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)  # a fresh import snapshots the inherited GIT_DIR, as collection can
+    monkeypatch.delenv("GIT_DIR")  # the autouse fixture's isolation, applied after collection
+    work = tmp_path / "work"
+    work.mkdir()
+    w = fresh._world(work, mode_registry.GLOBAL)
+    assert (w.repo / ".git").is_dir()
+    assert (other / ".git" / "config").read_text() == before

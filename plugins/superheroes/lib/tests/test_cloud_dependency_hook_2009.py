@@ -464,7 +464,7 @@ def test_an_unresolvable_repo_root_refuses_nothing_for_a_project_that_never_opte
     _lose_the_repo_root_for_the_hook(monkeypatch)
     done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
     assert "inputsFilled" not in done and "dependencyHook" not in done
-    assert "inputsFillFailed" not in done
+    assert done.get("inputsFillFailed") == "repo-root-unavailable"
     # turning the hook off needs no sync when it was never on
     assert "dependencyHook" not in _set_ok(w, HOOK_SLUG, False)
     monkeypatch.undo()
@@ -554,6 +554,72 @@ def test_a_failed_readback_after_a_held_write_keeps_the_synced_files(tmp_path, m
     monkeypatch.undo()
     assert _raw(w, HOOK_SLUG) is True
     _assert_files_match_stored(w)
+
+
+def test_a_refused_readback_reconciles_an_enable_that_landed_after_a_plan_that_ran_no_sync(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    real = core_md.write_project_config_item
+    state = {"done": False}
+
+    def interleaved(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not state["done"]:
+            state["done"] = True
+            # set B enables the hook (old inputs) between A's plan, which ran no sync, and A's write
+            _set_ok(w, HOOK_SLUG, True)
+            assert real(cwd, slug, value, root=root)["action"] in ("written", "noop")
+            # A's read-back is then refused
+            monkeypatch.setattr(PC, "get_item", lambda *a, **k: {"action": "ok", "raw": None})
+            return real(cwd, slug, value, root=root)
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", interleaved)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert got["action"] == "refused" and got["reason"] == PC.REASON_SET_MISMATCH
+    assert got["dependencyHookResynced"]["changed"]
+    assert _raw(w, INPUTS_SLUG) == ["uv.lock"]
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["uv.lock"])
+    _assert_files_match_stored(w)
+
+
+def test_a_refused_readback_with_an_unreadable_stored_config_after_a_plan_that_ran_no_sync_reports_it(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    real = core_md.write_project_config_item
+
+    def unreadable_after(cwd, slug, value, root=None):
+        got = real(cwd, slug, value, root=root)
+        monkeypatch.setattr(PC, "get_item", lambda *a, **k: {"action": "ok", "raw": None})
+        monkeypatch.setattr(core_md, "read", lambda *a, **k: {})
+        return got
+
+    monkeypatch.setattr(core_md, "write_project_config_item", unreadable_after)
+    got = _set(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert got["action"] == "refused" and got["reason"] == PC.REASON_SET_MISMATCH
+    assert got["dependencyHookResyncFailed"] == "stored-config-unreadable"
+
+
+@pytest.mark.parametrize("command", [
+    "env -u OLD_TOKEN printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "env -C /tmp printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "nice -n 5 printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "sudo -u deploy printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "exec -a name printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+    "env -S printf 'DATABASE_PASSWORD=%s\\n' \"$PW\" > .env",
+])
+def test_a_wrapper_options_argument_is_not_read_as_the_wrapped_command(tmp_path, command):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, [command])
+    assert _raw(w, COMMANDS_SLUG) == [command]
+    assert CS._scan(command) is None
+    assert _compose(w)["action"] == "written"
 
 
 def test_a_failing_fill_write_reports_inputs_fill_failed_and_the_files_match_what_is_stored(
@@ -902,6 +968,22 @@ def test_enabling_the_hook_refuses_a_stored_secret_shaped_command_and_writes_not
     assert not w.settings.exists()
 
 
+def test_enabling_the_hook_refuses_settings_that_disable_all_hooks_and_writes_nothing(tmp_path):
+    # axis: a hook that could not run is never reported as enabled, and no file is written for it
+    w = _world(tmp_path, mode_registry.GLOBAL)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    w.settings.parent.mkdir(parents=True, exist_ok=True)
+    w.settings.write_text(json.dumps({"disableAllHooks": True}))
+    before = w.settings.read_text()
+    got = _set(w, HOOK_SLUG, True)
+    assert got["action"] == "refused", got
+    assert got["reason"] == "dependency-hook-unwritable"
+    assert got["detail"] == "settings-hooks-disabled"
+    assert _raw(w, HOOK_SLUG) is None
+    assert not w.script.exists()
+    assert w.settings.read_text() == before
+
+
 def test_a_refused_sync_puts_back_what_it_already_changed(tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _set_ok(w, COMMANDS_SLUG, ["npm ci"])
@@ -947,6 +1029,31 @@ def test_a_concurrent_item_17_set_landing_between_the_sync_and_the_write_leaves_
     assert got["dependencyHookResynced"]["action"] in ("written", "noop")
     assert _raw(w, COMMANDS_SLUG) == ["make"] and _raw(w, INPUTS_SLUG) == ["uv.lock"]
     assert w.script.read_text() == hook.script_text(["make"], ["uv.lock"])
+    _assert_files_match_stored(w)
+
+
+def test_an_enable_landing_between_an_input_updates_plan_and_write_leaves_the_script_on_stored_inputs(
+        tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    assert not w.script.exists()
+    real = core_md.write_project_config_item
+    landed = []
+
+    def racing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not landed:
+            landed.append(True)
+            assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", racing)
+    got = _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert landed
+    assert got["dependencyHookResynced"]["action"] in ("written", "noop")
+    assert _raw(w, INPUTS_SLUG) == ["uv.lock"] and _raw(w, HOOK_SLUG) is True
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["uv.lock"])
     _assert_files_match_stored(w)
 
 
@@ -1000,6 +1107,35 @@ def test_a_failed_fill_write_names_every_path_the_first_sync_and_the_recovery_ch
     # the first sync wrote script and settings; the recovery rewrote only the script
     assert done["dependencyHook"]["changed"] == sorted([hook.SCRIPT_REL, hook.SETTINGS_REL])
     _assert_files_match_stored(w)
+
+
+def test_a_failed_fill_write_and_a_failed_recovery_report_the_resync_failure(tmp_path, monkeypatch):
+    # axis: a recovery sync that raises or is refused never counts as the old inputs being applied
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, HOOK_SLUG, True)
+    real_write = core_md.write_project_config_item
+    real_sync = hook.sync
+    syncs = []
+
+    def failing_write(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG:
+            return {"action": "refused", "reason": "y"}
+        return real_write(cwd, slug, value, root=root)
+
+    def failing_sync(repo_root, commands, inputs, enabled):
+        syncs.append(inputs)
+        if len(syncs) == 1:
+            return real_sync(repo_root, commands, inputs, enabled)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(core_md, "write_project_config_item", failing_write)
+    monkeypatch.setattr(hook, "sync", failing_sync)
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    monkeypatch.undo()
+    assert done["inputsFillFailed"] == "y"
+    assert "disk full" in done["dependencyHookResyncFailed"]
+    assert _raw(w, COMMANDS_SLUG) == ["npm ci"] and _raw(w, INPUTS_SLUG) is None
 
 
 def test_a_fill_readback_mismatch_names_every_path_the_first_sync_changed(tmp_path, monkeypatch):
@@ -1126,3 +1262,121 @@ def test_a_kill_after_the_file_sync_of_a_write_leaves_no_on_config_with_the_file
     assert w.script.exists() and len(_ours(_settings(w))) == 1
     assert _raw(w, slug) != value
     _never_on_with_the_files_gone(w)
+
+
+@pytest.mark.parametrize("matcher", ["(?i)startup", "(?P<n>startup)", r"\Astartup\Z", "start++up", "^startup$",
+                                     "(startup)", "start.*", "(?:startup|resume)"])
+def test_a_python_only_matcher_is_not_a_startup_group(matcher):
+    # axis: Claude evaluates matchers as JavaScript regexes; Python-only syntax is unusable
+    assert hook._group_starts({"matcher": matcher}) is False
+
+
+@pytest.mark.parametrize("matcher", ["startup", "startup|resume", "resume|startup", "a_b-c|startup"])
+def test_a_plain_word_list_matcher_still_starts(matcher):
+    assert hook._group_starts({"matcher": matcher}) is True
+
+
+@pytest.mark.parametrize("password", ['"$PIP_PASS"', "'$PIP_PASS'", '"${PIP_PASS}"', "$PIP_PASS"])
+def test_a_quoted_environment_reference_url_password_is_allowed(password):
+    cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
+    assert PC._validate_command_list([cmd]) is None or "secret" not in str(PC._validate_command_list([cmd]))
+    assert CS._SECRET_SHAPES  # scanner present
+    assert not [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]
+
+
+@pytest.mark.parametrize("password", ['"hunter2"', "'hunter2'", '""'])
+def test_a_quoted_literal_url_password_is_refused(password):
+    cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
+    assert [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]
+
+
+def test_only_invocations_of_the_managed_script_are_ours():
+    # axis: a command that merely mentions the script path is not the managed hook.
+    from cloud_dependency_hook import HOOK_COMMAND, SCRIPT_REL, _is_ours
+    assert _is_ours({"command": HOOK_COMMAND})
+    assert _is_ours({"command": "bash " + SCRIPT_REL})
+    assert not _is_ours({"command": "sha256sum " + SCRIPT_REL + ".backup"})
+    assert not _is_ours({"command": "cat " + SCRIPT_REL})
+    assert not _is_ours({"command": 'bash "$CLAUDE_PROJECT_DIR/' + SCRIPT_REL + '.backup"'})
+
+
+def test_an_existing_non_file_input_is_refused_not_hashed_as_missing(tmp_path):
+    # axis: a directory (or other non-regular input) is never recorded as a missing file
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    (w.repo / "plugins").mkdir()
+    script = w.script
+    script.parent.mkdir(parents=True)
+    text = hook.script_text(["true"], ["plugins"])
+    script.write_text(text)
+    fingerprint = re.search(r"^FINGERPRINT=(\S+)$", text, re.M).group(1).strip("'")
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(w.home),
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    proc = subprocess.run(["bash", str(script), "--record", fingerprint], cwd=str(w.repo), env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == (
+        "superheroes: dependency hook skipped: an input could not be read")
+    state = subprocess.run(["git", "-C", str(w.repo), "rev-parse", "--git-path", hook.HASH_NAME],
+                           capture_output=True, text=True, env=_GIT_ENV).stdout.strip()
+    assert not os.path.exists(os.path.join(str(w.repo), state))
+
+
+def test_a_registry_url_with_a_port_beside_a_scoped_package_is_not_a_url_credential(tmp_path):
+    # axis: user-info matching stays inside one shell word
+    w = _world(tmp_path, mode_registry.GLOBAL)
+    command = "npm install --registry https://registry.example.invalid:8443 @acme/widget"
+    done = _set(w, COMMANDS_SLUG, [command])
+    assert done["action"] in ("written", "noop"), done
+
+
+def test_enabling_the_hook_refuses_a_literal_credential_named_assignment_and_writes_nothing(tmp_path):
+    # axis: a credential-named NAME=value word in a stored command never reaches the committed hook.
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    got = core_md.write_project_config_item(
+        w.cwd, COMMANDS_SLUG, ["AWS_SECRET_ACCESS_KEY=abc123 npm ci"], root=w.root)
+    assert got["action"] in ("written", "noop"), got
+    refused = _set(w, HOOK_SLUG, True)
+    assert refused["action"] == "refused"
+    assert refused["reason"] == "setup-command-secret-shaped"
+    assert _raw(w, HOOK_SLUG) is None
+    assert not w.script.exists()
+    assert not w.settings.exists()
+
+
+def test_a_credential_named_assignment_of_a_bare_reference_is_accepted(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    got = core_md.write_project_config_item(
+        w.cwd, COMMANDS_SLUG, ["AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY npm ci"], root=w.root)
+    assert got["action"] in ("written", "noop"), got
+    ok = _set(w, HOOK_SLUG, True)
+    assert ok["action"] != "refused", ok
+    assert w.script.exists()
+
+
+def test_a_set_whose_inputs_another_set_overwrote_in_the_files_still_leaves_the_script_with_the_stored_inputs(
+        tmp_path, monkeypatch):
+    # A syncs ['uv.lock']; B stores and syncs ['requirements.txt'] before A's write; A then stores
+    # ['uv.lock'] -- the stored triple equals A's own, yet the script carries B's inputs
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    _set_ok(w, HOOK_SLUG, True)
+    real = core_md.write_project_config_item
+    landed = []
+
+    def racing(cwd, slug, value, root=None):
+        if slug == INPUTS_SLUG and not landed:
+            landed.append(True)
+            monkeypatch.setattr(core_md, "write_project_config_item", real)
+            assert PC.set_item(cwd, INPUTS_SLUG, ["requirements.txt"], root=root)["action"] == "written"
+            monkeypatch.setattr(core_md, "write_project_config_item", racing)
+        return real(cwd, slug, value, root=root)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", racing)
+    got = _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    monkeypatch.undo()
+    assert landed
+    assert _raw(w, INPUTS_SLUG) == ["uv.lock"]
+    assert w.script.read_text() == hook.script_text(["npm ci"], ["uv.lock"])
+    assert got["dependencyHookResynced"]["changed"]
+    _assert_files_match_stored(w)
