@@ -63,7 +63,7 @@ _STAMP_RE = re.compile(r"[A-Za-z0-9:._-]+")
 # name or a password with spaces); without a ':' a space ends the token, so `https://host user@x`
 # is not a URL credential
 _URL_USERINFO_RE = re.compile(
-    r"([A-Za-z][A-Za-z0-9+.-]*)://([^/@:\n]*:[^/@\n]*|[^\s/@:]*)@")
+    r"([A-Za-z][A-Za-z0-9+.-]*)://([^/@:\n]*:[^/\n]*|[^\s/@:]*)@")
 _URL_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
 _URL_HTTP_SCHEME_RE = re.compile(r"(?:.*\+)?https?", re.IGNORECASE)
 _URL_QUOTES_RE = re.compile(r"""\\?["']""")

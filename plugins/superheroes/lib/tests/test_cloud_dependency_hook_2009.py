@@ -996,14 +996,15 @@ def test_a_kill_after_the_file_sync_of_a_write_leaves_no_on_config_with_the_file
     _never_on_with_the_files_gone(w)
 
 
-@pytest.mark.parametrize("matcher", ["(?i)startup", "(?P<n>startup)", r"\Astartup\Z"])
+@pytest.mark.parametrize("matcher", ["(?i)startup", "(?P<n>startup)", r"\Astartup\Z", "start++up", "^startup$",
+                                     "(startup)", "start.*", "(?:startup|resume)"])
 def test_a_python_only_matcher_is_not_a_startup_group(matcher):
     # axis: Claude evaluates matchers as JavaScript regexes; Python-only syntax is unusable
     assert hook._group_starts({"matcher": matcher}) is False
 
 
-@pytest.mark.parametrize("matcher", ["startup", "start.*", "(?:startup|resume)", "(?=startup)startup"])
-def test_a_javascript_compatible_matcher_still_starts(matcher):
+@pytest.mark.parametrize("matcher", ["startup", "startup|resume", "resume|startup", "a_b-c|startup"])
+def test_a_plain_word_list_matcher_still_starts(matcher):
     assert hook._group_starts({"matcher": matcher}) is True
 
 

@@ -48,18 +48,42 @@ _STARTS_LINES = [
     "    m = e.get('matcher')",
     "    if m is None or m in ('', '*'):",
     "        return True",
-    "    try:",
-    # axis: Claude evaluates matchers as JavaScript regular expressions, so Python-only syntax
-    # (inline flags such as (?i), (?P<n>...), \\A, \\Z) is an unusable matcher, not a match
-    "        if not isinstance(m, str) or re.search(r'\\(\\?(?![:=!]|<[=!A-Za-z_])|\\\\[AZ]', m):",
-    "            return False",
-    "        return re.fullmatch(m, 'startup') is not None",
-    "    except Exception:",
+    # axis: Claude evaluates matchers as JavaScript regular expressions, and Python's regex
+    # dialect differs from that (`start++up` compiles here, not there), so only the plain form is
+    # trusted: a `|`-separated list of literal words, one of which is `startup`; anything with
+    # another metacharacter is treated as not covering startup
+    "    if not isinstance(m, str) or not re.fullmatch(r'[A-Za-z0-9_-]+(\\|[A-Za-z0-9_-]+)*', m):",
     "        return False",
+    "    return 'startup' in m.split('|')",
 ]
 _starts_scope = {"re": re}
 exec("\n".join(_STARTS_LINES), _starts_scope)
 _group_starts = _starts_scope["starts"]
+
+
+_CREDENTIAL_ENV_KEYS = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
+                        "AWS_SESSION_TOKEN"}
+_CREDENTIAL_ENV_SUFFIXES = ("_TOKEN", "_SECRET", "_PASSWORD", "_API_KEY", "_SECRET_KEY",
+                            "_ACCESS_KEY")
+_ENV_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+
+
+def _env_carries_credential(settings):
+    """True when the settings `env` block gives a credential-named key a populated value that is
+    not a bare `$NAME` / `${NAME}` reference (the content scan cannot know an opaque value)."""
+    env = settings.get("env") if isinstance(settings, dict) else None
+    if not isinstance(env, dict):
+        return False
+    for key, value in env.items():
+        name = str(key).upper()
+        if name not in _CREDENTIAL_ENV_KEYS and not name.endswith(_CREDENTIAL_ENV_SUFFIXES):
+            continue
+        if value is None or value == "":
+            continue
+        if isinstance(value, str) and _ENV_REFERENCE_RE.fullmatch(value.strip()):
+            continue
+        return True
+    return False
 
 
 def _skipped(reason):
@@ -349,7 +373,7 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     if write_settings is not None:
         from cloud_setup_text import _scan  # lazy: that module imports this one back
         text = json.dumps(write_settings, indent=2, ensure_ascii=False) + "\n"
-        if _scan(text):
+        if _scan(text) or _env_carries_credential(write_settings):
             # nothing is written, the script included: the owner is told to commit this file
             raise _Refused("settings-secret-shaped")
     if write_script is not None:

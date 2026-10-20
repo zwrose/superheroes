@@ -1,5 +1,6 @@
 """Enabling the hook refuses a settings file that already carries a credential."""
 import json
+import pytest
 import sys
 from pathlib import Path
 
@@ -46,3 +47,27 @@ def test_a_credential_in_settings_is_never_directed_to_commit_on_removal(tmp_pat
     assert world.settings.read_text() == before
     assert world.script.exists()
     assert secret not in json.dumps(result)
+
+
+@pytest.mark.parametrize("key", ["ANTHROPIC_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY"])
+def test_an_opaque_credential_env_value_in_settings_is_refused(tmp_path, key):
+    # axis: credential-named env keys are refused by name, since the content scan cannot know an opaque value.
+    world = _world(tmp_path, mode_registry.GLOBAL)
+    secret = "opaque-owner-credential-1234567890"
+    world.settings.parent.mkdir(parents=True, exist_ok=True)
+    world.settings.write_text(json.dumps({"env": {key: secret}}))
+    before = world.settings.read_text()
+    result = hook.sync(str(world.repo), ["npm ci"], [], True)
+    assert result == {"action": "refused", "reason": "settings-secret-shaped", "changed": []}
+    assert not world.script.exists()
+    assert world.settings.read_text() == before
+    assert secret not in json.dumps(result)
+
+
+def test_a_bare_reference_credential_env_value_is_allowed(tmp_path):
+    world = _world(tmp_path, mode_registry.GLOBAL)
+    world.settings.parent.mkdir(parents=True, exist_ok=True)
+    world.settings.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "${MY_TOKEN}", "X_API_KEY": ""}}))
+    result = hook.sync(str(world.repo), ["npm ci"], [], True)
+    assert result["action"] == "written", result
+    assert world.script.exists()
