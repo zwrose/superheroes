@@ -337,12 +337,32 @@ def test_a_detected_name_item_18_would_refuse_is_left_out_of_the_list(tmp_path):
     assert _raw(w, INPUTS_SLUG) == ["package-lock.json"]
 
 
+def test_a_fill_whose_read_back_does_not_match_reports_set_read_mismatch(tmp_path, monkeypatch):
+    # axis: a write that claims success without storing the list is reported, not trusted
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    real_write = core_md.write_project_config_item
+
+    def write(cwd, slug, value, **kw):
+        if slug == INPUTS_SLUG:
+            return dict(action="written")
+        return real_write(cwd, slug, value, **kw)
+
+    monkeypatch.setattr(core_md, "write_project_config_item", write)
+    done = _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert done["inputsFillFailed"] == "set-read-mismatch" == PC.REASON_SET_MISMATCH, done
+    assert "inputsFilled" not in done
+    monkeypatch.undo()
+    assert _raw(w, COMMANDS_SLUG) == ["npm ci"]
+    assert _raw(w, INPUTS_SLUG) is None
+
+
 # ---------------------------------------------------------------- the script checks its inputs
 
 
 def _run_setup(w, text, lock_text):
     """Runs the text in a stub clone (`work`, with a .git directory) holding the lockfile
-    `lock_text`, every tool stubbed; returns the setup log and the stamp path."""
+    `lock_text` (no lockfile when it is None), every tool stubbed; returns the setup log and the stamp path."""
     stub = w.tmp / "stubs"
     stub.mkdir()
     for name in ("git", "npm", "apt-get", "uv"):
@@ -350,7 +370,8 @@ def _run_setup(w, text, lock_text):
         (stub / name).chmod(0o755)
     work = w.tmp / "work"
     (work / ".git").mkdir(parents=True)
-    (work / "package-lock.json").write_text(lock_text)
+    if lock_text is not None:
+        (work / "package-lock.json").write_text(lock_text)
     env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
     subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60,
                    cwd=str(work))
@@ -372,16 +393,40 @@ def test_the_script_runs_nothing_and_withholds_the_stamp_when_an_input_differs(t
 
 
 def test_the_script_publishes_the_stamp_when_the_inputs_match(tmp_path):
+    # axis: the published stamp is the one that carries the input contents, not just any stamp
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w, text="v2\n")
     _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
-    log, work, stamp = _run_setup(w, _compose(w)["text"], "v2\n")
+    composed = _compose(w)
+    log, work, stamp = _run_setup(w, composed["text"], "v2\n")
     assert "differs" not in log and "setup command 1 ok" in log
     assert os.path.exists(stamp) and (work / "ran.txt").exists()
+    # the script writes the stamp followed by one newline (`printf '%s\n'`)
+    published = open(stamp).read()
+    assert published == composed["calibration"]["stamp"] + "\n"
+    published = published[:-1]
+    assert published == _stamp(w)
+    _lock(w, text="v3\n")
+    changed = _compose(w)["calibration"]["stamp"]
+    assert changed != published and changed == _stamp(w)
 
 
-def test_the_script_flags_an_input_missing_in_the_clone_and_one_present_when_expected_missing(
-        tmp_path):
+def test_the_script_flags_an_input_missing_in_the_clone_that_was_present_at_compose(tmp_path):
+    # axis: an input present when the text was composed and absent in the clone is caught
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w, text="v1\n")
+    _set_ok(w, COMMANDS_SLUG, ['echo ran >> "$PWD/ran.txt"'])
+    assert _raw(w, INPUTS_SLUG) == ["package-lock.json"]
+    log, work, stamp = _run_setup(w, _compose(w)["text"], None)
+    assert not (work / "package-lock.json").exists()
+    assert "setup input package-lock.json differs from the setup text" in log
+    assert "found missing" in log and "expected missing" not in log
+    assert "setup stamp withheld" in log and "setup command 1 ok" not in log
+    assert not os.path.exists(stamp) and not (work / "ran.txt").exists()
+
+
+def test_the_script_flags_an_input_present_in_the_clone_that_was_missing_at_compose(tmp_path):
+    # axis: an input missing when the text was composed and present in the clone is caught
     w = _world(tmp_path, mode_registry.IN_REPO)
     _set_ok(w, COMMANDS_SLUG, ["true"])
     _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
