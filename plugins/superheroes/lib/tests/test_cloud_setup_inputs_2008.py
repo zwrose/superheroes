@@ -28,7 +28,6 @@ import mode_registry  # noqa: E402
 import project_config as PC  # noqa: E402
 import store_core  # noqa: E402
 
-_GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 ORIGIN = "https://github.com/acme/corner-shop.git"
 SOURCE = "https://github.com/acme/superheroes.git"
 COMMIT = "0123456789abcdef" * 2 + "01234567"
@@ -49,7 +48,10 @@ class World:
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, env=_GIT_ENV)
+    # Built per call from the current (fixture-sanitized) environment, never a collection-time
+    # snapshot: an inherited GIT_DIR would otherwise override `git -C`.
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, env=env)
 
 
 def _world(tmp_path, mode):
@@ -521,3 +523,24 @@ def test_detect_inputs_missing_root_is_empty(tmp_path):
     assert CS.detect_inputs(str(tmp_path / "nope")) == []
     (tmp_path / "afile").write_text("x")
     assert CS.detect_inputs(str(tmp_path / "afile")) == []
+
+
+# ---------------------------------------------------------------- git environment isolation
+
+
+def test_git_helper_ignores_git_dir_inherited_at_import(tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "-C", str(other), "init", "-q"], check=True, capture_output=True)
+    before = (other / ".git" / "config").read_text()
+    import importlib.util
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    spec = importlib.util.spec_from_file_location("_inputs_2008_fresh", __file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)  # a fresh import snapshots the inherited GIT_DIR, as collection can
+    monkeypatch.delenv("GIT_DIR")  # the autouse fixture's isolation, applied after collection
+    work = tmp_path / "work"
+    work.mkdir()
+    w = fresh._world(work, mode_registry.GLOBAL)
+    assert (w.repo / ".git").is_dir()
+    assert (other / ".git" / "config").read_text() == before
