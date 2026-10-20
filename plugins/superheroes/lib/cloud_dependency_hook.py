@@ -372,8 +372,6 @@ def _offer(cwd, root):
     """The offer for the project at `cwd`, printed as one json line; 1 when there is none to make."""
     import project_config
     import store_core
-    from cloud_setup_text import detect_inputs
-
     commands_item = project_config.get_item(
         cwd, project_config.CLOUD_SETUP_COMMANDS_SLUG, root=root, persist_backfill=False)
     commands = commands_item.get("raw")
@@ -389,8 +387,10 @@ def _offer(cwd, root):
         except store_core.RepoRootUnavailable:
             return _offer_refusal("repo-root-unavailable", "The repository root cannot be found, "
                                   "so the files the setup depends on cannot be detected.")
-        inputs, source = detect_inputs(repo_root), "detected"
-    elif _valid_list(stored):
+        # axis: the offered list follows item 18's validator, as item 17's fill does
+        inputs, source = project_config._detected_inputs(repo_root), "detected"
+    elif _valid_list(stored) and project_config.validate_item_value(
+            project_config._item_by_slug(project_config.CLOUD_SETUP_INPUTS_SLUG), list(stored)) is None:
         inputs, source = list(stored), "stored"
     else:
         return _offer_refusal("setup-inputs-malformed", "The project's setup inputs (configure "

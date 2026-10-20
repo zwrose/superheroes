@@ -771,6 +771,26 @@ def test_offer_uses_the_stored_inputs_when_item_18_is_stored(tmp_path, capsys):
     assert got["message"] == hook.offer_message(["npm ci"], ["other.lock"])
 
 
+def test_offer_leaves_out_a_detected_name_item_18_would_refuse(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _lock(w, "requirements dev.txt", "x\n")
+    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["inputs"] == ["package-lock.json"] and got["inputsSource"] == "detected"
+
+
+def test_offer_refuses_stored_inputs_item_18_would_refuse(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    core_md.write_project_config_item(w.cwd, INPUTS_SLUG, ["/tmp/deps.lock"], root=w.root)
+    rc = hook.main(["offer", "--cwd", w.cwd, "--root", w.root])
+    captured = capsys.readouterr()
+    assert rc == 1 and captured.out == ""
+    assert json.loads(captured.err)["reason"] == "setup-inputs-malformed"
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_hook_on_a_changed_item_18_moves_the_stamp(tmp_path, mode):
     # axis: the input list and the hook flag stay in the stamp when the hook is on
