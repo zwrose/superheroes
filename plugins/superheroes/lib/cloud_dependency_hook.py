@@ -188,7 +188,23 @@ def script_text(commands, inputs):
 
 def _is_ours(hook):
     return (isinstance(hook, dict) and isinstance(hook.get("command"), str)
-            and SCRIPT_REL in hook["command"])
+            and _invokes_script(hook["command"]))
+
+
+def _invokes_script(command):
+    """True when `command` runs the managed script: the script path is the program, or the argument
+    of a bare bash/sh. A command that only mentions the path (an argument to another tool, a longer
+    filename such as `...sh.backup`) is not ours."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if tokens and os.path.basename(tokens[0]) in ("bash", "sh"):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    target = tokens[0].replace("${CLAUDE_PROJECT_DIR}", "$CLAUDE_PROJECT_DIR")
+    return target == SCRIPT_REL or target.endswith("/" + SCRIPT_REL)
 
 
 def _load_settings(path):

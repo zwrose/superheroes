@@ -1019,3 +1019,13 @@ def test_a_quoted_environment_reference_url_password_is_allowed(password):
 def test_a_quoted_literal_url_password_is_refused(password):
     cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
     assert [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]
+
+
+def test_only_invocations_of_the_managed_script_are_ours():
+    # axis: a command that merely mentions the script path is not the managed hook.
+    from cloud_dependency_hook import HOOK_COMMAND, SCRIPT_REL, _is_ours
+    assert _is_ours({"command": HOOK_COMMAND})
+    assert _is_ours({"command": "bash " + SCRIPT_REL})
+    assert not _is_ours({"command": "sha256sum " + SCRIPT_REL + ".backup"})
+    assert not _is_ours({"command": "cat " + SCRIPT_REL})
+    assert not _is_ours({"command": 'bash "$CLAUDE_PROJECT_DIR/' + SCRIPT_REL + '.backup"'})
