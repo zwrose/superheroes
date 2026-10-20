@@ -879,9 +879,20 @@ def _plan_dependency_hook(cwd, slug, value, facts):
     script = os.path.join(repo_root, *hook.SCRIPT_REL.split("/"))
     # axis: a project that never opted in has no script, so its settings file is never read
     if _hook_desired(new) or _hook_desired(old) or os.path.lexists(script):
+        # axis: a hook about to be written never carries a command the setup text would refuse — a stored command with a credential in it is not committed
+        if _hook_desired(new):
+            reason = _validate_command_list(new[0])
+            if reason is not None:
+                return {"refusal": {"action": "refused", "reason": reason}}
+        snap = hook.snapshot(repo_root)
         result = hook.sync(repo_root, *new)
         if result.get("action") == "refused":
-            return {"refusal": _hook_refusal(result.get("reason"))}
+            # axis: a refused sync that already changed files puts them back to the stored state
+            failed = hook.restore(repo_root, snap, result.get("changed") or [])
+            detail = result.get("reason")
+            if failed:
+                detail = "%s; not restored: %s" % (detail, ", ".join(failed))
+            return {"refusal": _hook_refusal(detail)}
         plan["hookResult"] = result
     return plan
 

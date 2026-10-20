@@ -118,6 +118,14 @@ def script_text(commands, inputs):
         "  exit 0",
         "fi",
         "",
+        "# The recorded success hash goes before any command runs, so a failed run leaves none and",
+        "# the next session runs the commands again, even if the inputs return to an earlier state.",
+        'rm -f "$STATE" 2>/dev/null',
+        'if [ -e "$STATE" ]; then',
+        '  echo "superheroes: dependency hook skipped: the previous record could not be cleared"',
+        "  exit 0",
+        "fi",
+        "",
         "n=0",
         "for cmd in %s; do" % quoted_commands,
         "  n=$((n + 1))",
@@ -291,6 +299,34 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     if not changed:
         return "noop"
     return "written" if desired else "removed"
+
+
+def snapshot(repo_root):
+    """The hook files as they are now: {repo-relative path: (bytes, mode) or None when absent}."""
+    snap = {}
+    for rel in (SCRIPT_REL, SETTINGS_REL):
+        path = os.path.join(repo_root, *rel.split("/"))
+        data = _read_bytes(path)
+        snap[rel] = None if data is None else (data, _mode_of(path, 0o644))
+    return snap
+
+
+def restore(repo_root, snap, paths):
+    """Puts each of `paths` back to its `snap` state. Returns the paths that could not be put
+    back, sorted."""
+    failed = []
+    for rel in paths:
+        path = os.path.join(repo_root, *rel.split("/"))
+        state = snap.get(rel)
+        try:
+            if state is None:
+                if os.path.lexists(path):
+                    os.remove(path)
+            else:
+                _atomic_write(path, state[0], state[1])
+        except OSError:
+            failed.append(rel)
+    return sorted(failed)
 
 
 def sync(repo_root, commands, inputs, enabled):

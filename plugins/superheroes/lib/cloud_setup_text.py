@@ -43,6 +43,7 @@ SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
 SETUP_COMMANDS_STAMP_KEY = "setup-commands"
 SETUP_INPUTS_STAMP_KEY = "setup-inputs"
+SETUP_HOOK_STAMP_KEY = "setup-dependency-hook"
 SETUP_INPUT_STAMP_PREFIX = "setup-input/"
 SETUP_INPUT_MISSING_STAMP_PREFIX = "setup-input-missing/"
 REQUIREMENTS_PATTERN = "requirements*.txt"
@@ -446,8 +447,15 @@ def _view_for(cwd, files, commands, inputs, hook_on):
     dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
     files needs no new paste)."""
     inputs_view = None
+    # axis: with commands and the hook on, the input list (when stored) and the hook flag stay in
+    # the stamp, because they change the generated text; only the files' contents leave it
+    if commands and hook_on:
+        inputs_view = {SETUP_HOOK_STAMP_KEY: b"on\n"}
+        if inputs is not None:
+            inputs_view[SETUP_INPUTS_STAMP_KEY] = (
+                json.dumps(list(inputs), ensure_ascii=False) + "\n").encode("utf-8")
     # axis: the input files join the stamp only with commands, stored inputs and no hook
-    if commands and inputs is not None and not hook_on:
+    elif commands and inputs is not None:
         try:
             repo_root = store_core.repo_root(cwd)
         except store_core.RepoRootUnavailable:

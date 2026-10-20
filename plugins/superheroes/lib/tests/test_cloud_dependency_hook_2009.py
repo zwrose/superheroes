@@ -175,7 +175,8 @@ def test_hook_on_an_input_change_leaves_the_stamp_unchanged(tmp_path, mode):
     assert _stamp(w) == before
     assert _compose(w)["text"] == text_before
     assert _calibration_condition(w) is True
-    assert not any(k.startswith("setup-input") for k in CS.stamped_files(w.cwd, w.root))
+    assert not any(k.startswith(("setup-input/", "setup-input-missing/"))
+                   for k in CS.stamped_files(w.cwd, w.root))
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -567,3 +568,66 @@ def test_the_record_step_is_skipped_when_a_command_fails(tmp_path):
     assert proc.returncode != 0
     assert "setup command 1 FAILED" in proc.stdout
     assert "dependency hook" not in proc.stdout
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_hook_on_a_changed_item_18_moves_the_stamp(tmp_path, mode):
+    # axis: the input list and the hook flag stay in the stamp when the hook is on
+    w = _world(tmp_path, mode)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["package-lock.json"])
+    _set_ok(w, HOOK_SLUG, True)
+    before = _stamp(w)
+    _set_ok(w, INPUTS_SLUG, ["uv.lock"])
+    assert _stamp(w) != before
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_enabling_the_hook_without_a_stored_item_18_moves_the_stamp(tmp_path, mode):
+    w = _world(tmp_path, mode)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    off = _stamp(w)
+    _set_ok(w, HOOK_SLUG, True)
+    assert _stamp(w) != off
+
+
+def test_enabling_the_hook_refuses_a_stored_secret_shaped_command_and_writes_nothing(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    # a hand-edit of the local calibration, past the item 17 validator
+    facts = core_md.read(w.cwd, w.root)
+    assert facts is not None
+    got = core_md.write_project_config_item(
+        w.cwd, COMMANDS_SLUG, ["OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789 npm ci"],
+        root=w.root)
+    assert got["action"] in ("written", "noop"), got
+    refused = _set(w, HOOK_SLUG, True)
+    assert refused["action"] == "refused"
+    assert refused["reason"] == "setup-command-secret-shaped"
+    assert _raw(w, HOOK_SLUG) is None
+    assert not w.script.exists()
+    assert not w.settings.exists()
+
+
+def test_a_refused_sync_puts_back_what_it_already_changed(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+    script_before = w.script.read_bytes()
+    settings_before = w.settings.read_bytes()
+    real_remove = os.remove
+
+    def remove(path, *a, **kw):
+        if str(path) == str(w.script):
+            raise PermissionError("denied")
+        return real_remove(path, *a, **kw)
+
+    monkeypatch.setattr(os, "remove", remove)
+    got = _set(w, HOOK_SLUG, False)
+    monkeypatch.undo()
+    assert got["action"] == "refused"
+    assert got["reason"] == "dependency-hook-unwritable"
+    assert _raw(w, HOOK_SLUG) is True
+    assert w.script.read_bytes() == script_before
+    assert w.settings.read_bytes() == settings_before
