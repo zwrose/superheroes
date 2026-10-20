@@ -955,6 +955,15 @@ def _finish_dependency_hook(cwd, root, plan, write_result):
     return write_result
 
 
+def _with_dependency_hook(cwd, root, plan, result):
+    """Attaches the sync's result to a read-back failure and runs the convergence step, keeping the
+    synced files."""
+    if plan is None or plan.get("hookResult") is None:
+        return result
+    result = {**result, "dependencyHook": plan["hookResult"]}
+    return _converge_dependency_hook(cwd, root, plan, result)
+
+
 def _converge_dependency_hook(cwd, root, plan, write_result):
     """Brings the hook files to the stored items 17, 18 and 19 when a set that landed between this
     set's sync and its write left them differing from the triple the sync used (the writers each
@@ -1065,19 +1074,18 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         rolled_back = _roll_back_dependency_hook(plan)
         return {**write_result, **rolled_back}
 
+    # axis: the write went through here, so a failed or mismatched read-back keeps the synced
+    # files (they match what was written) and converges them; only an uncommitted write rolls back
     reread = get_item(cwd, slug, root=root)
     if reread.get("action") == "refused":
-        rolled_back = _roll_back_dependency_hook(plan)
-        return {**reread, **rolled_back}
+        return _with_dependency_hook(cwd, root, plan, dict(reread))
     if not _values_equal(reread.get("raw"), value):
-        rolled_back = _roll_back_dependency_hook(plan)
-        return {
+        return _with_dependency_hook(cwd, root, plan, {
             "action": "refused",
             "reason": REASON_SET_MISMATCH,
             "expected": value,
             "observed": reread.get("raw"),
-            **rolled_back,
-        }
+        })
     if plan is not None:
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
         return _finish_dependency_hook(cwd, root, plan, write_result)

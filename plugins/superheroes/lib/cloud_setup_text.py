@@ -581,7 +581,8 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=No
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
     ran and succeeded. With a `record` fingerprint (the dependency hook is on), a finished run also
-    tells the clone's hook script, so the hook starts from this run."""
+    tells the clone's hook script, so the hook starts from this run; a missing script or a failed
+    record withholds the stamp and fails the setup, because the stamp stops covering the inputs."""
     return [
         "",
         "# Run the project's own setup commands (configure item 17), one at a time, in the order "
@@ -612,14 +613,15 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=No
         "    fi",
         "  done",
         *([
-            # axis: the hook is told of the run only when every command succeeded; none of this
-            # changes whether the setup finished
+            # axis: the hook is told of the run only when every command succeeded; with the hook
+            # on the stamp no longer covers the inputs, so a missing script or a failed record
+            # means the setup did not finish (no stamp, non-zero exit)
             '  if [ "$ok" = 1 ]; then',
             '    if [ -f "$DIR/%s" ]; then' % cloud_dependency_hook.SCRIPT_REL,
             '      if (cd "$DIR" && bash %s --record %s); then echo "dependency hook recorded"'
             % (cloud_dependency_hook.SCRIPT_REL, record),
-            '      else echo "dependency hook record FAILED"; fi',
-            '    else echo "dependency hook not in the clone: commit and push it"; fi',
+            '      else echo "dependency hook record FAILED"; ok=0; fi',
+            '    else echo "dependency hook not in the clone: commit and push it"; ok=0; fi',
             "  fi",
         ] if record is not None else []),
         *([

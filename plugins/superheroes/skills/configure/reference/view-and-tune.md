@@ -214,7 +214,9 @@ action that owns it, leaving the rest of the calibration untouched:
   `stackingTool` write above: only `written` or `noop` means it was saved. A refusal
   `dependency-hook-unwritable` carries a `detail` (`repo-root-unavailable`, `settings-unreadable`,
   `hook-files-unwritable` or `invalid-arguments`), and nothing is stored. Turning item 19 on or off changes the stamp, so the owner writes new setup
-  text (set-up § 6, "Setup text") and pastes it.
+  text (set-up § 6, "Setup text") and pastes it. Commit and push the hook files before pasting the
+  setup text: with no script in the clone, the setup text withholds its stamp and the setup does
+  not finish.
 
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a

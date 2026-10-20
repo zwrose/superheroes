@@ -9,6 +9,7 @@ environment the test builds itself.
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -443,6 +444,19 @@ def test_a_failing_config_write_after_a_successful_enable_sync_rolls_the_files_b
     assert _raw(w, HOOK_SLUG) is None
 
 
+def test_a_failed_readback_after_a_held_write_keeps_the_synced_files(tmp_path, monkeypatch):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    monkeypatch.setattr(PC, "get_item", lambda *a, **k: {"action": "ok", "raw": None})
+    got = _set(w, HOOK_SLUG, True)
+    assert got["action"] == "refused" and got["reason"] == PC.REASON_SET_MISMATCH
+    assert got["dependencyHook"]["changed"]
+    assert w.script.exists() and w.settings.exists()
+    monkeypatch.undo()
+    assert _raw(w, HOOK_SLUG) is True
+    _assert_files_match_stored(w)
+
+
 def test_a_failing_fill_write_reports_inputs_fill_failed_and_the_files_match_what_is_stored(
         tmp_path, monkeypatch):
     w = _world(tmp_path, mode_registry.IN_REPO)
@@ -509,7 +523,10 @@ def _setup_block(w, text):
     lines = text.splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("# Run the project's own"))
     end = next(i for i, ln in enumerate(lines) if ln == "setup_rc=$?")
-    return "\n".join(['LOG="%s"' % (w.tmp / "log.txt"), 'CLONE="repo"', 'wrote=0',
+    body = "\n".join(lines[start:end + 1])
+    count = re.search(r'"\$wrote" = (\d+)', body)
+    return "\n".join(['LOG="%s"' % (w.tmp / "log.txt"), 'CLONE="repo"',
+                      'wrote=%s' % (count.group(1) if count else "0"),
                       'DEST="%s"' % (w.tmp / "dest"), 'mkdir -p "$DEST"', *lines[start:end + 1],
                       'cat "$LOG"; exit "$setup_rc"'])
 
@@ -521,7 +538,7 @@ def _run_block(w, block):
                           text=True, timeout=60)
 
 
-def test_the_record_step_runs_the_clones_script_and_changes_no_status(tmp_path):
+def test_the_record_step_runs_the_clones_script_and_publishes_the_stamp(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
     _set_ok(w, COMMANDS_SLUG, ["true"])
@@ -532,17 +549,27 @@ def test_the_record_step_runs_the_clones_script_and_changes_no_status(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "dependency hook recorded" in proc.stdout
     assert "record FAILED" not in proc.stdout
+    assert os.path.isfile(str(w.tmp / "dest" / CS.STAMP_FILE))
     state = subprocess.run(["git", "-C", str(w.repo), "rev-parse", "--git-path", hook.HASH_NAME],
                            capture_output=True, text=True, env=_GIT_ENV).stdout.strip()
     assert os.path.isfile(os.path.join(str(w.repo), state))
-    # the clone does not hold it: the owner is told, and the setup still finishes
+
+
+def test_a_missing_hook_script_withholds_the_stamp_and_fails_the_setup(tmp_path):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["true"])
+    _set_ok(w, HOOK_SLUG, True)
+    block = _setup_block(w, _compose(w)["text"])
     os.remove(w.script)
     proc = _run_block(w, block)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode != 0
     assert "dependency hook not in the clone: commit and push it" in proc.stdout
+    assert "setup stamp withheld" in proc.stdout
+    assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
 
 
-def test_the_record_step_logs_a_failure_when_the_script_declines_and_still_finishes(tmp_path):
+def test_the_record_step_failure_withholds_the_stamp_and_fails_the_setup(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     _lock(w)
     _set_ok(w, COMMANDS_SLUG, ["true"])
@@ -551,8 +578,9 @@ def test_the_record_step_logs_a_failure_when_the_script_declines_and_still_finis
     # the committed script lists different inputs from the ones the text was written for
     assert hook.sync(str(w.repo), ["true"], ["uv.lock"], True)["action"] == "written"
     proc = _run_block(w, block)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode != 0
     assert "dependency hook record FAILED" in proc.stdout
+    assert not os.path.exists(str(w.tmp / "dest" / CS.STAMP_FILE))
     assert "dependency hook recorded" not in proc.stdout
     state = subprocess.run(["git", "-C", str(w.repo), "rev-parse", "--git-path", hook.HASH_NAME],
                            capture_output=True, text=True, env=_GIT_ENV).stdout.strip()
