@@ -2,7 +2,24 @@
 
 Invariant: the grant is exactly one extra directory, the realpath of a review landing slot
 (`<session>/round-<N>/landing/<phase>`) that overlaps no deny entry; anything else refuses at open
-with nothing opened. A run opened without the flag builds today's argv and settings."""
+with nothing opened. A run opened without the flag builds today's argv and settings.
+
+Detector axes (bite-proof):
+- test_argv_carries_add_dir_* — mapping: the landing dir reaches --add-dir and allowWrite
+- test_argv_without_landing_dir_* — preservation: no landing dir leaves argv and settings unchanged
+- test_open_refuses_invalid_landing_dir — refusal: each invalid spelling or target opens nothing
+- test_open_accepts_symlink_* — mapping: a symlinked landing dir is granted and journaled by realpath
+- test_open_refuses_landing_dir_overlapping_the_run_dir — deny wins: the run dir is never granted
+- test_open_refuses_landing_dir_only_overlapping_a_symlinked_deny_entry — deny wins: a deny entry
+  met only by realpath still refuses
+- test_malformed_journaled_landing_dir_* — journal reuse: a malformed journaled grant refuses
+- test_no_flag_opens_* — preservation: no flag journals no landingDir and passes no --add-dir
+- test_continuation_* — journal reuse: a continuation holds the journaled grant or refuses mismatch
+- test_non_claude_engine_* — preservation: a non-claude engine ignores the flag
+- test_cli_registers_landing_dir_flag — mapping: the CLI parses --landing-dir
+- test_fixer_writes_* / test_without_the_grant_* — end to end: the grant alone lets the fixer's
+  payload land and ingest
+"""
 import json
 import os
 import shutil
@@ -119,8 +136,12 @@ def _refuse_rows(tmp_path):
     sd, landing = _landing(tmp_path)
     rows = {}
     rows["E1-relative"] = ("round-1/landing/dispatch-fixer", INVALID)
-    rows["E2-glob-raw"] = (os.path.join(str(tmp_path), "se*ssion", "round-1", "landing", PHASE),
-                           INVALID)
+    # a glob-spelled symlink to the valid landing slot: only the raw spelling is wrong
+    globbed = tmp_path / "se*ssion"
+    globbed.symlink_to(sd)
+    raw_glob = os.path.join(str(globbed), "round-1", "landing", PHASE)
+    assert os.path.realpath(raw_glob) == os.path.realpath(landing)
+    rows["E2-glob-raw"] = (raw_glob, INVALID)
     star = tmp_path / "s[1]"
     (star / "round-1" / "landing" / PHASE).mkdir(parents=True)
     link = tmp_path / "globlink"
