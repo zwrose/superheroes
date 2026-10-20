@@ -97,15 +97,42 @@ def _hook_commands(settings, blank=False):
     return found
 
 
+def _permission_commands(settings, blank=False):
+    """The command inside each `Bash(<command>)` rule of `permissions.allow|deny|ask`, with a
+    trailing `:*` or `*` pattern suffix dropped; with `blank`, those rule strings are replaced by
+    empty strings in place."""
+    found = []
+    perms = settings.get("permissions") if isinstance(settings, dict) else None
+    if not isinstance(perms, dict):
+        return found
+    for key in ("allow", "deny", "ask"):
+        rules = perms.get(key)
+        if not isinstance(rules, list):
+            continue
+        for i, rule in enumerate(rules):
+            if isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")"):
+                command = rule[len("Bash("):-1]
+                for suffix in (":*", "*"):
+                    if command.endswith(suffix):
+                        command = command[:-len(suffix)]
+                        break
+                found.append(command)
+                if blank:
+                    rules[i] = ""
+    return found
+
+
 def _settings_secret_shaped(settings, scan):
     """True when the settings about to be written carry a credential: each hook command is read as
     a shell command (the way stored setup commands are, so `NAME=$NAME npm ci` passes), and the
     rest of the document, with those commands blanked, is read in document mode."""
     import copy
-    if any(scan(command, False) for command in _hook_commands(settings)):
+    commands = _hook_commands(settings) + _permission_commands(settings)
+    if any(scan(command, False) for command in commands):
         return True
     rest = copy.deepcopy(settings)
     _hook_commands(rest, blank=True)
+    _permission_commands(rest, blank=True)
     text = json.dumps(rest, indent=2, ensure_ascii=False) + "\n"
     return bool(scan(text, True)) or _env_carries_credential(settings)
 
