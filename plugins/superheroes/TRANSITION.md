@@ -16,6 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **Before switching.** **Finish every `dispatch-write` run in flight.** A write run opened before the upgrade and admitted after it forfeits `native-schema-unreadable`, because the declared write schema gained `refusals`. See [Orders: a refused or denied command is a stop](#orders-a-refused-or-denied-command-is-a-stop).
 - **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
@@ -28,6 +29,15 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
 - **After switching.** **Nothing is owed.** A launch whose premise adopts a branch (`adoptsBranch`, `adoptsHead`) now refuses before launch when the adopted head does not descend from `baseCommit`; bring the adopted branch current with its base and launch again. See [Launcher: an adoption whose head is not on its base is refused before launch](#launcher-an-adoption-whose-head-is-not-on-its-base-is-refused-before-launch).
 - **After switching.** **Nothing is owed.** A review orchestrator records its rulings on a round's findings before the `next` call that emits the fixer order. See [Review: rulings land before the fixer order](#review-rulings-land-before-the-fixer-order).
+
+### Orders: a refused or denied command is a stop
+
+- A command that a permission denial, a hook refusal or a sandbox refusal stopped is a stop for the agent that met it, and the agent reports it instead of retrying it in another form. The rule and the shape of a refusals entry have one home, `lib/command_refusals.py`; no order keeps a copy.
+- Four orders carry the rule: the fixer order (both branches), every `dispatch-write` prompt, the native preamble, and `agents/implementer.md`.
+- Four result channels accept a `refusals` list and refuse a malformed one: the host-seat fixer payload (optional), the native write result schema (required, may be empty), the foreground report grade, and the native `result.json` (optional). On `dispatch-write` a blank string forfeits `native-result-refusals-invalid`, and a shape or enum fault forfeits `native-result-schema-invalid`. A valid list rides on the terminal `dispatch-write` result and on every native `close` result, forfeits included.
+- Refusals are shown in two places: the review record's `commandRefusals` (each entry tagged with its round, with a "Refusals met" line in the summary; absent when there are none) and a refusals column in the build record's dispatch provenance. `commandRefusals` is separate from the record's `refused`, which lists findings the loop did not take in.
+- At vet, the advisor reads each refusal and names as a finding any refusal followed by the same act in another form. The vet receipt's triggered-fields table has the row.
+- The worktree guard was not taught more spellings of a delete. A list of spellings never closes, so the stop rule is carried by the orders instead.
 
 ### Review: rulings land before the fixer order
 

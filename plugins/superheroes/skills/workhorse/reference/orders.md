@@ -70,6 +70,12 @@ These obligations attach to the order on your side, when you write it.
   the implementer stops and reports it under the per-order test-command budget rule in
   `agents/implementer.md`. An order that names a long suite tends to forfeit after it has already
   landed good work.
+- **The orders that carry the stop rule for refused or denied commands never restate it.** The
+  fixer order, the `dispatch-write` runner, the native preamble and the implementer template carry
+  it, and its home is `lib/command_refusals.py`. An order never asks for what that rule forbids.
+  When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
+  so as its own instruction and names the refusal it answers. The refusals each dispatch reports go
+  into the build record's dispatch provenance (`handback.md` § The build record).
 - **An order to an external engine carries a no-install, no-network block and a provenance-accuracy
   block.** Every order to codex or cursor says: install nothing (no npm, pip, brew or npx, global or
   local) and reach no network. It also says: report only what the engine itself did, and never

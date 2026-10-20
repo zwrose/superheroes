@@ -440,7 +440,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
 > returns `unreadable`. A timed-out **reviewer** then takes the existing re-run-on-the-host-model path;
 > a timed-out **fixer** commits no external write and the fix falls open to the host model. A hang becomes a
-> bounded cost, never a stuck loop.
+> bounded cost, never a stuck loop. The orchestrator carries an engine fixer's reported `refusals` into the
+> `dispatch-fixer` submit, and never drops or rewrites them.
 >
 > **Settled dispatch contract.** The reconciliation between this skill's dispatch
 > behaviour and the builder's native-shape rule is **closed** — not an open migration:
