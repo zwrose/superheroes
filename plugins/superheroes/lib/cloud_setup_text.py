@@ -551,7 +551,17 @@ def _input_check_lines(expected):
         return []
     out = [
         "  check_input() {",
-        '    if [ ! -e "$DIR/$1" ] && [ ! -L "$DIR/$1" ]; then got=missing',
+        # axis: only an absent component is missing (the Python reader's rule: not-found or
+        # not-a-directory); a symlink that does not resolve, or a directory that cannot be
+        # searched, is unreadable and never matches the expected `missing`
+        '    got=""; probe="$DIR"; IFS=/ read -r -a parts <<< "$1"',
+        '    for part in "${parts[@]}"; do',
+        '      probe="$probe/$part"',
+        '      if [ -L "$probe" ] && [ ! -e "$probe" ]; then got=unreadable; break',
+        '      elif [ ! -e "$probe" ]; then got=missing; break; fi',
+        '      if [ -d "$probe" ] && [ ! -x "$probe" ]; then got=unreadable; break; fi',
+        "    done",
+        '    if [ -n "$got" ]; then :',
         '    elif [ -f "$DIR/$1" ]; then',
         '      got=$( (sha256sum "$DIR/$1" || shasum -a 256 "$DIR/$1") 2>/dev/null | cut -d" " -f1)',
         "    else got=unreadable; fi",
