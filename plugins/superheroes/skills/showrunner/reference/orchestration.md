@@ -411,7 +411,7 @@ report one that is not confirmed as the cleanup's steps say.
 ## Adoption mechanics
 
 The recovery rules live in `rubric/launch-doctrine.md` § Recovery, and the charter keeps the
-advisor's calls. Three of those calls have mechanics beyond the charter:
+advisor's calls. Four of those calls have mechanics beyond the charter:
 
 Follow the doctrine rather than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
 
@@ -447,3 +447,13 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   `cloud_recover.py relaunch-refusal`, then launch its premise with `launcher.py launch --place cloud`.
   The version the cloud reported stands as the cloud's, so the build runs on the owner's machine
   and the launch report names both versions.
+- **Adopt a layer that is behind its base.** Bring the adopted branch current with its base
+  first: merge the base in and push, so the premise keeps its base (the usual route, standing
+  craft). If that is not possible for an unstacked or bottom-layer adoption, set the premise's
+  `baseCommit` to the adopted head and launch with `--repo-root` set to a worktree on the adopted
+  branch at that head, with the ledger root from the environment
+  (`SUPERHEROES_LAUNCH_LEDGER_ROOT`). A layer above the bottom keeps the layer below's head as its
+  base. The launcher refuses an `adoptsHead` that does not descend from `baseCommit`, or whose
+  ancestry it cannot decide, with `premise-adopts-head-not-on-base` before anything is spent, and
+  its `remedy` names the fix; the cloud intake's `adopted-head-not-on-base` stays as the second
+  line.

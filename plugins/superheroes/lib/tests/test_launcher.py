@@ -7991,21 +7991,24 @@ def test_cli_canary_lane_unknown(tmp_path, monkeypatch):
 # --- stack gate: adoption of an occupied layer position (#1486) --------------
 
 
-def _adoption_members(head, occupant_number=4242, occupant_base="branch"):
+def _adoption_members(head, occupant_number=4242, occupant_base="branch", occupant_head="a" * 40):
     # The layer below is queried as headRefName "branch" (see _membership_ok); the occupant
     # at position 2 sits on that branch unless a test says otherwise.
     return [
         {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "branch", "baseRefName": "main"},
-        {"position": 2, "number": occupant_number, "headRefOid": "a" * 40, "headRefName": "b2", "baseRefName": occupant_base},
+        {"position": 2, "number": occupant_number, "headRefOid": occupant_head, "headRefName": "b2", "baseRefName": occupant_base},
     ]
 
 
-def _launch_adoption(tmp_path, monkeypatch, members, **premise_overrides):
+def _launch_adoption(tmp_path, monkeypatch, members, adopts_the_base_head=False, **premise_overrides):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     head = _head_sha(repo)
     members = members(head)
+    if adopts_the_base_head:
+        # a real adopted head that descends from the base: the base commit itself
+        premise_overrides["adoptsHead"] = head
 
     def reader(**kwargs):
         return _membership_ok(1, head, members=members)
@@ -9368,7 +9371,7 @@ def test_stack_gate_adoption_pair_off_the_occupant_refuses(tmp_path, monkeypatch
 def test_stack_gate_adoption_pair_matching_the_occupant_passes(tmp_path, monkeypatch):
   # axis: the adoption pair equal to the occupant's branch and head passes the gate
     _repo, result = _launch_adoption(
-        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=4242,
-        adoptsBranch="b2", adoptsHead="a" * 40,
+        tmp_path, monkeypatch, lambda head: _adoption_members(head, occupant_head=head),
+        adopts_the_base_head=True, adopts=4242, adoptsBranch="b2",
     )
     assert result["ok"] is True
