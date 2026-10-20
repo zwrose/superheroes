@@ -1446,6 +1446,8 @@ def test_literal_credential_elsewhere_in_the_placed_core_is_still_refused(tmp_pa
     "pip install git+https://0123456789abcdef@host.example.invalid/x.git",
     "redis-cli -u redis://:fixture-password-1234@cache.example.invalid PING",
     "curl https://user:fixture-password@host.example.invalid/",
+    "git clone https://TOKEN:@host.example.invalid/x.git",
+    'curl "https://u:p@host.example.invalid/"',
 ])
 def test_scan_refuses_url_credential_forms(text):
     assert CS._scan(text) is not None
@@ -1455,6 +1457,8 @@ def test_scan_refuses_url_credential_forms(text):
     "pip install --index-url https://$TOKEN@packages.example.invalid/simple demo",
     "pip install --index-url https://${TOKEN}@packages.example.invalid/simple demo",
     "curl https://user:$TOKEN@host.example.invalid/",
+    "curl https://$U:$P@host.example.invalid/",
+    "git clone ssh://git@host.example.invalid/x.git",
     "git clone ssh://git@github.com/x/y.git",
     "pip install git+ssh://git@host.example.invalid/x.git",
     "git clone git@github.com:x/y.git",

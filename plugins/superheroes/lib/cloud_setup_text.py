@@ -59,6 +59,39 @@ _SOURCE_RE = re.compile(r"https://[A-Za-z0-9][A-Za-z0-9._~:/-]*")
 _PATH_RE = re.compile(r"[A-Za-z0-9._/-]+")
 _STAMP_RE = re.compile(r"[A-Za-z0-9:._-]+")
 
+_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*)://([^\s/@]*)@")
+_URL_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+_URL_HTTP_SCHEME_RE = re.compile(r"(?:.*\+)?https?", re.IGNORECASE)
+_URL_QUOTES_RE = re.compile(r"""\\?["']""")
+
+
+class _UrlCredential:
+    """Pattern-like object (`.search(text)`) for a literal credential in `scheme://userinfo@host`.
+    Each user-info is split on its first ':'; with a ':' it is refused unless the password part is
+    exactly a bare `$NAME` or `${NAME}` (an empty or literal password is refused; the user part may
+    be literal beside a reference password); without one it is refused unless it is a bare
+    reference. A user-info with no ':' on a scheme that is not http/https (or a `+https` variant) is a user
+    name and passes (`ssh://git@host`). Shell quotes and JSON escapes are stripped before the
+    parse, so quoting a part cannot hide it."""
+
+    @staticmethod
+    def _refuses(text):
+        for match in _URL_USERINFO_RE.finditer(text):
+            scheme, userinfo = match.group(1), match.group(2)
+            if not userinfo:
+                continue
+            user, colon, password = userinfo.partition(":")
+            if colon:
+                if not _URL_REFERENCE_RE.fullmatch(password):
+                    return True
+            elif not _URL_REFERENCE_RE.fullmatch(user) and _URL_HTTP_SCHEME_RE.fullmatch(scheme):
+                return True
+        return False
+
+    def search(self, text):
+        return self._refuses(text) or self._refuses(_URL_QUOTES_RE.sub("", text))
+
+
 # Axis: each entry bites on one secret-shaped form appearing anywhere in the final text.
 _SECRET_SHAPES = (
     ("signed token", re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
@@ -86,17 +119,7 @@ _SECRET_SHAPES = (
         r"""|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')(?=$|[\s"',;}\\&|]))"""
         r"""(?:"[^"\s]|'[^'\s]|[^\s"',;}])""" % re.escape(cloud_pass.PASS_ENV),
         re.IGNORECASE)),
-    ("url credential", re.compile(
-        # (1) scheme://<user or empty>:password@host, any scheme; (2) for http/https (and
-        # +-prefixed variants such as git+https) any literal user-info, https://token@host.
-        # A secret that is only a bare environment reference ($NAME or ${NAME}) passes;
-        # user-only forms on other schemes (ssh://git@host) pass.
-        r"""(?<![A-Za-z0-9+.-])(?:"""
-        r"""[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'\\]*:"""
-        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})@)[^\s/@"'\\]+@"""
-        r"""|(?:[A-Za-z][A-Za-z0-9.-]*\+)*https?://"""
-        r"""(?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})@)[^\s:/@"'\\]+@)""",
-        re.IGNORECASE)),
+    ("url credential", _UrlCredential()),
     ("bearer credential", re.compile(
         # a token that is only a bare environment reference ($NAME or ${NAME}) passes
         r"""Bearer (?!\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?=$|[\s"'\\;,}&|]))"""
