@@ -59,11 +59,15 @@ _SOURCE_RE = re.compile(r"https://[A-Za-z0-9][A-Za-z0-9._~:/-]*")
 _PATH_RE = re.compile(r"[A-Za-z0-9._/-]+")
 _STAMP_RE = re.compile(r"[A-Za-z0-9:._-]+")
 
-# white space is part of the user-info when a ':' follows it (a shell-quoted URL can carry a user
-# name or a password with spaces); without a ':' a space ends the token, so `https://host user@x`
-# is not a URL credential
+# the user-info runs to the last '@' inside one run of characters free of white space, '/', '?'
+# and '#' after the '//'; it never crosses white space, so `--registry https://host:8443 @scope/pkg`
+# (a URL followed by a separate argument) is not read as `host:8443 @`. The one exception is a word
+# that IS the URL (the scheme starts the shell word, as a quoted URL does once split): there white
+# space is part of a user name or password, and the user-info still stops at '/', '?' and '#'
 _URL_USERINFO_RE = re.compile(
-    r"([A-Za-z][A-Za-z0-9+.-]*)://([^/@:\n]*:[^/\n]*|[^\s/@:]*)@")
+    r"([A-Za-z][A-Za-z0-9+.-]*)://([^\s/?#@:]*:[^\s/?#]*|[^\s/?#@:]*)@")
+_URL_WORD_USERINFO_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9+.-]*)://([^/?#@:\n]*:[^/?#\n]*|[^\s/?#@:]*)@")
 _URL_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
 _URL_HTTP_SCHEME_RE = re.compile(r"(?:.*\+)?https?", re.IGNORECASE)
 _URL_QUOTES_RE = re.compile(r"""\\?["']""")
@@ -93,7 +97,11 @@ class _UrlCredential:
 
     @staticmethod
     def _refuses(text):
-        for match in _URL_USERINFO_RE.finditer(text):
+        matches = list(_URL_USERINFO_RE.finditer(text))
+        whole = _URL_WORD_USERINFO_RE.match(text)
+        if whole:
+            matches.append(whole)
+        for match in matches:
             scheme, userinfo = match.group(1), match.group(2)
             if not userinfo:
                 continue
