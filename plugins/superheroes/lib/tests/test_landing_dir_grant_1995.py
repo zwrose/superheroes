@@ -190,17 +190,18 @@ def test_open_accepts_symlink_whose_target_has_the_layout_and_journals_realpath(
 def test_open_refuses_landing_dir_overlapping_the_run_dir(tmp_path, monkeypatch):
     # equal to the run dir
     sd, landing = _landing(tmp_path)
-    _wt, _rd, res, fake = _open(tmp_path, monkeypatch, run_dir=landing, landing_dir=landing)
+    wt, _rd, res, fake = _open(tmp_path, monkeypatch, run_dir=landing, landing_dir=landing)
     _assert_refused_unopened(res, fake, landing, DENIED)
     # inside the run dir
     inner = os.path.join(str(tmp_path / "run-in"), "round-1", "landing", PHASE)
     os.makedirs(inner)
-    _wt, _rd, res, fake = _open(tmp_path, monkeypatch, run_dir=str(tmp_path / "run-in"),
+    _wt, _rd, res, fake = _open(tmp_path, monkeypatch, wt=wt, run_dir=str(tmp_path / "run-in"),
                                 landing_dir=inner)
     _assert_refused_unopened(res, fake, str(tmp_path / "run-in"), DENIED)
     # containing the run dir
     run_inside = os.path.join(landing, "run")
-    _wt, _rd, res, fake = _open(tmp_path, monkeypatch, run_dir=run_inside, landing_dir=landing)
+    _wt, _rd, res, fake = _open(tmp_path, monkeypatch, wt=wt, run_dir=run_inside,
+                                landing_dir=landing)
     _assert_refused_unopened(res, fake, run_inside, DENIED)
 
 
@@ -334,7 +335,8 @@ def _fixer_session(tmp_path):
     RR.atomic_write_json(stub, {
         "schema": RR.SEAT_RESULT_SCHEMA, "session": SESSION, "round": 1, "phase": PHASE,
         "seat": SEAT, "attempt": 0, "vendor": "claude", "model": "sonnet-5.5",
-        "dispatchRef": "m" * 64, "orderSha256": "o" * 64, "manifestSha256": "m" * 64,
+        "dispatchRef": "m" * 64, "orderSha256": RR.NOT_EMITTED,
+        "manifestSha256": RR.NOT_EMITTED,
     })
     return sd, landing, skey
 
@@ -368,7 +370,8 @@ def test_fixer_writes_its_own_payload_and_the_driver_ingests_it(tmp_path, monkey
     assert os.path.isfile(payload_path)
     assert not os.path.exists(same_session)
     assert not os.path.exists(sibling)
-    out = RR.ingest_landing(sd, 1, PHASE, SEAT, 0, current_attempt=0, roster=[SEAT])
+    out = RR.ingest_landing(sd, 1, PHASE, SEAT, 0, current_attempt=0, roster=[SEAT],
+                            anchor=None)
     assert out["ok"] is True, out
 
 
@@ -377,5 +380,6 @@ def test_without_the_grant_the_fixer_payload_is_not_written(tmp_path, monkeypatc
     assert not os.path.exists(payload_path)
     assert not os.path.exists(same_session)
     assert not os.path.exists(sibling)
-    out = RR.ingest_landing(sd, 1, PHASE, SEAT, 0, current_attempt=0, roster=[SEAT])
+    out = RR.ingest_landing(sd, 1, PHASE, SEAT, 0, current_attempt=0, roster=[SEAT],
+                            anchor=None)
     assert out["ok"] is False and out["reason"] == "landing-missing", out
