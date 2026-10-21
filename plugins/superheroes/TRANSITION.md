@@ -23,6 +23,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
 - **After switching.** **Nothing is owed.** A stack launched once on its parent issue is now cleaned up as one lane; a PR that links an issue holding its own lane is cleaned up exactly as before, unless the PR also links a sub-issue of that issue, in which case it is a layer of the stack. See [Cloud cleanup: a stack launched on its parent issue cleans up as one lane](#cloud-cleanup-a-stack-launched-on-its-parent-issue-cleans-up-as-one-lane).
 - **After switching.** **Nothing is owed, and there is no setting to change.** A JavaScript project's break-it tests run when the reviewed checkout has `node_modules` installed; a build worktree with no `npm install` records them not-run. See [Break-it tests: a JavaScript test reaches the installed dependencies](#break-it-tests-a-javascript-test-reaches-the-installed-dependencies).
+- **After switching.** **Nothing is owed.** A builder that continues or retries an order can pass the order's original base, and items an earlier attempt already committed then count as delivered instead of forfeiting `items-undelivered`. See [Dispatch: a continuation counts an earlier attempt's delivered items](#dispatch-a-continuation-counts-an-earlier-attempts-delivered-items).
 
 ### Cloud readiness: the dependency hook on the launched commit
 
@@ -76,6 +77,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A run whose program is `npm`, `npx`, `pnpm` or `yarn`, whose copy's `package.json` declares dependencies, and whose reviewed checkout has no installed `node_modules`, is recorded not-run (`module-not-found`) and launches nothing, so it never reads `passed` or `failed`. Any other run without `node_modules` runs as written and is read by the run-time setup-failure signature.
 - A `node_modules` with a package that links back into the reviewed checkout's tracked files (a workspace or `file:` package) is never linked: the run is recorded not-run (`dependency-link-unsafe`). A link or scan that fails is recorded not-run (`dependency-link-failed`).
 - A review seat's sanitized-view notice says the view holds tracked files only, with no installed dependencies, and that the review loop's break-it runner runs JavaScript tests itself.
+
+### Dispatch: a continuation counts an earlier attempt's delivered items
+
+- `dispatch-write` and the native `open` take an optional `--items-base-sha <the order's original base>`. It is journaled as `itemsBaseSha` in the `run-opened` record, only when given.
+- The declared-item check (`--expect-item`, `--expect-items-file`) diffs against `itemsBaseSha` when the record has one, and against the attempt's `baseSha` otherwise, so an item an earlier attempt committed counts as delivered and an item no attempt delivered still reads missing.
+- The flag is refused at open, with nothing opened, as `items-base-sha-invalid` (not a full lowercase commit id) or `items-base-sha-not-ancestor` (it does not resolve, or it is not an ancestor of the attempt's base); `dispatch-write` also refuses `items-base-sha-mismatch` when a continuation of an opened run passes a different one. Without the flag nothing changes.
 
 ## 0.45.0
 

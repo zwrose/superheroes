@@ -10,7 +10,7 @@ Five verbs, one JSON object on stdout each:
 
   route   --cwd W                       the one chokepoint: native, or the calibrated engine
   open    --run-dir D --order-path P --cwd W --base-sha S --deadline-seconds N
-          [--expect-item X]... --seat JSON
+          [--expect-item X]... [--items-base-sha S] --seat JSON
                                         journal ``run-opened`` and write ``agent-prompt.md``
   enroll  --run-dir D                   run by the subagent, in its own worktree, as its first
                                         Bash command; checks only, writes nothing to the journal
@@ -304,6 +304,13 @@ def _cmd_open(args):
         return _refusal("run-dir-not-empty")
     if not _SHA40.fullmatch(args.base_sha or ""):
         return _refusal("base-sha-invalid")
+    items_base_sha = args.items_base_sha
+    if items_base_sha is not None:
+        if not _SHA40.fullmatch(items_base_sha):
+            return _refusal("items-base-sha-invalid")
+        if _git(os.path.realpath(args.cwd), "merge-base", "--is-ancestor",
+                items_base_sha, args.base_sha)[0] != 0:
+            return _refusal("items-base-sha-not-ancestor")
     if not DEADLINE_MIN_SECONDS <= args.deadline_seconds <= DEADLINE_MAX_SECONDS:
         return _refusal("deadline-invalid")
     expected = args.expect_item or None
@@ -382,6 +389,8 @@ def _cmd_open(args):
             "bounds": NATIVE_BOUNDS,
             "routeReason": ROUTE_REASON_NATIVE,
         }
+        if items_base_sha is not None:
+            record["itemsBaseSha"] = items_base_sha
         if not engine_dispatch._journal_append(run_dir, record):
             os.unlink(prompt_path)
             os.unlink(pointer_path)
@@ -630,10 +639,11 @@ class _Close(object):
         return self._collect(target, into, base)
 
     def _collect(self, target, into, base):
+        items_base = self.opened.get("itemsBaseSha") or base
         with _neutral_git():
             item_check = engine_dispatch._item_delivery_check(
                 target,
-                {"expectedItems": self.opened.get("expectedItems"), "baseSha": base,
+                {"expectedItems": self.opened.get("expectedItems"), "baseSha": items_base,
                  "baselineDirty": {}},
                 timeout=GIT_TIMEOUT)
         extra = {} if item_check is None else {"itemCheck": item_check}
@@ -668,7 +678,7 @@ class _Close(object):
             theirs = _staged_entry(target, item)
             if mine is None or theirs is None:
                 return self._forfeit("native-collect-incomplete", **extra)
-            if mine == "" and theirs == "" and _in_tree(target, base, item):
+            if mine == "" and theirs == "" and _in_tree(target, items_base, item):
                 continue  # a declared deletion (or rename source), applied on both sides
             if mine == "" or mine != theirs:
                 return self._forfeit("native-collect-incomplete", **extra)
@@ -721,6 +731,7 @@ def build_parser():
     p.add_argument("--base-sha", required=True)
     p.add_argument("--deadline-seconds", required=True, type=int)
     p.add_argument("--expect-item", action="append")
+    p.add_argument("--items-base-sha")
     p.add_argument("--seat", required=True)
     p.set_defaults(func=_cmd_open)
 

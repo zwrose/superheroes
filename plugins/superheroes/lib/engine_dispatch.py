@@ -145,6 +145,9 @@ ITEM_EVIDENCE_CAUSE_DIFF_FAILED = "diff-failed"
 ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT = "status-timeout"
 ITEM_EVIDENCE_CAUSE_STATUS_FAILED = "status-failed"
 BASE_SHA_UNRESOLVABLE = "base-sha-unresolvable"
+ITEMS_BASE_SHA_INVALID = "items-base-sha-invalid"
+ITEMS_BASE_SHA_NOT_ANCESTOR = "items-base-sha-not-ancestor"
+ITEMS_BASE_SHA_MISMATCH = "items-base-sha-mismatch"
 SIZE_COUNT_BUDGET_SECONDS = 30  # bounds the fold-time working-tree size count
 SIZE_INPUTS_INCOMPLETE = "size-inputs-incomplete"
 SIZE_LINE_INVALID = "size-line-invalid"
@@ -2785,7 +2788,8 @@ def _item_delivery_check(cwd_real, opened, timeout=None):
     if expected_items is None:
         return None
     baseline_dirty = opened.get("baselineDirty") or {}
-    delivered_result = _delivered_paths(cwd_real, opened.get("baseSha"), timeout=timeout)
+    items_base = opened.get("itemsBaseSha") or opened.get("baseSha")
+    delivered_result = _delivered_paths(cwd_real, items_base, timeout=timeout)
     if not isinstance(delivered_result, set):
         return {
             "evidenceUnavailable": True,
@@ -6485,7 +6489,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
                     repo_root=None, expected_items=None, baseline_dirty=None,
                     sibling_baseline=None, resolved_inputs=None, claude_mode=None,
-                    claude_write_sandbox=None, size_tripwire_inputs=None):
+                    claude_write_sandbox=None, size_tripwire_inputs=None,
+                    items_base_sha=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -6570,6 +6575,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    if items_base_sha is not None:
+        record["itemsBaseSha"] = items_base_sha
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
     if cfg is not None:
@@ -6594,7 +6601,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
                    expected_items=None, expected_items_file=None,
                    requires_process_listing=False, size_base=None, size_line=None,
-                   size_base_ref=None, landing_dir=None, **kwargs):
+                   size_base_ref=None, landing_dir=None, items_base_sha=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -6669,7 +6676,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             expected_items=expected_items, expected_items_file=expected_items_file,
             requires_process_listing=requires_process_listing,
             size_base=size_base, size_line=size_line, size_base_ref=size_base_ref,
-            landing_dir=landing_dir,
+            landing_dir=landing_dir, items_base_sha=items_base_sha,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6696,7 +6703,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          claude_mode=None, expected_items=None,
                          expected_items_file=None, requires_process_listing=False,
                          size_base=None, size_line=None, size_base_ref=None,
-                         landing_dir=None):
+                         landing_dir=None, items_base_sha=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -6955,6 +6962,13 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv,
                     )
+            if items_base_sha is not None and items_base_sha != opened.get("itemsBaseSha"):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": ITEMS_BASE_SHA_MISMATCH,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
         else:
             if size_inputs_supplied and not (
                 _verify_base_sha_resolves(cwd_real, size_base, timeout=preflight_timeout)
@@ -6999,6 +7013,31 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
+
+            if items_base_sha is not None:
+                items_base_detail = None
+                if not _validate_base_sha(items_base_sha)[0]:
+                    items_base_detail = ITEMS_BASE_SHA_INVALID
+                elif not base_sha:
+                    items_base_detail = ITEMS_BASE_SHA_NOT_ANCESTOR
+                else:
+                    try:
+                        ancestor = _git_scrubbed(
+                            cwd_real, "merge-base", "--is-ancestor", items_base_sha, base_sha,
+                            timeout=preflight_timeout,
+                        )
+                    except subprocess.TimeoutExpired:
+                        items_base_detail = "git-preflight-timeout"
+                    else:
+                        if ancestor.returncode != 0:
+                            items_base_detail = ITEMS_BASE_SHA_NOT_ANCESTOR
+                if items_base_detail is not None:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": items_base_detail,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    )
 
             if _run_dir_nonempty(run_dir_real):
                 return _write_preflight_terminal(
@@ -7103,6 +7142,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 claude_mode=resolved_claude_mode["claudeMode"],
                 claude_write_sandbox=claude_write_sandbox,
                 size_tripwire_inputs=size_tripwire_inputs,
+                items_base_sha=items_base_sha,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -7714,6 +7754,9 @@ def build_parser():
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
+    cc.add_argument(w, "--items-base-sha", contract="free-text", default=None,
+                    help="the order's original base; the declared-item check counts changes "
+                         "since it (a continuation of an earlier attempt)")
     cc.add_argument(w, "--size-base", contract="free-text", default=None)
     cc.add_argument(w, "--size-line", contract="integer", default=None, type=int)
     cc.add_argument(w, "--size-base-ref", contract="free-text", default=None,
@@ -7785,6 +7828,7 @@ def main(argv):
                                  claude_mode=args.claude_mode,
                                  expected_items=args.expect_item,
                                  expected_items_file=args.expect_items_file,
+                                 items_base_sha=args.items_base_sha,
                                  requires_process_listing=args.requires_process_listing,
                                  size_base=args.size_base, size_line=args.size_line,
                                  size_base_ref=args.size_base_ref,
