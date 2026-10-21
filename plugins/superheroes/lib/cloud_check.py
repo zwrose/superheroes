@@ -37,6 +37,7 @@ import cloud_setup
 import cloud_setup_text
 import core_md
 import engine_adapter
+import launch_doctrine
 import mode_registry
 import model_registry
 import project_config
@@ -133,8 +134,8 @@ _PARTS = (
     ("identity",
      "The cloud session has no git identity to commit with, so a build there would stop at its "
      "first commit.",
-     "set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL to your "
-     "name and email in the environment's variables"),
+     "set GIT_AUTHOR_NAME and GIT_COMMITTER_NAME to {name}, and GIT_AUTHOR_EMAIL and "
+     "GIT_COMMITTER_EMAIL to {email}, in the environment's variables"),
     ("record", "The check passed, but I could not finish saving the result on this machine.",
      "tell me so I can look at the store"),
     ("setting", "I could not switch cloud builds off.", cloud_setup.SWITCH_OFF_FIX),
@@ -315,25 +316,26 @@ def _stamp_file(cwd, root):
         return fh.read().strip()
 
 
-def _git_identity(cwd):
-    """{"author": bool, "committer": bool}: whether git, run in `cwd`, resolves a configured
-    author and committer identity. `user.useConfigOnly` refuses git's guessed identity, so only
-    an identity set in git config or in the GIT_AUTHOR_*/GIT_COMMITTER_* variables counts.
-    Never raises; carries no name or email."""
-    found = {}
-    for role, var in (("author", "GIT_AUTHOR_IDENT"), ("committer", "GIT_COMMITTER_IDENT")):
-        try:
-            got = subprocess.run(["git", "-c", "user.useConfigOnly=true", "var", var], cwd=cwd,
-                                 capture_output=True, text=True, timeout=10)
-            found[role] = got.returncode == 0
-        except Exception:
-            found[role] = False
-    return found
+def _local_identity(cwd):
+    """(name, email) of the identity git resolves in `cwd` on this machine, or None. Read only to
+    fill in the fix line after the check has failed on the identity part; it decides nothing."""
+    try:
+        got = subprocess.run(["git", "-c", "user.useConfigOnly=true", "var", "GIT_AUTHOR_IDENT"],
+                             cwd=cwd, capture_output=True, text=True, timeout=10)
+        if got.returncode != 0:
+            return None
+        match = re.fullmatch(r"(.+?) <([^<>]+)> \d+ [+-]\d{4}", got.stdout.strip())
+        if match is None or not match.group(1) or not match.group(2):
+            return None
+        return match.group(1), match.group(2)
+    except Exception:
+        return None
 
 
 def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_fn=None):
     """What this cloud session holds, as the object the marked line carries. Never raises.
-    `identity_fn(cwd)` is the test seam for the git identity check; it defaults to `_git_identity`."""
+    `identity_fn(cwd)` is the test seam for the git identity check; it defaults to
+    `launch_doctrine.git_identity`."""
     env = os.environ if env is None else env
     cwd = os.getcwd() if cwd is None else cwd
     environment = env.get(cloud_pass.ENVIRONMENT_ENV)
@@ -345,7 +347,7 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         confirmation = {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                         "passLapses": None, "reason": "confirm-raised"}
     try:
-        identity = (identity_fn or _git_identity)(cwd)
+        identity = (identity_fn or launch_doctrine.git_identity)(cwd)
     except Exception:
         identity = {"author": False, "committer": False}
     return {
@@ -550,7 +552,7 @@ def _remove_failed_check(cwd, account, root, started=None):
         return False
 
 
-def _failed_message(parts, switched, cloud_version, local_version):
+def _failed_message(parts, switched, cloud_version, local_version, identity=None):
     sentences = []
     for name, sentence, _fix in _PARTS:
         if name in parts:
@@ -560,6 +562,11 @@ def _failed_message(parts, switched, cloud_version, local_version):
     count = "one part" if len(parts) == 1 else "%d parts" % len(parts)
     fixes = []
     for name, _sentence, fix in _PARTS:
+        if name == "identity" and name in parts:
+            # only this one fix is a template; the name and email are values, never formatted
+            fix = fix.format(
+                name="your name" if identity is None else "`%s`" % identity[0],
+                email="your email" if identity is None else "`%s`" % identity[1])
         if name in parts and fix not in fixes:
             fixes.append(fix)
     # axis: the message never says cloud builds are off when the switch-off failed
@@ -637,8 +644,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment, failed, now)
         return {"action": "failed", "results": results, "failedParts": failed,
                 "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
-                "message": _failed_message(failed, off, obj["pluginVersion"],
-                                           _or_none(cloud_setup_text._plugin_version))}
+                "message": _failed_message(
+                    failed, off, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
+                    **({"identity": _local_identity(cwd)} if "identity" in failed else {}))}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
     return {"action": "passed", "results": results, "failedParts": [], "recordWritten": True,
