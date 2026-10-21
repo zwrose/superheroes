@@ -387,8 +387,10 @@ def _sync(repo_root, commands, inputs, enabled, changed):
 
     if not os.path.isdir(repo_root) and (write_script is not None or write_settings is not None):
         raise OSError("the repository root does not exist")
-    if write_settings is not None:
-        if _settings_secret_shaped(write_settings):
+    # the settings the hook relies on are scanned even when the existing entry is reused
+    checked = write_settings if write_settings is not None else (settings if desired else None)
+    if checked is not None:
+        if _settings_secret_shaped(checked):
             # nothing is written, the script included: the owner is told to commit this file
             raise _Refused("settings-secret-shaped")
     if write_script is not None:
