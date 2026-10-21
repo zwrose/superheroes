@@ -253,18 +253,19 @@ def test_the_eight_reasons_are_the_boards_words():
             "wasnt": "its calibration doesn't match this machine's."},
         "dependency-hook": {
             "words": ("The branch this build starts from doesn't carry the dependency hook, or "
-                      "the branch it adopts changes a dependency file after the hook ran, so the "
-                      "cloud could build it with out-of-date dependencies."),
+                      "a setup file the build adopts can't be shown unchanged since the hook ran "
+                      "(it changed, or it is a link), so the cloud could build it with "
+                      "out-of-date dependencies."),
             "fix": ("To fix it, commit and push the dependency hook files configure wrote (the "
                     "settings file and the hook script) on the branch the build starts from; if "
                     "the build adopts a branch that changed a dependency file, bring that change "
                     "into the branch it starts from first. A listed setup file that is a link or "
                     "sits under a linked folder cannot be compared, so list the regular file it "
                     "points to in configure's setup inputs instead. Then launch again."),
-            "short": ("Bring the dependency hook, and any adopted dependency change, onto the "
-                      "starting branch to fix it."),
-            "wasnt": ("the branch it starts from doesn't carry the dependency hook, or the "
-                      "branch it adopts changes a dependency file.")},
+            "short": ("Bring the dependency hook and any adopted setup-file change onto the "
+                      "starting branch, and list setup files as regular files, to fix it."),
+            "wasnt": ("the branch it starts from doesn't carry the dependency hook, or a setup "
+                      "file it adopts can't be shown unchanged.")},
         "unreachable": {
             "words": "The cloud platform couldn't be reached.",
             "fix": "I'll try the cloud again at the next launch.",
@@ -300,6 +301,7 @@ def test_the_dependency_hook_fix_says_to_list_the_regular_file_for_a_linked_inpu
     fix = LP.fix_text(_call(reason="dependency-hook"))
     assert "list the regular file it points to in configure's setup inputs" in fix
     assert fix.endswith("Then launch again.")
+    assert "regular files" in LP.REASONS["dependency-hook"]["short"]
 
 
 def test_E10_fix_text_without_a_reason_or_a_fix_is_none():
