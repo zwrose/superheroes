@@ -159,6 +159,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--progress-file` | no | `free-text` | none |  |
 | `--expect-item` | no | `free-text` | none |  |
 | `--expect-items-file` | no | `free-text` | none |  |
+| `--items-base-sha` | no | `free-text` | none | the order's original base; the declared-item check counts changes since it (a continuation of an earlier attempt) |
 | `--size-base` | no | `free-text` | none |  |
 | `--size-line` | no | `integer` | none |  |
 | `--size-base-ref` | no | `free-text` | none | the base branch; the fold counts from its merge base with HEAD when that is newer than --size-base |

@@ -6676,7 +6676,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             expected_items=expected_items, expected_items_file=expected_items_file,
             requires_process_listing=requires_process_listing,
             size_base=size_base, size_line=size_line, size_base_ref=size_base_ref,
-            landing_dir=landing_dir,
+            landing_dir=landing_dir, items_base_sha=items_base_sha,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6703,7 +6703,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          claude_mode=None, expected_items=None,
                          expected_items_file=None, requires_process_listing=False,
                          size_base=None, size_line=None, size_base_ref=None,
-                         landing_dir=None):
+                         landing_dir=None, items_base_sha=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
