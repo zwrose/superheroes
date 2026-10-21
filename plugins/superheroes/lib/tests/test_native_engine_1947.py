@@ -137,11 +137,13 @@ def _cli(capsys, *argv):
     return code, json.loads(out.strip().splitlines()[-1])
 
 
-def _open(capsys, r, deadline=600, items=(), seat=_SEAT, base=None, order=None):
+def _open(capsys, r, deadline=600, items=(), seat=_SEAT, base=None, order=None, items_base=None):
     argv = ["open", "--run-dir", r.run, "--order-path", order or r.order, "--cwd", r.B,
             "--base-sha", base or r.base, "--deadline-seconds", str(deadline), "--seat", seat]
     for item in items:
         argv += ["--expect-item", item]
+    if items_base is not None:
+        argv += ["--items-base-sha", items_base]
     return _cli(capsys, *argv)
 
 
@@ -192,10 +194,10 @@ def _close(capsys, r, worktree=None, transcript=None, into=None, forfeit=False):
     return _cli(capsys, *argv)
 
 
-def _ready(capsys, monkeypatch, r, items=(), edit=True):
+def _ready(capsys, monkeypatch, r, items=(), edit=True, base=None, items_base=None):
     """Opened, enrolled, edited, result done, a sonnet transcript: close would succeed."""
     _routed(monkeypatch)
-    code, opened = _open(capsys, r, items=items)
+    code, opened = _open(capsys, r, items=items, base=base, items_base=items_base)
     assert code == 0, opened
     _enrolled(r)
     if edit:
@@ -841,6 +843,114 @@ def test_close_grading_forfeits_a_declared_file_the_patch_cannot_carry(
     assert out["itemCheck"]["missing"] == []
     assert _git(r.B, "diff", "--cached", "--name-only").split() == ["a.txt"]
     assert "native-collecting" in _kinds(r)
+
+
+def _earlier_attempt(r, write=(), delete=()):
+    """Commit an earlier attempt's work in B and put the subagent's worktree T on that commit."""
+    for name in write:
+        _write(os.path.join(r.B, name), "delivered earlier\n")
+    for name in delete:
+        _git(r.B, "rm", "-q", name)
+    _git(r.B, "add", "-A")
+    _git(r.B, "commit", "-q", "-m", "earlier attempt")
+    head = _git(r.B, "rev-parse", "HEAD").strip()
+    _git(r.T, "checkout", "-q", "--detach", head)
+    return head
+
+
+def test_close_continuation_credits_an_earlier_attempts_committed_item(
+        tmp_path, monkeypatch, capsys):
+    # axis: contract — the check diffs against the items base, so an earlier attempt's commit counts
+    r = _make_repo(tmp_path)
+    attempt = _earlier_attempt(r, write=["src/new.txt"])
+    _ready(capsys, monkeypatch, r, items=["src/new.txt"], edit=False,
+           base=attempt, items_base=r.base)
+    assert _records(r)[0]["itemsBaseSha"] == r.base
+    assert _records(r)[0]["baseSha"] == attempt
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["itemCheck"]["missing"] == []
+    assert out["collected"]["files"] == []
+
+
+def test_close_continuation_still_forfeits_an_item_no_attempt_delivered(
+        tmp_path, monkeypatch, capsys):
+    # axis: over-acceptance — an item no attempt delivered still reads missing under the items base
+    r = _make_repo(tmp_path)
+    attempt = _earlier_attempt(r, write=["src/new.txt"])
+    _ready(capsys, monkeypatch, r, items=["src/new.txt", "src/untouched.txt"], edit=False,
+           base=attempt, items_base=r.base)
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "items-undelivered")
+    assert out["itemCheck"]["missing"] == ["src/untouched.txt"]
+
+
+def test_close_without_an_items_base_the_earlier_commit_does_not_count(
+        tmp_path, monkeypatch, capsys):
+    # axis: preservation — with no declared items base the check and the record are unchanged
+    r = _make_repo(tmp_path)
+    attempt = _earlier_attempt(r, write=["src/new.txt"])
+    _ready(capsys, monkeypatch, r, items=["src/new.txt"], edit=False, base=attempt)
+    assert "itemsBaseSha" not in _records(r)[0]
+    code, out = _close(capsys, r)
+    _forfeited(code, out, "items-undelivered")
+    assert out["itemCheck"]["missing"] == ["src/new.txt"]
+
+
+def test_close_continuation_accepts_a_deletion_the_earlier_attempt_committed(
+        tmp_path, monkeypatch, capsys):
+    # axis: preservation — a declared deletion committed earlier is credited, not native-collect-incomplete
+    r = _make_repo(tmp_path)
+    attempt = _earlier_attempt(r, delete=["a.txt"])
+    _ready(capsys, monkeypatch, r, items=["a.txt"], edit=False, base=attempt, items_base=r.base)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["itemCheck"]["missing"] == []
+    assert out["collected"]["files"] == []
+
+
+def test_open_items_base_without_declared_items_is_journaled_and_inert(
+        tmp_path, monkeypatch, capsys):
+    # axis: no-op — an items base with no declared items is journaled and runs no item check
+    r = _make_repo(tmp_path)
+    attempt = _earlier_attempt(r, write=["src/new.txt"])
+    _ready(capsys, monkeypatch, r, base=attempt, items_base=r.base)
+    assert _records(r)[0]["itemsBaseSha"] == r.base
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["itemCheck"] is None
+
+
+def test_open_accepts_an_items_base_equal_to_the_base(tmp_path, monkeypatch, capsys):
+    # axis: boundary — a commit is its own ancestor, so an items base equal to the base opens
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, out = _open(capsys, r, items_base=r.base)
+    assert code == 0, out
+    assert _records(r)[0]["itemsBaseSha"] == r.base
+
+
+def test_open_refuses_a_bad_items_base(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a malformed, unresolvable or non-ancestor items base refuses with nothing journaled
+    r = _make_repo(tmp_path)
+    attempt = _earlier_attempt(r, write=["src/new.txt"])
+    tree = _git(r.B, "rev-parse", "%s^{tree}" % r.base).strip()
+    sibling = _git(r.B, "commit-tree", tree, "-p", r.base, "-m", "sibling").strip()
+    _routed(monkeypatch)
+    cases = [
+        (r.base, attempt, "items-base-sha-not-ancestor"),
+        (attempt, sibling, "items-base-sha-not-ancestor"),
+        (attempt, "0" * 40, "items-base-sha-not-ancestor"),
+        (attempt, r.base[:12], "items-base-sha-invalid"),
+        (attempt, r.base.upper(), "items-base-sha-invalid"),
+        (attempt, "z" * 40, "items-base-sha-invalid"),
+    ]
+    for base, items_base, reason in cases:
+        code, out = _open(capsys, r, base=base, items_base=items_base)
+        assert code == 1, (items_base, out)
+        assert out == {"ok": False, "terminal": True, "reason": reason}, (items_base, out)
+        assert _records(r) == []
+        assert not os.path.exists(r.run)
 
 
 def test_staged_entry_treats_a_bracketed_name_as_a_literal_path(tmp_path):

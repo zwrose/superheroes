@@ -1555,6 +1555,7 @@ def _run_opened_records(tmp_path):
 
 
 def test_write_continuation_counts_earlier_attempts_committed_item(tmp_path):
+    # axis: contract — the check diffs against the items base, so an earlier attempt's commit counts as delivered
     wt, original_base, attempt_head = _continuation_fixture(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(
@@ -1570,6 +1571,7 @@ def test_write_continuation_counts_earlier_attempts_committed_item(tmp_path):
 
 
 def test_write_continuation_head_default_base_counts_earlier_commit(tmp_path):
+    # axis: default — an omitted --base-sha resolves to HEAD and the items base still governs the check
     wt, original_base, _attempt_head = _continuation_fixture(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(
@@ -1580,6 +1582,7 @@ def test_write_continuation_head_default_base_counts_earlier_commit(tmp_path):
 
 
 def test_write_continuation_untouched_item_still_forfeits(tmp_path):
+    # axis: over-acceptance — an item no attempt delivered still reads missing under the items base
     wt, original_base, attempt_head = _continuation_fixture(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(
@@ -1594,6 +1597,7 @@ def test_write_continuation_untouched_item_still_forfeits(tmp_path):
 
 
 def test_write_without_items_base_the_earlier_commit_does_not_count(tmp_path):
+    # axis: preservation — with no declared items base the check and the run-opened record are unchanged
     wt, _original_base, attempt_head = _continuation_fixture(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(
@@ -1607,6 +1611,7 @@ def test_write_without_items_base_the_earlier_commit_does_not_count(tmp_path):
 
 
 def test_write_items_base_without_declared_items_is_journaled_no_effect(tmp_path):
+    # axis: no-op — an items base with no declared items is journaled and runs no item check
     wt, original_base, _attempt_head = _continuation_fixture(tmp_path)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(tmp_path, fake, cwd=wt, items_base_sha=original_base)
@@ -1627,6 +1632,7 @@ def _sibling_commit(wt, parent):
 
 
 def test_write_items_base_refuses_at_open(tmp_path):
+    # axis: refusal — a malformed, unresolvable or non-ancestor items base refuses before anything opens
     wt, original_base, attempt_head = _continuation_fixture(tmp_path)
     sibling = _sibling_commit(wt, original_base)
     cases = [
@@ -1654,6 +1660,7 @@ def test_write_items_base_refuses_at_open(tmp_path):
 
 
 def test_write_items_base_descendant_of_base_refuses(tmp_path):
+    # axis: refusal — an items base that is a descendant of the attempt base is not an ancestor
     wt, original_base, attempt_head = _continuation_fixture(tmp_path)
     fake = FakeRunner([])
     res = _dispatch_write(
@@ -1667,6 +1674,7 @@ def test_write_items_base_descendant_of_base_refuses(tmp_path):
 
 
 def test_write_items_base_equal_to_base_is_accepted(tmp_path):
+    # axis: boundary — an items base equal to the attempt base is accepted and behaves as today
     wt, _original_base, attempt_head = _continuation_fixture(tmp_path)
 
     class DeliverRunner:
@@ -1686,6 +1694,7 @@ def test_write_items_base_equal_to_base_is_accepted(tmp_path):
 
 
 def test_write_resume_items_base_mismatch_and_omitted_inherits(tmp_path):
+    # axis: resume — a changed items base refuses on re-invoke; an omitted one inherits the journal's
     wt, original_base, attempt_head = _continuation_fixture(tmp_path)
     run_dir = str(tmp_path / "run")
     first = _dispatch_write(
