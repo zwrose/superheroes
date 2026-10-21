@@ -1,6 +1,8 @@
 """Tests for issue_contract (#932)."""
 import json
 
+import pytest
+
 import issue_contract as ic
 
 
@@ -555,3 +557,184 @@ def test_vocabulary_constants():
         ic.SLOT_STATUS_FILLED,
         ic.SLOT_STATUS_UNKNOWN,
     })
+
+
+# --- 8. The extra-repositories line (#1948) ---------------------------------
+# bite-proof record wo_a_1948_add_repo_grant
+
+
+def _extras(body):
+    return ic.extra_repositories(body)
+
+
+def _refused(reason):
+    return {"ok": False, "reason": reason, "repositories": []}
+
+
+def test_extras_vocabulary_constants():
+    # axis: the line's prefix and the refusal tokens are the contract the docs and the advisor read — pinned as literals — see bite-proof record wo_a_1948_add_repo_grant
+    assert ic.EXTRA_REPOSITORIES_LINE == "Extra repositories:"
+    assert ic.EXTRA_REPOSITORIES_REFUSALS == frozenset({
+        "extra-repositories-line-repeated",
+        "extra-repositories-empty",
+        "extra-repositories-name-invalid",
+        "extra-repositories-name-repeated",
+    })
+
+
+def test_extras_no_line_is_an_ok_empty_list():
+    # axis: a body with no extra-repositories line is ok with no repositories — never a refusal — see bite-proof record wo_a_1948_add_repo_grant
+    body = _minimal_body("Anchor (receipt):", "https://example.com/x")
+    assert _extras(body) == {"ok": True, "reason": None, "repositories": []}
+
+
+def test_extras_one_line_gives_its_names_in_order_with_whitespace_stripped():
+    # axis: one live line yields its comma-separated names in written order, each stripped — see bite-proof record wo_a_1948_add_repo_grant
+    body = (
+        "Anchor (receipt): https://example.com/x\n"
+        "Extra repositories:   zwrose/superheroes ,weekly-eats-hq/weekly-eats  \n"
+        "What: scope\n"
+    )
+    assert _extras(body) == {
+        "ok": True,
+        "reason": None,
+        "repositories": ["zwrose/superheroes", "weekly-eats-hq/weekly-eats"],
+    }
+
+
+def test_extras_one_name_and_an_indent_three_line_are_live():
+    # axis: a line indented fewer than 4 columns is still live — the indent gate bites at 4, not earlier — see bite-proof record wo_a_1948_add_repo_grant
+    assert _extras("   Extra repositories: a/b\n") == {
+        "ok": True, "reason": None, "repositories": ["a/b"],
+    }
+
+
+def test_extras_two_live_lines_are_refused_as_repeated():
+    # axis: the line may appear once — two live lines are refused as extra-repositories-line-repeated, never merged — see bite-proof record wo_a_1948_add_repo_grant
+    body = "Extra repositories: a/b\nWhat: scope\nExtra repositories: c/d\n"
+    assert _extras(body) == _refused(ic.REFUSAL_EXTRA_REPOSITORIES_LINE_REPEATED)
+
+
+@pytest.mark.parametrize("line", [
+    "Extra repositories:",
+    "Extra repositories:    ",
+    "Extra repositories: a/b,,c/d",
+    "Extra repositories: a/b,",
+    "Extra repositories: ,a/b",
+], ids=["no-value", "blank-value", "empty-item", "trailing-comma", "leading-comma"])
+def test_extras_an_empty_value_or_an_empty_item_is_refused_as_empty(line):
+    # axis: a line with no value, or an empty item between commas, is refused as extra-repositories-empty — never read as a shorter list — see bite-proof record wo_a_1948_add_repo_grant
+    assert _extras(line + "\n") == _refused(ic.REFUSAL_EXTRA_REPOSITORIES_EMPTY)
+
+
+@pytest.mark.parametrize("name", [
+    "a",
+    "a/b/c",
+    "-a/b",
+    "a_b/c",
+    "a/",
+    "/b",
+    "a/..",
+    "a/.",
+    "a/b c",
+    "o" * 40 + "/r",
+    "o/" + "r" * 101,
+], ids=["no-slash", "three-parts", "leading-hyphen", "underscore-owner", "no-repo", "no-owner",
+        "dot-dot", "dot", "inner-space", "owner-40", "repo-101"])
+def test_extras_an_invalid_name_is_refused_as_name_invalid(name):
+    # axis: every item must be a valid owner/repo name — one bad item refuses the whole line, beside good ones — see bite-proof record wo_a_1948_add_repo_grant
+    assert _extras("Extra repositories: zwrose/ok, %s\n" % name) == _refused(
+        ic.REFUSAL_EXTRA_REPOSITORIES_NAME_INVALID)
+
+
+@pytest.mark.parametrize("name", ["o" * 39 + "/" + "r" * 100, "a/.hidden", "A1/b.c_d-e"])
+def test_extras_names_at_the_shape_limits_are_accepted(name):
+    # axis: the name shape admits GitHub's longest owner (39) and repo (100) and the repo characters . _ - — see bite-proof record wo_a_1948_add_repo_grant
+    assert _extras("Extra repositories: %s\n" % name)["repositories"] == [name]
+
+
+def test_extras_a_name_repeated_in_different_case_is_refused_as_name_repeated():
+    # axis: GitHub names are case-insensitive — the same name twice, in any case, is refused as extra-repositories-name-repeated — see bite-proof record wo_a_1948_add_repo_grant
+    body = "Extra repositories: Weekly-Eats-HQ/weekly-eats, weekly-eats-hq/WEEKLY-EATS\n"
+    assert _extras(body) == _refused(ic.REFUSAL_EXTRA_REPOSITORIES_NAME_REPEATED)
+
+
+def test_extras_a_fenced_only_example_line_is_no_line():
+    # axis: a line inside a fenced block is an example, never live — an example-only body is ok with no repositories — see bite-proof record wo_a_1948_add_repo_grant
+    body = (
+        "Write it like this:\n"
+        "```\n"
+        "Extra repositories: owner/repo, owner/other\n"
+        "```\n"
+    )
+    assert _extras(body) == {"ok": True, "reason": None, "repositories": []}
+
+
+def test_extras_a_fenced_example_beside_a_real_line_leaves_only_the_real_line():
+    # axis: a fenced example beside a real line is neither a second live line nor a replacement for it — see bite-proof record wo_a_1948_add_repo_grant
+    body = (
+        "Extra repositories: zwrose/superheroes\n"
+        "```\n"
+        "Extra repositories: owner/repo, owner/other\n"
+        "```\n"
+    )
+    assert _extras(body) == {"ok": True, "reason": None, "repositories": ["zwrose/superheroes"]}
+
+
+def test_extras_an_unterminated_fence_swallows_a_later_line_and_grants_nothing():
+    # axis: an unterminated fence swallows every later line — the line after it is not live, so the list is empty and no grant follows — see bite-proof record wo_a_1948_add_repo_grant
+    body = (
+        "```\n"
+        "still inside the fence\n"
+        "Extra repositories: zwrose/superheroes\n"
+    )
+    assert _extras(body) == {"ok": True, "reason": None, "repositories": []}
+
+
+@pytest.mark.parametrize("prefix", ["    ", "\t", "     "], ids=["four-spaces", "tab", "five-spaces"])
+def test_extras_a_line_indented_four_columns_is_not_live(prefix):
+    # axis: an indented code block (4+ columns) is never a live extra-repositories line — see bite-proof record wo_a_1948_add_repo_grant
+    assert _extras(prefix + "Extra repositories: zwrose/superheroes\n") == {
+        "ok": True, "reason": None, "repositories": [],
+    }
+
+
+def test_extras_an_indented_example_beside_a_real_line_is_not_a_second_line():
+    # axis: an indented code-block example beside a real line is not counted as a second live line — see bite-proof record wo_a_1948_add_repo_grant
+    body = "    Extra repositories: owner/repo\nExtra repositories: zwrose/superheroes\n"
+    assert _extras(body) == {"ok": True, "reason": None, "repositories": ["zwrose/superheroes"]}
+
+
+def _run_extras(body_path):
+    return ic.main(["extras", "--body-file", body_path])
+
+
+def test_extras_cli_prints_one_json_line_and_exits_zero(tmp_path, capsys):
+    # axis: the extras verb prints the parser's result as one JSON line and exits 0 — see bite-proof record wo_a_1948_add_repo_grant
+    body_path = tmp_path / "body.md"
+    body_path.write_text("Extra repositories: zwrose/superheroes, a/b\n", encoding="utf-8")
+    rc = _run_extras(str(body_path))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1
+    assert json.loads(out) == {
+        "ok": True, "reason": None, "repositories": ["zwrose/superheroes", "a/b"],
+    }
+
+
+def test_extras_cli_prints_a_refusal_and_still_exits_zero(tmp_path, capsys):
+    # axis: a refusal is the JSON result, never a non-zero exit — see bite-proof record wo_a_1948_add_repo_grant
+    body_path = tmp_path / "body.md"
+    body_path.write_text("Extra repositories: nope\n", encoding="utf-8")
+    rc = _run_extras(str(body_path))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == _refused(ic.REFUSAL_EXTRA_REPOSITORIES_NAME_INVALID)
+
+
+def test_extras_cli_on_a_missing_file_is_body_unreadable(tmp_path, capsys):
+    # axis: an unreadable body file fails closed as body-unreadable with no repositories, and exits 0 — see bite-proof record wo_a_1948_add_repo_grant
+    rc = _run_extras(str(tmp_path / "nope.md"))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": False, "reason": "body-unreadable", "repositories": [],
+    }

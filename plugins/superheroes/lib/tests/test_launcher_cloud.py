@@ -297,6 +297,39 @@ def test_cloud_argv_accepts_a_64_character_name():
     assert built["reason"] is None
 
 
+def test_cloud_argv_grants_the_attach_tool_through_its_settings():
+    # axis: a non-empty allow_tools puts a permissions.allow list after `remote` in the --settings JSON — see bite-proof record wo_a_1948_add_repo_grant
+    built = EA.claude_cloud_builder_argv(
+        "opus", "medium", "the prompt", ENV_ID, "issue-1-ab", allow_tools=(EA.CLOUD_ATTACH_TOOL,),
+    )
+    assert built == {
+        "argv": [
+            "claude", "--cloud", "the prompt",
+            "--settings",
+            '{"remote":{"defaultEnvironmentId":"env_01AbCdEf"},"permissions":{"allow":["mcp__claude-code-remote__add_repo"]}}',
+            "--model", "opus", "--effort", "medium", "--permission-mode", "auto",
+            "--disallowedTools", "AskUserQuestion", "-n", "issue-1-ab",
+        ],
+        "reason": None,
+    }
+
+
+@pytest.mark.parametrize("allow_tools", [None, ()], ids=["none", "empty"])
+def test_cloud_argv_without_an_allowed_tool_is_the_argv_of_the_call_without_the_argument(allow_tools):
+    # axis: no allow_tools (None or empty) leaves the --settings JSON and the whole argv exactly as the call that never names it — see bite-proof record wo_a_1948_add_repo_grant
+    plain = EA.claude_cloud_builder_argv("opus", "medium", "the prompt", ENV_ID, "issue-1-ab")
+    built = EA.claude_cloud_builder_argv(
+        "opus", "medium", "the prompt", ENV_ID, "issue-1-ab", allow_tools=allow_tools,
+    )
+    assert built == plain
+    assert "permissions" not in built["argv"][built["argv"].index("--settings") + 1]
+
+
+def test_the_attach_tool_is_claude_codes_permission_rule_name_for_add_repo():
+    # axis: the attach tool's spelling is an external contract Claude Code owns, so its literal is pinned here — see bite-proof record wo_a_1948_add_repo_grant
+    assert EA.CLOUD_ATTACH_TOOL == "mcp__claude-code-remote__add_repo"
+
+
 # --- plugin_version ----------------------------------------------------------------------
 
 
@@ -506,6 +539,105 @@ def test_compose_other_place_refuses(tmp_path):
     assert result["reason"] == "launch-place-invalid"
 
 
+# --- the add_repo grant: a cloud launch whose premise names extra repositories ------------
+# bite-proof record wo_a_1948_add_repo_grant
+
+EXTRAS = ["weekly-eats-hq/weekly-eats"]
+
+
+def _compose_cloud_with(repo, premise):
+    return L.compose_launch(repo, 656, premise, place="cloud", cloud_environment=ENV_ID,
+                            session_name="issue-656-preview")
+
+
+def _stamped_with_extras(repo, extras):
+    result = L.validate_premise(_valid_premise(repo, extraRepositories=extras), repo, issue=656)
+    assert result["ok"] is True, result
+    return result["premise"]
+
+
+def _settings_of(argv):
+    return argv[argv.index("--settings") + 1]
+
+
+def test_compose_cloud_with_extra_repositories_grants_the_attach_tool_and_leaves_the_prompt_alone(tmp_path):
+    # axis: a stamped premise carrying extraRepositories makes the cloud launch's --settings allow the attach tool, and only the --settings changes — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    plain = _compose_cloud_with(repo, _stamped(repo))
+    granted = _compose_cloud_with(repo, _stamped_with_extras(repo, EXTRAS))
+    assert plain["ok"] is True and granted["ok"] is True
+    settings = json.loads(_settings_of(granted["argv"]))
+    assert settings["permissions"]["allow"] == [EA.CLOUD_ATTACH_TOOL]
+    assert settings["remote"] == {"defaultEnvironmentId": ENV_ID}
+    assert granted["prompt"] == plain["prompt"]
+    assert granted["argv"][2] == granted["prompt"]
+
+
+def test_compose_cloud_without_extra_repositories_composes_the_argv_it_always_did(tmp_path):
+    # axis: a stamped premise without extraRepositories grants nothing — the --settings is the bare environment and the argv is the unchanged builder argv — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    composed = _compose_cloud_with(repo, _stamped(repo))
+    assert composed["ok"] is True
+    argv = composed["argv"]
+    assert _settings_of(argv) == '{"remote":{"defaultEnvironmentId":"%s"}}' % ENV_ID
+    assert not any("permissions" in part for part in argv)
+    token = argv[argv.index("--model") + 1]
+    effort = argv[argv.index("--effort") + 1]
+    assert argv == EA.claude_cloud_builder_argv(
+        token, effort, composed["prompt"], ENV_ID, "issue-656-preview")["argv"]
+
+
+@pytest.mark.parametrize("extras", [
+    pytest.param("a/b", id="string"),
+    pytest.param([], id="empty-list"),
+])
+def test_an_extra_repositories_field_that_is_not_a_non_empty_list_is_refused(tmp_path, extras):
+    # axis: extraRepositories must be a non-empty list — a bare string or an empty list is refused whole, never read as no grant — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    result = L.validate_premise(_valid_premise(repo, extraRepositories=extras), repo, issue=656)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-extra-repositories-invalid"
+
+
+@pytest.mark.parametrize("name", ["a", "a/b/c", " a/b", "-a/b", "a/.."])
+def test_an_extra_repository_that_is_not_an_owner_and_repo_name_is_refused(tmp_path, name):
+    # axis: every member of extraRepositories must be a valid owner/repo name — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    result = L.validate_premise(
+        _valid_premise(repo, extraRepositories=["zwrose/ok", name]), repo, issue=656)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-extra-repositories-invalid"
+
+
+def test_an_extra_repository_named_twice_in_different_case_is_refused(tmp_path):
+    # axis: the members of extraRepositories are distinct whatever their case, since GitHub names are case-insensitive — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    result = L.validate_premise(
+        _valid_premise(repo, extraRepositories=["Weekly-Eats-HQ/weekly-eats", "weekly-eats-hq/Weekly-Eats"]),
+        repo, issue=656)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-extra-repositories-invalid"
+
+
+@pytest.mark.parametrize("extras", [["a/b", 7], [7], [None], [["a/b"]]],
+                         ids=["int-beside-name", "int", "none", "list"])
+def test_an_extra_repository_that_is_not_a_string_is_refused(tmp_path, extras):
+    # axis: a non-string member of extraRepositories is refused, never coerced or skipped — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    result = L.validate_premise(_valid_premise(repo, extraRepositories=extras), repo, issue=656)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-extra-repositories-invalid"
+
+
+def test_a_valid_extra_repositories_list_is_accepted_and_carried_in_the_stamped_premise(tmp_path):
+    # axis: a valid extraRepositories list is accepted and travels in the stamped premise, in order — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _init_repo(tmp_path / "repo")
+    extras = ["weekly-eats-hq/weekly-eats", "zwrose/superheroes"]
+    result = L.validate_premise(_valid_premise(repo, extraRepositories=extras), repo, issue=656)
+    assert result["ok"] is True, result
+    assert result["premise"]["extraRepositories"] == extras
+
+
 # --- edge 1: the five refusals before any reservation ------------------------------------
 
 
@@ -603,6 +735,19 @@ def test_edge1_a_cloud_launch_with_a_bad_issue_writes_nothing(tmp_path, issue):
 @pytest.mark.parametrize("place", [None, "local"])
 def test_a_local_launch_with_an_odd_issue_does_not_get_the_cloud_issue_refusal(issue, place):
     assert L._place_refusal("launch-x", place, None, None, None, {}, None, issue) is None
+
+
+@pytest.mark.parametrize("place", [None, "local"], ids=["none", "local"])
+def test_edge1_extra_repositories_on_a_launch_not_placed_in_the_cloud_writes_nothing(tmp_path, place):
+    # axis: refused before any write — a premise naming extra repositories on a launch not placed in the cloud reserves no lane and spawns nothing — see bite-proof record wo_a_1948_add_repo_grant
+    repo = _cloud_repo(tmp_path)
+    calls = []
+    premise = _valid_premise(repo, extraRepositories=EXTRAS)
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls), premise=premise, place=place)
+    assert result["ok"] is False
+    assert result["reason"] == "launch-extra-repositories-not-cloud"
+    assert "launchId" in result
+    _assert_nothing_written(repo, calls)
 
 
 # --- edge 2: a cloud launch refused at a gate is a cloud lane ----------------------------
