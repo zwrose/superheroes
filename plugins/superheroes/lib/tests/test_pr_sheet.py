@@ -31,6 +31,7 @@ STACK = (["record-stack-1.json", "record-stack-2.json", "record-stack-3.json"], 
 CLOSES = (["record-big.json"], "input-closes.json")
 WALK = (["record-big.json"], "input-walk.json")
 TWIN = (["record-twin-a.json", "record-twin-b.json"], "input-twin.json")
+COLLECTOR = (["record-small.json"], "input-collector.json")
 
 
 def load(name):
@@ -67,7 +68,7 @@ def cli(records, advisor, out):
     return subprocess.run(args, capture_output=True, text=True, timeout=60)
 
 
-@pytest.mark.parametrize("case", [BIG, SMALL, STACK, CLOSES], ids=["big", "small", "stack", "closes"])
+@pytest.mark.parametrize("case", [BIG, SMALL, STACK, CLOSES, COLLECTOR], ids=["big", "small", "stack", "closes", "collector"])
 def test_outputs_pass_the_schema_and_the_page_check(case):
     # Axis: every output is accepted by the shipped schema and by the shipped page's checkSheet.
     sheet = built(case)
@@ -2075,3 +2076,224 @@ def test_pr_state_reads_a_decided_entrys_stored_document(mine, picked, merge, ex
     state = pr_sheet.pr_state(raw, store(mine=mine, picked=picked, merge=merge), WORDS)
     assert state["state"] == expected
     assert list(state) == ["state", "accepted", "total", "walked", "walkTotal"] and state["total"] == 1
+
+
+# --- collector items: a decision tied to one PR rides that PR's sheet as an option card ---
+
+
+def collector_sheet():
+    return built(COLLECTOR)
+
+
+def test_a_collector_item_is_built_as_an_option_card_with_the_spine_and_lettered_options():
+    # Axis: each collector item is one card, in input order, with its collector number, the spine in the leftover's order, lettered option labels and a recommendation that names its letter.
+    # Bites on: a label shown without its letter, a recommendation without its letter, a kind that omits the number, a spine out of order, or items built out of input order.
+    advisor, cards = load("input-collector.json"), collector_sheet()["cards"]
+    assert len(cards) == len(advisor["collectorItems"]) == 2
+    for card, item in zip(cards, advisor["collectorItems"]):
+        assert card["id"].startswith("k-")
+        assert card["callKind"] == fill("collectorKind", number=item["number"]) and str(item["number"]) in card["callKind"]
+        assert card["question"] == item["title"]
+        assert [s["title"] for s in card["context"]] == [WORDS["whyYours"], WORDS["whatHappened"], WORDS["ifLeft"]]
+        assert [s["blocks"] for s in card["context"]] == [[{"paragraph": item[k]}] for k in ("why", "context", "ifLeft")]
+        assert [o["id"] for o in card["options"]] == ["a", "b", "c"]
+        assert [o["label"] for o in card["options"]] == [fill("collectorOption", letter=o["id"], label=o["label"]) for o in item["options"]]
+        assert all(o["label"].startswith(f"{o['id']}. ") for o in card["options"])
+        assert [(o["consequence"], o["sendsBack"]) for o in card["options"]] == [(o["consequence"], o["sendsBack"]) for o in item["options"]]
+        rec = item["recommendation"]
+        assert card["recommendation"] == {"text": fill("collectorRecommendation", letter=rec["optionId"], text=rec["text"]),
+                                          "reason": rec["reason"], "optionId": rec["optionId"]}
+        assert card["recommendation"]["text"].startswith(rec["optionId"])
+        assert all(not o["label"].startswith(o["id"]) for o in item["options"]) and not rec["text"].startswith(rec["optionId"])
+
+
+def test_collector_cards_sit_after_the_items_and_before_the_closure_card():
+    # Axis: the cards run leftovers, items, collector items, then the closure card.
+    # Bites on: collector cards appended after the closure card or before the items.
+    records, advisor = bundle(CLOSES)
+    advisor["collectorItems"] = load("input-collector.json")["collectorItems"]
+    rank = {"f-": 0, "i-": 1, "k-": 2, "c-": 3}
+    prefixes = [c["id"][:2] for c in build(records, advisor)["cards"]]
+    assert [rank[p] for p in prefixes] == sorted(rank[p] for p in prefixes)
+    assert prefixes.count("k-") == 2 and prefixes[-1] == "c-"
+
+
+def collector_store(sheet, picks, covers=None, verdict="merge"):
+    ids = [c["id"] for c in sheet["cards"]]
+    answers = {i: card_doc("option", pick) for i, pick in zip(ids, picks) if pick}
+    raw = json.dumps(sheet, indent=2).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    covered = [f"answers/{i}@{REV_A}" for i in (ids if covers is None else covers)]
+    return raw, {"answers": answers, "walk": {}, "verdict": {digest: merge_doc(covered, digest)} if verdict else {}}
+
+
+def test_collector_cards_are_answered_and_covered_like_any_card():
+    # Axis: the PR's state counts the collector cards, a Merge covering exactly their answers makes it ready, and a pick that sends back makes it being-fixed.
+    # Bites on: collector cards missing from the total, a Merge standing over an unanswered collector card, or a send-back option not read.
+    sheet = collector_sheet()
+    ids = [c["id"] for c in sheet["cards"]]
+    send_back = next(o["id"] for o in sheet["cards"][0]["options"] if o["sendsBack"])
+    keep = next(o["id"] for o in sheet["cards"][0]["options"] if not o["sendsBack"])
+    raw, store = collector_store(sheet, [None, None], verdict=None)
+    assert pr_sheet.pr_state(raw, store, WORDS) == {"state": "needs-you", "accepted": 0, "total": 2, "walked": 0, "walkTotal": 0}
+    raw, store = collector_store(sheet, [keep, keep])
+    assert pr_sheet.pr_state(raw, store, WORDS) == {"state": "ready", "accepted": 2, "total": 2, "walked": 0, "walkTotal": 0}
+    raw, store = collector_store(sheet, [keep, None])
+    assert pr_sheet.pr_state(raw, store, WORDS)["state"] == "needs-you"
+    raw, store = collector_store(sheet, [keep, keep], covers=ids[:1])
+    assert pr_sheet.pr_state(raw, store, WORDS)["state"] == "needs-you"
+    raw, store = collector_store(sheet, [keep, send_back])
+    assert pr_sheet.pr_state(raw, store, WORDS)["state"] == "being-fixed"
+
+
+def test_a_collector_card_naming_its_own_number_is_not_refused():
+    # Axis: a card that carries its own options is never refused for mentioning a list item by number.
+    # Bites on: the pointer scan reading cards that have options.
+    advisor = load("input-collector.json")
+    assert "item 1435 on your list" in advisor["collectorItems"][0]["context"]
+    assert "item 1435 on your list" in json.dumps(collector_sheet()["cards"][0]["context"])
+
+
+POINTER_TITLE = "Disclosures"
+POINTER_ITEM = {"id": "accepting", "kind": "What you're accepting", "title": POINTER_TITLE, "options": "none"}
+POINTER_PROBLEM = ("items accepting: card {title!r} sends the owner to a list item ({found!r}) instead of carrying that decision's options; "
+                   "put the decision on this sheet as a collectorItems card, or give this card its own options")
+
+
+def with_pointer_item(text, **more):
+    def edit(advisor):
+        advisor["items"].append({**POINTER_ITEM, "ifLeft": text, **more})
+    return edit
+
+
+def with_pointer_on_retry(text):
+    def edit(advisor):
+        advisor["items"][0]["ifLeft"] = text
+    return edit
+
+
+def with_pointer_on_f7(text):
+    def edit(advisor):
+        advisor["leftovers"]["F7"]["context"] = text
+    return edit
+
+
+# Each refused row's text matches exactly one pattern alternative, except the field case, which matches two.
+REFUSED_POINTERS = [
+    pytest.param("Whether to change that is decision item 1435.", "decision item 1435", id="refused-decision-item"),
+    pytest.param("see item 1435 on your list", "item 1435 on your list", id="refused-item-on-your-list"),
+    pytest.param("collector #1435", "collector #1435", id="refused-collector-number"),
+    pytest.param("Whether to change that is decision item 1435 on your list", "decision item 1435", id="refused-field-case"),
+]
+
+
+@pytest.mark.parametrize("text, found", REFUSED_POINTERS)
+def test_an_option_less_card_that_points_to_a_list_item_is_refused(text, found):
+    # Axis: an option-less card whose shown text sends the owner to a list item by number is refused, naming the card's input location, its title and the matched text.
+    # Bites on: the refusal not raised, or any one of the three pattern shapes missing.
+    records, advisor = bundle(BIG)
+    with_pointer_item(text)(advisor)
+    assert problems_of(records, advisor) == [POINTER_PROBLEM.format(title=POINTER_TITLE, found=found)]
+
+
+@pytest.mark.parametrize("text", [row.values[0] for row in REFUSED_POINTERS], ids=[row.id.replace("refused", "allowed-with-options") for row in REFUSED_POINTERS])
+def test_a_card_with_options_is_never_refused_for_mentioning_a_list_item(text):
+    # Axis: the same text on a card that carries a list of options builds.
+    # Bites on: the pointer scan reading cards that have options.
+    records, advisor = bundle(BIG)
+    with_pointer_on_retry(text)(advisor)
+    assert build(records, advisor)["cards"][2]["context"][0]["blocks"] == [{"paragraph": text}]
+
+
+def test_a_leftover_with_the_three_option_object_is_never_refused_for_a_list_item():
+    # Axis: a leftover whose options are the three-option object carries options, so its context may name a list item.
+    # Bites on: the pointer scan reading leftover cards that have options.
+    records, advisor = bundle(BIG)
+    with_pointer_on_f7("Whether to change that is decision item 1435.")(advisor)
+    assert any("decision item 1435" in json.dumps(c["context"]) for c in build(records, advisor)["cards"])
+
+
+@pytest.mark.parametrize("text", ["configure item 18 is set", "item 3 of the DoD", "Item 12 is done and item 14 follows"])
+def test_a_number_with_no_list_word_beside_it_is_not_a_pointer(text):
+    # Axis: a bare item number with no list, collector or decision word adjacent is not a pointer.
+    # Bites on: a pattern wide enough to refuse every mention of an item number.
+    records, advisor = bundle(BIG)
+    with_pointer_item(text)(advisor)
+    assert any(c["question"] == POINTER_TITLE for c in build(records, advisor)["cards"])
+
+
+def test_a_leftover_with_no_options_that_points_away_is_refused_naming_its_key():
+    # Axis: an option-less leftover is scanned too, and the problem names the key the leftover was found under.
+    # Bites on: the leftover cards left out of the scan, or the location label wrong.
+    records, advisor = bundle(BIG)
+    advisor["leftovers"]["F6"]["context"] = "see item 1435 on your list"
+    problems = problems_of(records, advisor)
+    assert len(problems) == 1 and problems[0].startswith("leftovers F6: card 'Customers are not told a retry happened' sends the owner to a list item ('item 1435 on your list')")
+
+
+POINTER_PLACES = [
+    pytest.param(lambda a: a["items"].append({**POINTER_ITEM, "title": "Decision item 1435", "ifLeft": "Nothing else."}), "items accepting", "Decision item 1435", id="in-the-question"),
+    pytest.param(with_pointer_item("Nothing else.", recommendation={"text": "Accept collector item 1435", "reason": "It is small."}), "items accepting", "collector item 1435", id="in-the-recommendation-text"),
+    pytest.param(with_pointer_item("Nothing else.", recommendation={"text": "Accept", "reason": "Covered by list item 1435."}), "items accepting", "list item 1435", id="in-the-recommendation-reason"),
+    pytest.param(lambda a: a.update(closesSpec={"spec": "decision item 1435", "receipt": "It shipped."}), "closesSpec", "decision item 1435", id="in-the-closure-spec-name"),
+    pytest.param(lambda a: a.update(closesSpec={"spec": "the receipt spec", "receipt": "Answered as collector number 1435."}), "closesSpec", "collector number 1435", id="in-the-closure-receipt"),
+]
+
+
+@pytest.mark.parametrize("edit, where, found", POINTER_PLACES)
+def test_a_pointer_is_found_wherever_an_option_less_card_shows_text(edit, where, found):
+    # Axis: the scan covers the question, every context block, the recommendation's text and reason, and the closure card built from the words file and the spec name.
+    # Bites on: a shown field left out of the scan.
+    records, advisor = bundle(BIG)
+    edit(advisor)
+    problems = problems_of(records, advisor)
+    assert len(problems) == 1 and problems[0].startswith(where + ": card ") and f"({found!r})" in problems[0]
+
+
+def test_every_pointer_in_every_option_less_card_is_listed_in_one_refusal():
+    # Axis: one refusal carries a problem for each pointing card, not just the first.
+    # Bites on: the refusal raised on the first pointing card.
+    records, advisor = bundle(BIG)
+    advisor["leftovers"]["F6"]["context"] = "see item 1435 on your list"
+    with_pointer_item("collector #1501")(advisor)
+    problems = problems_of(records, advisor)
+    assert [p.split(":")[0] for p in problems] == ["leftovers F6", "items accepting"]
+
+
+def collector_edit(change):
+    def edit(advisor):
+        change(advisor["collectorItems"])
+    return edit
+
+
+COLLECTOR_REFUSALS = [
+    pytest.param(lambda a: a.update(collectorItems={}), "collectorItems must be a list", id="not-a-list"),
+    pytest.param(collector_edit(lambda c: c.__setitem__(0, "item")), "collectorItems entry 1 must be an object", id="entry-not-an-object"),
+    pytest.param(collector_edit(lambda c: c[0].pop("ifLeft")), "collectorItems 1435 is missing ifLeft", id="missing-key"),
+    pytest.param(collector_edit(lambda c: c[0].update(extra=1)), "collectorItems 1435 has an unknown key extra", id="unknown-key"),
+    pytest.param(collector_edit(lambda c: c[0].update(number=0)), "collectorItems entry 1 needs number, an integer 1 or more", id="number-zero"),
+    pytest.param(collector_edit(lambda c: c[0].update(number=True)), "collectorItems entry 1 needs number, an integer 1 or more", id="number-a-bool"),
+    pytest.param(collector_edit(lambda c: c[1].update(number=1435)), "collectorItems 1435 repeats the number 1435", id="duplicate-number"),
+    pytest.param(collector_edit(lambda c: c[0].update(title="")), "collectorItems 1435: title must be a non-empty string", id="empty-title"),
+    pytest.param(collector_edit(lambda c: c[0].update(why=" ")), "collectorItems 1435: why must be a non-empty string", id="empty-why"),
+    pytest.param(collector_edit(lambda c: c[0].update(context="")), "collectorItems 1435: context must be a non-empty string", id="empty-context"),
+    pytest.param(collector_edit(lambda c: c[0].update(ifLeft="")), "collectorItems 1435: ifLeft must be a non-empty string", id="empty-if-left"),
+    pytest.param(collector_edit(lambda c: c[0].update(options="none")), "collectorItems 1435: options must be a list of at least 1 option", id="options-none"),
+    pytest.param(collector_edit(lambda c: c[0].update(options=[])), "collectorItems 1435: options must be a list of at least 1 option", id="options-empty"),
+    pytest.param(collector_edit(lambda c: c[0].update(options="a")), "collectorItems 1435: options must be a list of at least 1 option", id="options-a-string"),
+    pytest.param(collector_edit(lambda c: c[0].update(options={"a": "x"})), "collectorItems 1435: options must be a list of at least 1 option", id="options-a-dict"),
+    pytest.param(collector_edit(lambda c: c[0]["options"].reverse()), "option 1 must have the id 'a'", id="option-ids-out-of-order"),
+    pytest.param(collector_edit(lambda c: c[0]["options"][1].update(id="x")), "option 2 must have the id 'b'", id="option-id-not-the-next-letter"),
+    pytest.param(collector_edit(lambda c: c[0].pop("recommendation")), "collectorItems 1435 is missing recommendation", id="recommendation-missing"),
+    pytest.param(collector_edit(lambda c: c[0]["recommendation"].pop("optionId")), "collectorItems 1435: recommendation needs an optionId", id="recommendation-without-option-id"),
+    pytest.param(collector_edit(lambda c: c[0]["recommendation"].update(optionId="z")), "optionId 'z' is not one of its options", id="recommendation-option-id-unknown"),
+]
+
+
+@pytest.mark.parametrize("edit, expected", COLLECTOR_REFUSALS)
+def test_a_collector_input_that_breaks_a_rule_is_refused(edit, expected):
+    # Axis: each collectorItems shape the builder cannot trust is refused with a problem that names the entry and the cause.
+    # Bites on: letter order unchecked, the recommendation or its optionId made optional, "none" or an empty list accepted, a duplicate number or an unknown key let through.
+    records, advisor = bundle(COLLECTOR)
+    edit(advisor)
+    assert any(expected in p for p in problems_of(records, advisor))
