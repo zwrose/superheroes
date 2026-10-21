@@ -297,8 +297,8 @@ def test_cloud_argv_accepts_a_64_character_name():
     assert built["reason"] is None
 
 
-def test_cloud_argv_grants_the_attach_tool_through_its_settings():
-    # axis: a non-empty allow_tools puts a permissions.allow list after `remote` in the --settings JSON — see bite-proof record wo_a_1948_add_repo_grant
+def test_cloud_argv_grants_the_attach_tool_through_its_settings_and_allowed_tools():
+    # axis: a non-empty allow_tools puts a permissions.allow list after `remote` in the --settings JSON, and the grant also adds --allowedTools before --disallowedTools — see bite-proof record wo_a_1948_add_repo_grant and wo_a2_1948_allowed_tools
     built = EA.claude_cloud_builder_argv(
         "opus", "medium", "the prompt", ENV_ID, "issue-1-ab", allow_tools=(EA.CLOUD_ATTACH_TOOL,),
     )
@@ -308,21 +308,37 @@ def test_cloud_argv_grants_the_attach_tool_through_its_settings():
             "--settings",
             '{"remote":{"defaultEnvironmentId":"env_01AbCdEf"},"permissions":{"allow":["mcp__claude-code-remote__add_repo"]}}',
             "--model", "opus", "--effort", "medium", "--permission-mode", "auto",
+            "--allowedTools", "mcp__claude-code-remote__add_repo",
             "--disallowedTools", "AskUserQuestion", "-n", "issue-1-ab",
         ],
         "reason": None,
     }
 
 
+def test_cloud_argv_passes_every_allowed_tool_in_order_before_the_disallowed_tools():
+    # axis: every tool in allow_tools follows one --allowedTools, in order, before --disallowedTools (or straight before -n when none) — see bite-proof record wo_a2_1948_allowed_tools
+    argv = EA.claude_cloud_builder_argv("opus", None, "p", ENV_ID, "n", allow_tools=("t1", "t2"))["argv"]
+    assert argv[argv.index("--allowedTools"):] == [
+        "--allowedTools", "t1", "t2", "--disallowedTools", "AskUserQuestion", "-n", "n",
+    ]
+    assert argv.count("--allowedTools") == 1
+    bare = EA.claude_cloud_builder_argv(
+        "opus", None, "p", ENV_ID, "n", disallowed_tools=None, allow_tools=("t1", "t2"),
+    )["argv"]
+    assert bare[bare.index("--allowedTools"):] == ["--allowedTools", "t1", "t2", "-n", "n"]
+    assert bare.count("--allowedTools") == 1
+
+
 @pytest.mark.parametrize("allow_tools", [None, ()], ids=["none", "empty"])
 def test_cloud_argv_without_an_allowed_tool_is_the_argv_of_the_call_without_the_argument(allow_tools):
-    # axis: no allow_tools (None or empty) leaves the --settings JSON and the whole argv exactly as the call that never names it — see bite-proof record wo_a_1948_add_repo_grant
+    # axis: no allow_tools (None or empty) leaves the --settings JSON and the whole argv exactly as the call that never names it — see bite-proof record wo_a_1948_add_repo_grant and wo_a2_1948_allowed_tools
     plain = EA.claude_cloud_builder_argv("opus", "medium", "the prompt", ENV_ID, "issue-1-ab")
     built = EA.claude_cloud_builder_argv(
         "opus", "medium", "the prompt", ENV_ID, "issue-1-ab", allow_tools=allow_tools,
     )
     assert built == plain
     assert "permissions" not in built["argv"][built["argv"].index("--settings") + 1]
+    assert "--allowedTools" not in built["argv"]
 
 
 def test_the_attach_tool_is_claude_codes_permission_rule_name_for_add_repo():
@@ -561,7 +577,7 @@ def _settings_of(argv):
 
 
 def test_compose_cloud_with_extra_repositories_grants_the_attach_tool_and_leaves_the_prompt_alone(tmp_path):
-    # axis: a stamped premise carrying extraRepositories makes the cloud launch's --settings allow the attach tool, and only the --settings changes — see bite-proof record wo_a_1948_add_repo_grant
+    # axis: a stamped premise carrying extraRepositories makes the cloud launch's --settings allow the attach tool, and only the --settings and --allowedTools change — see bite-proof record wo_a_1948_add_repo_grant and wo_a2_1948_allowed_tools
     repo = _init_repo(tmp_path / "repo")
     plain = _compose_cloud_with(repo, _stamped(repo))
     granted = _compose_cloud_with(repo, _stamped_with_extras(repo, EXTRAS))
@@ -569,18 +585,23 @@ def test_compose_cloud_with_extra_repositories_grants_the_attach_tool_and_leaves
     settings = json.loads(_settings_of(granted["argv"]))
     assert settings["permissions"]["allow"] == [EA.CLOUD_ATTACH_TOOL]
     assert settings["remote"] == {"defaultEnvironmentId": ENV_ID}
+    assert granted["argv"].count("--allowedTools") == 1
+    i = granted["argv"].index("--allowedTools")
+    assert granted["argv"][i + 1] == EA.CLOUD_ATTACH_TOOL
+    assert granted["argv"][i + 2] == "--disallowedTools"
     assert granted["prompt"] == plain["prompt"]
     assert granted["argv"][2] == granted["prompt"]
 
 
 def test_compose_cloud_without_extra_repositories_composes_the_argv_it_always_did(tmp_path):
-    # axis: a stamped premise without extraRepositories grants nothing — the --settings is the bare environment and the argv is the unchanged builder argv — see bite-proof record wo_a_1948_add_repo_grant
+    # axis: a stamped premise without extraRepositories grants nothing — the --settings is the bare environment and the argv is the unchanged builder argv — see bite-proof record wo_a_1948_add_repo_grant and wo_a2_1948_allowed_tools
     repo = _init_repo(tmp_path / "repo")
     composed = _compose_cloud_with(repo, _stamped(repo))
     assert composed["ok"] is True
     argv = composed["argv"]
     assert _settings_of(argv) == '{"remote":{"defaultEnvironmentId":"%s"}}' % ENV_ID
     assert not any("permissions" in part for part in argv)
+    assert "--allowedTools" not in argv
     token = argv[argv.index("--model") + 1]
     effort = argv[argv.index("--effort") + 1]
     assert argv == EA.claude_cloud_builder_argv(

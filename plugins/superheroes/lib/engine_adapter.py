@@ -799,7 +799,8 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
     `CLOUD_PERMISSION_MODE` (`permission_mode=None` passes no mode), it starts without the tools in
     `CLOUD_DISALLOWED_TOOLS` (`disallowed_tools=None` or empty passes no flag), and `-n` names the
     session. The disallowed-tools flag takes a variadic value, so it always sits before `-n`.
-    A non-empty `allow_tools` adds a `permissions.allow` list to the `--settings` JSON; None or empty adds nothing.
+    A non-empty `allow_tools` is granted both through the `--settings` JSON's `permissions.allow` list and through
+    `--allowedTools`; None or empty adds neither.
     """
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
@@ -829,6 +830,8 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
         argv += ["--effort", effort]
     if permission_mode:
         argv += ["--permission-mode", permission_mode]
+    if allow_tools:
+        argv += ["--allowedTools", *allow_tools]
     if disallowed_tools:
         argv += ["--disallowedTools", *disallowed_tools]
     argv += ["-n", session_name]

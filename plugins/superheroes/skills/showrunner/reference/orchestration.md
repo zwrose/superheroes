@@ -154,8 +154,8 @@ lane's `started` record, and returns once the session exists. It does not wait f
   premise (`premise-extra-repositories-invalid`).
 - A premise with `extraRepositories` (the issue's extra-repositories line, copied by the advisor)
   makes the launch grant the cloud session the `mcp__claude-code-remote__add_repo` permission through
-  that launch's `--settings` and nowhere else. A premise without it launches exactly as before, and
-  the launch prompt is unchanged either way.
+  that launch's `--settings` and its `--allowedTools` flag, and nowhere else. A premise without it
+  launches exactly as before, and the launch prompt is unchanged either way.
 - When the command could not be started at all, the launch refuses and ends the lane, as a local
   launch does when it cannot spawn.
 - Once the command has run, the launcher never ends the lane. The launch returns one of three
