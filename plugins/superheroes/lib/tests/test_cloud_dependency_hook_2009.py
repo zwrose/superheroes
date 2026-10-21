@@ -1,5 +1,5 @@
 """Tests for #2009: configure item 19 (the cloud dependency hook), the hook wiring in `set_item`,
-the stamp exception, the setup text's record step.
+the stamp exception, the setup text's record step and the `offer` command.
 
 Every fixture project is a real git repository under tmp_path (every git call pins its global and
 system configuration away), and every store, home and Claude config directory is under tmp_path too.
@@ -7,6 +7,7 @@ No test reads the real home directory or the network, and the hook script is run
 environment the test builds itself.
 """
 import datetime
+import io
 import json
 import os
 import re
@@ -324,6 +325,53 @@ def test_the_first_item_17_set_with_the_hook_on_writes_a_script_that_lists_the_f
     assert done["dependencyHook"]["action"] == "written"
     assert w.script.read_text() == hook.script_text(["npm ci"], ["package-lock.json"])
     _assert_files_match_stored(w)
+
+
+def _cli_set(w, monkeypatch, capsys, slug, value):
+    """`project_config set` as set-up.md § 6 runs it: the json value on stdin, the result on stdout."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(value)))
+    assert PC.main(["set", "--item", slug, "--cwd", w.cwd, "--root", w.root]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def _offered_project(tmp_path, monkeypatch, capsys):
+    """A project whose item 18 is absent (item 17 stored with no fill) and the offer it gets."""
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    stored = core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    assert stored["action"] in ("written", "noop"), stored
+    assert _raw(w, INPUTS_SLUG) is None
+    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
+    offer = json.loads(capsys.readouterr().out)
+    assert offer["inputsSource"] == "detected" and offer["inputs"] == ["package-lock.json"]
+    assert not w.script.exists() and not w.settings.exists()
+    return w, offer
+
+
+def test_saving_the_offered_inputs_as_item_18_then_enabling_item_19_hashes_them(
+        tmp_path, monkeypatch, capsys):
+    # axis: the offer's detected `inputs`, saved as item 18 then item 19 on yes, are what the script hashes
+    w, offer = _offered_project(tmp_path, monkeypatch, capsys)
+    saved = _cli_set(w, monkeypatch, capsys, INPUTS_SLUG, offer["inputs"])
+    assert saved["action"] in ("written", "noop"), saved
+    assert _raw(w, INPUTS_SLUG) == offer["inputs"]
+    enabled = _cli_set(w, monkeypatch, capsys, HOOK_SLUG, True)
+    assert enabled["dependencyHook"]["action"] == "written", enabled
+    assert w.script.read_text() == hook.script_text(["npm ci"], offer["inputs"])
+    assert "package-lock.json" in w.script.read_text()
+    _assert_files_match_stored(w)
+
+
+def test_answering_no_to_the_offer_writes_no_hook_files(tmp_path, monkeypatch, capsys):
+    # axis: item 19 set `false` after the offer writes neither the script nor the settings entry
+    w, offer = _offered_project(tmp_path, monkeypatch, capsys)
+    saved = _cli_set(w, monkeypatch, capsys, INPUTS_SLUG, offer["inputs"])
+    assert saved["action"] in ("written", "noop"), saved
+    declined = _cli_set(w, monkeypatch, capsys, HOOK_SLUG, False)
+    assert declined["action"] in ("written", "noop"), declined
+    assert "dependencyHook" not in declined
+    assert _raw(w, HOOK_SLUG) is False
+    assert not w.script.exists() and not w.settings.exists()
 
 
 def test_a_project_that_never_opted_in_never_has_its_settings_file_read(tmp_path):
@@ -790,6 +838,90 @@ def test_the_record_step_is_skipped_when_a_command_fails(tmp_path):
     assert proc.returncode != 0
     assert "setup command 1 FAILED" in proc.stdout
     assert "dependency hook" not in proc.stdout
+
+
+# ---------------------------------------------------------------- the offer command
+
+
+def test_offer_refuses_when_no_setup_commands_are_listed(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    rc = hook.main(["offer", "--cwd", w.cwd, "--root", w.root])
+    captured = capsys.readouterr()
+    assert rc == 1 and captured.out == ""
+    refusal = json.loads(captured.err)
+    assert refusal["action"] == "refused" and refusal["reason"] == "no-setup-commands"
+    _set_ok(w, COMMANDS_SLUG, [])
+    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 1
+
+
+def test_offer_names_the_detected_inputs_when_item_18_is_unset(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _lock(w, "uv.lock", "x\n")
+    # axis: the offer's `commands` counts the listed commands, not the inputs (3 commands, 2 inputs)
+    commands = ["npm ci", "make", "make lint"]
+    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, commands, root=w.root)
+    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got == {"action": "offer", "message": hook.offer_message(commands,
+                                                                    ["package-lock.json", "uv.lock"]),
+                   "commands": 3, "inputs": ["package-lock.json", "uv.lock"],
+                   "inputsSource": "detected"}
+    assert len(got["inputs"]) == 2
+    assert "re-runs your 3 listed setup commands only when" in got["message"]
+
+
+def test_offer_refuses_when_the_repository_root_cannot_be_found(tmp_path, monkeypatch, capsys):
+    # axis: an unset item 18 with no repository root refuses the offer rather than offering no inputs
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+
+    real_root = store_core.repo_root
+
+    def no_root(cwd, **kw):
+        # every other reader of the root still finds it, so only the offer's own lookup fails
+        if sys._getframe(1).f_code.co_name == "_offer":
+            raise store_core.RepoRootUnavailable("not a checkout")
+        return real_root(cwd, **kw)
+
+    monkeypatch.setattr(store_core, "repo_root", no_root)
+    rc = hook.main(["offer", "--cwd", w.cwd, "--root", w.root])
+    captured = capsys.readouterr()
+    assert rc == 1 and captured.out == ""
+    refusal = json.loads(captured.err)
+    assert refusal["action"] == "refused" and refusal["reason"] == "repo-root-unavailable"
+
+
+def test_offer_uses_the_stored_inputs_when_item_18_is_stored(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, ["npm ci"])
+    _set_ok(w, INPUTS_SLUG, ["other.lock"])
+    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["inputs"] == ["other.lock"] and got["inputsSource"] == "stored"
+    assert got["message"] == hook.offer_message(["npm ci"], ["other.lock"])
+
+
+def test_offer_leaves_out_a_detected_name_item_18_would_refuse(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    _lock(w)
+    _lock(w, "requirements dev.txt", "x\n")
+    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    assert hook.main(["offer", "--cwd", w.cwd, "--root", w.root]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["inputs"] == ["package-lock.json"] and got["inputsSource"] == "detected"
+
+
+def test_offer_refuses_stored_inputs_item_18_would_refuse(tmp_path, capsys):
+    w = _world(tmp_path, mode_registry.IN_REPO)
+    core_md.write_project_config_item(w.cwd, COMMANDS_SLUG, ["npm ci"], root=w.root)
+    core_md.write_project_config_item(w.cwd, INPUTS_SLUG, ["/tmp/deps.lock"], root=w.root)
+    rc = hook.main(["offer", "--cwd", w.cwd, "--root", w.root])
+    captured = capsys.readouterr()
+    assert rc == 1 and captured.out == ""
+    assert json.loads(captured.err)["reason"] == "setup-inputs-malformed"
 
 
 @pytest.mark.parametrize("mode", MODES)

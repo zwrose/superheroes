@@ -479,6 +479,17 @@ def test_the_script_text_carries_the_published_names(repo):
     assert "set -e" not in text
 
 
+def test_offer_message_names_what_the_owner_decides(repo):
+    text = hook.offer_message(COMMANDS, INPUTS)
+    assert len(text) < 900
+    assert text.endswith("Add the dependency hook?")
+    for needle in ("optional", ".claude/settings.json", "commit and push", "package-lock.json",
+                   "uv.lock", "3 listed setup commands", "next session tries again"):
+        assert needle in text, needle
+    empty = hook.offer_message(["make"], [])
+    assert "no files are listed yet" in empty and "1 listed setup command " in empty
+
+
 def test_a_failed_run_does_not_let_a_return_to_the_earlier_inputs_skip_the_setup(repo):
     commands = ["cp deps.lock installed-deps", "grep -qx A deps.lock"]
     script = _installed(repo, commands, ["deps.lock"])
