@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import re
+import subprocess
 import sys
 
 import pytest
@@ -560,15 +561,61 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
     # equality means any softening has to edit this literal too — a third, deliberate site.
     assert text == (
         "commits inherit the git identity the worktree resolves through git's normal cascade "
-        "— repo-local `.git/config` when set, otherwise this environment's global config; "
+        "— the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment variables when set, otherwise "
+        "repo-local `.git/config`, otherwise this environment's global config; "
         "never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or "
-        "wrong identity — an empty *resolved* `git config user.email`/`user.name`, never an "
-        "empty `--local` — is a park-and-report, not an improvisation."
+        "wrong identity — `git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT` or "
+        "`GIT_COMMITTER_IDENT` failing, never an empty `git config` answer alone — "
+        "is a park-and-report, not an improvisation."
     )
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py::test_compose_git_identity_ruling_in_prompt — not here. Re-checking the
     # block for the line at this point would be vacuous: a parsed ruling exists only because
     # _parse_rulings_block matched that exact line in that exact block.
+
+
+# --- git_identity: the one test of whether a session has a commit identity -------------------
+
+_IDENTITY_VARS = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+
+
+@pytest.fixture
+def identity_repo(tmp_path, monkeypatch):
+    """A real git repository whose git sees no configuration but its own and no identity variable."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for var in _IDENTITY_VARS + ("EMAIL",):
+        monkeypatch.delenv(var, raising=False)
+    path = tmp_path / "identity-repo"
+    subprocess.run(["git", "init", "-q", str(path)], check=True, capture_output=True, text=True)
+    return str(path)
+
+
+def test_git_identity_is_true_on_a_variables_only_environment(identity_repo, monkeypatch):
+    for var, value in zip(_IDENTITY_VARS, ("A", "a@example.invalid", "C", "c@example.invalid")):
+        monkeypatch.setenv(var, value)
+    # axis: a builder whose identity comes only from the four variables does not park
+    assert LD.git_identity(identity_repo) == {"author": True, "committer": True}
+
+
+def test_git_identity_is_false_when_nothing_is_set(identity_repo):
+    # axis: a session with no variable and no config resolves no identity, so it parks
+    assert LD.git_identity(identity_repo) == {"author": False, "committer": False}
+
+
+def test_git_identity_is_true_for_a_repo_local_name_and_email(identity_repo):
+    for key, value in (("user.name", "Owner"), ("user.email", "owner@example.invalid")):
+        subprocess.run(["git", "-C", identity_repo, "config", "--local", key, value], check=True,
+                       capture_output=True, text=True)
+    # axis: an identity set in the repository's own config counts
+    assert LD.git_identity(identity_repo) == {"author": True, "committer": True}
+
+
+def test_git_identity_is_false_when_only_EMAIL_is_set(identity_repo, monkeypatch):
+    monkeypatch.setenv("EMAIL", "guess@example.invalid")
+    # axis: an identity git would guess (from $EMAIL) never counts
+    assert LD.git_identity(identity_repo) == {"author": False, "committer": False}
 
 
 def test_gated_strings_ruling_is_delivered_with_its_prohibitions():
