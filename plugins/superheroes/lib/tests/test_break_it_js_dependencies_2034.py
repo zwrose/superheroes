@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+from unittest import mock
 
 import pytest
 
@@ -178,8 +179,11 @@ def test_t4_npx_with_a_global_install_holding_the_fake_is_not_run(tmp_path, monk
     (prefix / "bin").mkdir(parents=True)
     os.symlink("../lib/node_modules/vitest/bin/vitest.mjs", prefix / "bin" / "vitest")
     monkeypatch.setenv("npm_config_prefix", str(prefix))
+    launched = mock.Mock(wraps=break_it._run_contained)
+    monkeypatch.setattr(break_it, "_run_contained", launched)
     got = _run(_repo(tmp_path, install=False), PASSING, NPX_RUN)
-    assert (got["outcome"], got["reason"]) == ("not-run", "module-not-found"), got
+    assert (got["outcome"], got["reason"], got["exitCode"]) == ("not-run", "module-not-found", None), got
+    launched.assert_not_called()
 
 
 # T5
