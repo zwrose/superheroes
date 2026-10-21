@@ -541,9 +541,11 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/cloud_dependency_hook.py" offer --cwd .
 ```
 
-A refusal means there is nothing to offer: skip the offer. When the owner says yes and the offer's
-`inputsSource` is `detected`, first save the offer's `inputs` as item 18 (the JSON list), and go on
-only when the result is `written` or `noop`; item 19 alone would leave the hook watching nothing.
+A refusal means there is nothing to offer: skip the offer. Whatever the owner answers, when the
+offer's `inputsSource` is `detected`, first save the offer's `inputs` as item 18 (the JSON list),
+and go on only when the result is `written` or `noop`. On yes, item 19 alone would leave the hook
+watching nothing; on no, the files would stay out of the setup text's stamp, so a change to one
+would never make the cloud check ask for new setup text, as the offer tells the owner it will.
 Leave an item 18 the owner already stored as it is.
 
 ```bash

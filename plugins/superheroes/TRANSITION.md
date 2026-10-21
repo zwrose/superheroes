@@ -12,6 +12,16 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
+
+### Configure: the hook offer saves the detected inputs on either answer
+
+- configure's cloud setup sitting (`skills/configure/reference/set-up.md` § 6, the dependency hook offer) and its item 19 tune row (`skills/configure/reference/view-and-tune.md`) save the offer's detected `inputs` as item 18 whether the owner accepts or declines the hook. Before, only a yes saved them, so a decline left item 18 unset and the input files out of the stamp, though the offer says a change to them makes the cloud check ask for a re-paste. Accepting is unchanged. No code or result shape changed.
+
 ## 0.45.0
 
 ### Before you upgrade

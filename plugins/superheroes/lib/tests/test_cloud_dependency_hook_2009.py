@@ -374,6 +374,23 @@ def test_answering_no_to_the_offer_writes_no_hook_files(tmp_path, monkeypatch, c
     assert not w.script.exists() and not w.settings.exists()
 
 
+def test_declining_the_offer_after_saving_its_inputs_makes_a_lockfile_change_ask_for_a_re_paste(
+        tmp_path, monkeypatch, capsys):
+    # axis: a decline that saved the offered inputs puts them in the stamp, so a lockfile change reads stale
+    w, offer = _offered_project(tmp_path, monkeypatch, capsys)
+    saved = _cli_set(w, monkeypatch, capsys, INPUTS_SLUG, offer["inputs"])
+    assert saved["action"] in ("written", "noop"), saved
+    declined = _cli_set(w, monkeypatch, capsys, HOOK_SLUG, False)
+    assert declined["action"] in ("written", "noop"), declined
+    assert _raw(w, INPUTS_SLUG) == offer["inputs"]
+    before = _stamp(w)
+    _record(w, before)
+    assert _calibration_condition(w) is True
+    _lock(w, text="v2\n")
+    assert _stamp(w) != before
+    assert _calibration_condition(w) is False
+
+
 def test_a_project_that_never_opted_in_never_has_its_settings_file_read(tmp_path):
     w = _world(tmp_path, mode_registry.IN_REPO)
     w.settings.parent.mkdir(parents=True, exist_ok=True)

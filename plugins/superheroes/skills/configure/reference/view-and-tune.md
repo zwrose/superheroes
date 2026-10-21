@@ -193,10 +193,11 @@ action that owns it, leaving the rest of the calibration untouched:
   setup text out of date until new setup text is pasted. With item 19 on, a change to a listed file
   does not make the setup text out of date.
 
-- **Keep cloud dependencies current with a hook (item 19)** → write only item 19, `true` to add the
+- **Keep cloud dependencies current with a hook (item 19)** → write item 19, `true` to add the
   project's dependency hook and `false` to remove it. The hook is a start-of-session script that,
   in a cloud session, re-runs the item 17 commands when the files in item 18 changed. Run the offer
-  first (set-up § 6) so the owner hears the cost before choosing.
+  first (set-up § 6) so the owner hears the cost before choosing, and on either answer save its
+  detected inputs as item 18 before item 19, as set-up § 6 says.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
