@@ -18,6 +18,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
 - **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
+- **After switching.** **Nothing is owed, and there is no new setting.** A JavaScript project's break-it tests run when the reviewed checkout has `node_modules` installed; a build worktree with no `npm install` records them not-run. See [Break-it tests: a JavaScript test reaches the installed dependencies](#break-it-tests-a-javascript-test-reaches-the-installed-dependencies).
 
 ### Configure: the hook offer saves the detected inputs on either answer
 
@@ -28,6 +29,14 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A check run that a newer run of the same check superseded no longer reads red. A check is the same name, app, workflow, event, head branch and pull request (two pull requests sharing one head commit never replace each other's checks); a workflow that re-runs on one commit (a cancelled run, then a rerun) leaves its older check runs listed, and only the newest run of each check is read. A check whose newest run is cancelled still reads red, and a different check's success never covers a failed one.
 - A check run whose identity cannot be established is not reduced: one with no name, id or app, or a GitHub Actions run whose suite maps to no workflow run on the commit. It is read as it is, so a failure on it still reads red.
 - The reduction applies to the whole paged check list, so a superseded run on one page and its replacement on another resolve the same way.
+
+### Break-it tests: a JavaScript test reaches the installed dependencies
+
+- A break-it test runs in a copy that holds the tracked files plus a symlink to the reviewed checkout's installed `node_modules` (`DEPENDENCY_DIRS` in `lib/break_it.py`), so an `npm test -- <file>` or `npx vitest run <file>` test resolves the project's dependencies. A head that tracks its own `node_modules` keeps it; nothing replaces it.
+- No tracked file of the reviewed checkout is written. A test may write untracked cache files inside the linked directory, such as vite's `node_modules/.vite-temp`; those land in the reviewed checkout's dependency tree. A block path under `node_modules/` is refused `path-escapes`.
+- A run whose program is `npm`, `npx`, `pnpm` or `yarn`, whose copy's `package.json` declares dependencies, and whose reviewed checkout has no installed `node_modules`, is recorded not-run (`module-not-found`) and launches nothing, so it never reads `passed` or `failed`. Any other run without `node_modules` runs as written and is read by the run-time setup-failure signature.
+- A `node_modules` with a package that links back into the reviewed checkout's tracked files (a workspace or `file:` package) is never linked: the run is recorded not-run (`dependency-link-unsafe`). A link or scan that fails is recorded not-run (`dependency-link-failed`).
+- A review seat's sanitized-view notice says the view holds tracked files only, with no installed dependencies, and that the review loop's break-it runner runs JavaScript tests itself.
 
 ## 0.45.0
 
