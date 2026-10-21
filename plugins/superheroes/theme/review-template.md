@@ -271,6 +271,11 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
 - Disclosures that offer no choice fold into one "What you're accepting" item with a single Accept,
   its `ifLeft` listing the disclosures, one sentence each (the page shows `ifLeft` as one paragraph).
   The fold is not a call, so the item bar above does not apply to it.
+- A collector item that concerns this PR is its own card, from the input's `collectorItems`. It is never
+  folded into the "What you're accepting" item and never only mentioned there by number. The builder
+  refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435
+  on your list", a collector number) instead of carrying that decision's options. It is a best-effort
+  pattern scan, so the rule binds the advisor whether or not the scan catches a wording.
 
 Each item shows, in this order, its kind, its title, what happens if it is left, its options with what
 each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
@@ -284,6 +289,10 @@ note left empty.
   true, `options` as the three leftover options (Keep it, Fix in a follow-up, Fix before merge) with
   their consequences for this finding, or `"none"` when nothing is left to decide, and a recommendation
   whose reason names the why and the cost. The input's exact shape is in `lib/pr_sheet.py`'s docstring.
+- A collector card shows, in order, its kind (naming the collector number), its title, **Why it's yours**,
+  **What happened**, **If left**, its lettered options (each label shown as `a. …`), the recommendation
+  naming its letter, the answer buttons and the note box. The input's exact shape is in `lib/pr_sheet.py`'s
+  docstring.
 - An item with no real choice offers **Accept** and **Discuss** and shows no options list.
 - When the merge closes a spec's last open piece, the spec's closure receipt is one of the items.
 

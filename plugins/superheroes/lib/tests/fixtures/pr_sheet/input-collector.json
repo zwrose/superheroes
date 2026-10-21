@@ -1,0 +1,35 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "pr",
+  "number": 211,
+  "title": "Reword the receipt page",
+  "summary": "The receipt page says 'Thank you for your order' in place of 'Order complete'.",
+  "collectorItems": [
+    {
+      "number": 1435,
+      "title": "Should the receipt page keep the old wording for gift orders?",
+      "why": "What a gift buyer reads on their receipt is a promise about how the shop talks to customers, and only you can decide that tone.",
+      "context": "The new wording thanks the buyer, but a gift order's receipt goes to the buyer and the new text reads oddly there. This is decision item 1435 on your list, and it is answered here.",
+      "options": [
+        {"id": "a", "label": "Use the new wording everywhere", "consequence": "Gift buyers read the thank-you line too; one wording to keep.", "sendsBack": false},
+        {"id": "b", "label": "Keep the old wording for gift orders", "consequence": "Gift receipts stay as they are; the PR keeps a second wording to maintain.", "sendsBack": false},
+        {"id": "c", "label": "Hold the PR until gift orders are reworded", "consequence": "The PR goes back and returns with a new sheet once gift receipts are settled.", "sendsBack": true}
+      ],
+      "ifLeft": "The new wording ships on gift receipts as well.",
+      "recommendation": {"text": "Use the new wording everywhere", "reason": "One wording is cheaper to keep, and gift buyers are still thanked for their order.", "optionId": "a"}
+    },
+    {
+      "number": 1501,
+      "title": "Should the receipt page show the order total in the thank-you line?",
+      "why": "Showing money on a page a customer may share is a privacy call about your customers, and only you can make it.",
+      "context": "A designer proposed adding the total to the thank-you line. The review found no rule against it and no rule for it.",
+      "options": [
+        {"id": "a", "label": "Leave the total out", "consequence": "The thank-you line stays short and shows no money.", "sendsBack": false},
+        {"id": "b", "label": "Add the total in a follow-up", "consequence": "This ships without the total; a follow-up adds it if you want it.", "sendsBack": false},
+        {"id": "c", "label": "Add the total before merge", "consequence": "The PR goes back to add the total and returns with a new sheet.", "sendsBack": true}
+      ],
+      "ifLeft": "The thank-you line ships without the total.",
+      "recommendation": {"text": "Leave the total out", "reason": "A receipt that is shared would show what the customer paid.", "optionId": "a"}
+    }
+  ]
+}

@@ -17,11 +17,19 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
+- **After switching.** **An advisor that put a PR-tied collector item in a "What you're accepting" item or a leftover's text by number must move it to `collectorItems`, because such a sheet input is now refused when that card has no options.** See [PR sheets: a PR-tied decision rides its PR's sheet](#pr-sheets-a-pr-tied-decision-rides-its-prs-sheet).
 - **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
 
 ### Configure: the hook offer saves the detected inputs on either answer
 
 - configure's cloud setup sitting (`skills/configure/reference/set-up.md` § 6, the dependency hook offer) and its item 19 tune row (`skills/configure/reference/view-and-tune.md`) save the offer's detected `inputs` as item 18 whether the owner accepts or declines the hook. Before, only a yes saved them, so a decline left item 18 unset and the input files out of the stamp, though the offer says a change to them makes the cloud check ask for a re-paste. Accepting is unchanged. No code or result shape changed.
+
+### PR sheets: a PR-tied decision rides its PR's sheet
+
+- `lib/pr_sheet.py build` takes a new optional input key, `collectorItems`: a list of `{number, title, why, context, options, ifLeft, recommendation}`, all required. `number` is the collector item's number (an integer, 1 or more, unique), `options` is a list of at least 1 option whose ids are `a`, `b`, `c` in order (`"none"` and an empty list are refused), and `recommendation` is `{text, reason, optionId}` with `optionId` required. Each entry is built as one option card after the `items` cards, so the merge verdict covers it like any other card. The sheet's data shape is unchanged.
+- `build` now refuses a card that has no options and whose shown text (question, context blocks, recommendation) sends the owner to a list item by number: "decision item 1435" (also "collector item", "list item"), "item 1435 on your list" (also in or from, the list or the collector), and "collector" followed by a hash and the number (also "collector number 1435", "collector entry 1435"). The scan is best effort. A card with its own options is never refused for mentioning a number. The problem names the card's input location, `leftovers <key>`, `items <id>` or `closesSpec`.
+- `theme/sheet-words.json` gains three `pr` words, `collectorKind`, `collectorOption` and `collectorRecommendation`, after `closureReceipt`.
+- `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics and `theme/review-template.md` § The items now say that a PR-tied collector item is a `collectorItems` card with the per-item spine and its collector number, never only in the chat and never inside a "What you're accepting" card. The recap gets a bare-line rule: a recap, morning or reminder line that names a decision carries its one-line context, never only its number and the recommended letter.
 
 ### Review record: CI reads each check's latest run
 
