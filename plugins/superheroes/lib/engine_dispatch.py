@@ -41,6 +41,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
+import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import cloud_pass  # noqa: E402  PASS_ENV, dropped at every public entry (stdlib-only module)
 import config_dir  # noqa: E402  claude config root resolution (#1273)
@@ -56,6 +57,7 @@ import heartbeat  # noqa: E402  HEARTBEAT_ROOT_ENV — the ledger root the launc
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
 import payload_contracts  # noqa: E402  verdict optional keys — single contract home (#1270 2c)
+import record_paths  # noqa: E402  landing-slot layout, one home (#1995)
 import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
 import sanitized_view  # noqa: E402
@@ -1734,7 +1736,7 @@ def _git_routing_scrubbed_environ():
         os.environ.update(saved)
 
 
-def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
+def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None, landing_dir=None):
     """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
 
     ``run_dir`` is the dispatch run directory: it and the supervisor journal root are denied for
@@ -1742,7 +1744,11 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
 
     Returns (sandbox_dict, None) or (None, refusal_token). The dict is journaled in the
     run-opened record and reused verbatim on every continuation and spawn — never re-derived
-    from the ambient environment."""
+    from the ambient environment.
+
+    ``landing_dir`` grants the child's file tools one extra directory, a review landing slot
+    (#1995); it is journaled as ``landingDir`` and refused unless it is a landing-layout directory
+    that overlaps no deny entry."""
     try:
         proc = _git_scrubbed(
             cwd_real, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir",
@@ -1861,6 +1867,11 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
                 return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
             if denied not in deny_write:
                 deny_write.append(denied)
+    landing_real = None
+    if landing_dir is not None:
+        landing_real, landing_refusal = _landing_dir_grant(landing_dir, deny_write)
+        if landing_refusal is not None:
+            return None, landing_refusal
     sandbox = {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
@@ -1878,7 +1889,29 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
     if tmp_base is not None:
         # frozen with the socket grant: every spawn pins it as the child's CLAUDE_CODE_TMPDIR
         sandbox["claudeTmpBase"] = tmp_base
+    if landing_real is not None:
+        sandbox["landingDir"] = landing_real
     return sandbox, None
+
+
+def _landing_dir_grant(landing_dir, deny_write):
+    """(realpath, None) for a landing directory the write sandbox may grant, else (None, refusal)."""
+    if not isinstance(landing_dir, str) or not os.path.isabs(landing_dir) \
+            or engine_adapter.sandbox_path_has_glob(landing_dir):
+        return None, engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_INVALID
+    real = os.path.realpath(landing_dir)
+    if not real.strip("/") or engine_adapter.sandbox_path_has_glob(real) \
+            or not os.path.isdir(real) or not record_paths.is_landing_dir(real):
+        return None, engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_INVALID
+    # deny wins, but a grant that contains or sits in a denied path is refused rather than trusted
+    # to the runtime's precedence; the git hooks/config entries are joined, not resolved, so both
+    # spellings are compared
+    for denied in deny_write:
+        for entry in {denied, os.path.realpath(denied)}:
+            if real == entry or real.startswith(entry.rstrip("/") + "/") \
+                    or entry.startswith(real.rstrip("/") + "/"):
+                return None, engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_DENIED
+    return real, None
 
 
 def _git_scrubbed_bytes(cwd, *args, timeout=None):
@@ -4839,24 +4872,33 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "detail": "native-result-report-blank",
         }
 
+    # axis: a refusals list that fails command_refusals.refusals_fault (a blank command, say) forfeits native-result-refusals-invalid before grading.
+    if "refusals" in obj and command_refusals.refusals_fault(obj["refusals"]) is not None:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "native-result-refusals-invalid",
+        }
+
     # axis: the report reaches the terminal and the journal only through the scrub egress.
     report = engine_adapter._scrub(obj["report"])
     graded = engine_adapter._grade_build_report_obj(obj)
+    carried = {"refusals": graded["refusals"]} if "refusals" in graded else {}
     if graded.get("ok") is True:
-        return {
+        return dict({
             "ok": True,
             "signal": graded["signal"],
             "evidence": graded["evidence"],
             "report": report,
-        }
-    return {
+        }, **carried)
+    return dict({
         "ok": False,
         "terminal_refusal": True,
         "reason": graded["reason"],
         "signal": graded["signal"],
         "evidence": graded["evidence"],
         "report": report,
-    }
+    }, **carried)
 
 
 def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_nonce):
@@ -5510,6 +5552,9 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             result["itemCheck"] = item_check
                         if "report" in grade:
                             result["report"] = grade["report"]
+                        # axis: the admitted refusals list reaches the terminal write result, success and post-admission forfeit alike.
+                        if "refusals" in grade:
+                            result["refusals"] = grade["refusals"]
                         if grade.get("admittedAfterTimeout"):
                             # axis: a write attempt hit the wall cap but was admitted (its
                             # result was written before the deadline) — carry that fact onto
@@ -5558,6 +5603,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if "report" in grade:
                         result["report"] = grade["report"]
+                    if "refusals" in grade:
+                        result["refusals"] = grade["refusals"]
                     if grade.get("admittedAfterTimeout"):
                         result["admittedAfterTimeout"] = True
                     return _fold_run(run_dir_real, state, result)
@@ -6465,7 +6512,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         if order_part and not order_part.endswith("\n"):
             order_part = order_part + "\n"
         prefix = order_part + ("\n" if order_part else "")
-        content = prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
+        content = (prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + command_refusals.ORDER_TEXT
+                   + "\n\n" + contract)
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -6546,7 +6594,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
                    expected_items=None, expected_items_file=None,
                    requires_process_listing=False, size_base=None, size_line=None,
-                   size_base_ref=None, **kwargs):
+                   size_base_ref=None, landing_dir=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -6621,6 +6669,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             expected_items=expected_items, expected_items_file=expected_items_file,
             requires_process_listing=requires_process_listing,
             size_base=size_base, size_line=size_line, size_base_ref=size_base_ref,
+            landing_dir=landing_dir,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6646,7 +6695,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
                          claude_mode=None, expected_items=None,
                          expected_items_file=None, requires_process_listing=False,
-                         size_base=None, size_line=None, size_base_ref=None):
+                         size_base=None, size_line=None, size_base_ref=None,
+                         landing_dir=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -6763,9 +6813,22 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         if engine == "claude":
             if opened is not None:
                 claude_write_sandbox = opened.get("claudeWriteSandbox")
+                # the journaled sandbox governs; a continuation may not name a different grant
+                if landing_dir is not None:
+                    journaled = (claude_write_sandbox or {}).get("landingDir") \
+                        if isinstance(claude_write_sandbox, dict) else None
+                    if journaled is None or os.path.realpath(landing_dir) != journaled:
+                        return _write_preflight_terminal(
+                            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                             "detail": "engine-config:%s"
+                                       % engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_MISMATCH,
+                             "attempts": 0, "forfeited": False, "terminal": True},
+                            run_dir=run_dir_real, argv=[],
+                        )
             elif not requires_process_listing:
                 claude_write_sandbox, sandbox_refusal = _resolve_claude_write_sandbox(
                     cwd_real, timeout=preflight_timeout, run_dir=run_dir_real,
+                    landing_dir=landing_dir,
                 )
                 if sandbox_refusal is not None:
                     return _write_preflight_terminal(
@@ -7662,6 +7725,9 @@ def build_parser():
     cc.add_argument(w, "--requires-process-listing", contract="boolean-flag",
                     help="declare the order needs process listing (ps); a claude write "
                          "refuses sandbox-process-listing-unavailable before any run opens")
+    cc.add_argument(w, "--landing-dir", contract="free-text", default=None,
+                    help="a claude write also grants its file tools this one review landing "
+                         "directory (<session>/round-<N>/landing/<phase>)")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
@@ -7721,7 +7787,8 @@ def main(argv):
                                  expected_items_file=args.expect_items_file,
                                  requires_process_listing=args.requires_process_listing,
                                  size_base=args.size_base, size_line=args.size_line,
-                                 size_base_ref=args.size_base_ref)
+                                 size_base_ref=args.size_base_ref,
+                                 landing_dir=args.landing_dir)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-poll":
             res, classification = _dispatch_poll_impl(args.run_dir)

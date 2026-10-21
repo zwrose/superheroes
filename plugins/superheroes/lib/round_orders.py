@@ -51,6 +51,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import command_refusals  # noqa: E402
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
 import order_contract  # noqa: E402
@@ -589,6 +590,8 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         blocks = [body.rstrip(), _format_residual_block(context).rstrip(),
                   format_threat_model_block(context).rstrip(),
                   format_rulings_block(context).rstrip()]
+        if phase == round_phases.P_FIXER:
+            blocks.append("## Refused or denied commands\n\n" + command_refusals.ORDER_TEXT)
         if phase != round_phases.P_FIXER or context.get("host_seat"):
             contract_block, creason = _format_payload_contract(phase)
             if creason:

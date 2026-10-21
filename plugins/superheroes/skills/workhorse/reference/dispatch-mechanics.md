@@ -775,7 +775,16 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `/tmp` needs a project-side setting (for example mongod `--nounixsocket`, or passing `TMPDIR`
   through). If the sandbox cannot start, the run fails instead of running unsandboxed.
 - **Settings files:** `--restricted` ignores user, project, and local settings and confines
-  Write and Edit to the working directory.
+  Write and Edit to the working directory. A run opened with `--landing-dir <dir>` also grants
+  those tools that one directory, `<dir>`'s realpath, through `--add-dir` placed before `--settings`
+  and `sandbox.filesystem.allowWrite`, so a review fixer writes its own payload into its landing
+  slot. `<dir>` must be absolute, free of glob characters, an existing directory ending
+  `round-<N>/landing/<phase>`; otherwise the open refuses `engine-config:sandbox-landing-dir-invalid`.
+  A `<dir>` that equals, sits inside, or contains a deny entry (as spelled or by realpath) refuses
+  `engine-config:sandbox-landing-dir-denied`: deny wins. A continuation that names a different
+  `--landing-dir`, or one when none was journaled, refuses `engine-config:sandbox-landing-dir-mismatch`
+  with nothing spawned; omitting the flag on a continuation is fine, the journal governs. Other
+  engines accept the flag and ignore it.
 - **uv is offline** (`UV_OFFLINE=1`) unless `allowedDomains` is non-empty: the order's Python
   dependencies must already be in the uv cache, or the install fails.
 - **Project access options.** A project opens access through `sandboxAccess` in its calibration, set
@@ -793,7 +802,8 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. The access
   options are read once at open and journaled with the roots as `claudeWriteSandbox.access`, and the
   two defaults are journaled as `claudeWriteSandbox.tmpWriteRoots` and
-  `claudeWriteSandbox.localBinding`, so a
+  `claudeWriteSandbox.localBinding`, and `--landing-dir` as `claudeWriteSandbox.landingDir` (absent
+  when the flag was not passed), so a
   calibration edit mid-run does not change a running run's sandbox; a run opened without that field
   reads as all off. A run opened without the roots refuses `engine-config:sandbox-roots-missing`. A
   root that cannot be resolved refuses at open, with nothing opened:
@@ -856,7 +866,7 @@ A cloud session on Linux cannot serve `localSockets` in the sandbox, so an imple
    - `native-model-unread` (no assistant record carries a `model`) or `native-model-mismatch` (any differs from `expectedServedModel`);
    - `native-result-invalid`: `result.json` is missing, malformed, or its status is outside `done`, `needs_context` and `blocked`.
 
-   `needs_context` and `blocked` return `{"ok": false, "terminal": true, "reason": <status>, "forfeited": false}` and collect nothing. On `done`, declared items are graded as the marker channel grades them (`items-undelivered` with `itemCheck`, or `item-evidence-unavailable:<cause>`, both forfeits). Collection then stages the worktree (`git add -A`), takes `git diff --cached --binary <baseSha>`, journals `native-collecting` with the patch's sha256 (an append failure refuses `journal-write-failed` before the apply), and runs `git apply --index` in the build worktree: the work arrives in its index. A failed apply forfeits `native-collect-failed`; a declared item absent from the build worktree or differing from the subagent's bytes forfeits `native-collect-incomplete`. Success journals `run-closed` with `ok: true`, `signal: "ok"`, `itemCheck`, `servedModel`, `collected` (`files`, `patchSha256`) and `bounds`; every result carries `engine`, `bounds` and `servedModel` (or null). Close is idempotent: a closed run returns its record unchanged, and a `native-collecting` record with no `run-closed` closes `native-collect-interrupted` and never reapplies.
+   `needs_context` and `blocked` return `{"ok": false, "terminal": true, "reason": <status>, "forfeited": false}` and collect nothing. On `done`, declared items are graded as the marker channel grades them (`items-undelivered` with `itemCheck`, or `item-evidence-unavailable:<cause>`, both forfeits). Collection then stages the worktree (`git add -A`), takes `git diff --cached --binary <baseSha>`, journals `native-collecting` with the patch's sha256 (an append failure refuses `journal-write-failed` before the apply), and runs `git apply --index` in the build worktree: the work arrives in its index. A failed apply forfeits `native-collect-failed`; a declared item absent from the build worktree or differing from the subagent's bytes forfeits `native-collect-incomplete`. Success journals `run-closed` with `ok: true`, `signal: "ok"`, `itemCheck`, `servedModel`, `collected` (`files`, `patchSha256`) and `bounds`; every result carries `engine`, `bounds` and `servedModel` (or null). Close is idempotent: a closed run returns its record unchanged, and a `native-collecting` record with no `run-closed` closes `native-collect-interrupted` and never reapplies. When `result.json` parses with a valid non-empty `refusals` list, every result `close` returns carries it, forfeits included.
 7. **Commit.** The builder commits the build worktree's index from its own shell; the engine never commits.
 
 **The fence.** `implementer_fence.py` is a PreToolUse hook on the `Bash` and `Edit|Write` matchers. It acts only on a `superheroes:implementer` subagent: the builder and every other agent are untouched, and an implementer outside a native run is too. It records the binding on a native run's enroll command (denied unless the run is open, before its deadline and not yet enrolled) and fences only an implementer enrolled that way. For that implementer it refuses every tool call once the run is closed or past `deadlineAt`, and refuses a Bash command whose leading word is an installer (`pip`, `uv`, `npm`, `pnpm`, `yarn`, `brew`, the system package managers, and the like) or a network command (`curl`, `wget`, `ssh`, `git push`, `fetch`, `pull`, `clone`, `gh`, and the like), or that it cannot parse. A refusal reaches the subagent as a tool error, never a prompt, so a run never waits on an approval.
@@ -878,7 +888,7 @@ but whitespace.
 is **not** an acceptance verdict, and the implementer never marks its own work done. `ok: false`
 carries `signal` of `"plan_wrong"` (the order's premise is wrong) or `"needs_context"` (anything
 else). `evidence.testFailed` / `evidence.testPassed` report whether a test was **observed** failing
-/ passing during that attempt.
+/ passing during that attempt. `refusals` lists the refused or denied commands, as `lib/command_refusals.py` defines them, one entry each, and is `[]` when none were met; `lib/command_refusals.py` owns the entry shape.
 
 **Grading is strict, and keyed to the prompt.** When the runner contracted the prompt, a report is
 recognised only as a final tail matching this grammar: a line whose trimmed content is the sentinel,
@@ -918,6 +928,8 @@ This is **final-diff membership, not proof of engine authorship**: it cannot dis
 modified; a create-then-delete leaves no evidence and reads as missing; a concurrent writer could
 supply a path. A file that was already dirty before the run and unchanged afterward is not credited
 as delivered.
+
+A native write result whose `refusals` the declared schema refuses (shape or enum) forfeits `native-result-schema-invalid`, as any schema fault does; one that passes the schema but fails the entry check in `lib/command_refusals.py` (blank strings) forfeits `native-result-refusals-invalid`.
 
 ### Sibling worktree observation (`siblingWorktrees`)
 

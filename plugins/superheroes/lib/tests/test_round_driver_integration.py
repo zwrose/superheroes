@@ -1218,6 +1218,7 @@ def _write_execution_run_dir(tmp_path, order_path, echo_nonce="nonce-fixer-e2e")
             "signal": "ok",
             "report": "Receipt prose.",
             "evidence": {"testFailed": False, "testPassed": True},
+            "refusals": [],
         }
         native_path = engine_dispatch._native_result_path(run_dir, 1)
         with open(native_path, "w", encoding="utf-8") as fh:
