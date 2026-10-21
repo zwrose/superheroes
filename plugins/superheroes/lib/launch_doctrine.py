@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import subprocess
 
 RULING_IDS = (
     "own-worktree",
@@ -68,10 +69,12 @@ RULING_TEXT = {
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
         "commits inherit the git identity the worktree resolves through git's normal cascade "
-        "— repo-local `.git/config` when set, otherwise this environment's global config; "
+        "— the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment variables when set, otherwise "
+        "repo-local `.git/config`, otherwise this environment's global config; "
         "never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or "
-        "wrong identity — an empty *resolved* `git config user.email`/`user.name`, never an "
-        "empty `--local` — is a park-and-report, not an improvisation."
+        "wrong identity — `git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT` or "
+        "`GIT_COMMITTER_IDENT` failing, never an empty `git config` answer alone — "
+        "is a park-and-report, not an improvisation."
     ),
     "gated-strings": (
         "gated command strings reach disk only through file-write tools: a permission-gated literal "
@@ -90,6 +93,7 @@ RULING_INVARIANTS = {
         "never pass `-c user.name` or `-c user.email`",
         "never synthesize one",
         "park-and-report",
+        "`git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT`",
     ),
     "await-dispatches": (
         "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end",
@@ -127,6 +131,23 @@ _CHARTER_LINE = re.compile(
     r".*$"
 )
 _CHARTER_ITEM_START = re.compile(r"^\s*\d+\.")
+
+
+def git_identity(cwd):
+    """{"author": bool, "committer": bool}: whether git, run in `cwd`, resolves a configured author
+    and committer identity — the test the `git-identity` ruling names. `user.useConfigOnly`
+    refuses only git's guessed identity (from $EMAIL, the host name or the passwd entry), so the
+    GIT_AUTHOR_*/GIT_COMMITTER_* variables, repo config and global config all count. Never raises;
+    carries no name or email."""
+    found = {}
+    for role, var in (("author", "GIT_AUTHOR_IDENT"), ("committer", "GIT_COMMITTER_IDENT")):
+        try:
+            got = subprocess.run(["git", "-c", "user.useConfigOnly=true", "var", var], cwd=cwd,
+                                 capture_output=True, text=True, timeout=10)
+            found[role] = got.returncode == 0
+        except Exception:
+            found[role] = False
+    return found
 
 
 def _refuse(reason: str) -> dict:

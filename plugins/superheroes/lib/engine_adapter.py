@@ -36,6 +36,7 @@ TASK_ID_TRAILER = "Task-Id"
 # import this name, never restate the literal.
 import break_it  # noqa: E402  (break-it contract vocabulary home; imports no engine_adapter)
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
+import command_refusals  # noqa: E402  (refusals list shape + validator home; stdlib-only leaf)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
@@ -145,6 +146,8 @@ WRITE_REPORT_FIELD_SEMANTICS = (
     "is wrong, otherwise \"needs_context\" (only those two values).\n"
     "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
     "failing / passing during this attempt; false when not observed.\n"
+    "  refusals — every refused or denied command you met, as the stop rule in this prompt "
+    "defines it, one entry each (command, refusedBy, hook, next); [] when you met none.\n"
 )
 
 WRITE_REPORT_CONTRACT = (
@@ -158,7 +161,7 @@ WRITE_REPORT_CONTRACT = (
     + "Example final two lines (placeholders — compose real JSON literals yourself):\n"
     + WRITE_REPORT_SENTINEL + "\n"
     '{"ok": <true or false>, "signal": "<ok | plan_wrong | needs_context>", '
-    '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}}'
+    '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}, "refusals": []}'
 )
 
 _REVIEW_RESULT_KIND_DESCRIPTIONS = {
@@ -205,6 +208,9 @@ REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
 REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"
 REFUSAL_SANDBOX_ACCESS_UNREADABLE = "sandbox-access-unreadable"
 REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM = "sandbox-access-unsupported-platform"
+REFUSAL_SANDBOX_LANDING_DIR_INVALID = "sandbox-landing-dir-invalid"
+REFUSAL_SANDBOX_LANDING_DIR_DENIED = "sandbox-landing-dir-denied"
+REFUSAL_SANDBOX_LANDING_DIR_MISMATCH = "sandbox-landing-dir-mismatch"
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
@@ -226,6 +232,9 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     REFUSAL_SANDBOX_ACCESS_MALFORMED,
     REFUSAL_SANDBOX_ACCESS_UNREADABLE,
     REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM,
+    REFUSAL_SANDBOX_LANDING_DIR_INVALID,
+    REFUSAL_SANDBOX_LANDING_DIR_DENIED,
+    REFUSAL_SANDBOX_LANDING_DIR_MISMATCH,
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
@@ -272,6 +281,10 @@ def claude_write_sandbox_valid(sandbox):
             return False
     if "localBinding" in sandbox and type(sandbox["localBinding"]) is not bool:
         return False
+    if "landingDir" in sandbox:
+        landing = sandbox["landingDir"]
+        if not _abs_str(landing) or sandbox_path_has_glob(landing):
+            return False
     return _sandbox_access_valid(sandbox.get("access"))
 
 
@@ -338,6 +351,8 @@ def claude_write_sandbox_settings(sandbox):
         allow_write.append(uv_cache)
     allow_write.extend(sandbox.get("tmpWriteRoots") or [])
     allow_write.extend(extra_paths)
+    if sandbox.get("landingDir") is not None:
+        allow_write.append(sandbox["landingDir"])
     network = {"allowedDomains": list(domains), "strictAllowlist": True}
     if sandbox.get("localBinding") is True or access.get("localPorts"):
         network["allowLocalBinding"] = True
@@ -708,6 +723,12 @@ def build_argv_result(seat, role_kind, opts):
                 "--permission-mode", "acceptEdits", "--restricted",
                 "--tools", CLAUDE_WRITE_TOOLS,
                 "--strict-mcp-config",
+            ]
+            landing = opts["claudeWriteSandbox"].get("landingDir")
+            if landing is not None:
+                # variadic: the next token must stay a flag or the prompt is swallowed
+                argv += ["--add-dir", landing]
+            argv += [
                 "--settings", claude_write_sandbox_settings(opts["claudeWriteSandbox"]),
             ]
         return _ok(argv)
@@ -907,18 +928,29 @@ def _last_json_array(stdout):
     return _last_top_level_json(stdout, list)
 
 
+def scrub_refusals(refusals):
+    """Recursively scrub every string in a validated refusals list (the one scrub seam for the
+    foreground grader and the native close path). Never raises."""
+    return _scrub_mapping(refusals)
+
+
 def _grade_build_report_obj(obj):
     """Single home for build|fix report-object grading (CONVENTIONS §11). Never raises."""
     if not isinstance(obj, dict):
         return {"ok": False, "reason": "unreadable"}
+    carried = {}
+    if "refusals" in obj:
+        if command_refusals.refusals_fault(obj["refusals"]) is not None:
+            return {"ok": False, "reason": "unreadable"}
+        carried["refusals"] = scrub_refusals(obj["refusals"])
     ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
     evidence = {"testFailed": bool(ev.get("testFailed")),
                 "testPassed": bool(ev.get("testPassed"))}
     if obj.get("ok") is not True:
         sig = (WRITE_SIGNAL_PLAN_WRONG if obj.get("signal") == WRITE_SIGNAL_PLAN_WRONG
                else WRITE_SIGNAL_NEEDS_CONTEXT)
-        return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
-    return {"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}
+        return dict({"ok": False, "signal": sig, "reason": sig, "evidence": evidence}, **carried)
+    return dict({"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}, **carried)
 
 
 def strip_echoed_prompt(stdout, prompt_text):

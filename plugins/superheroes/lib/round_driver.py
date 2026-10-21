@@ -60,6 +60,7 @@ import break_it  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
+import command_refusals  # noqa: E402
 import mode_registry  # noqa: E402
 import decision_kinds  # noqa: E402
 import delta_surface  # noqa: E402
@@ -5192,15 +5193,23 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
     rec = state.get("rounds", {}).get(str(state["round"]), {})
     prior_fix = rec.get("fix") if isinstance(rec, dict) else None
+    # The refusals the fixer met ride in the round's `fix` dict only when there are some, so a round
+    # with none records what it always did. The list is validated before the fold: by the payload
+    # contract on the landed path and by the submit guard on a hand submission.
+    refusals = artifact.get("refusals") if isinstance(artifact.get("refusals"), list) else []
     if index >= 1 and isinstance(prior_fix, dict):
         fixes = list(prior_fix.get("fixes") or []) + list(artifact.get("fixes") or [])
         escalated = bool(prior_fix.get("escalated")) or bool(
             artifact.get("escalated") or state.get("_escalatedRung"))
-        _record_round(state, "fix", {"fixes": fixes, "escalated": escalated})
+        fix_rec = {"fixes": fixes, "escalated": escalated}
+        prior_refusals = prior_fix.get("refusals")
+        refusals = (list(prior_refusals) if isinstance(prior_refusals, list) else []) + list(refusals)
     else:
-        _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
-                                     "escalated": bool(artifact.get("escalated")
-                                                       or state.get("_escalatedRung"))})
+        fix_rec = {"fixes": artifact.get("fixes") or [],
+                   "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))}
+    if refusals:
+        fix_rec["refusals"] = refusals
+    _record_round(state, "fix", fix_rec)
     _record_round_append(state, "fixBatches",
                          {"index": index, "size": len(slice_),
                           "fixes": len(artifact.get("fixes") or [])})
@@ -8931,6 +8940,15 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "staged-id-unresolvable"})
             return {"ok": False, "reason": fault}
+    if phase == P_FIXER and isinstance(artifact, dict) and "refusals" in artifact:
+        # A hand submission never reaches the payload contract, so the refusals list is checked
+        # here, before the pending step is consumed.
+        fault = command_refusals.refusals_fault(artifact["refusals"])
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "fixer-refusals-malformed"})
+            return {"ok": False, "reason": "`refusals` — " + fault}
     if phase == P_STALL:
         choice = artifact.get("choice") if isinstance(artifact, dict) else None
         if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:

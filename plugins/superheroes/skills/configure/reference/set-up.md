@@ -706,6 +706,20 @@ seconds when nothing changed; when an input changed, as long as the setup comman
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
 
+The check also asks the cloud session's git for a commit identity. It passes when git, with
+guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity from
+any source: the platform's own identity, the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables, or git
+config. It requires no particular name or email, and its report line says only whether each one
+resolved. A cloud session starts with the platform's own identity, which signs its commits, so they
+show as Verified on GitHub; that is the default and needs nothing. A project that wants a different
+author or committer sets the four variables on the environment, and git reads them ahead of any
+config; those commits most likely show as Unverified. A missing identity fails the check before any
+build, and its fix line names the four variables with this machine's name and email filled in
+("your name" and "your email" when this machine resolves none); that line appears only in the
+message on this machine and is never stored. The setup text writes no identity step: `git config`
+from inside a cloud session is refused as persistence, and the home folder's git config does not
+carry over to later sessions.
+
 The setup text runs the project's own setup commands (item 17) after its other steps, one at a
 time, in order, in the project's clone. Each one is logged `setup command <n> ok` or
 `setup command <n> FAILED`, and the first failure skips the rest. Changing the list means writing

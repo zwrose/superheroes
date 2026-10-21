@@ -71,6 +71,7 @@ def _payload(report):
     return json.dumps({
         "ok": True, "signal": "ok", "report": report,
         "evidence": {"testFailed": False, "testPassed": True},
+        "refusals": [],
     }, separators=(",", ":"))
 
 

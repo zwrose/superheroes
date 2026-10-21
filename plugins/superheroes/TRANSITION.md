@@ -16,6 +16,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **Pass `--landing-dir <the order's landing directory>` on a review fixer's `dispatch-write` on the claude engine.** A run opened before the upgrade continues without it. See [Dispatch: the claude write fixer lands its own payload](#dispatch-the-claude-write-fixer-lands-its-own-payload).
+- **Before switching.** **Finish every `dispatch-write` run in flight.** A write run opened before the upgrade and admitted after it forfeits `native-schema-unreadable`, because the declared write schema gained `refusals`. See [Orders: a refused or denied command is a stop](#orders-a-refused-or-denied-command-is-a-stop).
 - **Before switching.** **Finish or restart every review session in flight.** A review opened before the upgrade restarts once: its first driver command answers `session-from-earlier-version`, and Setup runs again into a fresh session folder. See [Review: the post-fix diff comes from git](#review-the-post-fix-diff-comes-from-git).
 - **After switching.** **Nothing is owed for an existing PR or stack sheet input.** An advisor that wants to keep a craft finding off the owner's sheet now gives it a `craftDeterminations` entry in place of a `leftovers` entry. See [PR sheet: craft determinations and the Decided for you list](#pr-sheet-craft-determinations-and-the-decided-for-you-list).
 - **After switching.** **Review seats now get the project's `CLAUDE.md` by absolute path.** A project that pastes `CLAUDE.md` into a review seat's prompt by hand, as a stopgap, can drop the paste. See [Review seats: CLAUDE.md by absolute path](#review-seats-claudemd-by-absolute-path).
@@ -28,11 +30,39 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **A project that lists setup commands has the files they depend on (item 18, `cloudSetupInputs`) in the setup text's stamp, so changing a lockfile makes the cloud check report the setup text out of date; write and paste new setup text.** A project that already lists commands has no item 18 until it sets one or lists commands again after clearing them, so its stamp is unchanged until then. See [Cloud setup text: setup inputs join the stamp](#cloud-setup-text-setup-inputs-join-the-stamp).
 - **After switching.** **A project that lists setup commands can add the dependency hook (item 19, `cloudDependencyHook`) through configure, then commits and pushes the two files it writes and writes and pastes new setup text.** Turning the hook on or off changes the stamp, so the cloud check reports the setup text out of date until new setup text is pasted. A project that does not opt in has the same stamp and setup text as before. See [Cloud setup text: the dependency hook](#cloud-setup-text-the-dependency-hook).
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
+- **After switching.** **Nothing is owed.** A launch whose premise adopts a branch (`adoptsBranch`, `adoptsHead`) now refuses before launch when the adopted head does not descend from `baseCommit`; bring the adopted branch current with its base and launch again. See [Launcher: an adoption whose head is not on its base is refused before launch](#launcher-an-adoption-whose-head-is-not-on-its-base-is-refused-before-launch).
+- **After switching.** **Nothing is owed.** A review orchestrator records its rulings on a round's findings before the `next` call that emits the fixer order. See [Review: rulings land before the fixer order](#review-rulings-land-before-the-fixer-order).
+- **After switching.** **Paste new setup text and say "check again" in each project with cloud builds, as after any upgrade.** The check fails a cloud session where git resolves no commit identity, and the `git-identity` launch ruling reads `git var`, so a builder on an environment that sets only the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables does not park. See [Cloud check: a commit identity](#cloud-check-a-commit-identity).
+
+### Orders: a refused or denied command is a stop
+
+- A command that a permission denial, a hook refusal, a sandbox refusal or the harness's own safety checks stopped, or one held for an approval nobody answers, is a stop for the agent that met it, and the agent reports it instead of retrying it in another form. The rule and the shape of a refusals entry have one home, `lib/command_refusals.py`; no order keeps a copy.
+- Four orders carry the rule: the fixer order (both branches), every `dispatch-write` prompt, the native preamble, and `agents/implementer.md`.
+- Four result channels accept a `refusals` list and refuse a malformed one: the host-seat fixer payload (optional), the native write result schema (required, may be empty), the foreground report grade, and the native `result.json` (optional). On `dispatch-write` a blank string forfeits `native-result-refusals-invalid`, and a shape or enum fault forfeits `native-result-schema-invalid`. A valid list rides on the terminal `dispatch-write` result and on every native `close` result, forfeits included.
+- Refusals are shown in two places: the review record's `commandRefusals` (each entry tagged with its round, with a "Refusals met" line in the summary; absent when there are none) and a refusals column in the build record's dispatch provenance. `commandRefusals` is separate from the record's `refused`, which lists findings the loop did not take in.
+- At vet, the advisor reads each refusal and names as a finding any refusal followed by the same act in another form. The vet receipt's triggered-fields table has the row.
+- The worktree guard was not taught more spellings of a delete. A list of spellings never closes, so the stop rule is carried by the orders instead.
+
+### Review: rulings land before the fixer order
+
+- `skills/review-code/SKILL.md` (the loop's step 3) and `reference/round-driver.md` § Owner and advisor rulings now tell the orchestrator to record every `rule` on a round's folded findings before its next `next` call, which emits the fixer order. A ruling recorded after the order is out reached only the next order, so the fixer built the old direction once and the next round reworked it.
+- No driver change: a late ruling is still accepted and carried into the next order, as the backstop.
+
+### Dispatch: the claude write fixer lands its own payload
+
+- `engine_dispatch.py dispatch-write` takes `--landing-dir`, one review landing directory (`<session>/round-<N>/landing/<phase>`). The claude write child's file tools are confined to the working directory, so a host-seat fixer could not write its payload into the session folder outside it; the flag grants that one directory and nothing else.
+- The open refuses `engine-config:sandbox-landing-dir-invalid` for a directory that is not an absolute, glob-free, existing landing-layout directory, and `engine-config:sandbox-landing-dir-denied` for one that overlaps a path the sandbox denies. A continuation that names a different directory refuses `engine-config:sandbox-landing-dir-mismatch`. A run opened without the flag is unchanged, and other engines ignore it.
 
 ### Checkpoint: a subagent's turn never holds the automatic checkpoint
 
 - A subagent's `turn.start`, a background agent's especially, left the session marked busy after the main turn ended, so the automatic checkpoint never fired in an attended session that ran subagents, until Claude Code compacted the session itself without fresh notes.
 - Only the main turn now marks the session busy or binds the checkpoint turn. The checkpoint fires at the next idle measurement above the trigger whatever subagents are running. Headless builder sessions are unchanged.
+
+### Launcher: an adoption whose head is not on its base is refused before launch
+
+- A premise that adopted a branch whose head was not on its `baseCommit` launched, spent a lane, and only then failed at the cloud intake with `adopted-head-not-on-base`.
+- `launcher.py launch` now refuses it first, with `premise-adopts-head-not-on-base`, before any lane, worktree, cloud command or child exists, for cloud and local launches alike. The result carries `ancestry` (`not-descendant`, or `undecidable` when the adopted head is not present in the launching checkout, the checkout is shallow, or git could not answer) and a `remedy` that names the fix; a layer above the bottom is told to bring the adopted branch current with the layer below.
+- The cloud intake's `adopted-head-not-on-base` is unchanged and stays as the second line. `compose` and `preflight` do not run the check.
 
 ### PR sheet: judge before you build
 
@@ -138,6 +168,15 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The compose result's `calibration` gains `dependencyHook: true` when the hook is on, and has no such key otherwise.
 - `cloud_dependency_hook.py offer --cwd .` prints the question configure asks before the hook is added (`action`, `message`, `commands`, `inputs`, `inputsSource`: `stored` or `detected`). It exits 1 with a refusal on stderr: `no-setup-commands` when item 17 lists none, and also `repo-root-unavailable` and `setup-inputs-malformed`.
 - `set` refuses item 17, 18 or 19 with `dependency-hook-unwritable` and a `detail` (`repo-root-unavailable`, `settings-unreadable`, `hook-files-unwritable`, `invalid-arguments`, `settings-hooks-disabled` for `disableAllHooks: true` in `.claude/settings.json`, or `settings-secret-shaped` for a credential already in `.claude/settings.json`) when the hook files cannot be brought to the state the new values call for, and nothing is stored. A project that never opted in, with no root and nothing to sync, still sets item 17 and gets no fill. If a write fails after the files were synced, the files are put back to the state of the stored values; if the write held and only the read-back fails or differs, the synced files stay (they match what was written) and the result carries `dependencyHook`.
+
+### Cloud check: a commit identity
+
+- The cloud check's report gains `identity`, `{"author": bool, "committer": bool}`: whether git in the session's repository resolves an author and a committer identity, read with `user.useConfigOnly` so a guessed identity never counts. The report carries no name or email.
+- `judge` gains `results.identityPresent` and the failed part `identity`, reported after `reviewer`. Its fix line names `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, filled in with this machine's name and email (or "your name" and "your email" when none resolves). The values appear only in the returned message, never in the failed-check marker, the setup record or the calibration. A passed check's message gains the line "It has a git identity to commit with." A report that carries no identity (the fallback line, or an older plugin's report) still fails on `identity`, but its message never claims the session has no identity and never prints the variables fix.
+- A report without `identity`, from an older cloud plugin, stays readable and fails on `identity` as well as on `version`. `REPORT_FIELDS` is unchanged.
+- The `git-identity` launch ruling reads `git var`. Its cascade names the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables first, and its missing-identity test is `git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT` or `GIT_COMMITTER_IDENT` failing, never an empty `git config` answer. `launch_doctrine.git_identity(cwd)` is the one implementation, and the cloud check calls it. Every composed launch carries this text.
+- The setup text writes no identity step. The platform's own signed identity is the default. A project that wants another author sets the four variables on its cloud environment, and those commits most likely show as Unverified. `git config` inside a cloud session is refused by the session's permission classifier as persistence.
+- Recovering a stack in the cloud takes one adoption launch per layer, bottom first, each layer brought current with the one below before its launch (`skills/showrunner/reference/orchestration.md` § Adoption mechanics).
 
 ## 0.44.0
 
