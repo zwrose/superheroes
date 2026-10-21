@@ -7,7 +7,7 @@ detector again (green), and the file's sha256 compared before and after. Test fi
 `git diff --stat` cannot show a restore; the sha256 pair and the quoted restored lines are the receipt.
 Raw captures drop only pytest's `UV_NATIVE_TLS` deprecation warning line.
 
-Declared guarded-element set: G1-G16 (one entry each below; no equivalence classes, none unproven).
+Declared guarded-element set: G1-G17 (one entry each below; no equivalence classes, none unproven).
 
 Disclosure: G4's, G5's and G6's detectors are the edge tests; the parity census
 (`test_the_registration_rule_agrees_with_the_record_mode_snippet`) is a second detector for the same
@@ -993,6 +993,67 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_adopti
 ```
 .                                                                        [100%]
 1 passed, 69 deselected in 4.49s
+```
+
+- **verdict:** RED->GREEN
+
+## G17 — the still line's dependency-hook rule checks the launch's own adopted head
+
+- **guarded element:** `plugins/superheroes/lib/launch_report.py:217-218` (the `dependency-hook` branch in `_fixed`, its `candidate.get("adoptsHead")` argument)
+- **axis:** a dependency-hook fallback reads fixed only when readiness's `dependencyHook` reads true now and the check routing ran (`branch_hook_gap` on that launch's own `baseCommit` and `adoptsHead`) returns no gap, so a base that carries the hook does not clear a fallback whose adopted head changed a listed input
+- **detector:** `test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason`, case (a) (selected with `-k "test_the_still_line_rereads_the_dependency_hook_reason"`)
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-            cwd, root, candidate.get("baseCommit"), candidate.get("adoptsHead")) is None
++            cwd, root, candidate.get("baseCommit"), None) is None
+```
+
+- **raw red (rc 1):** the pytest `+  where` detail lines under the assertion are omitted in this record only
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_the_still_line_rereads_the_dependency_hook_reason ____________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-56/test_the_still_line_rereads_th0')
+
+    def test_the_still_line_rereads_the_dependency_hook_reason(tmp_path):
+        assert "dependency-hook" in launch_report._REREAD_REASONS
+        w, bare, with_hook = _hooked(tmp_path)
+        (w.repo / "other.txt").write_text("x\n")
+        same_inputs = _commit(w.cwd, "other file")
+        _lock(w, "v2\n")
+        changed = _commit(w.cwd, "lock changed")
+        # the checkout's HEAD carries the hook
+        assert CS.branch_hook_gap(w.cwd, w.root) is None
+    
+        def fixed(base, adopts):
+            return launch_report._fixed(_hook_candidate(base, adopts), _NOW_READS_FIXED, w.cwd, w.root)
+    
+        # (a) the base carries the hook, the adopted head changed a listed input: the fallback stands
+        # even though the checkout's HEAD carries the hook
+>       assert fixed(with_hook, changed) is False
+E       AssertionError: assert True is False
+
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:706: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason
+1 failed, 70 deselected in 5.49s
+```
+
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: the restored lines quoted back below:
+
+```
+        return conditions.get("dependencyHook") is True and cloud_setup_text.branch_hook_gap(
+            cwd, root, candidate.get("baseCommit"), candidate.get("adoptsHead")) is None
+```
+
+- **raw green (rc 0):**
+
+```
+.                                                                        [100%]
+1 passed, 70 deselected in 5.21s
 ```
 
 - **verdict:** RED->GREEN
