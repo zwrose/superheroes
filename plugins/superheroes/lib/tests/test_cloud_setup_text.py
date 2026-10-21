@@ -26,6 +26,7 @@ if _LIB not in sys.path:
 import architect_config  # noqa: E402
 import cloud_check  # noqa: E402
 import cloud_pass  # noqa: E402
+import cloud_plugin_pin  # noqa: E402
 import cloud_setup  # noqa: E402
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
@@ -1482,3 +1483,200 @@ def test_serialized_verify_command_ending_in_a_quoted_reference_composes(tmp_pat
 def test_serialized_verify_command_keeps_the_printf_and_reference_exemptions(tmp_path, command):
     result = _compose_with_verify_command(tmp_path, command)
     assert result["action"] == "written", result
+
+
+# --- the plugin pin hook: what the setup text and its stamp do with it ------------------------
+
+PIN = {"source": SOURCE, "commit": COMMIT, "subdir": SUBDIR, "version": VERSION}
+ABSENT = {"state": "absent", "reason": None, "pin": None}
+PIN_KEYS = (CS.SETUP_STEPS_STAMP_KEY, CS.SETUP_INVENTORY_STAMP_KEY)
+
+
+def _with_pin(w, pin=PIN):
+    result = cloud_plugin_pin.sync(w.cwd, pin)
+    assert result["action"] == "written", result
+    assert cloud_plugin_pin.in_tree(w.cwd)["state"] == "valid"
+
+
+def _break_pin(w):
+    with open(os.path.join(w.cwd, ".claude", "superheroes-plugin-pin"), "w") as fh:
+        fh.write("not a pin\n")
+    assert cloud_plugin_pin.in_tree(w.cwd)["state"] == "broken"
+
+
+def _plugin_copy(tmp_path, monkeypatch):
+    """A plugin directory of the parts a cloud session loads at its start, standing in for the real one."""
+    root = tmp_path / "plugin-copy"
+    for sub in ("skills/alpha", "agents", "hooks"):
+        (root / sub).mkdir(parents=True)
+    (root / "version.txt").write_text(VERSION + "\n")
+    (root / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: first\n---\nbody one\n")
+    (root / "agents" / "helper.md").write_text("agent one\n")
+    (root / "hooks" / "hooks.json").write_text('{"hooks": {}}\n')
+    monkeypatch.setattr(CS, "_plugin_root", lambda: str(root))
+    return root
+
+
+def _real_stamp(w):
+    return cloud_setup.calibration_stamp(CS.stamped_files(w.cwd, w.root))
+
+
+def test_a_project_without_the_hook_composes_and_stamps_as_it_did_without_the_pin(
+        tmp_path, monkeypatch):
+    for name, make in (("outside", _outside), ("inside", _inside)):
+        (tmp_path / name).mkdir()
+        w = make(tmp_path / name)
+        _store_commands(w, ["npm ci"])
+        assert cloud_plugin_pin.in_tree(w.cwd)["state"] == "absent"
+        got = _compose(w)
+        stamped = CS.stamped_files(w.cwd, w.root)
+        # axis: an absent hook leaves every output as it was before the pin was read
+        monkeypatch.setattr(CS, "_pin_state", lambda cwd: ABSENT)
+        expected = _compose(w)
+        assert got == expected and got["pluginPin"] is False
+        assert CS.stamped_files(w.cwd, w.root) == stamped
+        monkeypatch.undo()
+        assert not set(PIN_KEYS) & set(stamped)
+        assert "follows the committed pin" not in got["header"]
+        assert got["text"].splitlines()[1] == "# " + got["header"]
+        assert got["calibration"]["stamp"] == _stamp(stamped)
+
+
+def test_a_project_without_the_hook_has_no_pin_entries_in_its_stamp(tmp_path):
+    w = _outside(tmp_path)
+    # axis: the two pin entries are in no stamp of a project whose working tree has no hook
+    assert not set(PIN_KEYS) & set(CS.stamped_files(w.cwd, w.root))
+    assert set(CS.stamped_files(w.cwd, w.root)) == set(CS.calibration_files(w.cwd, w.root))
+
+
+def test_a_valid_hook_adds_exactly_the_two_entries_and_names_the_pin(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    before = CS.stamped_files(w.cwd, w.root)
+    _with_pin(w)
+    after = CS.stamped_files(w.cwd, w.root)
+    assert set(after) - set(before) == set(PIN_KEYS) and set(before) <= set(after)
+    result = _compose(w)
+    assert result["action"] == "written" and result["pluginPin"] is True
+    assert result["header"] == ("Corner Shop · plugin %s · follows the committed pin"
+                                " · calibration from 10 Oct" % VERSION)
+    assert result["calibration"]["stamp"] == _stamp(after)
+    steps = after[CS.SETUP_STEPS_STAMP_KEY].decode("utf-8")
+    assert 'git fetch -q --depth 1 "SOURCE" PINNED \\' in steps
+    assert 'ln -sfn "$SRC/SUBDIR" "$LINK"' in steps
+    for value in (SOURCE, COMMIT, SUBDIR):
+        assert value not in steps
+
+
+def test_a_valid_hook_writes_a_stamp_even_with_no_files_and_no_commands(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    w = _inside(tmp_path)
+    assert CS.calibration_files(w.cwd, w.root) == {}
+    _with_pin(w)
+    result = _compose(w, stamp_fn=None)
+    assert result["action"] == "written" and result["pluginPin"] is True
+    assert result["calibration"]["files"] == [] and "setupCommands" not in result["calibration"]
+    stamp = result["calibration"]["stamp"]
+    assert STAMP_SHAPE.fullmatch(stamp) and stamp == _real_stamp(w)
+    assert "printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, "cloud-setup-stamp") in result["text"]
+    # without the hook the same project writes no stamp
+    cloud_plugin_pin.sync(w.cwd, None)
+    plain = _compose(w, stamp_fn=None)
+    assert plain["calibration"]["stamp"] is None and "cloud-setup-stamp" not in plain["text"].replace(
+        'rm -f "$DEST/cloud-setup-stamp"', "")
+
+
+def test_a_broken_hook_is_refused_by_the_text_and_the_stamp_readers(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    for name, make in (("outside", _outside), ("inside", _inside)):
+        (tmp_path / name).mkdir()
+        w = make(tmp_path / name)
+        _with_pin(w)
+        _break_pin(w)
+        # axis: a broken state is refused, never composed as absent or valid
+        _refusal(_compose(w), "plugin-pin-broken")
+        with pytest.raises(CS._Refused) as raised:
+            CS.stamped_files(w.cwd, w.root)
+        assert raised.value.reason == "plugin-pin-broken"
+
+
+def test_the_composed_text_with_the_hook_carries_no_secret_shape_and_no_pass(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    w.env[cloud_pass.PASS_ENV] = base64.b64encode(b"pass-value-" + b"x" * 40).decode("ascii")
+    _with_pin(w)
+    result = _compose(w)
+    assert result["action"] == "written"
+    assert CS._scan(result["text"]) is None
+    assert cloud_pass.PASS_ENV not in result["text"] and w.env[cloud_pass.PASS_ENV] not in result["text"]
+
+
+def test_the_stamp_is_unchanged_when_only_the_plugin_commit_differs(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    one = _compose(w, stamp_fn=None)
+    other = _compose(w, stamp_fn=None, plugin_commit="f" * 40, plugin_source=SOURCE + ".other",
+                     plugin_subdir="plugins/other")
+    assert one["pluginCommit"] != other["pluginCommit"]
+    assert one["calibration"]["stamp"] == other["calibration"]["stamp"] == _real_stamp(w)
+    # a pin commit moves the pin file, which the stamp does not cover
+    _with_pin(w, dict(PIN, commit="e" * 40))
+    assert _real_stamp(w) == one["calibration"]["stamp"]
+
+
+def test_the_stamp_changes_when_a_tool_step_of_the_setup_text_changes(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    before = _real_stamp(w)
+    monkeypatch.setattr(CS, "REVIEWER_CLI_PACKAGE", "@openai/codex@9.9.9")
+    # axis: the setup-steps entry covers the install and fetch steps a pin commit cannot move
+    assert _real_stamp(w) != before
+    assert _compose(w, stamp_fn=None)["calibration"]["stamp"] == _real_stamp(w)
+
+
+def test_the_stamp_changes_when_a_skill_frontmatter_changes_but_not_its_body(tmp_path, monkeypatch):
+    root = _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    before = _real_stamp(w)
+    skill = root / "skills" / "alpha" / "SKILL.md"
+    skill.write_text("---\nname: alpha\ndescription: first\n---\nbody two, quite different\n")
+    assert _real_stamp(w) == before
+    skill.write_text("---\nname: alpha\ndescription: second\n---\nbody one\n")
+    assert _real_stamp(w) != before
+
+
+def test_the_stamp_changes_when_an_agent_file_changes(tmp_path, monkeypatch):
+    root = _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    before = _real_stamp(w)
+    (root / "agents" / "helper.md").write_text("agent two\n")
+    # axis: the inventory entry covers each agent file, loaded at a session's start
+    assert _real_stamp(w) != before
+
+
+def test_the_stamp_changes_when_the_plugin_hooks_file_changes(tmp_path, monkeypatch):
+    root = _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    before = _real_stamp(w)
+    (root / "hooks" / "hooks.json").write_text('{"hooks": {"SessionStart": []}}\n')
+    assert _real_stamp(w) != before
+    (root / "hooks" / "hooks.json").unlink()
+    assert _real_stamp(w) not in (before, None)
+
+
+def test_an_unreadable_inventory_file_is_refused_by_the_text_and_the_stamp_readers(
+        tmp_path, monkeypatch):
+    root = _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    (root / "agents" / "unreadable.md").mkdir()
+    _refusal(_compose(w), "plugin-inventory-unreadable")
+    with pytest.raises(CS._Refused) as raised:
+        CS.stamped_files(w.cwd, w.root)
+    assert raised.value.reason == "plugin-inventory-unreadable"

@@ -40,6 +40,10 @@ release, whatever its type.
   it. A release PR left behind `main` runs CI on a tree that will not ship.
 - **Post-merge green means both the `CI` and the `Release Please` workflows passed on `main`,
   read per commit.**
+- **After the release is installed on the owner's machine, move each project's cloud builds to
+  it.** A project with cloud builds and the plugin pin hook commits a new pin
+  (`cloud_plugin_pin.py write`) instead of pasting setup text, unless its cloud check or readiness
+  reports the setup text out of date. A project without the hook pastes new setup text.
 
 ## Pre-release verification — the advisor vet
 
