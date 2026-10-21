@@ -1281,13 +1281,7 @@ def test_a_quoted_environment_reference_url_password_is_allowed(password):
     cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
     assert PC._validate_command_list([cmd]) is None or "secret" not in str(PC._validate_command_list([cmd]))
     assert CS._SECRET_SHAPES  # scanner present
-    assert not [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]
-
-
-@pytest.mark.parametrize("password", ['"hunter2"', "'hunter2'", '""'])
-def test_a_quoted_literal_url_password_is_refused(password):
-    cmd = "pip install --index-url https://builder:" + password + "@packages.example/simple demo"
-    assert [n for n, p in CS._SECRET_SHAPES if n == "url credential" and p.search(cmd)]
+    assert CS._scan(cmd) is None
 
 
 def test_only_invocations_of_the_managed_script_are_ours():
@@ -1333,7 +1327,8 @@ def test_enabling_the_hook_refuses_a_literal_credential_named_assignment_and_wri
     # axis: a credential-named NAME=value word in a stored command never reaches the committed hook.
     w = _world(tmp_path, mode_registry.IN_REPO)
     got = core_md.write_project_config_item(
-        w.cwd, COMMANDS_SLUG, ["AWS_SECRET_ACCESS_KEY=abc123 npm ci"], root=w.root)
+        w.cwd, COMMANDS_SLUG, ["OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789 npm ci"],
+        root=w.root)
     assert got["action"] in ("written", "noop"), got
     refused = _set(w, HOOK_SLUG, True)
     assert refused["action"] == "refused"

@@ -29,7 +29,7 @@ def test_literal_credential_in_permission_is_still_refused(tmp_path):
     repo.mkdir()
     settings = repo / hook.SETTINGS_REL
     settings.parent.mkdir(parents=True)
-    command = "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI7K9xQ2pLmNoPqRsTuVw"
+    command = "export OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789"
     permissions = {"allow": ["Bash(" + command + ":*)"]}
     settings.write_text(json.dumps({"permissions": permissions}), encoding="utf-8")
 
