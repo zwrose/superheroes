@@ -8,7 +8,10 @@ A plan whose request is already `delivered` carries `archiveText: null` and `alr
 caller sends nothing, and goes on to `branch`. A plan for a stack lane (a cloud lane one session used for several
 layers, whose sub-issues hang under the lane's issue) carries `archiveText: null` and `archiveHeld` until every
 sub-issue of the lane's issue is closed (`stack-open`, with `openLayers`) or when the sub-issues cannot be read
-(`stack-unreadable`); `record --outcome pending` refuses `archive-held` then, and `branch` still runs. The plan's launch id is given as `--launch-id` to `record`
+(`stack-unreadable`); `record --outcome pending` refuses `archive-held` then, and `branch` still runs. When a PR's other
+linked issues cannot be read, so it cannot be told whether the PR is a layer of a stack, the plan never refuses: its
+archive is held only while the lane's issue has a sub-issue that is not closed, or while its sub-issues cannot be read,
+and `branch` still runs. The plan's launch id is given as `--launch-id` to `record`
 and `branch`, so all three act on the one lane. The caller records `pending` before it sends; a later
 `delivered`, `uncertain` or `failed` for the same msg id replaces it. A `pending` or `uncertain` request
 found on resume is never sent a second time on its own.
@@ -342,12 +345,14 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         if reason:
             return _refusal(reason), None
     lane_issue = lane.get("issue")
+    unclassified = False
     if not via_parent and len(issues) > 1 and lane_issue in issues:
         # axis: a PR linking its sub-issue and the lane's own issue is a layer of that lane's stack, so the lane-wide request rules reach it — see bite-proof record c8_cloud_cleanup, entry 26
+        # axis: a read that fails while deciding this leaves the layer unclassified, never a refusal, so an unrelated issue cannot block an ordinary lane's branch step — see bite-proof record c8_cloud_cleanup, entry 30
         parents = _parent_issues(repo, [i for i in issues if i != lane_issue], env, run)
         if parents is None:
-            return _refusal("issue-unreadable"), None
-        if lane_issue in parents:
+            unclassified = True
+        elif lane_issue in parents:
             via_parent = True
     session = lane.get("cloudSessionName")
     if not (isinstance(session, str) and session):
@@ -359,7 +364,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     request = own
     # axis: a lane found through its parent issue is asked to archive once for all its layers, so a request held on any layer is this layer's request too — see bite-proof record c8_cloud_cleanup, entry 20
     # axis: this layer's own failed try holds nothing, so a request another layer holds still shows — see bite-proof record c8_cloud_cleanup, entry 22
-    if via_parent and (own is None or own["outcome"] == "failed"):
+    if (via_parent or unclassified) and (own is None or own["outcome"] == "failed"):
         held = [r for r in receipts if r["repo"].lower() == repo.lower() and r["session"] == session
                 and r["outcome"] in ("pending", "uncertain", "delivered")]
         if held:
@@ -371,10 +376,11 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     text = ARCHIVE_TEXT_MERGED if outcome == "merged" else ARCHIVE_TEXT_CLOSED
     delivered = request.get("outcome") == "delivered"
     hold, open_layers = None, []
-    if via_parent:
+    if via_parent or unclassified:
         found = _pages(run, "repos/%s/issues/%d/sub_issues" % (repo, lane_issue), env)
         # axis: a stack whose layers cannot be read is never asked to archive, so the lane's session is not archived on a guess — see bite-proof record c8_cloud_cleanup, entry 28
-        if not found:
+        # axis: an unclassified layer whose lane issue has no sub-issues is not a stack, so its archive is not held — see bite-proof record c8_cloud_cleanup, entry 31
+        if found is None or (not found and via_parent):
             hold = "stack-unreadable"
         # axis: a stack lane is asked to archive only once every sub-issue of its issue is closed, so the open layers keep their session — see bite-proof record c8_cloud_cleanup, entry 27
         elif any(row.get("state") != "closed" for row in found):

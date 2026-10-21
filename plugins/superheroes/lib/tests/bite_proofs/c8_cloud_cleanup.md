@@ -365,3 +365,27 @@ Axis: a reservation to send is never granted for a held archive, so nothing is s
 - Red: `test_cloud_cleanup.py:1284: in test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch`, `assert _record_n(w, 501, "m-1", "pending") == {"ok": False, "reason": "archive-held"}`, `AssertionError: assert {'ok': True, ...essage': None} == {'ok': False,...archive-held'}`, `1 failed in 2.17s`.
 - Restore: the inverse edit; `cloud_cleanup.py:430` reads `        if got.get("archiveHeld"):`.
 - Green: the 22-test run above.
+
+Entries 30-31 (review round 2: a layer whose classification read fails is unclassified, never a refusal). Each entry below was run by a targeted edit to `cloud_cleanup.py` only (no test edited), the detector run alone, then the inverse edit. `<new>` is `plugins/superheroes/lib/tests/test_cloud_cleanup.py`. T-unclassified-plain is `test_a_pr_whose_other_linked_issue_cannot_be_read_is_cleaned_up_as_an_ordinary_lane`.
+
+The green for both entries is one run of the new and updated tests after the last restore (`-k "other_linked_issue_cannot_be_read or whose_own_issue_cannot_be_read_is_held or delivered_on_another_pr_of_the_session"`): `4 passed, 122 deselected in 3.07s`.
+
+## 30. An unclassified layer never refuses
+
+Axis: a failed read of a PR's other linked issues, while deciding whether a directly-found lane is a stack lane, leaves the layer unclassified and never refuses the plan, so an unrelated issue cannot block an ordinary lane's branch step.
+
+- Test: T-unclassified-plain, with `test_a_layer_linking_the_parent_whose_own_issue_cannot_be_read_is_held_on_its_stack`.
+- Neutralization (`_plan`, `cloud_cleanup.py:356`): the line `    if unclassified: return _refusal("issue-unreadable"), None` inserted right after the classification block, before `session = lane.get("cloudSessionName")`.
+- Red: `test_cloud_cleanup.py:1414: in test_a_pr_whose_other_linked_issue_cannot_be_read_is_cleaned_up_as_an_ordinary_lane`, `assert got["ok"] is True and got["action"] == "cleanup" and got["issue"] == 101 and got["launchId"] == "l-1"`, `E   assert (False is True)`, `1 failed, 125 deselected in 2.51s`.
+- Restore: the inverse edit (the inserted line removed); `cloud_cleanup.py:356` reads `    session = lane.get("cloudSessionName")`, and `grep -n 'if unclassified: return'` finds nothing.
+- Green: the 4-test run above.
+
+## 31. An unclassified layer with no sub-issues is not held
+
+Axis: an unclassified layer is held only on the evidence a proven stack is held on (a sub-issue that is not closed, or a sub-issue read that fails); an empty sub-issue list means the lane's issue is not a stack, so the archive goes out as before.
+
+- Test: T-unclassified-plain.
+- Neutralization (`_plan`, `cloud_cleanup.py:383`): `if found is None or (not found and via_parent):` became `if found is None or (not found and (via_parent or unclassified)):`.
+- Red: `test_cloud_cleanup.py:1415: in test_a_pr_whose_other_linked_issue_cannot_be_read_is_cleaned_up_as_an_ordinary_lane`, `assert "viaParent" not in got and "archiveHeld" not in got`, `AssertionError: assert ('viaParent' not in {'ok': True, 'action': 'cleanup', 'outcome': 'merged', 'repo': 'owner/name', ...} and 'archiveHeld' not in {'ok': True, 'action': 'cleanup', 'outcome': 'merged', 'repo': 'owner/name', ...})`, `1 failed, 125 deselected in 5.84s`.
+- Restore: the inverse edit; `cloud_cleanup.py:383` reads `        if found is None or (not found and via_parent):`.
+- Green: the 4-test run above.

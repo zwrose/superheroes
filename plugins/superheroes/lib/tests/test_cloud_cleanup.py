@@ -1355,13 +1355,17 @@ def test_a_layer_linking_its_sub_issue_and_the_parent_is_a_stack_layer_and_holds
     assert _plan_n(w, 503)["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503
 
 
-def test_a_layer_linking_the_parent_whose_own_issue_cannot_be_read_refuses(w):
+def test_a_layer_linking_the_parent_whose_own_issue_cannot_be_read_is_held_on_its_stack(w):
     _stack(w)
     w.gh.pulls[503] = _pull(issues=(203, PARENT), head_sha=_sha(503), ref="layer-3", created_at=_OPENED)
     w.gh.broken.add("repos/%s/issues/203" % REPO)
-    want = {"ok": False, "reason": "issue-unreadable"}
-    assert _plan_n(w, 503) == want
-    assert _record_n(w, 503, "m-1", "pending") == want
+    got = _plan_n(w, 503)
+    assert got["ok"] is True and got["issue"] == PARENT and "viaParent" not in got
+    assert got["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503 and "archiveHeld" not in got
+    _layers(w, i202="open")
+    got = _plan_n(w, 503)
+    assert got["ok"] and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202] and got["archiveText"] is None
+    assert _record_n(w, 503, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
     assert not os.path.exists(_state_file(w))
 
 
@@ -1384,3 +1388,60 @@ def test_a_pr_linking_one_issue_with_a_lane_of_its_own_reads_no_issue_at_all(w):
     assert got["ok"] and got["archiveText"] and "viaParent" not in got and "archiveHeld" not in got
     assert _record(w, "m-1", "pending")["ok"]
     assert [c for c in w.gh.calls if "/issues/" in c[-1]] == []
+
+
+# ---------------------------------------------------------------- a layer that cannot be classified never refuses
+
+UNCLASSIFIED_PR = 520
+UNCLASSIFIED_BRANCH = "unclassified-feature"
+ISSUE_102 = "repos/%s/issues/102" % REPO
+SUB_ISSUES_101 = "repos/%s/issues/101/sub_issues?per_page=100" % REPO
+
+
+def _unclassified(w):
+    """A PR linking issues 101 and 102 with its own head branch; the cloud lane is on 101 and 102 cannot be read."""
+    w.gh.branches[UNCLASSIFIED_BRANCH] = _sha(UNCLASSIFIED_PR)
+    w.gh.pulls[UNCLASSIFIED_PR] = _pull(issues=(101, 102), head_sha=_sha(UNCLASSIFIED_PR), ref=UNCLASSIFIED_BRANCH,
+                                        created_at=_OPENED)
+    w.gh.broken.add(ISSUE_102)
+    _lane(w, "l-1", 101, ts=_T1)
+
+
+def test_a_pr_whose_other_linked_issue_cannot_be_read_is_cleaned_up_as_an_ordinary_lane(w):
+    _unclassified(w)
+    w.gh.sub_issues[101] = []
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] is True and got["action"] == "cleanup" and got["issue"] == 101 and got["launchId"] == "l-1"
+    assert "viaParent" not in got and "archiveHeld" not in got
+    assert got["archiveText"] == CC.ARCHIVE_TEXT_MERGED % UNCLASSIFIED_PR
+    assert _record_n(w, UNCLASSIFIED_PR, "m-1", "pending")["ok"]
+    out = CC.branch(w.repo, REPO, UNCLASSIFIED_PR, env=w.env, run=w.gh)
+    assert out["ok"] and out["branch"] == UNCLASSIFIED_BRANCH and out["deleted"] is True
+    assert UNCLASSIFIED_BRANCH not in w.gh.branches
+
+
+def test_a_pr_whose_other_linked_issue_cannot_be_read_is_held_while_its_lane_issue_has_an_open_sub_issue(w):
+    _unclassified(w)
+    w.gh.sub_issues[101] = [{"number": 102, "state": "open"}]
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] and got["action"] == "cleanup" and "viaParent" not in got
+    assert got["archiveHeld"] == "stack-open" and got["openLayers"] == [102] and got["archiveText"] is None
+    assert _record_n(w, UNCLASSIFIED_PR, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    w.gh.broken.add(SUB_ISSUES_101)
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] and got["archiveHeld"] == "stack-unreadable" and got["archiveText"] is None
+    assert "openLayers" not in got and "viaParent" not in got
+    assert _record_n(w, UNCLASSIFIED_PR, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert CC.branch(w.repo, REPO, UNCLASSIFIED_PR, env=w.env, run=w.gh)["deleted"] is True
+
+
+def test_a_request_delivered_on_another_pr_of_the_session_is_not_sent_again_to_an_unclassified_layer(w):
+    _unclassified(w)
+    w.gh.sub_issues[101] = []
+    w.gh.pulls[521] = _pull(issues=(101,), head_sha=_sha(521), ref="other-layer", created_at=_OPENED)
+    assert _record_n(w, 521, "m-1", "pending")["ok"]
+    assert _record_n(w, 521, "m-1", "delivered")["ok"]
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] and got["alreadyDelivered"] is True and got["archiveText"] is None
+    assert got["request"]["pr"] == 521 and "viaParent" not in got and "archiveHeld" not in got
+    assert _record_n(w, UNCLASSIFIED_PR, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
