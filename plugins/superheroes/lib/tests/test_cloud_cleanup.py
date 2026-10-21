@@ -37,6 +37,7 @@ class Gh:
     def __init__(self):
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
+        self.sub_issues = {}  # parent issue number -> its sub-issue rows (`number`, `state`) that `issues/<n>/sub_issues` answers; an absent parent has none
         self.issues = {}  # issue number -> the issue object `repos/owner/name/issues/<n>` answers; an absent one has no parent
         self.branches = {"main": "c" * 40, BRANCH: HEAD}
         self.deletes, self.delete_envs, self.delete_result, self.before_delete = [], [], None, None
@@ -80,6 +81,10 @@ class Gh:
                 rows = self.open_prs
             piece = rows[(int(page) - 1) * 100:int(page) * 100]
             return SimpleNamespace(returncode=0, stdout=json.dumps(piece), stderr="")
+        if listing.startswith(base + "/issues/") and listing.endswith("/sub_issues?per_page=100"):
+            assert "--paginate" not in argv and page.isdigit(), argv
+            rows = self.sub_issues.get(int(listing[len(base + "/issues/"):].split("/", 1)[0]), [])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows[(int(page) - 1) * 100:int(page) * 100]), stderr="")
         if path.startswith(base + "/issues/") and path[len(base + "/issues/"):].isdigit():
             issue = self.issues.get(int(path.rsplit("/", 1)[1]), {"parent_issue_url": None})
             return SimpleNamespace(returncode=0, stdout=json.dumps(issue), stderr="")
@@ -1029,6 +1034,7 @@ def _stack(w, session="session-a", outcome=None):
         w.gh.pulls[number] = _layer_pull(number, issue, ref)
         w.gh.branches[ref] = _sha(number)
         w.gh.issues[issue] = {"parent_issue_url": _parent_url(PARENT)}
+    w.gh.sub_issues[PARENT] = [{"number": issue, "state": "closed"} for _, issue, _ in LAYERS]
     _lane(w, "l-1", PARENT, session=session, outcome=outcome, ts=_T1)
 
 
@@ -1251,3 +1257,130 @@ def test_a_lane_on_the_parent_issue_reserved_after_the_layer_closed_is_not_its_a
     _parent_adopter(w, "l-2", "session-two", _AFTER + 3600, adopts=501)
     got = _plan_n(w, 501)
     assert got["ok"] and got["launchId"] == "l-1" and got["session"] == "session-a"
+
+
+# ---------------------------------------------------------------- a stack lane is archived once, when every layer is closed
+
+
+def _layers(w, **states):
+    """The parent issue's sub-issues, each `closed` unless `states` (i201=..., i202=..., i203=...) says otherwise."""
+    w.gh.sub_issues[PARENT] = [{"number": n, "state": states.get("i%d" % n, "closed")} for n in (201, 202, 203)]
+
+
+SUB_ISSUES = "repos/%s/issues/%d/sub_issues?per_page=100" % (REPO, PARENT)
+
+
+def _sub_issue_reads(w):
+    return [c for c in w.gh.calls if "/sub_issues" in c[-1]]
+
+
+def test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch(w):
+    _stack(w)
+    _layers(w, i201="closed", i202="open", i203="open")
+    got = _plan_n(w, 501)
+    assert got["ok"] and got["action"] == "cleanup" and got["viaParent"] is True and got["launchId"] == "l-1"
+    assert got["archiveText"] is None and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202, 203]
+    assert "alreadyDelivered" not in got
+    assert _record_n(w, 501, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert not os.path.exists(_state_file(w))
+    out = CC.branch(w.repo, REPO, 501, env=w.env, run=w.gh)
+    assert out["ok"] and out["branch"] == "layer-1" and out["deleted"] is True
+    assert "layer-1" not in w.gh.branches
+    assert w.gh.deletes == [["gh", "api", "-X", "DELETE", "repos/owner/name/git/refs/heads/layer-1"]]
+
+
+def test_the_last_layer_to_close_carries_the_archive_text_and_the_one_request(w):
+    _stack(w)
+    _layers(w, i201="closed", i202="open", i203="open")
+    assert _plan_n(w, 501)["archiveHeld"] == "stack-open"
+    assert _plan_n(w, 502)["openLayers"] == [202, 203]
+    _layers(w)
+    last = _plan_n(w, 503)
+    assert last["ok"] and last["viaParent"] is True and last["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503
+    assert "archiveHeld" not in last and "openLayers" not in last
+    assert _record_n(w, 503, "m-1", "pending")["ok"]
+    assert _record_n(w, 503, "m-1", "delivered")["ok"]
+    assert _receipts(w) == [(503, "m-1", "delivered")]
+    again = _plan_n(w, 501)
+    assert again["archiveText"] is None and again["alreadyDelivered"] is True and "archiveHeld" not in again
+
+
+def test_a_delivered_request_keeps_its_shape_when_a_layer_is_open_again(w):
+    _stack(w)
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    assert _record_n(w, 501, "m-1", "delivered")["ok"]
+    _layers(w, i202="open")
+    got = _plan_n(w, 502)
+    assert got["archiveText"] is None and got["alreadyDelivered"] is True and "archiveHeld" not in got
+    assert _record_n(w, 502, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
+
+
+@pytest.mark.parametrize("rows", [[], None, [{"number": 201, "state": "open"}, {"number": "x", "state": "open"}]],
+                         ids=["empty", "unreadable", "open-without-an-int-number"])
+def test_a_stack_whose_layers_cannot_be_read_or_are_not_all_closed_holds_the_archive(w, rows):
+    _stack(w)
+    if rows is None:
+        w.gh.broken.add(SUB_ISSUES)
+    else:
+        w.gh.sub_issues[PARENT] = rows
+    got = _plan_n(w, 501)
+    assert got["ok"] and got["action"] == "cleanup" and got["archiveText"] is None
+    if rows:
+        assert got["archiveHeld"] == "stack-open" and got["openLayers"] == [201]
+    else:
+        assert got["archiveHeld"] == "stack-unreadable" and "openLayers" not in got
+    assert _record_n(w, 501, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert not os.path.exists(_state_file(w))
+    assert CC.branch(w.repo, REPO, 501, env=w.env, run=w.gh)["deleted"] is True
+
+
+@pytest.mark.parametrize("state", [None, "OPEN", "closed ", 1, True])
+def test_a_layer_whose_state_is_not_exactly_closed_holds_the_archive(w, state):
+    _stack(w)
+    w.gh.sub_issues[PARENT][1]["state"] = state
+    got = _plan_n(w, 501)
+    assert got["archiveHeld"] == "stack-open" and got["openLayers"] == [202] and got["archiveText"] is None
+
+
+def test_a_layer_linking_its_sub_issue_and_the_parent_is_a_stack_layer_and_holds_the_archive(w):
+    _stack(w)
+    _layers(w, i202="open")
+    w.gh.pulls[503] = _pull(issues=(203, PARENT), head_sha=_sha(503), ref="layer-3", created_at=_OPENED)
+    for selection in ({}, {"launch_id": "l-1"}):
+        got = _plan_n(w, 503, **selection)
+        assert got["ok"] and got["viaParent"] is True and got["launchId"] == "l-1" and got["issue"] == PARENT
+        assert got["archiveText"] is None and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202]
+    assert _record_n(w, 503, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    _layers(w)
+    assert _plan_n(w, 503)["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503
+
+
+def test_a_layer_linking_the_parent_whose_own_issue_cannot_be_read_refuses(w):
+    _stack(w)
+    w.gh.pulls[503] = _pull(issues=(203, PARENT), head_sha=_sha(503), ref="layer-3", created_at=_OPENED)
+    w.gh.broken.add("repos/%s/issues/203" % REPO)
+    want = {"ok": False, "reason": "issue-unreadable"}
+    assert _plan_n(w, 503) == want
+    assert _record_n(w, 503, "m-1", "pending") == want
+    assert not os.path.exists(_state_file(w))
+
+
+@pytest.mark.parametrize("other", [None, 300], ids=["no-parent", "another-parent"])
+def test_a_pr_linking_several_issues_none_a_sub_issue_of_the_lane_issue_is_not_a_stack_layer(w, other):
+    _lane(w, "l-1", 101, ts=_T1)
+    w.gh.pulls[PR] = _pull(issues=(101, 102), head_sha=w.head, created_at=_OPENED)
+    if other is not None:
+        w.gh.issues[102] = {"parent_issue_url": _parent_url(other)}
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1" and got["issue"] == 101 and "viaParent" not in got
+    assert got["archiveText"] == CC.ARCHIVE_TEXT_MERGED % PR and "archiveHeld" not in got
+    assert _sub_issue_reads(w) == []
+    assert _record(w, "m-1", "pending")["ok"]
+
+
+def test_a_pr_linking_one_issue_with_a_lane_of_its_own_reads_no_issue_at_all(w):
+    _lane(w, "l-1", 101, ts=_T1)
+    got = _plan(w)
+    assert got["ok"] and got["archiveText"] and "viaParent" not in got and "archiveHeld" not in got
+    assert _record(w, "m-1", "pending")["ok"]
+    assert [c for c in w.gh.calls if "/issues/" in c[-1]] == []

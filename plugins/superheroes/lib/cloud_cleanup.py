@@ -5,7 +5,10 @@
   cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--launch-id ID]
 
 A plan whose request is already `delivered` carries `archiveText: null` and `alreadyDelivered: true`: the
-caller sends nothing, and goes on to `branch`. The plan's launch id is given as `--launch-id` to `record`
+caller sends nothing, and goes on to `branch`. A plan for a stack lane (a cloud lane one session used for several
+layers, whose sub-issues hang under the lane's issue) carries `archiveText: null` and `archiveHeld` until every
+sub-issue of the lane's issue is closed (`stack-open`, with `openLayers`) or when the sub-issues cannot be read
+(`stack-unreadable`); `record --outcome pending` refuses `archive-held` then, and `branch` still runs. The plan's launch id is given as `--launch-id` to `record`
 and `branch`, so all three act on the one lane. The caller records `pending` before it sends; a later
 `delivered`, `uncertain` or `failed` for the same msg id replaces it. A `pending` or `uncertain` request
 found on resume is never sent a second time on its own.
@@ -338,6 +341,14 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         lid, lane, reason = _adopting_successor(repo_root, lid, lane, scope, pr, head_ref, closed, env)
         if reason:
             return _refusal(reason), None
+    lane_issue = lane.get("issue")
+    if not via_parent and len(issues) > 1 and lane_issue in issues:
+        # axis: a PR linking its sub-issue and the lane's own issue is a layer of that lane's stack, so the lane-wide request rules reach it — see bite-proof record c8_cloud_cleanup, entry 26
+        parents = _parent_issues(repo, [i for i in issues if i != lane_issue], env, run)
+        if parents is None:
+            return _refusal("issue-unreadable"), None
+        if lane_issue in parents:
+            via_parent = True
     session = lane.get("cloudSessionName")
     if not (isinstance(session, str) and session):
         return _refusal("lane-session-unknown"), None
@@ -359,15 +370,29 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
              "baseRepo": _name(pull.get("base"), "repo", "full_name")}
     text = ARCHIVE_TEXT_MERGED if outcome == "merged" else ARCHIVE_TEXT_CLOSED
     delivered = request.get("outcome") == "delivered"
+    hold, open_layers = None, []
+    if via_parent:
+        found = _pages(run, "repos/%s/issues/%d/sub_issues" % (repo, lane_issue), env)
+        # axis: a stack whose layers cannot be read is never asked to archive, so the lane's session is not archived on a guess — see bite-proof record c8_cloud_cleanup, entry 28
+        if not found:
+            hold = "stack-unreadable"
+        # axis: a stack lane is asked to archive only once every sub-issue of its issue is closed, so the open layers keep their session — see bite-proof record c8_cloud_cleanup, entry 27
+        elif any(row.get("state") != "closed" for row in found):
+            hold = "stack-open"
+            open_layers = sorted(row["number"] for row in found if row.get("state") != "closed" and type(row.get("number")) is int)
     result = {"ok": True, "action": "cleanup", "outcome": outcome, "repo": repo, "pr": pr, "issue": lane.get("issue"),
               "launchId": lid, "session": session, "sessionId": lane.get("cloudSessionId"),
-              "configDir": lane.get("configDir"), "archiveText": None if delivered else text % pr,
+              "configDir": lane.get("configDir"), "archiveText": None if delivered or hold else text % pr,
               "request": request, "closedAt": closed_at, "branch": facts["branch"], "headSha": facts["headSha"]}
     # axis: a confirmed delivery needs no further send, so a retried cleanup carries no archive text
     if delivered:
         result["alreadyDelivered"] = True
     if via_parent:
         result["viaParent"] = True
+    if hold and not delivered:
+        result["archiveHeld"] = hold
+        if hold == "stack-open":
+            result["openLayers"] = open_layers
     return result, facts
 
 
@@ -401,6 +426,9 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
         if "msgId" in held and not _same_receipt(held, repo, number, got["session"], got["closedAt"]):
             return _refusal({"delivered": "request-delivered", "pending": "request-in-progress",
                              "uncertain": "request-uncertain"}[held["outcome"]])
+        # axis: a stack lane's archive that is held until every layer closes is never reserved, so nothing is sent early — see bite-proof record c8_cloud_cleanup, entry 29
+        if got.get("archiveHeld"):
+            return _refusal("archive-held")
     path, receipts = _load(repo_root, env)
     if receipts is None:
         return path

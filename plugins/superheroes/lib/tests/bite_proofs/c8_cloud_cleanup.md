@@ -321,3 +321,47 @@ Axis: a parent issue URL naming another repository is never a lane of this repos
 - Red: `test_cloud_cleanup.py:1119: in test_a_parent_in_another_repository_is_never_a_lane_of_this_repository`, `assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}`, `assert {'ok': True, ...er/name', ...} == {'ok': False,...o-cloud-lane'}`, `1 failed in 1.86s`.
 - Restore: the inverse edit; `cloud_cleanup.py:201` reads `        if match.group(1).lower() == repo.lower() and parent not in issues and parent not in parents:`.
 - Green: the 28-test run above.
+
+Entries 26-29 (review round 1: a stack lane is archived once, when every layer is closed). Each entry below was run in this dispatch by a targeted edit to `cloud_cleanup.py` only (no test edited), the detector run alone, then the inverse edit. Before the first neutralization and after each restore `git diff --stat -- plugins/superheroes/lib/cloud_cleanup.py` read `1 file changed, 30 insertions(+), 2 deletions(-)`. Command form as above. `<new>` is `plugins/superheroes/lib/tests/test_cloud_cleanup.py`; `<break-it>` is `plugins/superheroes/lib/tests/test_cloud_cleanup_parent_mixed_links_break_it.py`.
+
+The green for every entry below is one run of the break-it file and the 16 new `<new>` tests together after the last restore (`-k "linking_parent_does_not or first_layer_merging or last_layer_to_close or delivered_request_keeps or cannot_be_read_or_are_not or not_exactly_closed or linking_its_sub_issue or whose_own_issue_cannot or none_a_sub_issue or lane_of_its_own_reads"`): `22 passed, 107 deselected in 9.11s`.
+
+## 26. A PR linking its sub-issue and the lane's own issue is a layer of the stack
+
+Axis: directly linking the shared parent issue must not bypass another layer's archive reservation, so such a PR reads `viaParent` and the lane-wide request rules apply (implicit and explicit launch id).
+
+- Test: `<break-it>` (all six cases of `test_linking_parent_does_not_grant_another_archive_reservation`).
+- Neutralization (`_plan`, `cloud_cleanup.py:350`): `if lane_issue in parents:` became `if False:`.
+- Red: `test_cloud_cleanup_parent_mixed_links_break_it.py:36: in test_linking_parent_does_not_grant_another_archive_reservation`, `assert result == {"ok": False, "reason": reason}`, `AssertionError: assert {'ok': True, ...essage': None} == {'ok': False,...-in-progress'}` (and the same for `request-uncertain` and `request-delivered`, implicit and explicit), `6 failed in 4.45s`.
+- Restore: the inverse edit; `cloud_cleanup.py:350` reads `        if lane_issue in parents:`.
+- Green: the 22-test run above.
+
+## 27. The stack-open hold
+
+Axis: a stack lane is asked to archive only once every sub-issue of its issue is closed, so the plan of a layer closing while another layer is open carries no archive text and `record` pending refuses.
+
+- Test: `test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch`.
+- Neutralization (`_plan`, `cloud_cleanup.py:380`): `elif any(row.get("state") != "closed" for row in found):` became `elif False:`.
+- Red: `test_cloud_cleanup.py:1282: in test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch`, `assert got["archiveText"] is None and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202, 203]`, `assert ('Pull request #501 is merged, so this build is finished. Follow the section "When the advisor asks you to archive your session" in your cloud build reference.' is None)`, `1 failed in 5.17s`.
+- Restore: the inverse edit; `cloud_cleanup.py:380` reads `        elif any(row.get("state") != "closed" for row in found):`.
+- Green: the 22-test run above.
+
+## 28. The unreadable-stack hold
+
+Axis: a stack whose sub-issues cannot be read, or has none, is never asked to archive (fail closed).
+
+- Test: `test_a_stack_whose_layers_cannot_be_read_or_are_not_all_closed_holds_the_archive[empty]` and `[unreadable]`.
+- Neutralization (`_plan`, `cloud_cleanup.py:377`): `if not found:` became `if False:`.
+- Red: `[empty]` at `test_cloud_cleanup.py:1327`, `assert got["ok"] and got["action"] == "cleanup" and got["archiveText"] is None`, `cleanup and 'Pull request #501 is merged, so this build is finished. ...' is None)`; `[unreadable]` `TypeError: 'NoneType' object is not iterable` at `cloud_cleanup.py:380` (the unread list reached the open-layer test); `2 failed, 1 passed in 3.15s` (the whole three-case function was run; the `open-without-an-int-number` case stays green, as it holds through `stack-open`).
+- Restore: the inverse edit; `cloud_cleanup.py:377` reads `        if not found:`.
+- Green: the 22-test run above.
+
+## 29. `record` pending refuses a held archive
+
+Axis: a reservation to send is never granted for a held archive, so nothing is sent while a layer is open.
+
+- Test: `test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch` (its `record` row).
+- Neutralization (`record`, `cloud_cleanup.py:430`): `if got.get("archiveHeld"):` became `if False and got.get("archiveHeld"):`.
+- Red: `test_cloud_cleanup.py:1284: in test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch`, `assert _record_n(w, 501, "m-1", "pending") == {"ok": False, "reason": "archive-held"}`, `AssertionError: assert {'ok': True, ...essage': None} == {'ok': False,...archive-held'}`, `1 failed in 2.17s`.
+- Restore: the inverse edit; `cloud_cleanup.py:430` reads `        if got.get("archiveHeld"):`.
+- Green: the 22-test run above.

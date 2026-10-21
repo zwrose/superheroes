@@ -229,7 +229,8 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    pushed branch stays for the vet, a renewed review or a recovery.
 2. **Plan, then ask.** Run `python3 -B <plugin root>/lib/cloud_cleanup.py plan --repo-root <root>
    --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup` with `alreadyDelivered`, send
-   nothing and go to the branch step. On any other `cleanup`, first persist the attempt under the
+   nothing and go to the branch step. On `cleanup` with `archiveHeld` (a stack whose layers are not all closed, or could not be
+   read), send nothing and go to the branch step; the plan of the stack's last layer to close carries the archive text. On any other `cleanup`, first persist the attempt under the
    message id the send will carry. For another account, run the relay's `ensure` and `compose` first
    (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
    the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
@@ -262,9 +263,10 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    gone, and a cloud launch made no checkout or worktree to remove.
 
 A stack launched once on its parent issue cleans up as one lane: each layer's plan names the parent issue's lane and
-carries `viaParent`, the archive request goes once for the lane, and a later layer's plan carries that request (its `pr`
-names the layer it was recorded on, so a `pending` or `uncertain` one is settled with `record --pr <that pr>`); the
-branch step runs for each layer's own branch.
+carries `viaParent` (a layer whose PR links both its sub-issue and the parent issue counts as a layer), the archive
+request goes once for the lane and only once every sub-issue of the lane's issue is closed, and a later layer's plan
+carries that request (its `pr` names the layer it was recorded on, so a `pending` or `uncertain` one is settled with
+`record --pr <that pr>`); the branch step runs for each layer's own branch.
 
 If the owner never answers the archive prompt, the session stays listed and the advisor carries on; nothing reminds the owner.
 
