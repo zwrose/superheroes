@@ -251,6 +251,14 @@ def test_the_eight_reasons_are_the_boards_words():
             "words": "The cloud's calibration doesn't match this machine's.",
             "fix": SETUP_TEXT_FIX, "short": "Paste the new setup text to fix it.",
             "wasnt": "its calibration doesn't match this machine's."},
+        "plugin-pin": {
+            "words": ("The plugin pin on the branch this build starts from doesn't name the plugin "
+                      "I run, or its pin hook is broken."),
+            "fix": ("To fix it, run cloud_plugin_pin.py write on this machine (it pins the plugin "
+                    "I run), commit and push the files it names on the branch the build starts "
+                    "from, then launch again."),
+            "short": "Commit a current plugin pin on the starting branch to fix it.",
+            "wasnt": "the plugin pin on the branch it starts from doesn't name my plugin."},
         "dependency-hook": {
             "words": ("The branch this build starts from doesn't carry the dependency hook, or "
                       "a setup file the build adopts can't be shown unchanged since the hook ran "

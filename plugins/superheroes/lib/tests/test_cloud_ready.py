@@ -41,7 +41,9 @@ PAST = "2026-10-10"
 ALL_TRUE = {name: True for name in CR.CONDITION_ORDER}
 ALL_FALSE = {name: False for name in CR.CONDITION_ORDER}
 RESULT_KEYS = {"ready", "reason", "conditions", "setting", "account", "environment",
-               "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck"}
+               "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck",
+               "pluginPin"}
+NO_PIN = {"state": "absent", "reason": None, "version": None}
 
 
 def _stamp_ok(cwd, root):
@@ -92,11 +94,12 @@ def _only_false(result, name):
 
 def test_the_interface_constants_are_exact():
     assert CR.CONDITION_ORDER == (
-        "setup", "passPresent", "passLive", "version", "dependencyHook", "calibration", "platform")
+        "setup", "passPresent", "passLive", "version", "pluginPin", "dependencyHook", "calibration",
+        "platform")
     assert CR.REASON_FOR == {
         "setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
-        "version": "version", "dependencyHook": "dependency-hook", "calibration": "calibration",
-        "platform": "unreachable"}
+        "version": "version", "pluginPin": "plugin-pin", "dependencyHook": "dependency-hook",
+        "calibration": "calibration", "platform": "unreachable"}
     assert CR.REPORTED_KEYS == ("pluginVersion", "noPass", "unreachable")
 
 
@@ -129,7 +132,7 @@ def test_ready_when_all_six_hold_and_every_key_is_present(tmp_path):
         "ready": True, "reason": None, "conditions": ALL_TRUE, "setting": False,
         "account": ACCOUNT, "environment": ENVIRONMENT, "cloudVersion": ADVISOR,
         "advisorVersion": ADVISOR, "picksUpVersion": False, "checkedAt": "2026-10-09",
-        "failedCheck": None}
+        "failedCheck": None, "pluginPin": NO_PIN}
 
 
 def test_setting_comes_from_the_one_reader(tmp_path):
@@ -399,7 +402,7 @@ def test_everything_false_but_setup_reports_the_pass(tmp_path):
     got = _read(repo, store, stamp_fn=lambda cwd, root: OTHER_STAMP,
                 reported={"noPass": True, "unreachable": True})
     # the fixture has the dependency hook off, so that condition holds whatever the commit
-    assert got["conditions"] == dict(ALL_FALSE, setup=True, dependencyHook=True)
+    assert got["conditions"] == dict(ALL_FALSE, setup=True, dependencyHook=True, pluginPin=True)
     assert got["reason"] == "no-pass"
 
 

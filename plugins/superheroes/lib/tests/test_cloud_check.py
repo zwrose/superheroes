@@ -384,9 +384,9 @@ def test_report_line_round_trips_through_judge(tmp_path):
                                                          separators=(",", ":"))
     result = _judge(local, line)
     assert result["action"] == "passed" and result["failedParts"] == []
-    assert result["results"] == {"versionMatches": True, "calibrationMatches": True,
-                                 "reviewerAnswered": True, "environmentMatches": True,
-                                 "identityPresent": True}
+    assert result["results"] == {"versionMatches": True, "pinMatches": None,
+                                 "calibrationMatches": True, "reviewerAnswered": True,
+                                 "environmentMatches": True, "identityPresent": True}
     assert result["recordWritten"] is True and result["settingSwitchedOff"] is False
     state = cloud_setup.read(local.cwd, ACCOUNT, local.root)
     assert state["ready"] is True
@@ -414,8 +414,8 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
     # a session with no store and no calibration directory has nothing placed and nothing carried
     assert obj == {
         "schema": CC.REPORT_SCHEMA, "nonce": None, "environment": None,
-        "pluginVersion": None, "placedStamp": "none", "stampFile": None, "repoStamp": "none",
-        "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
+        "pluginVersion": None, "pluginCommit": None, "placedStamp": "none", "stampFile": None,
+        "repoStamp": "none", "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                          "passLapses": None, "reason": "confirm-raised"},
         "identity": {"author": False, "committer": False}}
     line = CC.report_line(obj)
@@ -1571,8 +1571,8 @@ def test_start_makes_a_fresh_nonce_when_none_is_given(tmp_path):
 def _expected_prompt(issue=None):
     fallback_object = (
         {"schema": CC.REPORT_SCHEMA, "nonce": NONCE, "environment": None,
-         "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
-         "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
+         "pluginVersion": None, "pluginCommit": None, "placedStamp": None, "stampFile": None,
+         "repoStamp": None, "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                           "passLapses": None, "reason": "plugin-missing"},
          "identity": None})
     fallback = CC.report_line(fallback_object)
