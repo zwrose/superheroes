@@ -490,6 +490,26 @@ def _effective_runs(rows):
     return [row for _, row in newest.values()]
 
 
+def _latest_checks(rows, workflow_rows):
+    """One check run per check: the newest. A check is the same (name, app, workflow, event); a workflow that
+    re-runs on the same commit leaves its older check runs listed. A row whose check cannot be identified
+    (no name, no id, no app, or a GitHub Actions run whose suite maps to no workflow run) is never reduced."""
+    suites = {wr.get("check_suite_id"): (wr.get("workflow_id") or wr.get("name"), wr.get("event"))
+              for wr in workflow_rows if wr.get("check_suite_id") is not None}
+    newest, passed = {}, []
+    for row in rows:
+        app = row.get("app") or {}
+        suite = (row.get("check_suite") or {}).get("id")
+        if not row.get("name") or row.get("id") is None or app.get("id") is None \
+                or (app.get("slug") == "github-actions" and suite not in suites):
+            passed.append(row)
+            continue
+        key = (row["name"], app["id"]) + suites.get(suite, (None, None))
+        if key not in newest or row["id"] > newest[key]["id"]:
+            newest[key] = row
+    return list(newest.values()) + passed
+
+
 def _run_words(rows):
     return [f"run {r.get('id')} {r.get('conclusion') or r.get('status')}"
             for r in sorted(rows, key=lambda r: r.get("id") or 0)]
@@ -498,7 +518,7 @@ def _run_words(rows):
 def ci_reading(check_runs, status, workflow_runs=None, declaration=("absent", None)):
     """CI's state with the declared workflow it was read from and one line saying how: green only when
     the project's CI ran and passed on the head. ``workflow_runs`` is ``{"workflow_runs": [row, ...]}``."""
-    runs = (check_runs or {}).get("check_runs") or []
+    runs = _latest_checks((check_runs or {}).get("check_runs") or [], (workflow_runs or {}).get("workflow_runs") or [])
     status = status or {}
     effective = _effective_runs((workflow_runs or {}).get("workflow_runs") or [])
     kind, name = declaration
