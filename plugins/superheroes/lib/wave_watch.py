@@ -1542,8 +1542,10 @@ def _evaluate_cloud_comments(
     """(notes, cloud_terminals) on live started cloud lanes' issues, from one comments read.
 
     Notes are unanswered builder notes by comment id; terminals are the lanes whose newest
-    ending comment is a handback, stop or park not recorded answered. When `progress_out` is a
-    dict and a request was made, it is filled with `_cloud_progress` over what was observed.
+    ending comment is a handback, stop or park not recorded answered. `progress_out` is a one-slot
+    list: when a request was made (complete or partial) its slot is set to `_cloud_progress` over what
+    was observed, possibly `{}`; on every return where no request was made the slot is left as the
+    caller set it.
     """
     watched = {
         lid: info for lid, info in live_lanes.items()
@@ -1572,8 +1574,8 @@ def _evaluate_cloud_comments(
     if not state:
         # Disclose the incomplete read, but still evaluate whatever was observed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-    if isinstance(progress_out, dict):
-        progress_out.update(_cloud_progress(comments, watched))
+    if isinstance(progress_out, list) and progress_out:
+        progress_out[0] = _cloud_progress(comments, watched)
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     notes = [_builder_note(comment, watched, answered) for comment in comments]
@@ -2441,14 +2443,21 @@ def _evaluate_tick(
             notes_deadline = max(
                 cloud_deadline, activity_deadline + _MIN_PR_POLL_SECONDS,
             )
-        progress = {}
+        progress_out = [None]
         builder_notes, cloud_terminals = _evaluate_cloud_comments(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
-            known_slug=repo_slug, slug_cell=slug_cell, progress_out=progress,
+            known_slug=repo_slug, slug_cell=slug_cell, progress_out=progress_out,
         )
-        if progress and progress_state is not None:
-            progress_state[0] = progress
+        # A tick whose comments read made no request (budget spent, or no watched lane) reuses the
+        # stored snapshot; one that made a request replaces it with what it observed, `{}` included.
+        if progress_out[0] is None:
+            stored = progress_state[0] if progress_state is not None else None
+            progress = stored if isinstance(stored, dict) else {}
+        else:
+            progress = progress_out[0]
+            if progress_state is not None:
+                progress_state[0] = progress
         # bite-axis: PROGRESS — the progress comments the same read observed replace the activity
         # verdict for their lanes before the stale set joins the tick's.
         stale_cloud_launches = _apply_cloud_progress(

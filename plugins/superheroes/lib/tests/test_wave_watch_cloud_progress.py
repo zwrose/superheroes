@@ -4,6 +4,7 @@ For a started cloud lane whose tick's comments read observed a progress comment,
 alone decides lane-stale; a lane with none keeps the activity rule; no extra request is made.
 """
 import json
+import os
 import re
 import subprocess
 import time
@@ -84,7 +85,7 @@ def test_t1_a_quiet_lane_inside_its_stated_step_is_not_stale(repo):
     _lane(repo)
     gh = _ProgressGh([_progress(7, 101, updated_age=3000)])
     result = _arm(repo, gh)
-    assert result["event"] == ww.EVENT_TIMER, (result, gh.calls)
+    assert result["event"] == ww.EVENT_TIMER
 
 
 def test_t2_a_lane_past_its_stated_step_plus_the_window_is_stale(repo):
@@ -377,7 +378,7 @@ def _filled(comments, *, deadline=130.0, watched_lanes=None):
         "cloud-a": {"place": ll.PLACE_CLOUD, "started": True, "issue": 101,
                     "reservedTs": 999.0, "startedTs": 1_000.0},
     }
-    out = {}
+    out = [None]
     gh = _ProgressGh(comments)
     result = ww._evaluate_cloud_comments(
         "/nowhere", lanes, deadline=deadline, env={}, gh_run=gh, monotonic=lambda: 100.0,
@@ -386,21 +387,21 @@ def _filled(comments, *, deadline=130.0, watched_lanes=None):
     return result, out, gh
 
 
-def test_evaluate_cloud_comments_fills_progress_out_and_keeps_its_return_value():
+def test_evaluate_cloud_comments_fills_the_progress_slot_and_keeps_its_return_value():
     stamp = "2001-09-09T01:46:41Z"
     comments = [_comment_at(7, 101, stamp, stamp, _body())]
     (notes, terminals), out, _gh = _filled(comments)
     assert (notes, terminals) == ([], [])
-    assert out["cloud-a"]["commentId"] == 7
+    assert out[0]["cloud-a"]["commentId"] == 7
 
 
-def test_evaluate_cloud_comments_leaves_progress_out_untouched_on_every_early_return():
+def test_evaluate_cloud_comments_leaves_the_progress_slot_untouched_on_every_early_return():
     stamp = "2001-09-09T01:46:41Z"
     comments = [_comment_at(7, 101, stamp, stamp, _body())]
     (_n, _t), out, gh = _filled(comments, watched_lanes={})
-    assert out == {} and gh.calls == []
+    assert out == [None] and gh.calls == []
     (_n, _t), out, gh = _filled(comments, deadline=100.0)
-    assert out == {} and gh.calls == []
+    assert out == [None] and gh.calls == []
 
 
 def test_apply_cloud_progress_keeps_other_lanes_and_sorts_by_launch_id():
@@ -426,3 +427,81 @@ def test_apply_cloud_progress_keeps_other_lanes_and_sorts_by_launch_id():
     # a progress entry for a lane that is not a started cloud lane in the batch decides nothing
     ghost = {"cloud-z": dict(progress["cloud-b"])}
     assert ww._apply_cloud_progress(activity, lanes, ghost, now) == activity
+
+
+# --- a tick that makes no comments request reuses the stored snapshot ---------------
+
+
+def _tick(repo_root, gh, progress_state, *, spent, cloud_state, note_state):
+    """One `_evaluate_tick`, its arm deadline `spent` or a minute ahead; (result, payload, degraded)."""
+    now = ww.time.monotonic()
+    payload, degraded = {}, set()
+    result = ww._evaluate_tick(
+        repo_root, _BATCH, deadline=now - 1 if spent else now + 60, env=os.environ, gh_run=gh,
+        membership_reader=lambda *a, **k: None, monotonic=ww.time.monotonic, degraded=degraded,
+        ignore_launch_ids=(), pr_state=[None], stack_state=[None], pr_sampled=[False],
+        first_tick=[False], ignore_set=set(), cloud_state=cloud_state,
+        cloud_payload_out=payload, note_state=note_state, progress_state=progress_state,
+    )
+    return result, payload, degraded
+
+
+def test_t14_a_tick_with_no_comments_request_reuses_the_stored_snapshot(repo):
+    _lane(repo)
+    gh = _ProgressGh([_progress(7, 101, updated_age=3000)])
+    progress_state, cloud_state, note_state = [None], [None], [None]
+    result, _payload, _degraded = _tick(
+        repo, gh, progress_state, spent=False, cloud_state=cloud_state, note_state=note_state,
+    )
+    assert result is None
+    assert progress_state[0]["cloud-a"]["commentId"] == 7
+    assert len(gh.note_calls()) == 1
+    stored = progress_state[0]
+
+    result, payload, _degraded = _tick(
+        repo, gh, progress_state, spent=True, cloud_state=cloud_state, note_state=note_state,
+    )
+    assert len(gh.note_calls()) == 1  # the spent tick asked for no comments
+    assert result is None  # the quiet activity did not fire lane-stale: the stored snapshot decided
+    assert progress_state[0] is stored
+    [lane] = payload["cloudLanes"]
+    assert lane["phase"] == "gate"
+    assert lane["progressExpectedSeconds"] == _EXPECTED_60
+
+
+def test_t15_a_request_that_finds_no_progress_comment_replaces_the_stored_snapshot(repo):
+    _lane(repo)
+    stale_snapshot = {"cloud-a": {
+        "commentId": 7, "updatedAt": "x", "updatedEpoch": time.time() - 100,
+        "phase": "gate", "expectedSeconds": _EXPECTED_60,
+    }}
+    progress_state = [stale_snapshot]
+    gh = _ProgressGh([])
+    result, payload, _degraded = _tick(
+        repo, gh, progress_state, spent=False, cloud_state=[None], note_state=[None],
+    )
+    assert len(gh.note_calls()) == 1
+    assert progress_state[0] == {}
+    launch = _only_launch(result)
+    assert "activityAgeSeconds" in launch  # the activity rule, quiet and so stale
+    assert "progressAgeSeconds" not in launch
+    [lane] = payload["cloudLanes"]
+    assert "phase" not in lane
+
+
+def test_t16_a_reused_snapshot_past_its_expected_time_is_stale(repo):
+    _lane(repo)
+    old = time.time() - (_EXPECTED_60 + _WINDOW + 60)
+    progress_state = [{"cloud-a": {
+        "commentId": 7, "updatedAt": "x", "updatedEpoch": old,
+        "phase": "gate", "expectedSeconds": _EXPECTED_60,
+    }}]
+    gh = _ProgressGh([], activity_age=_FRESH)
+    result, _payload, _degraded = _tick(
+        repo, gh, progress_state, spent=True, cloud_state=[None], note_state=[None],
+    )
+    assert gh.note_calls() == []
+    launch = _only_launch(result)
+    assert launch["progressExpectedSeconds"] == _EXPECTED_60
+    assert launch["progressAgeSeconds"] >= _EXPECTED_60 + _WINDOW + 60
+    assert "activityAgeSeconds" not in launch
