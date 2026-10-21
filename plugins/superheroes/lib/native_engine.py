@@ -39,8 +39,10 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_pass  # noqa: E402  _is_cloud
+import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import core_md  # noqa: E402  read_sandbox_access
 import dispatch_outcome  # noqa: E402  REASON_FORFEITED
+import engine_adapter  # noqa: E402  scrub_refusals — the band scrub seam for refusal text
 import engine_dispatch  # noqa: E402  journal, git, host platform, declared-item check
 import file_lock  # noqa: E402  the run-dir lock
 import launch_ledger  # noqa: E402  scrub_env
@@ -75,11 +77,15 @@ do not try another route into the worktree.
 2. Work only in your own worktree. Do not commit. Leave your change in the working tree.
 3. Install nothing and reach no network: no package installs, no curl or wget, no git push, \
 fetch, pull or clone, no gh.
-4. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
-   {"status": "done" | "needs_context" | "blocked", "summary": "<text>"}
+4. """ + command_refusals.ORDER_TEXT + """
+5. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
+   {"status": "done" | "needs_context" | "blocked", "summary": "<text>", "refusals": [ ... ]}
+   Include refusals, in the entry shape the rule above names, whenever you met a refused or \
+denied command; an empty list or no refusals key means you met none. If your enroll command is \
+refused or denied, still write this result with status "blocked" and that refusal before you stop.
    Use "done" only when the order is carried out; "needs_context" when you need information the \
 order does not give; "blocked" when something outside your reach stops you.
-5. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
+6. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
 
 The order follows, verbatim.
 
@@ -494,7 +500,23 @@ def _read_result(run_dir):
         return None
     if "summary" in data and not isinstance(data["summary"], str):
         return None
+    # axis: a result whose refusals list fails command_refusals.refusals_fault is unreadable (native-result-invalid on the done path).
+    if "refusals" in data and command_refusals.refusals_fault(data["refusals"]) is not None:
+        return None
     return data
+
+
+def _result_refusals(run_dir):
+    """The valid non-empty refusals list in ``result.json``, else ``None``; best-effort, never raises."""
+    try:
+        with open(os.path.join(run_dir, _RESULT_NAME), encoding="utf-8") as fh:
+            data = json.load(fh)
+        refusals = data.get("refusals") if isinstance(data, dict) else None
+        if refusals and command_refusals.refusals_fault(refusals) is None:
+            return engine_adapter.scrub_refusals(refusals)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
 
 
 def _worktree_listed(into, target):
@@ -541,9 +563,13 @@ class _Close(object):
         self.opened = opened
         self.state = state
         self.served = None
+        self.refusals = None
 
     def _result(self, **fields):
         out = {"engine": "native", "bounds": NATIVE_BOUNDS, "servedModel": self.served}
+        # axis: every terminal close result carries the agent's valid refusals, forfeit paths included.
+        if self.refusals:
+            out["refusals"] = self.refusals
         out.update(fields)
         return out
 
@@ -560,6 +586,7 @@ class _Close(object):
 
     def run(self, args):
         opened = self.opened
+        self.refusals = _result_refusals(self.run_dir)
         if self.state["collecting"] is not None:
             return self._forfeit("native-collect-interrupted")
         deadline = _deadline_epoch(opened)

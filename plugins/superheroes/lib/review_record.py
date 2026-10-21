@@ -41,6 +41,7 @@ if _LIB_DIR not in sys.path:
 
 import build_lane  # noqa: E402
 import cloud_pass  # noqa: E402
+import command_refusals  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
@@ -431,6 +432,13 @@ def _validate(a):
             f"goAheads[{i}]")
     for i, x in enumerate(lst("refused")):
         chk(isinstance(x, dict) and ne(x.get("title")) and ne(x.get("reason")), f"refused[{i}] (needs title and reason)")
+    for i, x in enumerate(lst("commandRefusals")):
+        where = f"commandRefusals[{i}]"
+        chk(isinstance(x, dict), where)
+        # axis: an entry is a valid refusal tagged with a real round, never a blank or foreign shape — see bite-proof record wo3_2011_record
+        chk(isinstance(x.get("round"), int) and not isinstance(x["round"], bool) and x["round"] >= 1, f"{where}.round")
+        fault = command_refusals.refusals_fault([{k: v for k, v in x.items() if k != "round"}])
+        chk(fault is None, f"{where} ({fault})")
     named = []
     for i, c in enumerate(lst("carriedChecks")):
         where = f"carriedChecks[{i}]"
@@ -464,7 +472,7 @@ def _validate(a):
         and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
-            "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
+            "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
             "makers": makers or [], "rounds": dict(rounds, capKind=rounds.get("capKind", CAP_KINDS[0]))}
 
 
@@ -1088,7 +1096,8 @@ def build_record(account, readers, prior=None):
         "withheldFromReviewers": withheld,
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
-        "refused": a["refused"], "unreadFiles": unread, "rawOutputs": [],
+        "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),
+        "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, **({"seatsNotRun": seats_not_run} if seats_not_run else {}),
         "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
@@ -1415,6 +1424,24 @@ def _refused_line(refused, compact):
             + "; ".join(f"{reason}: {count}" for reason, count in reasons.items()) + ".")
 
 
+def _inline_code(text):
+    """``text`` as a Markdown code span whose fence is longer than any backtick run inside it."""
+    fence = "`" * (max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def _command_refusals_line(refusals, compact):
+    count = _plural(len(refusals), "refused or denied command", "refused or denied commands")
+    if compact:
+        return f"Refusals met: {count} {LISTED}."
+    parts = []
+    for x in refusals:
+        by = x.get("refusedBy") + (f": {x['hook']}" if x.get("hook") else "")
+        parts.append(f"round {x.get('round')}: {_inline_code(_clip(x.get('command')))} ({by}) → {_clip(x.get('next'))}")
+    return f"Refusals met: {len(refusals)} — " + "; ".join(parts) + "."
+
+
 def _rounds_line(rounds):
     if not isinstance(rounds, dict):
         return None
@@ -1490,6 +1517,8 @@ def _summary(r, level):
     rounds_line = _rounds_line(r.get("rounds"))
     refused = r.get("refused") or []
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
+    command_refusals_rec = r.get("commandRefusals") or []
+    refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     lines = [
         f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
         waits_text,
@@ -1501,6 +1530,7 @@ def _summary(r, level):
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
         *([_refused_line(refused, compact)] if refused else []),
+        *([refusals_line] if refusals_line else []),
         *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
         *who,
         *[f"Not run: {n['name']}, because {n['why']}." for n in r.get("seatsNotRun") or []],
@@ -1511,9 +1541,11 @@ def _summary(r, level):
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.
     # The wider lines carry the driver's own reason text, and the withheld line carries literal path data,
-    # like the floor line.
+    # like the floor line. The refusals line carries the agent's literal command and next-step text.
+    # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     _assert_no_bug_free_claim(
-        "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l not in wider_lines))
+        "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
+                  and l not in wider_lines))
     return "\n".join(lines)
 
 

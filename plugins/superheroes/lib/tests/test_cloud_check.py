@@ -91,7 +91,8 @@ def _confirm(answered=True, lapses=FAR, reason=None):
 
 def _cloud_report(cloud, **over):
     obj = CC.report(env={cloud_pass.ENVIRONMENT_ENV: ENV_ID}, cwd=cloud.cwd, root=cloud.root,
-                    nonce=NONCE, confirm_fn=_confirm())
+                    nonce=NONCE, confirm_fn=_confirm(),
+                    identity_fn=lambda cwd: {"author": True, "committer": True})
     obj.update(over)
     return obj
 
@@ -384,7 +385,8 @@ def test_report_line_round_trips_through_judge(tmp_path):
     result = _judge(local, line)
     assert result["action"] == "passed" and result["failedParts"] == []
     assert result["results"] == {"versionMatches": True, "calibrationMatches": True,
-                                 "reviewerAnswered": True, "environmentMatches": True}
+                                 "reviewerAnswered": True, "environmentMatches": True,
+                                 "identityPresent": True}
     assert result["recordWritten"] is True and result["settingSwitchedOff"] is False
     state = cloud_setup.read(local.cwd, ACCOUNT, local.root)
     assert state["ready"] is True
@@ -414,7 +416,8 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
         "schema": CC.REPORT_SCHEMA, "nonce": None, "environment": None,
         "pluginVersion": None, "placedStamp": "none", "stampFile": None, "repoStamp": "none",
         "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
-                         "passLapses": None, "reason": "confirm-raised"}}
+                         "passLapses": None, "reason": "confirm-raised"},
+        "identity": {"author": False, "committer": False}}
     line = CC.report_line(obj)
     assert line.startswith("SUPERHEROES-CLOUD-CHECK ") and "\n" not in line
     assert json.loads(line.split(" ", 1)[1]) == dict(obj, digest=CC.report_digest(obj))
@@ -903,7 +906,8 @@ def test_judge_passed_message_is_the_approved_words(tmp_path):
         "**The check passed.**\n\n"
         "- The cloud's plugin is %s, the same as mine.\n"
         "- Its calibration matches this machine's.\n"
-        "- The reviewer answered.\n\n"
+        "- The reviewer answered.\n"
+        "- It has a git identity to commit with.\n\n"
         "Cloud builds are ready for demo and still switched off. Say \"turn cloud builds on\" "
         "when you want them." % VERSION)
 
@@ -917,7 +921,8 @@ def test_judge_passed_message_when_already_on(tmp_path):
         "**The check passed.**\n\n"
         "- The cloud's plugin is %s, the same as mine.\n"
         "- Its calibration matches this machine's.\n"
-        "- The reviewer answered.\n\n"
+        "- The reviewer answered.\n"
+        "- It has a git identity to commit with.\n\n"
         "Cloud builds are ready for demo, and they're already on." % VERSION)
 
 
@@ -1568,7 +1573,8 @@ def _expected_prompt(issue=None):
         {"schema": CC.REPORT_SCHEMA, "nonce": NONCE, "environment": None,
          "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
          "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
-                          "passLapses": None, "reason": "plugin-missing"}})
+                          "passLapses": None, "reason": "plugin-missing"},
+         "identity": None})
     fallback = CC.report_line(fallback_object)
     text = ("This is a short setup check. Edit nothing, commit nothing, push nothing, and invoke "
             "no skill.\n\n"

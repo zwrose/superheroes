@@ -536,6 +536,19 @@ def _wider_rounds(rounds):
     return out
 
 
+def _command_refusals(rounds):
+    """``[{..., round}]``: every refusal a round's fixer reported, in round order. A round with no
+    ``fix`` dict, or a ``fix`` without a ``refusals`` list (a session written before the key), yields
+    nothing; the writer's validation is the refusing layer for a malformed entry."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        fix = rounds[n].get("fix") if isinstance(rounds[n], dict) else None
+        refusals = fix.get("refusals") if isinstance(fix, dict) else None
+        if isinstance(refusals, list):
+            out += [dict(entry, round=int(n)) if isinstance(entry, dict) else entry for entry in refusals]
+    return out
+
+
 def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     _check_extras(extras)
     if not os.path.isdir(session_dir):
@@ -592,7 +605,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                        "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
-            "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
+            "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked}
 
