@@ -216,15 +216,17 @@ occupant of a reassigned one.
 **Read `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` § Slot reference format when you verify a slot or meet a lifecycle refusal token.**
 
 **Third, and at every commit after, commit under the git identity the worktree resolves, and never synthesize one.** Git's
-normal cascade resolves it from the repo-local `.git/config` when that is set, otherwise from this
-environment's global config. A clone with no repo-local identity is the normal case, so an empty
-`git config --local` is not by itself a missing identity. Read the resolved identity with
-`git config user.email` and `git config user.name`, without `--local`, before you commit. An empty
-answer there is the missing-identity condition. **Never pass `-c user.name` or `-c user.email`**,
-and never derive an identity from your own context. A commit under a synthesized identity lands
-unverified, and a downstream gate can refuse the whole branch for it after review. If the identity
-is **missing or wrong**, park and report the identity you found. A throwaway repo that a test
-fixture creates is a separate case: its own commits pass an explicit inline identity.
+normal cascade resolves it from the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` environment variables when
+they are set, otherwise from the repo-local `.git/config`, otherwise from this environment's global
+config. A clone with no repo-local identity is the normal case, and a cloud environment may supply
+its identity through the variables alone, so an empty `git config` answer is not by itself a missing
+identity. Read the resolved identity with `git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT` and
+`git -c user.useConfigOnly=true var GIT_COMMITTER_IDENT` before you commit. Either one failing is
+the missing-identity condition. **Never pass `-c user.name` or `-c user.email`**, and never derive
+an identity from your own context. A commit under a synthesized identity lands unverified, and a
+downstream gate can refuse the whole branch for it after review. If the identity is **missing or
+wrong**, park and report the identity you found. A throwaway repo that a test fixture creates is a
+separate case: its own commits pass an explicit inline identity.
 
 Your own worktree and branch come off the issue's base. **Bring the app up** the way test-pilot will
 run it: the dev server and any login or seed the app needs to be usable. A build with no running app

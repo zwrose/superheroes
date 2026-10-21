@@ -30,7 +30,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed.** An attended session that runs subagents now gets its automatic checkpoint at the next idle measurement above the trigger, where a subagent's turn used to hold it off. See [Checkpoint: a subagent's turn never holds the automatic checkpoint](#checkpoint-a-subagents-turn-never-holds-the-automatic-checkpoint).
 - **After switching.** **Nothing is owed.** A launch whose premise adopts a branch (`adoptsBranch`, `adoptsHead`) now refuses before launch when the adopted head does not descend from `baseCommit`; bring the adopted branch current with its base and launch again. See [Launcher: an adoption whose head is not on its base is refused before launch](#launcher-an-adoption-whose-head-is-not-on-its-base-is-refused-before-launch).
 - **After switching.** **Nothing is owed.** A review orchestrator records its rulings on a round's findings before the `next` call that emits the fixer order. See [Review: rulings land before the fixer order](#review-rulings-land-before-the-fixer-order).
-- **After switching.** **Paste new setup text and say "check again" in each project with cloud builds, as after any upgrade.** The check now also fails a cloud session with no git commit identity, and its fix names the four `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables to set in the environment. See [Cloud check: a commit identity](#cloud-check-a-commit-identity).
+- **After switching.** **Paste new setup text and say "check again" in each project with cloud builds, as after any upgrade.** The check fails a cloud session where git resolves no commit identity, and the `git-identity` launch ruling reads `git var`, so a builder on an environment that sets only the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables does not park. See [Cloud check: a commit identity](#cloud-check-a-commit-identity).
 
 ### Orders: a refused or denied command is a stop
 
@@ -144,10 +144,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Cloud check: a commit identity
 
-- The cloud check's report gains `identity`, `{"author": bool, "committer": bool}`: whether git in the session's repository resolves a configured author and committer identity. It reads them with `user.useConfigOnly`, so a guessed identity never counts. The report carries no name or email.
-- `judge` gains `results.identityPresent` and the failed part `identity`, reported after `reviewer`. Its fix names `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`. A passed check's message gains the line "It has a git identity to commit with."
+- The cloud check's report gains `identity`, `{"author": bool, "committer": bool}`: whether git in the session's repository resolves an author and a committer identity, read with `user.useConfigOnly` so a guessed identity never counts. The report carries no name or email.
+- `judge` gains `results.identityPresent` and the failed part `identity`, reported after `reviewer`. Its fix line names `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, filled in with this machine's name and email (or "your name" and "your email" when none resolves). The values appear only in the returned message, never in the failed-check marker, the setup record or the calibration. A passed check's message gains the line "It has a git identity to commit with."
 - A report without `identity`, from an older cloud plugin, stays readable and fails on `identity` as well as on `version`. `REPORT_FIELDS` is unchanged.
-- `git config` inside a cloud session is refused by the session's permission classifier as persistence. Set a missing identity through the environment's variables.
+- The `git-identity` launch ruling reads `git var`. Its cascade names the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables first, and its missing-identity test is `git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT` or `GIT_COMMITTER_IDENT` failing, never an empty `git config` answer. `launch_doctrine.git_identity(cwd)` is the one implementation, and the cloud check calls it. Every composed launch carries this text.
+- The setup text writes no identity step. The platform's own signed identity is the default. A project that wants another author sets the four variables on its cloud environment, and those commits most likely show as Unverified. `git config` inside a cloud session is refused by the session's permission classifier as persistence.
 - Recovering a stack in the cloud takes one adoption launch per layer, bottom first, each layer brought current with the one below before its launch (`skills/showrunner/reference/orchestration.md` § Adoption mechanics).
 
 ## 0.44.0
