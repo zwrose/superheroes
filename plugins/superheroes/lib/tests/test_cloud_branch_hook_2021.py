@@ -170,15 +170,20 @@ def test_dod1_routing_a_base_commit_without_the_hook_runs_locally_with_the_new_w
     call = _account_route(w, {"baseCommit": bare})
     assert call["place"] == "local" and call["reason"] == "dependency-hook"
     assert launch_place.reason_text(call) == (
-        "The branch this build starts from doesn't carry the dependency hook, so the cloud could "
-        "build it with out-of-date dependencies.")
+        "The branch this build starts from doesn't carry the dependency hook, or the branch it "
+        "adopts changes a dependency file after the hook ran, so the cloud could build it with "
+        "out-of-date dependencies.")
     assert launch_place.fix_text(call) == (
         "To fix it, commit and push the dependency hook files configure wrote (the settings file "
-        "and the hook script) on that branch, then launch again.")
+        "and the hook script) on the branch the build starts from; if the build adopts a branch "
+        "that changed a dependency file, bring that change into the branch it starts from first. "
+        "Then launch again.")
     assert launch_place.REASONS["dependency-hook"]["short"] == (
-        "Bring the dependency hook onto that branch to fix it.")
+        "Bring the dependency hook, and any adopted dependency change, onto the starting branch "
+        "to fix it.")
     assert launch_place.REASONS["dependency-hook"]["wasnt"] == (
-        "the branch it starts from doesn't carry the dependency hook.")
+        "the branch it starts from doesn't carry the dependency hook, or the branch it adopts "
+        "changes a dependency file.")
 
 
 def test_route_reads_the_startup_commit_not_the_checkout_head(tmp_path):
@@ -240,6 +245,19 @@ def test_routing_passes_the_adopted_head(tmp_path):
     call = _account_route(w, {"baseCommit": with_hook, "adoptsHead": adopted})
     assert call["place"] == "local" and call["reason"] == "dependency-hook"
     assert _account_route(w, {"baseCommit": with_hook, "adoptsHead": with_hook})["place"] == "cloud"
+
+
+def test_routing_an_adopted_dependency_change_tells_the_owner_about_the_adoption(tmp_path):
+    w, bare, with_hook = _hooked(tmp_path)
+    _record_for_routing(w)
+    _lock(w, "v2\n")
+    adopted = _commit(w.cwd, "lock changed")
+    call = _account_route(w, {"baseCommit": with_hook, "adoptsHead": adopted})
+    assert call["place"] == "local" and call["reason"] == "dependency-hook"
+    reason = launch_place.reason_text(call)
+    assert "adopts" in reason and "dependency file" in reason
+    fix = launch_place.fix_text(call)
+    assert "adopts" in fix and "dependency file" in fix
 
 
 # ---------------------------------------------------------------- DoD row 2
