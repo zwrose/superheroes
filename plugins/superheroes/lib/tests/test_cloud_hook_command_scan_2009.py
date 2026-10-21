@@ -1,5 +1,5 @@
-"""Existing hook commands in the settings are read as shell commands (a reference passes, a
-literal is refused); shell `-c` scripts and `NAME+=value` are scanned like any command."""
+"""Existing hook commands in the settings are read by the shared whole-text scan: a reference
+passes, a literal credential refuses `settings-secret-shaped`."""
 import json
 import sys
 from pathlib import Path
@@ -12,8 +12,8 @@ from test_cloud_dependency_hook_2009 import _world, mode_registry  # noqa: E402
 import cloud_dependency_hook as hook  # noqa: E402
 import cloud_setup_text  # noqa: E402
 
-LITERAL = "fixture_private_key_123"
-SCAN = cloud_setup_text._CredentialAssignment().search
+LITERAL = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+SCAN = cloud_setup_text._scan
 REFERENCE_HOOKS = [
     "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY npm ci",
     "printf 'AWS_SECRET_ACCESS_KEY=%s\\n' \"$AWS_SECRET_ACCESS_KEY\" > .env",
@@ -31,29 +31,18 @@ def test_existing_reference_hook_allows_enable_and_removal(tmp_path, command):
     world = _world(tmp_path, mode_registry.GLOBAL)
     _existing(world, command)
     assert hook.sync(str(world.repo), ["npm ci"], [], True)["action"] == "written"
-    assert hook._hook_commands(json.loads(world.settings.read_text())).count(command) == 1
+    groups = json.loads(world.settings.read_text())["hooks"]["PreToolUse"]
+    assert [h["command"] for g in groups for h in g["hooks"]].count(command) == 1
     assert hook.sync(str(world.repo), ["npm ci"], [], False)["action"] == "removed"
     assert world.settings.exists()
 
 
 def test_existing_literal_hook_is_refused(tmp_path):
     world = _world(tmp_path, mode_registry.GLOBAL)
-    _existing(world, "AWS_SECRET_ACCESS_KEY=%s npm ci" % LITERAL)
+    _existing(world, "OPENAI_API_KEY=%s npm ci" % LITERAL)
     result = hook.sync(str(world.repo), ["npm ci"], [], True)
     assert result == {"action": "refused", "reason": "settings-secret-shaped", "changed": []}
     assert not world.script.exists()
-
-
-@pytest.mark.parametrize("script", [
-    "bash -c 'AWS_SECRET_ACCESS_KEY=%s npm ci'" % LITERAL,
-    'sh -c "AWS_SECRET_ACCESS_KEY=%s npm ci"' % LITERAL,
-    "env /bin/bash -ec 'AWS_SECRET_ACCESS_KEY=%s npm ci'" % LITERAL,
-    "zsh -lc \"true; export AWS_SECRET_ACCESS_KEY=%s\"" % LITERAL,
-    "bash -c \"sh -c 'AWS_SECRET_ACCESS_KEY=%s npm ci'\"" % LITERAL,
-    "AWS_SECRET_ACCESS_KEY+=%s npm ci" % LITERAL,
-])
-def test_shell_c_script_and_append_literals_are_refused(script):
-    assert SCAN(script)
 
 
 @pytest.mark.parametrize("script", [

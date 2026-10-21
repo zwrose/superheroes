@@ -61,80 +61,43 @@ exec("\n".join(_STARTS_LINES), _starts_scope)
 _group_starts = _starts_scope["starts"]
 
 
+# a settings `env` key that names a credential, and the one value that is allowed there: a bare
+# `$NAME` / `${NAME}` reference
+_CREDENTIAL_ENV_KEYS = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
+                        "AWS_SESSION_TOKEN"}
+_CREDENTIAL_ENV_SUFFIXES = ("_TOKEN", "_SECRET", "_PASSWORD", "_API_KEY", "_SECRET_KEY",
+                            "_ACCESS_KEY")
+_BARE_REFERENCE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+
+
+def _credential_env_name(key):
+    name = str(key).upper()
+    return name in _CREDENTIAL_ENV_KEYS or name.endswith(_CREDENTIAL_ENV_SUFFIXES)
+
+
 def _env_carries_credential(settings):
     """True when the settings `env` block gives a credential-named key a populated value that is
     not a bare `$NAME` / `${NAME}` reference (the content scan cannot know an opaque value)."""
-    from cloud_setup_text import ENV_REFERENCE_RE, is_credential_env_name  # lazy: imports us back
     env = settings.get("env") if isinstance(settings, dict) else None
     if not isinstance(env, dict):
         return False
     for key, value in env.items():
-        if not is_credential_env_name(key):
+        if not _credential_env_name(key):
             continue
         if value is None or value == "":
             continue
-        if isinstance(value, str) and ENV_REFERENCE_RE.fullmatch(value.strip()):
+        if isinstance(value, str) and _BARE_REFERENCE_RE.fullmatch(value.strip()):
             continue
         return True
     return False
 
 
-def _hook_commands(settings, blank=False):
-    """Every `hooks.<Event>[].hooks[].command` string in the settings; with `blank`, those values
-    are replaced by empty strings in place, leaving the rest of the document."""
-    found = []
-    hooks = settings.get("hooks") if isinstance(settings, dict) else None
-    if not isinstance(hooks, dict):
-        return found
-    for groups in hooks.values():
-        for group in groups if isinstance(groups, list) else []:
-            inner = group.get("hooks") if isinstance(group, dict) else None
-            for hook in inner if isinstance(inner, list) else []:
-                if isinstance(hook, dict) and isinstance(hook.get("command"), str):
-                    found.append(hook["command"])
-                    if blank:
-                        hook["command"] = ""
-    return found
-
-
-def _permission_commands(settings, blank=False):
-    """The command inside each `Bash(<command>)` rule of `permissions.allow|deny|ask`, with a
-    trailing `:*` or `*` pattern suffix dropped; with `blank`, those rule strings are replaced by
-    empty strings in place."""
-    found = []
-    perms = settings.get("permissions") if isinstance(settings, dict) else None
-    if not isinstance(perms, dict):
-        return found
-    for key in ("allow", "deny", "ask"):
-        rules = perms.get(key)
-        if not isinstance(rules, list):
-            continue
-        for i, rule in enumerate(rules):
-            if isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")"):
-                command = rule[len("Bash("):-1]
-                for suffix in (":*", "*"):
-                    if command.endswith(suffix):
-                        command = command[:-len(suffix)]
-                        break
-                found.append(command)
-                if blank:
-                    rules[i] = ""
-    return found
-
-
-def _settings_secret_shaped(settings, scan):
-    """True when the settings about to be written carry a credential: each hook command is read as
-    a shell command (the way stored setup commands are, so `NAME=$NAME npm ci` passes), and the
-    rest of the document, with those commands blanked, is read in document mode."""
-    import copy
-    commands = _hook_commands(settings) + _permission_commands(settings)
-    if any(scan(command, False) for command in commands):
-        return True
-    rest = copy.deepcopy(settings)
-    _hook_commands(rest, blank=True)
-    _permission_commands(rest, blank=True)
-    text = json.dumps(rest, indent=2, ensure_ascii=False) + "\n"
-    return bool(scan(text, True)) or _env_carries_credential(settings)
+def _settings_secret_shaped(settings):
+    """True when the settings about to be written carry a credential: the shared whole-text scan
+    finds a shape in the serialized file, or the `env` block holds a credential-named literal."""
+    from cloud_setup_text import _scan  # lazy: that module imports this one back
+    text = json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+    return bool(_scan(text)) or _env_carries_credential(settings)
 
 
 def _skipped(reason):
@@ -425,8 +388,7 @@ def _sync(repo_root, commands, inputs, enabled, changed):
     if not os.path.isdir(repo_root) and (write_script is not None or write_settings is not None):
         raise OSError("the repository root does not exist")
     if write_settings is not None:
-        from cloud_setup_text import _scan  # lazy: that module imports this one back
-        if _settings_secret_shaped(write_settings, _scan):
+        if _settings_secret_shaped(write_settings):
             # nothing is written, the script included: the owner is told to commit this file
             raise _Refused("settings-secret-shaped")
     if write_script is not None:

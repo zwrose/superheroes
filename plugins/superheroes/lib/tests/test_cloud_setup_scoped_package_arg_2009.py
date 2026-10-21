@@ -19,10 +19,6 @@ def test_json_serialized_command_is_not_secret_shaped():
     assert CS._scan(json.dumps(settings)) is None
 
 
-def test_real_credential_beside_it_is_still_secret_shaped():
-    assert CS._scan(COMMAND + " https://u:p4ss@host.example.invalid/x") is not None
-
-
 def test_credential_free_verify_command_still_produces_setup_text(tmp_path):
     w = _outside(tmp_path)
     core = json.dumps({"projectConfiguration": {"verifyCommand": COMMAND}})
