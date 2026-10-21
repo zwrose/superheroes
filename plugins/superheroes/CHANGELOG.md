@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.45.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.44.0...superheroes-v0.45.0) (2026-10-21)
+
+
+### Features
+
+* **superheroes:** a cloud builder keeps a progress comment, so the wave watch tells a long step from a stall ([#2020](https://github.com/zwrose/superheroes/issues/2020)) ([69b4b62](https://github.com/zwrose/superheroes/commit/69b4b623e2aad793521303e0fb5f526c0fcfd4ab))
+* **superheroes:** a project lists setup commands that its cloud setup text runs, in order ([#2000](https://github.com/zwrose/superheroes/issues/2000)) ([9e2efe6](https://github.com/zwrose/superheroes/commit/9e2efe652618502fbd00ca0b628c9cb1d065028b))
+* **superheroes:** configure can turn on a start-of-session hook that keeps cloud dependencies current ([#2013](https://github.com/zwrose/superheroes/issues/2013)) ([1651b3d](https://github.com/zwrose/superheroes/commit/1651b3dc20fbffe1302c7dba016d1f60c7c2267a))
+* **superheroes:** configure's cloud setup sitting offers the dependency hook ([#2014](https://github.com/zwrose/superheroes/issues/2014)) ([1fb284b](https://github.com/zwrose/superheroes/commit/1fb284bbd7d57fb1f2910d9aa57c0fe3fb0418a6))
+* **superheroes:** the advisor can keep craft findings off the owner's merge sheet, listed and reversible ([#1972](https://github.com/zwrose/superheroes/issues/1972)) ([cdbd124](https://github.com/zwrose/superheroes/commit/cdbd1249cf63523e71b3b094ad1ba585c94521f3))
+* **superheroes:** the cloud check fails without a git commit identity, and cloud stack recovery is one adoption per layer ([#2019](https://github.com/zwrose/superheroes/issues/2019)) ([07f61eb](https://github.com/zwrose/superheroes/commit/07f61ebfbc6f34d48d5894672785391acac22fad))
+
+
+### Bug Fixes
+
+* **superheroes:** a command the owner is asked to run lives in a reviewed file, never in the PR body ([#1993](https://github.com/zwrose/superheroes/issues/1993)) ([a167eb4](https://github.com/zwrose/superheroes/commit/a167eb4efcf0498e543b9cc68bc10a494825c36e))
+* **superheroes:** a finding is never dismissed by a check that could not run ([#1990](https://github.com/zwrose/superheroes/issues/1990)) ([f7c710b](https://github.com/zwrose/superheroes/commit/f7c710b139e905fa38c006478d8950e6cb84da39))
+* **superheroes:** a project's setup inputs join the setup stamp, so a lockfile change asks for a re-paste ([#2010](https://github.com/zwrose/superheroes/issues/2010)) ([7122038](https://github.com/zwrose/superheroes/commit/712203883a2ff48ea3449d7e56ee5ff453b958a8))
+* **superheroes:** a refused or denied command is a stop in every plugin-written order ([#2015](https://github.com/zwrose/superheroes/issues/2015)) ([6a618c6](https://github.com/zwrose/superheroes/commit/6a618c6ace9fe26162b40ff9fcbd64df49cd2bda))
+* **superheroes:** a subagent's turn never leaves the session marked busy, so the auto checkpoint fires ([#1999](https://github.com/zwrose/superheroes/issues/1999)) ([c376aa1](https://github.com/zwrose/superheroes/commit/c376aa1b6f0886d089313e28b42368af235d3e40))
+* **superheroes:** an owner ruling cited by a finding counts on an organisation-owned repository ([#1994](https://github.com/zwrose/superheroes/issues/1994)) ([6a66e4c](https://github.com/zwrose/superheroes/commit/6a66e4c5ec345b5b568ae3827b765defb76c05a5))
+* **superheroes:** containment tests and the citation check adapt inside the claude write sandbox ([#1983](https://github.com/zwrose/superheroes/issues/1983)) ([44686bc](https://github.com/zwrose/superheroes/commit/44686bc990746f3eb937e9fad65233753534dcd4))
+* **superheroes:** every review seat reads the project's CLAUDE.md ([#1970](https://github.com/zwrose/superheroes/issues/1970)) ([d785e40](https://github.com/zwrose/superheroes/commit/d785e407210c6ed19905274fa1a9cc6ae866e5ca))
+* **superheroes:** read CI green in the review record only when the project's CI ran ([#1985](https://github.com/zwrose/superheroes/issues/1985)) ([adcfa39](https://github.com/zwrose/superheroes/commit/adcfa39020f78b6bdcbf83e713ee0de5195f6db8))
+* **superheroes:** refuse an adoption whose head is not on its base before launch ([#2006](https://github.com/zwrose/superheroes/issues/2006)) ([5b7d2a3](https://github.com/zwrose/superheroes/commit/5b7d2a338e6969687e9d93c20cf82d24f35e6e0b))
+* **superheroes:** review-code records its rulings before it asks for the fixer step ([#2005](https://github.com/zwrose/superheroes/issues/2005)) ([60c802b](https://github.com/zwrose/superheroes/commit/60c802b8c7d77995ae9f8f6d4fd7d9e475377caa))
+* **superheroes:** the dispatch size count ignores main merged into the branch mid-build ([#1987](https://github.com/zwrose/superheroes/issues/1987)) ([ed0bb60](https://github.com/zwrose/superheroes/commit/ed0bb60d2313724a18749d37c6a6c1210bfc8f03))
+* **superheroes:** the review driver derives the post-fix diff from git and refuses a mismatched one ([#1971](https://github.com/zwrose/superheroes/issues/1971)) ([bcb7f22](https://github.com/zwrose/superheroes/commit/bcb7f2276901c26689ff7e5880d087e927655729))
+* **superheroes:** the review fixer writes its own landing payload from inside its write sandbox ([#2003](https://github.com/zwrose/superheroes/issues/2003)) ([9e62fdd](https://github.com/zwrose/superheroes/commit/9e62fdd1de33698bbeebc1ebe3875d2c6552b1b3))
+* **superheroes:** the review record names a composed seat the loop does not run ([#1988](https://github.com/zwrose/superheroes/issues/1988)) ([211bedf](https://github.com/zwrose/superheroes/commit/211bedfe278f7652474e9bee1a78605c848dce02))
+
 ## [0.44.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.43.0...superheroes-v0.44.0) (2026-10-18)
 
 
