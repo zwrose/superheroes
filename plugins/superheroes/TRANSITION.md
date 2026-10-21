@@ -18,6 +18,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
 - **After switching.** **An advisor that put a PR-tied collector item in a "What you're accepting" item or a leftover's text by number must move it to `collectorItems`, because such a sheet input is now refused when that card has no options.** See [PR sheets: a PR-tied decision rides its PR's sheet](#pr-sheets-a-pr-tied-decision-rides-its-prs-sheet).
+- **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
 
 ### Configure: the hook offer saves the detected inputs on either answer
 
@@ -29,6 +30,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - `build` now refuses a card that has no options and whose shown text (question, context blocks, recommendation) sends the owner to a list item by number: "decision item 1435" (also "collector item", "list item"), "item 1435 on your list" (also in or from, the list or the collector), and "collector" followed by a hash and the number (also "collector number 1435", "collector entry 1435"). The scan is best effort. A card with its own options is never refused for mentioning a number. The problem names the card's input location, `leftovers <key>`, `items <id>` or `closesSpec`.
 - `theme/sheet-words.json` gains three `pr` words, `collectorKind`, `collectorOption` and `collectorRecommendation`, after `closureReceipt`.
 - `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics and `theme/review-template.md` § The items now say that a PR-tied collector item is a `collectorItems` card with the per-item spine and its collector number, never only in the chat and never inside a "What you're accepting" card. The recap gets a bare-line rule: a recap, morning or reminder line that names a decision carries its one-line context, never only its number and the recommended letter.
+
+### Review record: CI reads each check's latest run
+
+- A check run that a newer run of the same check superseded no longer reads red. A check is the same name, app, workflow, event, head branch and pull request (two pull requests sharing one head commit never replace each other's checks); a workflow that re-runs on one commit (a cancelled run, then a rerun) leaves its older check runs listed, and only the newest run of each check is read. A check whose newest run is cancelled still reads red, and a different check's success never covers a failed one.
+- A check run whose identity cannot be established is not reduced: one with no name, id or app, or a GitHub Actions run whose suite maps to no workflow run on the commit. It is read as it is, so a failure on it still reads red.
+- The reduction applies to the whole paged check list, so a superseded run on one page and its replacement on another resolve the same way.
 
 ## 0.45.0
 
