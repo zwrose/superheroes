@@ -12,6 +12,18 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
+
+### Review record: CI reads each check's latest run
+
+- A check run that a newer run of the same check superseded no longer reads red. A check is the same name, app, workflow and event; a workflow that re-runs on one commit (a cancelled run, then a rerun) leaves its older check runs listed, and only the newest run of each check is read. A check whose newest run is cancelled still reads red, and a different check's success never covers a failed one.
+- A check run whose identity cannot be established is not reduced: one with no name, id or app, or a GitHub Actions run whose suite maps to no workflow run on the commit. It is read as it is, so a failure on it still reads red.
+- The reduction applies to the whole paged check list, so a superseded run on one page and its replacement on another resolve the same way.
+
 ## 0.45.0
 
 ### Before you upgrade

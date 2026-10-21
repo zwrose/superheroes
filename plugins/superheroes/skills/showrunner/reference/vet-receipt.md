@@ -36,7 +36,7 @@ shape is wrong and the thinking wins.
    **Select that CI run by workflow name *and* head sha — never `gh run list --limit 1`.** The latest
    run on a branch is whatever workflow happened to fire last, which is not necessarily the one whose
    green you are claiming, so `--limit 1` can report another workflow's green as this one's. Name
-   the workflow and pin the sha; a run that does not match both is not evidence about this head. The same selection binds
+   the workflow and pin the sha; a run that does not match both is not evidence about this head. When the same check ran more than once on that sha, its newest run is the reading: an older cancelled run that a newer run of the same check replaced is superseded, and a check whose newest run is cancelled is red — the review record reads CI the same way. The same selection binds
    **any** CI watch on a head you are about to act on — a vet, a wave watch, a merge train — not only
    the one this receipt records.
 
