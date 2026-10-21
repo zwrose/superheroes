@@ -33,6 +33,7 @@ import tempfile
 import time
 
 import cloud_pass
+import cloud_plugin_pin
 import cloud_setup
 import cloud_setup_text
 import core_md
@@ -57,6 +58,7 @@ failed_check_path = cloud_setup.failed_check_path
 read_failed_check = cloud_setup.read_failed_check
 
 _NONCE_RE = re.compile(r"[A-Za-z0-9]{8,64}")
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
 _SETUP_MESSAGE = (
     "**Setting up cloud builds for {project}.** You do these by hand, once. It takes about ten "
@@ -120,6 +122,12 @@ _EXPIRY_UNKNOWN = "it stops working after {days} days; the exact date isn't know
 _SIGN_IN_IN_PLACE = "The separate reviewer sign-in is in place."
 
 _SAME_FIX = "paste the new setup text into the environment"
+_PIN_FIX = ("run cloud_plugin_pin.py write on this machine, commit and push the files it names, then "
+            "start a new check; if the pin already names my plugin, the cloud could not install it, "
+            "and the hook's one-line message in the cloud session says why")
+_PIN_MISMATCH = ("The cloud runs plugin {cloud} at commit {cloud_commit}; this project's pin names "
+                 "{pin_version} at {pin_commit}, and mine is {mine}.")
+_PIN_BROKEN = "This project's plugin pin hook is broken ({reason})."
 # part -> (sentence, fix), in the order the parts are reported
 _PARTS = (
     ("environment",
@@ -128,6 +136,7 @@ _PARTS = (
      "run /remote-env in Claude Code and pick this project's environment again, then run the pass "
      "command and paste the block into that environment"),
     ("version", "The cloud's plugin is {cloud} and mine is {mine}.", _SAME_FIX),
+    ("pin", _PIN_MISMATCH, _PIN_FIX),
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
      "paste a fresh pass into the environment"),
@@ -333,10 +342,20 @@ def _local_identity(cwd):
         return None
 
 
+def _plugin_commit():
+    """The commit of the plugin this session runs: a 40-hex string, or None when its directory is not
+    a git checkout or git does not answer."""
+    got = subprocess.run(["git", "-C", cloud_setup_text._plugin_root(), "rev-parse", "--verify", "HEAD"],
+                         capture_output=True, text=True, timeout=10)
+    commit = got.stdout.strip() if got.returncode == 0 else ""
+    return commit if _COMMIT_RE.fullmatch(commit) else None
+
+
 def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_fn=None):
     """What this cloud session holds, as the object the marked line carries. Never raises.
     `identity_fn(cwd)` is the test seam for the git identity check; it defaults to
-    `launch_doctrine.git_identity`."""
+    `launch_doctrine.git_identity`. `pluginCommit` is an optional field, not one a report must
+    carry to be read."""
     env = os.environ if env is None else env
     cwd = os.getcwd() if cwd is None else cwd
     environment = env.get(cloud_pass.ENVIRONMENT_ENV)
@@ -356,6 +375,7 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         "nonce": nonce if isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce) else None,
         "environment": environment,
         "pluginVersion": _or_none(cloud_setup_text._plugin_version),
+        "pluginCommit": _or_none(_plugin_commit),
         "placedStamp": _or_none(_placed_stamp, cwd, root),
         "stampFile": _or_none(_stamp_file, cwd, root),
         "repoStamp": _or_none(repo_calibration_stamp, cwd),
@@ -425,8 +445,16 @@ def _readable(obj, nonce):
 _lapses_ok = cloud_setup._lapses_ok
 
 
+def _pin_facts(cwd):
+    """The plugin pin hook's reader result in the working tree; with no repository, absent."""
+    try:
+        return cloud_plugin_pin.in_tree(store_core.repo_root(cwd))
+    except store_core.RepoRootUnavailable:
+        return {"state": "absent", "reason": None, "pin": None}
+
+
 def _judge_parts(obj, environment, cwd, root, today):
-    """(results, local placed stamp or None)."""
+    """(results, local placed stamp or None, the pin hook's reader result)."""
     local_version = _or_none(cloud_setup_text._plugin_version)
     local_placed = _or_none(_placed_stamp, cwd, root)
     local_repo = _or_none(repo_calibration_stamp, cwd)
@@ -449,13 +477,23 @@ def _judge_parts(obj, environment, cwd, root, today):
     # axis: the cloud session must resolve a configured author and committer identity
     identity_ok = (isinstance(identity, dict) and identity.get("author") is True
                    and identity.get("committer") is True)
+    pin = _pin_facts(cwd)
+    pin_ok = None
+    if pin["state"] == "broken":
+        pin_ok = False  # axis: a broken pin hook is never read as absent or valid
+    elif pin["state"] == "valid":
+        # axis: the cloud must run the commit the pin names, and the pin must name the plugin this machine runs
+        pin_ok = (isinstance(obj.get("pluginCommit"), str)
+                  and obj["pluginCommit"] == pin["pin"]["commit"]
+                  and pin["pin"]["version"] == local_version)
     return {
         "versionMatches": version_ok,
+        "pinMatches": pin_ok,
         "calibrationMatches": computed and placed_ok and file_ok and repo_ok,
         "reviewerAnswered": reviewer,
         "environmentMatches": environment_ok,
         "identityPresent": identity_ok,
-    }, local_placed
+    }, local_placed, pin
 
 
 def _switch_off(cwd, account, root, project_name, set_fn):
@@ -553,8 +591,19 @@ def _remove_failed_check(cwd, account, root, started=None):
         return False
 
 
+def _short_commit(commit):
+    return commit[:12] if isinstance(commit, str) and _COMMIT_RE.fullmatch(commit) else "unknown"
+
+
 def _failed_message(parts, switched, cloud_version, local_version, identity=None,
-                    identity_reported=True):
+                    identity_reported=True, pin=None, cloud_commit=None):
+    pinned = (pin or {}).get("pin") or {}
+    pin_values = {
+        "cloud": "unknown" if cloud_version is None else cloud_version,
+        "cloud_commit": _short_commit(cloud_commit),
+        "pin_version": pinned.get("version") or "unknown",
+        "pin_commit": _short_commit(pinned.get("commit")),
+    }
     sentences = []
     for name, sentence, _fix in _PARTS:
         if name not in parts:
@@ -564,9 +613,13 @@ def _failed_message(parts, switched, cloud_version, local_version, identity=None
             if parts == ["identity"]:
                 sentences.append(_IDENTITY_UNREPORTED)
             continue
+        if name == "pin" and (pin or {}).get("state") == "broken":
+            sentences.append(_PIN_BROKEN.format(reason=pin["reason"]))
+            continue
         sentences.append(sentence.format(
-            cloud="not installed" if cloud_version is None else cloud_version,
-            mine="unknown" if local_version is None else local_version))
+            **dict({"cloud": "not installed" if cloud_version is None else cloud_version,
+                    "mine": "unknown" if local_version is None else local_version},
+                   **pin_values if name == "pin" else {})))
     count = "one part" if len(sentences) == 1 else "%d parts" % len(sentences)
     fixes = []
     for name, _sentence, fix in _PARTS:
@@ -591,7 +644,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
           project_name=None, set_fn=None, record_fn=None):
     """Read the report line out of `line` and decide. The setup record is written only when the
     environment, the plugin version, the calibration and the reviewer's answer all agree with this
-    machine; every other result writes none, switches an on cloud-builds setting off, and leaves a
+    machine; for a project that commits the plugin pin hook the plugin version is judged as the pin:
+    the cloud's reported commit must equal the pin's commit and the pin's version this machine's,
+    and a broken hook fails the check. Every other result writes none, switches an on cloud-builds setting off, and leaves a
     failed-check marker beside the record (a passing check writes the record first, then removes
     the marker; a marker that cannot be removed fails the check as `record` with `recordWritten`
     true and stays). The record is never touched
@@ -611,20 +666,24 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment,
                                            ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
-                    ("versionMatches", "calibrationMatches", "reviewerAnswered",
+                    ("versionMatches", "pinMatches", "calibrationMatches", "reviewerAnswered",
                      "environmentMatches", "identityPresent")),
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": off,
                 "markerWritten": marked,
                 "message": (_UNREAD_STILL_ON if "setting" in failed
                             else _UNREAD.format(switched=_SWITCHED_OFF if off else ""))}
 
-    results, local_placed = _judge_parts(obj, environment, cwd, root, today)
+    results, local_placed, pin = _judge_parts(obj, environment, cwd, root, today)
     identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
+    # axis: a valid pin hook's pin part replaces the version part
     failed = [part for part, key in (("environment", "environmentMatches"),
                                      ("version", "versionMatches"),
+                                     ("pin", "pinMatches"),
                                      ("calibration", "calibrationMatches"),
                                      ("reviewer", "reviewerAnswered"),
-                                     ("identity", "identityPresent")) if not results[key]]
+                                     ("identity", "identityPresent"))
+              if not results[key] and not (part == "version" and pin["state"] == "valid")
+              and not (part == "pin" and results[key] is None)]
     written = False
     if not failed:
         done = False
@@ -658,7 +717,8 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                 "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
                 "message": _failed_message(
                     failed, off, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
-                    identity_reported=identity_reported,
+                    identity_reported=identity_reported, pin=pin,
+                    cloud_commit=obj.get("pluginCommit"),
                     # axis: an identity the session never reported is not a missing one
                     **({"identity": _local_identity(cwd)}
                        if "identity" in failed and identity_reported else {}))}
@@ -687,6 +747,7 @@ def _issue_number(issue):
 def _fallback_line(nonce):
     """The line a session that cannot run `report` gives instead: a report that judges as failed."""
     obj = dict.fromkeys(REPORT_FIELDS)
+    obj["pluginCommit"] = None
     obj["schema"] = REPORT_SCHEMA
     obj["nonce"] = nonce
     obj["confirmation"] = {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,

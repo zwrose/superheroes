@@ -20,6 +20,7 @@ if _LIB not in sys.path:
 import architect_config  # noqa: E402
 import cloud_check  # noqa: E402
 import cloud_pass  # noqa: E402
+import cloud_plugin_pin  # noqa: E402
 import cloud_ready as CR  # noqa: E402
 import cloud_setup as CS  # noqa: E402
 import core_md as CM  # noqa: E402
@@ -251,6 +252,14 @@ def test_the_eight_reasons_are_the_boards_words():
             "words": "The cloud's calibration doesn't match this machine's.",
             "fix": SETUP_TEXT_FIX, "short": "Paste the new setup text to fix it.",
             "wasnt": "its calibration doesn't match this machine's."},
+        "plugin-pin": {
+            "words": ("The plugin pin on the branch this build starts from doesn't name the plugin "
+                      "I run, or its pin hook is broken."),
+            "fix": ("To fix it, run cloud_plugin_pin.py write on this machine (it pins the plugin "
+                    "I run), commit and push the files it names on the branch the build starts "
+                    "from, then launch again."),
+            "short": "Commit a current plugin pin on the starting branch to fix it.",
+            "wasnt": "the plugin pin on the branch it starts from doesn't name my plugin."},
         "dependency-hook": {
             "words": ("The branch this build starts from doesn't carry the dependency hook, or "
                       "a setup file the build adopts can't be shown unchanged since the hook ran "
@@ -890,3 +899,56 @@ def test_I4_n_calls_make_n_placements():
     calls = [LP.route("cwd", {"issue": i}, None, readiness_fn=_fn(), needs_fn=_no_needs)
              for i in range(7)]
     assert len(calls) == 7 and {c["place"] for c in calls} == {"cloud"}
+
+
+# ---------------------------------------------------------------- the plugin pin reason
+
+PIN_WORDS = ("The plugin pin on the branch this build starts from doesn't name the plugin I run, "
+             "or its pin hook is broken.")
+PIN_FIX = ("To fix it, run cloud_plugin_pin.py write on this machine (it pins the plugin I run), "
+           "commit and push the files it names on the branch the build starts from, then launch "
+           "again.")
+
+
+def _commit_pin(repo, version):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.devnull,
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo,
+                       env=env, capture_output=True, check=True)
+
+    git("init", "-q")
+    pin = {"source": "https://github.com/acme/superheroes.git", "commit": "a" * 40,
+           "subdir": "plugins/superheroes", "version": version}
+    assert cloud_plugin_pin.sync(repo, pin)["action"] == "written"
+    git("add", ".claude")
+    git("commit", "-q", "-m", "pin")
+
+
+def test_the_plugin_pin_reason_gives_its_words_and_its_fix():
+    call = _call(reason="plugin-pin")
+    assert LP.reason_text(call) == PIN_WORDS
+    assert LP.fix_text(call) == PIN_FIX
+    assert LP.REASONS["plugin-pin"]["short"] == (
+        "Commit a current plugin pin on the starting branch to fix it.")
+    assert LP.REASONS["plugin-pin"]["wasnt"] == (
+        "the plugin pin on the branch it starts from doesn't name my plugin.")
+
+
+def test_after_a_failed_check_the_plugin_pin_fix_asks_for_the_check_again():
+    # axis: after a failed check the fix ends by asking for the check to be run again
+    assert LP.fix_text(_call(reason="plugin-pin", failed=["pin"])) == (
+        PIN_FIX + ' Then say "check again".')
+
+
+def test_a_pin_naming_another_version_routes_local_with_the_plugin_pin_reason(tmp_path):
+    _commit_pin(str(tmp_path), "1.2.2")
+    repo, store, env = _on(tmp_path)
+    call = _route(repo, store, env)
+    assert call["place"] == "local" and call["reason"] == "plugin-pin"
+    assert LP.reason_text(call) == PIN_WORDS
+    (tmp_path / "current").mkdir()
+    _commit_pin(str(tmp_path / "current"), ADVISOR)
+    repo, store, env = _on(tmp_path / "current")
+    assert _route(repo, store, env)["place"] == "cloud"

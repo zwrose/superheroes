@@ -5,6 +5,7 @@ built under tmp_path; no test touches the real home directory, clock or network.
 import datetime
 import json
 import os
+import subprocess
 import sys
 import types
 
@@ -15,6 +16,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_check  # noqa: E402
+import cloud_plugin_pin  # noqa: E402
 import cloud_ready as CR  # noqa: E402
 import cloud_setup as CS  # noqa: E402
 import cloud_setup_text  # noqa: E402
@@ -41,7 +43,9 @@ PAST = "2026-10-10"
 ALL_TRUE = {name: True for name in CR.CONDITION_ORDER}
 ALL_FALSE = {name: False for name in CR.CONDITION_ORDER}
 RESULT_KEYS = {"ready", "reason", "conditions", "setting", "account", "environment",
-               "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck"}
+               "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck",
+               "pluginPin"}
+NO_PIN = {"state": "absent", "reason": None, "version": None}
 
 
 def _stamp_ok(cwd, root):
@@ -92,11 +96,12 @@ def _only_false(result, name):
 
 def test_the_interface_constants_are_exact():
     assert CR.CONDITION_ORDER == (
-        "setup", "passPresent", "passLive", "version", "dependencyHook", "calibration", "platform")
+        "setup", "passPresent", "passLive", "version", "pluginPin", "dependencyHook", "calibration",
+        "platform")
     assert CR.REASON_FOR == {
         "setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
-        "version": "version", "dependencyHook": "dependency-hook", "calibration": "calibration",
-        "platform": "unreachable"}
+        "version": "version", "pluginPin": "plugin-pin", "dependencyHook": "dependency-hook",
+        "calibration": "calibration", "platform": "unreachable"}
     assert CR.REPORTED_KEYS == ("pluginVersion", "noPass", "unreachable")
 
 
@@ -129,7 +134,7 @@ def test_ready_when_all_six_hold_and_every_key_is_present(tmp_path):
         "ready": True, "reason": None, "conditions": ALL_TRUE, "setting": False,
         "account": ACCOUNT, "environment": ENVIRONMENT, "cloudVersion": ADVISOR,
         "advisorVersion": ADVISOR, "picksUpVersion": False, "checkedAt": "2026-10-09",
-        "failedCheck": None}
+        "failedCheck": None, "pluginPin": NO_PIN}
 
 
 def test_setting_comes_from_the_one_reader(tmp_path):
@@ -399,7 +404,7 @@ def test_everything_false_but_setup_reports_the_pass(tmp_path):
     got = _read(repo, store, stamp_fn=lambda cwd, root: OTHER_STAMP,
                 reported={"noPass": True, "unreachable": True})
     # the fixture has the dependency hook off, so that condition holds whatever the commit
-    assert got["conditions"] == dict(ALL_FALSE, setup=True, dependencyHook=True)
+    assert got["conditions"] == dict(ALL_FALSE, setup=True, dependencyHook=True, pluginPin=True)
     assert got["reason"] == "no-pass"
 
 
@@ -566,3 +571,152 @@ def test_the_all_false_fallback_carries_failed_check_none(tmp_path, monkeypatch)
     got = _read(repo, store)
     assert got["failedCheck"] is None and got["conditions"] == ALL_FALSE
     assert set(got) == RESULT_KEYS
+
+
+# ---------------------------------------------------------------- the plugin pin hook
+
+UNREAD_PIN = {"state": None, "reason": None, "version": None}
+
+
+def _pin(version=ADVISOR):
+    return {"source": "https://github.com/acme/superheroes.git", "commit": "a" * 40,
+            "subdir": "plugins/superheroes", "version": version}
+
+
+def _git(repo, *args):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.devnull,
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    done = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                          cwd=repo, env=env, capture_output=True, text=True, check=True)
+    return done.stdout.strip()
+
+
+def _commit_pin(repo, pin=None, broken=False):
+    """Commit the plugin pin hook files for `pin` (or a broken pin file, or no hook files at all
+    when `pin` is None and `broken` is False); returns the new commit."""
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        _git(repo, "init", "-q")
+        with open(os.path.join(repo, "README"), "w") as fh:
+            fh.write("x\n")
+    if pin is not None or broken:
+        assert cloud_plugin_pin.sync(repo, pin or _pin())["action"] in ("written", "noop")
+    if broken:
+        with open(os.path.join(repo, ".claude", "superheroes-plugin-pin"), "w") as fh:
+            fh.write("not a pin\n")
+    _git(repo, "add", "README", *([".claude"] if os.path.isdir(os.path.join(repo, ".claude")) else []))
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "x")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _pin_ready(tmp_path, pin=None, broken=False, **over):
+    """A ready project whose repository commits the hook for `pin` (a broken one when `broken`)."""
+    _commit_pin(str(tmp_path), pin, broken)
+    return _ready(tmp_path, **over)
+
+
+def test_an_absent_hook_changes_nothing_but_the_two_additions(tmp_path):
+    for name, hooked in (("git-no-hook", False), ("no-git", None)):
+        (tmp_path / name).mkdir()
+        if hooked is False:
+            _commit_pin(str(tmp_path / name))
+        repo, store = _ready(tmp_path / name)
+        got = _read(repo, store)
+        assert got["conditions"] == ALL_TRUE and got["ready"] is True and got["reason"] is None
+        assert got["pluginPin"] == NO_PIN and set(got) == RESULT_KEYS
+        assert got["cloudVersion"] == ADVISOR
+        stale = _read(repo, store, reported={"pluginVersion": "1.2.2"})
+        _only_false(stale, "version")
+        assert stale["pluginPin"] == NO_PIN
+
+
+def test_the_early_returns_carry_the_unread_pin_and_every_condition_false(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["pluginPin"] == UNREAD_PIN
+    assert got["conditions"]["pluginPin"] is False
+
+
+def test_rule_a_a_reported_version_decides_and_the_pin_never_overrides_it(tmp_path):
+    repo, store = _pin_ready(tmp_path, _pin(ADVISOR))
+    stale = _read(repo, store, reported={"pluginVersion": "1.2.2"})
+    # axis: a reported version stands alone; the pin never overrides it
+    _only_false(stale, "version")
+    assert stale["cloudVersion"] == "1.2.2"
+    assert stale["pluginPin"] == {"state": "valid", "reason": None, "version": ADVISOR}
+    # and it does not make a pin that names another version fail either
+    (tmp_path / "other").mkdir()
+    repo2, store2 = _pin_ready(tmp_path / "other", _pin("1.0.0"))
+    current = _read(repo2, store2, reported={"pluginVersion": ADVISOR})
+    assert current["conditions"] == ALL_TRUE and current["cloudVersion"] == ADVISOR
+
+
+def test_rule_b_a_valid_pin_naming_the_advisor_makes_the_cloud_current(tmp_path):
+    repo, store = _pin_ready(tmp_path, _pin(ADVISOR), plugin_version="1.2.2")
+    got = _read(repo, store)
+    assert got["ready"] is True and got["conditions"] == ALL_TRUE
+    # the record says 1.2.2 and no pick-up is on file; the pin is what the cloud will run
+    assert got["cloudVersion"] == ADVISOR
+    assert got["pluginPin"] == {"state": "valid", "reason": None, "version": ADVISOR}
+
+
+def test_rule_c_a_valid_pin_naming_another_version_is_not_current(tmp_path):
+    repo, store = _pin_ready(tmp_path, _pin("1.2.2"))
+    got = _read(repo, store)
+    # axis: the pin is current only when its version is the advisor's
+    _only_false(got, "pluginPin")
+    assert got["reason"] == "plugin-pin" and got["cloudVersion"] == "1.2.2"
+    assert got["pluginPin"] == {"state": "valid", "reason": None, "version": "1.2.2"}
+
+
+def test_rule_d_a_broken_pin_is_not_current_and_is_not_read_as_absent(tmp_path):
+    repo, store = _pin_ready(tmp_path, broken=True)
+    got = _read(repo, store)
+    # axis: a broken pin hook is never read as absent
+    _only_false(got, "pluginPin")
+    assert got["pluginPin"]["state"] == "broken" and got["pluginPin"]["reason"]
+    assert got["pluginPin"]["version"] is None
+    reported = _read(repo, store, reported={"pluginVersion": ADVISOR})
+    _only_false(reported, "pluginPin")
+
+
+def test_E2_the_pin_is_read_at_the_start_commit_not_the_working_tree(tmp_path):
+    repo = str(tmp_path)
+    bare = _commit_pin(repo)
+    valid = _commit_pin(repo, _pin(ADVISOR))
+    broken = _commit_pin(repo, broken=True)
+    _, store = _ready(tmp_path)
+    assert _read(repo, store, commit=valid)["conditions"] == ALL_TRUE
+    assert _read(repo, store, commit=bare)["pluginPin"] == NO_PIN
+    _only_false(_read(repo, store, commit=broken), "pluginPin")
+    # a commit that does not exist, with the hook files in the working tree, is not read as absent
+    _only_false(_read(repo, store, commit="d" * 40), "pluginPin")
+
+
+def test_E2_a_pin_reader_that_raises_reads_as_not_current(tmp_path, monkeypatch):
+    repo, store = _pin_ready(tmp_path, _pin(ADVISOR))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("pin reader exploded")
+
+    monkeypatch.setattr(cloud_plugin_pin, "at_commit", boom)
+    got = _read(repo, store)
+    _only_false(got, "pluginPin")
+    assert got["pluginPin"] == {"state": "broken", "reason": "commit-unreadable", "version": None}
+
+
+def test_E6_a_failed_check_pin_part_forces_the_condition_false(tmp_path):
+    repo, store = _pin_ready(tmp_path, _pin(ADVISOR))
+    assert _read(repo, store)["ready"] is True
+    _mark(repo, store, ["pin"])
+    got = _read(repo, store)
+    # axis: the pin part forces the plugin-pin condition false
+    _only_false(got, "pluginPin")
+    assert got["failedCheck"] == ["pin"] and got["reason"] == "plugin-pin"
+    assert got["pluginPin"] == {"state": "valid", "reason": None, "version": ADVISOR}
+
+
+def test_the_version_reason_comes_before_the_plugin_pin_reason(tmp_path):
+    repo, store = _pin_ready(tmp_path, broken=True, plugin_version="1.2.2")
+    got = _read(repo, store)
+    assert got["conditions"]["version"] is False and got["conditions"]["pluginPin"] is False
+    assert got["reason"] == "version"

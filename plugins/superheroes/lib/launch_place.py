@@ -70,6 +70,15 @@ REASONS = {
         "short": "Paste the new setup text to fix it.",
         "wasnt": "its calibration doesn't match this machine's.",
     },
+    "plugin-pin": {
+        "words": ("The plugin pin on the branch this build starts from doesn't name the plugin I "
+                  "run, or its pin hook is broken."),
+        "fix": ("To fix it, run cloud_plugin_pin.py write on this machine (it pins the plugin I run), "
+                "commit and push the files it names on the branch the build starts from, then launch "
+                "again."),
+        "short": "Commit a current plugin pin on the starting branch to fix it.",
+        "wasnt": "the plugin pin on the branch it starts from doesn't name my plugin.",
+    },
     "dependency-hook": {
         "words": ("The branch this build starts from doesn't carry the dependency hook, or a "
                   "setup file the build adopts can't be shown unchanged since the hook ran (it "
@@ -304,7 +313,7 @@ def fix_text(place_call):
         # axis: after a failed check the fix ends by asking for the check to be run again — see bite-proof record wo_c_place_call
         if code == "no-setup":
             return _CHECK_AGAIN_ONLY
-        if code in ("version", "calibration", "no-pass"):
+        if code in ("version", "plugin-pin", "calibration", "no-pass"):
             return fix if _CHECK_AGAIN in fix else fix + _CHECK_AGAIN_SUFFIX
         return fix
     except Exception:

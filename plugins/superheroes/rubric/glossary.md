@@ -456,7 +456,8 @@ passed. It belongs to the Claude account it was made on.
 ### Setup text
 
 The block the plugin writes for the owner to paste into the [cloud environment](#cloud-environment).
-It holds no secret.
+It holds no secret. A project that commits the plugin pin hook gets a plugin release in its cloud
+builds by a new pin commit, without a paste.
 
 ### Reviewer pass
 
