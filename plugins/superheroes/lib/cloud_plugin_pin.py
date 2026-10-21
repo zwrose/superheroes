@@ -328,7 +328,8 @@ def _sync(repo_root, pin, changed):
                 if hook._is_ours(h, script_rel=SCRIPT_REL)]
         starts = all(hook._group_starts(g) for g in hook._session_groups(settings)
                      if any(hook._is_ours(h, script_rel=SCRIPT_REL) for h in g["hooks"]))
-        if was_missing or mine != [new_hook] or not starts:
+        if (was_missing or mine != [new_hook] or not starts
+                or os.path.islink(settings_path)):
             hook._remove_ours(settings, script_rel=SCRIPT_REL)
             settings.setdefault("hooks", {}).setdefault("SessionStart", []).append(
                 {"hooks": [new_hook]})
