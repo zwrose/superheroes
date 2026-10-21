@@ -403,8 +403,10 @@ def _render_card(number, card, answers=ANSWERS):
     if options:
         lines.append("   - Options:")
         for position, option in enumerate(options):
-            lines.append("     - %s. %s: %s" % (_letter(position), _text(option["label"]),
-                                                _text(option["consequence"])))
+            label, prefix = _text(option["label"]), _letter(position) + ". "
+            # A collector card's label already opens with its letter; show it once.
+            shown = label if label.startswith(prefix) else prefix + label
+            lines.append("     - %s: %s" % (shown, _text(option["consequence"])))
     recommendation = card.get("recommendation")
     if recommendation is not None:
         line = "   - Recommendation: %s %s" % (_text(recommendation["text"]), _text(recommendation["reason"]))

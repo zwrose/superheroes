@@ -52,6 +52,14 @@ The advisor's input is one JSON object; any key not listed is refused.
                  added determination, or a leftovers entry over an earlier one.
   items          Optional list. Each is {id, kind, title, ifLeft, options, recommendation?} with options
                  "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items.
+  collectorItems Optional list. A decision from the owner's list that concerns this one PR, answered on this PR's sheet.
+                 Each is {number, title, why, context, options, ifLeft, recommendation}, all required: number the collector
+                 item's number (an integer, 1 or more, unique among the entries); title, why, context and ifLeft non-empty
+                 strings (the question, why it is the owner's, what happened, and what leaving it costs); options a list of
+                 at least 1 option, whose ids are a, b, c, ... in that order ("none" and an empty list are refused);
+                 recommendation {text, reason, optionId} with optionId required and naming one of the options. Each lands as
+                 one option card after the items, showing its collector number, Why it's yours, What happened, If left, the
+                 lettered options and the recommendation naming its letter.
   closesSpec     Optional. Null, or {"spec": ..., "receipt": ...}.
   walk           Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
                  http(s); stops is at least 1 of {id, title, pr, group, kind, steps?, expect, optional?, notWalked?,
@@ -62,6 +70,13 @@ The advisor's input is one JSON object; any key not listed is refused.
 An option is {id, label, consequence, sendsBack}, all required, sendsBack a boolean, ids unique within the
 item. A recommendation is {text, reason, optionId?}; optionId must name one of the item's options and is
 refused where the options are "none".
+
+A card that has no options and whose shown text sends the owner to a list item by number is refused: the decision belongs
+on this sheet as a collectorItems card, or the card needs its own options. This is a best-effort pattern scan over the shown
+text of each option-less card (its question, its context blocks and its recommendation), so it catches the wordings it
+knows and no others. It recognizes three shapes, each ending in a number: "decision item 12" (also "collector item" and
+"list item"), "item 12 on your list" (also in or from, the list or the collector), and "collector" followed by a hash and
+the number, or by "number" or "entry" and the number. A card that carries its own options is never scanned.
 
 `index` builds the index sheet: the questions that block work, then a row for each PR with a sheet. Its input is one
 JSON object; any key not listed is refused.
@@ -133,6 +148,10 @@ _STEPS = {a["if"]["properties"]["kind"]["const"]: a["then"]["properties"]["steps
 _DEFS = _SCHEMA["$defs"]
 _LINK = re.compile(_DEFS["indexRow"]["properties"]["link"]["pattern"])
 _STORE_KEYS = ("answers", "verdict", "walk")
+# Axis: an option-less card that sends the owner to a list item by number, in any of three wordings.
+_POINTER = re.compile(r"\b(?:decision|collector|list)\s+item\s+#?\d+"
+                      r"|\bitem\s+#?\d+\s+(?:on|in|from)\s+(?:your|the)\s+(?:list|collector)\b"
+                      r"|\bcollector\s+(?:#\d+|(?:number|entry)\s+#?\d+)", re.IGNORECASE)
 
 
 def _shape(d, inferred=()):
@@ -165,7 +184,7 @@ def _commit(v):
     return isinstance(v, str) and _COMMIT.search(v) is not None
 
 
-def _fill(text, **slots):
+def _fill(text, /, **slots):
     return re.sub(r"\{(\w+)\}", lambda m: str(slots.get(m.group(1), m.group(0))), text)
 
 
@@ -303,7 +322,7 @@ def _check_list(name, entries, required, optional, problems):
 
 def _check_input(adv, words, problems):
     """Collects the input's problems; returns the PR numbers the sheet covers, or None when unknown."""
-    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "closesSpec", "walk")
+    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "collectorItems", "closesSpec", "walk")
     _keys("the advisor's input", adv, ("schema", "kind", "number", "title", "summary"), optional, problems)
     kind, number, prs = adv.get("kind"), adv.get("number"), adv.get("prs")
     if adv.get("schema") != "pr-sheet-input/1":
@@ -347,6 +366,7 @@ def _check_input(adv, words, problems):
     for it in _check_list("items", adv.get("items", []), ("id", "kind", "title", "ifLeft", "options"),
                           ("recommendation",), problems):
         _check_call(f"items {it['id']}", it, words, problems, False)
+    _check_collector(adv.get("collectorItems", []), words, problems)
     spec = adv.get("closesSpec")
     if spec is not None and _keys("closesSpec", spec, ("spec", "receipt"), (), problems) \
             and not (_text(spec["spec"]) and _text(spec["receipt"])):
@@ -354,6 +374,37 @@ def _check_input(adv, words, problems):
     if "walk" in adv:
         _check_walk(adv["walk"], allowed, problems)
     return allowed
+
+
+def _check_collector(entries, words, problems):
+    """Collects the collectorItems problems: each entry's spine, its lettered options and its keyed recommendation."""
+    if not isinstance(entries, list):
+        problems.append("collectorItems must be a list")
+        return
+    seen = []
+    for n, e in enumerate(entries, 1):
+        number = e.get("number") if isinstance(e, dict) else None
+        where = f"collectorItems {number}" if _num(number) else f"collectorItems entry {n}"
+        if not _keys(where, e, ("number", "title", "why", "context", "options", "ifLeft", "recommendation"), (), problems):
+            continue
+        if not _num(number):
+            problems.append(f"{where} needs number, an integer 1 or more")
+        elif number in seen:
+            problems.append(f"{where} repeats the number {number}")
+        seen.append(number)
+        problems.extend(f"{where}: {k} must be a non-empty string" for k in ("title", "why", "context", "ifLeft") if not _text(e[k]))
+        opts = e["options"]
+        if not (isinstance(opts, list) and opts):
+            problems.append(f"{where}: options must be a list of at least 1 option; a collector item is a decision, so \"none\" and an empty list are refused")
+        else:
+            _check_call(where, e, words, problems, False)
+            problems.extend(f"{where}: option {i} must have the id {chr(ord('a') + i - 1)!r}, the letter of its place; ids run a, b, c in order"
+                            for i, o in enumerate(opts, 1) if isinstance(o, dict) and o.get("id") != chr(ord("a") + i - 1))
+        rec = e["recommendation"]
+        if not (isinstance(opts, list) and opts):
+            _keys(f"{where}: recommendation", rec, ("text", "reason"), ("optionId",), problems)
+        if isinstance(rec, dict) and "optionId" not in rec:
+            problems.append(f"{where}: recommendation needs an optionId naming one of the options")
 
 
 def _check_walk(walk, allowed, problems):
@@ -463,6 +514,13 @@ def _card(prefix, pr, identity, call_kind, question, context, options, recommend
     return {"id": card_id(prefix, pr, identity, card), **card}
 
 
+def _shown(card):
+    """The strings a card shows the owner: its question, every context block's text, and its recommendation's text and reason."""
+    blocks = [b for section in card["context"] for b in section["blocks"]]
+    texts = [card["question"], *(t for b in blocks for v in b.values() for t in ([v] if isinstance(v, str) else v))]
+    return texts + [card["recommendation"][k] for k in ("text", "reason") if k in card.get("recommendation", {})]
+
+
 def _walk(walk, place):
     """The walk as the sheet carries it; place(path) is a picture's sheet src, or None when it cannot be copied."""
     def picture(pic):
@@ -545,7 +603,7 @@ def build(records, advisor, words, place=None, previous=None):
     by_pr = {r["pr"]: r for r in recs}
     recs = [by_pr[n] for n in allowed] if stack else recs
     top, tag = recs[-1], (lambda r: f"#{r['pr']}: " if stack else "")
-    cards, decided_for_you = [], []
+    cards, decided_for_you, places = [], [], []
     for r in recs:
         for n, f in enumerate(r["findings"]):
             if f["outcome"] != _LEFT:
@@ -564,15 +622,33 @@ def build(records, advisor, words, place=None, previous=None):
                                 _section(words["whatHappened"], "paragraph", call["context"]),
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
                                options, call.get("recommendation")))
+            places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
     for it in advisor.get("items", []):
         cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], "paragraph", it["ifLeft"])],
                            _options(it["options"], words, False), it.get("recommendation")))
+        places.append(f"items {it['id']}")
+    for it in advisor.get("collectorItems", []):
+        rec = it["recommendation"]
+        cards.append(_card("k-", number, it["number"], _fill(words["collectorKind"], number=it["number"]), it["title"],
+                           [_section(words["whyYours"], "paragraph", it["why"]),
+                            _section(words["whatHappened"], "paragraph", it["context"]),
+                            _section(words["ifLeft"], "paragraph", it["ifLeft"])],
+                           [{**o, "label": _fill(words["collectorOption"], letter=o["id"], label=o["label"])} for o in it["options"]],
+                           {"text": _fill(words["collectorRecommendation"], letter=rec["optionId"], text=rec["text"]),
+                            "reason": rec["reason"], "optionId": rec["optionId"]}))
+        places.append(f"collectorItems {it['number']}")
     spec = advisor.get("closesSpec")
     if spec:
         context = [_section(words["ifLeft"], "paragraph", words["closureIfLeft"]),
                    _section(words["closureReceipt"], "quote", spec["receipt"])]
         cards.append(_card("c-", number, spec["spec"], words["closureKind"],
                            _fill(words["closureQuestion"], spec=spec["spec"]), context, [], None))
+        places.append("closesSpec")
+    pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
+                "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
+                for where, card in zip(places, cards) if not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
+    if pointing:
+        raise Refusal(pointing)
     if len({c["id"] for c in [*cards, *decided_for_you]}) != len(cards) + len(decided_for_you):
         raise Refusal(["two cards would share an id: the same finding or item appears twice"])
     reviewers, caught, craft, decided, history = [], [], [], [], []
