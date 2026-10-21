@@ -37,6 +37,8 @@ class Gh:
     def __init__(self):
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
+        self.sub_issues = {}  # parent issue number -> its sub-issue rows (`number`, `state`) that `issues/<n>/sub_issues` answers; an absent parent has none
+        self.issues = {}  # issue number -> the issue object `repos/owner/name/issues/<n>` answers; an absent one has no parent
         self.branches = {"main": "c" * 40, BRANCH: HEAD}
         self.deletes, self.delete_envs, self.delete_result, self.before_delete = [], [], None, None
         self.sticky = False
@@ -79,6 +81,13 @@ class Gh:
                 rows = self.open_prs
             piece = rows[(int(page) - 1) * 100:int(page) * 100]
             return SimpleNamespace(returncode=0, stdout=json.dumps(piece), stderr="")
+        if listing.startswith(base + "/issues/") and listing.endswith("/sub_issues?per_page=100"):
+            assert "--paginate" not in argv and page.isdigit(), argv
+            rows = self.sub_issues.get(int(listing[len(base + "/issues/"):].split("/", 1)[0]), [])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows[(int(page) - 1) * 100:int(page) * 100]), stderr="")
+        if path.startswith(base + "/issues/") and path[len(base + "/issues/"):].isdigit():
+            issue = self.issues.get(int(path.rsplit("/", 1)[1]), {"parent_issue_url": None})
+            return SimpleNamespace(returncode=0, stdout=json.dumps(issue), stderr="")
         assert path.startswith(base + "/git/ref/heads/"), path
         branch = urllib.parse.unquote(path[len(base + "/git/ref/heads/"):])
         sha = self.ref_override.get(branch) or self.branches.get(branch)
@@ -997,3 +1006,442 @@ def test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool(
     assert message.index("If its session has a tool") < message.index("tap Allow once")
     assert "If it has none, it will say so" in message
     assert _UNCONDITIONAL_PROMPT not in message
+
+
+# ---------------------------------------------------------------- a stack launched on its parent issue is one lane
+
+PARENT = 200
+LAYERS = ((501, 201, "layer-1"), (502, 202, "layer-2"), (503, 203, "layer-3"))
+
+
+def _parent_url(number, repo=REPO, host="https://api.github.com"):
+    return "%s/repos/%s/issues/%d" % (host, repo, number)
+
+
+def _sha(number):
+    return format(number, "x").rjust(40, "0")
+
+
+def _layer_pull(number, issue, ref, **kw):
+    kw.setdefault("created_at", "2023-11-15T00:00:00Z")
+    return _pull(issues=(issue,), head_sha=_sha(number), ref=ref, **kw)
+
+
+def _stack(w, session="session-a", outcome=None):
+    """Three layer PRs, each closing its own sub-issue; the one cloud lane (l-1) sits on the parent issue."""
+    w.gh.branches["unrelated"] = "d" * 40
+    for number, issue, ref in LAYERS:
+        w.gh.pulls[number] = _layer_pull(number, issue, ref)
+        w.gh.branches[ref] = _sha(number)
+        w.gh.issues[issue] = {"parent_issue_url": _parent_url(PARENT)}
+    w.gh.sub_issues[PARENT] = [{"number": issue, "state": "closed"} for _, issue, _ in LAYERS]
+    _lane(w, "l-1", PARENT, session=session, outcome=outcome, ts=_T1)
+
+
+def _plan_n(w, number, **kw):
+    return CC.plan(w.repo, REPO, number, env=w.env, run=w.gh, **kw)
+
+
+def _record_n(w, number, msg_id, outcome, **kw):
+    return CC.record(w.repo, REPO, number, msg_id, outcome, env=w.env, run=w.gh, **kw)
+
+
+def _receipts(w):
+    with open(_state_file(w), encoding="utf-8") as fh:
+        return [(r["pr"], r["msgId"], r["outcome"]) for r in json.load(fh)]
+
+
+def _issue_reads(w):
+    return [c for c in w.gh.calls if c[-1].startswith("repos/%s/issues/" % REPO)]
+
+
+def test_a_layer_of_a_stack_is_cleaned_up_under_the_parent_issues_lane_and_the_request_goes_once(w):
+    _stack(w)
+    first = _plan_n(w, 501)
+    assert first["ok"] and first["action"] == "cleanup" and first["issue"] == PARENT
+    assert first["launchId"] == "l-1" and first["session"] == "session-a" and first["viaParent"] is True
+    assert first["archiveText"] and first["request"] == {"state": "none"}
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    assert _record_n(w, 501, "m-1", "delivered")["ok"]
+    for number in (502, 503):
+        later = _plan_n(w, number)
+        assert later["ok"] and later["issue"] == PARENT and later["launchId"] == "l-1"
+        assert later["session"] == "session-a" and later["viaParent"] is True
+        assert later["request"]["pr"] == 501 and later["request"]["msgId"] == "m-1"
+        assert later["archiveText"] is None and later["alreadyDelivered"] is True
+        assert _record_n(w, number, "m-%d" % number, "pending") == {"ok": False, "reason": "request-delivered"}
+    assert _receipts(w) == [(501, "m-1", "delivered")]
+
+
+@pytest.mark.parametrize("held,reason", [("pending", "request-in-progress"), ("uncertain", "request-uncertain"),
+                                         ("delivered", "request-delivered")])
+def test_a_request_held_on_one_layer_is_the_lanes_request_and_grants_no_second_reservation(w, held, reason):
+    _stack(w)
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    if held != "pending":
+        assert _record_n(w, 501, "m-1", held)["ok"]
+    later = _plan_n(w, 502)
+    assert later["ok"] and later["viaParent"] is True
+    assert later["request"]["pr"] == 501 and later["request"]["outcome"] == held
+    assert (later["archiveText"] is None) == (held == "delivered")
+    assert _record_n(w, 502, "m-2", "pending") == {"ok": False, "reason": reason}
+    assert _receipts(w) == [(501, "m-1", held)]
+
+
+def test_each_layers_branch_step_deletes_only_its_own_head_branch(w):
+    _stack(w)
+    gone = []
+    for number, _, ref in LAYERS:
+        out = CC.branch(w.repo, REPO, number, env=w.env, run=w.gh)
+        assert out["ok"] and out["branch"] == ref and out["deleted"] is True
+        gone.append(ref)
+        assert sorted(w.gh.branches) == sorted({"main", "unrelated", BRANCH, *(r for _, _, r in LAYERS)} - set(gone))
+    assert [d[-1] for d in w.gh.deletes] == ["repos/owner/name/git/refs/heads/%s" % r for r in gone]
+    assert len(set(gone)) == 3 and "unrelated" in w.gh.branches
+
+
+def test_a_launch_id_of_the_parent_issues_lane_is_this_layers_lane_but_an_unrelated_issues_is_not(w):
+    _stack(w)
+    _lane(w, "l-9", 909, session="session-z", ts=_T1)
+    got = _plan_n(w, 501, launch_id="l-1")
+    assert got["ok"] and got["action"] == "cleanup" and got["viaParent"] is True and got["launchId"] == "l-1"
+    assert got["issue"] == PARENT and got["session"] == "session-a"
+    assert _plan_n(w, 501, launch_id="l-9") == {"ok": False, "reason": "lane-mismatch"}
+    assert _record_n(w, 501, "m-1", "pending", launch_id="l-9") == {"ok": False, "reason": "lane-mismatch"}
+    assert w.gh.deletes == [] and not os.path.exists(_state_file(w))
+
+
+def test_a_pr_whose_issues_hold_no_lane_and_whose_parent_holds_none_is_no_cloud_lane(w):
+    assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}  # no parent at all
+    w.gh.issues[101] = {"parent_issue_url": _parent_url(PARENT)}
+    assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}  # a parent without a lane
+    assert _branch(w) == {"ok": False, "reason": "no-cloud-lane"}
+    assert w.gh.deletes == [] and not os.path.exists(_state_file(w))
+
+
+def test_a_parent_in_another_repository_is_never_a_lane_of_this_repository(w):
+    _lane(w, "l-1", PARENT, ts=_T1)
+    w.gh.issues[101] = {"parent_issue_url": _parent_url(PARENT, repo="other/repo")}
+    assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}
+    assert _branch(w) == {"ok": False, "reason": "no-cloud-lane"}
+    assert w.gh.deletes == []
+
+
+@pytest.mark.parametrize("url", [_parent_url(PARENT, repo="Owner/Name"), _parent_url(PARENT, host="http://ghe.example/api/v3"),
+                                 _parent_url(PARENT, host="https://ghe.example/api/v3")])
+def test_a_parent_url_of_this_repository_is_read_without_case_and_on_an_enterprise_host(w, url):
+    _lane(w, "l-1", PARENT, ts=_T1)
+    w.gh.issues[101] = {"parent_issue_url": url}
+    got = _plan(w)
+    assert got["ok"] and got["issue"] == PARENT and got["viaParent"] is True
+
+
+def test_two_linked_issues_with_different_parents_that_each_hold_a_lane_are_ambiguous(w):
+    _lane(w, "l-1", 200, session="session-a", ts=_T1)
+    _lane(w, "l-2", 300, session="session-b", ts=_T1)
+    w.gh.pulls[PR] = _pull(issues=(201, 301), head_sha=w.head, created_at=_OPENED)
+    w.gh.issues[201] = {"parent_issue_url": _parent_url(200)}
+    w.gh.issues[301] = {"parent_issue_url": _parent_url(300)}
+    assert _plan(w) == {"ok": False, "reason": "lane-ambiguous"}
+    assert _branch(w) == {"ok": False, "reason": "lane-ambiguous"}
+    assert w.gh.deletes == []
+
+
+def test_two_linked_issues_with_the_same_parent_are_one_lane(w):
+    _lane(w, "l-1", PARENT, ts=_T1)
+    w.gh.pulls[PR] = _pull(issues=(201, 202), head_sha=w.head, created_at=_OPENED)
+    w.gh.issues[201] = {"parent_issue_url": _parent_url(PARENT)}
+    w.gh.issues[202] = {"parent_issue_url": _parent_url(PARENT)}
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1" and got["issue"] == PARENT and got["viaParent"] is True
+
+
+@pytest.mark.parametrize("bad", [42, "not a url", "", True, ["x"], _parent_url(PARENT) + "/extra",
+                                 "https://api.github.com/repos/owner/name/issues/0"])
+def test_a_parent_link_that_is_not_an_issue_url_refuses_and_sends_and_deletes_nothing(w, bad):
+    _lane(w, "l-1", PARENT, ts=_T1)
+    w.gh.issues[101] = {"parent_issue_url": bad}
+    want = {"ok": False, "reason": "issue-unreadable"}
+    assert _plan(w) == want
+    assert _branch(w) == want
+    assert _record(w, "m-1", "pending") == want
+    assert w.gh.deletes == [] and not os.path.exists(_state_file(w))
+
+
+def test_an_issue_read_that_fails_or_is_not_an_object_refuses_and_sends_and_deletes_nothing(w):
+    _lane(w, "l-1", PARENT, ts=_T1)
+    _lane(w, "l-9", 909, session="session-z", ts=_T1)
+    want = {"ok": False, "reason": "issue-unreadable"}
+    w.gh.broken.add("repos/%s/issues/101" % REPO)
+    assert _plan(w) == want
+    assert _branch(w) == want
+    assert _record(w, "m-1", "pending") == want
+    assert _plan(w, launch_id="l-9") == want  # a launch id on another issue also needs the parent read
+    w.gh.broken.clear()
+    w.gh.issues[101] = ["not", "an", "object"]
+    assert _plan(w) == want
+    assert w.gh.deletes == [] and not os.path.exists(_state_file(w))
+
+
+def test_a_lane_on_a_linked_issue_is_used_as_it_is_and_its_parent_is_never_read(w):
+    _lane(w, "l-1", 101, session="session-a", ts=_T1)
+    _lane(w, "l-2", PARENT, session="session-b", ts=_T1)
+    w.gh.issues[101] = {"parent_issue_url": _parent_url(PARENT)}
+    got = _plan(w)
+    assert got["ok"] and got["issue"] == 101 and got["launchId"] == "l-1" and got["session"] == "session-a"
+    assert "viaParent" not in got
+    assert _plan(w, launch_id="l-1")["issue"] == 101
+    assert _record(w, "m-1", "pending")["ok"]
+    assert _branch(w)["ok"]
+    assert _issue_reads(w) == []
+
+
+def test_a_layers_own_failed_try_does_not_hide_the_request_another_layer_holds(w):
+    _stack(w)
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    assert _record_n(w, 501, "m-1", "failed")["ok"]
+    assert _record_n(w, 502, "m-2", "pending")["ok"]
+    assert _record_n(w, 502, "m-2", "delivered")["ok"]
+    again = _plan_n(w, 501)
+    assert again["request"]["pr"] == 502 and again["request"]["msgId"] == "m-2" and again["request"]["outcome"] == "delivered"
+    assert again["alreadyDelivered"] is True and again["archiveText"] is None
+    assert _record_n(w, 501, "m-3", "pending") == {"ok": False, "reason": "request-delivered"}
+    assert _receipts(w) == [(501, "m-1", "failed"), (502, "m-2", "delivered")]
+
+
+def test_a_layer_whose_own_try_failed_and_whom_no_other_layer_asked_may_try_again(w):
+    _stack(w)
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    assert _record_n(w, 501, "m-1", "failed")["ok"]
+    assert _plan_n(w, 501)["request"]["outcome"] == "failed"
+    assert _record_n(w, 501, "m-2", "pending")["ok"]
+
+
+def test_a_reclosed_layer_after_a_delivered_request_is_not_asked_again(w):
+    _stack(w)
+    w.gh.pulls[501] = _layer_pull(501, 201, "layer-1", merged=False, closed_at="2026-10-12T10:00:00Z")
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    assert _record_n(w, 501, "m-1", "delivered")["ok"]
+    w.gh.pulls[501] = _layer_pull(501, 201, "layer-1", merged=False, closed_at="2026-10-13T10:00:00Z")
+    again = _plan_n(w, 501)
+    assert again["ok"] and again["viaParent"] is True
+    assert again["alreadyDelivered"] is True and again["archiveText"] is None
+    assert again["request"]["closedAt"] == "2026-10-12T10:00:00Z"
+    assert _record_n(w, 501, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
+    assert _receipts(w) == [(501, "m-1", "delivered")]
+
+
+def _parent_adopter(w, launch_id, session, ts, **premise):
+    reserved = _reserved(launch_id, BATCH, [launch_id], w.repo, issue=PARENT, place="cloud",
+                         cloudEnvironment="env-fixture-one", pluginVersion="1.2.3", ts=ts)
+    reserved["premise"] = dict(reserved.get("premise") or {}, **premise)
+    assert ll.reserve(w.repo, reserved, env=w.env)["ok"]
+    started = _started(launch_id)
+    started.update(cloudSessionName=session, cloudSessionId="session_01AbCdEf123")
+    assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+
+
+@pytest.mark.parametrize("premise", [{"adopts": 501}, {"adoptsBranch": "layer-1", "adoptsHead": _sha(501)}],
+                         ids=["by-pr", "by-branch"])
+def test_a_later_lane_on_the_parent_issue_that_adopted_the_layer_is_the_one_cleaned_up(w, premise):
+    _stack(w, outcome="park")
+    w.gh.pulls[501] = _layer_pull(501, 201, "layer-1", created_at=_OPENED)
+    _parent_adopter(w, "l-2", "session-two", _T2, **premise)
+    got = _plan_n(w, 501)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two" and got["viaParent"] is True
+
+
+def test_a_lane_on_the_parent_issue_reserved_after_the_layer_closed_is_not_its_adopter(w):
+    _stack(w, outcome="park")
+    w.gh.pulls[501] = _layer_pull(501, 201, "layer-1", created_at=_OPENED, merged=False, closed_at=_CLOSED_AT)
+    _parent_adopter(w, "l-2", "session-two", _AFTER + 3600, adopts=501)
+    got = _plan_n(w, 501)
+    assert got["ok"] and got["launchId"] == "l-1" and got["session"] == "session-a"
+
+
+# ---------------------------------------------------------------- a stack lane is archived once, when every layer is closed
+
+
+def _layers(w, **states):
+    """The parent issue's sub-issues, each `closed` unless `states` (i201=..., i202=..., i203=...) says otherwise."""
+    w.gh.sub_issues[PARENT] = [{"number": n, "state": states.get("i%d" % n, "closed")} for n in (201, 202, 203)]
+
+
+SUB_ISSUES = "repos/%s/issues/%d/sub_issues?per_page=100" % (REPO, PARENT)
+
+
+def _sub_issue_reads(w):
+    return [c for c in w.gh.calls if "/sub_issues" in c[-1]]
+
+
+def test_the_first_layer_merging_while_upper_layers_are_open_holds_the_archive_but_not_the_branch(w):
+    _stack(w)
+    _layers(w, i201="closed", i202="open", i203="open")
+    got = _plan_n(w, 501)
+    assert got["ok"] and got["action"] == "cleanup" and got["viaParent"] is True and got["launchId"] == "l-1"
+    assert got["archiveText"] is None and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202, 203]
+    assert "alreadyDelivered" not in got
+    assert _record_n(w, 501, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert not os.path.exists(_state_file(w))
+    out = CC.branch(w.repo, REPO, 501, env=w.env, run=w.gh)
+    assert out["ok"] and out["branch"] == "layer-1" and out["deleted"] is True
+    assert "layer-1" not in w.gh.branches
+    assert w.gh.deletes == [["gh", "api", "-X", "DELETE", "repos/owner/name/git/refs/heads/layer-1"]]
+
+
+def test_the_last_layer_to_close_carries_the_archive_text_and_the_one_request(w):
+    _stack(w)
+    _layers(w, i201="closed", i202="open", i203="open")
+    assert _plan_n(w, 501)["archiveHeld"] == "stack-open"
+    assert _plan_n(w, 502)["openLayers"] == [202, 203]
+    _layers(w)
+    last = _plan_n(w, 503)
+    assert last["ok"] and last["viaParent"] is True and last["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503
+    assert "archiveHeld" not in last and "openLayers" not in last
+    assert _record_n(w, 503, "m-1", "pending")["ok"]
+    assert _record_n(w, 503, "m-1", "delivered")["ok"]
+    assert _receipts(w) == [(503, "m-1", "delivered")]
+    again = _plan_n(w, 501)
+    assert again["archiveText"] is None and again["alreadyDelivered"] is True and "archiveHeld" not in again
+
+
+def test_a_delivered_request_keeps_its_shape_when_a_layer_is_open_again(w):
+    _stack(w)
+    assert _record_n(w, 501, "m-1", "pending")["ok"]
+    assert _record_n(w, 501, "m-1", "delivered")["ok"]
+    _layers(w, i202="open")
+    got = _plan_n(w, 502)
+    assert got["archiveText"] is None and got["alreadyDelivered"] is True and "archiveHeld" not in got
+    assert _record_n(w, 502, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
+
+
+@pytest.mark.parametrize("rows", [[], None, [{"number": 201, "state": "open"}, {"number": "x", "state": "open"}]],
+                         ids=["empty", "unreadable", "open-without-an-int-number"])
+def test_a_stack_whose_layers_cannot_be_read_or_are_not_all_closed_holds_the_archive(w, rows):
+    _stack(w)
+    if rows is None:
+        w.gh.broken.add(SUB_ISSUES)
+    else:
+        w.gh.sub_issues[PARENT] = rows
+    got = _plan_n(w, 501)
+    assert got["ok"] and got["action"] == "cleanup" and got["archiveText"] is None
+    if rows:
+        assert got["archiveHeld"] == "stack-open" and got["openLayers"] == [201]
+    else:
+        assert got["archiveHeld"] == "stack-unreadable" and "openLayers" not in got
+    assert _record_n(w, 501, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert not os.path.exists(_state_file(w))
+    assert CC.branch(w.repo, REPO, 501, env=w.env, run=w.gh)["deleted"] is True
+
+
+@pytest.mark.parametrize("state", [None, "OPEN", "closed ", 1, True])
+def test_a_layer_whose_state_is_not_exactly_closed_holds_the_archive(w, state):
+    _stack(w)
+    w.gh.sub_issues[PARENT][1]["state"] = state
+    got = _plan_n(w, 501)
+    assert got["archiveHeld"] == "stack-open" and got["openLayers"] == [202] and got["archiveText"] is None
+
+
+def test_a_layer_linking_its_sub_issue_and_the_parent_is_a_stack_layer_and_holds_the_archive(w):
+    _stack(w)
+    _layers(w, i202="open")
+    w.gh.pulls[503] = _pull(issues=(203, PARENT), head_sha=_sha(503), ref="layer-3", created_at=_OPENED)
+    for selection in ({}, {"launch_id": "l-1"}):
+        got = _plan_n(w, 503, **selection)
+        assert got["ok"] and got["viaParent"] is True and got["launchId"] == "l-1" and got["issue"] == PARENT
+        assert got["archiveText"] is None and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202]
+    assert _record_n(w, 503, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    _layers(w)
+    assert _plan_n(w, 503)["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503
+
+
+def test_a_layer_linking_the_parent_whose_own_issue_cannot_be_read_is_held_on_its_stack(w):
+    _stack(w)
+    w.gh.pulls[503] = _pull(issues=(203, PARENT), head_sha=_sha(503), ref="layer-3", created_at=_OPENED)
+    w.gh.broken.add("repos/%s/issues/203" % REPO)
+    got = _plan_n(w, 503)
+    assert got["ok"] is True and got["issue"] == PARENT and "viaParent" not in got
+    assert got["archiveText"] == CC.ARCHIVE_TEXT_MERGED % 503 and "archiveHeld" not in got
+    _layers(w, i202="open")
+    got = _plan_n(w, 503)
+    assert got["ok"] and got["archiveHeld"] == "stack-open" and got["openLayers"] == [202] and got["archiveText"] is None
+    assert _record_n(w, 503, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert not os.path.exists(_state_file(w))
+
+
+@pytest.mark.parametrize("other", [None, 300], ids=["no-parent", "another-parent"])
+def test_a_pr_linking_several_issues_none_a_sub_issue_of_the_lane_issue_is_not_a_stack_layer(w, other):
+    _lane(w, "l-1", 101, ts=_T1)
+    w.gh.pulls[PR] = _pull(issues=(101, 102), head_sha=w.head, created_at=_OPENED)
+    if other is not None:
+        w.gh.issues[102] = {"parent_issue_url": _parent_url(other)}
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1" and got["issue"] == 101 and "viaParent" not in got
+    assert got["archiveText"] == CC.ARCHIVE_TEXT_MERGED % PR and "archiveHeld" not in got
+    assert _sub_issue_reads(w) == []
+    assert _record(w, "m-1", "pending")["ok"]
+
+
+def test_a_pr_linking_one_issue_with_a_lane_of_its_own_reads_no_issue_at_all(w):
+    _lane(w, "l-1", 101, ts=_T1)
+    got = _plan(w)
+    assert got["ok"] and got["archiveText"] and "viaParent" not in got and "archiveHeld" not in got
+    assert _record(w, "m-1", "pending")["ok"]
+    assert [c for c in w.gh.calls if "/issues/" in c[-1]] == []
+
+
+# ---------------------------------------------------------------- a layer that cannot be classified never refuses
+
+UNCLASSIFIED_PR = 520
+UNCLASSIFIED_BRANCH = "unclassified-feature"
+ISSUE_102 = "repos/%s/issues/102" % REPO
+SUB_ISSUES_101 = "repos/%s/issues/101/sub_issues?per_page=100" % REPO
+
+
+def _unclassified(w):
+    """A PR linking issues 101 and 102 with its own head branch; the cloud lane is on 101 and 102 cannot be read."""
+    w.gh.branches[UNCLASSIFIED_BRANCH] = _sha(UNCLASSIFIED_PR)
+    w.gh.pulls[UNCLASSIFIED_PR] = _pull(issues=(101, 102), head_sha=_sha(UNCLASSIFIED_PR), ref=UNCLASSIFIED_BRANCH,
+                                        created_at=_OPENED)
+    w.gh.broken.add(ISSUE_102)
+    _lane(w, "l-1", 101, ts=_T1)
+
+
+def test_a_pr_whose_other_linked_issue_cannot_be_read_is_cleaned_up_as_an_ordinary_lane(w):
+    _unclassified(w)
+    w.gh.sub_issues[101] = []
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] is True and got["action"] == "cleanup" and got["issue"] == 101 and got["launchId"] == "l-1"
+    assert "viaParent" not in got and "archiveHeld" not in got
+    assert got["archiveText"] == CC.ARCHIVE_TEXT_MERGED % UNCLASSIFIED_PR
+    assert _record_n(w, UNCLASSIFIED_PR, "m-1", "pending")["ok"]
+    out = CC.branch(w.repo, REPO, UNCLASSIFIED_PR, env=w.env, run=w.gh)
+    assert out["ok"] and out["branch"] == UNCLASSIFIED_BRANCH and out["deleted"] is True
+    assert UNCLASSIFIED_BRANCH not in w.gh.branches
+
+
+def test_a_pr_whose_other_linked_issue_cannot_be_read_is_held_while_its_lane_issue_has_an_open_sub_issue(w):
+    _unclassified(w)
+    w.gh.sub_issues[101] = [{"number": 102, "state": "open"}]
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] and got["action"] == "cleanup" and "viaParent" not in got
+    assert got["archiveHeld"] == "stack-open" and got["openLayers"] == [102] and got["archiveText"] is None
+    assert _record_n(w, UNCLASSIFIED_PR, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    w.gh.broken.add(SUB_ISSUES_101)
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] and got["archiveHeld"] == "stack-unreadable" and got["archiveText"] is None
+    assert "openLayers" not in got and "viaParent" not in got
+    assert _record_n(w, UNCLASSIFIED_PR, "m-1", "pending") == {"ok": False, "reason": "archive-held"}
+    assert CC.branch(w.repo, REPO, UNCLASSIFIED_PR, env=w.env, run=w.gh)["deleted"] is True
+
+
+def test_a_request_delivered_on_another_pr_of_the_session_is_not_sent_again_to_an_unclassified_layer(w):
+    _unclassified(w)
+    w.gh.sub_issues[101] = []
+    w.gh.pulls[521] = _pull(issues=(101,), head_sha=_sha(521), ref="other-layer", created_at=_OPENED)
+    assert _record_n(w, 521, "m-1", "pending")["ok"]
+    assert _record_n(w, 521, "m-1", "delivered")["ok"]
+    got = _plan_n(w, UNCLASSIFIED_PR)
+    assert got["ok"] and got["alreadyDelivered"] is True and got["archiveText"] is None
+    assert got["request"]["pr"] == 521 and "viaParent" not in got and "archiveHeld" not in got
+    assert _record_n(w, UNCLASSIFIED_PR, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
