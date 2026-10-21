@@ -678,15 +678,52 @@ def test_the_census_has_both_outcomes():
 # ---------------------------------------------------------------- the launch report
 
 
-def test_the_still_line_rereads_the_dependency_hook_reason():
+def _hook_candidate(base, adopts):
+    return {"reason": "dependency-hook", "by": "word", "cloudVersion": None,
+            "advisorVersion": None, "reported": None, "failedCheck": None,
+            "observedOn": "2026-10-10", "baseCommit": base, "adoptsHead": adopts}
+
+
+# the checkout's own readiness reads fixed in every case below; only the launch's own check decides
+_NOW_READS_FIXED = {"conditions": {"dependencyHook": True}, "setting": True, "ready": False}
+
+
+def test_the_still_line_rereads_the_dependency_hook_reason(tmp_path):
     assert "dependency-hook" in launch_report._REREAD_REASONS
-    candidate = {"reason": "dependency-hook", "by": "word", "cloudVersion": None,
-                 "advisorVersion": None, "reported": None, "failedCheck": None,
-                 "observedOn": "2026-10-10"}
-    fixed = {"conditions": {"dependencyHook": True}, "setting": True, "ready": False}
-    standing = {"conditions": {"dependencyHook": False}, "setting": True, "ready": False}
-    assert launch_report._fixed(candidate, fixed) is True
-    assert launch_report._fixed(candidate, standing) is False
+    w, bare, with_hook = _hooked(tmp_path)
+    (w.repo / "other.txt").write_text("x\n")
+    same_inputs = _commit(w.cwd, "other file")
+    _lock(w, "v2\n")
+    changed = _commit(w.cwd, "lock changed")
+    # the checkout's HEAD carries the hook
+    assert CS.branch_hook_gap(w.cwd, w.root) is None
+
+    def fixed(base, adopts):
+        return launch_report._fixed(_hook_candidate(base, adopts), _NOW_READS_FIXED, w.cwd, w.root)
+
+    # (a) the base carries the hook, the adopted head changed a listed input: the fallback stands
+    # even though the checkout's HEAD carries the hook
+    assert fixed(with_hook, changed) is False
+    # (b) the same base with an adopted head whose inputs match reads fixed
+    assert fixed(with_hook, same_inputs) is True
+    # (c) a base without the hook is not fixed, adopted or not
+    assert fixed(bare, None) is False
+    assert fixed(bare, same_inputs) is False
+
+
+def test_the_fallback_candidate_carries_the_reserved_records_base_and_adopted_commits():
+    def records(premise):
+        return [{"event": "reserved", "launchId": "a", "premise": premise},
+                {"event": "started", "launchId": "a"}]
+
+    launches = {"a": {"started": True, "place": "local", "reservedIndex": 0, "startedTs": 1760000000}}
+    call = {"place": "local", "pointedAtCloud": True, "reason": "dependency-hook", "by": "word"}
+    got = launch_report._fallbacks(
+        records({"placeCall": call, "baseCommit": "b" * 40, "adoptsHead": "c" * 40}), launches)
+    assert [(c["baseCommit"], c["adoptsHead"]) for c in got] == [("b" * 40, "c" * 40)]
+    for premise in ({"placeCall": call}, {"placeCall": call, "baseCommit": "", "adoptsHead": 7}):
+        got = launch_report._fallbacks(records(premise), launches)
+        assert [(c["baseCommit"], c["adoptsHead"]) for c in got] == [(None, None)]
 
 
 def test_the_interface_gains_the_new_condition_and_reason():
