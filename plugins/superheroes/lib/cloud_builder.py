@@ -18,6 +18,10 @@ preflight, review and park.
                           one comment on an issue or pull request
   cloud_builder.py note --question-file F
                           the builder note for the advisor, as comment text
+  cloud_builder.py edit --repo O/R --comment-id N --body-file F
+                          one existing comment rewritten in place
+  cloud_builder.py progress --phase P --running R --started T --expected-minutes N [--lost L]
+                          the progress comment the builder keeps on its issue, as comment text
   cloud_builder.py review-lapsed
                           the park comment for a lapsed reviewer pass
   cloud_builder.py handover --head SHA
@@ -33,6 +37,7 @@ default the process environment), and one that runs a command also takes `run=No
 `reason` token, never a raise. The CLI prints one JSON object and exits 1 on a refusal.
 """
 import argparse
+import datetime
 import importlib
 import json
 import os
@@ -48,6 +53,8 @@ _GH_TIMEOUT = 120
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPO_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}\Z)[A-Za-z0-9_.-]+\Z")
+_STARTED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+_EXPECTED_RE = re.compile(r"^Expected:\s*(\d+)\s*minutes?\s*$", re.ASCII)
 
 INTAKE_TEXT = (
     "Builder intake (cloud build). Plugin {v}. Commits from this build carry the cloud's own "
@@ -79,6 +86,8 @@ REFUSAL_TEXT = {
 REFUSAL_OTHER = ("I could not start from the launch's base commit ({reason}). I built nothing. "
                  "This lane ends as a refusal.")
 NOTE_HEADER = "Builder note for the advisor (cloud build)."
+PROGRESS_HEADER = "Builder progress (cloud build)."
+PROGRESS_EXPECTED_MAX_MINUTES = 240  # the longest wait a progress comment can state; the advisor never reads more
 NOTE_CLOSING = "I'm waiting for your answer."
 REVIEW_LAPSED_TEXT = (
     "Parked: the review did not run.\n\n"
@@ -416,9 +425,85 @@ def post_comment(repo, number, body_path, *, run=None, env=None):
     return {"ok": True, "reason": None, "url": url if isinstance(url, str) else None}
 
 
+def edit_comment(repo, comment_id, body_path, *, run=None, env=None):
+    """Exactly one write that replaces an existing comment's body in place; never loops or batches."""
+    env = _env(env)
+    failed = {"ok": False, "reason": "github-write-failed", "url": None}
+    if not (isinstance(repo, str) and _REPO_RE.match(repo)
+            and isinstance(comment_id, int) and not isinstance(comment_id, bool) and comment_id > 0
+            and isinstance(body_path, str) and body_path):
+        return failed
+    code, out = _gh(run, ["api", "-X", "PATCH", "repos/%s/issues/comments/%d" % (repo, comment_id),
+                          "-F", "body=@%s" % body_path], env)
+    if code != 0:
+        return failed
+    edited = _json_object_or_list(out)
+    url = edited.get("html_url") if isinstance(edited, dict) else None
+    return {"ok": True, "reason": None, "url": url if isinstance(url, str) else None}
+
+
 def note_text(question):
     """The builder's note to the advisor, as comment text."""
     return {"comment": "%s\n\n%s\n\n%s" % (NOTE_HEADER, question.strip(), NOTE_CLOSING)}
+
+
+def _one_line(value):
+    """True when `value` is a string with text in it and no line break."""
+    return isinstance(value, str) and bool(value.strip()) and "\n" not in value and "\r" not in value
+
+
+def progress_text(phase, running, started_at, expected_minutes, lost=None):
+    """The progress comment the builder keeps on its issue, as comment text; a refusal is a result, never a raise."""
+    if not _one_line(phase):
+        return {"ok": False, "reason": "phase-invalid"}
+    if not _one_line(running):
+        return {"ok": False, "reason": "running-invalid"}
+    if not (isinstance(started_at, str) and _STARTED_RE.match(started_at)):
+        return {"ok": False, "reason": "started-invalid"}
+    try:
+        datetime.datetime.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return {"ok": False, "reason": "started-invalid"}
+    if (isinstance(expected_minutes, bool) or not isinstance(expected_minutes, int)
+            or not 1 <= expected_minutes <= PROGRESS_EXPECTED_MAX_MINUTES):
+        return {"ok": False, "reason": "expected-invalid"}
+    if isinstance(lost, str) and ("\n" in lost or "\r" in lost):
+        return {"ok": False, "reason": "lost-invalid"}
+    lines = [PROGRESS_HEADER, "", "Phase: " + phase.strip(), "Now running: " + running.strip(),
+             "Started: " + started_at.strip(), "Expected: %d minutes" % expected_minutes]
+    if isinstance(lost, str) and lost.strip():
+        lines.append("Lost work: " + lost.strip())
+    return {"ok": True, "comment": "\n".join(lines)}
+
+
+def _progress_field(lines, label):
+    """The stripped value of the first `label` line; None when there is none or it is blank."""
+    for line in lines:
+        if line.startswith(label):
+            return line[len(label):].strip() or None
+    return None
+
+
+def parse_progress(body):
+    """The fields of a progress comment (as `progress_text` writes it, with or without the cloud footer); None
+    for any other body. `expectedSeconds` is never more time than the comment states, nor more than the cap:
+    a missing or malformed `Expected:` line reads as 0."""
+    text = strip_cloud_footer(body)
+    if text is None or text.split("\n", 1)[0].rstrip() != PROGRESS_HEADER:
+        return None
+    lines = text.split("\n")[1:]
+    expected = 0
+    for line in lines:
+        if line.startswith("Expected:"):
+            match = _EXPECTED_RE.match(line)
+            if match:
+                digits = match.group(1).lstrip("0") or "0"
+                minutes = int(digits) if len(digits) <= 9 else PROGRESS_EXPECTED_MAX_MINUTES
+                expected = min(minutes, PROGRESS_EXPECTED_MAX_MINUTES) * 60
+            break
+    return {"phase": _progress_field(lines, "Phase:"), "running": _progress_field(lines, "Now running:"),
+            "startedAt": _progress_field(lines, "Started:"), "expectedSeconds": expected,
+            "lostWork": _progress_field(lines, "Lost work:")}
 
 
 def review_lapsed_text():
@@ -527,6 +612,9 @@ def _build_parser():
     verb("pr-json", "--repo", "--branch", "--out")
     verb("repo-json", "--repo")
     verb("post", "--repo", "--number", "--body-file", **{"--number": {"type": int}})
+    verb("edit", "--repo", "--comment-id", "--body-file", **{"--comment-id": {"type": int}})
+    verb("progress", "--phase", "--running", "--started", "--expected-minutes",
+         **{"--expected-minutes": {"type": int}}).add_argument("--lost", default=None)
     verb("note", "--question-file")
     verb("review-lapsed")
     verb("handover", "--head")
@@ -554,6 +642,10 @@ def _dispatch(args):
         return repo_json(args.repo)
     if args.verb == "post":
         return post_comment(args.repo, args.number, args.body_file)
+    if args.verb == "edit":
+        return edit_comment(args.repo, args.comment_id, args.body_file)
+    if args.verb == "progress":
+        return progress_text(args.phase, args.running, args.started, args.expected_minutes, args.lost)
     if args.verb == "note":
         question = _read_text(args.question_file)
         if question is None:
