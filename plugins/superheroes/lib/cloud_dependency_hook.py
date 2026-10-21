@@ -25,7 +25,7 @@ SETTINGS_REL = ".claude/settings.json"
 HASH_NAME = "superheroes-cloud-setup-hash"
 LOG_NAME = "superheroes-cloud-setup.log"
 HOOK_TIMEOUT_SECONDS = 600
-HOOK_COMMAND = 'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/superheroes-cloud-dependencies.sh"'
+HOOK_COMMAND = 'bash "$CLAUDE_PROJECT_DIR/%s"' % SCRIPT_REL
 
 
 class _Refused(Exception):
