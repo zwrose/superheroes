@@ -17,11 +17,18 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
+- **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
 - **After switching.** **Nothing is owed.** A stack launched once on its parent issue is now cleaned up as one lane; a PR that links an issue holding its own lane is cleaned up exactly as before. See [Cloud cleanup: a stack launched on its parent issue cleans up as one lane](#cloud-cleanup-a-stack-launched-on-its-parent-issue-cleans-up-as-one-lane).
 
 ### Configure: the hook offer saves the detected inputs on either answer
 
 - configure's cloud setup sitting (`skills/configure/reference/set-up.md` § 6, the dependency hook offer) and its item 19 tune row (`skills/configure/reference/view-and-tune.md`) save the offer's detected `inputs` as item 18 whether the owner accepts or declines the hook. Before, only a yes saved them, so a decline left item 18 unset and the input files out of the stamp, though the offer says a change to them makes the cloud check ask for a re-paste. Accepting is unchanged. No code or result shape changed.
+
+### Review record: CI reads each check's latest run
+
+- A check run that a newer run of the same check superseded no longer reads red. A check is the same name, app, workflow, event, head branch and pull request (two pull requests sharing one head commit never replace each other's checks); a workflow that re-runs on one commit (a cancelled run, then a rerun) leaves its older check runs listed, and only the newest run of each check is read. A check whose newest run is cancelled still reads red, and a different check's success never covers a failed one.
+- A check run whose identity cannot be established is not reduced: one with no name, id or app, or a GitHub Actions run whose suite maps to no workflow run on the commit. It is read as it is, so a failure on it still reads red.
+- The reduction applies to the whole paged check list, so a superseded run on one page and its replacement on another resolve the same way.
 
 ### Cloud cleanup: a stack launched on its parent issue cleans up as one lane
 
