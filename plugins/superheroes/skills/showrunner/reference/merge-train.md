@@ -229,8 +229,7 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    pushed branch stays for the vet, a renewed review or a recovery.
 2. **Plan, then ask.** Run `python3 -B <plugin root>/lib/cloud_cleanup.py plan --repo-root <root>
    --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup` with `alreadyDelivered`, send
-   nothing and go to the branch step. On `cleanup` with `archiveHeld` (a stack whose layers are not all closed, or could not be
-   read), send nothing and go to the branch step; the plan of the stack's last layer to close carries the archive text. On any other `cleanup`, first persist the attempt under the
+   nothing and go to the branch step. On `cleanup` with `archiveHeld: "stack-open"` (a stack whose layers are not all closed), send nothing and go to the branch step; the plan of the stack's last layer to close carries the archive text. On `archiveHeld: "stack-unreadable"` (the stack could not be read), send nothing and go to the branch step; the archive request is still owed, so re-run `plan` for the same PR later, and until a plan carries the archive text, tell the owner that the session stays listed. On any other `cleanup`, first persist the attempt under the
    message id the send will carry. For another account, run the relay's `ensure` and `compose` first
    (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
    the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
