@@ -216,10 +216,23 @@ while a cloud lane is live. A cloud lane quiet past `LIVENESS_QUIET_WINDOW_SECON
 later of its start and its last activity, is `lane-stale`. Its entry carries `place: "cloud"` and
 `activityAgeSeconds` in place of `transcriptAgeSeconds`.
 
-Before you treat a cloud lane's `lane-stale` as a wedge, read the session's state in the host's
-session listing. A session the platform shows working is not wedged. A branch whose name omits the
-issue number is not read until its PR opens, so a builder on such a branch can read quiet while it
-works.
+The watcher also reads the lane's progress comment from the issue comments it already reads, with no
+extra request. That comment's first line is `Builder progress (cloud build).` (`PROGRESS_HEADER` in
+`lib/cloud_builder.py`); the most recently edited one created after the lane started is the lane's.
+When there is one, it decides alone: the lane is `lane-stale` when the comment's last edit is older
+than its stated expected time plus `LIVENESS_QUIET_WINDOW_SECONDS`, or dated in the future; otherwise
+the lane is not stale, whatever its activity age. With no progress comment, or when the comments read
+could not be made, the activity rule above decides; a tick whose comments read made no request reuses
+the last progress snapshot it read. A stale entry decided by the comment carries
+`progressAgeSeconds`, `progressExpectedSeconds` and `phase` in place of `activityAgeSeconds`. The
+`cloudLanes` entry carries `phase`, `progressAgeSeconds` and `progressExpectedSeconds` when a progress
+comment was read.
+
+**The first check on a quiet cloud lane is a relayed status ping**: a message to the lane's session
+asking it to update its progress comment. Read the comment again. Start a helper session to read the
+lane only after about 15 minutes with no answer. A session the platform shows working is not wedged. A
+branch whose name omits the issue number is not read until its PR opens, so a builder on such a branch
+can read quiet while it works.
 
 For a local lane, before emitting `lane-stale`, the watcher resolves the lane's session transcript
 from the **session id the launcher recorded on the launch record** and compares its mtime to
