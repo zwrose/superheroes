@@ -179,6 +179,30 @@ def _object(run, path, env):
     return got if isinstance(got, dict) else None
 
 
+_ISSUE_URL_RE = re.compile(r"https?://[^/\s]+(?:/api/v3)?/repos/([^/\s]+/[^/\s]+)/issues/([1-9]\d*)")
+
+
+def _parent_issues(repo, issues, env, run):
+    """The distinct parent issue numbers of the given issues, in order and never one already given; None when
+    any issue could not be read or names a parent that is not an issue URL."""
+    parents = []
+    for number in issues:
+        got = _object(run, "repos/%s/issues/%d" % (repo, number), env)
+        if got is None:
+            return None
+        url = got.get("parent_issue_url")
+        if url is None:
+            continue
+        match = _ISSUE_URL_RE.fullmatch(url) if isinstance(url, str) else None
+        if match is None:
+            return None
+        parent = int(match.group(2))
+        # axis: a parent in another repository is never a lane of this repository, so it is not a parent here — see bite-proof record c8_cloud_cleanup, entry 25
+        if match.group(1).lower() == repo.lower() and parent not in issues and parent not in parents:
+            parents.append(parent)
+    return parents
+
+
 def _pages(run, path, env):
     """Every item of a paginated REST list, read page by number, or None when any page failed or the rows
     were not all JSON objects (a page that is a bare object, such as `{}`, is unreadable)."""
@@ -262,23 +286,47 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     issues = cp._linked_issues(pull.get("body"), repo)
     if not issues:
         return _refusal("pr-unlinked"), None
+    head_ref = _name(pull.get("head"), "ref")
+    scope, via_parent = issues, False
     if launch_id:
         found = [cp._lane(repo_root, issues, env, launch_id=launch_id)]
-        if found[0][2] is None and found[0][1] and found[0][1].get("issue") not in issues:
-            return _refusal("lane-mismatch"), None
+        lane_issue = found[0][1].get("issue") if found[0][2] is None and found[0][1] else None
+        if lane_issue is not None and lane_issue not in issues:
+            parents = _parent_issues(repo, issues, env, run)
+            if parents is None:
+                return _refusal("issue-unreadable"), None
+            # axis: a launch id naming a lane on another issue is this PR's only when that issue is the parent of a linked issue — see bite-proof record c8_cloud_cleanup, entry 19
+            if lane_issue not in parents:
+                return _refusal("lane-mismatch"), None
+            via_parent = True
+        for _, _, reason in found:
+            if reason:
+                return _refusal(reason), None
+        lanes = [(lid, lane) for lid, lane, _ in found if lane]
     else:
-        # axis: a lane reserved after the PR was opened cannot have built it, so the newest lane at or before the open — see bite-proof record c8_cloud_cleanup, entry 15
-        found = [cp._lane(repo_root, [issue], env, reserved_by=opened) for issue in issues]
-    for _, _, reason in found:
-        if reason:
-            return _refusal(reason), None
-    lanes = [(lid, lane) for lid, lane, _ in found if lane]
-    if len(lanes) != 1 and not launch_id:
-        # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup, entry 16
-        lid, lane, reason = _adopting_successor(repo_root, None, {}, issues, pr, _name(pull.get("head"), "ref"), closed, env)
-        if reason:
-            return _refusal(reason), None
-        lanes = [(lid, lane)] if lane else lanes
+        while True:
+            # axis: a lane reserved after the PR was opened cannot have built it, so the newest lane at or before the open — see bite-proof record c8_cloud_cleanup, entry 15
+            found = [cp._lane(repo_root, [issue], env, reserved_by=opened) for issue in scope]
+            for _, _, reason in found:
+                if reason:
+                    return _refusal(reason), None
+            lanes = [(lid, lane) for lid, lane, _ in found if lane]
+            if len(lanes) != 1:
+                # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup, entry 16
+                lid, lane, reason = _adopting_successor(repo_root, None, {}, scope, pr, head_ref, closed, env)
+                if reason:
+                    return _refusal(reason), None
+                lanes = [(lid, lane)] if lane else lanes
+            if lanes or via_parent:
+                break
+            parents = _parent_issues(repo, issues, env, run)
+            # axis: a parent read that fails leaves the PR unbound rather than reading as no parent, so nothing is sent or deleted — see bite-proof record c8_cloud_cleanup, entry 24
+            if parents is None:
+                return _refusal("issue-unreadable"), None
+            if not parents:
+                break
+            # axis: linked issues that hold no lane are cleaned up under the lane of their parent issue, so a stack launched once on its parent is found — see bite-proof record c8_cloud_cleanup, entry 18
+            scope, via_parent = parents, True
     if not lanes:
         return _refusal("no-cloud-lane"), None
     if len(lanes) > 1:
@@ -286,7 +334,8 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     lid, lane = lanes[0]
     if not launch_id:
         # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup, entry 17
-        lid, lane, reason = _adopting_successor(repo_root, lid, lane, issues, pr, _name(pull.get("head"), "ref"), closed, env)
+        # axis: a lane found through the parent issue is searched for adopters on the parent issues, where its successors are reserved — see bite-proof record c8_cloud_cleanup, entry 23
+        lid, lane, reason = _adopting_successor(repo_root, lid, lane, scope, pr, head_ref, closed, env)
         if reason:
             return _refusal(reason), None
     session = lane.get("cloudSessionName")
@@ -295,7 +344,16 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     path, receipts = _load(repo_root, env)
     if receipts is None:
         return path, None
-    request = next((r for r in receipts if _same_receipt(r, repo, pr, session, closed_at)), {"state": "none"})
+    own = next((r for r in receipts if _same_receipt(r, repo, pr, session, closed_at)), None)
+    request = own
+    # axis: a lane found through its parent issue is asked to archive once for all its layers, so a request held on any layer is this layer's request too — see bite-proof record c8_cloud_cleanup, entry 20
+    # axis: this layer's own failed try holds nothing, so a request another layer holds still shows — see bite-proof record c8_cloud_cleanup, entry 22
+    if via_parent and (own is None or own["outcome"] == "failed"):
+        held = [r for r in receipts if r["repo"].lower() == repo.lower() and r["session"] == session
+                and r["outcome"] in ("pending", "uncertain", "delivered")]
+        if held:
+            request = max(held, key=lambda r: r["at"])
+    request = request if request is not None else {"state": "none"}
     head = pull.get("head")
     facts = {"branch": _name(head, "ref"), "headSha": _name(head, "sha"), "headRepo": _name(head, "repo", "full_name"),
              "baseRepo": _name(pull.get("base"), "repo", "full_name")}
@@ -308,6 +366,8 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     # axis: a confirmed delivery needs no further send, so a retried cleanup carries no archive text
     if delivered:
         result["alreadyDelivered"] = True
+    if via_parent:
+        result["viaParent"] = True
     return result, facts
 
 
@@ -336,6 +396,11 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
             return got
         if got["action"] == "none":
             return _refusal("pr-open")
+        held = got["request"]
+        # axis: a lane's one archive request held on another layer grants this layer no second reservation — see bite-proof record c8_cloud_cleanup, entry 21
+        if "msgId" in held and not _same_receipt(held, repo, number, got["session"], got["closedAt"]):
+            return _refusal({"delivered": "request-delivered", "pending": "request-in-progress",
+                             "uncertain": "request-uncertain"}[held["outcome"]])
     path, receipts = _load(repo_root, env)
     if receipts is None:
         return path

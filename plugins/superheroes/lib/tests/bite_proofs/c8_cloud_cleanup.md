@@ -233,3 +233,91 @@ Axis: when one older lane resolves, a later lane that adopted this PR (or its br
 - Red: `test_cloud_cleanup.py:630: in test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up`, `assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"`, `AssertionError: assert (True and 'l-1' == 'l-2'`, `1 failed in 2.51s`.
 - Restore: the inverse edit; `cloud_cleanup.py:299-300` read `    lid, lane = lanes[0]` and `    if not launch_id:`.
 - Green: `1 passed in 3.41s`.
+
+## Entries added for the parent-issue lane (issue 2024)
+
+A merged or closed PR whose linked issues hold no cloud lane is cleaned up under the lane of its linked issues' parent issue, and that lane's archive request goes at most once. Each entry below was run in this dispatch by a targeted edit to `cloud_cleanup.py` only (no test edited), the detector run alone as one node, then the inverse edit. After all eight restores `git diff --stat plugins/superheroes/lib/cloud_cleanup.py` read `1 file changed, 81 insertions(+), 16 deletions(-)`, the same as before the first neutralization.
+
+Command, each time, from the worktree root: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest '<file>::<test>' -q -p no:cacheprovider --tb=short`. `<file>` is `plugins/superheroes/lib/tests/test_cloud_cleanup.py`.
+
+The green for every entry below is one run of all 28 new tests together after the last restore (`-k "parent or layer or issue_read or a_request_held"`): `28 passed, 79 deselected in 10.37s`.
+
+## 18. Linked issues that hold no lane are searched on their parent issue
+
+Axis: when no linked issue holds a lane, the search widens to the linked issues' parent issues and marks the plan `viaParent`, so a stack launched once on its parent is cleaned up.
+
+- Test: `test_a_layer_of_a_stack_is_cleaned_up_under_the_parent_issues_lane_and_the_request_goes_once`.
+- Neutralization (`_plan`, `cloud_cleanup.py:329`): `scope, via_parent = parents, True` became `break`.
+- Red: `test_cloud_cleanup.py:1055: in test_a_layer_of_a_stack_is_cleaned_up_under_the_parent_issues_lane_and_the_request_goes_once`, `assert first["ok"] and first["action"] == "cleanup" and first["issue"] == PARENT`, `E   assert (False)`, `1 failed in 1.85s`.
+- Restore: the inverse edit; `cloud_cleanup.py:329` reads `            scope, via_parent = parents, True`.
+- Green: the 28-test run above.
+
+## 19. A launch id naming a lane on a parent issue is accepted
+
+Axis: a `--launch-id` whose lane sits on another issue is this PR's lane only when that issue is a parent of a linked issue; any other issue stays `lane-mismatch`.
+
+- Test: `test_a_launch_id_of_the_parent_issues_lane_is_this_layers_lane_but_an_unrelated_issues_is_not`.
+- Neutralization (`_plan`, `cloud_cleanup.py:299`): `if lane_issue not in parents:` became `if True:` (every lane on another issue is refused). This bites the accepting half; the refusing half (`l-9` on an unrelated issue) passes with this neutralization, and no run here neutralizes it the other way (`if False:`), so the refusing half is unproven by this entry.
+- Red: `test_cloud_cleanup.py:1101: in test_a_launch_id_of_the_parent_issues_lane_is_this_layers_lane_but_an_unrelated_issues_is_not`, `assert got["ok"] and got["action"] == "cleanup" and got["viaParent"] is True and got["launchId"] == "l-1"`, `E   assert (False)`, `1 failed in 2.41s`.
+- Restore: the inverse edit; `cloud_cleanup.py:299` reads `            if lane_issue not in parents:`.
+- Green: the 28-test run above.
+
+## 20. The lane's request is carried to every layer
+
+Axis: for a lane found through its parent issue, a request held on any layer of the lane is the request of every other layer, so a later layer's plan shows it delivered and sends nothing.
+
+- Test: `test_a_layer_of_a_stack_is_cleaned_up_under_the_parent_issues_lane_and_the_request_goes_once`.
+- Neutralization (`_plan`, `cloud_cleanup.py:351`): `if via_parent and (own is None or own["outcome"] == "failed"):` became `if False and via_parent and (own is None or own["outcome"] == "failed"):`.
+- Red: `test_cloud_cleanup.py:1064: in test_a_layer_of_a_stack_is_cleaned_up_under_the_parent_issues_lane_and_the_request_goes_once`, `assert later["request"]["pr"] == 501 and later["request"]["msgId"] == "m-1"`, `KeyError: 'pr'` (the request read `{"state": "none"}`), `1 failed in 2.38s`.
+- Restore: the inverse edit; `cloud_cleanup.py:351` reads `    if via_parent and (own is None or own["outcome"] == "failed"):`.
+- Green: the 28-test run above.
+
+## 21. A request held on another layer grants no second reservation
+
+Axis: `record ... pending` on a layer refuses when the lane's request is a holding receipt that is not this PR's own for this closure, so the archive request is not sent once per layer.
+
+- Test: `test_a_request_held_on_one_layer_is_the_lanes_request_and_grants_no_second_reservation[pending-request-in-progress]`.
+- Neutralization (`record`, `cloud_cleanup.py:401`): `if "msgId" in held and not _same_receipt(...)` became `if False and "msgId" in held and not _same_receipt(...)`.
+- Red: `test_cloud_cleanup.py:1081: in test_a_request_held_on_one_layer_is_the_lanes_request_and_grants_no_second_reservation`, `assert _record_n(w, 502, "m-2", "pending") == {"ok": False, "reason": reason}`, `AssertionError: assert {'ok': True, ...essage': None} == {'ok': False,...-in-progress'}`, `1 failed in 1.88s`.
+- Restore: the inverse edit; `cloud_cleanup.py:401` reads `        if "msgId" in held and not _same_receipt(held, repo, number, got["session"], got["closedAt"]):`.
+- Green: the 28-test run above.
+
+## 22. A layer's own failed try does not hide the lane's hold
+
+Axis: a layer whose own receipt is `failed` still sees the request another layer holds, so it neither resends over a delivered request nor reads the failed try as the lane's request.
+
+- Test: `test_a_layers_own_failed_try_does_not_hide_the_request_another_layer_holds`.
+- Neutralization (`_plan`, `cloud_cleanup.py:351`): `(own is None or own["outcome"] == "failed")` became `(own is None)`.
+- Red: `test_cloud_cleanup.py:1200: in test_a_layers_own_failed_try_does_not_hide_the_request_another_layer_holds`, `assert again["request"]["pr"] == 502 and again["request"]["msgId"] == "m-2" and again["request"]["outcome"] == "delivered"`, `E   assert (501 == 502)`, `1 failed in 1.96s`.
+- Restore: the inverse edit; `cloud_cleanup.py:351` reads `    if via_parent and (own is None or own["outcome"] == "failed"):`.
+- Green: the 28-test run above.
+
+## 23. A lane found through the parent is searched for adopters on the parent issues
+
+Axis: after a lane is found on a parent issue, the later lane that adopted the PR is searched among the parent issues, where its successors are reserved, so cleanup follows the adopter.
+
+- Test: `test_a_later_lane_on_the_parent_issue_that_adopted_the_layer_is_the_one_cleaned_up[by-pr]`.
+- Neutralization (`_plan`, `cloud_cleanup.py:338`): `_adopting_successor(repo_root, lid, lane, scope, pr, head_ref, closed, env)` became `_adopting_successor(repo_root, lid, lane, issues, pr, head_ref, closed, env)`.
+- Red: `test_cloud_cleanup.py:1245: in test_a_later_lane_on_the_parent_issue_that_adopted_the_layer_is_the_one_cleaned_up`, `assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two" and got["viaParent"] is True`, `AssertionError: assert (True and 'l-1' == 'l-2'`, `1 failed in 2.13s`.
+- Restore: the inverse edit; `cloud_cleanup.py:338` reads `        lid, lane, reason = _adopting_successor(repo_root, lid, lane, scope, pr, head_ref, closed, env)`.
+- Green: the 28-test run above.
+
+## 24. An unreadable parent read refuses
+
+Axis: a parent read that fails leaves the PR unbound as `issue-unreadable` rather than reading as no parent, so nothing is sent or deleted on a guess.
+
+- Test: `test_an_issue_read_that_fails_or_is_not_an_object_refuses_and_sends_and_deletes_nothing`.
+- Neutralization (`_plan`, `cloud_cleanup.py:324-325`): `if parents is None:` followed by `return _refusal("issue-unreadable"), None` became `if parents is None:` followed by `parents = []`.
+- Red: `test_cloud_cleanup.py:1170: in test_an_issue_read_that_fails_or_is_not_an_object_refuses_and_sends_and_deletes_nothing`, `assert _plan(w) == want`, `{'reason': 'no-cloud-lane'} != {'reason': 'issue-unreadable'}`, `1 failed in 1.93s`.
+- Restore: the inverse edit; `cloud_cleanup.py:324-325` read `            if parents is None:` and `                return _refusal("issue-unreadable"), None`.
+- Green: the 28-test run above.
+
+## 25. A parent in another repository is not a parent
+
+Axis: a parent issue URL naming another repository is never a lane of this repository, so it yields no parent (compared without case).
+
+- Test: `test_a_parent_in_another_repository_is_never_a_lane_of_this_repository`.
+- Neutralization (`_parent_issues`, `cloud_cleanup.py:201`): `if match.group(1).lower() == repo.lower() and parent not in issues ...` became `if True and parent not in issues ...`.
+- Red: `test_cloud_cleanup.py:1119: in test_a_parent_in_another_repository_is_never_a_lane_of_this_repository`, `assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}`, `assert {'ok': True, ...er/name', ...} == {'ok': False,...o-cloud-lane'}`, `1 failed in 1.86s`.
+- Restore: the inverse edit; `cloud_cleanup.py:201` reads `        if match.group(1).lower() == repo.lower() and parent not in issues and parent not in parents:`.
+- Green: the 28-test run above.

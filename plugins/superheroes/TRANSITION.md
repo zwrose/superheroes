@@ -12,6 +12,21 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** A stack launched once on its parent issue is now cleaned up as one lane; a PR that links an issue holding its own lane is cleaned up exactly as before. See [Cloud cleanup: a stack launched on its parent issue cleans up as one lane](#cloud-cleanup-a-stack-launched-on-its-parent-issue-cleans-up-as-one-lane).
+
+### Cloud cleanup: a stack launched on its parent issue cleans up as one lane
+
+- When a merged or closed PR's linked issues hold no cloud lane, `cloud_cleanup.py plan` reads each linked issue's parent issue and looks for the lane there (`--launch-id` naming a lane on a parent issue is accepted the same way). A parent in another repository is not a parent. A parent link that cannot be read, or is not an issue address, refuses `issue-unreadable` and nothing is sent or deleted; `no-cloud-lane`, `lane-mismatch` and `lane-ambiguous` keep their meanings.
+- A plan whose lane came from a parent issue carries `viaParent: true`; the key is absent for a lane found on a linked issue.
+- The archive request goes once per lane across all its layers. A later layer's plan carries the request recorded on an earlier layer (its `request.pr` names that layer), with `archiveText: null` and `alreadyDelivered: true` once delivered, and `record ... --outcome pending` on another layer refuses `request-in-progress`, `request-uncertain` or `request-delivered` while the lane's request is held.
+- A `pending` or `uncertain` request is settled with `record --pr <the request's pr>`. The `branch` step is unchanged: it deletes only the PR's own head branch, for each layer.
+
 ## 0.45.0
 
 ### Before you upgrade

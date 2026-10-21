@@ -261,6 +261,11 @@ on the owner's machine. This section is the one home of how they are cleaned up.
 5. **What is left.** The session, until it is archived as the `ownerMessage` says, and the lane's record. The branch is
    gone, and a cloud launch made no checkout or worktree to remove.
 
+A stack launched once on its parent issue cleans up as one lane: each layer's plan names the parent issue's lane and
+carries `viaParent`, the archive request goes once for the lane, and a later layer's plan carries that request (its `pr`
+names the layer it was recorded on, so a `pending` or `uncertain` one is settled with `record --pr <that pr>`); the
+branch step runs for each layer's own branch.
+
 If the owner never answers the archive prompt, the session stays listed and the advisor carries on; nothing reminds the owner.
 
 ## When the repository refuses a cloud-built merge
