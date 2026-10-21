@@ -389,3 +389,13 @@ Axis: an unclassified layer is held only on the evidence a proven stack is held 
 - Red: `test_cloud_cleanup.py:1415: in test_a_pr_whose_other_linked_issue_cannot_be_read_is_cleaned_up_as_an_ordinary_lane`, `assert "viaParent" not in got and "archiveHeld" not in got`, `AssertionError: assert ('viaParent' not in {'ok': True, 'action': 'cleanup', 'outcome': 'merged', 'repo': 'owner/name', ...} and 'archiveHeld' not in {'ok': True, 'action': 'cleanup', 'outcome': 'merged', 'repo': 'owner/name', ...})`, `1 failed, 125 deselected in 5.84s`.
 - Restore: the inverse edit; `cloud_cleanup.py:383` reads `        if found is None or (not found and via_parent):`.
 - Green: the 4-test run above.
+
+## 32. A layer reopened after planning revokes the archive reservation
+
+Axis: `record --outcome pending` refuses a held archive after a layer reopens, so a stale plan that carried the archive text cannot reserve the send, write state, or delete anything (G15, the guard entry 29 also covers, here driven through a plan made before the reopen).
+
+- Test: `test_reopened_layer_invalidates_archive_plan_before_reservation` in `plugins/superheroes/lib/tests/test_cloud_cleanup_reopened_stack_break_it.py`, both cases (`explicit` False and True).
+- Neutralization (`record`, `cloud_cleanup.py:436`): `if got.get("archiveHeld"):` became `if False and got.get("archiveHeld"):`.
+- Red: `test_cloud_cleanup_reopened_stack_break_it.py:23: in test_reopened_layer_invalidates_archive_plan_before_reservation`, `assert result == {"ok": False, "reason": "archive-held"}`, `AssertionError: assert {'ok': True, ...essage': None} == {'ok': False,...archive-held'}`, `2 failed in 2.62s`.
+- Restore: the inverse edit; `cloud_cleanup.py:436` reads `        if got.get("archiveHeld"):`.
+- Green: the same file run alone after the restore, `2 passed in 2.39s`.
