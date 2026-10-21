@@ -22,11 +22,12 @@ import cloud_check as CC  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import launch_doctrine as LD  # noqa: E402
 import mode_registry  # noqa: E402
-from test_cloud_check import (ACCOUNT, NONCE, _cloud_report, _confirm, _first, _judge,  # noqa: E402
-                              _pair)
+from test_cloud_check import (ACCOUNT, NONCE, VERSION, _cloud_report, _confirm, _first,  # noqa: E402
+                              _judge, _pair)
 
 FIRST = ("**The check failed on one part.** The cloud session has no git identity to commit with, "
          "so a build there would stop at its first commit.")
+UNREPORTED = "**The check failed on one part.** The cloud session did not report its git identity."
 FIX = ("set GIT_AUTHOR_NAME and GIT_COMMITTER_NAME to your name, and GIT_AUTHOR_EMAIL and "
        "GIT_COMMITTER_EMAIL to your email, in the environment's variables")
 BOTH = {"author": True, "committer": True}
@@ -70,32 +71,16 @@ def _failed_on_identity(result):
     assert _first(result) == FIRST, result["message"]
 
 
+def _failed_on_unreported_identity(result):
+    assert result["action"] == "failed", result
+    assert result["failedParts"] == ["identity"], result
+    assert result["results"]["identityPresent"] is False
+    assert result["recordWritten"] is False
+    assert _first(result) == UNREPORTED, result["message"]
+    assert "GIT_AUTHOR_NAME" not in result["message"]
+
+
 # --- launch_doctrine.git_identity: against a real repository -------------------------------
-
-def test_git_identity_is_false_when_nothing_is_set(repo):
-    # axis: a repository with no variable and no config resolves neither identity
-    assert LD.git_identity(repo) == NEITHER
-
-
-def test_git_identity_refuses_a_guess_from_EMAIL(repo, monkeypatch):
-    monkeypatch.setenv("EMAIL", "guess@example.invalid")
-    # axis: an identity git guesses (from $EMAIL, the host name or the passwd entry) never counts
-    assert LD.git_identity(repo) == NEITHER
-
-
-def test_git_identity_is_true_for_a_repository_config(repo):
-    _local_config(repo)
-    # axis: a name and email in the repository's own config give both identities
-    assert LD.git_identity(repo) == BOTH
-
-
-def test_git_identity_is_true_for_the_four_variables(repo, monkeypatch):
-    for var, value in (("GIT_AUTHOR_NAME", "A"), ("GIT_AUTHOR_EMAIL", "a@example.invalid"),
-                       ("GIT_COMMITTER_NAME", "C"), ("GIT_COMMITTER_EMAIL", "c@example.invalid")):
-        monkeypatch.setenv(var, value)
-    # axis: the four variables alone give both identities
-    assert LD.git_identity(repo) == BOTH
-
 
 def test_git_identity_is_author_only_with_only_the_author_variables(repo, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_NAME", "A")
@@ -159,21 +144,24 @@ def test_judge_fails_on_identity_when_the_report_has_none(tmp_path):
     local, cloud = _pair(tmp_path)
     obj = _cloud_report(cloud)
     del obj[CC.IDENTITY_FIELD]
-    # axis: a report without an identity key does not show a configured identity
-    _failed_on_identity(_judge(local, obj))
+    # axis: a report without an identity key does not show a configured identity, so the check
+    # fails, but the identity was never reported and the message does not claim there is none
+    _failed_on_unreported_identity(_judge(local, obj))
 
 
 def test_judge_fails_on_identity_when_it_is_null(tmp_path):
     local, cloud = _pair(tmp_path)
-    # axis: a null identity is not a configured identity
-    _failed_on_identity(_judge(local, _with_identity(cloud, None)))
+    # axis: a null identity is not a configured identity, so the check fails, but the identity was
+    # never reported and the message does not claim there is none
+    _failed_on_unreported_identity(_judge(local, _with_identity(cloud, None)))
 
 
 def test_judge_fails_on_identity_when_it_is_not_a_dict(tmp_path):
     local, cloud = _pair(tmp_path)
     for bad in (["author", "committer"], "author committer", True, 1):
-        # axis: only a dict with both flags true counts; a truthy non-dict never does
-        _failed_on_identity(_judge(local, _with_identity(cloud, bad)))
+        # axis: only a dict with both flags true counts; a truthy non-dict never does, and as a
+        # non-dict it was never reported, so the message does not claim there is no identity
+        _failed_on_unreported_identity(_judge(local, _with_identity(cloud, bad)))
 
 
 def test_judge_fails_on_identity_without_a_committer(tmp_path):
@@ -220,6 +208,56 @@ def test_the_fallback_line_does_not_pass_on_identity(tmp_path):
     # axis: the line a session that cannot run `report` gives never passes the identity part
     assert result["action"] != "passed"
     assert result["results"]["identityPresent"] is False
+
+
+# --- an unreported identity is not a missing one -------------------------------------------------
+
+def _unreported(cloud, **changes):
+    obj = _cloud_report(cloud, **changes)
+    del obj[CC.IDENTITY_FIELD]
+    return obj
+
+
+def test_the_fallback_line_never_says_there_is_no_identity(tmp_path):
+    local, _cloud = _pair(tmp_path)
+    result = _judge(local, CC._fallback_line(NONCE))
+    # axis: a session that reported no identity is never told it has none, nor given the variables fix
+    assert "identity" in result["failedParts"]
+    assert "has no git identity" not in result["message"]
+    assert "GIT_AUTHOR_NAME" not in result["message"]
+
+
+def test_an_older_report_without_identity_never_says_there_is_no_identity(tmp_path):
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _unreported(cloud, pluginVersion="0.0.1"))
+    # axis: the count follows the sentences listed, so an unreported identity beside another part
+    # adds neither a sentence, a fix nor a part to the count
+    assert result["failedParts"] == ["version", "identity"]
+    assert result["message"].split("\n\n")[0] == (
+        "**The check failed on one part.** The cloud's plugin is 0.0.1 and mine is %s." % VERSION)
+    assert "GIT_AUTHOR_NAME" not in result["message"]
+
+
+def test_an_unreported_identity_alone_says_it_was_not_reported(tmp_path):
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _unreported(cloud))
+    # axis: an unreported identity that is the only failed part is named as unreported, with the
+    # setup-text fix
+    assert result["failedParts"] == ["identity"]
+    assert result["message"] == (
+        "**The check failed on one part.** The cloud session did not report its git identity.\n\n"
+        "Cloud builds stay off. To fix it, paste the new setup text into the environment and say "
+        "\"check again\".")
+
+
+def test_an_unreported_identity_spawns_no_local_identity_read(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(CC, "_local_identity", lambda cwd: calls.append(cwd))
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _unreported(cloud))
+    # axis: an identity the session never reported spawns no git process on the owner's machine
+    assert result["failedParts"] == ["identity"]
+    assert calls == []
 
 
 # --- the fix line carries the owner's own name and email, only in the message ----------------

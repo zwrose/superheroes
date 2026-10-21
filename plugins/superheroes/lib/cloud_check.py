@@ -140,6 +140,7 @@ _PARTS = (
      "tell me so I can look at the store"),
     ("setting", "I could not switch cloud builds off.", cloud_setup.SWITCH_OFF_FIX),
 )
+_IDENTITY_UNREPORTED = "The cloud session did not report its git identity."
 _SWITCHED_OFF = " They were on for this project, so I've switched them off."
 
 _PASSED = (
@@ -552,22 +553,32 @@ def _remove_failed_check(cwd, account, root, started=None):
         return False
 
 
-def _failed_message(parts, switched, cloud_version, local_version, identity=None):
+def _failed_message(parts, switched, cloud_version, local_version, identity=None,
+                    identity_reported=True):
     sentences = []
     for name, sentence, _fix in _PARTS:
-        if name in parts:
-            sentences.append(sentence.format(
-                cloud="not installed" if cloud_version is None else cloud_version,
-                mine="unknown" if local_version is None else local_version))
-    count = "one part" if len(parts) == 1 else "%d parts" % len(parts)
+        if name not in parts:
+            continue
+        if name == "identity" and not identity_reported:
+            # an unreported identity is named only when it is the one part that failed
+            if parts == ["identity"]:
+                sentences.append(_IDENTITY_UNREPORTED)
+            continue
+        sentences.append(sentence.format(
+            cloud="not installed" if cloud_version is None else cloud_version,
+            mine="unknown" if local_version is None else local_version))
+    count = "one part" if len(sentences) == 1 else "%d parts" % len(sentences)
     fixes = []
     for name, _sentence, fix in _PARTS:
         if name == "identity" and name in parts:
-            # only this one fix is a template; the name and email are values, never formatted
-            fix = fix.format(
-                name="your name" if identity is None else "`%s`" % identity[0],
-                email="your email" if identity is None else "`%s`" % identity[1])
-        if name in parts and fix not in fixes:
+            if not identity_reported:
+                fix = _SAME_FIX if parts == ["identity"] else None
+            else:
+                # only this one fix is a template; the name and email are values, never formatted
+                fix = fix.format(
+                    name="your name" if identity is None else "`%s`" % identity[0],
+                    email="your email" if identity is None else "`%s`" % identity[1])
+        if name in parts and fix is not None and fix not in fixes:
             fixes.append(fix)
     # axis: the message never says cloud builds are off when the switch-off failed
     standing = ("Cloud builds are still on." if "setting" in parts else
@@ -608,6 +619,7 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                             else _UNREAD.format(switched=_SWITCHED_OFF if off else ""))}
 
     results, local_placed = _judge_parts(obj, environment, cwd, root, today)
+    identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
     failed = [part for part, key in (("environment", "environmentMatches"),
                                      ("version", "versionMatches"),
                                      ("calibration", "calibrationMatches"),
@@ -646,7 +658,10 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                 "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
                 "message": _failed_message(
                     failed, off, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
-                    **({"identity": _local_identity(cwd)} if "identity" in failed else {}))}
+                    identity_reported=identity_reported,
+                    # axis: an identity the session never reported is not a missing one
+                    **({"identity": _local_identity(cwd)}
+                       if "identity" in failed and identity_reported else {}))}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
     return {"action": "passed", "results": results, "failedParts": [], "recordWritten": True,
