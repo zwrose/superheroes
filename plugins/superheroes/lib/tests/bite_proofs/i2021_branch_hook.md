@@ -7,8 +7,8 @@ detector again (green), and the file's sha256 compared before and after. Test fi
 `git diff --stat` cannot show a restore; the sha256 pair and the quoted restored lines are the receipt.
 Raw captures drop only pytest's `UV_NATIVE_TLS` deprecation warning line.
 
-Declared guarded-element set: G1-G18 (one entry each below; no equivalence classes, none unproven),
-plus G19, added by the F5 fix batch for the fixture-isolation regression test (the order named no bite-proof for it).
+Declared guarded-element set: G1-G20 (one entry each below; no equivalence classes, none unproven),
+including G19, added by the F5 fix batch for the fixture-isolation regression test (the order named no bite-proof for it), and G20, added by the #2021 nounset amendment.
 
 Disclosure: G4's, G5's and G6's detectors are the edge tests; the parity census
 (`test_the_registration_rule_agrees_with_the_record_mode_snippet`) is a second detector for the same
@@ -1190,6 +1190,49 @@ _GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
 ```
 .                                                                        [100%]
 1 passed, 71 deselected in 1.23s
+```
+
+- **verdict:** RED->GREEN
+
+## G20 — the generated script reads its first argument with a default
+
+(Added by the #2021 amendment order `wo-f7-2021`, which named this bite-proof.)
+
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:256` (the `"${1-}"` default in the `--record` check of `script_text`)
+- **axis:** the generated script never ends with an unbound-variable error under an inherited `nounset` (`SHELLOPTS=nounset`), so it keeps its "never fails the session" promise when started with no arguments
+- **detector:** `test_cloud_dependency_hook_nounset_2021.py::test_the_script_never_dies_of_an_unbound_variable_under_nounset` (selected with `-k "no-args"`, the two no-argument modes)
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-        'if [ "${1-}" = "--record" ]; then',
++        'if [ "$1" = "--record" ]; then',
+```
+
+- **raw red (rc 1):** the pytest `UV_NATIVE_TLS` warning line is dropped; the pytest-parametrize source echo is elided from the two tracebacks below only to the lines shown (the output was not otherwise cut)
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_the_script_never_dies_of_an_unbound_variable_under_nounset[no-args-local] _
+E       AssertionError: /tmp/claude-0/pytest-of-root/pytest-77/test_the_script_never_dies_of_0/repo/.claude/hooks/superheroes-cloud-dependencies.sh: line 10: $1: unbound variable
+_ test_the_script_never_dies_of_an_unbound_variable_under_nounset[no-args-cloud] _
+E       AssertionError: /tmp/claude-0/pytest-of-root/pytest-77/test_the_script_never_dies_of_1/repo/.claude/hooks/superheroes-cloud-dependencies.sh: line 10: $1: unbound variable
+FAILED plugins/superheroes/lib/tests/test_cloud_dependency_hook_nounset_2021.py::test_the_script_never_dies_of_an_unbound_variable_under_nounset[no-args-local]
+FAILED plugins/superheroes/lib/tests/test_cloud_dependency_hook_nounset_2021.py::test_the_script_never_dies_of_an_unbound_variable_under_nounset[no-args-cloud]
+2 failed, 3 deselected in 0.43s
+```
+
+- **restore:** the inverse edit (the neutralized line replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `a78a973af3e27d2af7be9bf12069ee6562d13eaa8cc6e1333b1d21e9ef0e6f13`, while neutralized `a489e659482f9742f488c2b633d08910ec1764343c93822a1b5b022dfa2d3ae5`, after the restore `a78a973af3e27d2af7be9bf12069ee6562d13eaa8cc6e1333b1d21e9ef0e6f13` — identical to before; the restored line quoted back:
+
+```
+        'if [ "${1-}" = "--record" ]; then',
+```
+
+- **raw green (rc 0):**
+
+```
+..                                                                       [100%]
+2 passed, 3 deselected in 4.59s
 ```
 
 - **verdict:** RED->GREEN
