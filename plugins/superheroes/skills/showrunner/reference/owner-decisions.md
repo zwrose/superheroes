@@ -787,6 +787,11 @@ and the shape of the advisor's input to a sheet, are the template's, in
 [the review template](../../../theme/review-template.md); this file restates none of it. A PR sheet's
 leftover carries this file's per-item spine, written by the advisor in its sheet input as
 [the review template](../../../theme/review-template.md) § The items says. Before building a sheet, judge what reaches the owner by that section's "judge before you build" rule.
+**A collector item that concerns one PR rides that PR's sheet as an option card.** The advisor delivers it through
+the sheet input's `collectorItems` (shape in `lib/pr_sheet.py`'s docstring, as the template says), carrying this
+file's per-item spine and its collector number, so the merge verdict covers it like any other card. It is never
+delivered only in the chat. A "What you're accepting" card never stands in for it. The sheet builder refuses a
+card that only points the owner to a list item instead of carrying that decision's options.
 
 **The first answer the advisor reads counts.** The first answer the advisor reads to a batch-1
 question, in the chat or on the index, is the answer, and it counts at once. A batch-1 answer on the
@@ -802,7 +807,7 @@ unblocked, says what it already did, and asks.
 **Batch 2 comes in the chat**, and only once the batch-1 rulings land, as soon as they do. The advisor **executes what batch
 1 unblocked alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split
 exists at all, bounded by the section below. **No batch-2 item concerns one specific PR.** An item
-about one PR goes on that PR's sheet, or into batch 1 when it blocks work.
+about one PR goes on that PR's sheet as a `collectorItems` card (see batch 1 above), or into batch 1 when it blocks work.
 
 **Batch 3 is the PR sheets, and they are built last.** Build them only after the batch-1 and batch-2
 rulings have been carried out. **A ruling routinely sends a vetted pull request back**, so a sheet
@@ -882,6 +887,10 @@ one they will not in practice review. Each decided-for-you entry on a PR sheet i
 the finding, craft with its ground, and the PR's sheet and its decided-for-you list as the record.
 **It is a recap, not a batch** — nothing in it waits on a
 word, and an item that needs one is not delivered here in place of the filter and the spine.
+
+**A bare line is refused shape.** A recap, morning or reminder line that names a decision carries that decision's
+one-line context, never only its number and the recommended letter. "1435: I recommend c" alone is refused shape.
+A reader who sees only that line must be able to tell what the decision is about.
 
 **State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
 failed." The same holds for batch 3 and an empty recap: no PR has a sheet waiting, and nothing
