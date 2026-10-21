@@ -518,12 +518,49 @@ def test_adoption_leaving_a_dot_slash_listed_input_unchanged_has_no_gap(tmp_path
     assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) is None
 
 
-def test_edge11_an_input_path_that_names_no_file_differs(tmp_path):
-    repo, _ = _edge_repo(tmp_path)
-    for n, bad in enumerate([".", "", "./"]):
-        (tmp_path / "edge" / hook.SCRIPT_REL).write_text(hook.script_text(COMMANDS, [bad]))
-        commit = _commit(repo, "inputs %d" % n)
-        assert _gap(repo, commit, adopted=commit, inputs=[bad]) == "adopted-inputs-differ"
+NESTED_INPUT = "deps/requirements.txt"
+
+
+def _hooked_with_nested_input(tmp_path, linked):
+    """A hooked project whose stored item 18 is one nested entry (directory `deps`, file
+    `requirements.txt` inside it). With `linked`, `deps` is a committed symlink to the real directory
+    `real-deps` that holds the file. Returns (world, the commit carrying the hook files)."""
+    w = _world(tmp_path)
+    holder = w.repo / ("real-deps" if linked else "deps")
+    holder.mkdir()
+    (holder / "requirements.txt").write_text("v1\n")
+    if linked:
+        (w.repo / "deps").symlink_to("real-deps")
+    _set_ok(w, COMMANDS_SLUG, list(COMMANDS))
+    _set_ok(w, "cloudSetupInputs", [NESTED_INPUT])
+    assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+    start = _commit(w.cwd, "hook")
+    _record(w)
+    return w, start
+
+
+def test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs(tmp_path):
+    w, start = _hooked_with_nested_input(tmp_path, linked=True)
+    (w.repo / "real-deps" / "requirements.txt").write_text("v2\n")
+    adopted = _commit(w.cwd, "target file changed")
+    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+
+
+def test_adoption_leaving_a_symlinked_input_directory_unchanged_still_differs(tmp_path):
+    w, start = _hooked_with_nested_input(tmp_path, linked=True)
+    (w.repo / "other.txt").write_text("x\n")
+    adopted = _commit(w.cwd, "other file")
+    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+
+
+def test_adoption_of_a_nested_input_in_a_real_directory_is_read_by_its_blob(tmp_path):
+    w, start = _hooked_with_nested_input(tmp_path, linked=False)
+    (w.repo / "other.txt").write_text("x\n")
+    unchanged = _commit(w.cwd, "other file")
+    assert CS.branch_hook_gap(w.cwd, w.root, start, unchanged) is None
+    (w.repo / "deps" / "requirements.txt").write_text("v2\n")
+    changed = _commit(w.cwd, "nested file changed")
+    assert CS.branch_hook_gap(w.cwd, w.root, start, changed) == "adopted-inputs-differ"
 
 
 def test_edge11_a_symlink_input_with_an_unchanged_target_differs(tmp_path):

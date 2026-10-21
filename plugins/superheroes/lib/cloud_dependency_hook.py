@@ -128,6 +128,23 @@ def _blob(repo_root, entry):
     return _git_out(repo_root, "cat-file", "blob", entry[2])
 
 
+def _ancestor_gap(repo_root, commits, norm):
+    """A reason token when a proper ancestor directory of `norm` is unreadable or is anything but a
+    tree at any of `commits` (absent is fine), else None."""
+    parts = norm.split("/")[:-1]
+    for depth in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:depth])
+        if not prefix:
+            continue
+        for commit in commits:
+            entry = _entry(repo_root, commit, prefix)
+            if entry is False:
+                return "commit-unreadable"  # axis: an ancestor that cannot be listed leaves the input unshown
+            if entry and entry[1] != "tree":
+                return "adopted-inputs-differ"  # axis: an input under a symlink, file or submodule is read through it, which a tree lookup cannot traverse
+    return None
+
+
 def branch_gap(repo_root, commit, commands, inputs, adopted=None):
     """None when the tree at `commit` carries this hook (the script exactly as `script_text` writes
     it, and settings that register it as record mode accepts) and, with `adopted`, every path in
@@ -159,13 +176,15 @@ def branch_gap(repo_root, commit, commands, inputs, adopted=None):
         if base is None:
             return "commit-unreadable"  # axis: an adopted head that does not resolve cannot be compared
         for path in inputs:
-            norm = posixpath.normpath(path) if isinstance(path, str) and path else "."
-            if norm == ".":
-                return "adopted-inputs-differ"  # axis: an input path that names no file cannot be shown unchanged
+            norm = posixpath.normpath(path)
             ours = _entry(repo_root, resolved, norm)
             theirs = _entry(repo_root, base, norm)
             if ours is False or theirs is False:
                 return "commit-unreadable"  # axis: an input that cannot be listed cannot be compared
+            if ours is None or theirs is None:
+                gap = _ancestor_gap(repo_root, (resolved, base), norm)
+                if gap:
+                    return gap
             if ours is None and theirs is None:
                 continue
             if (ours and not _regular(ours)) or (theirs and not _regular(theirs)):

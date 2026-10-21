@@ -7,7 +7,7 @@ detector again (green), and the file's sha256 compared before and after. Test fi
 `git diff --stat` cannot show a restore; the sha256 pair and the quoted restored lines are the receipt.
 Raw captures drop only pytest's `UV_NATIVE_TLS` deprecation warning line.
 
-Declared guarded-element set: G1-G15 (one entry each below; no equivalence classes, none unproven).
+Declared guarded-element set: G1-G16 (one entry each below; no equivalence classes, none unproven).
 
 Disclosure: G4's, G5's and G6's detectors are the edge tests; the parity census
 (`test_the_registration_rule_agrees_with_the_record_mode_snippet`) is a second detector for the same
@@ -944,6 +944,55 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_symlink_breakit_2021
 ```
 ..                                                                       [100%]
 2 passed, 66 deselected in 1.95s
+```
+
+- **verdict:** RED->GREEN
+
+## G16 — branch_gap ancestor-directory fail-closed leg
+
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:143` (the refusal inside `_ancestor_gap`)
+- **axis:** a listed nested input whose ancestor directory is a symlink, file or submodule at either commit fails closed, because `git ls-tree` cannot traverse the link and reads the input as absent while the hook reads it through the link
+- **detector:** `test_cloud_branch_hook_2021.py::test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs` (selected with `-k "test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs"`)
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-            if entry and entry[1] != "tree":
++            if False:
+```
+
+- **raw red (rc 1):** the pytest `+  where` detail lines under the assertion are omitted in this record only
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs ___
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-50/test_adoption_changing_a_file_0')
+
+    def test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs(tmp_path):
+        w, start = _hooked_with_nested_input(tmp_path, linked=True)
+        (w.repo / "real-deps" / "requirements.txt").write_text("v2\n")
+        adopted = _commit(w.cwd, "target file changed")
+>       assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+E       AssertionError: assert None == 'adopted-inputs-differ'
+
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:546: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs
+1 failed, 69 deselected in 1.73s
+```
+
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: the restored line quoted back below; sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` while neutralized `c696fbc32d7338bbc5dd68da0240e3ace6563ff995f0686e7ce291effda9ffe4`, after the restore `1f0b4f38fb595f0db3f75825680f4d6617d35986383fbb6efef3d053b1e20021` (no sha was taken before the neutralization, so there is no before/after pair for this element):
+
+```
+            if entry and entry[1] != "tree":
+```
+
+- **raw green (rc 0):**
+
+```
+.                                                                        [100%]
+1 passed, 69 deselected in 4.49s
 ```
 
 - **verdict:** RED->GREEN
