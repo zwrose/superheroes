@@ -349,6 +349,44 @@ def test_E4_a_fallback_with_no_start_date_is_never_fixed_by_the_later_day_leg(re
     assert LR._fixed(dated, _now(ready=True, checked="2026-10-12")) is True
 
 
+PIN_WORDS = ("The plugin pin on the branch this build starts from doesn't name the plugin I run, "
+             "or its pin hook is broken.")
+PIN_FIX = ("To fix it, run cloud_plugin_pin.py write on this machine (it pins the plugin I run), "
+           "commit and push the files it names on the branch the build starts from, then launch "
+           "again.")
+
+
+def test_the_plugin_pin_reason_renders_its_words_its_wasnt_and_its_fix():
+    call = _call(reason="plugin-pin")
+    listed = LR.render_report([_lane(1, call), _lane(2, _call("cloud"))])
+    assert "- #1 Build 1. " + PIN_WORDS in listed.splitlines()
+    assert listed.endswith(PIN_FIX)
+    summary = LR.render_report([_lane(1, call), _lane(2, call)])
+    assert summary == (
+        "Launched 2 builds, all on your machine. The cloud wasn't ready: the plugin pin on the "
+        "branch it starts from doesn't name my plugin.\n" + PIN_FIX)
+
+
+def test_after_a_failed_check_the_plugin_pin_fix_in_the_report_asks_for_the_check_again():
+    call = dict(_call(reason="plugin-pin"), failedCheck=["pin"])
+    assert LR.render_report([_lane(1, call)]).endswith(PIN_FIX + ' Then say "check again".')
+    assert LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]).endswith(
+        PIN_FIX + ' Then say "check again".')
+
+
+def test_a_plugin_pin_fallback_clears_when_readiness_reads_the_pin_current_again():
+    candidate = {"reason": "plugin-pin", "by": "setting", "cloudVersion": None,
+                 "advisorVersion": None, "reported": None, "failedCheck": None, "observedOn": None}
+    stands = _now(ready=False, reason="plugin-pin")
+    assert stands["conditions"]["pluginPin"] is False
+    assert LR._fixed(candidate, stands) is False
+    # axis: a plugin-pin fallback clears from the pluginPin condition alone, with no later check
+    fixed = dict(stands, conditions=dict(stands["conditions"], pluginPin=True))
+    assert LR._fixed(candidate, fixed) is True
+    other = dict(stands, conditions=dict(stands["conditions"], pluginPin=False, version=True))
+    assert LR._fixed(candidate, other) is False
+
+
 def test_a_report_renders_the_need_a_routing_result_carries():
     phone = _call(reason="needs", need=PHONE)
     canon = _call(reason="needs", need="this project's Canon and specs")

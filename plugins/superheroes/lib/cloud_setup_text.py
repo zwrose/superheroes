@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 import cloud_dependency_hook
 import cloud_pass
+import cloud_plugin_pin
 import architect_config
 import cloud_setup
 import config_dir
@@ -44,12 +45,18 @@ STAMP_FILE = "cloud-setup-stamp"
 SETUP_COMMANDS_STAMP_KEY = "setup-commands"
 SETUP_INPUTS_STAMP_KEY = "setup-inputs"
 SETUP_HOOK_STAMP_KEY = "setup-dependency-hook"
+SETUP_STEPS_STAMP_KEY = "setup-steps"
+SETUP_INVENTORY_STAMP_KEY = "setup-plugin-inventory"
+# What the setup steps entry holds in place of the plugin source, commit and subdirectory, so it
+# depends on no discovery.
+STEPS_SOURCE, STEPS_COMMIT, STEPS_SUBDIR = "SOURCE", "PINNED", "SUBDIR"
 SETUP_INPUT_STAMP_PREFIX = "setup-input/"
 SETUP_INPUT_MISSING_STAMP_PREFIX = "setup-input-missing/"
 REQUIREMENTS_PATTERN = "requirements*.txt"
 TOOL_STEPS_MARKER = "# The project's own tool steps, if any, go below this line."
 # The cloud platform runs nothing before a session starts except this cached script, so a setup
-# made at one plugin version stays at that version until new setup text is pasted.
+# made at one plugin version stays at that version until new setup text is pasted; a project that
+# commits the plugin pin hook gets each release from the hook, per project.
 PICKS_UP_VERSION_BY_ITSELF = False
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -134,6 +141,103 @@ def _plugin_version():
     if not version:
         raise _Refused("plugin-version-unreadable", "The plugin's version file is missing or empty.")
     return version
+
+
+def _pin_state(cwd):
+    """The plugin pin hook's state in the working tree: absent, valid or broken. With no repository
+    no hook can be committed, so that is absent."""
+    try:
+        return cloud_plugin_pin.in_tree(store_core.repo_root(cwd))
+    except store_core.RepoRootUnavailable:
+        return {"state": "absent", "reason": None, "pin": None}
+
+
+def _frontmatter(data):
+    """The block from the first `---` line through the closing `---` line, or nothing."""
+    lines = data.split(b"\n")
+    if not lines or lines[0].rstrip(b"\r") != b"---":
+        return b""
+    for index, line in enumerate(lines[1:], 1):
+        if line.rstrip(b"\r") == b"---":
+            return b"\n".join(lines[:index + 1]) + b"\n"
+    return b""
+
+
+def _inventory_file(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        raise _Refused("plugin-inventory-unreadable", "A part of the plugin that a cloud session "
+                       "loads at its start cannot be read.")
+
+
+def _inventory_names(directory, suffix=None):
+    try:
+        names = sorted(os.listdir(directory))
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        raise _Refused("plugin-inventory-unreadable", "A part of the plugin that a cloud session "
+                       "loads at its start cannot be read.")
+    return [n for n in names if suffix is None or n.endswith(suffix)]
+
+
+def _plugin_inventory():
+    """The plugin parts a cloud session loads at its start, before the pin hook can swap the plugin:
+    each skill's frontmatter, each agent file and the hooks file. The plugin manifest is left out,
+    because its version moves every release."""
+    root = _plugin_root()
+    out = []
+    for name in _inventory_names(os.path.join(root, "skills")) or []:
+        path = os.path.join(root, "skills", name, "SKILL.md")
+        if os.path.isfile(path):
+            out += [b"skill " + name.encode("utf-8") + b"\n", _frontmatter(_inventory_file(path))]
+    agents = _inventory_names(os.path.join(root, "agents"), ".md")
+    if agents is None:
+        out.append(b"agents missing\n")
+    for name in agents or []:
+        out += [b"agent " + name[:-3].encode("utf-8") + b"\n",
+                _inventory_file(os.path.join(root, "agents", name))]
+    hooks = os.path.join(root, "hooks", "hooks.json")
+    out.append(b"hooks\n")
+    out.append(_inventory_file(hooks) if os.path.isfile(hooks) else b"missing\n")
+    for rel, data in _hook_modules(os.path.join(root, "hooks"), hooks):
+        out += [b"module " + rel.encode("utf-8") + b"\n", data]
+    return b"".join(out)
+
+
+_MODULE_IMPORT = re.compile(r"""(?:\bfrom\s*|\bimport\s*\(?\s*|\bimport\s+)['"](\.{1,2}/[^'"]+)['"]""")
+
+
+def _hook_modules(hooks_dir, hooks_path):
+    """(path relative to the hooks directory, bytes) for each module the hooks file registers and
+    each local module those import, in path order. A loaded module is not reloaded when the pin
+    hook swaps the plugin, so a change to one must move the stamp."""
+    if not os.path.isfile(hooks_path):
+        return []
+    try:
+        declared = json.loads(_inventory_file(hooks_path)).get("modules") or []
+    except (ValueError, AttributeError):
+        return []
+    seen = {}
+    pending = [os.path.normpath(m) for m in declared if isinstance(m, str)]
+    while pending:
+        rel = pending.pop()
+        if rel in seen:
+            continue
+        path = os.path.join(hooks_dir, rel)
+        if not os.path.isfile(path):
+            for ext in (".ts", ".js", "/index.ts"):
+                if os.path.isfile(path + ext):
+                    path, rel = path + ext, os.path.normpath(rel + ext)
+                    break
+        data = _inventory_file(path)
+        seen[rel] = data
+        base = os.path.dirname(rel)
+        for spec in _MODULE_IMPORT.findall(data.decode("utf-8", "replace")):
+            pending.append(os.path.normpath(os.path.join(base, spec)))
+    return sorted(seen.items())
 
 
 def _read_json(path):
@@ -486,25 +590,50 @@ def _hook_view(inputs):
     return view
 
 
-def _view_for(cwd, files, commands, inputs, hook_on):
+def _pin_view(cwd):
+    """The two stamp entries a valid plugin pin hook adds, read in one place for both callers."""
+    steps = _steps(STEPS_SOURCE, STEPS_COMMIT, STEPS_SUBDIR, SOURCE_DIR,
+                   cloud_pass.CLOUD_PLUGIN_DIR, _clone_dir(cwd))
+    return {SETUP_STEPS_STAMP_KEY: ("\n".join(steps) + "\n").encode("utf-8"),
+            SETUP_INVENTORY_STAMP_KEY: _plugin_inventory()}
+
+
+def _view_for(cwd, files, commands, inputs, hook_on, pin_on=False):
     """The stamp's view of `files`, built for both callers (`stamped_files` and `_compose`): the
     files the setup depends on join it exactly when commands are listed, item 18 is stored and the
     dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
-    files needs no new paste)."""
+    files needs no new paste). With the plugin pin hook valid, it also holds what a pin commit
+    cannot move: the setup text's fixed steps and the plugin parts a session loads at its start."""
     if commands and hook_on:
-        return _stamp_view(files, commands, _hook_view(inputs))
-    # axis: the input files join the stamp only with commands, stored inputs and no hook
-    return _stamp_view(files, commands, _inputs_view_for(cwd, commands, inputs))
+        view = _stamp_view(files, commands, _hook_view(inputs))
+    else:
+        # axis: the input files join the stamp only with commands, stored inputs and no hook
+        view = _stamp_view(files, commands, _inputs_view_for(cwd, commands, inputs))
+    # axis: only a valid pin hook adds these two entries, so a project without one keeps its stamp
+    if pin_on:
+        view.update(_pin_view(cwd))
+    return view
+
+
+def _pin_broken(state):
+    return _Refused("plugin-pin-broken", "The plugin pin hook in this project is broken (%s). Run "
+                    "cloud_plugin_pin.py write to rewrite it, or cloud_plugin_pin.py remove to take "
+                    "it out." % state["reason"])
 
 
 def stamped_files(cwd, root=None):
     """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
     switching cloud builds on or off never changes the stamp, and the project's setup commands
-    when it lists any, with the files they depend on unless the dependency hook is on."""
+    when it lists any, with the files they depend on unless the dependency hook is on. With the
+    plugin pin hook valid it also covers the setup steps and the startup-loaded plugin parts; with
+    it broken it raises `_Refused`."""
     commands = _setup_commands(cwd, root)
+    state = _pin_state(cwd)
+    if state["state"] == "broken":
+        raise _pin_broken(state)
     return _view_for(cwd, calibration_files(cwd, root), commands,
                      _stored_setup_inputs(cwd, root, commands),
-                     _dependency_hook_on(cwd, root, commands))
+                     _dependency_hook_on(cwd, root, commands), state["state"] == "valid")
 
 
 def _project_name(cwd):
@@ -684,14 +813,12 @@ def _commands_block(commands, clone, stamp=None, count=0, expected=(), record=No
     ]
 
 
-def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
-            commands, cleared=False, expected=(), record=None):
+def _steps(source, commit, subdir, source_dir, plugin_dir, clone):
+    """The setup text's fixed install and fetch steps: the lines from the log path through the first
+    `wait`. The stamp's setup-steps entry is these lines with placeholders for the plugin's source,
+    commit and subdirectory."""
     parent = os.path.dirname(plugin_dir.rstrip("/"))
-    out = [
-        "#!/bin/bash",
-        "# " + head,
-        "# Setup text for a cloud environment: paste it over the whole setup-script field.",
-        "# It holds no reviewer pass and no other secret.",
+    return [
         'LOG="%s"' % _LOG,
         'SRC="%s"' % source_dir,
         'LINK="%s"' % plugin_dir,
@@ -742,6 +869,17 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
         ') >> "$LOG" 2>&1 &',
         "wait",
     ]
+
+
+def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
+            commands, cleared=False, expected=(), record=None):
+    out = [
+        "#!/bin/bash",
+        "# " + head,
+        "# Setup text for a cloud environment: paste it over the whole setup-script field.",
+        "# It holds no reviewer pass and no other secret.",
+        *_steps(source, commit, subdir, source_dir, plugin_dir, clone),
+    ]
     if files or stamp is not None:
         out += ["", "# Place the project's calibration.",
                 'DEST="%s"' % dest, 'rm -f "$DEST/%s"' % STAMP_FILE,
@@ -791,6 +929,10 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
             and isinstance(commit, str) and _COMMIT_RE.fullmatch(commit)
             and _plain_relative(subdir)):
         raise invalid
+    state = _pin_state(cwd)
+    if state["state"] == "broken":  # axis: a broken pin hook is refused, never composed as absent or valid
+        raise _pin_broken(state)
+    pin_on = state["state"] == "valid"
     placed, files = _calibration(cwd, root)
     stored = _stored_setup_commands(cwd, root)
     commands = stored or []
@@ -807,7 +949,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         bad.append(key)
     dest = mode_registry.project_store_dir(
         cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)
-    ) if files or commands or cleared else None
+    ) if files or commands or cleared or pin_on else None
     tags = {rel: _end_tag(i) for i, rel in enumerate(files, 1)}
     for rel, data in files.items():
         try:
@@ -823,14 +965,16 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "here-document).")
     stamp = date = None
     inputs_view = None
-    if files or commands:
+    if files or commands or pin_on:
         try:
             # axis: the inputs are read once; the stamp and the checks in the text share the bytes
             if not hook_on:
                 inputs_view = _inputs_view_for(cwd, commands, inputs)
-            stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _stamp_view(files, commands, _hook_view(inputs)
-                            if commands and hook_on else inputs_view))
+            view = _stamp_view(files, commands, _hook_view(inputs)
+                               if commands and hook_on else inputs_view)
+            if pin_on:
+                view.update(_pin_view(cwd))
+            stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(view)
         except _Refused:
             raise
         except Exception:
@@ -844,7 +988,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     else:
         part = "calibration in the repository"
     name = " ".join((project_name or _project_name(cwd)).splitlines())
-    head = "%s · plugin %s · %s" % (name, version, part)
+    head = "%s · plugin %s · %s" % (
+        name, version + " · follows the committed pin" if pin_on else version, part)
     expected = ()
     # axis: with the hook on the inputs are not in the stamp, so the text does not check them
     if commands and inputs and not hook_on:
@@ -881,7 +1026,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
             calibration["dependencyHook"] = True
     return {"action": "written", "reason": None, "text": text, "header": head,
             "pluginVersion": version, "pluginCommit": commit, "calibration": calibration,
-            "picksUpVersionByItself": PICKS_UP_VERSION_BY_ITSELF}
+            "pluginPin": pin_on, "picksUpVersionByItself": PICKS_UP_VERSION_BY_ITSELF}
 
 
 def compose(cwd, *, now=None, stamp_fn=None, plugin_source=None, plugin_commit=None,

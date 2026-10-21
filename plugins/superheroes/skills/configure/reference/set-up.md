@@ -570,6 +570,34 @@ the pushed repository. State the cost plainly: the hook runs at every cloud sess
 seconds when nothing changed; when an input changed, as long as the setup commands take, up to its
 600-second limit), and a failed command prints one line and never stops the session.
 
+**The plugin pin hook.** Offered when the owner wants a plugin release to reach cloud builds without
+a paste. It is a committed start-of-session script plus a committed pin file that names one plugin
+commit. In a cloud session it installs that commit when the installed plugin is at another one, in
+seconds when nothing changed; a failed install prints one line and keeps the installed plugin. Add
+it before step 2, because it changes the setup text:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/cloud_plugin_pin.py" write --cwd .
+```
+
+Commit and push the files it names before pasting the setup text, because a cloud session starts
+from the pushed repository. The setup text then stamps its own install and fetch steps and the
+plugin parts a cloud session loads at its start, so write and paste it once after adding the hook.
+
+*When a pin commit is enough, and when a paste is still needed.* After a release, run `write` again
+on the owner's machine and commit the new pin; the cloud picks the release up at its next session
+start. Paste new setup text only when the cloud check or readiness says the setup text is out of
+date. That happens when the release changed a tool or fetch step of the setup text, or the parts of
+the plugin a cloud session loads at its start (each skill's frontmatter, the agents, the plugin's
+hooks file), and when an out-of-repo calibration or the setup commands changed. A project without
+the hook pastes new setup text for every release.
+
+*Several repositories.* Hooks do not run in multi-repository cloud sessions or Projects threads, so
+there neither this hook nor the dependency hook runs. The session runs the plugin the setup text
+installed, and a cloud builder's intake still refuses a plugin version that does not match the
+launching machine's.
+
 2. **Open the sitting.** Run `setup-message` and give the owner its `message`, then its `setupText`
    in one fenced block for them to copy.
 

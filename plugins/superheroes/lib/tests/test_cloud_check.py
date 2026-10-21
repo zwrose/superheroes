@@ -9,6 +9,7 @@ cloud session, runs the reviewer tool or touches the network.
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -21,6 +22,7 @@ if _LIB not in sys.path:
 
 import cloud_check as CC  # noqa: E402
 import cloud_pass  # noqa: E402
+import cloud_plugin_pin  # noqa: E402
 import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import core_md  # noqa: E402
@@ -384,9 +386,9 @@ def test_report_line_round_trips_through_judge(tmp_path):
                                                          separators=(",", ":"))
     result = _judge(local, line)
     assert result["action"] == "passed" and result["failedParts"] == []
-    assert result["results"] == {"versionMatches": True, "calibrationMatches": True,
-                                 "reviewerAnswered": True, "environmentMatches": True,
-                                 "identityPresent": True}
+    assert result["results"] == {"versionMatches": True, "pinMatches": None,
+                                 "calibrationMatches": True, "reviewerAnswered": True,
+                                 "environmentMatches": True, "identityPresent": True}
     assert result["recordWritten"] is True and result["settingSwitchedOff"] is False
     state = cloud_setup.read(local.cwd, ACCOUNT, local.root)
     assert state["ready"] is True
@@ -414,8 +416,8 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
     # a session with no store and no calibration directory has nothing placed and nothing carried
     assert obj == {
         "schema": CC.REPORT_SCHEMA, "nonce": None, "environment": None,
-        "pluginVersion": None, "placedStamp": "none", "stampFile": None, "repoStamp": "none",
-        "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
+        "pluginVersion": None, "pluginCommit": None, "placedStamp": "none", "stampFile": None,
+        "repoStamp": "none", "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                          "passLapses": None, "reason": "confirm-raised"},
         "identity": {"author": False, "committer": False}}
     line = CC.report_line(obj)
@@ -1571,8 +1573,8 @@ def test_start_makes_a_fresh_nonce_when_none_is_given(tmp_path):
 def _expected_prompt(issue=None):
     fallback_object = (
         {"schema": CC.REPORT_SCHEMA, "nonce": NONCE, "environment": None,
-         "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
-         "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
+         "pluginVersion": None, "pluginCommit": None, "placedStamp": None, "stampFile": None,
+         "repoStamp": None, "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                           "passLapses": None, "reason": "plugin-missing"},
          "identity": None})
     fallback = CC.report_line(fallback_object)
@@ -1695,3 +1697,133 @@ def test_find_report_accepts_a_respaced_copy_of_the_same_report():
     respaced = CC.MARKER + " " + json.dumps(json.loads(line.split(" ", 1)[1]))
     # bites on: raw-body comparison treating a respaced copy as a conflicting report (None)
     assert CC._find_report(line + "\n" + respaced, "abcdefgh") is not None
+
+
+# --- the plugin pin hook: the report's commit and the judgment of a pin project ----------------
+
+PIN = {"source": SOURCE, "commit": COMMIT, "subdir": SUBDIR, "version": VERSION}
+OTHER_COMMIT = "b" * 40
+PIN_FILE = os.path.join(".claude", "superheroes-plugin-pin")
+
+
+def _git_env():
+    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.devnull,
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def _plugin_repo(path):
+    """A directory that is a git repository with one commit; returns that commit."""
+    path.mkdir()
+    (path / "version.txt").write_text("1.2.3\n")
+    for args in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]):
+        subprocess.run(["git", *args], cwd=str(path), env=_git_env(), capture_output=True, check=True)
+    done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(path), env=_git_env(),
+                          capture_output=True, text=True, check=True)
+    return done.stdout.strip()
+
+
+def _pin_pair(tmp_path, pin=PIN):
+    """A pair whose local project commits the pin hook; its stamp covers the pin's two entries."""
+    local = _build(tmp_path / "local")
+    assert cloud_plugin_pin.sync(local.cwd, pin)["action"] == "written"
+    local.stamp = cloud_setup.calibration_stamp(
+        cloud_setup_text.stamped_files(local.cwd, local.root))
+    _put(local, cloud_setup_text.STAMP_FILE, (local.stamp + "\n").encode())
+    cloud = _mirror(tmp_path / "cloud", local, mode_registry.GLOBAL, FACTS["patterns"])
+    # the cloud session works in a clone of the repository, which carries the committed hook files
+    assert cloud_plugin_pin.sync(cloud.cwd, pin)["action"] == "written"
+    return local, cloud
+
+
+def _break_local_pin(local):
+    with open(os.path.join(local.cwd, PIN_FILE), "w") as fh:
+        fh.write("not a pin\n")
+    assert cloud_plugin_pin.in_tree(local.cwd)["state"] == "broken"
+
+
+def test_report_carries_the_commit_of_the_plugin_it_runs(tmp_path, monkeypatch):
+    commit = _plugin_repo(tmp_path / "plugin-repo")
+    monkeypatch.setattr(cloud_setup_text, "_plugin_root", lambda: str(tmp_path / "plugin-repo"))
+    got = CC.report(env={}, cwd=str(tmp_path), root=str(tmp_path / "no-store"))
+    assert got["pluginCommit"] == commit and re.fullmatch(r"[0-9a-f]{40}", commit)
+    (tmp_path / "plain").mkdir()
+    monkeypatch.setattr(cloud_setup_text, "_plugin_root", lambda: str(tmp_path / "plain"))
+    assert CC.report(env={}, cwd=str(tmp_path), root=str(tmp_path / "no-store"))["pluginCommit"] is None
+
+
+def test_judge_passes_a_pin_project_when_the_commit_and_version_match(tmp_path):
+    local, cloud = _pin_pair(tmp_path)
+    result = _judge(local, _cloud_report(cloud, pluginCommit=COMMIT))
+    assert result["action"] == "passed" and result["failedParts"] == []
+    assert result["results"] == {"versionMatches": True, "pinMatches": True,
+                                 "calibrationMatches": True, "reviewerAnswered": True,
+                                 "environmentMatches": True, "identityPresent": True}
+    assert result["recordWritten"] is True
+    assert cloud_setup.read(local.cwd, ACCOUNT, local.root)["state"] == "ready"
+
+
+def test_judge_fails_the_pin_part_when_the_cloud_runs_another_commit(tmp_path):
+    local, cloud = _pin_pair(tmp_path)
+    result = _judge(local, _cloud_report(cloud, pluginCommit=OTHER_COMMIT))
+    # axis: the cloud's reported commit must equal the pin's commit
+    assert result["action"] == "failed" and result["failedParts"] == ["pin"]
+    assert result["results"]["pinMatches"] is False and result["recordWritten"] is False
+    assert _first(result) == (
+        "**The check failed on one part.** The cloud runs plugin %s at commit %s; this project's "
+        "pin names %s at %s, and mine is %s." % (
+            VERSION, OTHER_COMMIT[:12], VERSION, COMMIT[:12], VERSION))
+    assert "run cloud_plugin_pin.py write on this machine" in result["message"]
+
+
+def test_judge_fails_the_pin_part_when_the_commit_cannot_be_read(tmp_path):
+    local, cloud = _pin_pair(tmp_path)
+    for commit in (None, "not-a-commit", COMMIT.upper(), COMMIT[:12]):
+        result = _judge(local, _cloud_report(cloud, pluginCommit=commit))
+        assert result["failedParts"] == ["pin"] and result["results"]["pinMatches"] is False
+    no_field = _cloud_report(cloud)
+    del no_field["pluginCommit"]
+    assert _judge(local, no_field)["failedParts"] == ["pin"]
+
+
+def test_judge_fails_the_pin_part_when_the_pin_names_another_version(tmp_path):
+    local, cloud = _pin_pair(tmp_path, dict(PIN, version="0.0.1"))
+    result = _judge(local, _cloud_report(cloud, pluginCommit=COMMIT))
+    assert result["failedParts"] == ["pin"] and result["results"]["pinMatches"] is False
+    assert "this project's pin names 0.0.1 at %s, and mine is %s." % (COMMIT[:12], VERSION) in (
+        result["message"])
+
+
+def test_judge_fails_the_pin_part_for_a_broken_hook(tmp_path):
+    local, cloud = _pin_pair(tmp_path)
+    _break_local_pin(local)
+    result = _judge(local, _cloud_report(cloud, pluginCommit=COMMIT))
+    assert "pin" in result["failedParts"] and result["results"]["pinMatches"] is False
+    assert result["action"] == "failed" and result["recordWritten"] is False
+    assert "This project's plugin pin hook is broken (" in result["message"]
+
+
+def test_judge_a_pin_project_does_not_fail_on_the_reported_version_alone(tmp_path):
+    local, cloud = _pin_pair(tmp_path)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1", pluginCommit=COMMIT))
+    assert result["action"] == "passed" and result["results"]["versionMatches"] is False
+
+
+def test_judge_without_the_hook_judges_the_version_and_ignores_the_commit(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert cloud_plugin_pin.in_tree(local.cwd)["state"] == "absent"
+    for commit in (None, OTHER_COMMIT):
+        result = _judge(local, _cloud_report(cloud, pluginCommit=commit))
+        assert result["action"] == "passed" and result["results"]["pinMatches"] is None
+    bad = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1", pluginCommit=COMMIT))
+    assert bad["failedParts"] == ["version"] and bad["results"]["pinMatches"] is None
+    assert _first(bad) == ("**The check failed on one part.** The cloud's plugin is 0.0.1 and "
+                           "mine is %s." % VERSION)
+
+
+def test_the_fallback_line_still_judges_as_failed_for_a_pin_project_and_one_without(tmp_path):
+    for name, local in (("pin", _pin_pair(tmp_path / "pin")[0]), ("plain", _build(tmp_path / "plain"))):
+        result = _judge(local, CC._fallback_line(NONCE))
+        assert result["action"] == "failed", name
+        assert "reviewer" in result["failedParts"] and result["recordWritten"] is False
+        assert ("pin" in result["failedParts"]) is (name == "pin")

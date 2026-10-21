@@ -2,7 +2,7 @@
 """The readiness reader: whether the cloud can take a build right now.
 
 Stdlib plus plugin imports only. The setting and the setup record come only from
-`cloud_setup.read`; the calibration stamp comes only from the formula the cloud check uses. Seven
+`cloud_setup.read`; the calibration stamp comes only from the formula the cloud check uses. Eight
 conditions are judged in a fixed order; the first one that fails names the reason. Anything that
 cannot be read counts as not ready, never as ready, and `readiness` never raises."""
 import datetime
@@ -15,13 +15,15 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_check  # noqa: E402
+import cloud_plugin_pin  # noqa: E402
 import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
+import store_core  # noqa: E402
 
-CONDITION_ORDER = ("setup", "passPresent", "passLive", "version", "dependencyHook", "calibration",
-                   "platform")
+CONDITION_ORDER = ("setup", "passPresent", "passLive", "version", "pluginPin", "dependencyHook",
+                   "calibration", "platform")
 REASON_FOR = {"setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
-              "version": "version", "dependencyHook": "dependency-hook",
+              "version": "version", "pluginPin": "plugin-pin", "dependencyHook": "dependency-hook",
               "calibration": "calibration", "platform": "unreachable"}
 REPORTED_KEYS = ("pluginVersion", "noPass", "unreachable")
 # The one condition a failed check's part forces false; any other part, or a marker that cannot be
@@ -31,6 +33,8 @@ FAILED_PART_CONDITION = {
     "reviewer": "passPresent",
     # axis: the version part forces the version condition false — see bite-proof record wo_c_place_call
     "version": "version",
+    # axis: the pin part forces the plugin-pin condition false
+    "pin": "pluginPin",
     # axis: the calibration part forces the calibration condition false — see bite-proof record wo_c_place_call
     "calibration": "calibration",
 }
@@ -55,8 +59,12 @@ def valid_reported(reported):
     return True
 
 
+_NO_PIN = {"state": None, "reason": None, "version": None}
+
+
 def _result(conditions, *, setting=False, account=None, environment=None, cloud_version=None,
-            advisor_version=None, picks_up=None, checked_at=None, failed_check=None):
+            advisor_version=None, picks_up=None, checked_at=None, failed_check=None,
+            plugin_pin=None):
     # axis: the reason is the first false condition in the fixed order — see bite-proof record wo_a_place_call
     reason = next((REASON_FOR[name] for name in CONDITION_ORDER if not conditions[name]), None)
     return {
@@ -71,6 +79,7 @@ def _result(conditions, *, setting=False, account=None, environment=None, cloud_
         "picksUpVersion": picks_up,
         "checkedAt": checked_at,
         "failedCheck": failed_check,
+        "pluginPin": dict(_NO_PIN if plugin_pin is None else plugin_pin),
     }
 
 
@@ -111,6 +120,17 @@ def _failed_check(cwd, account, root):
         return []
 
 
+def _pin_at(cwd, commit):
+    """The plugin pin hook's reader result at the start commit. Anything that cannot be read is
+    broken; a project with no repository has no committed hook, so it is absent."""
+    try:
+        return cloud_plugin_pin.at_commit(store_core.repo_root(cwd), commit or "HEAD")
+    except store_core.RepoRootUnavailable:
+        return {"state": "absent", "reason": None, "pin": None}
+    except Exception:
+        return {"state": "broken", "reason": "commit-unreadable", "pin": None}
+
+
 def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen,
                *, persist_backfill=True, commit=None, adopted=None):
     if account is None:
@@ -144,14 +164,26 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
     conditions["passPresent"] = reported.get("noPass") is not True
     # axis: the pass is live only while its recorded lapse date is not before today — see bite-proof record wo_a_place_call
     conditions["passLive"] = cloud_check._lapses_ok(record.get("passLapses"), _today(today))
+    pin = _pin_at(cwd, commit)
+    pin_state = pin["state"]
+    pin_version = pin["pin"]["version"] if pin_state == "valid" else None
     # axis: a version the cloud reported stands in place of the record's — see bite-proof record wo_a_place_call
     if reported.get("pluginVersion") is not None:
+        # axis: a reported version stands alone; the pin never overrides it
         cloud_version = reported["pluginVersion"]
         conditions["version"] = advisor is not None and cloud_version == advisor
+        conditions["pluginPin"] = pin_state != "broken"
+    elif pin_state == "valid":
+        # axis: with a valid pin the cloud runs the pinned version once the session starts
+        cloud_version = pin_version
+        conditions["version"] = True
+        conditions["pluginPin"] = advisor is not None and pin_version == advisor
     else:
         cloud_version = record.get("pluginVersion")
         conditions["version"] = advisor is not None and (
             cloud_version == advisor or record.get("picksUpVersion") is True)
+        # axis: a broken pin hook is never read as absent
+        conditions["pluginPin"] = pin_state != "broken"
         # axis: a failed version check leaves the old record in place, so its version is not the cloud's current one — see bite-proof record wo_d_place_call
         if failed is not None and "version" in failed:
             cloud_version = None
@@ -174,7 +206,8 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
         conditions, setting=setting, account=seen["account"], environment=record.get("environment"),
         cloud_version=cloud_version, advisor_version=advisor,
         picks_up=record.get("picksUpVersion"), checked_at=record.get("checkedAt"),
-        failed_check=failed)
+        failed_check=failed,
+        plugin_pin={"state": pin_state, "reason": pin["reason"], "version": pin_version})
 
 
 def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=None,
@@ -184,11 +217,19 @@ def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=N
     Never raises; any unexpected failure reads as not ready.
 
     The result's keys are ready, reason, conditions, setting, account, environment, cloudVersion,
-    advisorVersion, picksUpVersion, checkedAt and failedCheck. `failedCheck` is None unless the
+    advisorVersion, picksUpVersion, checkedAt, failedCheck and pluginPin. `pluginPin` is the plugin
+    pin hook's state on the start commit (absent, valid or broken, with the reason a broken one
+    gives and the version a valid pin names; all None where the reader returned before reading it).
+    A version the cloud reported always decides the version condition and keeps the pin from
+    standing in for it. With nothing reported: an absent hook leaves the version condition as the
+    record has it and `pluginPin` true; a valid one makes `version` true and `cloudVersion` the pin's
+    version, and `pluginPin` true only when that version is the advisor's; a broken one leaves
+    `version` as the record has it and `pluginPin` false. `failedCheck` is None unless the
     setup is on record and the latest check for the account failed; then it is the failed parts
     the check left (an empty list when that note cannot be read). A failed check forces its parts'
-    conditions false: the reviewer part the pass, the version part the version, the calibration
-    part the calibration, and any other part, or a marker that cannot be read, the setup.
+    conditions false: the reviewer part the pass, the version part the version, the pin part the
+    plugin pin, the calibration part the calibration, and any other part, or a marker that cannot
+    be read, the setup.
 
     `commit` is the commit the cloud session starts on (the checkout's HEAD when None); with the
     dependency hook on, it must carry the hook. `adopted` is, for a launch that adopts a branch, the
