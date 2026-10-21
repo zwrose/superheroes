@@ -218,15 +218,16 @@ later of its start and its last activity, is `lane-stale`. Its entry carries `pl
 
 The watcher also reads the lane's progress comment from the issue comments it already reads, with no
 extra request. That comment's first line is `Builder progress (cloud build).` (`PROGRESS_HEADER` in
-`lib/cloud_builder.py`); the most recently edited one created after the lane started is the lane's.
-When there is one, it decides alone: the lane is `lane-stale` when the comment's last edit is older
-than its stated expected time plus `LIVENESS_QUIET_WINDOW_SECONDS`, or dated in the future; otherwise
-the lane is not stale, whatever its activity age. With no progress comment, or when the comments read
-could not be made, the activity rule above decides; a tick whose comments read made no request reuses
-the last progress snapshot it read. A stale entry decided by the comment carries
-`progressAgeSeconds`, `progressExpectedSeconds` and `phase` in place of `activityAgeSeconds`. The
-`cloudLanes` entry carries `phase`, `progressAgeSeconds` and `progressExpectedSeconds` when a progress
-comment was read.
+`lib/cloud_builder.py`); the most recently edited one created at or after the lane's start is the
+lane's. When there is one, it decides alone: the lane is `lane-stale` when the comment's last edit is
+older than its stated expected time plus `LIVENESS_QUIET_WINDOW_SECONDS`, or dated in the future;
+otherwise the lane is not stale, whatever its activity age. With no progress comment the activity
+rule above decides. A tick whose comments read was made but failed decides from what it did read, and
+from the activity rule when it read nothing; a tick that made no comments request at all (its time
+budget spent, or no watched lane to read) reuses the last progress snapshot it read. A stale entry
+decided by the comment carries `progressAgeSeconds`, `progressExpectedSeconds` and `phase` in place
+of `activityAgeSeconds`. The `cloudLanes` entry carries `phase`, `progressAgeSeconds` and
+`progressExpectedSeconds` when a progress comment was read.
 
 **The first check on a quiet cloud lane is a relayed status ping**: a message to the lane's session
 asking it to update its progress comment. Read the comment again. Start a helper session to read the
