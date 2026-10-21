@@ -2237,6 +2237,7 @@ POINTER_PLACES = [
     pytest.param(with_pointer_item("Nothing else.", recommendation={"text": "Accept", "reason": "Covered by list item 1435."}), "items accepting", "list item 1435", id="in-the-recommendation-reason"),
     pytest.param(lambda a: a.update(closesSpec={"spec": "decision item 1435", "receipt": "It shipped."}), "closesSpec", "decision item 1435", id="in-the-closure-spec-name"),
     pytest.param(lambda a: a.update(closesSpec={"spec": "the receipt spec", "receipt": "Answered as collector number 1435."}), "closesSpec", "collector number 1435", id="in-the-closure-receipt"),
+    pytest.param(lambda a: a["leftovers"]["F6"].update(ifLeft="Answered as list item 1435."), "leftovers F6", "list item 1435", id="in-a-leftovers-if-left"),
 ]
 
 
