@@ -36,6 +36,7 @@ import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import issue_contract  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import launch_place  # noqa: E402
@@ -1292,6 +1293,16 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         ):
             return _fail("premise-needs-invalid")
 
+    if "extraRepositories" in premise:
+        extras_val = premise["extraRepositories"]
+        # axis: extraRepositories is the advisor's copy of the issue's extra-repositories line — a non-empty list of valid owner/repo names, each once whatever its case, else the launch would grant the cloud session an attach it cannot use or one named twice — see bite-proof record wo_a_1948_add_repo_grant
+        if not isinstance(extras_val, list) or not extras_val:
+            return _fail("premise-extra-repositories-invalid")
+        if not all(issue_contract.valid_repository_name(r) for r in extras_val):
+            return _fail("premise-extra-repositories-invalid")
+        if len({r.lower() for r in extras_val}) != len(extras_val):
+            return _fail("premise-extra-repositories-invalid")
+
     if "reportedCloud" in premise:
         # axis: reportedCloud is a fact the cloud reported — only the known keys in their exact shapes — see bite-proof record wo_b_place_call
         if not cloud_ready.valid_reported(premise["reportedCloud"]):
@@ -1408,8 +1419,11 @@ def compose_launch(
     if cloud:
         # A cloud lane has no session id of its own to mint: the platform names the session.
         session_id = None
+        grant = {}
+        if isinstance(premise, dict) and "extraRepositories" in premise:
+            grant["allow_tools"] = (engine_adapter.CLOUD_ATTACH_TOOL,)
         built = engine_adapter.claude_cloud_builder_argv(
-            token, effort_result["effort"], prompt, cloud_environment, session_name,
+            token, effort_result["effort"], prompt, cloud_environment, session_name, **grant,
         )
     else:
         session_id = str(uuid.uuid4())
@@ -2486,6 +2500,9 @@ def _place_refusal(
     """
     if place not in (None, PLACE_LOCAL, PLACE_CLOUD):
         return _fail("launch-place-invalid", launchId=launch_id)
+    # axis: refused before any write — extra repositories are attached by a cloud session, so a launch not placed in the cloud cannot carry them — see bite-proof record wo_a_1948_add_repo_grant
+    if place != PLACE_CLOUD and isinstance(premise, dict) and "extraRepositories" in premise:
+        return _fail("launch-extra-repositories-not-cloud", launchId=launch_id)
     if place != PLACE_CLOUD:
         return None
     if slot is not None or generation is not None or boundary is not None:

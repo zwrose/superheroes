@@ -66,6 +66,74 @@ SLOT_STATUSES = frozenset({
     SLOT_STATUS_UNKNOWN,
 })
 
+# --- the extra-repositories line: ONE authoritative home (CONVENTIONS §11) ---
+
+EXTRA_REPOSITORIES_LINE = "Extra repositories:"
+
+REFUSAL_EXTRA_REPOSITORIES_LINE_REPEATED = "extra-repositories-line-repeated"
+REFUSAL_EXTRA_REPOSITORIES_EMPTY = "extra-repositories-empty"
+REFUSAL_EXTRA_REPOSITORIES_NAME_INVALID = "extra-repositories-name-invalid"
+REFUSAL_EXTRA_REPOSITORIES_NAME_REPEATED = "extra-repositories-name-repeated"
+EXTRA_REPOSITORIES_REFUSALS = frozenset({
+    REFUSAL_EXTRA_REPOSITORIES_LINE_REPEATED,
+    REFUSAL_EXTRA_REPOSITORIES_EMPTY,
+    REFUSAL_EXTRA_REPOSITORIES_NAME_INVALID,
+    REFUSAL_EXTRA_REPOSITORIES_NAME_REPEATED,
+})
+
+_REPOSITORY_OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+_REPOSITORY_REPO_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
+
+
+def valid_repository_name(value):
+    """True only for a string ``<owner>/<repo>`` in GitHub's name shape. Never raises."""
+    if not isinstance(value, str):
+        return False
+    owner, sep, repo = value.partition("/")
+    if not sep:
+        return False
+    if not _REPOSITORY_OWNER_RE.fullmatch(owner) or not _REPOSITORY_REPO_RE.fullmatch(repo):
+        return False
+    return repo not in (".", "..")
+
+
+def _extras_result(ok, reason, repositories):
+    return {"ok": ok, "reason": reason, "repositories": repositories}
+
+
+def extra_repositories(body):
+    """Read the extra-repositories line of an issue body. Always returns a result dict."""
+    lines = body.splitlines()
+    # axis: unterminated fence is not a refusal here — every later line is fence content, so a line
+    # after it is swallowed and reads as no line (fail-closed: no grant).
+    scan = md_fence.scan(lines)
+    live = []
+    for line, kind in zip(lines, scan.kinds):
+        # axis: a line inside a fenced block is an example, never live — md_fence.scan kinds gate it.
+        if kind in (md_fence.KIND_OPENER, md_fence.KIND_CLOSER, md_fence.KIND_CONTENT):
+            continue
+        # axis: indented code block (4+ columns) — never a live extra-repositories line.
+        if md_fence.indent_width(line) >= md_fence.INDENT_CODE_BLOCK_COLUMNS:
+            continue
+        if line.lstrip().startswith(EXTRA_REPOSITORIES_LINE):
+            live.append(line.lstrip()[len(EXTRA_REPOSITORIES_LINE):])
+    if not live:
+        return _extras_result(True, None, [])
+    # axis: the line may appear once — two live lines would leave the advisor to guess which list is meant.
+    if len(live) >= 2:
+        return _extras_result(False, REFUSAL_EXTRA_REPOSITORIES_LINE_REPEATED, [])
+    items = [item.strip() for item in live[0].split(",")]
+    # axis: a line with no value, or an empty item between commas, is refused — never read as a shorter list.
+    if not all(items):
+        return _extras_result(False, REFUSAL_EXTRA_REPOSITORIES_EMPTY, [])
+    # axis: every item must be a valid owner/repo name — the shape the launch grant later trusts.
+    if not all(valid_repository_name(item) for item in items):
+        return _extras_result(False, REFUSAL_EXTRA_REPOSITORIES_NAME_INVALID, [])
+    # axis: GitHub names are case-insensitive — the same name twice, in any case, is refused.
+    if len({item.lower() for item in items}) != len(items):
+        return _extras_result(False, REFUSAL_EXTRA_REPOSITORIES_NAME_REPEATED, [])
+    return _extras_result(True, None, items)
+
 
 def _normalize_header_line(line):
     """Strip markdown heading/emphasis decoration from a slot header line."""
@@ -297,10 +365,20 @@ def main(argv=None):
         help="read an issue body and report build-ready anchor shape",
     )
     c.add_argument("--body-file", required=True, help="path to the issue body text")
+    e = sub.add_parser(
+        "extras",
+        help="read an issue body and report its extra-repositories line",
+    )
+    e.add_argument("--body-file", required=True, help="path to the issue body text")
     args = p.parse_args(argv)
 
     body = _read_body_file(args.body_file)
-    if body is None:
+    if args.cmd == "extras":
+        if body is None:
+            result = _extras_result(False, REFUSAL_BODY_UNREADABLE, [])
+        else:
+            result = extra_repositories(body)
+    elif body is None:
         result = _fail_closed_unreadable_body()
     else:
         result = check_build_ready(body)

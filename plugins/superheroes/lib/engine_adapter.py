@@ -784,11 +784,14 @@ _CLOUD_SESSION_NAME_RE = re.compile("[%s]{1,%d}" % (CLOUD_SESSION_NAME_CHARS, CL
 CLOUD_PERMISSION_MODE = "auto"
 # A cloud session nobody watches has no one to answer a question dialog, so a builder starts without it.
 CLOUD_DISALLOWED_TOOLS = ("AskUserQuestion",)
+# Claude Code's permission-rule name for the cloud session's repository-attach tool.
+CLOUD_ATTACH_TOOL = "mcp__claude-code-remote__add_repo"
 
 
 def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_name,
                               permission_mode=CLOUD_PERMISSION_MODE,
-                              disallowed_tools=CLOUD_DISALLOWED_TOOLS):
+                              disallowed_tools=CLOUD_DISALLOWED_TOOLS,
+                              allow_tools=None):
     """Build the argv that starts a builder in a cloud session. Never raises.
 
     The command needs a pseudo-terminal and refuses `-p`, so the prompt rides as the argument of
@@ -796,6 +799,7 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
     `CLOUD_PERMISSION_MODE` (`permission_mode=None` passes no mode), it starts without the tools in
     `CLOUD_DISALLOWED_TOOLS` (`disallowed_tools=None` or empty passes no flag), and `-n` names the
     session. The disallowed-tools flag takes a variadic value, so it always sits before `-n`.
+    A non-empty `allow_tools` adds a `permissions.allow` list to the `--settings` JSON; None or empty adds nothing.
     """
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
@@ -816,9 +820,10 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
             "reason": REFUSAL_CLOUD_SESSION_NAME_INVALID,
             "detail": "1 to 64 characters from letters, digits, '.', '_' and '-'",
         }
-    settings = json.dumps(
-        {CLOUD_SETTINGS_SECTION: {CLOUD_SETTINGS_ENVIRONMENT_KEY: environment_id}}, separators=(",", ":"),
-    )
+    settings_doc = {CLOUD_SETTINGS_SECTION: {CLOUD_SETTINGS_ENVIRONMENT_KEY: environment_id}}
+    if allow_tools:
+        settings_doc["permissions"] = {"allow": list(allow_tools)}
+    settings = json.dumps(settings_doc, separators=(",", ":"))
     argv = [CLAUDE_EXECUTABLE, "--cloud", prompt, "--settings", settings, "--model", token]
     if isinstance(effort, str) and effort:
         argv += ["--effort", effort]
