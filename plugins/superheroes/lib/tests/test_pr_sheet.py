@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 
 import pr_sheet
 import review_record
+import sheet_prose
 from provenance_patterns import PROVENANCE_PATTERNS
 from test_sheet_schema import check_sheet_problems, walk_stop
 from test_sheet_schema import pr_sheet as schema_pr_sheet
@@ -2105,6 +2106,44 @@ def test_a_collector_item_is_built_as_an_option_card_with_the_spine_and_lettered
                                           "reason": rec["reason"], "optionId": rec["optionId"]}
         assert card["recommendation"]["text"].startswith(rec["optionId"])
         assert all(not o["label"].startswith(o["id"]) for o in item["options"]) and not rec["text"].startswith(rec["optionId"])
+
+
+def test_collector_cards_follow_the_input_order_not_the_number_order():
+    # Axis: collector cards come out in the order the input lists them, whatever the item numbers are.
+    # Bites on: collectorItems sorted by number (the fixture lists them ascending, so only a reversed input can tell).
+    records, advisor = bundle(COLLECTOR)
+    advisor["collectorItems"].reverse()
+    assert [i["number"] for i in advisor["collectorItems"]] == [1501, 1435]
+    cards = [c for c in build(records, advisor)["cards"] if c["id"].startswith("k-")]
+    assert [c["question"] for c in cards] == [i["title"] for i in advisor["collectorItems"]]
+    assert [c["callKind"] for c in cards] == [fill("collectorKind", number=i["number"]) for i in advisor["collectorItems"]]
+
+
+def test_the_prose_of_a_collector_card_shows_each_option_letter_once():
+    # Axis: in the chat prose an option line shows its letter once, and an ordinary card's option line keeps its shape.
+    # Bites on: the prose renderer prefixing a letter to a label that already opens with it ("a. a. ...").
+    sheet = collector_sheet()
+    assert sheet_prose.check_sheet(sheet) == []
+    lines = sheet_prose.render(sheet).splitlines()
+    assert not any(doubled in line for line in lines for doubled in ("a. a. ", "b. b. ", "c. c. "))
+    for item in load("input-collector.json")["collectorItems"]:
+        for letter, option in zip("abc", item["options"]):
+            assert "     - %s. %s: %s" % (letter, option["label"], option["consequence"]) in lines
+    big = sheet_prose.render(built(BIG)).splitlines()
+    assert "     - a. Ten minutes: Orders wait up to ten minutes for a payment to clear." in big
+
+
+@pytest.mark.parametrize("label, shown", [
+    pytest.param("b. x", "a. b. x", id="E1-another-letter-still-prefixed"),
+    pytest.param("a thing", "a. a thing", id="E3-letter-without-dot-space-still-prefixed"),
+    pytest.param("a. x", "a. x", id="own-letter-shown-once"),
+])
+def test_the_prose_prefixes_a_label_unless_it_already_opens_with_its_own_letter(label, shown):
+    # Axis: only a label opening with exactly its own position's letter and ". " is shown as given.
+    # Bites on: a looser test (any letter, or the letter alone) leaving a label without its own letter.
+    card = {"callKind": "k", "warning": False, "question": "q", "context": [], "images": [],
+            "options": [{"id": "a", "label": label, "consequence": "c"}]}
+    assert "     - %s: c" % shown in sheet_prose._render_card(1, card)
 
 
 def test_collector_cards_sit_after_the_items_and_before_the_closure_card():
