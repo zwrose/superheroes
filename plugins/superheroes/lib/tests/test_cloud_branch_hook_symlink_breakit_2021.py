@@ -21,4 +21,4 @@ def test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink(tmp_pat
 
     assert CS.branch_hook_gap(
         world.cwd, world.root, startup, adopted
-    ) == "adopted-inputs-differ"
+    ) == "adopted-input-not-a-file"

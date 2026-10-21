@@ -31,7 +31,10 @@ import mode_registry  # noqa: E402
 import project_config as PC  # noqa: E402
 import store_core  # noqa: E402
 
-_GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+# inherited GIT_* routing (GIT_INDEX_FILE, GIT_DIR, GIT_WORK_TREE...) would send a fixture's git call to
+# the caller's repository, so none of it is kept; the two pins are the only GIT_* the fixtures get
+_GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 ORIGIN = "https://github.com/acme/corner-shop.git"
 ACCOUNT = "acct-fixture-one"
 ENVIRONMENT = "env-fixture-one"
@@ -130,6 +133,41 @@ def _drop_hook_files(w):
     return _commit(w.cwd, "drop")
 
 
+# ---------------------------------------------------------------- fixture git isolation
+
+
+_ROUTING_PROBE = """
+import sys
+sys.path.insert(0, %(here)r)
+import test_cloud_branch_hook_2021 as T
+
+
+def test_fixture_commits_stay_in_the_fixture_repository(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    T._git(repo, "init", "-q")
+    (repo / "f.txt").write_text("x\\n")
+    T._commit(repo, "c")
+"""
+
+
+def test_inherited_git_index_routing_never_reaches_the_fixture_commands(tmp_path):
+    here = tmp_path / "probe"
+    here.mkdir()
+    (here / "test_probe.py").write_text(_ROUTING_PROBE % {"here": _HERE})
+    sentinel = tmp_path / "sentinel-index"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_INDEX_FILE=str(sentinel), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    ran = subprocess.run(
+        [sys.executable, "-m", "pytest", str(here / "test_probe.py"), "-q", "-p", "no:cacheprovider",
+         "--rootdir", str(here)],
+        capture_output=True, env=env, cwd=str(here))
+    assert ran.returncode == 0, ran.stdout.decode("utf-8") + ran.stderr.decode("utf-8")
+    assert b"1 passed" in ran.stdout
+    assert not sentinel.exists()
+
+
 # ---------------------------------------------------------------- DoD row 1
 
 
@@ -177,7 +215,10 @@ def test_dod1_routing_a_base_commit_without_the_hook_runs_locally_with_the_new_w
         "To fix it, commit and push the dependency hook files configure wrote (the settings file "
         "and the hook script) on the branch the build starts from; if the build adopts a branch "
         "that changed a dependency file, bring that change into the branch it starts from first. "
-        "Then launch again.")
+        "A listed setup file that is a link or sits under a linked folder cannot be compared, so "
+        "list the regular file it points to in configure's setup inputs instead. Then launch "
+        "again.")
+    assert "list the regular file it points to" in launch_place.fix_text(call)
     assert launch_place.REASONS["dependency-hook"]["short"] == (
         "Bring the dependency hook, and any adopted dependency change, onto the starting branch "
         "to fix it.")
@@ -488,7 +529,7 @@ def test_edge11_an_input_that_is_a_directory_at_one_head_differs(tmp_path):
     (tmp_path / "edge" / "package-lock.json").mkdir()
     (tmp_path / "edge" / "package-lock.json" / "f").write_text("x")
     swapped = _commit(repo, "swapped")
-    assert _gap(repo, commit, adopted=swapped) == "adopted-inputs-differ"
+    assert _gap(repo, commit, adopted=swapped) == "adopted-input-not-a-file"
 
 
 def _hooked_with_dot_slash_input(tmp_path):
@@ -543,14 +584,14 @@ def test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs(tmp
     w, start = _hooked_with_nested_input(tmp_path, linked=True)
     (w.repo / "real-deps" / "requirements.txt").write_text("v2\n")
     adopted = _commit(w.cwd, "target file changed")
-    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-input-not-a-file"
 
 
-def test_adoption_leaving_a_symlinked_input_directory_unchanged_still_differs(tmp_path):
+def test_adoption_leaving_a_symlinked_input_directory_unchanged_still_cannot_be_compared(tmp_path):
     w, start = _hooked_with_nested_input(tmp_path, linked=True)
     (w.repo / "other.txt").write_text("x\n")
     adopted = _commit(w.cwd, "other file")
-    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-input-not-a-file"
 
 
 def test_adoption_of_a_nested_input_in_a_real_directory_is_read_by_its_blob(tmp_path):
@@ -563,7 +604,7 @@ def test_adoption_of_a_nested_input_in_a_real_directory_is_read_by_its_blob(tmp_
     assert CS.branch_hook_gap(w.cwd, w.root, start, changed) == "adopted-inputs-differ"
 
 
-def test_edge11_a_symlink_input_with_an_unchanged_target_differs(tmp_path):
+def test_edge11_a_symlink_input_with_an_unchanged_target_is_not_a_file(tmp_path):
     repo, _ = _edge_repo(tmp_path)
     root = tmp_path / "edge"
     (root / "dependency-lock.json").write_text("v1\n")
@@ -572,7 +613,7 @@ def test_edge11_a_symlink_input_with_an_unchanged_target_differs(tmp_path):
     linked = _commit(repo, "input is a symlink")
     (root / "other.txt").write_text("x\n")
     adopted = _commit(repo, "other file")
-    assert _gap(repo, linked, adopted=adopted) == "adopted-inputs-differ"
+    assert _gap(repo, linked, adopted=adopted) == "adopted-input-not-a-file"
 
 
 def test_edge12_a_reader_that_raises_reads_as_not_ready(tmp_path, monkeypatch):
@@ -695,20 +736,26 @@ def test_the_still_line_rereads_the_dependency_hook_reason(tmp_path):
     same_inputs = _commit(w.cwd, "other file")
     _lock(w, "v2\n")
     changed = _commit(w.cwd, "lock changed")
-    # the checkout's HEAD carries the hook
+    _git(w.repo, "checkout", "-q", "--detach", same_inputs)
+    # the checkout's HEAD carries the hook and the lock file as `with_hook` has it
+    assert _git(w.repo, "rev-parse", "HEAD") == same_inputs
     assert CS.branch_hook_gap(w.cwd, w.root) is None
 
     def fixed(base, adopts):
         return launch_report._fixed(_hook_candidate(base, adopts), _NOW_READS_FIXED, w.cwd, w.root)
 
-    # (a) the base carries the hook, the adopted head changed a listed input: the fallback stands
-    # even though the checkout's HEAD carries the hook
+    # (a) the launch's base lacked the hook and the hook has since been committed on HEAD: fixed,
+    # with no adopted head and with an adopted head whose listed inputs match HEAD
+    assert fixed(bare, None) is True
+    assert fixed(bare, with_hook) is True
+    # (b) the adopted head changed a listed input relative to HEAD: the fallback stands even though
+    # HEAD carries the hook
+    assert fixed(bare, changed) is False
     assert fixed(with_hook, changed) is False
-    # (b) the same base with an adopted head whose inputs match reads fixed
-    assert fixed(with_hook, same_inputs) is True
-    # (c) a base without the hook is not fixed, adopted or not
-    assert fixed(bare, None) is False
-    assert fixed(bare, same_inputs) is False
+    # (c) HEAD without the hook is not fixed, adopted or not
+    _git(w.repo, "checkout", "-q", "--detach", bare)
+    assert fixed(with_hook, None) is False
+    assert fixed(with_hook, bare) is False
 
 
 def test_the_fallback_candidate_carries_the_reserved_records_base_and_adopted_commits():

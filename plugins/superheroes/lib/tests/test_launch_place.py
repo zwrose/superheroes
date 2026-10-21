@@ -258,7 +258,9 @@ def test_the_eight_reasons_are_the_boards_words():
             "fix": ("To fix it, commit and push the dependency hook files configure wrote (the "
                     "settings file and the hook script) on the branch the build starts from; if "
                     "the build adopts a branch that changed a dependency file, bring that change "
-                    "into the branch it starts from first. Then launch again."),
+                    "into the branch it starts from first. A listed setup file that is a link or "
+                    "sits under a linked folder cannot be compared, so list the regular file it "
+                    "points to in configure's setup inputs instead. Then launch again."),
             "short": ("Bring the dependency hook, and any adopted dependency change, onto the "
                       "starting branch to fix it."),
             "wasnt": ("the branch it starts from doesn't carry the dependency hook, or the "
@@ -292,6 +294,12 @@ CHECK_AGAIN_ONLY = 'Say "check again" and I\'ll run the check again.'
 def test_fix_text_is_the_tables_fix_when_no_check_failed():
     for code in LP.REASON_CODES:
         assert LP.fix_text(_call(reason=code)) == LP.REASONS[code]["fix"]
+
+
+def test_the_dependency_hook_fix_says_to_list_the_regular_file_for_a_linked_input():
+    fix = LP.fix_text(_call(reason="dependency-hook"))
+    assert "list the regular file it points to in configure's setup inputs" in fix
+    assert fix.endswith("Then launch again.")
 
 
 def test_E10_fix_text_without_a_reason_or_a_fix_is_none():

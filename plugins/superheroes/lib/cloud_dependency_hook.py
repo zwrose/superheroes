@@ -141,7 +141,7 @@ def _ancestor_gap(repo_root, commits, norm):
             if entry is False:
                 return "commit-unreadable"  # axis: an ancestor that cannot be listed leaves the input unshown
             if entry and entry[1] != "tree":
-                return "adopted-inputs-differ"  # axis: an input under a symlink, file or submodule is read through it, which a tree lookup cannot traverse
+                return "adopted-input-not-a-file"  # axis: an input under a symlink, file or submodule is read through it, which a tree lookup cannot traverse
     return None
 
 
@@ -149,7 +149,8 @@ def branch_gap(repo_root, commit, commands, inputs, adopted=None):
     """None when the tree at `commit` carries this hook (the script exactly as `script_text` writes
     it, and settings that register it as record mode accepts) and, with `adopted`, every path in
     `inputs` is identical at `adopted`; else a reason token: commit-unreadable, script-missing,
-    script-differs, settings-not-registered or adopted-inputs-differ. Never raises."""
+    script-differs, settings-not-registered, adopted-inputs-differ or adopted-input-not-a-file (an input
+    that is a link, a folder or a submodule, or sits under a linked folder). Never raises."""
     resolved = _resolve(repo_root, commit)
     if resolved is None:
         return "commit-unreadable"  # axis: a commit that does not resolve cannot be shown to carry the hook
@@ -188,7 +189,7 @@ def branch_gap(repo_root, commit, commands, inputs, adopted=None):
             if ours is None and theirs is None:
                 continue
             if (ours and not _regular(ours)) or (theirs and not _regular(theirs)):
-                return "adopted-inputs-differ"  # axis: a symlink, tree or submodule input is read through its target, so equal entries prove nothing
+                return "adopted-input-not-a-file"  # axis: a symlink, tree or submodule input is read through its target, so equal entries prove nothing
             if not (ours and theirs and ours[2] == theirs[2]):
                 return "adopted-inputs-differ"  # axis: an input changed by the adopted branch is not refreshed by the hook already started
     return None

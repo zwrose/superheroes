@@ -213,9 +213,9 @@ def _fixed(candidate, now, cwd=None, root=None):
         return True
     conditions = now.get("conditions") or {}
     if reason == cloud_ready.REASON_FOR["dependencyHook"]:
-        # axis: a dependency-hook fallback is fixed only when readiness reads the hook now and the check routing ran, on that launch's own base and adopted head, finds no gap — see bite-proof record i2021_branch_hook
+        # axis: a dependency-hook fallback is fixed only when readiness reads the hook now and the check routing runs, on the checkout's current HEAD against the launch's adopted head, finds no gap — see bite-proof record i2021_branch_hook
         return conditions.get("dependencyHook") is True and cloud_setup_text.branch_hook_gap(
-            cwd, root, candidate.get("baseCommit"), candidate.get("adoptsHead")) is None
+            cwd, root, None, candidate.get("adoptsHead")) is None
     if reason in _REREAD_REASONS:
         return conditions.get(_CONDITION_FOR[reason]) is True
     if reason == _VERSION_REASON and reported.get("pluginVersion") is None:

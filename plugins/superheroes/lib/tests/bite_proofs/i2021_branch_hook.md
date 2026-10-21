@@ -7,7 +7,8 @@ detector again (green), and the file's sha256 compared before and after. Test fi
 `git diff --stat` cannot show a restore; the sha256 pair and the quoted restored lines are the receipt.
 Raw captures drop only pytest's `UV_NATIVE_TLS` deprecation warning line.
 
-Declared guarded-element set: G1-G17 (one entry each below; no equivalence classes, none unproven).
+Declared guarded-element set: G1-G18 (one entry each below; no equivalence classes, none unproven),
+plus G19, added by the F5 fix batch for the fixture-isolation regression test (the order named no bite-proof for it).
 
 Disclosure: G4's, G5's and G6's detectors are the edge tests; the parity census
 (`test_the_registration_rule_agrees_with_the_record_mode_snippet`) is a second detector for the same
@@ -901,8 +902,8 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_adopti
 ## G15 — branch_gap non-regular input fail-closed leg
 
 - **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:171`
-- **axis:** a listed input that is a symlink, tree or submodule at either commit fails closed, because the hook reads it through its target and equal entries prove nothing
-- **detectors:** `test_cloud_branch_hook_2021.py::test_edge11_a_symlink_input_with_an_unchanged_target_differs` and `test_cloud_branch_hook_symlink_breakit_2021.py::test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink` (both selected in one run with `-k "test_edge11_a_symlink_input_with_an_unchanged_target_differs or test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink"`)
+- **axis:** a listed input that is a symlink, tree or submodule at either commit fails closed, because the hook reads it through its target and equal entries prove nothing; the return is `adopted-input-not-a-file` (F5; it was `adopted-inputs-differ`)
+- **detectors:** `test_cloud_branch_hook_2021.py::test_edge11_a_symlink_input_with_an_unchanged_target_is_not_a_file` (renamed in F5 from `..._target_differs`) and `test_cloud_branch_hook_symlink_breakit_2021.py::test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink` (both selected in one run with `-k "test_edge11_a_symlink_input_with_an_unchanged_target_is_not_a_file or test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink"`)
 - **neutralization (exact string, count(old)=1):**
 
 ```diff
@@ -910,7 +911,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_adopti
 +            if False:
 ```
 
-- **raw red (rc 1):** the traceback bodies are elided with `...` in this record only
+- **raw red (rc 1, taken before the F5 token rename, so the quoted asserts show the old `adopted-inputs-differ` token; not re-run):** the traceback bodies are elided with `...` in this record only
 
 ```
 FF                                                                       [100%]
@@ -951,7 +952,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_symlink_breakit_2021
 ## G16 — branch_gap ancestor-directory fail-closed leg
 
 - **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:143` (the refusal inside `_ancestor_gap`)
-- **axis:** a listed nested input whose ancestor directory is a symlink, file or submodule at either commit fails closed, because `git ls-tree` cannot traverse the link and reads the input as absent while the hook reads it through the link
+- **axis:** a listed nested input whose ancestor directory is a symlink, file or submodule at either commit fails closed, because `git ls-tree` cannot traverse the link and reads the input as absent while the hook reads it through the link; the return is `adopted-input-not-a-file` (F5; it was `adopted-inputs-differ`)
 - **detector:** `test_cloud_branch_hook_2021.py::test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs` (selected with `-k "test_adoption_changing_a_file_behind_a_symlinked_input_directory_differs"`)
 - **neutralization (exact string, count(old)=1):**
 
@@ -960,7 +961,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_symlink_breakit_2021
 +            if False:
 ```
 
-- **raw red (rc 1):** the pytest `+  where` detail lines under the assertion are omitted in this record only
+- **raw red (rc 1, taken before the F5 token rename, so the quoted assert shows the old `adopted-inputs-differ` token; not re-run):** the pytest `+  where` detail lines under the assertion are omitted in this record only
 
 ```
 F                                                                        [100%]
@@ -997,26 +998,26 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_adopti
 
 - **verdict:** RED->GREEN
 
-## G17 — the still line's dependency-hook rule checks the launch's own adopted head
+## G17 — the still line's dependency-hook rule compares the launch's adopted head with the checkout's HEAD
 
 - **guarded element:** `plugins/superheroes/lib/launch_report.py:217-218` (the `dependency-hook` branch in `_fixed`, its `candidate.get("adoptsHead")` argument)
-- **axis:** a dependency-hook fallback reads fixed only when readiness's `dependencyHook` reads true now and the check routing ran (`branch_hook_gap` on that launch's own `baseCommit` and `adoptsHead`) returns no gap, so a base that carries the hook does not clear a fallback whose adopted head changed a listed input
-- **detector:** `test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason`, case (a) (selected with `-k "test_the_still_line_rereads_the_dependency_hook_reason"`)
+- **axis:** a dependency-hook fallback reads fixed only when readiness's `dependencyHook` reads true now and the check routing ran (`branch_hook_gap` on the checkout's current `HEAD`, against the launch's own `adoptsHead`) returns no gap, so a `HEAD` that carries the hook does not clear a fallback whose adopted head changed a listed input
+- **detector:** `test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason`, case (b) (selected with `-k "test_the_still_line_rereads_the_dependency_hook_reason"`)
 - **neutralization (exact string, count(old)=1):**
 
 ```diff
--            cwd, root, candidate.get("baseCommit"), candidate.get("adoptsHead")) is None
-+            cwd, root, candidate.get("baseCommit"), None) is None
+-            cwd, root, None, candidate.get("adoptsHead")) is None
++            cwd, root, None, None) is None
 ```
 
-- **raw red (rc 1):** the pytest `+  where` detail lines under the assertion are omitted in this record only
+- **raw red (rc 1):** the new line is replaced by `None) is None` for the adopted head; case (a) passes and case (b) goes red (the pytest `UV_NATIVE_TLS` warning line is dropped)
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_the_still_line_rereads_the_dependency_hook_reason ____________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-56/test_the_still_line_rereads_th0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-61/test_the_still_line_rereads_th0')
 
     def test_the_still_line_rereads_the_dependency_hook_reason(tmp_path):
         assert "dependency-hook" in launch_report._REREAD_REASONS
@@ -1025,35 +1026,170 @@ tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-56/test_the_still_line
         same_inputs = _commit(w.cwd, "other file")
         _lock(w, "v2\n")
         changed = _commit(w.cwd, "lock changed")
-        # the checkout's HEAD carries the hook
+        _git(w.repo, "checkout", "-q", "--detach", same_inputs)
+        # the checkout's HEAD carries the hook and the lock file as `with_hook` has it
+        assert _git(w.repo, "rev-parse", "HEAD") == same_inputs
         assert CS.branch_hook_gap(w.cwd, w.root) is None
     
         def fixed(base, adopts):
             return launch_report._fixed(_hook_candidate(base, adopts), _NOW_READS_FIXED, w.cwd, w.root)
     
-        # (a) the base carries the hook, the adopted head changed a listed input: the fallback stands
-        # even though the checkout's HEAD carries the hook
->       assert fixed(with_hook, changed) is False
+        # (a) the launch's base lacked the hook and the hook has since been committed on HEAD: fixed,
+        # with no adopted head and with an adopted head whose listed inputs match HEAD
+        assert fixed(bare, None) is True
+        assert fixed(bare, with_hook) is True
+        # (b) the adopted head changed a listed input relative to HEAD: the fallback stands even though
+        # HEAD carries the hook
+>       assert fixed(bare, changed) is False
 E       AssertionError: assert True is False
+E        +  where True = <function test_the_still_line_rereads_the_dependency_hook_reason.<locals>.fixed at 0x7f0eb1824900>('aace2fe712a31a8a410a247990041f8254076bcb', 'fd9da2b18e1bf717a5e928ca1227350ebb25e916')
 
-/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:706: AssertionError
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:753: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason
-1 failed, 70 deselected in 5.49s
+1 failed, 71 deselected in 5.24s
 ```
 
-- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: the restored lines quoted back below:
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/launch_report.py` before the neutralization `06b46a4cff5c6f501eee2a30c9a545d85a5f913117df60b9775211570dea077a`, while neutralized `d63282cd03ebb4aa133b6a754a42c069696c4e2101f8e7bd33a1717577b5ebde`, after the restore `06b46a4cff5c6f501eee2a30c9a545d85a5f913117df60b9775211570dea077a` — before and after identical; the restored lines quoted back:
 
 ```
         return conditions.get("dependencyHook") is True and cloud_setup_text.branch_hook_gap(
-            cwd, root, candidate.get("baseCommit"), candidate.get("adoptsHead")) is None
+            cwd, root, None, candidate.get("adoptsHead")) is None
 ```
 
 - **raw green (rc 0):**
 
 ```
 .                                                                        [100%]
-1 passed, 70 deselected in 5.21s
+1 passed, 71 deselected in 8.03s
+```
+
+- **verdict:** RED->GREEN
+
+## G18 — the still line's dependency-hook rule checks the checkout's current HEAD, not the failed launch's baseCommit
+
+- **guarded element:** `plugins/superheroes/lib/launch_report.py:217-218` (the `dependency-hook` branch in `_fixed`, its `None` commit argument)
+- **axis:** after a launch fell back because its base lacked the hook, committing the hook on the checkout's `HEAD` clears the reminder, because the check runs on `HEAD` (commit `None`) and never on the launch's immutable `baseCommit`
+- **detector:** `test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason`, case (a) (selected with `-k "test_the_still_line_rereads_the_dependency_hook_reason"`)
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-            cwd, root, None, candidate.get("adoptsHead")) is None
++            cwd, root, candidate.get("baseCommit"), candidate.get("adoptsHead")) is None
+```
+
+- **raw red (rc 1):** the pytest `UV_NATIVE_TLS` warning line is dropped
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_the_still_line_rereads_the_dependency_hook_reason ____________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-63/test_the_still_line_rereads_th0')
+
+    def test_the_still_line_rereads_the_dependency_hook_reason(tmp_path):
+        assert "dependency-hook" in launch_report._REREAD_REASONS
+        w, bare, with_hook = _hooked(tmp_path)
+        (w.repo / "other.txt").write_text("x\n")
+        same_inputs = _commit(w.cwd, "other file")
+        _lock(w, "v2\n")
+        changed = _commit(w.cwd, "lock changed")
+        _git(w.repo, "checkout", "-q", "--detach", same_inputs)
+        # the checkout's HEAD carries the hook and the lock file as `with_hook` has it
+        assert _git(w.repo, "rev-parse", "HEAD") == same_inputs
+        assert CS.branch_hook_gap(w.cwd, w.root) is None
+    
+        def fixed(base, adopts):
+            return launch_report._fixed(_hook_candidate(base, adopts), _NOW_READS_FIXED, w.cwd, w.root)
+    
+        # (a) the launch's base lacked the hook and the hook has since been committed on HEAD: fixed,
+        # with no adopted head and with an adopted head whose listed inputs match HEAD
+>       assert fixed(bare, None) is True
+E       AssertionError: assert False is True
+E        +  where False = <function test_the_still_line_rereads_the_dependency_hook_reason.<locals>.fixed at 0x7f398a0ac720>('15bae00bb251f7db1cbb843759f92719e80f9349', None)
+
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:749: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_the_still_line_rereads_the_dependency_hook_reason
+1 failed, 71 deselected in 1.72s
+```
+
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/launch_report.py` before the neutralization `06b46a4cff5c6f501eee2a30c9a545d85a5f913117df60b9775211570dea077a`, while neutralized `0030c23f8ccd70b9f34dd3fc2de11a7b9c164ab339d72f6007db878e68f52030`, after the restore `06b46a4cff5c6f501eee2a30c9a545d85a5f913117df60b9775211570dea077a` — before and after identical; the restored lines quoted back:
+
+```
+        return conditions.get("dependencyHook") is True and cloud_setup_text.branch_hook_gap(
+            cwd, root, None, candidate.get("adoptsHead")) is None
+```
+
+- **raw green (rc 0):**
+
+```
+.                                                                        [100%]
+1 passed, 71 deselected in 2.31s
+```
+
+- **verdict:** RED->GREEN
+
+## G19 — the fixture Git environment drops every inherited GIT_* variable
+
+(Not named by the order; added because the order added a detector, the regression test for finding v1.)
+
+- **guarded element:** `plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:36-37` (the `_GIT_ENV` comprehension that filters out names starting with `GIT_`)
+- **axis:** inherited Git routing such as `GIT_INDEX_FILE`, `GIT_DIR` or `GIT_WORK_TREE` never reaches a fixture Git command, so a fixture cannot stage into or alter the caller's index or repository
+- **detector:** `test_cloud_branch_hook_2021.py::test_inherited_git_index_routing_never_reaches_the_fixture_commands` (selected with `-k "test_inherited_git_index_routing_never_reaches_the_fixture_commands"`); it runs a tiny pytest case in a subprocess with `GIT_INDEX_FILE` pointing at a sentinel path under `tmp_path`, and asserts the sentinel is never created
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-_GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
++_GIT_ENV = {**os.environ,
+```
+
+- **raw red (rc 1):** the pytest `UV_NATIVE_TLS` warning line is dropped
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_inherited_git_index_routing_never_reaches_the_fixture_commands ______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-65/test_inherited_git_index_routi0')
+
+    def test_inherited_git_index_routing_never_reaches_the_fixture_commands(tmp_path):
+        here = tmp_path / "probe"
+        here.mkdir()
+        (here / "test_probe.py").write_text(_ROUTING_PROBE % {"here": _HERE})
+        sentinel = tmp_path / "sentinel-index"
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_INDEX_FILE=str(sentinel), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   PYTHONDONTWRITEBYTECODE="1")
+        ran = subprocess.run(
+            [sys.executable, "-m", "pytest", str(here / "test_probe.py"), "-q", "-p", "no:cacheprovider",
+             "--rootdir", str(here)],
+            capture_output=True, env=env, cwd=str(here))
+        assert ran.returncode == 0, ran.stdout.decode("utf-8") + ran.stderr.decode("utf-8")
+        assert b"1 passed" in ran.stdout
+>       assert not sentinel.exists()
+E       AssertionError: assert not True
+E        +  where True = exists()
+E        +    where exists = PosixPath('/tmp/claude-0/pytest-of-root/pytest-65/test_inherited_git_index_routi0/sentinel-index').exists
+
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:168: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_inherited_git_index_routing_never_reaches_the_fixture_commands
+1 failed, 71 deselected in 1.18s
+```
+
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py` before the neutralization `368f8f196f19ab608b700513c923a25ff04517013f6ecefdaece8ffbdb9ad45f`, after the restore `368f8f196f19ab608b700513c923a25ff04517013f6ecefdaece8ffbdb9ad45f` — identical (no sha was taken while neutralized); the restored lines quoted back:
+
+```
+_GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+```
+
+- **raw green (rc 0):**
+
+```
+.                                                                        [100%]
+1 passed, 71 deselected in 1.23s
 ```
 
 - **verdict:** RED->GREEN
