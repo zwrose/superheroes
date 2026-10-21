@@ -41,12 +41,15 @@ REASON_SETUP_COMMAND_EMPTY = "setup-command-empty"
 REASON_SETUP_COMMAND_MULTI_LINE = "setup-command-multi-line"
 REASON_SETUP_COMMAND_SECRET_SHAPED = "setup-command-secret-shaped"
 REASON_SETUP_INPUT_UNSAFE_PATH = "setup-input-unsafe-path"
+REASON_SETUP_INPUT_SECRET_SHAPED = "setup-input-secret-shaped"
+REASON_DEPENDENCY_HOOK_UNWRITABLE = "dependency-hook-unwritable"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
 CLOUD_BUILDS_SLUG = "cloudBuilds"
 CI_WORKFLOW_SLUG = "ciWorkflow"
 CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
 CLOUD_SETUP_INPUTS_SLUG = "cloudSetupInputs"
+CLOUD_DEPENDENCY_HOOK_SLUG = "cloudDependencyHook"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -211,6 +214,14 @@ ITEMS = (
         "shape": "inputPathList",
         "plugin_default": None,
     },
+    {
+        "number": 19,
+        "slug": "cloudDependencyHook",
+        "name": "Cloud dependency hook",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "boolean",
+        "plugin_default": None,
+    },
 )
 
 _SLUG_INDEX = {item["slug"]: item for item in ITEMS}
@@ -324,6 +335,15 @@ def _validate_input_path_list(value):
     # axis: an entry that is not a plain repo-relative path is refused, since the setup stamp reads it
     if any(not cloud_setup_text._plain_relative(entry) for entry in value):
         return REASON_SETUP_INPUT_UNSAFE_PATH
+    return None
+
+
+def _validate_inputs_not_secret_shaped(inputs):
+    """REASON_SETUP_INPUT_SECRET_SHAPED when an input path is shaped like a secret, else None."""
+    import cloud_setup_text
+
+    if any(cloud_setup_text._scan(entry) is not None for entry in inputs):
+        return REASON_SETUP_INPUT_SECRET_SHAPED
     return None
 
 
@@ -787,46 +807,302 @@ def _set_risk_and_trust(cwd, value, root):
     return write_result
 
 
-def _fill_setup_inputs(cwd, root, write_result):
-    """Stores item 18 as the lockfiles at the repository root, after item 17 is stored. A root that
-    cannot be resolved (git failing), or that is not itself a git checkout, gets no fill and is
-    reported, never silent. The fill never turns a
-    stored item 17 into a refusal: a detected name item 18 would refuse is left out of the list,
-    and when the write or its read-back fails, item 17's result is returned with `inputsFillFailed`
-    carrying the reason (and no `inputsFilled`), leaving item 18 unset."""
+def _detected_inputs(repo_root):
+    """The lockfile names at `repo_root` that item 18 accepts."""
     import cloud_setup_text
+
+    item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
+    # axis: a detected name item 18 would refuse is never stored, so the list stays valid
+    return [name for name in cloud_setup_text.detect_inputs(repo_root)
+            if validate_item_value(item, [name]) is None]
+
+
+def _fill_setup_inputs(cwd, root, write_result, filled):
+    """Stores the detected `filled` list as item 18, after item 17 is stored. The fill never turns
+    a stored item 17 into a refusal: when the write or its read-back fails, item 17's result is
+    returned with `inputsFillFailed` carrying the reason (and no `inputsFilled`), leaving item 18
+    unset when the write failed. Returns (result, committed): `committed` is True once the write
+    went through, even when the read-back then failed."""
+    stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
+    if stored.get("action") not in ("written", "noop"):
+        return {**write_result, "inputsFillFailed": stored.get("reason")}, False
+    reread = get_item(cwd, CLOUD_SETUP_INPUTS_SLUG, root=root)
+    if reread.get("action") == "refused":
+        return {**write_result, "inputsFillFailed": reread.get("reason")}, True
+    if not _values_equal(reread.get("raw"), filled):
+        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}, True
+    return {**write_result, "inputsFilled": list(filled)}, True
+
+
+_DEPENDENCY_HOOK_SLUGS = (
+    CLOUD_SETUP_COMMANDS_SLUG, CLOUD_SETUP_INPUTS_SLUG, CLOUD_DEPENDENCY_HOOK_SLUG)
+
+
+def _string_list_or_empty(value):
+    return list(value) if isinstance(value, list) and all(isinstance(v, str) for v in value) else []
+
+
+def _hook_triple(mapping):
+    """(commands, inputs, enabled) as the stored items 17, 18 and 19 give them to the hook."""
+    return (_string_list_or_empty(mapping.get(CLOUD_SETUP_COMMANDS_SLUG)),
+            _string_list_or_empty(mapping.get(CLOUD_SETUP_INPUTS_SLUG)),
+            mapping.get(CLOUD_DEPENDENCY_HOOK_SLUG) is True)
+
+
+def _hook_desired(triple):
+    return triple[2] and bool(triple[0])
+
+
+def _hook_refusal(detail):
+    return {"action": "refused", "reason": REASON_DEPENDENCY_HOOK_UNWRITABLE, "detail": detail}
+
+
+def _plan_fill(repo_root):
+    """The item 18 fill for a set that would fill it: (filled, None), or (None, reason) when the
+    fill is skipped. A root that cannot be resolved (git failing), that is not itself a git
+    checkout, or that cannot be listed gets no fill and is reported, never silent."""
     import store_core
 
+    # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
+    if repo_root is None:
+        return None, "repo-root-unavailable"
     try:
-        repo_root = store_core.repo_root(cwd)
         # a checkout answers its real git directory (wherever the metadata lives); the greenfield
         # fallback answers the directory itself
         git_dir = store_core.get_worktree_gitdir(repo_root)
     except store_core.RepoRootUnavailable:
-        # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
-        return {**write_result, "inputsFillFailed": "repo-root-unavailable"}
+        return None, "repo-root-unavailable"
     if git_dir == os.path.realpath(repo_root):
         # axis: a configured directory that is not a git checkout gets no fill — the root fallback names the directory itself, and scanning it would store a list for the wrong tree
-        return {**write_result, "inputsFillFailed": "not-a-git-checkout"}
-    item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
-    # axis: a detected name item 18 would refuse is never stored, so the list stays valid
+        return None, "not-a-git-checkout"
     try:
-        detected = cloud_setup_text.detect_inputs(repo_root)
+        return _detected_inputs(repo_root), None
     except OSError as exc:
         # axis: a root that could not be listed is a failed scan, never "found none" — storing []
         # would freeze input tracking off for good
-        return {**write_result, "inputsFillFailed": "the repository root could not be read (%s)"
-                % (exc.strerror or type(exc).__name__)}
-    filled = [name for name in detected if validate_item_value(item, [name]) is None]
-    stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
-    if stored.get("action") not in ("written", "noop"):
-        return {**write_result, "inputsFillFailed": stored.get("reason")}
-    reread = get_item(cwd, CLOUD_SETUP_INPUTS_SLUG, root=root)
-    if reread.get("action") == "refused":
-        return {**write_result, "inputsFillFailed": reread.get("reason")}
-    if not _values_equal(reread.get("raw"), filled):
-        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}
-    return {**write_result, "inputsFilled": list(filled)}
+        return None, ("the repository root could not be read (%s)"
+                      % (exc.strerror or type(exc).__name__))
+
+
+def _plan_dependency_hook(cwd, slug, value, facts, root=None):
+    """Works out, before anything is written, the item 18 fill and the hook state this set leads
+    to, and brings the hook files to that state. Returns {"refusal": result} when it cannot, else
+    the plan: the stored `old` triple, the `new` triple (with the fill), the `filled` item 18 (or
+    None), the `fillFailed` reason when a fill was skipped (or None), the sync result
+    (`hookResult`, or None when none ran) and the `repoRoot`."""
+    import cloud_dependency_hook as hook
+    import store_core
+
+    mapping = _project_config_mapping(facts)
+    old = _hook_triple(mapping)
+    after = dict(mapping)
+    after[slug] = value
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except store_core.RepoRootUnavailable:
+        repo_root = None
+    filled = fill_failed = None
+    # axis: item 18 is filled only when it was never stored, so an edited list survives
+    if slug == CLOUD_SETUP_COMMANDS_SLUG and value and CLOUD_SETUP_INPUTS_SLUG not in mapping:
+        filled, fill_failed = _plan_fill(repo_root)
+        if filled is not None:
+            after[CLOUD_SETUP_INPUTS_SLUG] = filled
+    new = _hook_triple(after)
+    plan = {"old": old, "new": new, "filled": filled, "fillFailed": fill_failed,
+            "hookResult": None, "repoRoot": repo_root, "slug": slug,
+            "oldValue": mapping.get(slug), "newValue": value, "deferred": False}
+    if repo_root is None:
+        # axis: with no root a sync is impossible, so it refuses only when one is needed
+        if _hook_desired(new) or _hook_desired(old):
+            return {"refusal": _hook_refusal("repo-root-unavailable")}
+        return plan
+    script = os.path.join(repo_root, *hook.SCRIPT_REL.split("/"))
+    # axis: a project that never opted in has no script, so its settings file is never read
+    if _hook_desired(old) and not _hook_desired(new):
+        # axis: a set that removes the hook writes the config first and removes the files after it, so a kill between the two never leaves "on" stored with the files gone
+        plan["deferred"] = True
+        return plan
+    if _hook_desired(new) or _hook_desired(old) or os.path.lexists(script):
+        # axis: a hook about to be written never carries a command the setup text would refuse — a stored command with a credential in it is not committed
+        if _hook_desired(new):
+            reason = _validate_command_list(new[0])
+            if reason is None:
+                reason = _validate_inputs_not_secret_shaped(new[1])
+            if reason is not None:
+                return {"refusal": {"action": "refused", "reason": reason}}
+        result = hook.sync(repo_root, *new)
+        if result.get("action") == "refused":
+            # axis: a refused sync that already changed files puts them back to the stored state, by reconciling to the stored items — never from a snapshot
+            refusal = _hook_refusal(result.get("reason"))
+            if result.get("changed"):
+                # axis: another set may have stored items since `old` was read, so recovery reads them afresh
+                fresh = core_md.read(cwd, root)
+                if not fresh:
+                    refusal["dependencyHookResyncFailed"] = "stored-config-unreadable"
+                else:
+                    refusal.update(_reconcile_dependency_hook(
+                        repo_root, _hook_triple(_project_config_mapping(fresh))))
+            return {"refusal": refusal}
+        plan["hookResult"] = result
+    return plan
+
+
+def _reconcile_dependency_hook(repo_root, stored):
+    """Brings the hook files to the stored (commands, inputs, enabled) triple, the one way every
+    failure after a sync ends: a triple a hook-writing sync would accept is synced as stored; one it
+    would refuse (a secret-shaped command or input) gets the hook turned off, which removes the
+    files, so no stored credential reaches a script. Returns {"dependencyHookResynced": result} or
+    {"dependencyHookResyncFailed": reason}, and adds `dependencyHookRemovedInvalid` with the reason
+    when the stored triple was invalid."""
+    import cloud_dependency_hook as hook
+
+    target = stored
+    extra = {}
+    if _hook_desired(stored):
+        reason = _validate_command_list(stored[0])
+        if reason is None:
+            reason = _validate_inputs_not_secret_shaped(stored[1])
+        if reason is not None:
+            target = (stored[0], stored[1], False)
+            extra = {"dependencyHookRemovedInvalid": reason}
+    try:
+        again = hook.sync(repo_root, *target)
+    except Exception as exc:
+        return {**extra, "dependencyHookResyncFailed": str(exc)}
+    if again.get("action") == "refused":
+        return {**extra, "dependencyHookResyncFailed": again.get("reason")}
+    return {**extra, "dependencyHookResynced": again}
+
+
+def _finish_dependency_hook(cwd, root, plan, write_result):
+    """Stores the filled item 18 (after item 17) and attaches what the sync did to the result.
+    After any failure here the stored items and the files on disk agree: a fill whose write held
+    keeps its script (inputs and item 18 both filled); a fill whose write failed gets the script
+    for the stored (unset) item 18."""
+    hook_result = plan["hookResult"]
+    recovery_failed = False
+    if plan.get("fillFailed") is not None:
+        # axis: a skipped fill is reported on item 17's result, never silent
+        write_result = {**write_result, "inputsFillFailed": plan["fillFailed"]}
+    if plan["filled"] is not None:
+        write_result, committed = _fill_setup_inputs(cwd, root, write_result, plan["filled"])
+        if "inputsFillFailed" in write_result and not committed and _hook_desired(plan["new"]):
+            import cloud_dependency_hook as hook
+
+            try:
+                # the commands were validated before the first sync; the old inputs are unset here
+                again = hook.sync(plan["repoRoot"], plan["new"][0], plan["old"][1], plan["new"][2])
+            except Exception:
+                again = None
+            if again is not None and again.get("action") == "refused":
+                again = None
+            if again is not None:
+                # axis: the paths the first sync changed stay reported beside the recovery's
+                changed = sorted(set(hook_result.get("changed") or []) | set(again.get("changed") or []))
+                hook_result = {**again, "changed": changed}
+            else:
+                # axis: a recovery that did not land leaves the first sync's files, never the old inputs
+                recovery_failed = True
+    if hook_result is not None:
+        write_result = {**write_result, "dependencyHook": hook_result}
+        if recovery_failed:
+            facts = core_md.read(cwd, root)
+            if not facts:
+                return {**write_result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+            return {**write_result, **_reconcile_dependency_hook(
+                plan["repoRoot"], _hook_triple(_project_config_mapping(facts)))}
+        write_result = _converge_dependency_hook(cwd, root, plan, write_result)
+    elif plan.get("repoRoot") is not None and not plan.get("deferred"):
+        # axis: a set that planned no sync may have been overtaken by an enable between its plan and its write, so the stored triple is re-read and the hook reconciled when it is wanted or its script exists; a project that never opted in has neither, so its settings file is never read
+        import cloud_dependency_hook as hook
+
+        facts = core_md.read(cwd, root)
+        if facts:
+            stored = _hook_triple(_project_config_mapping(facts))
+            script = os.path.join(plan["repoRoot"], *hook.SCRIPT_REL.split("/"))
+            if _hook_desired(stored) or os.path.lexists(script):
+                write_result = _converge_dependency_hook(cwd, root, plan, write_result)
+    return write_result
+
+
+def _run_deferred_removal(cwd, root, plan):
+    """Removes the files after the config write that turned the hook off. Returns None once they
+    are removed (the sync result is in the plan); a refusal puts the old value back and reconciles
+    the files to what is stored."""
+    import cloud_dependency_hook as hook
+
+    try:
+        result = hook.sync(plan["repoRoot"], *plan["new"])
+    except Exception:
+        result = {"action": "refused", "reason": "hook-files-unwritable"}
+    if result.get("action") != "refused":
+        plan["hookResult"] = result
+        return None
+    refusal = _hook_refusal(result.get("reason"))
+    # only while the slug still holds the value this set wrote: a newer stored value stays, and the
+    # files are reconciled to it below
+    restored = core_md.write_project_config_item_if(
+        cwd, plan["slug"], plan["oldValue"], expected=plan["newValue"], root=root)
+    if (restored.get("action") not in ("written", "noop")
+            and restored.get("reason") != "item-changed"):
+        refusal["dependencyHookRestoreFailed"] = restored.get("reason")
+    fresh = core_md.read(cwd, root)
+    if not fresh:
+        refusal["dependencyHookResyncFailed"] = "stored-config-unreadable"
+    else:
+        refusal.update(_reconcile_dependency_hook(
+            plan["repoRoot"], _hook_triple(_project_config_mapping(fresh))))
+    return refusal
+
+
+def _with_dependency_hook(cwd, root, plan, result):
+    """Attaches the sync's result to a read-back failure and runs the convergence step, keeping the
+    synced files."""
+    if plan is not None and plan.get("deferred"):
+        facts = core_md.read(cwd, root)
+        if not facts:
+            return {**result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+        return {**result, **_reconcile_dependency_hook(
+            plan["repoRoot"], _hook_triple(_project_config_mapping(facts)))}
+    if plan is None:
+        return result
+    if plan.get("hookResult") is None:
+        if plan.get("repoRoot") is None:
+            return result
+        # axis: a plan that ran no sync may have been overtaken by an enable between its plan and its write, so the stored triple is re-read and the hook reconciled when it is wanted or its script exists
+        import cloud_dependency_hook as hook
+
+        facts = core_md.read(cwd, root)
+        if facts:
+            stored = _hook_triple(_project_config_mapping(facts))
+            script = os.path.join(plan["repoRoot"], *hook.SCRIPT_REL.split("/"))
+            if _hook_desired(stored) or os.path.lexists(script):
+                return _converge_dependency_hook(cwd, root, plan, result)
+        else:
+            return {**result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+        return result
+    result = {**result, "dependencyHook": plan["hookResult"]}
+    return _converge_dependency_hook(cwd, root, plan, result)
+
+
+def _converge_dependency_hook(cwd, root, plan, write_result):
+    """Brings the hook files to the stored items 17, 18 and 19 when a set that landed between this
+    set's sync and its write left them differing from the triple the sync used (the writers each
+    lock internally, so no lock can span the sync). One more sync runs with the stored triple,
+    validated as before a hook-writing sync, and the result reports it under `dependencyHookResynced`
+    (only when that sync changed a path) or `dependencyHookResyncFailed`. The sync runs even when the
+    stored triple equals the one this set used: only the files say what they carry."""
+    # accepted under the single-owner threat model: two sets interleaving after this re-read
+    facts = core_md.read(cwd, root)
+    if not facts:
+        return {**write_result, "dependencyHookResyncFailed": "stored-config-unreadable"}
+    stored = _hook_triple(_project_config_mapping(facts))
+    # axis: equal triples do not prove the files carry them (another set may have synced other inputs between this set's sync and its write), so the idempotent sync always runs
+    got = _reconcile_dependency_hook(plan["repoRoot"], stored)
+    synced = got.get("dependencyHookResynced")
+    if isinstance(synced, dict) and not synced.get("changed"):
+        got = {k: v for k, v in got.items() if k != "dependencyHookResynced"}
+    return {**write_result, **got}
 
 
 def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
@@ -880,6 +1156,12 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
                     "message": cloud_setup.switch_message("check-failed", project_name),
                 }
 
+    plan = None
+    if slug in _DEPENDENCY_HOOK_SLUGS:
+        plan = _plan_dependency_hook(cwd, slug, value, facts, root)
+        if plan.get("refusal") is not None:
+            return plan["refusal"]
+
     if item["home"] == HOME_RISK_AND_TRUST:
         return _set_risk_and_trust(cwd, value, root)
     if item["home"] == HOME_GUARDIAN_CADENCE:
@@ -897,23 +1179,30 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
 
     if write_result.get("action") not in ("written", "noop"):
+        # axis: a failed write reconciles the hook files to what is stored now, so it never undoes another set's stored update and never writes a stored credential
+        if plan is not None and plan.get("hookResult") is not None:
+            write_result = _converge_dependency_hook(cwd, root, plan, dict(write_result))
         return write_result
 
+    # axis: the write went through here, so a failed or mismatched read-back keeps the synced
+    # files (they match what was written) and converges them; only an uncommitted write rolls back
     reread = get_item(cwd, slug, root=root)
     if reread.get("action") == "refused":
-        return reread
+        return _with_dependency_hook(cwd, root, plan, dict(reread))
     if not _values_equal(reread.get("raw"), value):
-        return {
+        return _with_dependency_hook(cwd, root, plan, {
             "action": "refused",
             "reason": REASON_SET_MISMATCH,
             "expected": value,
             "observed": reread.get("raw"),
-        }
-    # axis: item 18 is filled only when it was never stored, so an edited list survives
-    if (slug == CLOUD_SETUP_COMMANDS_SLUG and value
-            and CLOUD_SETUP_INPUTS_SLUG not in _project_config_mapping(facts)):
+        })
+    if plan is not None and plan["deferred"]:
+        refusal = _run_deferred_removal(cwd, root, plan)
+        if refusal is not None:
+            return refusal
+    if plan is not None:
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
-        return _fill_setup_inputs(cwd, root, write_result)
+        return _finish_dependency_hook(cwd, root, plan, write_result)
     if slug == CLOUD_BUILDS_SLUG:
         kind = "on" if value else "off"
         return {**write_result, "message": cloud_setup.switch_message(kind, project_name)}

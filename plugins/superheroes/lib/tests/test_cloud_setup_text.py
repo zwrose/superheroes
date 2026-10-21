@@ -763,6 +763,11 @@ def test_s9_secret_shaped_content(tmp_path, shape, builder):
     assert planted.split(":")[-1].strip(' "}') not in result["detail"]
 
 
+def test_url_credential_env_reference_passes():
+    assert CS._plain_shape("pip install --index-url https://builder:${PIP_PASS}@host/simple x") is None
+    assert CS._plain_shape("git clone https://github.com/a/b.git") is None
+
+
 def test_s9_in_the_head_line_names_the_shape_only(tmp_path):
     w = _inside(tmp_path)
     planted = "Bearer " + "t" * 20
@@ -1430,3 +1435,50 @@ def test_literal_credential_elsewhere_in_the_placed_core_is_still_refused(tmp_pa
     _store_commands(w, [ENV_REF_COMMAND])
     _edit_core_block(w, lambda obj: obj.__setitem__("note", planted))
     _refusal(_compose(w), "secret-shaped-content")
+
+
+# --- URL forms without a literal secret are not refused ---------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "pip install --index-url https://$TOKEN@packages.example.invalid/simple demo",
+    "pip install --index-url https://${TOKEN}@packages.example.invalid/simple demo",
+    "curl https://user:$TOKEN@host.example.invalid/",
+    "curl https://$U:$P@host.example.invalid/",
+    "git clone ssh://git@host.example.invalid/x.git",
+    "git clone ssh://git@github.com/x/y.git",
+    "pip install git+ssh://git@host.example.invalid/x.git",
+    "git clone git@github.com:x/y.git",
+    "pip install --index-url https://packages.example.invalid/simple demo",
+])
+def test_scan_allows_url_forms_without_a_literal_secret(text):
+    assert CS._scan(text) is None
+
+
+# --- a serialized verification command keeps its shell word boundaries (#2009) ----------------
+
+def _compose_with_verify_command(tmp_path, command):
+    w = _outside(tmp_path)
+    _edit_core_block(w, lambda obj: obj.update(verifyCommand=command))
+    return _compose(w)
+
+
+def test_serialized_verify_command_with_an_environment_reference_composes(tmp_path):
+    # axis: the JSON quotes around a command are not shell quotes; `npm test` is a separate word
+    result = _compose_with_verify_command(
+        tmp_path, "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY npm test")
+    assert result["action"] == "written", result
+
+
+def test_serialized_verify_command_ending_in_a_quoted_reference_composes(tmp_path):
+    # axis: the JSON delimiters beside a value ending in a quote survive the empty-quote normalization
+    result = _compose_with_verify_command(tmp_path, 'make test DATABASE_PASSWORD="$PW"')
+    assert result["action"] == "written", result
+
+
+@pytest.mark.parametrize("command", [
+    'printf AWS_SECRET_ACCESS_KEY=%s "$KEY" > .env && npm test',
+    'printf "AWS_SECRET_ACCESS_KEY=%s\\n" "$KEY" > .env && npm test',
+])
+def test_serialized_verify_command_keeps_the_printf_and_reference_exemptions(tmp_path, command):
+    result = _compose_with_verify_command(tmp_path, command)
+    assert result["action"] == "written", result
