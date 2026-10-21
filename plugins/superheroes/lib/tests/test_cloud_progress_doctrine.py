@@ -3,7 +3,7 @@
 Bites on: `PROGRESS_HEADER` changing without cloud.md's section following it, or cloud.md writing the header with a
 different character; cloud.md's progress section losing the `progress` / `edit` verbs, `Lost work:` or the
 15-minute rule; wave-watch.md's wedge section losing the header constant, `progressAgeSeconds` or the status ping;
-TRANSITION.md's Unreleased notes losing the progress section's heading.
+TRANSITION.md's 0.45.0 notes (the release it shipped in) losing the progress section's heading.
 
 **Residual blind spots:** the doctrine tests are phrase searches over the collapsed text, so a section that keeps
 the phrase but contradicts it in the next sentence passes; nothing here compares the prose with what
@@ -66,8 +66,8 @@ def test_wave_watch_wedge_section_names_the_header_constant_the_age_key_and_the_
     assert "status ping" in section
 
 
-def test_transition_unreleased_names_the_progress_section():
+def test_transition_0_45_0_names_the_progress_section():
     # axis: the upgrade notes carry a section for the progress comment, linked from the Before-you-upgrade list
-    unreleased = _section(_TRANSITION, "Unreleased")
-    assert _TRANSITION_HEADING in unreleased
-    assert "(#wave-watch-a-cloud-builders-progress-comment)" in unreleased
+    notes = _section(_TRANSITION, "0.45.0")
+    assert _TRANSITION_HEADING in notes
+    assert "(#wave-watch-a-cloud-builders-progress-comment)" in notes
