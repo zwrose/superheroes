@@ -40,11 +40,13 @@ REASON_SETUP_COMMANDS_NOT_A_LIST = "setup-commands-not-a-list"
 REASON_SETUP_COMMAND_EMPTY = "setup-command-empty"
 REASON_SETUP_COMMAND_MULTI_LINE = "setup-command-multi-line"
 REASON_SETUP_COMMAND_SECRET_SHAPED = "setup-command-secret-shaped"
+REASON_SETUP_INPUT_UNSAFE_PATH = "setup-input-unsafe-path"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
 CLOUD_BUILDS_SLUG = "cloudBuilds"
 CI_WORKFLOW_SLUG = "ciWorkflow"
 CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
+CLOUD_SETUP_INPUTS_SLUG = "cloudSetupInputs"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -201,6 +203,14 @@ ITEMS = (
         "shape": "commandList",
         "plugin_default": None,
     },
+    {
+        "number": 18,
+        "slug": "cloudSetupInputs",
+        "name": "Cloud setup inputs",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "inputPathList",
+        "plugin_default": None,
+    },
 )
 
 _SLUG_INDEX = {item["slug"]: item for item in ITEMS}
@@ -305,6 +315,18 @@ def _validate_command_list(value):
     return None
 
 
+def _validate_input_path_list(value):
+    """The first failing reason for a list of repo-relative input file paths, else None."""
+    if not isinstance(value, list):
+        return REASON_MALFORMED_VALUE
+    import cloud_setup_text  # imports this module at load, so it is imported here
+
+    # axis: an entry that is not a plain repo-relative path is refused, since the setup stamp reads it
+    if any(not cloud_setup_text._plain_relative(entry) for entry in value):
+        return REASON_SETUP_INPUT_UNSAFE_PATH
+    return None
+
+
 def _validate_boolean(value):
     if not isinstance(value, bool):
         return REASON_MALFORMED_VALUE
@@ -381,6 +403,7 @@ _VALIDATORS = {
     "proseList": _validate_prose_list,
     "pathList": _validate_path_list,
     "commandList": _validate_command_list,
+    "inputPathList": _validate_input_path_list,
     "boolean": _validate_boolean,
     "dial": _validate_dial,
     "budgetN": _validate_budget_n,
@@ -764,6 +787,48 @@ def _set_risk_and_trust(cwd, value, root):
     return write_result
 
 
+def _fill_setup_inputs(cwd, root, write_result):
+    """Stores item 18 as the lockfiles at the repository root, after item 17 is stored. A root that
+    cannot be resolved (git failing), or that is not itself a git checkout, gets no fill and is
+    reported, never silent. The fill never turns a
+    stored item 17 into a refusal: a detected name item 18 would refuse is left out of the list,
+    and when the write or its read-back fails, item 17's result is returned with `inputsFillFailed`
+    carrying the reason (and no `inputsFilled`), leaving item 18 unset."""
+    import cloud_setup_text
+    import store_core
+
+    try:
+        repo_root = store_core.repo_root(cwd)
+        # a checkout answers its real git directory (wherever the metadata lives); the greenfield
+        # fallback answers the directory itself
+        git_dir = store_core.get_worktree_gitdir(repo_root)
+    except store_core.RepoRootUnavailable:
+        # axis: an unresolved root is reported, never silent — a transient git failure would otherwise leave item 18 unset unnoticed
+        return {**write_result, "inputsFillFailed": "repo-root-unavailable"}
+    if git_dir == os.path.realpath(repo_root):
+        # axis: a configured directory that is not a git checkout gets no fill — the root fallback names the directory itself, and scanning it would store a list for the wrong tree
+        return {**write_result, "inputsFillFailed": "not-a-git-checkout"}
+    item = _item_by_slug(CLOUD_SETUP_INPUTS_SLUG)
+    # axis: a detected name item 18 would refuse is never stored, so the list stays valid
+    try:
+        detected = cloud_setup_text.detect_inputs(repo_root)
+    except OSError as exc:
+        # axis: a root that could not be listed is a failed scan, never "found none" — storing []
+        # would freeze input tracking off for good
+        return {**write_result, "inputsFillFailed": "the repository root could not be read (%s)"
+                % (exc.strerror or type(exc).__name__)}
+    filled = [name for name in detected if validate_item_value(item, [name]) is None]
+    stored = core_md.write_project_config_item(cwd, CLOUD_SETUP_INPUTS_SLUG, filled, root=root)
+    if stored.get("action") not in ("written", "noop"):
+        return {**write_result, "inputsFillFailed": stored.get("reason")}
+    reread = get_item(cwd, CLOUD_SETUP_INPUTS_SLUG, root=root)
+    if reread.get("action") == "refused":
+        return {**write_result, "inputsFillFailed": reread.get("reason")}
+    if not _values_equal(reread.get("raw"), filled):
+        return {**write_result, "inputsFillFailed": REASON_SET_MISMATCH}
+    return {**write_result, "inputsFilled": list(filled)}
+
+
 def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
     """Validate and write one item to its home only."""
     item = _item_by_slug(slug)
@@ -844,6 +909,11 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
             "expected": value,
             "observed": reread.get("raw"),
         }
+    # axis: item 18 is filled only when it was never stored, so an edited list survives
+    if (slug == CLOUD_SETUP_COMMANDS_SLUG and value
+            and CLOUD_SETUP_INPUTS_SLUG not in _project_config_mapping(facts)):
+        # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
+        return _fill_setup_inputs(cwd, root, write_result)
     if slug == CLOUD_BUILDS_SLUG:
         kind = "on" if value else "off"
         return {**write_result, "message": cloud_setup.switch_message(kind, project_name)}

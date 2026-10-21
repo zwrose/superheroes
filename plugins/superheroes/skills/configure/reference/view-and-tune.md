@@ -147,7 +147,8 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **List cloud setup commands (item 17)** → write only item 17, the project's own setup commands
   for the cloud (for example `npm ci`) as a JSON list of one-line shell commands on stdin. The
-  setup text runs them in order, in the project's clone, after its other steps.
+  setup text runs them in order, in the project's clone, after its other steps. Listing commands
+  also fills item 18 (below).
   A credential never goes in a listed command: put it in the cloud environment's variables and
   reference it as `$NAME`. The setup text's secret scan catches obvious pastes and is not a
   guarantee.
@@ -166,6 +167,29 @@ action that owns it, leaving the rest of the calibration untouched:
   (an entry holds something shaped like a secret). `[]` clears the list. After any change, the owner
   writes new setup text (set-up § 6, "Setup text") and pastes it, because the cloud check reports
   the old one as out of date.
+
+- **Set the files the cloud setup depends on (item 18)** → write only item 18, the files the setup
+  commands depend on (for example `package-lock.json`) as a JSON list of repository-relative paths
+  on stdin.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudSetupInputs --cwd . <<'SUPERHEROES_ANSWER'
+  ["package-lock.json"]
+  SUPERHEROES_ANSWER
+  ```
+
+  The first time setup commands are listed, configure fills item 18 from the lockfiles at the
+  repository root (the plugin's lockfile list, which includes `package-lock.json`, `yarn.lock`,
+  `pnpm-lock.yaml`, `uv.lock`, `poetry.lock`, `Gemfile.lock`, `Cargo.lock` and `go.sum`, and any
+  `requirements*.txt`; a name item 18 would refuse is left out) and never overwrites a list
+  already stored. If that fill fails, item 17 stays saved, the result carries `inputsFillFailed`
+  with the reason, and item 18 stays unset. Read the result the same way as
+  the `stackingTool` write above: only `written` or `noop` means it was saved. A refusal names one
+  of two reasons, and nothing is stored: `malformed-value` (the value is not a JSON list) and
+  `setup-input-unsafe-path` (an entry is not a plain repository-relative path). `[]` stores an
+  empty list. A change to the list or to a listed file's contents makes the cloud check report the
+  setup text out of date until new setup text is pasted.
 
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a

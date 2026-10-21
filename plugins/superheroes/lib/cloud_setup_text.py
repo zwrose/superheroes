@@ -14,6 +14,8 @@ token and one plain sentence, never a raise.
 """
 import argparse
 import base64
+import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -30,6 +32,7 @@ import control_plane
 import core_md
 import mode_registry
 import project_config
+import size_count
 import store_core
 
 REVIEWER_CLI_PACKAGE = "@openai/codex"
@@ -38,6 +41,10 @@ SANDBOX_TOOL_PACKAGES = "bubblewrap socat"
 SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
 SETUP_COMMANDS_STAMP_KEY = "setup-commands"
+SETUP_INPUTS_STAMP_KEY = "setup-inputs"
+SETUP_INPUT_STAMP_PREFIX = "setup-input/"
+SETUP_INPUT_MISSING_STAMP_PREFIX = "setup-input-missing/"
+REQUIREMENTS_PATTERN = "requirements*.txt"
 TOOL_STEPS_MARKER = "# The project's own tool steps, if any, go below this line."
 # The cloud platform runs nothing before a session starts except this cached script, so a setup
 # made at one plugin version stays at that version until new setup text is pasted.
@@ -269,7 +276,8 @@ def _without_setting(data, slug=None):
         return data
 
 
-def _refuse_malformed_container(cwd, root):
+def _refuse_malformed_container(cwd, root, reason="setup-commands-unreadable",
+                                what="setup commands"):
     """Refuses a core whose raw projectConfiguration is present but not an object: parse_core reads
     that as an empty setting, which would drop the owner's commands without a word."""
     try:
@@ -282,8 +290,8 @@ def _refuse_malformed_container(cwd, root):
     # axis: a projectConfiguration that is not an object is refused, never read as absent commands
     if isinstance(block, dict) and core_md.PROJECT_CONFIGURATION_KEY in block and not isinstance(
             block[core_md.PROJECT_CONFIGURATION_KEY], dict):
-        raise _Refused("setup-commands-unreadable", "The project's calibration holds its "
-                       "configuration in a form that cannot be read for setup commands.")
+        raise _Refused(reason, "The project's calibration holds its configuration in a form that "
+                       "cannot be read for %s." % what)
 
 
 def _setup_commands(cwd, root):
@@ -297,11 +305,34 @@ def _stored_setup_commands(cwd, root):
     all (so an empty list that was stored is told apart from a setting never set). A setting that
     is there but invalid is refused, because the text would otherwise quietly leave out what the
     owner listed."""
+    return _stored_setting(
+        cwd, root, project_config.CLOUD_SETUP_COMMANDS_SLUG, "setup commands",
+        "setup-commands-unreadable",
+        ("setup-commands-malformed", "The project's setup commands are stored in a form that is "
+         "not a list of one-line commands."))
+
+
+def _stored_setup_inputs(cwd, root, commands):
+    """The stored list of files the setup depends on (item 18), or None when never stored. A
+    project with no setup commands has no inputs, and its item 18 is not even read."""
+    if not commands:
+        return None
+    return _stored_setting(
+        cwd, root, project_config.CLOUD_SETUP_INPUTS_SLUG, "setup inputs",
+        "setup-inputs-unreadable",
+        ("setup-inputs-malformed", "The project's setup inputs are stored in a form that is not a "
+         "list of plain repository paths."))
+
+
+def _stored_setting(cwd, root, slug, what, unreadable, malformed):
+    """The stored value of the project-configuration item `slug` (named `what` in a refusal), or
+    None when it is not stored. A calibration that cannot be read for it is refused with the
+    `unreadable` reason, and a stored value that fails the item's own validation with the
+    `malformed` reason and sentence."""
     try:
         facts = core_md.read(cwd, root, persist_backfill=False)
     except Exception:
-        raise _Refused("setup-commands-unreadable", "The project's setup commands cannot be read "
-                       "from its calibration.")
+        raise _Refused(unreadable, "The project's %s cannot be read from its calibration." % what)
     if facts is None:
         # core_md.read answers None for a file it cannot open as well as for an absent one; a core
         # that is there but unreadable would otherwise drop the owner's commands without a word
@@ -311,44 +342,128 @@ def _stored_setup_commands(cwd, root):
                 with open(path, "rb") as fh:
                     raw = fh.read()
             except OSError:
-                raise _Refused("setup-commands-unreadable", "The project's setup commands cannot "
-                               "be read from its calibration.")
+                raise _Refused(unreadable, "The project's %s cannot be read from its "
+                               "calibration." % what)
             # axis: a core that names the setting but cannot be parsed would drop the owner's
             # commands without a word, so it is refused; a core that never names it has none
-            if project_config.CLOUD_SETUP_COMMANDS_SLUG.encode("utf-8") in raw:
-                raise _Refused("setup-commands-unreadable", "The project's calibration names "
-                               "setup commands but cannot be parsed to read them.")
+            if slug.encode("utf-8") in raw:
+                raise _Refused(unreadable, "The project's calibration names %s but cannot be "
+                               "parsed to read them." % what)
     else:
-        _refuse_malformed_container(cwd, root)
+        _refuse_malformed_container(cwd, root, unreadable, what)
     settings = facts.get("projectConfiguration") if facts is not None else None
-    slug = project_config.CLOUD_SETUP_COMMANDS_SLUG
     if not isinstance(settings, dict) or slug not in settings:
         return None
     item = project_config._item_by_slug(slug)
     # axis: a stored value that is not a valid list is refused, never read as an empty list
     if project_config.validate_item_value(item, settings[slug]) is not None:
-        raise _Refused("setup-commands-malformed", "The project's setup commands are stored in a "
-                       "form that is not a list of one-line commands.")
+        raise _Refused(*malformed)
     return settings[slug]
 
 
-def _stamp_view(files, commands=()):
+def detect_inputs(repo_root):
+    """The sorted names of the lockfiles and requirements files directly in `repo_root`; it never
+    looks deeper, and a missing root (or one that is not a directory) has none. A root that exists
+    but cannot be read raises `OSError`: "could not look" is not "found none"."""
+    try:
+        entries = list(os.scandir(repo_root))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    names = []
+    for entry in entries:
+        try:
+            regular = entry.is_file(follow_symlinks=False)
+        except OSError:
+            continue
+        if regular and (entry.name in size_count.LOCKFILE_NAMES
+                        or fnmatch.fnmatchcase(entry.name, REQUIREMENTS_PATTERN)):
+            names.append(entry.name)
+    return sorted(names)
+
+
+def _input_view(repo_root, inputs):
+    """The stamp entries for the files the setup depends on: the list itself, each existing file's
+    bytes, and an empty marker for each one that does not exist."""
+    view = {SETUP_INPUTS_STAMP_KEY: (json.dumps(list(inputs), ensure_ascii=False)
+                                     + "\n").encode("utf-8")}
+    for rel in inputs:
+        path = os.path.join(repo_root, *rel.split("/"))
+        try:
+            os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            view[SETUP_INPUT_MISSING_STAMP_PREFIX + rel] = b""
+            continue
+        except OSError:
+            raise _Refused("setup-inputs-unreadable", "A file the setup depends on (%s) is not a "
+                           "readable file." % rel)
+        try:
+            if not os.path.isfile(path):
+                raise OSError("not a regular file")
+            with open(path, "rb") as fh:
+                view[SETUP_INPUT_STAMP_PREFIX + rel] = fh.read()
+        except OSError:
+            raise _Refused("setup-inputs-unreadable", "A file the setup depends on (%s) is not a "
+                           "readable file." % rel)
+    return view
+
+
+def _input_expectations(repo_root, inputs):
+    """(path, sha256 hex or None) for each setup input as the text is composed: None marks a
+    file that does not exist. The generated script checks the clone against these."""
+    return _expectations_from_view(_input_view(repo_root, inputs), inputs)
+
+
+def _expectations_from_view(view, inputs):
+    """`_input_expectations` read from an already-taken input view, so the stamp and the checks
+    in the text describe the same bytes."""
+    return [(rel, hashlib.sha256(view[SETUP_INPUT_STAMP_PREFIX + rel]).hexdigest()
+             if SETUP_INPUT_STAMP_PREFIX + rel in view else None) for rel in inputs]
+
+
+def _stamp_view(files, commands=(), inputs_view=None):
     view = dict(files)
     core = _core_rel()
     if core in view:
         view[core] = _without_setting(view[core])
+        # axis: without setup commands item 18 is unused, so it never moves the stamp
+        if not commands:
+            view[core] = _without_setting(view[core], project_config.CLOUD_SETUP_INPUTS_SLUG)
     # axis: the stamp moves whenever the command list does, in both storage modes
     if commands:
         view[SETUP_COMMANDS_STAMP_KEY] = (
             json.dumps(list(commands), ensure_ascii=False) + "\n").encode("utf-8")
+        if inputs_view:
+            view.update(inputs_view)
     return view
+
+
+def _inputs_view_for(cwd, commands, inputs):
+    """The input files' stamp entries, read once; None unless commands are listed and item 18 is
+    stored."""
+    # axis: the input files join the stamp only with commands and stored inputs
+    if not (commands and inputs is not None):
+        return None
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except store_core.RepoRootUnavailable:
+        raise _Refused("setup-inputs-unreadable", "The repository root cannot be found, so the "
+                       "files the setup depends on cannot be read.")
+    return _input_view(repo_root, inputs)
+
+
+def _view_for(cwd, files, commands, inputs):
+    """The stamp's view of `files`, built for both callers (`stamped_files` and `_compose`): the
+    files the setup depends on join it exactly when commands are listed and item 18 is stored."""
+    return _stamp_view(files, commands, _inputs_view_for(cwd, commands, inputs))
 
 
 def stamped_files(cwd, root=None):
     """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
     switching cloud builds on or off never changes the stamp, and the project's setup commands
-    when it lists any."""
-    return _stamp_view(calibration_files(cwd, root), _setup_commands(cwd, root))
+    when it lists any, with the files they depend on."""
+    commands = _setup_commands(cwd, root)
+    return _view_for(cwd, calibration_files(cwd, root), commands,
+                     _stored_setup_inputs(cwd, root, commands))
 
 
 def _project_name(cwd):
@@ -428,7 +543,42 @@ def _for_line(commands):
     return "  for cmd in %s; do" % " ".join(shlex.quote(c) for c in commands)
 
 
-def _commands_block(commands, clone, stamp=None, count=0):
+def _input_check_lines(expected):
+    """The step that compares each listed input in the clone with the content the text was
+    written for (its sha256, or `missing`), logging one line per input that differs and leaving
+    `ok` at 0 so no stamp is published."""
+    if not expected:
+        return []
+    out = [
+        "  check_input() {",
+        # axis: only an absent component is missing (the Python reader's rule: not-found or
+        # not-a-directory); a symlink that does not resolve, or a directory that cannot be
+        # searched, is unreadable and never matches the expected `missing`
+        '    got=""; probe="$DIR"; IFS=/ read -r -a parts <<< "$1"',
+        '    for part in "${parts[@]}"; do',
+        '      probe="$probe/$part"',
+        '      if [ -L "$probe" ] && [ ! -e "$probe" ]; then got=unreadable; break',
+        '      elif [ ! -e "$probe" ]; then got=missing; break; fi',
+        '      if [ -d "$probe" ] && [ ! -x "$probe" ]; then got=unreadable; break; fi',
+        "    done",
+        '    if [ -n "$got" ]; then :',
+        '    elif [ -f "$DIR/$1" ]; then',
+        '      got=$( (sha256sum "$DIR/$1" || shasum -a 256 "$DIR/$1") 2>/dev/null | cut -d" " -f1)',
+        "    else got=unreadable; fi",
+        '    if [ "$got" != "$2" ]; then',
+        '      echo "setup input $1 differs from the setup text: expected $2, found ${got:-unreadable}"',
+        "      ok=0",
+        "    fi",
+        "  }",
+        '  if [ -n "$DIR" ]; then',
+    ]
+    for rel, digest in expected:
+        out.append("    check_input %s %s" % (shlex.quote(rel), digest or "missing"))
+    out.append("  fi")
+    return out
+
+
+def _commands_block(commands, clone, stamp=None, count=0, expected=()):
     """The step that runs the project's setup commands, one at a time, in its clone. With a stamp
     to publish, it publishes it last, and only when the calibration was written and every command
     ran and succeeded."""
@@ -446,10 +596,15 @@ def _commands_block(commands, clone, stamp=None, count=0):
         "  n=0",
         '  failed=""',
         "  ok=1",
+        *_input_check_lines(expected),
         _for_line(commands),
         "    n=$((n + 1))",
         '    if [ -z "$DIR" ]; then ok=0; echo "setup command $n skipped: no clone in $PWD%s"'
         % (" or $PWD/$CLONE" if clone is not None else ""),
+        # axis: inputs that differ from the ones the text was written for run no command
+        *(['    elif [ "$ok" = 0 ] && [ -z "$failed" ]; then '
+           'echo "setup command $n skipped: setup inputs differ from the setup text"']
+          if expected else []),
         # axis: after a failure every later command is skipped, never run
         '    elif [ -n "$failed" ]; then echo "setup command $n skipped: setup command $failed FAILED"',
         '    elif (cd "$DIR" && bash -o pipefail -c "$cmd" </dev/null); then echo "setup command $n ok"',
@@ -474,7 +629,7 @@ def _commands_block(commands, clone, stamp=None, count=0):
 
 
 def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
-            commands, cleared=False):
+            commands, cleared=False, expected=()):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -559,7 +714,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
     # axis: only a non-empty list adds a step, so no list leaves the text as it was
     if commands:
         out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
-                               len(files))
+                               len(files), expected)
     out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', 'exit "$setup_rc"' if commands else "exit 0", ""]
     return "\n".join(out)
@@ -583,6 +738,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     placed, files = _calibration(cwd, root)
     stored = _stored_setup_commands(cwd, root)
     commands = stored or []
+    inputs = _stored_setup_inputs(cwd, root, commands)
     # axis: a list stored as empty, in a project that places no files, still has a stamp to retire
     cleared = stored is not None and not stored and not files
     if placed and not files:
@@ -609,10 +765,15 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
     stamp = date = None
+    inputs_view = None
     if files or commands:
         try:
+            # axis: the inputs are read once; the stamp and the checks in the text share the bytes
+            inputs_view = _inputs_view_for(cwd, commands, inputs)
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
-                _stamp_view(files, commands))
+                _stamp_view(files, commands, inputs_view))
+        except _Refused:
+            raise
         except Exception:
             stamp = None
         if not (isinstance(stamp, str) and _STAMP_RE.fullmatch(stamp)):
@@ -625,8 +786,13 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         part = "calibration in the repository"
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
+    expected = ()
+    if commands and inputs:
+        if inputs_view is None:
+            inputs_view = _inputs_view_for(cwd, commands, inputs)
+        expected = _expectations_from_view(inputs_view, inputs)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
-                   _clone_dir(cwd), commands, cleared)
+                   _clone_dir(cwd), commands, cleared, expected)
     # axis: the command list is scanned as written (as `set` scans it), never as the quoted
     # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
     # in full
