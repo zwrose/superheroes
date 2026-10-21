@@ -2913,6 +2913,16 @@ def test_runs_of_the_same_check_on_different_branches_never_replace_one_another(
         assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
 
 
+def test_runs_of_the_same_check_on_different_pull_requests_never_replace_one_another():
+    # axis: the check identity's pull request; two PRs from one head branch to different bases sharing the head SHA
+    workflows = wfs(suite_run("pr-title", 10, head_branch="a", pull_requests=[{"number": 1}]),
+                    suite_run("pr-title", 20, head_branch="a", pull_requests=[{"number": 2}]),
+                    wf_run("CI", id=5, workflow_id=7))
+    failed, passed = chk("pr-title", 1, "failure", 10), chk("pr-title", 2, "success", 20)
+    for rows in ([failed, passed], [passed, failed]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
+
+
 def test_a_check_run_whose_identity_cannot_be_established_is_never_reduced_away():
     # axis: the fail-closed reduction; a failed row with no app, or an Actions suite mapped to no workflow run, dropped for a newer success
     workflows = wfs(suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
