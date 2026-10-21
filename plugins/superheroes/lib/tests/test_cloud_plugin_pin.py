@@ -230,8 +230,11 @@ def test_sync_refuses_and_leaves_every_file_byte_identical(tmp_path, pin, settin
     assert _snapshot(tmp_path) == before
 
 
-def test_sync_refuses_a_secret_shape_in_the_script_or_pin_text(tmp_path, monkeypatch):
-    monkeypatch.setattr(cloud_setup_text, "_scan", lambda text: "signed token")
+@pytest.mark.parametrize("generator", ["script_text", "pin_text"])
+def test_sync_refuses_a_secret_shape_in_the_script_or_pin_text(tmp_path, monkeypatch, generator):
+    real = getattr(pin_mod, generator)
+    token = "npm_" + "a" * 36
+    monkeypatch.setattr(pin_mod, generator, lambda *a, **kw: real(*a, **kw) + "# " + token + "\n")
     assert pin_mod.sync(str(tmp_path), PIN) == {
         "action": "refused", "reason": "secret-shaped", "changed": []}
     assert _snapshot(tmp_path) == {}
@@ -426,6 +429,20 @@ def test_the_script_does_not_link_a_tree_whose_version_disagrees_with_the_pin(tm
     done = _run_script(sc)
     assert done.returncode == 0
     assert "plugin pin not applied: the fetched plugin is version 9.9.9, not the pinned 8.8.8" in done.stdout
+    assert _linked(sc) == before
+
+
+def test_the_script_does_not_link_a_cached_tree_at_another_commit(tmp_path):
+    sc = _scene(tmp_path)
+    _git(tmp_path, "clone", "-q", str(sc.src), str(sc.dest))
+    _git(sc.dest, "checkout", "-q", "--detach", sc.sha_b)
+    _git(sc.dest, "commit", "-q", "--allow-empty", "-m", "elsewhere")
+    assert _git(sc.dest, "rev-parse", "HEAD") != sc.sha_b
+    assert (sc.dest / SUBDIR / "version.txt").read_text().strip() == "9.9.9"
+    before = _linked(sc)
+    done = _run_script(sc)
+    assert done.returncode == 0
+    assert "plugin pin not applied: the fetched plugin is not at the pinned commit;" in done.stdout
     assert _linked(sc) == before
 
 
