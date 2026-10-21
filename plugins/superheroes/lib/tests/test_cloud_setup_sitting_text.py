@@ -9,6 +9,7 @@ import re
 
 PLUGIN_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 SET_UP = os.path.join("skills", "configure", "reference", "set-up.md")
+VIEW_AND_TUNE = os.path.join("skills", "configure", "reference", "view-and-tune.md")
 CONFIGURE_SKILL = os.path.join("skills", "configure", "SKILL.md")
 SHOWRUNNER_SKILL = os.path.join("skills", "showrunner", "SKILL.md")
 
@@ -194,3 +195,42 @@ def test_a_null_snapshot_leaves_before_out_of_both_pick_commands():
     assert said[0] < plain, "the step 3 rule (%d) does not come before the plain pick (%d)" % (said[0], plain)
     assert judge < said[1] < recovery, "the step 8 rule (%d) is not between the judge (%d) and recovery (%d) lines" % (
         said[1], judge, recovery)
+
+
+def _flat(text):
+    return " ".join(text.split())
+
+
+def test_the_hook_offer_saves_the_detected_inputs_on_either_answer():
+    # axis: the item 18 save is unconditional on the owner's answer to the hook offer
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    start = _first(section, "**The dependency hook offer.**")
+    assert start is not None, "section 6 has no paragraph starting '**The dependency hook offer.**'"
+    refusal = next((i for i in range(start, len(section))
+                    if section[i].startswith("A refusal means there is nothing to offer")), None)
+    assert refusal is not None, "the offer paragraph has no 'A refusal means there is nothing to offer'"
+    end = next((i for i in range(refusal, len(section)) if section[i].startswith("```")), len(section))
+    paragraph = section[start:end]
+    sentences = [_flat(s) for s in _sentences(paragraph)]
+    saves = [s for s in sentences if "save the offer's `inputs` as item 18" in s]
+    assert saves, "the offer paragraph never says to save the offer's `inputs` as item 18"
+    assert any("Whatever the owner answers" in s for s in saves), (
+        "the item 18 save is not stated for whatever the owner answers: %r" % saves)
+    text = _flat("\n".join(paragraph))
+    assert "On yes" in text and "on no" in text, "the paragraph does not speak to both answers"
+    for sentence in sentences:
+        if "item 18" in sentence:
+            assert "says yes" not in sentence, "an item 18 sentence is conditioned on a yes: %r" % sentence
+
+
+def test_the_item_19_tune_row_saves_the_detected_inputs_on_either_answer():
+    # axis: the item 18 save is unconditional on the owner's answer in the item 19 tune row
+    lines = _read(VIEW_AND_TUNE).splitlines()
+    start = _first(lines, "- **Keep cloud dependencies current with a hook (item 19)**")
+    assert start is not None, "view-and-tune.md has no item 19 bullet"
+    end = next((i for i in range(start, len(lines)) if lines[i].strip().startswith("```")), len(lines))
+    bullet = _flat("\n".join(lines[start:end]))
+    assert "write only item 19" not in bullet, "the item 19 row still says to write only item 19"
+    assert "on either answer" in bullet, "the item 19 row does not say the save is on either answer"
+    assert "as item 18" in bullet, "the item 19 row does not say to save the inputs as item 18"

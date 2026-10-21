@@ -16,9 +16,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
-
+- **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
 - **After switching.** **Nothing is owed.** A stack launched once on its parent issue is now cleaned up as one lane; a PR that links an issue holding its own lane is cleaned up exactly as before. See [Cloud cleanup: a stack launched on its parent issue cleans up as one lane](#cloud-cleanup-a-stack-launched-on-its-parent-issue-cleans-up-as-one-lane).
+
+### Configure: the hook offer saves the detected inputs on either answer
+
+- configure's cloud setup sitting (`skills/configure/reference/set-up.md` § 6, the dependency hook offer) and its item 19 tune row (`skills/configure/reference/view-and-tune.md`) save the offer's detected `inputs` as item 18 whether the owner accepts or declines the hook. Before, only a yes saved them, so a decline left item 18 unset and the input files out of the stamp, though the offer says a change to them makes the cloud check ask for a re-paste. Accepting is unchanged. No code or result shape changed.
 
 ### Cloud cleanup: a stack launched on its parent issue cleans up as one lane
 
