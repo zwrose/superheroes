@@ -491,10 +491,12 @@ def _effective_runs(rows):
 
 
 def _latest_checks(rows, workflow_rows):
-    """One check run per check: the newest. A check is the same (name, app, workflow, event); a workflow that
-    re-runs on the same commit leaves its older check runs listed. A row whose check cannot be identified
-    (no name, no id, no app, or a GitHub Actions run whose suite maps to no workflow run) is never reduced."""
-    suites = {wr.get("check_suite_id"): (wr.get("workflow_id") or wr.get("name"), wr.get("event"))
+    """One check run per check: the newest. A check is the same (name, app, workflow, event, head branch); a
+    workflow that re-runs on the same commit leaves its older check runs listed, while two PRs sharing one head
+    SHA stay apart by their branch. A row whose check cannot be identified (no name, no id, no app, or a GitHub
+    Actions run whose suite maps to no workflow run) is never reduced."""
+    suites = {wr.get("check_suite_id"): (wr.get("workflow_id") or wr.get("name"), wr.get("event"),
+                                         wr.get("head_branch"))
               for wr in workflow_rows if wr.get("check_suite_id") is not None}
     newest, passed = {}, []
     for row in rows:
@@ -504,7 +506,7 @@ def _latest_checks(rows, workflow_rows):
                 or (app.get("slug") == "github-actions" and suite not in suites):
             passed.append(row)
             continue
-        key = (row["name"], app["id"]) + suites.get(suite, (None, None))
+        key = (row["name"], app["id"]) + suites.get(suite, (None, None, None))
         if key not in newest or row["id"] > newest[key]["id"]:
             newest[key] = row
     return list(newest.values()) + passed

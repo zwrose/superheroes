@@ -20,7 +20,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Review record: CI reads each check's latest run
 
-- A check run that a newer run of the same check superseded no longer reads red. A check is the same name, app, workflow and event; a workflow that re-runs on one commit (a cancelled run, then a rerun) leaves its older check runs listed, and only the newest run of each check is read. A check whose newest run is cancelled still reads red, and a different check's success never covers a failed one.
+- A check run that a newer run of the same check superseded no longer reads red. A check is the same name, app, workflow, event and head branch (two pull requests sharing one head commit never replace each other's checks); a workflow that re-runs on one commit (a cancelled run, then a rerun) leaves its older check runs listed, and only the newest run of each check is read. A check whose newest run is cancelled still reads red, and a different check's success never covers a failed one.
 - A check run whose identity cannot be established is not reduced: one with no name, id or app, or a GitHub Actions run whose suite maps to no workflow run on the commit. It is read as it is, so a failure on it still reads red.
 - The reduction applies to the whole paged check list, so a superseded run on one page and its replacement on another resolve the same way.
 
