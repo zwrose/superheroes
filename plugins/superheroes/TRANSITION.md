@@ -18,7 +18,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
 - **After switching.** **Nothing is owed.** A review record that read CI red because an older cancelled run of a check was still listed beside a newer run of it now reads the newer run. See [Review record: CI reads each check's latest run](#review-record-ci-reads-each-checks-latest-run).
-- **After switching.** **Nothing is owed, and there is no new setting.** A JavaScript project's break-it tests run when the reviewed checkout has `node_modules` installed; a build worktree with no `npm install` records them not-run. See [Break-it tests: a JavaScript test reaches the installed dependencies](#break-it-tests-a-javascript-test-reaches-the-installed-dependencies).
+- **After switching.** **Nothing is owed, and there is no setting to change.** A JavaScript project's break-it tests run when the reviewed checkout has `node_modules` installed; a build worktree with no `npm install` records them not-run. See [Break-it tests: a JavaScript test reaches the installed dependencies](#break-it-tests-a-javascript-test-reaches-the-installed-dependencies).
 
 ### Configure: the hook offer saves the detected inputs on either answer
 

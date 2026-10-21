@@ -6,7 +6,8 @@ touches the caller's tree, index or HEAD, and its process tree never outlives th
 itself writes only inside the copy. The copy links the reviewed checkout's installed, untracked
 dependency directories (``DEPENDENCY_DIRS``); a test may write untracked cache files inside a linked
 directory, such as vite's ``node_modules/.vite-temp``, but no tracked file of the reviewed checkout is
-written, and a dependency tree that links back into the checkout's tracked files is never linked. Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
+written, and a dependency tree that links back into the checkout's tracked files is never linked.
+Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
 and the caller decides from the record; nothing is raised."""
 import hashlib
 import json
@@ -78,7 +79,8 @@ BLOCK_TEMPLATE = "\n".join([
 ])
 RUN_RULES = (
     "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
-    "files plus the reviewed checkout's installed `node_modules` when it has one: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
+    "files plus the reviewed checkout's installed `node_modules` when it has one: one command, "
+    "optionally led by `NAME=value` settings, with no pipes, redirects, "
     "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run. A `run` "
     "whose program is `python` or `python3` (or another Python interpreter path), or, when the "
     "project's `breakItInterpreter` calibration is set, `pytest` or `py.test` (run as "

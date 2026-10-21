@@ -154,6 +154,18 @@ def test_t3_without_the_gate_precondition_the_run_time_signature_still_fails_clo
     assert (got["outcome"], got["reason"], got["exitCode"]) == ("not-run", "command-not-found", 127), got
 
 
+def test_t3_an_unparseable_package_json_fires_no_gate(tmp_path):
+    repo = _repo(tmp_path, install=False)
+    (repo / "package.json").write_text("not json {")
+    _git(repo, "add", "-A")
+    _git(repo, *_ID, "commit", "-q", "-m", "unparseable")
+    got = _run(repo, PASSING, NPM_RUN)
+    # the run launched (an exit code, not the gate's launch-nothing record) and reads as it does without the gate
+    assert got["exitCode"] is not None, got
+    assert "no installed node_modules" not in (got["output"] or ""), got
+    assert got["outcome"] != "passed", got
+
+
 # T4
 def test_t4_npx_with_an_empty_offline_cache_is_not_run(tmp_path):
     got = _run(_repo(tmp_path, install=False), PASSING, NPX_RUN)
