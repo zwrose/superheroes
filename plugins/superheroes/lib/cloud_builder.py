@@ -497,7 +497,7 @@ def parse_progress(body):
         if line.startswith("Expected:"):
             match = _EXPECTED_RE.match(line)
             if match:
-                digits = match.group(1)
+                digits = match.group(1).lstrip("0") or "0"
                 minutes = int(digits) if len(digits) <= 9 else PROGRESS_EXPECTED_MAX_MINUTES
                 expected = min(minutes, PROGRESS_EXPECTED_MAX_MINUTES) * 60
             break
