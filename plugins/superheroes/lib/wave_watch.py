@@ -103,6 +103,15 @@ Contract:
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
   with state handback, stopped or parked. A newer handover, or an answered newest comment,
   surfaces nothing.
+- Cloud progress: a cloud builder keeps one progress comment on its issue, edited in place, that
+  opens with cloud_builder.PROGRESS_HEADER and states how long its current step is expected to
+  run. For a started cloud lane whose tick's comments read observed at least one such comment
+  (created at or after the lane's start), that comment alone decides lane-stale: stale exactly
+  when its updated_at age is negative or greater than its stated expected seconds plus
+  LIVENESS_QUIET_WINDOW_SECONDS; the newest-updated comment wins, a missing or malformed
+  expectation counts as zero extra seconds, and one over cb.PROGRESS_EXPECTED_MAX_MINUTES is
+  capped. A lane with no observed progress comment keeps the activity rule unchanged. The
+  comment is read from the same comments read as builder notes and endings: no extra request.
 - Standing guarantees: the watcher never writes ledger or heartbeat state; under
   the store its only write is its own loop-lock sidecar (`wave-watch-locks/`);
   `--log` writes the caller-selected log. The `note-answered` verb alone writes
@@ -1457,14 +1466,84 @@ def _cloud_terminals(comments, watched, answered):
     return sorted(entries, key=lambda entry: entry["launchId"])
 
 
+def _cloud_progress(comments, watched):
+    """{launch id: the lane's progress comment} from one comments read; the lane's most recently updated wins.
+
+    An entry is `commentId`, `updatedAt`, `updatedEpoch`, `phase` and `expectedSeconds`. Never raises
+    on a malformed element: one without a usable id, string body, progress header or readable
+    `updated_at` is skipped.
+    """
+    newest = {}
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        comment_id, body = comment.get("id"), comment.get("body")
+        if not _valid_positive_int(comment_id) or not isinstance(body, str):
+            continue
+        # bite-axis: HEADER — only a body whose first line is the progress header is a progress comment.
+        fields = cb.parse_progress(body)
+        if fields is None:
+            continue
+        updated = _parse_activity_time(comment.get("updated_at"))
+        if updated is None:
+            continue
+        lane = _comment_lane(comment, watched)
+        if lane is None:
+            continue
+        key = (updated, comment_id)
+        # bite-axis: NEWEST — the lane's most recently updated progress comment decides.
+        if lane[0] not in newest or key > newest[lane[0]][0]:
+            newest[lane[0]] = (key, {
+                "commentId": comment_id,
+                "updatedAt": comment["updated_at"],
+                "updatedEpoch": updated,
+                "phase": fields["phase"],
+                "expectedSeconds": fields["expectedSeconds"],
+            })
+    return {lid: entry for lid, (_key, entry) in newest.items()}
+
+
+def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now):
+    """The stale cloud lanes after progress comments decide for the lanes that have one.
+
+    A lane with a progress comment loses its activity entry and is stale only by the comment's
+    age; every other lane's entry stays. Sorted by launch id.
+    """
+    # bite-axis: PROGRESS — a lane with a progress comment is stale by that comment alone: a
+    # builder inside its stated step is not stale however quiet its GitHub activity, and one past
+    # it is stale however fresh the activity.
+    decided = {
+        lid: live_lanes[lid] for lid in progress
+        if lid in live_lanes and _is_cloud_lane(live_lanes[lid]) and live_lanes[lid].get("started")
+    }
+    stale = [entry for entry in stale_cloud_launches if entry["launchId"] not in decided]
+    for lid in sorted(decided):
+        entry = progress[lid]
+        age = now - entry["updatedEpoch"]
+        if age < 0 or age > entry["expectedSeconds"] + LIVENESS_QUIET_WINDOW_SECONDS:
+            stale.append({
+                "launchId": lid,
+                "state": None,
+                "place": ll.PLACE_CLOUD,
+                "progressAgeSeconds": round(age, 3),
+                "progressExpectedSeconds": entry["expectedSeconds"],
+                "phase": entry["phase"],
+                "quietWindowSeconds": LIVENESS_QUIET_WINDOW_SECONDS,
+                "cloudSessionName": decided[lid].get("cloudSessionName"),
+                "cloudSessionId": decided[lid].get("cloudSessionId"),
+            })
+    return sorted(stale, key=lambda entry: entry["launchId"])
+
+
 def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
-    note_state, known_slug=None, slug_cell=None,
+    note_state, known_slug=None, slug_cell=None, progress_out=None,
 ):
     """(notes, cloud_terminals) on live started cloud lanes' issues, from one comments read.
 
     Notes are unanswered builder notes by comment id; terminals are the lanes whose newest
-    ending comment is a handback, stop or park not recorded answered.
+    ending comment is a handback, stop or park not recorded answered. When `progress_out` is a
+    dict and a request was made, it is filled with `_cloud_progress` over what was observed.
     """
     watched = {
         lid: info for lid, info in live_lanes.items()
@@ -1493,6 +1572,8 @@ def _evaluate_cloud_comments(
     if not state:
         # Disclose the incomplete read, but still evaluate whatever was observed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+    if isinstance(progress_out, dict):
+        progress_out.update(_cloud_progress(comments, watched))
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     notes = [_builder_note(comment, watched, answered) for comment in comments]
@@ -1547,12 +1628,15 @@ def note_answered(repo_root, comment_id, *, env=None):
         }
 
 
-def _cloud_lanes_payload(live_lanes, cloud_state=None):
+def _cloud_lanes_payload(live_lanes, cloud_state=None, progress_state=None):
     """The `cloudLanes` result key for a batch's live cloud lanes; {} when there are none.
 
-    A lane whose activity was read carries `activityAgeSeconds`; a failed read leaves it out.
+    A lane whose activity was read carries `activityAgeSeconds`; a failed read leaves it out. A
+    started lane with a progress comment carries `phase`, `progressAgeSeconds` and
+    `progressExpectedSeconds`; one without carries none of the three.
     """
     cached = cloud_state[0][1] if cloud_state and cloud_state[0] else {}
+    progress = progress_state[0] if progress_state and progress_state[0] else {}
     now = time.time()
     entries = []
     for lid, info in sorted(live_lanes.items()):
@@ -1569,6 +1653,10 @@ def _cloud_lanes_payload(live_lanes, cloud_state=None):
         )
         if info.get("started") and activity_time is not None:
             entry["activityAgeSeconds"] = round(_cloud_activity_age(info, activity_time, now), 3)
+        if info.get("started") and lid in progress:
+            entry["phase"] = progress[lid]["phase"]
+            entry["progressAgeSeconds"] = round(now - progress[lid]["updatedEpoch"], 3)
+            entry["progressExpectedSeconds"] = progress[lid]["expectedSeconds"]
         entries.append(entry)
     return {"cloudLanes": entries} if entries else {}
 
@@ -2250,6 +2338,7 @@ def _evaluate_tick(
     cloud_state=None,
     cloud_payload_out=None,
     note_state=None,
+    progress_state=None,
 ):
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
@@ -2344,7 +2433,6 @@ def _evaluate_tick(
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
             known_slug=repo_slug, slug_cell=slug_cell,
         )
-        stale_live_launches = stale_live_launches + stale_cloud_launches
         # No fresh clock read: the notes window is fixed from the activity grant, so it
         # still holds one request's minimum after an activity request spends its grant.
         if arm_remaining <= 0:
@@ -2353,16 +2441,25 @@ def _evaluate_tick(
             notes_deadline = max(
                 cloud_deadline, activity_deadline + _MIN_PR_POLL_SECONDS,
             )
+        progress = {}
         builder_notes, cloud_terminals = _evaluate_cloud_comments(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
-            known_slug=repo_slug, slug_cell=slug_cell,
+            known_slug=repo_slug, slug_cell=slug_cell, progress_out=progress,
         )
+        if progress and progress_state is not None:
+            progress_state[0] = progress
+        # bite-axis: PROGRESS — the progress comments the same read observed replace the activity
+        # verdict for their lanes before the stale set joins the tick's.
+        stale_cloud_launches = _apply_cloud_progress(
+            stale_cloud_launches, live_lanes, progress, time.time(),
+        )
+        stale_live_launches = stale_live_launches + stale_cloud_launches
         # bite-axis: CLOUD ENDING — a cloud lane's ending comment joins the lane-terminal
         # set before the event is built, so it is reported and seen by alsoObserved.
         terminal_launches.extend(cloud_terminals)
 
-    cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state)
+    cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state, progress_state)
     if cloud_payload_out is not None:
         cloud_payload_out.update(cloud_payload)
 
@@ -2412,6 +2509,7 @@ def _timer_at_deadline(
     pr_sampled,
     add_window_degradations,
     cloud_state=None,
+    progress_state=None,
 ):
     _batch_lanes, live_lanes, deadline_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded,
@@ -2426,7 +2524,7 @@ def _timer_at_deadline(
             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
     return _event_result(
         EVENT_TIMER, batch_id, degraded,
-        **_cloud_lanes_payload(live_lanes, cloud_state)
+        **_cloud_lanes_payload(live_lanes, cloud_state, progress_state)
     )
 
 
@@ -2509,6 +2607,7 @@ def watch_arm(
     pr_sampled=None,
     cloud_state=None,
     note_state=None,
+    progress_state=None,
 ):
     """Windowed watch — one arm until the first event or arm deadline."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -2555,6 +2654,8 @@ def watch_arm(
             cloud_state = [None]
         if note_state is None:
             note_state = [None]
+        if progress_state is None:
+            progress_state = [None]
 
         start = monotonic()
         deadline = start + max_seconds
@@ -2581,6 +2682,7 @@ def watch_arm(
                 ignore_set=ignore_set,
                 cloud_state=cloud_state,
                 note_state=note_state,
+                progress_state=progress_state,
             )
             if tick_result is not None:
                 return _with_ledger_path(tick_result, resolved_ledger_path)
@@ -2595,6 +2697,7 @@ def watch_arm(
                     pr_sampled=pr_sampled,
                     add_window_degradations=True,
                     cloud_state=cloud_state,
+                    progress_state=progress_state,
                 ), resolved_ledger_path)
 
             tick = max(
@@ -2655,6 +2758,7 @@ def run(
         stack_state = [None]
         pr_sampled = [False]
         cloud_state = [None]
+        progress_state = [None]
         cloud_payload = {}
 
         start = monotonic()
@@ -2681,6 +2785,7 @@ def run(
             cloud_state=cloud_state,
             cloud_payload_out=cloud_payload,
             note_state=[None],
+            progress_state=progress_state,
         )
         if tick_result is not None:
             return _with_ledger_path(tick_result, resolved_ledger_path)
@@ -2782,6 +2887,7 @@ def loop(
         pr_sampled = [False]
         cloud_state = [None]
         note_state = [None]
+        progress_state = [None]
         last_cloud_lanes = [None]
         total_start = monotonic()
         total_deadline = (
@@ -2840,6 +2946,7 @@ def loop(
                 pr_sampled=pr_sampled,
                 cloud_state=cloud_state,
                 note_state=note_state,
+                progress_state=progress_state,
             )
 
             result_degraded = set(result.get("degraded", []))
