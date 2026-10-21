@@ -2,10 +2,15 @@
 """Run a break-it test the test role wrote as text, in a throwaway copy, and check it was kept (#1800).
 
 Stdlib only. A break-it test runs **only** inside a detached copy of the reviewed head: it never
-touches the caller's tree, index or HEAD, never writes outside the copy, and its process tree never
-outlives the call. Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
+touches the caller's tree, index or HEAD, and its process tree never outlives the call. The runner
+itself writes only inside the copy. The copy links the reviewed checkout's installed, untracked
+dependency directories (``DEPENDENCY_DIRS``); a test may write untracked cache files inside a linked
+directory, such as vite's ``node_modules/.vite-temp``, but no tracked file of the reviewed checkout is
+written, and a dependency tree that links back into the checkout's tracked files is never linked.
+Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
 and the caller decides from the record; nothing is raised."""
 import hashlib
+import json
 import os
 import posixpath
 import re
@@ -38,6 +43,10 @@ OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
 REASON_COMMAND_NOT_FOUND = "command-not-found"
 REASON_MODULE_NOT_FOUND = "module-not-found"
+REASON_DEPENDENCY_LINK_FAILED = "dependency-link-failed"
+REASON_DEPENDENCY_LINK_UNSAFE = "dependency-link-unsafe"
+DEPENDENCY_DIRS = ("node_modules",)
+_JS_LAUNCHERS = frozenset(["npm", "npx", "pnpm", "yarn"])
 _COMMAND_NOT_FOUND_EXIT = 127
 _COMMAND_NOT_FOUND_RE = re.compile(r"command not found")
 _MODULE_NOT_FOUND_RE = re.compile(
@@ -70,7 +79,8 @@ BLOCK_TEMPLATE = "\n".join([
 ])
 RUN_RULES = (
     "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
-    "files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
+    "files plus the reviewed checkout's installed `node_modules` when it has one: one command, "
+    "optionally led by `NAME=value` settings, with no pipes, redirects, "
     "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run. A `run` "
     "whose program is `python` or `python3` (or another Python interpreter path), or, when the "
     "project's `breakItInterpreter` calibration is set, `pytest` or `py.test` (run as "
@@ -666,6 +676,62 @@ def _already_kept(copy, rel, sha):
     return hashlib.sha256(data).hexdigest() == sha
 
 
+def _scan_entries(directory):
+    """The paths of every entry of ``directory`` and of each ``@``-prefixed scope directory beneath it."""
+    found = []
+    for name in sorted(os.listdir(directory)):
+        entry = os.path.join(directory, name)
+        found.append(entry)
+        if name.startswith("@") and os.path.isdir(entry) and not os.path.islink(entry):
+            found.extend(os.path.join(entry, sub) for sub in sorted(os.listdir(entry)))
+    return found
+
+
+def _link_dependencies(repo_root, copy):
+    """Link the reviewed checkout's installed dependency directories into ``copy``. None on success or when
+    there is nothing to do, else the not-run reason."""
+    root_real = os.path.realpath(repo_root)
+    for name in DEPENDENCY_DIRS:
+        source = os.path.join(os.path.abspath(repo_root), name)
+        target = os.path.join(copy, name)
+        # axis: a dependency directory the head tracks is already in the copy and is never replaced by a link
+        if os.path.lexists(target) or not os.path.isdir(source):
+            continue
+        src_real = os.path.realpath(source)
+        try:
+            for entry in _scan_entries(source):
+                if not os.path.islink(entry):
+                    continue
+                real = os.path.realpath(entry)
+                inside_root = real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep)
+                inside_src = real == src_real or real.startswith(src_real.rstrip(os.sep) + os.sep)
+                # axis: a package that links back into the reviewed checkout's tracked tree is never linked, so a test cannot write a tracked file through it
+                if inside_root and not inside_src:
+                    return REASON_DEPENDENCY_LINK_UNSAFE
+            os.symlink(source, target, target_is_directory=True)
+        except OSError:
+            # axis: a scan or link that fails reads not-run, never a run without the dependencies
+            return REASON_DEPENDENCY_LINK_FAILED
+    return None
+
+
+def _declares_dependencies(copy):
+    """True when the copy's root ``package.json`` (a regular file, read without following a symlink)
+    declares a non-empty ``dependencies`` or ``devDependencies`` object."""
+    target = os.path.join(copy, "package.json")
+    try:
+        if not stat.S_ISREG(os.lstat(target).st_mode):
+            return False
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            data = json.loads(fh.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return any(isinstance(data.get(key), dict) and data[key] for key in ("dependencies", "devDependencies"))
+
+
 def _run_contained(argv, env, copy, repo_root, token, timeout):
     """Run ``argv`` in ``copy`` under the reaper, with the token and working-directory sweeps, keeping only the
     output tail. Returns ``(launch_failed, timed_out, returncode, output, setup)``, ``setup`` being the setup-failure
@@ -736,6 +802,10 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
     if added.returncode != 0:
         return rec(OUTCOME_NOT_RUN, "copy-failed",
                    output=_tail_text(added.stderr, True))
+    # axis: the dependencies are linked before the block is written, so a block path under a linked directory meets a symlinked ancestor and is refused `path-escapes`
+    unlinked = _link_dependencies(repo_root, copy)
+    if unlinked:
+        return rec(OUTCOME_NOT_RUN, unlinked)
     # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
     if write and _already_kept(copy, block["path"], block.get("sha256")):
         write = False
@@ -754,6 +824,11 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
         # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
         if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
             return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
+    # axis: a JavaScript launcher with dependencies declared and none installed is not launched, so npx never falls back to a global or cached runner and reads passed or failed without the project's dependencies
+    if (os.path.basename(argv[0]) in _JS_LAUNCHERS and _declares_dependencies(copy)
+            and not os.path.lexists(os.path.join(copy, "node_modules"))):
+        return rec(OUTCOME_NOT_RUN, REASON_MODULE_NOT_FOUND,
+                   output="the copy holds package.json with dependencies but the reviewed checkout has no installed node_modules")
     token = uuid.uuid4().hex
     launch_failed, timed_out, code, output, setup = _run_contained(argv, env, copy, repo_root, token, timeout)
     if launch_failed and not timed_out:
