@@ -92,10 +92,11 @@ def _only_false(result, name):
 
 def test_the_interface_constants_are_exact():
     assert CR.CONDITION_ORDER == (
-        "setup", "passPresent", "passLive", "version", "calibration", "platform")
+        "setup", "passPresent", "passLive", "version", "dependencyHook", "calibration", "platform")
     assert CR.REASON_FOR == {
         "setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
-        "version": "version", "calibration": "calibration", "platform": "unreachable"}
+        "version": "version", "dependencyHook": "dependency-hook", "calibration": "calibration",
+        "platform": "unreachable"}
     assert CR.REPORTED_KEYS == ("pluginVersion", "noPass", "unreachable")
 
 
@@ -397,7 +398,8 @@ def test_everything_false_but_setup_reports_the_pass(tmp_path):
     repo, store = _ready(tmp_path, pass_lapses=PAST, plugin_version="1.2.2")
     got = _read(repo, store, stamp_fn=lambda cwd, root: OTHER_STAMP,
                 reported={"noPass": True, "unreachable": True})
-    assert got["conditions"] == dict(ALL_FALSE, setup=True)
+    # the fixture has the dependency hook off, so that condition holds whatever the commit
+    assert got["conditions"] == dict(ALL_FALSE, setup=True, dependencyHook=True)
     assert got["reason"] == "no-pass"
 
 

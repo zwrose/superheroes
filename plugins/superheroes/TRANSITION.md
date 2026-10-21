@@ -17,6 +17,17 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **A project that lists setup commands and declined the dependency hook before this release may have no setup inputs (item 18) stored, so a lockfile change does not make the cloud check report the setup text out of date.** Set item 18 through configure, or run the hook offer again and answer, then write and paste new setup text. See [Configure: the hook offer saves the detected inputs on either answer](#configure-the-hook-offer-saves-the-detected-inputs-on-either-answer).
+- **After switching.** **Nothing is owed for a project with the dependency hook (item 19) off.** A project with it on, whose launch branch lacks the committed, registered hook, now launches on the owner's machine with reason `dependency-hook` until the hook files are committed and pushed on that branch. See [Cloud readiness: the dependency hook on the launched commit](#cloud-readiness-the-dependency-hook-on-the-launched-commit).
+
+### Cloud readiness: the dependency hook on the launched commit
+
+- Cloud readiness (`lib/cloud_ready.py`) has a seventh condition, `dependencyHook`, placed before `calibration` in `CONDITION_ORDER`. When both fail, the owner is told to bring the hook onto the branch first, because a re-paste cannot finish while the clone lacks the registered hook. Its reason is `dependency-hook`: "The branch this build starts from doesn't carry the dependency hook, so the cloud could build it with out-of-date dependencies."
+- With item 19 not exactly `true`, or item 17 empty or unset, nothing changes: the condition is true and git is never read for it.
+- With the hook on, the condition is true only when the commit the cloud session starts on carries the hook. The script holds exactly the bytes `cloud_dependency_hook.script_text` writes for the stored commands and inputs (an unset item 18 reads as an empty list), as a regular file. `.claude/settings.json` is a regular file whose JSON registers the hook command as an enabled startup `SessionStart` command hook, by the same rule the script's record mode applies; `disableAllHooks: true` fails it.
+- The launch checks `baseCommit`, the commit the session starts on, never `adoptsHead`: an adopted head is checked out only at builder intake, after the start-of-session hook ran. For an adoption, every setup input listed in item 18 must also be identical at `baseCommit` and `adoptsHead`. A commit, file or entry that cannot be read is not ready.
+- `cloud_ready.readiness` gains the keywords `commit` (the commit the session starts on; the checkout's `HEAD` when None) and `adopted` (the adopted head). `launch_place.route` passes `premise["baseCommit"]` and `premise["adoptsHead"]` when it calls the real readiness; an injected `readiness_fn` is called as before.
+- `cloud_dependency_hook.branch_gap(repo_root, commit, commands, inputs, adopted=None)` returns None or one of `commit-unreadable`, `script-missing`, `script-differs`, `settings-not-registered` and `adopted-inputs-differ`. `cloud_setup_text.branch_hook_gap(cwd, root=None, commit=None, adopted=None)` is the reader readiness calls; it returns None without reading git when the hook is off.
+- The `Still on your machine` line re-reads the condition, so it clears once the hook is on the branch. The input files stay out of the setup stamp, so a changed lockfile still asks for no re-paste.
 
 ### Configure: the hook offer saves the detected inputs on either answer
 

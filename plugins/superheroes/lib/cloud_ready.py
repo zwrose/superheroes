@@ -2,7 +2,7 @@
 """The readiness reader: whether the cloud can take a build right now.
 
 Stdlib plus plugin imports only. The setting and the setup record come only from
-`cloud_setup.read`; the calibration stamp comes only from the formula the cloud check uses. Six
+`cloud_setup.read`; the calibration stamp comes only from the formula the cloud check uses. Seven
 conditions are judged in a fixed order; the first one that fails names the reason. Anything that
 cannot be read counts as not ready, never as ready, and `readiness` never raises."""
 import datetime
@@ -18,9 +18,11 @@ import cloud_check  # noqa: E402
 import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 
-CONDITION_ORDER = ("setup", "passPresent", "passLive", "version", "calibration", "platform")
+CONDITION_ORDER = ("setup", "passPresent", "passLive", "version", "dependencyHook", "calibration",
+                   "platform")
 REASON_FOR = {"setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
-              "version": "version", "calibration": "calibration", "platform": "unreachable"}
+              "version": "version", "dependencyHook": "dependency-hook",
+              "calibration": "calibration", "platform": "unreachable"}
 REPORTED_KEYS = ("pluginVersion", "noPass", "unreachable")
 # The one condition a failed check's part forces false; any other part, or a marker that cannot be
 # read, forces the setup condition false.
@@ -110,7 +112,7 @@ def _failed_check(cwd, account, root):
 
 
 def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen,
-               *, persist_backfill=True):
+               *, persist_backfill=True, commit=None, adopted=None):
     if account is None:
         account = cloud_setup.launching_account(env, cwd)
     advisor = _advisor_version(advisor_version)
@@ -154,6 +156,12 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
         if failed is not None and "version" in failed:
             cloud_version = None
     try:
+        # axis: with the hook on, the commit the session starts on must carry it; unreadable is not ready
+        conditions["dependencyHook"] = cloud_setup_text.branch_hook_gap(
+            cwd, root, commit, adopted) is None
+    except Exception:
+        conditions["dependencyHook"] = False
+    try:
         # axis: the calibration matches only when the placed stamp equals the recorded one — see bite-proof record wo_a_place_call
         conditions["calibration"] = (stamp_fn or cloud_check._placed_stamp)(cwd, root) == record.get(
             "calibrationStamp")
@@ -170,7 +178,8 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
 
 
 def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=None,
-              root=None, env=None, stamp_fn=None, persist_backfill=True):
+              root=None, env=None, stamp_fn=None, persist_backfill=True, commit=None,
+              adopted=None):
     """Whether the cloud can take a build now, with every condition and the facts behind them.
     Never raises; any unexpected failure reads as not ready.
 
@@ -179,11 +188,15 @@ def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=N
     setup is on record and the latest check for the account failed; then it is the failed parts
     the check left (an empty list when that note cannot be read). A failed check forces its parts'
     conditions false: the reviewer part the pass, the version part the version, the calibration
-    part the calibration, and any other part, or a marker that cannot be read, the setup."""
+    part the calibration, and any other part, or a marker that cannot be read, the setup.
+
+    `commit` is the commit the cloud session starts on (the checkout's HEAD when None); with the
+    dependency hook on, it must carry the hook. `adopted` is, for a launch that adopts a branch, the
+    adopted head, whose setup inputs must match those at `commit`."""
     seen = {"setting": False, "account": None}
     try:
         return _readiness(
             cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen,
-            persist_backfill=persist_backfill)
+            persist_backfill=persist_backfill, commit=commit, adopted=adopted)
     except Exception:
         return _result(_all_false(), setting=seen["setting"], account=seen["account"])

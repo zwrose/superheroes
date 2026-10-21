@@ -70,6 +70,14 @@ REASONS = {
         "short": "Paste the new setup text to fix it.",
         "wasnt": "its calibration doesn't match this machine's.",
     },
+    "dependency-hook": {
+        "words": ("The branch this build starts from doesn't carry the dependency hook, so the "
+                  "cloud could build it with out-of-date dependencies."),
+        "fix": ("To fix it, commit and push the dependency hook files configure wrote (the "
+                "settings file and the hook script) on that branch, then launch again."),
+        "short": "Bring the dependency hook onto that branch to fix it.",
+        "wasnt": "the branch it starts from doesn't carry the dependency hook.",
+    },
     "unreachable": {
         "words": "The cloud platform couldn't be reached.",
         "fix": "I'll try the cloud again at the next launch.",
@@ -194,8 +202,16 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
     cloud_version = advisor_version = failed_check = None
     try:
         reported = premise.get("reportedCloud")
-        now = (readiness_fn or cloud_ready.readiness)(
-            cwd, reported=reported, root=root, env=env)
+        if readiness_fn is not None:
+            now = readiness_fn(cwd, reported=reported, root=root, env=env)
+        else:
+            base = premise.get("baseCommit")
+            adopts = premise.get("adoptsHead")
+            # the session starts on baseCommit; an adopted head is checked out only after SessionStart
+            now = cloud_ready.readiness(
+                cwd, reported=reported, root=root, env=env,
+                commit=base if isinstance(base, str) and base else None,
+                adopted=adopts if isinstance(adopts, str) and adopts else None)
         setting = now.get("setting") is True
         cloud_version = now.get("cloudVersion")
         advisor_version = now.get("advisorVersion")

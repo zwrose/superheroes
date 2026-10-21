@@ -251,6 +251,13 @@ def test_the_eight_reasons_are_the_boards_words():
             "words": "The cloud's calibration doesn't match this machine's.",
             "fix": SETUP_TEXT_FIX, "short": "Paste the new setup text to fix it.",
             "wasnt": "its calibration doesn't match this machine's."},
+        "dependency-hook": {
+            "words": ("The branch this build starts from doesn't carry the dependency hook, so "
+                      "the cloud could build it with out-of-date dependencies."),
+            "fix": ("To fix it, commit and push the dependency hook files configure wrote (the "
+                    "settings file and the hook script) on that branch, then launch again."),
+            "short": "Bring the dependency hook onto that branch to fix it.",
+            "wasnt": "the branch it starts from doesn't carry the dependency hook."},
         "unreachable": {
             "words": "The cloud platform couldn't be reached.",
             "fix": "I'll try the cloud again at the next launch.",

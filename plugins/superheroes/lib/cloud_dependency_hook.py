@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import tempfile
 
@@ -64,6 +65,109 @@ _STARTS_LINES = [
 _starts_scope = {"re": re}
 exec("\n".join(_STARTS_LINES), _starts_scope)
 _group_starts = _starts_scope["starts"]
+
+
+_GIT_TIMEOUT_SECONDS = 30
+_REGULAR_MODES = ("100644", "100755")
+
+
+def _registers(data):
+    """True when settings document `data` registers the hook the way the script's record mode
+    accepts: hooks not all disabled, and an enabled startup SessionStart group holding our command."""
+    try:
+        ok = isinstance(data, dict) and data.get("disableAllHooks") is not True
+        entries = data.get("hooks", {}).get("SessionStart", []) if ok else []
+        return bool(ok and any(
+            isinstance(h, dict) and h.get("type") == "command" and h.get("command") == HOOK_COMMAND
+            for e in entries if isinstance(e, dict) and _group_starts(e) for h in (e.get("hooks") or [])))
+    except Exception:
+        return False
+
+
+def _git_out(repo_root, *args):
+    """The stdout bytes of one bounded git read, or None when it could not run or exited non-zero."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}
+    try:
+        done = subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, env=env,
+                              timeout=_GIT_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _resolve(repo_root, commit):
+    if not isinstance(commit, str) or not commit or commit.startswith("-"):
+        return None  # never handed to git, where a leading dash reads as an option
+    out = _git_out(repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % commit)
+    text = out.decode("utf-8", "replace").strip() if out is not None else ""
+    return text or None
+
+
+def _entry(repo_root, resolved, path):
+    """(mode, type, oid) of `path` in the tree at `resolved`, None when absent, False when unreadable."""
+    out = _git_out(repo_root, "ls-tree", "-z", resolved, "--", path)
+    if out is None:
+        return False
+    for raw in out.split(b"\0"):
+        if not raw:
+            continue
+        meta, _, name = raw.decode("utf-8", "replace").partition("\t")
+        fields = meta.split(" ")
+        if name == path and len(fields) == 3:
+            return tuple(fields)
+    return None
+
+
+def _regular(entry):
+    return bool(entry) and entry[0] in _REGULAR_MODES and entry[1] == "blob"
+
+
+def _blob(repo_root, entry):
+    """The bytes of the blob an entry names, None when they cannot be read."""
+    return _git_out(repo_root, "cat-file", "blob", entry[2])
+
+
+def branch_gap(repo_root, commit, commands, inputs, adopted=None):
+    """None when the tree at `commit` carries this hook (the script exactly as `script_text` writes
+    it, and settings that register it as record mode accepts) and, with `adopted`, every path in
+    `inputs` is identical at `adopted`; else a reason token: commit-unreadable, script-missing,
+    script-differs, settings-not-registered or adopted-inputs-differ. Never raises."""
+    resolved = _resolve(repo_root, commit)
+    if resolved is None:
+        return "commit-unreadable"  # axis: a commit that does not resolve cannot be shown to carry the hook
+    script = _entry(repo_root, resolved, SCRIPT_REL)
+    settings = _entry(repo_root, resolved, SETTINGS_REL)
+    if script is False or settings is False:
+        return "commit-unreadable"  # axis: a tree that cannot be listed is not shown to carry the hook
+    if script is None:
+        return "script-missing"  # axis: a commit without the script starts a session with no hook
+    if not _regular(script):
+        return "script-differs"  # axis: a symlink or directory at the script path is not the script configure wrote
+    wanted = script_text(commands, inputs).encode("utf-8")
+    if _blob(repo_root, script) != wanted:
+        return "script-differs"  # axis: script bytes that differ from configure's mean a stale or other hook runs
+    body = _blob(repo_root, settings) if _regular(settings) else None
+    try:
+        data = json.loads(body.decode("utf-8")) if body is not None else None
+    except ValueError:
+        data = None
+    if not _registers(data):
+        return "settings-not-registered"  # axis: settings that do not register an enabled startup command never run the script
+    if adopted is not None:
+        base = _resolve(repo_root, adopted)
+        if base is None:
+            return "commit-unreadable"  # axis: an adopted head that does not resolve cannot be compared
+        for path in inputs:
+            ours = _entry(repo_root, resolved, path)
+            theirs = _entry(repo_root, base, path)
+            if ours is False or theirs is False:
+                return "commit-unreadable"  # axis: an input that cannot be listed cannot be compared
+            if ours is None and theirs is None:
+                continue
+            if not (ours and theirs and ours[1] == "blob" and theirs[1] == "blob"
+                    and ours[2] == theirs[2]):
+                return "adopted-inputs-differ"  # axis: an input changed by the adopted branch is not refreshed by the hook already started
+    return None
 
 
 # a settings `env` key that names a credential, and the one value that is allowed there: a bare

@@ -28,7 +28,7 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The condition behind each reason, read back out of the readiness registry.
 _CONDITION_FOR = {reason: name for name, reason in cloud_ready.REASON_FOR.items()}
 # The reasons a condition this machine can read again clears.
-_REREAD_REASONS = tuple(cloud_ready.REASON_FOR[name] for name in ("setup", "passLive", "calibration"))
+_REREAD_REASONS = tuple(cloud_ready.REASON_FOR[name] for name in ("setup", "passLive", "dependencyHook", "calibration"))
 # The reason whose fact the cloud reports as a plugin version.
 _VERSION_REASON = cloud_ready.REASON_FOR["version"]
 # Where each reason stands in the cloud check's order: the lower the number, the sooner it is shown.
