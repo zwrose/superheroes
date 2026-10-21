@@ -1512,6 +1512,204 @@ def test_write_resume_omitted_expected_items_inherit(tmp_path):
     assert opened["expectedItems"] == ["keep.txt"]
 
 
+def _commit_env():
+    env = dict(os.environ)
+    env.update({
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.local",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.local",
+    })
+    return env
+
+
+def _commit_files(wt, files, msg="earlier attempt"):
+    """Commit ``files`` (name -> content) in ``wt``; return the new commit sha."""
+    for name, content in files.items():
+        path = os.path.join(wt, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        _git(wt, "add", name)
+    subprocess.run(
+        ["git", "-C", wt, "commit", "-qm", msg],
+        capture_output=True, text=True, check=True, env=_commit_env(),
+    )
+    return _git(wt, "rev-parse", "HEAD").stdout.strip()
+
+
+def _head(wt):
+    return _git(wt, "rev-parse", "HEAD").stdout.strip()
+
+
+def _continuation_fixture(tmp_path):
+    """A worktree whose earlier attempt already committed ``item.txt``."""
+    wt, _main = _linked_worktree(tmp_path)
+    original_base = _head(wt)
+    attempt_head = _commit_files(wt, {"item.txt": "delivered earlier\n"})
+    return wt, original_base, attempt_head
+
+
+def _run_opened_records(tmp_path):
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    return [r for r in records if r.get("kind") == "run-opened"]
+
+
+def test_write_continuation_counts_earlier_attempts_committed_item(tmp_path):
+    wt, original_base, attempt_head = _continuation_fixture(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, base_sha=attempt_head,
+        items_base_sha=original_base, expected_items=["item.txt"],
+    )
+    assert res["ok"] is True, res
+    assert res["itemCheck"]["missing"] == []
+    assert res["itemCheck"]["delivered"] == 1
+    (opened,) = _run_opened_records(tmp_path)
+    assert opened["itemsBaseSha"] == original_base
+    assert opened["baseSha"] == attempt_head
+
+
+def test_write_continuation_head_default_base_counts_earlier_commit(tmp_path):
+    wt, original_base, _attempt_head = _continuation_fixture(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, items_base_sha=original_base, expected_items=["item.txt"],
+    )
+    assert res["ok"] is True, res
+    assert res["itemCheck"]["missing"] == []
+
+
+def test_write_continuation_untouched_item_still_forfeits(tmp_path):
+    wt, original_base, attempt_head = _continuation_fixture(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, base_sha=attempt_head, items_base_sha=original_base,
+        expected_items=["item.txt", "untouched.txt"],
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == ED.ITEM_DETAIL_UNDELIVERED
+    assert res["itemCheck"]["missing"] == ["untouched.txt"]
+    assert res["itemCheck"]["delivered"] == 1
+
+
+def test_write_without_items_base_the_earlier_commit_does_not_count(tmp_path):
+    wt, _original_base, attempt_head = _continuation_fixture(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, base_sha=attempt_head, expected_items=["item.txt"],
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.ITEM_DETAIL_UNDELIVERED
+    assert res["itemCheck"]["missing"] == ["item.txt"]
+    (opened,) = _run_opened_records(tmp_path)
+    assert "itemsBaseSha" not in opened
+
+
+def test_write_items_base_without_declared_items_is_journaled_no_effect(tmp_path):
+    wt, original_base, _attempt_head = _continuation_fixture(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, items_base_sha=original_base)
+    assert res["ok"] is True, res
+    assert "itemCheck" not in res
+    (opened,) = _run_opened_records(tmp_path)
+    assert opened["itemsBaseSha"] == original_base
+
+
+def _sibling_commit(wt, parent):
+    """A commit that is neither an ancestor nor a descendant of ``wt``'s HEAD."""
+    tree = _git(wt, "rev-parse", "%s^{tree}" % parent).stdout.strip()
+    done = subprocess.run(
+        ["git", "-C", wt, "commit-tree", tree, "-p", parent, "-m", "sibling"],
+        capture_output=True, text=True, check=True, env=_commit_env(),
+    )
+    return done.stdout.strip()
+
+
+def test_write_items_base_refuses_at_open(tmp_path):
+    wt, original_base, attempt_head = _continuation_fixture(tmp_path)
+    sibling = _sibling_commit(wt, original_base)
+    cases = [
+        ("short", "abc123", "items-base-sha-invalid"),
+        ("uppercase", attempt_head.upper(), "items-base-sha-invalid"),
+        ("non-hex", "z" * 40, "items-base-sha-invalid"),
+        ("unresolvable", "0" * 40, "items-base-sha-not-ancestor"),
+        ("sibling", sibling, "items-base-sha-not-ancestor"),
+    ]
+    for label, items_base, detail in cases:
+        run_dir = str(tmp_path / ("run-%s" % label))
+        fake = FakeRunner([])
+        res = _dispatch_write(
+            tmp_path, fake, cwd=wt, run_dir=run_dir, base_sha=attempt_head,
+            items_base_sha=items_base, expected_items=["item.txt"],
+        )
+        assert res["ok"] is False, label
+        assert res["detail"] == detail, (label, res)
+        assert res["attempts"] == 0, label
+        assert res["forfeited"] is False, label
+        assert fake.calls == [], label
+        records, _ = ED._journal_read(run_dir)
+        assert not [r for r in records if r.get("kind") == "run-opened"], label
+        assert not os.path.exists(ED._worktree_lease_path(os.path.realpath(wt))), label
+
+
+def test_write_items_base_descendant_of_base_refuses(tmp_path):
+    wt, original_base, attempt_head = _continuation_fixture(tmp_path)
+    fake = FakeRunner([])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, base_sha=original_base,
+        items_base_sha=attempt_head, expected_items=["item.txt"],
+    )
+    assert res["detail"] == "items-base-sha-not-ancestor"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+    assert _run_opened_records(tmp_path) == []
+
+
+def test_write_items_base_equal_to_base_is_accepted(tmp_path):
+    wt, _original_base, attempt_head = _continuation_fixture(tmp_path)
+
+    class DeliverRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "fresh.txt"), "w", encoding="utf-8") as fh:
+                fh.write("new\n")
+            return _finish_codex_write_runner(argv, _build_ok_stdout())
+
+    res = _dispatch_write(
+        tmp_path, DeliverRunner(), cwd=wt, base_sha=attempt_head,
+        items_base_sha=attempt_head, expected_items=["fresh.txt"],
+    )
+    assert res["ok"] is True, res
+    assert res["itemCheck"]["missing"] == []
+    (opened,) = _run_opened_records(tmp_path)
+    assert opened["itemsBaseSha"] == attempt_head
+
+
+def test_write_resume_items_base_mismatch_and_omitted_inherits(tmp_path):
+    wt, original_base, attempt_head = _continuation_fixture(tmp_path)
+    run_dir = str(tmp_path / "run")
+    first = _dispatch_write(
+        tmp_path, FakeRunner([(_build_ok_stdout(), False, 0, "")]), cwd=wt,
+        run_dir=run_dir, base_sha=attempt_head, items_base_sha=original_base,
+        expected_items=["item.txt"], max_wait=0,
+    )
+    assert first.get("terminal") is False
+    res = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir,
+        items_base_sha=attempt_head, max_wait=0,
+    )
+    assert res["detail"] == "items-base-sha-mismatch"
+    assert res["attempts"] == 0
+    res = _dispatch_write(
+        tmp_path, FakeRunner([(_build_ok_stdout(), False, 0, "")]),
+        cwd=wt, run_dir=run_dir, max_wait=120,
+    )
+    assert res["ok"] is True, res
+    assert res["itemCheck"]["missing"] == []
+    (opened,) = _run_opened_records(tmp_path)
+    assert opened["itemsBaseSha"] == original_base
+
+
 def test_write_terminal_folded_returns_stored_before_expectation_check(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
