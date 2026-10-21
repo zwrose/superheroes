@@ -336,6 +336,19 @@ def _dependency_hook_on(cwd, root, commands):
         "setup-commands-unreadable", None) is True
 
 
+def branch_hook_gap(cwd, root=None, commit=None, adopted=None):
+    """None when the dependency hook is off; otherwise cloud_dependency_hook.branch_gap for `commit`
+    (the checkout's HEAD when None). A hook that is off reads no git. Raises _Refused or
+    store_core.RepoRootUnavailable when the settings or the repository root cannot be read."""
+    commands = _setup_commands(cwd, root)
+    if not _dependency_hook_on(cwd, root, commands):
+        return None
+    inputs = _stored_setup_inputs(cwd, root, commands)
+    repo_root = store_core.repo_root(cwd)
+    return cloud_dependency_hook.branch_gap(
+        repo_root, commit or "HEAD", commands, inputs or [], adopted)
+
+
 def _stored_setting(cwd, root, slug, what, unreadable, malformed):
     """The stored value of the project-configuration item `slug` (named `what` in a refusal), or
     None when it is not stored. A calibration that cannot be read for it is refused with the

@@ -18,6 +18,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_ready  # noqa: E402
+import cloud_setup_text  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text  # noqa: E402
 
@@ -28,7 +29,7 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The condition behind each reason, read back out of the readiness registry.
 _CONDITION_FOR = {reason: name for name, reason in cloud_ready.REASON_FOR.items()}
 # The reasons a condition this machine can read again clears.
-_REREAD_REASONS = tuple(cloud_ready.REASON_FOR[name] for name in ("setup", "passLive", "calibration"))
+_REREAD_REASONS = tuple(cloud_ready.REASON_FOR[name] for name in ("setup", "passLive", "dependencyHook", "calibration"))
 # The reason whose fact the cloud reports as a plugin version.
 _VERSION_REASON = cloud_ready.REASON_FOR["version"]
 # Where each reason stands in the cloud check's order: the lower the number, the sooner it is shown.
@@ -211,6 +212,10 @@ def _fixed(candidate, now, cwd=None, root=None):
     if candidate["by"] == "setting" and now.get("setting") is not True and _setting_read_off(cwd, root):
         return True
     conditions = now.get("conditions") or {}
+    if reason == cloud_ready.REASON_FOR["dependencyHook"]:
+        # axis: a dependency-hook fallback is fixed only when readiness reads the hook now and the check routing runs, on the checkout's current HEAD against the launch's adopted head, finds no gap — see bite-proof record i2021_branch_hook
+        return conditions.get("dependencyHook") is True and cloud_setup_text.branch_hook_gap(
+            cwd, root, None, candidate.get("adoptsHead")) is None
     if reason in _REREAD_REASONS:
         return conditions.get(_CONDITION_FOR[reason]) is True
     if reason == _VERSION_REASON and reported.get("pluginVersion") is None:
@@ -229,8 +234,12 @@ def _fixed(candidate, now, cwd=None, root=None):
         return False
 
 
-def _candidate(call, info):
-    """What the line needs from one local fallback, kept to the shapes it can print."""
+def _candidate(call, info, premise=None):
+    """What the line needs from one local fallback, kept to the shapes it can print. `premise` is the
+    reserved record's premise: the base and adopted commits routing checked the hook on."""
+    premise = premise if isinstance(premise, dict) else {}
+    base = premise.get("baseCommit")
+    adopts = premise.get("adoptsHead")
     reported = call.get("reported")
     failed = call.get("failedCheck")
     day = launch_day(info)
@@ -242,6 +251,8 @@ def _candidate(call, info):
         "reported": reported if cloud_ready.valid_reported(reported) else None,
         "failedCheck": failed if isinstance(failed, list) and all(isinstance(p, str) for p in failed) else None,
         "observedOn": None if day is None else day.isoformat(),
+        "baseCommit": base if isinstance(base, str) and base else None,
+        "adoptsHead": adopts if isinstance(adopts, str) and adopts else None,
     }
 
 
@@ -259,14 +270,16 @@ def _fallbacks(records, launches):
         # axis: an unconfirmed cloud launch does not clear the line — see bite-proof record wo_a_launch_report
         if not info["started"] or info.get("cloudSessionUnconfirmed"):
             continue
-        call = report_place_call(reserved.get(launch_id), info["place"])
+        raw = reserved.get(launch_id)
+        call = report_place_call(raw, info["place"])
         if decides_still(call):
-            deciding.append((started_at.get(launch_id, info["reservedIndex"]), call, info))
+            premise = raw.get("premise") if isinstance(raw, dict) else None
+            deciding.append((started_at.get(launch_id, info["reservedIndex"]), call, info, premise))
     deciding.sort(key=lambda entry: entry[0])
     # axis: only the fallbacks after the last confirmed cloud launch count — see bite-proof record wo_a_launch_report
-    last_cloud = max((at for at, (_pos, call, _info) in enumerate(deciding)
+    last_cloud = max((at for at, (_pos, call, _info, _premise) in enumerate(deciding)
                       if call.get("place") == ll.PLACE_CLOUD), default=-1)
-    return [_candidate(call, info) for _pos, call, info in deciding[last_cloud + 1:]]
+    return [_candidate(call, info, premise) for _pos, call, info, premise in deciding[last_cloud + 1:]]
 
 
 def _still_fixed(candidate, now, cwd, root):
