@@ -322,7 +322,10 @@ def sanitized_view_notice(view, *, mode="review"):
         "path fails the investigation floor and forfeits this seat. "
         "This view has no origin/main, no remote, no parent commit, and only a single synthetic "
         "commit. git diff <ref>, git log, git blame, and git show <ref> cannot work here and "
-        "must not be attempted.\n"
+        "must not be attempted. "
+        "This view holds tracked files only, with no installed dependencies such as `node_modules`, "
+        "so a JavaScript test cannot run here. Do not attempt one; the review loop's break-it runner "
+        "runs break-it tests itself, in a copy that reaches the project's installed dependencies.\n"
         % head,
     ]
     if mode == MODE_BRIEF_CHECK:
