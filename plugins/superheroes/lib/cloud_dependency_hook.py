@@ -381,15 +381,16 @@ def offer_message(commands, inputs):
         "Add the dependency hook?" % (files, count, "" if count == 1 else "s"))
 
 
-def _is_ours(hook):
+def _is_ours(hook, script_rel=SCRIPT_REL):
     return (isinstance(hook, dict) and isinstance(hook.get("command"), str)
-            and _invokes_script(hook["command"]))
+            and _invokes_script(hook["command"], script_rel=script_rel))
 
 
-def _invokes_script(command):
+def _invokes_script(command, script_rel=SCRIPT_REL):
     """True when `command` runs the managed script: the script path is the program, or the argument
     of a bare bash/sh. A command that only mentions the path (an argument to another tool, a longer
-    filename such as `...sh.backup`) is not ours."""
+    filename such as `...sh.backup`) is not ours. `script_rel` names another managed script (the
+    plugin pin hook shares this editor)."""
     try:
         tokens = shlex.split(command)
     except ValueError:
@@ -399,7 +400,7 @@ def _invokes_script(command):
     if not tokens:
         return False
     target = tokens[0].replace("${CLAUDE_PROJECT_DIR}", "$CLAUDE_PROJECT_DIR")
-    return target == SCRIPT_REL or target.endswith("/" + SCRIPT_REL)
+    return target == script_rel or target.endswith("/" + script_rel)
 
 
 def _load_settings(path):
@@ -433,7 +434,7 @@ def _session_groups(obj):
     return groups if isinstance(groups, list) else []
 
 
-def _remove_ours(obj):
+def _remove_ours(obj, script_rel=SCRIPT_REL):
     """Takes every hook of ours out of `obj` (in place), dropping a group, list or key only when
     that removal emptied it. Returns the number removed."""
     removed = 0
@@ -441,12 +442,12 @@ def _remove_ours(obj):
     kept = []
     for group in groups:
         inner = group["hooks"]
-        mine = [h for h in inner if _is_ours(h)]
+        mine = [h for h in inner if _is_ours(h, script_rel=script_rel)]
         if not mine:
             kept.append(group)
             continue
         removed += len(mine)
-        group["hooks"] = [h for h in inner if not _is_ours(h)]
+        group["hooks"] = [h for h in inner if not _is_ours(h, script_rel=script_rel)]
         if group["hooks"]:
             kept.append(group)
     if removed:
