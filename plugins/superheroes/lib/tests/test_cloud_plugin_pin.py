@@ -189,6 +189,18 @@ def test_sync_rewrites_a_changed_pin_and_a_damaged_settings_entry(tmp_path):
         {"type": "command", "command": pin_mod.HOOK_COMMAND, "timeout": 300}]
 
 
+def test_sync_repairs_a_registration_whose_only_damage_is_a_resume_matcher(tmp_path):
+    pin_mod.sync(str(tmp_path), PIN)
+    settings = json.loads((tmp_path / SETTINGS_PATH).read_text())
+    groups = settings["hooks"]["SessionStart"]
+    assert len(groups) == 1
+    groups[0]["matcher"] = "resume"
+    _write(tmp_path, SETTINGS_PATH, json.dumps(settings))
+    assert pin_mod.sync(str(tmp_path), PIN) == {
+        "action": "written", "reason": None, "changed": [SETTINGS_PATH]}
+    assert pin_mod.in_tree(str(tmp_path)) == {"state": "valid", "reason": None, "pin": PIN}
+
+
 def test_the_pin_hook_and_the_dependency_hook_share_the_settings_file(tmp_path):
     root = str(tmp_path)
     assert dep.sync(root, ["echo one"], ["uv.lock"], True)["action"] == "written"
@@ -272,6 +284,14 @@ def at(root, commit="HEAD"):
 def test_at_commit_valid_for_the_files_sync_writes(tmp_path):
     root = _repo(tmp_path / "p", _good(tmp_path))
     assert at(root) == {"state": "valid", "reason": None, "pin": PIN}
+
+
+def test_at_commit_describes_the_commit_not_the_working_tree(tmp_path):
+    root = _repo(tmp_path / "p", _good(tmp_path))
+    sha = _git(root, "rev-parse", "HEAD")
+    (root / PIN_PATH).unlink()
+    assert pin_mod.at_commit(str(root), sha) == {"state": "valid", "reason": None, "pin": PIN}
+    assert pin_mod.in_tree(str(root)) == {"state": "broken", "reason": "pin-missing", "pin": None}
 
 
 def test_at_commit_valid_when_the_registration_is_untidy_but_still_runs(tmp_path):
