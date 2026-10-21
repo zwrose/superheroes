@@ -473,6 +473,53 @@ def test_edge11_an_input_that_is_a_directory_at_one_head_differs(tmp_path):
     assert _gap(repo, commit, adopted=swapped) == "adopted-inputs-differ"
 
 
+def _hooked_with_dot_slash_input(tmp_path):
+    """A hooked project whose stored item 18 is one entry: the lockfile named with a leading dot-slash
+    segment. Returns (world, the commit carrying the hook files for that list)."""
+    w = _world(tmp_path)
+    _lock(w)
+    _set_ok(w, COMMANDS_SLUG, list(COMMANDS))
+    _set_ok(w, "cloudSetupInputs", ["./" + INPUTS[0]])
+    assert _set_ok(w, HOOK_SLUG, True)["dependencyHook"]["action"] == "written"
+    start = _commit(w.cwd, "hook")
+    _record(w)
+    return w, start
+
+
+def test_adoption_changing_a_dot_slash_listed_input_differs(tmp_path):
+    w, start = _hooked_with_dot_slash_input(tmp_path)
+    _lock(w, "v2\n")
+    adopted = _commit(w.cwd, "lock changed")
+    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+
+
+def test_adoption_leaving_a_dot_slash_listed_input_unchanged_has_no_gap(tmp_path):
+    w, start = _hooked_with_dot_slash_input(tmp_path)
+    (w.repo / "other.txt").write_text("x\n")
+    adopted = _commit(w.cwd, "other file")
+    assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) is None
+
+
+def test_edge11_an_input_path_that_names_no_file_differs(tmp_path):
+    repo, _ = _edge_repo(tmp_path)
+    for n, bad in enumerate([".", "", "./"]):
+        (tmp_path / "edge" / hook.SCRIPT_REL).write_text(hook.script_text(COMMANDS, [bad]))
+        commit = _commit(repo, "inputs %d" % n)
+        assert _gap(repo, commit, adopted=commit, inputs=[bad]) == "adopted-inputs-differ"
+
+
+def test_edge11_a_symlink_input_with_an_unchanged_target_differs(tmp_path):
+    repo, _ = _edge_repo(tmp_path)
+    root = tmp_path / "edge"
+    (root / "dependency-lock.json").write_text("v1\n")
+    (root / "package-lock.json").unlink()
+    (root / "package-lock.json").symlink_to("dependency-lock.json")
+    linked = _commit(repo, "input is a symlink")
+    (root / "other.txt").write_text("x\n")
+    adopted = _commit(repo, "other file")
+    assert _gap(repo, linked, adopted=adopted) == "adopted-inputs-differ"
+
+
 def test_edge12_a_reader_that_raises_reads_as_not_ready(tmp_path, monkeypatch):
     w, bare, with_hook = _hooked(tmp_path)
     assert _ready(w)["ready"] is True

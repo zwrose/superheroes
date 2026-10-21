@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -158,14 +159,18 @@ def branch_gap(repo_root, commit, commands, inputs, adopted=None):
         if base is None:
             return "commit-unreadable"  # axis: an adopted head that does not resolve cannot be compared
         for path in inputs:
-            ours = _entry(repo_root, resolved, path)
-            theirs = _entry(repo_root, base, path)
+            norm = posixpath.normpath(path) if isinstance(path, str) and path else "."
+            if norm == ".":
+                return "adopted-inputs-differ"  # axis: an input path that names no file cannot be shown unchanged
+            ours = _entry(repo_root, resolved, norm)
+            theirs = _entry(repo_root, base, norm)
             if ours is False or theirs is False:
                 return "commit-unreadable"  # axis: an input that cannot be listed cannot be compared
             if ours is None and theirs is None:
                 continue
-            if not (ours and theirs and ours[1] == "blob" and theirs[1] == "blob"
-                    and ours[2] == theirs[2]):
+            if (ours and not _regular(ours)) or (theirs and not _regular(theirs)):
+                return "adopted-inputs-differ"  # axis: a symlink, tree or submodule input is read through its target, so equal entries prove nothing
+            if not (ours and theirs and ours[2] == theirs[2]):
                 return "adopted-inputs-differ"  # axis: an input changed by the adopted branch is not refreshed by the hook already started
     return None
 

@@ -7,7 +7,7 @@ detector again (green), and the file's sha256 compared before and after. Test fi
 `git diff --stat` cannot show a restore; the sha256 pair and the quoted restored lines are the receipt.
 Raw captures drop only pytest's `UV_NATIVE_TLS` deprecation warning line.
 
-Declared guarded-element set: G1-G13 (one entry each below; no equivalence classes, none unproven).
+Declared guarded-element set: G1-G15 (one entry each below; no equivalence classes, none unproven).
 
 Disclosure: G4's, G5's and G6's detectors are the edge tests; the parity census
 (`test_the_registration_rule_agrees_with_the_record_mode_snippet`) is a second detector for the same
@@ -841,6 +841,109 @@ for name in ("setup", "passLive", "dependencyHook", "calibration"))
 ```
 .                                                                        [100%]
 1 passed, 62 deselected in 0.46s
+```
+
+- **verdict:** RED->GREEN
+
+## G14 — branch_gap input-path normalization
+
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:165` (the `_entry` lookups take the normalized `norm`, not the raw path)
+- **axis:** a listed input written with a leading dot-slash segment is matched to its tree entry and compared, not read as absent at both commits
+- **detector:** `test_cloud_branch_hook_2021.py::test_adoption_changing_a_dot_slash_listed_input_differs` (selected with `-k "test_adoption_changing_a_dot_slash_listed_input_differs"`)
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-            ours = _entry(repo_root, resolved, norm)
+-            theirs = _entry(repo_root, base, norm)
++            ours = _entry(repo_root, resolved, path)
++            theirs = _entry(repo_root, base, path)
+```
+
+- **raw red (rc 1):** the pytest `+  where` detail lines under the assertion are omitted in this record only
+
+```
+F
+=================================== FAILURES ===================================
+___________ test_adoption_changing_a_dot_slash_listed_input_differs ____________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-44/test_adoption_changing_a_dot_s0')
+
+    def test_adoption_changing_a_dot_slash_listed_input_differs(tmp_path):
+        w, start = _hooked_with_dot_slash_input(tmp_path)
+        _lock(w, "v2\n")
+        adopted = _commit(w.cwd, "lock changed")
+>       assert CS.branch_hook_gap(w.cwd, w.root, start, adopted) == "adopted-inputs-differ"
+E       AssertionError: assert None == 'adopted-inputs-differ'
+
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:493: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_adoption_changing_a_dot_slash_listed_input_differs
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 66 deselected in 13.54s
+```
+
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `e0fbd587a224f6228f1851a4e8f5148c3b92e0e2d40087b59e7e1dee9168e625`, after the restore `e0fbd587a224f6228f1851a4e8f5148c3b92e0e2d40087b59e7e1dee9168e625` — identical; the restored lines quoted back:
+
+```
+            ours = _entry(repo_root, resolved, norm)
+            theirs = _entry(repo_root, base, norm)
+```
+
+- **raw green (rc 0):**
+
+```
+.                                                                        [100%]
+1 passed, 66 deselected in 3.49s
+```
+
+- **verdict:** RED->GREEN
+
+## G15 — branch_gap non-regular input fail-closed leg
+
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:171`
+- **axis:** a listed input that is a symlink, tree or submodule at either commit fails closed, because the hook reads it through its target and equal entries prove nothing
+- **detectors:** `test_cloud_branch_hook_2021.py::test_edge11_a_symlink_input_with_an_unchanged_target_differs` and `test_cloud_branch_hook_symlink_breakit_2021.py::test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink` (both selected in one run with `-k "test_edge11_a_symlink_input_with_an_unchanged_target_differs or test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink"`)
+- **neutralization (exact string, count(old)=1):**
+
+```diff
+-            if (ours and not _regular(ours)) or (theirs and not _regular(theirs)):
++            if False:
+```
+
+- **raw red (rc 1):** the traceback bodies are elided with `...` in this record only
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_________ test_edge11_a_symlink_input_with_an_unchanged_target_differs _________
+...
+>       assert _gap(repo, linked, adopted=adopted) == "adopted-inputs-differ"
+E       AssertionError: assert None == 'adopted-inputs-differ'
+...
+_____ test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink _____
+...
+>       assert CS.branch_hook_gap(
+            world.cwd, world.root, startup, adopted
+        ) == "adopted-inputs-differ"
+E       AssertionError: assert None == 'adopted-inputs-differ'
+...
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_edge11_a_symlink_input_with_an_unchanged_target_differs
+FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_symlink_breakit_2021.py::test_adoption_refuses_a_changed_target_of_an_unchanged_input_symlink
+2 failed, 66 deselected in 3.56s
+```
+
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `e0fbd587a224f6228f1851a4e8f5148c3b92e0e2d40087b59e7e1dee9168e625`, after the restore `e0fbd587a224f6228f1851a4e8f5148c3b92e0e2d40087b59e7e1dee9168e625` — identical; the restored line quoted back:
+
+```
+            if (ours and not _regular(ours)) or (theirs and not _regular(theirs)):
+```
+
+- **raw green (rc 0):**
+
+```
+..                                                                       [100%]
+2 passed, 66 deselected in 1.95s
 ```
 
 - **verdict:** RED->GREEN
