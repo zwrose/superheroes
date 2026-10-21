@@ -2854,6 +2854,108 @@ def test_third_party_checks_alone_never_make_ci_green():
     assert rr.ci_reading(CHECK_OK, NO_STATUS, wfs())["read"] == "no CI workflow declared; no GitHub Actions run on this commit"
 
 
+def chk(name, id, conclusion, suite, app_id=15368, slug="github-actions", status="completed"):
+    return {"id": id, "name": name, "app": {"id": app_id, "slug": slug}, "check_suite": {"id": suite},
+            "status": status, "conclusion": conclusion if status == "completed" else None}
+
+
+def suite_run(name, suite, workflow_id=325422332, **over):
+    return wf_run(name, id=over.pop("id", suite + 1), workflow_id=workflow_id, event="pull_request",
+                  check_suite_id=suite, run_number=suite, **over)
+
+
+def checks(*rows):
+    return {"check_runs": list(rows)}
+
+
+def test_a_check_run_a_newer_run_of_the_same_check_replaced_no_longer_reads_red():
+    # axis: the check-run reduction; an older cancelled run of a check that a newer run replaced reading CI red, in either row order
+    old, new = chk("pr-title", 1, "cancelled", 10), chk("pr-title", 2, "success", 20)
+    workflows = wfs(suite_run("pr-title", 10), suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
+    for rows in ([old, new], [new, old]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "green"
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows, DECLARED_CI) == "green"
+
+
+def test_a_check_whose_newest_run_is_not_green_reads_red():
+    # axis: the check-run reduction; keeping the older run, or dropping the only run of a check, hiding a newest run that is red
+    workflows = wfs(suite_run("pr-title", 10), suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
+    assert rr.ci_state(checks(chk("pr-title", 1, "cancelled", 10)), NO_STATUS, workflows) == "red"
+    older, newest = chk("pr-title", 1, "success", 10), chk("pr-title", 2, "cancelled", 20)
+    for rows in ([older, newest], [newest, older]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows, DECLARED_CI) == "red"
+
+
+def test_runs_of_different_checks_never_replace_one_another():
+    # axis: the check identity; a failed check hidden by a newer success of a different workflow, app or name
+    ci = wf_run("CI", id=5, workflow_id=222, event="pull_request", check_suite_id=20)
+    in_progress = wf_run("A", "in_progress", id=3, workflow_id=111, event="pull_request", check_suite_id=10)
+    failed, passed = chk("validate", 1, "failure", 10), chk("validate", 2, "success", 20)
+    for rows in ([failed, passed], [passed, failed]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, wfs(in_progress, ci), DECLARED_CI) == "red"
+    other_app = [chk("validate", 1, "failure", 10, app_id=99, slug="circleci"),
+                 chk("validate", 2, "success", 20, app_id=100, slug="other-app")]
+    for rows in (other_app, other_app[::-1]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, wfs(wf_run("CI", id=5))) == "red"
+    workflows = wfs(suite_run("pr-title", 10), suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
+    names = [chk("lint", 1, "failure", 10), chk("pr-title", 2, "success", 20)]
+    for rows in (names, names[::-1]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
+
+
+def test_runs_of_the_same_check_on_different_branches_never_replace_one_another():
+    # axis: the check identity's head branch; a failed pr-title of one PR hidden by a newer success of another PR sharing the head SHA
+    workflows = wfs(suite_run("pr-title", 10, head_branch="a"), suite_run("pr-title", 20, head_branch="b"),
+                    wf_run("CI", id=5, workflow_id=7))
+    failed, passed = chk("pr-title", 1, "failure", 10), chk("pr-title", 2, "success", 20)
+    for rows in ([failed, passed], [passed, failed]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
+
+
+def test_runs_of_the_same_check_on_different_pull_requests_never_replace_one_another():
+    # axis: the check identity's pull request; two PRs from one head branch to different bases sharing the head SHA
+    workflows = wfs(suite_run("pr-title", 10, head_branch="a", pull_requests=[{"number": 1}]),
+                    suite_run("pr-title", 20, head_branch="a", pull_requests=[{"number": 2}]),
+                    wf_run("CI", id=5, workflow_id=7))
+    failed, passed = chk("pr-title", 1, "failure", 10), chk("pr-title", 2, "success", 20)
+    for rows in ([failed, passed], [passed, failed]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
+
+
+def test_a_check_run_whose_identity_cannot_be_established_is_never_reduced_away():
+    # axis: the fail-closed reduction; a failed row with no app, or an Actions suite mapped to no workflow run, dropped for a newer success
+    workflows = wfs(suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
+    no_app = [dict(chk("pr-title", 1, "cancelled", 10), app=None), chk("pr-title", 2, "success", 20)]
+    unmapped = [chk("pr-title", 1, "cancelled", 99), chk("pr-title", 2, "success", 100)]
+    for rows in (no_app, no_app[::-1], unmapped, unmapped[::-1]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
+
+
+def test_a_cancelled_run_replaced_by_a_newer_run_still_in_progress_reads_pending():
+    # axis: the pending test reading the reduced runs; the superseded cancelled run reading red, or the in-progress run ignored
+    workflows = wfs(suite_run("pr-title", 10), suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
+    old, new = chk("pr-title", 1, "cancelled", 10), chk("pr-title", 2, None, 20, status="in_progress")
+    for rows in ([old, new], [new, old]):
+        assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "pending"
+
+
+def test_a_replaced_check_is_reduced_across_pages_and_an_unrelated_failure_on_a_later_page_stays_red(monkeypatch):
+    # axis: the reduction over the whole paged check list; a superseded run on page one read red, or a later page's failure dropped
+    path = f"repos/o/r/commits/{HEAD}/check-runs"
+    actions = [dict(suite_run("pr-title", 10), head_sha=HEAD), dict(suite_run("pr-title", 20), head_sha=HEAD),
+               dict(wf_run("CI", id=5, workflow_id=7), head_sha=HEAD)]
+    page_one = [chk("pr-title", 1, "cancelled", 10)] + [chk(f"u{i}", 1000 + i, "success", 10) for i in range(99)]
+    newer = chk("pr-title", 2, "success", 20)
+    for tail, state in (([newer], "green"), ([newer, chk("unrelated", 3, "failure", 20)], "red")):
+        seen = []
+        monkeypatch.setattr(rr, "_run", cloud_proxy({path: (page_one + tail, "check_runs"),
+                                                     "repos/o/r/actions/runs": (actions, "workflow_runs")}, seen))
+        runs, st, wf = rr._check_data(HEAD, "o/r")
+        assert len(runs["check_runs"]) == 100 + len(tail) and rr.ci_state(runs, st, wf) == state
+        assert pages_asked(seen, "/check-runs")[:2] == [1, 2]
+
+
 def test_a_declared_workflow_alone_decides_pending_and_green():
     # axis: the declared workflow's selection; another workflow's run, or a third-party status, deciding the state
     release = wf_run("Release Please", id=1)
