@@ -148,7 +148,14 @@ lane's `started` record, and returns once the session exists. It does not wait f
   for the iPhone check (`launch-cloud-with-iphone-check`); an environment id that is not `env_`
   followed by letters and digits (`launch-cloud-environment-invalid`); an issue that is not a whole
   number above zero (`launch-cloud-issue-invalid`); a plugin version the launcher cannot read from
-  its own manifest (`launch-cloud-plugin-version-unreadable`).
+  its own manifest (`launch-cloud-plugin-version-unreadable`); a premise naming extra repositories
+  on a launch not placed in the cloud (`launch-extra-repositories-not-cloud`). A premise whose
+  `extraRepositories` is not a non-empty list of distinct `owner/repo` names is refused as a
+  premise (`premise-extra-repositories-invalid`).
+- A premise with `extraRepositories` (the issue's extra-repositories line, copied by the advisor)
+  makes the launch grant the cloud session the `mcp__claude-code-remote__add_repo` permission through
+  that launch's `--settings` and nowhere else. A premise without it launches exactly as before, and
+  the launch prompt is unchanged either way.
 - When the command could not be started at all, the launch refuses and ends the lane, as a local
   launch does when it cannot spawn.
 - Once the command has run, the launcher never ends the lane. The launch returns one of three

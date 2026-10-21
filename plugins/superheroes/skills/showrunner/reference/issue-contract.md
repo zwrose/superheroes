@@ -10,6 +10,7 @@
 - [The size-consideration slot](#the-size-consideration-slot)
 - [Machinery, product, and the two kind labels](#machinery-product-and-the-two-kind-labels)
 - [Craft calls, owner calls, and the material-consequence line](#craft-calls-owner-calls-and-the-material-consequence-line)
+- [The extra-repositories line](#the-extra-repositories-line)
 - [Anchor resolution](#anchor-resolution)
 - [Pre-doctrine issues](#pre-doctrine-issues)
 - [The standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row)
@@ -283,6 +284,38 @@ half or in the thread. **Nothing checks it**, and a classifier for it is decline
 **What reads it.** The scope exception and the red-train fix in the merge doctrine, the fold rule at
 routing, and the vet's judgment about a
 deviation all turn on "material".
+
+## The extra-repositories line
+
+An issue whose build needs more repositories than its own names them on one line, in this exact
+form:
+
+```
+Extra repositories: owner/repo, owner/other
+```
+
+The line is **cloud-only**: a launch that is not placed in the cloud refuses a premise that carries
+the list. Only **live** lines count. A line inside a fenced block, or indented four columns or more,
+is an example and is never read. An unterminated fence swallows every later line, so a line after it
+reads as no line and grants nothing.
+
+Read the line with (`ROOT_DIR` as in [the build-ready block](#the-build-ready-block)):
+
+```bash
+python3 -B "$ROOT_DIR/lib/issue_contract.py" extras --body-file <path>
+```
+
+The result is one JSON line, `{"ok": ..., "reason": ..., "repositories": [...]}`, and the exit code is
+always 0. A body with no live line is `ok` with an empty list. A refusal carries an empty list.
+
+| Token | Meaning |
+| --- | --- |
+| `extra-repositories-line-repeated` | Two or more live lines |
+| `extra-repositories-empty` | The line has no value, or an empty item between commas |
+| `extra-repositories-name-invalid` | An item is not an `owner/repo` name |
+| `extra-repositories-name-repeated` | The same name twice, whatever its case |
+
+The advisor copies a non-empty `repositories` list into the premise as `extraRepositories`.
 
 ## Anchor resolution
 
