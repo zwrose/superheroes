@@ -1670,6 +1670,23 @@ def test_the_stamp_changes_when_the_plugin_hooks_file_changes(tmp_path, monkeypa
     assert _real_stamp(w) not in (before, None)
 
 
+def test_the_stamp_changes_when_a_registered_hook_module_or_its_import_changes(tmp_path, monkeypatch):
+    root = _plugin_copy(tmp_path, monkeypatch)
+    w = _outside(tmp_path)
+    _with_pin(w)
+    (root / "hooks" / "mod").mkdir()
+    (root / "hooks" / "hooks.json").write_text('{"modules": ["./mod/register.ts"], "hooks": {}}\n')
+    (root / "hooks" / "mod" / "register.ts").write_text("import { A } from './resume'\n")
+    (root / "hooks" / "mod" / "resume.ts").write_text("export const A = 1\n")
+    before = _real_stamp(w)
+    (root / "hooks" / "mod" / "resume.ts").write_text("export const A = 2\n")
+    # axis: a loaded module is not reloaded by the pin swap, so its change must move the stamp
+    after_import = _real_stamp(w)
+    assert after_import != before
+    (root / "hooks" / "mod" / "register.ts").write_text("import { A } from './resume'\n// edit\n")
+    assert _real_stamp(w) != after_import
+
+
 def test_an_unreadable_inventory_file_is_refused_by_the_text_and_the_stamp_readers(
         tmp_path, monkeypatch):
     root = _plugin_copy(tmp_path, monkeypatch)

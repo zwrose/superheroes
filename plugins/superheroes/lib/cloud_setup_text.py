@@ -202,7 +202,42 @@ def _plugin_inventory():
     hooks = os.path.join(root, "hooks", "hooks.json")
     out.append(b"hooks\n")
     out.append(_inventory_file(hooks) if os.path.isfile(hooks) else b"missing\n")
+    for rel, data in _hook_modules(os.path.join(root, "hooks"), hooks):
+        out += [b"module " + rel.encode("utf-8") + b"\n", data]
     return b"".join(out)
+
+
+_MODULE_IMPORT = re.compile(r"""(?:\bfrom\s*|\bimport\s*\(?\s*|\bimport\s+)['"](\.{1,2}/[^'"]+)['"]""")
+
+
+def _hook_modules(hooks_dir, hooks_path):
+    """(path relative to the hooks directory, bytes) for each module the hooks file registers and
+    each local module those import, in path order. A loaded module is not reloaded when the pin
+    hook swaps the plugin, so a change to one must move the stamp."""
+    if not os.path.isfile(hooks_path):
+        return []
+    try:
+        declared = json.loads(_inventory_file(hooks_path)).get("modules") or []
+    except (ValueError, AttributeError):
+        return []
+    seen = {}
+    pending = [os.path.normpath(m) for m in declared if isinstance(m, str)]
+    while pending:
+        rel = pending.pop()
+        if rel in seen:
+            continue
+        path = os.path.join(hooks_dir, rel)
+        if not os.path.isfile(path):
+            for ext in (".ts", ".js", "/index.ts"):
+                if os.path.isfile(path + ext):
+                    path, rel = path + ext, os.path.normpath(rel + ext)
+                    break
+        data = _inventory_file(path)
+        seen[rel] = data
+        base = os.path.dirname(rel)
+        for spec in _MODULE_IMPORT.findall(data.decode("utf-8", "replace")):
+            pending.append(os.path.normpath(os.path.join(base, spec)))
+    return sorted(seen.items())
 
 
 def _read_json(path):
