@@ -260,8 +260,9 @@ def test_the_eight_reasons_are_the_boards_words():
                     "settings file and the hook script) on the branch the build starts from; if "
                     "the build adopts a branch that changed a dependency file, bring that change "
                     "into the branch it starts from first. A listed setup file that is a link or "
-                    "sits under a linked folder cannot be compared, so list the regular file it "
-                    "points to in configure's setup inputs instead. Then launch again."),
+                    "sits under a linked folder cannot be compared, so point both the setup "
+                    "command and configure's setup inputs at the regular file itself, with no "
+                    "link in between. Then launch again."),
             "short": ("Bring the dependency hook and any adopted setup-file change onto the "
                       "starting branch, and list setup files as regular files, to fix it."),
             "wasnt": ("the branch it starts from doesn't carry the dependency hook, or a setup "
@@ -297,9 +298,10 @@ def test_fix_text_is_the_tables_fix_when_no_check_failed():
         assert LP.fix_text(_call(reason=code)) == LP.REASONS[code]["fix"]
 
 
-def test_the_dependency_hook_fix_says_to_list_the_regular_file_for_a_linked_input():
+def test_the_dependency_hook_fix_says_to_point_command_and_inputs_at_the_regular_file():
     fix = LP.fix_text(_call(reason="dependency-hook"))
-    assert "list the regular file it points to in configure's setup inputs" in fix
+    assert ("point both the setup command and configure's setup inputs at the regular file "
+            "itself, with no link in between") in fix
     assert fix.endswith("Then launch again.")
     assert "regular files" in LP.REASONS["dependency-hook"]["short"]
 

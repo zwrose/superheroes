@@ -216,9 +216,9 @@ def test_dod1_routing_a_base_commit_without_the_hook_runs_locally_with_the_new_w
         "and the hook script) on the branch the build starts from; if the build adopts a branch "
         "that changed a dependency file, bring that change into the branch it starts from first. "
         "A listed setup file that is a link or sits under a linked folder cannot be compared, so "
-        "list the regular file it points to in configure's setup inputs instead. Then launch "
-        "again.")
-    assert "list the regular file it points to" in launch_place.fix_text(call)
+        "point both the setup command and configure's setup inputs at the regular file itself, "
+        "with no link in between. Then launch again.")
+    assert "at the regular file itself, with no link in between" in launch_place.fix_text(call)
     assert launch_place.REASONS["dependency-hook"]["short"] == (
         "Bring the dependency hook and any adopted setup-file change onto the starting branch, "
         "and list setup files as regular files, to fix it.")

@@ -48,8 +48,9 @@ def fingerprint(commands, inputs):
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-# Whether a SessionStart group runs at startup. One source, two users: the record-mode check in the
-# script text embeds these lines, and `_sync` runs the same lines, so the two cannot drift.
+# Whether a SessionStart group runs at startup, and whether a settings document registers the hook.
+# One source, two users: `_STARTS_LINES` and `_REGISTERS_LINES` are embedded in the script text's
+# record-mode check and run here by the Python reader, so the script and the reader cannot drift.
 _STARTS_LINES = [
     "def starts(e):",
     "    m = e.get('matcher')",
@@ -63,9 +64,19 @@ _STARTS_LINES = [
     "        return False",
     "    return 'startup' in m.split('|')",
 ]
-_starts_scope = {"re": re}
-exec("\n".join(_STARTS_LINES), _starts_scope)
-_group_starts = _starts_scope["starts"]
+# The whole registration rule: hooks not all disabled, and an enabled startup SessionStart group
+# holding the command. It calls `starts`, so the two line lists run in one scope.
+_REGISTERS_LINES = [
+    "def registers(data, command):",
+    "    ok = isinstance(data, dict) and data.get('disableAllHooks') is not True",
+    "    entries = data.get('hooks', {}).get('SessionStart', []) if ok else []",
+    "    return bool(ok and any(",
+    "        isinstance(h, dict) and h.get('type') == 'command' and h.get('command') == command",
+    "        for e in entries if isinstance(e, dict) and starts(e) for h in (e.get('hooks') or [])))",
+]
+_registers_scope = {"re": re}
+exec("\n".join([*_STARTS_LINES, *_REGISTERS_LINES]), _registers_scope)
+_group_starts = _registers_scope["starts"]
 
 
 _GIT_TIMEOUT_SECONDS = 30
@@ -76,11 +87,7 @@ def _registers(data):
     """True when settings document `data` registers the hook the way the script's record mode
     accepts: hooks not all disabled, and an enabled startup SessionStart group holding our command."""
     try:
-        ok = isinstance(data, dict) and data.get("disableAllHooks") is not True
-        entries = data.get("hooks", {}).get("SessionStart", []) if ok else []
-        return bool(ok and any(
-            isinstance(h, dict) and h.get("type") == "command" and h.get("command") == HOOK_COMMAND
-            for e in entries if isinstance(e, dict) and _group_starts(e) for h in (e.get("hooks") or [])))
+        return _registers_scope["registers"](data, HOOK_COMMAND)
     except Exception:
         return False
 
@@ -306,14 +313,11 @@ def script_text(commands, inputs):
         "  python3 - %s %s <<'PY' 2>/dev/null" % (shlex.quote(SETTINGS_REL), shlex.quote(HOOK_COMMAND)),
         "import json, re, sys",
         *_STARTS_LINES,
+        *_REGISTERS_LINES,
         "try:",
         "    with open(sys.argv[1], encoding='utf-8') as fh:",
         "        data = json.load(fh)",
-        "    ok = isinstance(data, dict) and data.get('disableAllHooks') is not True",
-        "    entries = data.get('hooks', {}).get('SessionStart', []) if ok else []",
-        "    ok = ok and any(",
-        "        isinstance(h, dict) and h.get('type') == 'command' and h.get('command') == sys.argv[2]",
-        "        for e in entries if isinstance(e, dict) and starts(e) for h in (e.get('hooks') or []))",
+        "    ok = registers(data, sys.argv[2])",
         "except Exception:",
         "    ok = False",
         "sys.exit(0 if ok else 1)",

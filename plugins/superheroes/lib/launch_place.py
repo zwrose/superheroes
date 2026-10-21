@@ -79,8 +79,9 @@ REASONS = {
                 "settings file and the hook script) on the branch the build starts from; if the "
                 "build adopts a branch that changed a dependency file, bring that change into "
                 "the branch it starts from first. A listed setup file that is a link or sits "
-                "under a linked folder cannot be compared, so list the regular file it points "
-                "to in configure's setup inputs instead. Then launch again."),
+                "under a linked folder cannot be compared, so point both the setup command "
+                "and configure's setup inputs at the regular file itself, with no link in "
+                "between. Then launch again."),
         "short": ("Bring the dependency hook and any adopted setup-file change onto the "
                   "starting branch, and list setup files as regular files, to fix it."),
         "wasnt": ("the branch it starts from doesn't carry the dependency hook, or a setup file "

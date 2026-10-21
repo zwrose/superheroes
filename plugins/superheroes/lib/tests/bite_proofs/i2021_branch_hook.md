@@ -174,18 +174,16 @@ FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_edge4_
 
 - **verdict:** RED->GREEN
 
-## G4 — _registers disableAllHooks leg
+## G4 — _REGISTERS_LINES disableAllHooks leg
 
-- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:78`
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:71` (a line of `_REGISTERS_LINES`, the one home of the registration rule)
 - **axis:** disableAllHooks true means the hook never runs
 - **detector:** `test_cloud_branch_hook_2021.py::test_edge8_disable_all_hooks_refuses` (selected with `-k "test_edge8_disable_all_hooks_refuses"`)
-- **neutralization (exact string, count(old)=1):**
+- **neutralization (exact string, count(old)=1; this line is shared, so the same edit also changes the generated script's record mode):**
 
 ```diff
--ok = isinstance(data, dict) and data.get("disableAllHooks") is not True
--        entries
-+ok = isinstance(data, dict)
-+        entries
+-isinstance(data, dict) and data.get('disableAllHooks') is not True",
++isinstance(data, dict)",
 ```
 
 - **raw red (rc 1):**
@@ -195,48 +193,47 @@ F
 =================================== FAILURES ===================================
 _____________________ test_edge8_disable_all_hooks_refuses _____________________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-18/test_edge8_disable_all_hooks_r0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-83/test_edge8_disable_all_hooks_r0')
 
     def test_edge8_disable_all_hooks_refuses(tmp_path):
         settings = {"disableAllHooks": True, "hooks": {"SessionStart": [{"hooks": [_hook_entry()]}]}}
         repo, commit = _edge_repo(tmp_path, settings=settings)
 >       assert _gap(repo, commit) == "settings-not-registered"
 E       AssertionError: assert None == 'settings-not-registered'
-E        +  where None = _gap('/tmp/claude-0/pytest-of-root/pytest-18/test_edge8_disable_all_hooks_r0/edge', '34ed2dc7584622ce6ac170cfe05788194e192493')
+E        +  where None = _gap('/tmp/claude-0/pytest-of-root/pytest-83/test_edge8_disable_all_hooks_r0/edge', 'e64c774e4d9e989fd2dbece3e7d30c6e5b6c54b3')
 
-/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:429: AssertionError
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:492: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_edge8_disable_all_hooks_refuses
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 62 deselected in 0.61s
+1 failed, 71 deselected in 0.64s
 ```
 
-- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `229b46e815487408d4e398b5590c656e2a50cb72bfeda06c932e9f4e4d62b0e2`, after the restore `229b46e815487408d4e398b5590c656e2a50cb72bfeda06c932e9f4e4d62b0e2` — identical; the restored lines quoted back:
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `8c40b85ddf86ba6acde229a95055bb688188411f11529f7830b1b511069f8b42`, after the restore `8c40b85ddf86ba6acde229a95055bb688188411f11529f7830b1b511069f8b42` — identical; the restored line quoted back:
 
 ```
-ok = isinstance(data, dict) and data.get("disableAllHooks") is not True
-        entries
+isinstance(data, dict) and data.get('disableAllHooks') is not True",
 ```
 
 - **raw green (rc 0):**
 
 ```
 .                                                                        [100%]
-1 passed, 62 deselected in 0.61s
+1 passed, 71 deselected in 6.57s
 ```
 
 - **verdict:** RED->GREEN
 
-## G5 — _registers startup-matcher leg
+## G5 — _REGISTERS_LINES startup-matcher leg
 
-- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:82`
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:75` (a line of `_REGISTERS_LINES`, the one home of the registration rule)
 - **axis:** a group whose matcher does not cover startup never runs the hook at session start
 - **detector:** `test_cloud_branch_hook_2021.py::test_edge9_a_group_that_does_not_cover_startup_refuses` (selected with `-k "test_edge9_a_group_that_does_not_cover_startup_refuses"`)
-- **neutralization (exact string, count(old)=1):**
+- **neutralization (exact string, count(old)=1; this line is shared, so the same edit also changes the generated script's record mode):**
 
 ```diff
--for e in entries if isinstance(e, dict) and _group_starts(e) for h
-+for e in entries if isinstance(e, dict) for h
+-isinstance(e, dict) and starts(e) for h in
++isinstance(e, dict) for h in
 ```
 
 - **raw red (rc 1):**
@@ -246,49 +243,47 @@ F
 =================================== FAILURES ===================================
 ____________ test_edge9_a_group_that_does_not_cover_startup_refuses ____________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-20/test_edge9_a_group_that_does_n0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-85/test_edge9_a_group_that_does_n0')
 
     def test_edge9_a_group_that_does_not_cover_startup_refuses(tmp_path):
         settings = {"hooks": {"SessionStart": [{"matcher": "resume", "hooks": [_hook_entry()]}]}}
         repo, commit = _edge_repo(tmp_path, settings=settings)
 >       assert _gap(repo, commit) == "settings-not-registered"
 E       AssertionError: assert None == 'settings-not-registered'
-E        +  where None = _gap('/tmp/claude-0/pytest-of-root/pytest-20/test_edge9_a_group_that_does_n0/edge', 'c1210819d4cb77172146166b6527668318328381')
+E        +  where None = _gap('/tmp/claude-0/pytest-of-root/pytest-85/test_edge9_a_group_that_does_n0/edge', '67490fbf7165ec8548e85442ddc79118e9dc3b03')
 
-/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:435: AssertionError
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:498: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_edge9_a_group_that_does_not_cover_startup_refuses
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 62 deselected in 0.59s
+1 failed, 71 deselected in 0.86s
 ```
 
-- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `229b46e815487408d4e398b5590c656e2a50cb72bfeda06c932e9f4e4d62b0e2`, after the restore `229b46e815487408d4e398b5590c656e2a50cb72bfeda06c932e9f4e4d62b0e2` — identical; the restored lines quoted back:
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `8c40b85ddf86ba6acde229a95055bb688188411f11529f7830b1b511069f8b42`, after the restore `8c40b85ddf86ba6acde229a95055bb688188411f11529f7830b1b511069f8b42` — identical; the restored line quoted back:
 
 ```
-for e in entries if isinstance(e, dict) and _group_starts(e) for h
+isinstance(e, dict) and starts(e) for h in
 ```
 
 - **raw green (rc 0):**
 
 ```
 .                                                                        [100%]
-1 passed, 62 deselected in 0.60s
+1 passed, 71 deselected in 0.55s
 ```
 
 - **verdict:** RED->GREEN
 
-## G6 — _registers type/command leg
+## G6 — _REGISTERS_LINES type/command leg
 
-- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:81`
+- **guarded element:** `plugins/superheroes/lib/cloud_dependency_hook.py:74` (a line of `_REGISTERS_LINES`, the one home of the registration rule)
 - **axis:** only a command hook with our exact command is registered
 - **detector:** `test_cloud_branch_hook_2021.py::test_edge10_a_hook_entry_of_another_type_or_command_refuses` (selected with `-k "test_edge10_a_hook_entry_of_another_type_or_command_refuses"`)
-- **neutralization (exact string, count(old)=1):**
+- **neutralization (exact string, count(old)=1; this line is shared, so the same edit also changes the generated script's record mode):**
 
 ```diff
--isinstance(h, dict) and h.get("type") == "command" and h.get("command") == HOOK_COMMAND
--            for e
+-isinstance(h, dict) and h.get('type') == 'command' and h.get('command') == command
 +isinstance(h, dict)
-+            for e
 ```
 
 - **raw red (rc 1):**
@@ -298,7 +293,7 @@ F
 =================================== FAILURES ===================================
 _________ test_edge10_a_hook_entry_of_another_type_or_command_refuses __________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-22/test_edge10_a_hook_entry_of_an0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-87/test_edge10_a_hook_entry_of_an0')
 
     def test_edge10_a_hook_entry_of_another_type_or_command_refuses(tmp_path):
         for n, entry in enumerate([_hook_entry(type="prompt"), _hook_entry(command="bash other.sh")]):
@@ -306,27 +301,26 @@ tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-22/test_edge10_a_hook_
             repo, commit = _edge_repo(tmp_path, settings=settings, name="e%d" % n)
 >           assert _gap(repo, commit) == "settings-not-registered"
 E           AssertionError: assert None == 'settings-not-registered'
-E            +  where None = _gap('/tmp/claude-0/pytest-of-root/pytest-22/test_edge10_a_hook_entry_of_an0/e0', '24e31b44237bfe0e4bde1f79c24d185eec9db7e7')
+E            +  where None = _gap('/tmp/claude-0/pytest-of-root/pytest-87/test_edge10_a_hook_entry_of_an0/e0', '854741776a354eb004f93b25cddd8cb197fd5c92')
 
-/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:445: AssertionError
+/home/user/wt-2021/plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py:508: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_branch_hook_2021.py::test_edge10_a_hook_entry_of_another_type_or_command_refuses
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 62 deselected in 0.62s
+1 failed, 71 deselected in 0.59s
 ```
 
-- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `229b46e815487408d4e398b5590c656e2a50cb72bfeda06c932e9f4e4d62b0e2`, after the restore `229b46e815487408d4e398b5590c656e2a50cb72bfeda06c932e9f4e4d62b0e2` — identical; the restored lines quoted back:
+- **restore:** the inverse edit (the neutralized text replaced by the original, count 1). Restore receipt: sha256 of `plugins/superheroes/lib/cloud_dependency_hook.py` before the neutralization `8c40b85ddf86ba6acde229a95055bb688188411f11529f7830b1b511069f8b42`, after the restore `8c40b85ddf86ba6acde229a95055bb688188411f11529f7830b1b511069f8b42` — identical; the restored line quoted back:
 
 ```
-isinstance(h, dict) and h.get("type") == "command" and h.get("command") == HOOK_COMMAND
-            for e
+isinstance(h, dict) and h.get('type') == 'command' and h.get('command') == command
 ```
 
 - **raw green (rc 0):**
 
 ```
 .                                                                        [100%]
-1 passed, 62 deselected in 0.61s
+1 passed, 71 deselected in 0.65s
 ```
 
 - **verdict:** RED->GREEN
