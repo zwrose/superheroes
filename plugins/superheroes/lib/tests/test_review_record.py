@@ -2927,7 +2927,7 @@ def test_a_check_run_whose_identity_cannot_be_established_is_never_reduced_away(
     # axis: the fail-closed reduction; a failed row with no app, or an Actions suite mapped to no workflow run, dropped for a newer success
     workflows = wfs(suite_run("pr-title", 20), wf_run("CI", id=5, workflow_id=7))
     no_app = [dict(chk("pr-title", 1, "cancelled", 10), app=None), chk("pr-title", 2, "success", 20)]
-    unmapped = [chk("pr-title", 1, "cancelled", 99), chk("pr-title", 2, "success", 20)]
+    unmapped = [chk("pr-title", 1, "cancelled", 99), chk("pr-title", 2, "success", 100)]
     for rows in (no_app, no_app[::-1], unmapped, unmapped[::-1]):
         assert rr.ci_state(checks(*rows), NO_STATUS, workflows) == "red"
 
