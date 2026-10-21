@@ -261,7 +261,7 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
 (`rubric/canon-contract.md`): a standing ruling that already answers a call makes it craft. Then:
 
 - A leftover goes to `craftDeterminations`, not to a card, only on one of the three grounds in
-  § Decided for you, each of which leaves its real consequence with the owner nowhere else: another
+  § Decided for you, each of which means its real consequence needs no card of its own: another
   card on the same sheet carries it; a fix in another layer of the same stack, named in the ground,
   removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
 - An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
@@ -331,7 +331,7 @@ answer that sends the PR back never counts.
 ### Decided for you
 
 A left-for-owner finding the advisor re-graded as craft at vet is no card, and neither is one whose real
-consequence is left with the owner nowhere else on one of three grounds: another card on the same sheet
+consequence needs no card of its own on one of three grounds: another card on the same sheet
 carries it; a fix in another layer of the same stack, named in the ground, removed it; or a Canon
 entry, cited by id, answers it. Each is an entry of the sheet's
 **Decided for you** list (`prSheet.decidedForYou`, `$defs/decided` in `sheet.schema.json`). The list sits

@@ -12,9 +12,11 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.45.0
 
 ### Before you upgrade
+
+Check these in a consuming project when it adopts 0.45.0. Each step names the note it comes from.
 
 - **After switching.** **Pass `--landing-dir <the order's landing directory>` on a review fixer's `dispatch-write` on the claude engine.** A run opened before the upgrade continues without it. See [Dispatch: the claude write fixer lands its own payload](#dispatch-the-claude-write-fixer-lands-its-own-payload).
 - **Before switching.** **Finish every `dispatch-write` run in flight.** A write run opened before the upgrade and admitted after it forfeits `native-schema-unreadable`, because the declared write schema gained `refusals`. See [Orders: a refused or denied command is a stop](#orders-a-refused-or-denied-command-is-a-stop).
