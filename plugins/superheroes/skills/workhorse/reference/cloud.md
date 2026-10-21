@@ -8,6 +8,7 @@
   - [Preflight](#preflight)
   - [GitHub reads, without GraphQL](#github-reads-without-graphql)
   - [Asking the advisor: the builder note](#asking-the-advisor-the-builder-note)
+  - [The progress comment](#the-progress-comment)
   - [When the advisor asks you to push](#when-the-advisor-asks-you-to-push)
   - [When the advisor asks you to archive your session](#when-the-advisor-asks-you-to-archive-your-session)
   - [Review](#review)
@@ -161,6 +162,41 @@ Writes go one per call: one comment, one edit.
 
 A cloud session stays listed while parked, and the advisor's message resumes it. On resume, re-read
 the issue, then carry on from the pushed head.
+
+## The progress comment
+
+Keep **one** progress comment on the build's issue and edit it in place. Post it right after the
+intake comment (§ Intake), then edit that same comment. A new session posts its own: the watch reads
+only a comment created at or after the lane's start. It is not a terminal comment (§ Terminal
+comments).
+
+Compose it with
+`python3 -B <plugin root>/lib/cloud_builder.py progress --phase <text> --running <text> --started <UTC time, …Z> --expected-minutes <N> [--lost <text>]`.
+Post its `comment` the first time. Edit after that: on a `gh`-channel session with
+`python3 -B <plugin root>/lib/cloud_builder.py edit --repo <o>/<r> --comment-id <id> --body-file <file>`,
+on a `tools`-channel session through the session's GitHub tools' comment edit.
+
+Its first line is the fixed header `Builder progress (cloud build).` The lines after it are `Phase:`,
+`Now running:`, `Started:` and `Expected: <N> minutes`, then `Lost work:` when there is lost work. The
+expected time is your own estimate for what is running now, from 1 to 240 minutes
+(`PROGRESS_EXPECTED_MAX_MINUTES`). Take `Started:` from `date -u +%Y-%m-%dT%H:%M:%SZ`, never from memory.
+
+**When to update it.** At each phase change: intake, brief, each order, verify, each review round,
+handback. Also before any step you expect to run past ten minutes (a full check, a review round, an
+integration run), stating that step's expected time.
+
+**Lost work after a restart.** When you resume and find in-flight work you dispatched is gone (a
+container restart killed a subagent, a run dir is missing), say so in `Lost work:`. Post a builder
+note too (§ Asking the advisor) when the loss changes the plan.
+
+**A status ping.** The advisor's first check on a quiet cloud lane is a relayed status ping by
+message. Answer it by updating the progress comment, and reply when the message asks. The advisor
+starts a helper session to read a lane only after about 15 minutes with no answer.
+
+The watch reads the comment as `skills/showrunner/reference/wave-watch.md` § Before treating
+`lane-stale` as a wedge says: while the comment's last edit is within its expected time plus the
+quiet window the lane is not stale; past that it is. A watch tick whose comments read made no request
+reuses the last progress snapshot it read.
 
 ## When the advisor asks you to push
 
