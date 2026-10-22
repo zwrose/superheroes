@@ -296,6 +296,19 @@ def test_unrecognised_conflict_style_is_indeterminate(tmp_path, monkeypatch):
     assert wg.classify("git checkout --theirs f.txt", work) == _indeterminate("checkout-path")
 
 
+def test_unreadable_conflict_style_is_indeterminate(tmp_path, monkeypatch):
+    work = _merge_repo(tmp_path, monkeypatch)
+    real_run_git = wg._run_git
+
+    def failing_config_read(cwd, *args):
+        if args[:1] == ("config",):
+            return subprocess.CompletedProcess(args, 128, "", "fatal: bad config")
+        return real_run_git(cwd, *args)
+
+    monkeypatch.setattr(wg, "_run_git", failing_config_read)
+    assert wg.classify("git checkout --theirs f.txt", work) == _indeterminate("checkout-path")
+
+
 def test_edge6_merge_staged_changes_on_unnamed_paths_do_not_count(tmp_path, monkeypatch):
     work = _merge_repo(tmp_path, monkeypatch)
     with open(os.path.join(work, "a.txt"), "a") as f:
