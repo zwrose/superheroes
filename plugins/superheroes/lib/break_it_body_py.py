@@ -19,9 +19,7 @@ _DIRECTIVE = re.compile(r"^#\s*(type:|pyright:|mypy:|noqa|pragma)", re.IGNORECAS
 _SPACES = re.compile(r"\s+")
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-_HOOK_NAMES = frozenset(["pytestmark", "pytest_plugins", "setup_module", "teardown_module", "setUpModule",
-                         "tearDownModule", "setup_function", "teardown_function", "load_tests",
-                         "pytest_generate_tests"])
+_VALUE_REFUSED = (ast.Call, ast.Lambda, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom) + _COMPREHENSIONS
 
 
 def _directives(text):
@@ -167,23 +165,50 @@ def _uses(node):
     return frozenset(names)
 
 
-def _autouse(node):
-    """True when ``node`` is, or at import time (inside an if, try, with, loop or class) contains, a def carrying
-    an ``autouse`` keyword other than a literal False; a function body is not entered."""
-    stack = [node]
-    while stack:
-        cur = stack.pop()
-        if isinstance(cur, _FUNCTIONS):
-            for decorator in cur.decorator_list:
-                for sub in ast.walk(decorator):
-                    if (isinstance(sub, ast.keyword) and sub.arg == "autouse"
-                            and not (isinstance(sub.value, ast.Constant) and sub.value.value is False)):
-                        return True
-        elif isinstance(cur, (ast.Lambda,) + _COMPREHENSIONS):
-            continue
-        else:
-            stack.extend(ast.iter_child_nodes(cur))
-    return False
+def _hook_name(name):
+    """True for a name a test runner treats as module setup: ``pytest_*``, ``setup*`` / ``teardown*`` in any case
+    (``setup_module``, ``setUpModule``) and ``load_tests``."""
+    return name.lower().startswith(("pytest_", "setup", "teardown")) or name == "load_tests"
+
+
+def _plain_value(value):
+    """True when ``value`` (an expression or ``None``) runs no code at import: no call, lambda, walrus,
+    comprehension, generator, await or yield anywhere inside it."""
+    return value is None or not any(isinstance(sub, _VALUE_REFUSED) for sub in ast.walk(value))
+
+
+def _allowed_host(node):
+    """True when the module-level statement ``node`` is plain code a host may add around a moved test: an import,
+    an undecorated def or class that is no runner hook, a constant assignment or a docstring. Anything else
+    (a decorated def or class, control flow, a call statement, an augmented assignment, ``global``, ``del``,
+    ``assert``, ``raise``) can change how the test runs and is not allowed."""
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return True
+    if isinstance(node, _FUNCTIONS):
+        # axis: a decorated def (a fixture under any spelling or alias) is a hook, and so is a runner-named def — see bite-proof record wo_a_2053_break_it_body
+        return not node.decorator_list and not _hook_name(node.name)
+    if isinstance(node, ast.ClassDef):
+        if node.decorator_list:
+            return False
+        return not any(isinstance(sub, (ast.Global, ast.Nonlocal)) or getattr(sub, "decorator_list", None)
+                       for sub in ast.walk(node))
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, [node.value]
+    elif isinstance(node, ast.AnnAssign):
+        targets, value = [node.target], [node.value, node.annotation]
+    elif isinstance(node, ast.Expr):
+        return isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+    else:
+        # axis: module-level control flow, an expression statement, an augmented assignment, global, del, assert and raise are all hooks — see bite-proof record wo_a_2053_break_it_body
+        return False
+    if not all(isinstance(target, ast.Name) for target in targets):
+        return False
+    for target in targets:
+        name = target.id
+        if _hook_name(name) or name.startswith("pytest") or (name.startswith("__") and name.endswith("__")):
+            return False
+    # axis: a value that runs code at import (a call, lambda, walrus, comprehension, await or yield) is a hook — see bite-proof record wo_a_2053_break_it_body
+    return all(_plain_value(part) for part in value)
 
 
 def _normalise(node):
@@ -214,7 +239,7 @@ def _record(node, directives, aliases=frozenset()):
     _binds(node, binds, aliases)
     return {"kind": kind, "key": key, "titles": titles, "imports": _import_pairs(node),
             "binds": frozenset(binds), "uses": _uses(node),
-            "hook": _autouse(node) or bool(binds & _HOOK_NAMES),
+            "hook": not _allowed_host(node),
             # a relative import at any depth (inside a test function too) resolves against its file's package
             "relative": any(isinstance(sub, ast.ImportFrom) and (sub.level or 0) > 0 for sub in ast.walk(node))}
 

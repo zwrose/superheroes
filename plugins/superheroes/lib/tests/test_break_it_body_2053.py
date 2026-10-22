@@ -3,6 +3,7 @@
 Covers the core (`break_it_body`), the Python front (`break_it_body_py`) and the body search in
 `break_it.check_kept` / `break_it._rewrite_command`. Real `check_kept` runs use real `python -m pytest`
 commands in a throwaway fixture repo; a stub runner stands in only where a test needs to see the command."""
+import ast
 import hashlib
 import os
 import shlex
@@ -885,3 +886,99 @@ def test_core_an_autouse_fixture_inside_module_level_control_flow_is_host_setup(
     host = _V + "\n\nif True:\n    @pytest.fixture(autouse=True)\n    def _env():\n        pass\n"
     got = break_it_body.locate(_V, "a.py", [("b.py", host)])
     assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+# ---- the closed-world host check (#2060) -----------------------------------------------------------
+
+@pytest.mark.parametrize("extra", [
+    "if True:\n    def helper():\n        return 1\n",
+    "setup_things()\n",
+    "@functools.lru_cache\ndef helper():\n    return 1\n",
+    "COUNT += 1\n",
+    "CONFIG = load()\n",
+], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+    got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+@pytest.mark.parametrize("extra", [
+    "def helper():\n    return 1\n",
+    "class Helper:\n    size = 2\n\n    def grow(self):\n        return self.size + 1\n",
+    "LIMIT = 3\n",
+    '"""Notes on this module."""\n',
+], ids=["helper-def", "helper-class", "constant", "docstring"])
+def test_core_a_host_that_adds_plain_code_is_found(extra):
+    got = break_it_body.locate(_V, "a.py", [("b.py", extra + "\n\n" + _V)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+@pytest.mark.parametrize("text", [
+    "import os\n",
+    "from os import path as p\n",
+    "def helper():\n    return 1\n",
+    "async def helper():\n    return 1\n",
+    "def check_setup():\n    return 1\n",
+    "class Helper:\n    size = 2\n\n    def grow(self):\n        return self.size\n",
+    "LIMIT = 3\n",
+    "A = B = (1, 'x', [2])\n",
+    "LIMIT: int = 3\n",
+    "LIMIT: int\n",
+    '"""A docstring."""\n',
+], ids=["import", "import-from", "def", "async-def", "def-with-setup-inside", "class", "assign", "chained-assign",
+        "annotated-assign", "bare-annotation", "docstring"])
+def test_allowed_host_accepts_each_allowed_shape(text):
+    assert front._allowed_host(ast.parse(text).body[0])
+
+
+@pytest.mark.parametrize("text", [
+    "@pytest.fixture\ndef f():\n    pass\n",
+    "@fx(autouse=True)\nasync def f():\n    pass\n",
+    "def pytest_generate_tests(metafunc):\n    pass\n",
+    "def setup_module():\n    pass\n",
+    "def setUpModule():\n    pass\n",
+    "def tearDownModule():\n    pass\n",
+    "def load_tests(loader, tests, pattern):\n    pass\n",
+    "@register\nclass K:\n    pass\n",
+    "class K:\n    global g\n    g = 1\n",
+    "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+    "pytestmark = 1\n",
+    "pytest_plugins = ['x']\n",
+    "setup_module = other\n",
+    "__unittest_skip__ = True\n",
+    "A.b = 1\n",
+    "x, y = 1, 2\n",
+    "x = f()\n",
+    "x = lambda: 1\n",
+    "x = (y := 1)\n",
+    "x = [i for i in range(3)]\n",
+    "x = {i for i in ()}\n",
+    "x = (i for i in ())\n",
+    "x: int = f()\n",
+    "if c:\n    x = 1\n",
+    "try:\n    x = 1\nexcept E:\n    pass\n",
+    "for i in v:\n    pass\n",
+    "while c:\n    pass\n",
+    "with c:\n    pass\n",
+    "match c:\n    case 1:\n        pass\n",
+    "f()\n",
+    "'a' + 'b'\n",
+    "x += 1\n",
+    "global g\n",
+    "del x\n",
+    "assert x\n",
+    "raise E\n",
+], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+        "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "pytestmark", "pytest_plugins",
+        "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+        "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+        "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+        "raise"])
+def test_allowed_host_refuses_each_forbidden_shape(text):
+    assert not front._allowed_host(ast.parse(text).body[0])
+
+
+def test_front_records_hook_is_the_negation_of_allowed_host():
+    for text in ("import os\n", "x = 1\n", "x = f()\n", "@d\ndef f(): pass\n", "if c:\n    pass\n"):
+        node = ast.parse(text).body[0]
+        assert front.parse(text)[0]["hook"] is (not front._allowed_host(node))
