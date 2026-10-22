@@ -63,9 +63,3 @@ def test_digest_normalizes_trailing_whitespace_and_crlf():
     b = skills.skill_digest("D", "x\ny\n")
     assert a == b
 
-def test_normalization_stays_in_lockstep_with_identifiers():
-    # the digest's normalization must match the conventions-pinned content_hash
-    # normalization, so the UFR-6 carve-out key cannot silently drift
-    import identifiers
-    sample = "café\r\nline  \n"
-    assert skills._normalize(sample) == identifiers._normalize_body(sample)
