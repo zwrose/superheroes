@@ -3800,3 +3800,33 @@ def test_889_cli_preflight_entry_passes_config_dir_through(tmp_path, monkeypatch
     capsys.readouterr()
     assert code == 0
     assert seen["launch_config_dir"] == ("/cfg/launch" if flag else None)
+
+
+def test_889_relative_override_stamps_the_dir_the_child_was_pinned_to(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", ".")
+    run_dir = str(tmp_path / "run-relative")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _claude_event_stream(tool_calls=1, structured_output={"result": _native_verdicts_branch()})
+    payload, _code, _ = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30,
+        run_engine=FakeRunner([lambda *a: (stdout, False, 0, "")], sync_native=False),
+        build_view=_fake_build_view(tmp_path),
+    )
+    records, _ = ED._journal_read(os.path.join(os.path.realpath(run_dir), "print"))
+    pinned = ED._journal_state(records)["opened"]["configDir"]
+    assert payload["configDir"] == pinned
+    assert payload["configDir"] != CP._launch_config_dir(None, os.path.realpath(repo))
+
+
+def test_889_a_differently_spelled_launch_dir_fails_closed(tmp_path):
+    repo = _repo(tmp_path)
+    cfg = str(tmp_path / "cfg")
+    os.makedirs(cfg)
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude={"configDir": cfg})
+    payload, rc = CP.preflight_entry(
+        repo, paths, calibration_rows=_calibration_rows(),
+        launch_config_dir=os.path.join(cfg, "..", "cfg"),
+    )
+    assert rc == 1
+    assert payload["reason"].startswith("probe-config-dir-mismatch:claude")

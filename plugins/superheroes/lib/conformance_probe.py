@@ -264,12 +264,6 @@ def _stderr_failure_line(engine, legs, dependent_lanes):
     return "CONFORMANCE PROBE FAILED engine=%s failed=%s dependent lanes: %s" % (
         engine, ",".join(parts), dependent_lanes)
 
-def _probe_config_dir(engine, repo_root):
-    """The config dir a claude probe child is pinned to — the same resolve `dispatch_review` makes. (#889)"""
-    if engine != "claude":
-        return None
-    return config_dir.resolve(env=os.environ, cwd=repo_root)
-
 def _preflight_check_entry(engine, channel, seat, wall_seconds, legs, run_dir, all_ok, cfg_dir=None):
     cell = [seat["vendor"], seat["model"], seat.get("effort")]
     leg_summary = ",".join(
@@ -352,10 +346,9 @@ def _grade_legs(terminal, state, bound_exceeded):
     return {"resultProduction": rp, "completionDetection": cd, "progressTelemetry": pt}
 
 def _payload(engine, channel, seat, repo_root, started_at, completed_at, wall, run_dir,
-             mode_legs, probed_modes, dependent_roles, dependent_lanes, wave=None):
+             mode_legs, probed_modes, dependent_roles, dependent_lanes, wave=None, cfg_dir=None):
     legs = _derive_flat_legs(mode_legs)
     all_ok = all(legs[n]["ok"] for n in _LEG_NAMES)
-    cfg_dir = _probe_config_dir(engine, repo_root)
     out = {
         "schema": SCHEMA, "ok": all_ok, "engine": engine, "channel": channel, "seat": seat,
         "probedCell": [seat["vendor"], seat["model"], seat.get("effort")],
@@ -424,13 +417,14 @@ def _ensure_mode_run_dir(mode_run_dir):
 
 def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
                     run_engine, build_view, order_suffix):
+    """Returns (legs, configDir): configDir is the dir the run journaled as the child's pin. (#889)"""
     mode_run_dir = _mode_run_dir(parent_run_dir, mode)
     mode_run_dir_real, reused, setup_error = _ensure_mode_run_dir(mode_run_dir)
     if setup_error:
-        return _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_run_dir_real)
+        return _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_run_dir_real), None
     if reused:
         return _stamp_mode_run_dir(
-            _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_run_dir_real)
+            _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_run_dir_real), None
     claude_mode = mode if engine == "claude" else None
     order_id = "conformance-probe:%s:%s:%s" % (engine, mode, order_suffix)
     deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
@@ -466,8 +460,10 @@ def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, 
             pass
         terminal = dict(terminal, terminal=True, ok=False)
     records, _ = engine_dispatch._journal_read(mode_run_dir_real)
-    legs = _grade_legs(terminal, engine_dispatch._journal_state(records), bound_exceeded)
-    return _stamp_mode_run_dir(legs, mode_run_dir_real)
+    state = engine_dispatch._journal_state(records)
+    legs = _grade_legs(terminal, state, bound_exceeded)
+    pinned = (state.get("opened") or {}).get("configDir")
+    return _stamp_mode_run_dir(legs, mode_run_dir_real), (pinned if isinstance(pinned, str) else None)
 
 def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, build_view=None,
           wave=None):
@@ -557,7 +553,7 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
         if err and setup_error is None:
             setup_error = err
         any_reused = any_reused or reused
-    mode_legs = {}
+    mode_legs, cfg_dir = {}, None
     if setup_error:
         for mode in modes:
             mode_legs[mode] = _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_dirs[mode])
@@ -567,15 +563,16 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
                 _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_dirs[mode])
     else:
         for mode in modes:
-            mode_legs[mode] = _probe_one_mode(
+            mode_legs[mode], pinned = _probe_one_mode(
                 engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
                 run_engine, build_view, order_suffix)
+            cfg_dir = cfg_dir or pinned
     wall = time.monotonic() - t0
     dep_roles, dep_lanes = _dependent_from_calibration(
         preflight_probe.dispatch_calibration(cwd=repo_real), engine)
     payload = _scrub_obj(_payload(
         engine, channel, seat, repo_real, started_at, _utc_now_iso(), round(wall, 1),
-        parent_run_dir, mode_legs, modes, dep_roles, dep_lanes, wave=wave))
+        parent_run_dir, mode_legs, modes, dep_roles, dep_lanes, wave=wave, cfg_dir=cfg_dir))
     legs = payload["legs"]
     all_ok = payload["ok"]
     return payload, (0 if all_ok else 1), (_stderr_failure_line(engine, legs, dep_lanes) if not all_ok else None)
@@ -705,8 +702,7 @@ def _launch_config_dir(launch_config_dir, repo_real):
     env = dict(os.environ)
     if launch_config_dir:
         env[config_dir.CONFIG_DIR_ENV] = launch_config_dir
-    resolved = config_dir.resolve(env=env, cwd=repo_real)
-    return os.path.normpath(resolved) if resolved else None
+    return config_dir.resolve(env=env, cwd=repo_real)
 
 def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                     max_age_seconds=DEFAULT_MAX_AGE_SECONDS, calibration_rows=None, wave=None,
@@ -768,7 +764,8 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
             if not probed_dir:
                 return {"ok": False, "reason": "probe-config-dir-unrecorded:claude — re-run the claude "
                                                "probe; builders spawn under %s" % launch_dir}, 1
-            if launch_dir is None or os.path.normpath(probed_dir) != launch_dir:
+            # exact: a differently spelled path to the same dir fails closed (re-run the probe)
+            if launch_dir is None or probed_dir != launch_dir:
                 return {"ok": False, "reason": "probe-config-dir-mismatch:claude — probed under %s, "
                                                "builders spawn under %s" % (probed_dir, launch_dir)}, 1
         (passing if res.get("ok") else failed).append(eng)
