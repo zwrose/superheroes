@@ -4,9 +4,14 @@ Pure decide + best-effort injectable probe + JSON CLI verdict. Read-only; never 
 persists credentials; probe NEVER raises (any exception/timeout → error)."""
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
 
 # engine -> (the CLI binary, the cheap auth/whoami argv).
 _CLI = {
@@ -45,7 +50,9 @@ def _probe_one(engine, root, run):
         if shutil.which(binary) is None:
             return rec
         rec["installed"] = True
-        proc = run(auth_argv, capture_output=True, text=True, timeout=10, cwd=root)
+        import engine_adapter
+        proc = engine_adapter.run_engine_cli(auth_argv, run=run, capture_output=True, text=True,
+                                             timeout=10, cwd=root)
         rec["authed"] = (proc.returncode == 0)
         return rec
     except Exception as exc:  # timeout, OSError, anything — never propagate

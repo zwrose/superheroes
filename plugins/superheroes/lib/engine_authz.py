@@ -103,8 +103,10 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
         # the probe hangs to the timeout, always reporting the engine not-ready); -f forces/trusts.
         argv = ["cursor-agent", "-p", "-f", write_prompt]
     timeout = _probe_timeout(overrides)
+    import engine_adapter
     try:
-        proc = run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        proc = engine_adapter.run_engine_cli(argv, run=run, capture_output=True, text=True,
+                                             timeout=timeout, cwd=cwd)
         allowed = (getattr(proc, "returncode", 1) == 0)
     except Exception:
         # includes subprocess.TimeoutExpired: no response within the bounded limit -> deny/fall-open

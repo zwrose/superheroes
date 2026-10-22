@@ -16,9 +16,48 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
-- **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
+- **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
+- **After switching.** **Re-run the claude conformance probe before the next wave's `preflight-entry`.** A claude probe result taken before the upgrade records no config dir and is refused as `probe-config-dir-unrecorded:claude`. See [Preflight: the claude probe runs under the launch's config dir](#preflight-the-claude-probe-runs-under-the-launchs-config-dir).
+- **After switching.** **Nothing is owed.** A caller that reads a `dispatch-write` write forfeit now also finds `dirtiedPaths` on the "forfeited twice" result, and both write-forfeit disclosures say whether the timeout cut the engine off and whether work landed. See [Dispatch: both write forfeits name what landed](#dispatch-both-write-forfeits-name-what-landed).
+- **After switching.** **A project whose guardian config file is unreadable or not valid UTF-8 now sweeps as `degraded` and loses benching until the file is fixed; nothing else is owed.** See [Guardian: an unreadable or non-UTF-8 config is degraded](#guardian-an-unreadable-or-non-utf-8-config-is-degraded).
+- **After switching.** **Nothing is owed.** Guardian's hotspots lens stops ranking `.tsx`/`.jsx` files on lizard's complexity figures, which lizard mis-measures in JSX. Those files now read unmeasured, so a TSX-heavy project's hotspot list gets shorter and the sweep lists the hotspots lens as degraded with the count of unmeasured files. See [Guardian: TSX/JSX complexity reads unmeasured](#guardian-tsxjsx-complexity-reads-unmeasured).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
+- **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
+- **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
 - **After switching.** **Review seats now run no programs, and codex review seats ignore your codex config; nothing is owed unless a review relied on a custom MCP server, plugin, hook or model-provider setting in codex.** See [Review seats: a closed tool set, and a forfeit on any program run](#review-seats-a-closed-tool-set-and-a-forfeit-on-any-program-run).
+
+### Engine CLI calls: one stdin chokepoint
+
+- `engine_adapter.run_engine_cli(argv, run=None, **kwargs)` runs an engine CLI (`codex`, `cursor-agent`, `claude`) with stdin closed. Without `input=` the child's stdin is `subprocess.DEVNULL`; with `input=` (a string, including empty) the text is piped in and stdin is not set. It raises `ValueError` before calling `run` for any `stdin=` other than `subprocess.DEVNULL`, for `input=None`, and for `stdin=` together with `input=`. `run` defaults to `subprocess.run` and its result is returned unchanged.
+- `engine_authz.implementation_dispatch_allowed`, `engine_detect.probe`, `cloud_relay._call` and `preflight_probe.probe_command` spawn through it. Each keeps its `run=` seam and its `except Exception`, so a refusal reads as a failed probe.
+- `plugins/superheroes/lib/tests/test_engine_cli_stdin_census.py` scans the shipped Python and fails on a spawner call in a file that holds an engine argv source when the call neither starts with a non-engine literal argv nor passes `input=` or a `stdin=` other than `None`, `0` or `sys.stdin`. A call that carries `**kwargs` and no explicit `stdin=` or `input=` fails too. `engine_adapter.py` and `engine_dispatch.py` are exempt by name.
+
+### Preflight: the claude probe runs under the launch's config dir
+
+- `conformance_probe.py run` stamps `configDir` on its result: the `CLAUDE_CONFIG_DIR` the claude child was pinned to, as the dispatch journaled it (a probe whose dispatch never opened records `null`), and `null` for every other engine. The schema stays `conformance-probe/2`; the key is additive.
+- `preflight-entry` gained `--config-dir <dir>`, the dir the launch will spawn builders with; omitted, it is this process's own resolved dir. A claude record taken under a different dir is refused as `probe-config-dir-mismatch:claude` (the two paths are compared exactly as written, so a differently spelled path to the same dir is refused too; re-run the probe with the launch's spelling), and one with no `configDir` as `probe-config-dir-unrecorded:claude`. The owner's `--launch-without claude --owner-word` still covers claude, whatever dir it ran under.
+- A claude fail reason and the pass evidence name the dir as `configDir=<dir>`.
+
+### Dispatch: both write forfeits name what landed
+
+- The `dispatch-write` "forfeited twice (timeout or unreadable)" result gains `dirtiedPaths`, in the shape the `worktree-dirtied-by-attempt` result already carries (`status`, `paths`, `headMoved`, `truncated`, or `status: indeterminate` with a `reason`). Before, a second attempt that timed out after its edits landed returned no list of what changed.
+- Both write-forfeit `disclosure` strings now end with what landed: `The timeout cut the engine off and its report is missing.` when the attempt's detail is a `timeout-*` token, then `Work landed: <n> path(s) changed (see dirtiedPaths); verify them before re-ordering.`, `No paths landed.`, or `Whether work landed could not be read (dirtiedPaths: <reason>); inspect the worktree.` The keys `reason`, `detail`, `attemptDetail` and `attempts` are unchanged.
+
+### Guardian: an unreadable or non-UTF-8 config is degraded
+
+- `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory or a dangling symlink at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
+- The guardian cadence write in `core_md` returns `{"action": "refused", "reason": "guardian-layer-not-utf8"}` (`GUARDIAN_CADENCE_REASON_UNDECODABLE`) on a non-UTF-8 layer instead of raising.
+
+### Guardian: TSX/JSX complexity reads unmeasured
+
+- `lib/guardian_lens_hotspots.py` no longer passes `.tsx`/`.jsx` files to lizard. Each tracked one gets a digest record `{"unmeasured": true, "reason": "jsx-unreliable"}` and a `collectorErrors` entry `{"collector": "lizard", "path": …, "kind": "jsx-unreliable"}`, and `coverageGaps` gains one line counting them. When every JS-family file is `.tsx`/`.jsx`, lizard does not run and `complexityCoverage.javascript` reads `not-collected`.
+- When any tracked `.tsx`/`.jsx` file exists, `collect()` returns `partial` with a reason that counts them, so the sweep report shows the gap in `degradedLenses`. When that is the only gap, the result also carries `permanentBoundary: true`, so it can seed a baseline. When a language also failed, the reason names both and `permanentBoundary` is not set.
+- A `.tsx`/`.jsx` file measured by an earlier sweep produces no `new`, `worsened` or `resolved` drift and no red line once it reads unmeasured. The collector version is unchanged.
+- The lizard install guidance (`guardian_tools.INSTALL_COMMANDS`) pins `pip install lizard==1.24.0`. `.js`, `.ts`, `.mjs` and `.cjs` figures are unchanged.
+
+### Retired: the identifiers content hash and the cross-vendor escalation step
+
+- `identifiers.py` drops `content_hash`, `STABLE_FIELDS` and `_normalize_body` (no non-test caller; `work_item_slug` stays), and `model_registry.escalate()` at the top of a vendor's ladder returns `None` instead of the next vendor's first rung (its one caller already treats `None` as no escalation).
 
 ### Cloud setup: the setup text fills the launcher's dependency caches
 

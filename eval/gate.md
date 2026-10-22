@@ -10,8 +10,7 @@ get their fixtures as the loop is built.
 
 ## Conformance — deterministic
 
-- **[live] Identifiers via the reference impls.** The work-item slug and the work-branch
-  content-hash are produced by [`plugins/superheroes/lib/identifiers.py`](../plugins/superheroes/lib/identifiers.py) (or a vendored
+- **[live] Identifiers via the reference impls.** The work-item slug is produced by [`plugins/superheroes/lib/identifiers.py`](../plugins/superheroes/lib/identifiers.py) (or a vendored
   copy proven equal to it), not re-derived ad hoc. Covered by `lib/tests/test_identifiers.py`.
 - **[live] Artifacts validate against their schemas.** Every definition-doc's frontmatter,
   and every `checkpoint.json` / `queue.json` / `registry.json` the loop writes, validates
@@ -33,14 +32,8 @@ get their fixtures as the loop is built.
 
 ## Resume / idempotency — full resume landed in 2a-core (resilience)
 
-- **[live] Content-hash determinism.** The same approved tasks doc hashes identically
-  across runs and hosts (so two resumers mint the same branch), ignores volatile
-  metadata, and is NFC-stable for non-ASCII text. Pinned by a golden value in
-  `lib/tests/test_identifiers.py`.
-- **[Phase 1 — entry-gate] Content-hash canon-versioning.** When `content_hash` gets its
-  first consumer (producer/the-architect), confirm the deferred decision from CONVENTIONS §6.4:
-  a breaking change to the §6.3 canonicalization must bump the definition-doc `schemaVersion`,
-  and decide whether to also embed an explicit canon-version in the stored branch key.
+- **[retired] Content-hash determinism and canon-versioning.** `identifiers.content_hash`
+  never got a consumer and was removed with its golden values (#2050).
 - **[live — 2a-core] Full resume.** Killing the loop mid-phase and resuming reads the
   durable cursor from `checkpoint.json`, re-acquires the lease, reconciles against reality
   (reality-wins), and neither loses nor duplicates work. Pinned by the kill-resume

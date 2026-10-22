@@ -5238,6 +5238,33 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     return _marker_arm_retired_grade()
 
 
+def _attach_write_forfeit_landed(terminal, state, attempt_detail):
+    """Attach dirtiedPaths to a write forfeit and say in its disclosure what landed. Never raises."""
+    opened = (state or {}).get("opened") or {}
+    dirtied = _worktree_dirtied_paths(
+        opened.get("worktreeBaseline"), opened.get("cwd") or "",
+        timeout=ITEM_EVIDENCE_TIMEOUT,
+    )
+    terminal["dirtiedPaths"] = dirtied
+    clauses = []
+    if isinstance(attempt_detail, str) and attempt_detail.startswith("timeout-"):
+        clauses.append("The timeout cut the engine off and its report is missing.")
+    if dirtied.get("status") != "ok":
+        clauses.append(
+            "Whether work landed could not be read (dirtiedPaths: %s); inspect the worktree."
+            % dirtied.get("reason")
+        )
+    elif dirtied.get("paths"):
+        clauses.append(
+            "Work landed: %d path(s) changed (see dirtiedPaths); verify them before re-ordering."
+            % len(dirtied["paths"])
+        )
+    else:
+        clauses.append("No paths landed.")
+    terminal["disclosure"] = "%s %s" % (terminal["disclosure"], " ".join(clauses))
+    return terminal
+
+
 def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None, detail=None):
     terminal = {
         "ok": False,
@@ -5247,11 +5274,12 @@ def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None, 
         "forfeited": True,
         "disclosure": (
             "%s build worker forfeited twice (timeout or unreadable); "
-            "inspect the worktree and retry manually" % engine
+            "inspect the worktree and retry manually." % engine
         ),
     }
     if detail:
         terminal["detail"] = detail
+    _attach_write_forfeit_landed(terminal, state, detail)
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
@@ -5280,11 +5308,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
     }
     if attempt_detail:
         terminal["attemptDetail"] = attempt_detail
-    opened = (state or {}).get("opened") or {}
-    terminal["dirtiedPaths"] = _worktree_dirtied_paths(
-        opened.get("worktreeBaseline"), opened.get("cwd") or "",
-        timeout=ITEM_EVIDENCE_TIMEOUT,
-    )
+    _attach_write_forfeit_landed(terminal, state, attempt_detail)
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 

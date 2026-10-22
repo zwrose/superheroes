@@ -857,6 +857,28 @@ def claude_relay_argv(session_name, prompt):
                 "--effort", "low", prompt])
 
 
+def run_engine_cli(argv, run=None, **kwargs):
+    """Run an engine CLI (`codex`, `cursor-agent`, `claude`) so it never inherits the parent's stdin (#777).
+
+    Without `input=` the child's stdin is `subprocess.DEVNULL`; with `input=` (a value, including "")
+    Python's `subprocess.run` pipes it in and closes the pipe. Any other `stdin=`, `input=None` (which
+    leaves stdin inherited), or both `stdin=` and `input=` raises ValueError before `run` is called.
+    `run` defaults to `subprocess.run`; its return value is returned unchanged."""
+    if run is None:
+        run = subprocess.run
+    if "input" in kwargs and "stdin" in kwargs:
+        raise ValueError("run_engine_cli: pass stdin= or input=, not both")
+    if "input" in kwargs:
+        if kwargs["input"] is None:
+            raise ValueError("run_engine_cli: input=None leaves stdin inherited; pass a string or omit it")
+        return run(list(argv), **kwargs)
+    if "stdin" in kwargs:
+        if kwargs["stdin"] is not subprocess.DEVNULL:
+            raise ValueError("run_engine_cli: stdin must be subprocess.DEVNULL, got %r" % (kwargs["stdin"],))
+        return run(list(argv), **kwargs)
+    return run(list(argv), stdin=subprocess.DEVNULL, **kwargs)
+
+
 def build_argv(seat, role_kind, opts):
     """Return the argv list to dispatch the validated ``seat`` bundle for ``role_kind``.
 
