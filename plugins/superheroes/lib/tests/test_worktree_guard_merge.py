@@ -213,6 +213,18 @@ def test_edge1_2_executable_bit_edit_on_stage_zero_path_denies_whatever_filemode
     assert wg.classify("git restore --theirs a.txt", work) == _refusal("restore", 1)
 
 
+def test_external_diff_helper_cannot_vouch_for_an_edited_stage_zero_path(tmp_path, monkeypatch):
+    work = _merge_repo(tmp_path, monkeypatch)
+    helper = tmp_path / "ext-diff.sh"
+    helper.write_text("#!/bin/sh\nexit 0\n")
+    helper.chmod(0o755)
+    _git(work, "config", "diff.external", str(helper))
+    _git(work, "config", "diff.trustExitCode", "true")
+    with open(os.path.join(work, "a.txt"), "a") as f:
+        f.write("builder's unstaged edit\n")
+    assert wg.classify("git restore --theirs a.txt", work) == _refusal("restore", 1)
+
+
 @pytest.mark.parametrize("filemode", ["false", "true"])
 def test_edge3_stage_zero_path_with_content_and_mode_unchanged_allows(
     tmp_path, monkeypatch, filemode,

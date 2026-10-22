@@ -1197,8 +1197,8 @@ def _merge_side_probe(cwd, action, command):
                     if entry and (entry[0].islower() or entry[0] == "S"):
                         return ("indeterminate", 0)
                 diff = _run_git(
-                    top, "--literal-pathspecs", "diff", "--quiet",
-                    "--ignore-submodules=none", "--", path,
+                    top, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+                    "--quiet", "--ignore-submodules=none", "--", path,
                 )
                 if diff.returncode == 1:
                     risky += 1
@@ -1242,7 +1242,8 @@ def _merge_side_probe(cwd, action, command):
             # Bytes alone miss a mode-only edit: the executable bit is the builder's too.
             # core.filemode does not matter: a checkout rewrites the file's mode either way.
             merged_mode = _merge_tree_mode(top, tree, path)
-            if merged_mode is None:
+            if merged_mode not in ("100644", "100755"):
+                # A symlink (120000) or gitlink (160000) resolution is a file-type choice.
                 return ("indeterminate", 0)
             if bool(os.stat(worktree_path).st_mode & stat.S_IXUSR) != (merged_mode == "100755"):
                 risky += 1
