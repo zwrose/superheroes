@@ -9,26 +9,23 @@ because comments are kept as tokens and every other character lands in a token.
 The front contract, shared with the core: EXTENSIONS, TITLE and parse(). Stdlib only; imports no other
 lib module.
 """
+import itertools
+import re
 
 EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 TITLE = "\x00title"
 
-_BREAKS = "\n\r  "
-_DIGITS = "0123456789"
-_PUNCT_MULTI = {
-    4: frozenset((">>>=",)),
-    3: frozenset(("...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=")),
-    2: frozenset(("=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=",
-                  "%=", "&=", "|=", "^=", "**", "<<", ">>")),
-}
+_BREAKS = "\n\r\u2028\u2029"
+_PUNCTS = (">>>= ... === !== **= <<= >>= >>> &&= ||= ??= => == != <= >= && || ?? ?. ++ -- += -= *= /= %= &= |= ^= "
+           "** << >>").split()
 _PUNCT_SINGLE = frozenset("{}()[];,<>+-*/%&|^!~?:=.@")
 _OPEN = frozenset("([{")
 _CLOSE_TO_OPEN = {")": "(", "]": "[", "}": "{"}
-_SEMI = ("punct", ";")
-_COMMA = ("punct", ",")
-_LBRACE = ("punct", "{")
-_STAR = ("punct", "*")
-_MEMBER = (("punct", "."), ("punct", "?."))
+_OPENERS = frozenset(("punct", c) for c in "([{")
+_SEMI, _COMMA, _LBRACE, _RBRACE, _LPAREN, _RPAREN, _STAR, _DOT, _ARROW = (
+    ("punct", c) for c in (";", ",", "{", "}", "(", ")", "*", ".", "=>"))
+_MEMBER = (_DOT, ("punct", "?."))
+_TYPE, _AS, _FROM, _IMPORT = (("id", word) for word in ("type", "as", "from", "import"))
 
 _REGEX_IDS = frozenset(("return typeof case do else in instanceof new delete void throw yield await of").split())
 _RESTRICTED = frozenset(("return", "throw", "break", "continue", "yield"))
@@ -46,290 +43,157 @@ _HOOKS = frozenset(("beforeEach", "beforeAll", "afterEach", "afterAll"))
 _HOOK_OBJECTS = frozenset(("vi", "jest"))
 _TITLE_CALLEES = ("it", "test", "describe")
 _FRAMEWORK_MODULES = frozenset(("vitest", "@jest/globals", "node:test", "bun:test"))
-_STATEMENT_START = frozenset((_SEMI, _LBRACE, ("punct", "}")))
+_STATEMENT_START = frozenset((_SEMI, _LBRACE, _RBRACE))
 
-
-def _is_digit(ch):
-    return ch != "" and ch in _DIGITS
+_LINE_END = re.compile("[%s]" % _BREAKS)
+_ESCAPE = re.compile(r"\\([\s\S])")
+_STRINGS = {q: re.compile(r"%s(?:[^%s\\%s]|\\\r\n|\\[\s\S])*%s" % (q, q, _BREAKS, q)) for q in "\"'"}
+_STOPS = {False: re.compile(r"[\\`$]"), True: re.compile(r"[\"'`/{}]")}
+_REGEX = re.compile(r"/(?:\\[^{0}]|\[(?:\\[^{0}]|[^\]\\{0}])*\]|[^/\\\[{0}])*/".format(_BREAKS))
+_NUMBER = re.compile(r"0[xX][0-9a-zA-Z_.]*|(?:[0-9]|\.(?=[0-9]))(?:[0-9a-zA-Z_.]|(?<=[eE])[+-])*")
 
 
 def _id_start(ch):
-    return ch == "$" or ch == "_" or ch.isidentifier()
+    return ch in ("$", "_") or ch.isidentifier()
 
 
-def _id_part(ch):
-    return ch == "$" or ("a" + ch).isidentifier()
+def _id_end(text, j):
+    while j < len(text) and (text[j] == "$" or ("a" + text[j]).isidentifier()):
+        j += 1
+    return j
 
 
 def _normalise_comment(body, block):
-    parts = []
-    for line in body.splitlines():
-        line = line.strip()
-        if block:
-            line = line.lstrip("*").strip()
-        if line:
-            parts.append(line)
-    return " ".join(parts)
+    lines = (line.strip().lstrip("*").strip() if block else line.strip() for line in body.splitlines())
+    return " ".join(filter(None, lines))
+
+
+def _read_comment(text, i):
+    """Return (end, body, block) for the comment at text[i]."""
+    if text.startswith("//", i):
+        line_end = _LINE_END.search(text, i)
+        end = line_end.start() if line_end else len(text)
+        return end, text[i + 2:end], False
+    end = text.find("*/", i + 2)
+    if end < 0:
+        raise ValueError("unterminated block comment")
+    return end + 2, text[i + 2:end], True
 
 
 def _read_string(text, i):
     """Return (end, body) for the quoted string at text[i]; the body reads \\' and \\" as the bare quote."""
-    quote, n, j, parts = text[i], len(text), i + 1, []
-    while True:
-        ch = text[j] if j < n else ""
-        if ch == quote:
-            return j + 1, "".join(parts)
-        # axis: an unterminated string, or one cut by a line break, raises instead of reading as text — see bite-proof record wo_b_2053_break_it_body_js
-        if ch == "" or ch in _BREAKS:
-            raise ValueError("unterminated string")
-        if ch == "\\":
-            nxt = text[j + 1:j + 2]
-            if nxt in ("'", '"'):
-                parts.append(nxt)
-            elif nxt == "\r" and text[j + 2:j + 3] == "\n":
-                parts.append("\\\r\n")
-                j += 3
-                continue
-            else:
-                parts.append(ch + nxt)
-            j += 2
-            continue
-        parts.append(ch)
-        j += 1
+    found = _STRINGS[text[i]].match(text, i)
+    # axis: an unterminated string, or one cut by a line break, raises instead of reading as text — see bite-proof record wo_b_2061_break_it_body_js
+    if found is None:
+        raise ValueError("unterminated string")
+    return found.end(), _ESCAPE.sub(lambda e: e.group(1) if e.group(1) in "'\"" else e.group(), found.group()[1:-1])
 
 
-def _skip_template(text, j):
-    """Return the index just past the template literal whose body starts at text[j]."""
-    n = len(text)
+def _skip_template(text, j, sub=False):
+    """Return the index just past the template literal whose body starts at text[j]; with `sub`, past the
+    `${ ... }` substitution whose body starts there."""
+    depth = 1
     while True:
-        if j >= n:
+        stop = _STOPS[sub].search(text, j)
+        if stop is None:
             raise ValueError("unterminated template literal")
-        ch = text[j]
+        j, ch = stop.start(), stop.group()
         if ch == "\\":
             j += 2
-        elif ch == "`":
-            return j + 1
-        elif ch == "$" and text.startswith("${", j):
-            j = _skip_substitution(text, j + 2)
-        else:
-            j += 1
-
-
-def _skip_substitution(text, j):
-    """Return the index just past the `${ ... }` substitution whose body starts at text[j]."""
-    n, depth = len(text), 1
-    while True:
-        if j >= n:
-            raise ValueError("unterminated template literal")
-        ch = text[j]
-        if ch in "\"'":
+        elif ch in "\"'":
             j = _read_string(text, j)[0]
         elif ch == "`":
+            if not sub:
+                return j + 1
             j = _skip_template(text, j + 1)
-        elif text.startswith("//", j):
-            while j < n and text[j] not in _BREAKS:
-                j += 1
-        elif text.startswith("/*", j):
-            end = text.find("*/", j + 2)
-            if end < 0:
-                raise ValueError("unterminated block comment")
-            j = end + 2
-        elif ch == "{":
-            depth += 1
-            j += 1
-        elif ch == "}":
-            depth -= 1
+        elif ch == "$":
+            j = _skip_template(text, j + 2, True) if text.startswith("${", j) else j + 1
+        elif ch == "/":
+            j = _read_comment(text, j)[0] if text.startswith(("//", "/*"), j) else j + 1
+        else:
+            depth += 1 if ch == "{" else -1
             j += 1
             if depth == 0:
                 return j
-        else:
-            j += 1
-
-
-def _ends_expression(tok, head_close):
-    typ, txt = tok
-    if typ == "id":
-        return txt not in _NOT_END_IDS
-    if typ in ("num", "str", "tpl", "re"):
-        return True
-    if typ == "punct":
-        if txt == ")":
-            return not head_close
-        return txt in ("]", "}", "++", "--")
-    return False
-
-
-def _starts_expression(tok):
-    typ, txt = tok
-    if typ == "id":
-        return txt not in _NOT_START_IDS
-    if typ in ("num", "str"):
-        return True
-    return typ == "punct" and txt in _START_PUNCT
 
 
 class _Scanner:
     """Tokenise one text, applying the emit-time normalisation (statement ends, commas, arrow parens)."""
 
     def __init__(self, text):
-        self.text = text
-        self.out = []
-        self.stack = []
-        self.nl = False
-        self.p_ends = False
+        self.text, self.out, self.stack, self.nl, self.p_ends = text, [], [], False, False
+
+    def _sig_at(self, skip=0):
+        """The index in `out` of the `skip`-th token from the end that is not a comment, or -1."""
+        sig = (k for k in range(len(self.out) - 1, -1, -1) if self.out[k][0] != "comment")
+        return next(itertools.islice(sig, skip, None), -1)
 
     def _last_sig(self, skip=0):
-        seen = 0
-        for k in range(len(self.out) - 1, -1, -1):
-            tok = self.out[k]
-            if tok[0] == "comment":
-                continue
-            if seen == skip:
-                return tok
-            seen += 1
-        return None
+        k = self._sig_at(skip)
+        return self.out[k] if k >= 0 else None
 
     def _put_semi(self):
-        # axis: a semicolon, written or automatic, sits before the comments that precede it — see bite-proof record wo_b_2053_break_it_body_js
-        j = len(self.out)
-        while j > 0 and self.out[j - 1][0] == "comment":
-            j -= 1
-        self.out.insert(j, _SEMI)
-
-    def _comment(self, body, block):
-        # axis: comments stay in the key as tokens, so an added or removed directive reads unequal — see bite-proof record wo_b_2053_break_it_body_js
-        self.out.append(("comment", _normalise_comment(body, block)))
-
-    def _is_head(self):
-        """True when the `(` about to be emitted opens the head of an if, for, while, with or catch."""
-        # axis: the `)` closing such a head does not end an expression, so no automatic semicolon follows it — see bite-proof record wo_b_2053_break_it_body_js
-        prev = self._last_sig()
-        if prev is None or prev[0] != "id":
-            return False
-        if prev[1] in _HEAD_IDS:
-            return self._last_sig(1) not in _MEMBER
-        return prev[1] == "await" and self._last_sig(1) == ("id", "for")
-
-    def _needs_semi(self, prev, tok):
-        # axis: after return, throw, break, continue or yield a line break is a statement end whatever follows — see bite-proof record wo_b_2053_break_it_body_js
-        if prev[0] == "id" and prev[1] in _RESTRICTED:
-            return True
-        return self.p_ends and _starts_expression(tok)
+        # axis: a semicolon, written or automatic, sits before the comments that precede it — see bite-proof record wo_b_2061_break_it_body_js
+        self.out.insert(self._sig_at() + 1, _SEMI)
 
     def _drop_trailing_comma(self):
-        k = len(self.out) - 1
-        while k >= 0 and self.out[k][0] == "comment":
-            k -= 1
-        if k < 0 or self.out[k] != _COMMA:
-            return
-        m = k - 1
-        while m >= 0 and self.out[m][0] == "comment":
-            m -= 1
-        # axis: a comma after an opener or another comma is an array hole and stays — see bite-proof record wo_b_2053_break_it_body_js
-        if m < 0 or self.out[m] == _COMMA or (self.out[m][0] == "punct" and self.out[m][1] in _OPEN):
-            return
-        del self.out[k]
+        k, m = self._sig_at(), self._sig_at(1)
+        # axis: a comma after an opener or another comma is an array hole and stays — see bite-proof record wo_b_2061_break_it_body_js
+        if k >= 0 and m >= 0 and self.out[k] == _COMMA and self.out[m] != _COMMA and self.out[m] not in _OPENERS:
+            del self.out[k]
 
     def _emit(self, typ, txt):
-        tok = (typ, txt)
-        prev = self._last_sig()
-        if self.nl and prev is not None and prev != _SEMI and self._needs_semi(prev, tok):
-            self._put_semi()
-        self.nl = False
-        if typ == "punct":
-            if txt == ";":
+        tok, prev = (typ, txt), self._last_sig()
+        starts = ((typ == "id" and txt not in _NOT_START_IDS) or typ in ("num", "str")
+                  or (typ == "punct" and txt in _START_PUNCT))
+        if self.nl and prev is not None and prev != _SEMI:
+            # axis: after return, throw, break, continue or yield a line break is a statement end whatever follows — see bite-proof record wo_b_2061_break_it_body_js
+            if (prev[0] == "id" and prev[1] in _RESTRICTED) or (self.p_ends and starts):
                 self._put_semi()
-                self.p_ends = False
-                return
-            if txt in _OPEN:
-                self.stack.append((txt, txt == "(" and self._is_head()))
-                self.out.append(tok)
-                self.p_ends = False
-                return
-            if txt in _CLOSE_TO_OPEN:
-                self._drop_trailing_comma()
-                if not self.stack or self.stack[-1][0] != _CLOSE_TO_OPEN[txt]:
-                    raise ValueError("unbalanced brackets")
-                head = self.stack.pop()[1]
-                self.out.append(tok)
-                self.p_ends = not head
-                return
-            if txt == "=>" and len(self.out) >= 3 and self.out[-1] == ("punct", ")") \
-                    and self.out[-2][0] == "id" and self.out[-3] == ("punct", "("):
-                self.out[-3:] = [self.out[-2]]
-        self.out.append(tok)
-        self.p_ends = _ends_expression(tok, False)
+        self.nl = False
+        if tok == _SEMI:
+            self._put_semi()
+            self.p_ends = False
+        elif typ == "punct" and txt in _OPEN:
+            prev, before = self._last_sig(), self._last_sig(1)
+            # axis: the `)` closing an if, for, while, with or catch head does not end an expression, so no automatic semicolon follows it — see bite-proof record wo_b_2061_break_it_body_js
+            head = txt == "(" and prev is not None and prev[0] == "id" and (
+                (prev[1] in _HEAD_IDS and before not in _MEMBER) or (prev[1] == "await" and before == ("id", "for")))
+            self.stack.append((txt, head))
+            self.out.append(tok)
+            self.p_ends = False
+        elif typ == "punct" and txt in _CLOSE_TO_OPEN:
+            self._drop_trailing_comma()
+            if not self.stack or self.stack[-1][0] != _CLOSE_TO_OPEN[txt]:
+                raise ValueError("unbalanced brackets")
+            self.out.append(tok)
+            self.p_ends = not self.stack.pop()[1]
+        else:
+            last3 = self.out[-3:]
+            if tok == _ARROW and len(last3) == 3 and last3[0] == _LPAREN and last3[1][0] == "id" and last3[2] == _RPAREN:
+                self.out[-3:] = last3[1:2]
+            self.out.append(tok)
+            self.p_ends = ((typ == "id" and txt not in _NOT_END_IDS) or typ in ("num", "str", "tpl", "re")
+                           or (typ == "punct" and txt in (")", "]", "}", "++", "--")))
 
     def _regex_allowed(self):
         prev = self._last_sig()
         if prev is None:
             return True
-        if prev[0] == "punct":
-            return prev[1] not in (")", "]", "}")
-        return prev[0] == "id" and prev[1] in _REGEX_IDS
-
-    def _read_regex(self, i):
-        text, n, j, in_class = self.text, len(self.text), i + 1, False
-        while True:
-            ch = text[j] if j < n else ""
-            if ch == "" or ch in _BREAKS:
-                raise ValueError("unterminated regular expression")
-            if ch == "\\":
-                if text[j + 1:j + 2] in _BREAKS:
-                    raise ValueError("unterminated regular expression")
-                j += 2
-                continue
-            if ch == "[":
-                in_class = True
-            elif ch == "]":
-                in_class = False
-            elif ch == "/" and not in_class:
-                break
-            j += 1
-        j += 1
-        while j < n and _id_part(text[j]):
-            j += 1
-        return j
-
-    def _read_number(self, i):
-        text, n = self.text, len(self.text)
-        hexlike = text[i:i + 2] in ("0x", "0X")
-        j = i + 1
-        while j < n:
-            ch = text[j]
-            if ch.isascii() and (ch.isalnum() or ch in "_."):
-                j += 1
-            elif ch in "+-" and text[j - 1] in "eE" and not hexlike:
-                j += 1
-            else:
-                break
-        return j
+        return prev[1] not in (")", "]", "}") if prev[0] == "punct" else prev[0] == "id" and prev[1] in _REGEX_IDS
 
     def run(self):
-        text, n = self.text, len(self.text)
-        i = 0
+        text, n, i = self.text, len(self.text), 0
         while i < n:
             c = text[i]
-            if c in _BREAKS:
-                self.nl = True
+            if c.isspace() or c == "\ufeff":
+                self.nl = self.nl or c in _BREAKS
                 i += 1
-            elif c.isspace() or c == "﻿":
-                i += 1
-            elif text.startswith("//", i):
-                j = i + 2
-                while j < n and text[j] not in _BREAKS:
-                    j += 1
-                self._comment(text[i + 2:j], False)
-                i = j
-            elif text.startswith("/*", i):
-                j = text.find("*/", i + 2)
-                if j < 0:
-                    raise ValueError("unterminated block comment")
-                body = text[i + 2:j]
-                if any(b in body for b in _BREAKS):
-                    self.nl = True
-                self._comment(body, True)
-                i = j + 2
+            elif text.startswith(("//", "/*"), i):
+                i, body, block = _read_comment(text, i)
+                self.nl = self.nl or (block and any(b in body for b in _BREAKS))
+                # axis: comments stay in the key as tokens, so an added or removed directive reads unequal — see bite-proof record wo_b_2061_break_it_body_js
+                self.out.append(("comment", _normalise_comment(body, block)))
             elif c in "\"'":
                 i, body = _read_string(text, i)
                 self._emit("str", body)
@@ -338,30 +202,25 @@ class _Scanner:
                 self._emit("tpl", text[i + 1:end - 1])
                 i = end
             elif c == "/" and self._regex_allowed():
-                j = self._read_regex(i)
+                found = _REGEX.match(text, i)
+                if found is None:
+                    raise ValueError("unterminated regular expression")
+                j = _id_end(text, found.end())
                 self._emit("re", text[i:j])
                 i = j
-            elif _id_start(c) or (c == "#" and _id_start(text[i + 1:i + 2] or " ")):
-                j = i + 2 if c == "#" else i + 1
-                while j < n and _id_part(text[j]):
-                    j += 1
+            elif _id_start(c) or (c == "#" and _id_start(text[i + 1:i + 2])):
+                j = _id_end(text, i + 1 + (c == "#"))
                 self._emit("id", text[i:j])
                 i = j
-            elif _is_digit(c) or (c == "." and _is_digit(text[i + 1:i + 2])):
-                j = self._read_number(i)
-                self._emit("num", text[i:j])
-                i = j
+            elif (number := _NUMBER.match(text, i)) is not None:
+                self._emit("num", number.group())
+                i = number.end()
             else:
-                for size in (4, 3, 2):
-                    if text[i:i + size] in _PUNCT_MULTI[size]:
-                        self._emit("punct", text[i:i + size])
-                        i += size
-                        break
-                else:
-                    if c not in _PUNCT_SINGLE:
-                        raise ValueError("unknown character %r" % c)
-                    self._emit("punct", c)
-                    i += 1
+                punct = next((p for p in _PUNCTS if text.startswith(p, i)), c)
+                if len(punct) == 1 and c not in _PUNCT_SINGLE:
+                    raise ValueError("unknown character %r" % c)
+                self._emit("punct", punct)
+                i += len(punct)
         if self.stack:
             raise ValueError("unbalanced brackets")
         prev = self._last_sig()
@@ -376,103 +235,83 @@ def _split(tokens):
     for tok in tokens:
         cur.append(tok)
         if tok[0] == "punct":
-            if tok[1] in _OPEN:
-                depth += 1
-            elif tok[1] in _CLOSE_TO_OPEN:
-                depth -= 1
-            elif tok[1] == ";" and depth == 0:
-                statements.append(cur)
-                cur = []
-    if cur:
-        statements.append(cur)
-    return statements
-
-
-def _is_import(sig):
-    return bool(sig) and sig[0] == ("id", "import") and (len(sig) < 2 or sig[1] not in (("punct", "("), ("punct", ".")))
+            depth += (tok[1] in _OPEN) - (tok[1] in _CLOSE_TO_OPEN)
+        if tok == _SEMI and depth == 0:
+            statements.append(cur)
+            cur = []
+    return statements + [cur] if cur else statements
 
 
 def _bad_import():
     raise ValueError("unreadable import statement")
 
 
-def _read_specifiers(toks, i, pairs):
+def _specifiers(toks, i, pairs):
     """Read `{ a, b as c, type d }` starting at the `{` at toks[i]; append to pairs; return the index after `}`."""
-    n, group, groups = len(toks), [], []
-    i += 1
-    while True:
-        if i >= n:
-            _bad_import()
-        tok = toks[i]
-        if tok == ("punct", "}"):
-            if group:
-                groups.append(group)
-            return i + 1 if _flush(groups, pairs) else _bad_import()
+    end = next((k for k in range(i, len(toks)) if toks[k] == _RBRACE), -1)
+    if end < 0:
+        _bad_import()
+    groups = [[]]
+    for tok in toks[i + 1:end]:
         if tok == _COMMA:
-            if not group:
-                _bad_import()
-            groups.append(group)
-            group = []
+            groups.append([])
         elif tok[0] in ("id", "str"):
-            group.append(tok)
+            groups[-1].append(tok)
         else:
             _bad_import()
-        i += 1
-
-
-def _flush(groups, pairs):
-    for group in groups:
-        type_only = False
-        if len(group) == 1:
-            imported, local = group[0], group[0]
-        elif len(group) == 2 and group[0] == ("id", "type") and group[1][0] == "id":
-            type_only, imported, local = True, group[1], group[1]
-        elif len(group) == 3 and group[1] == ("id", "as"):
-            imported, local = group[0], group[2]
-        elif len(group) == 4 and group[0] == ("id", "type") and group[2] == ("id", "as"):
-            type_only, imported, local = True, group[1], group[3]
+    if not all(groups[:-1]):
+        _bad_import()
+    for group in filter(None, groups):
+        type_only = len(group) in (2, 4) and group[0] == _TYPE
+        core = group[1:] if type_only else group
+        if len(core) == 1:
+            imported = local = core[0]
+        elif len(core) == 3 and core[1] == _AS:
+            imported, local = core[0], core[2]
         else:
-            return False
+            _bad_import()
         if local[0] != "id":
-            return False
+            _bad_import()
         pairs.append((local[1], imported[1], type_only))
-    return True
+    return end + 1
 
 
 def _parse_import(sig):
     """Return (imports, binds) for an import statement, or raise ValueError for a form it does not read."""
-    toks = list(sig)
-    if toks and toks[-1] == _SEMI:
-        toks.pop()
+    toks = sig[:-1] if sig[-1] == _SEMI else sig
     n = len(toks)
+
+    def at(k):
+        return toks[k] if k < n else ("", "")
+
     if n < 2:
         _bad_import()
-    if toks[1][0] == "str":
+    if at(1)[0] == "str":
         if n != 2:
             _bad_import()
         return ((None, (toks[1][1], None)),), frozenset()
     i, type_only, pairs = 1, False, []
-    if toks[1] == ("id", "type") and n > 2:
-        after = toks[2]
-        if after in (_LBRACE, _STAR) or (after[0] == "id" and not (after[1] == "from" and n > 3 and toks[3][0] == "str")):
+    if at(1) == _TYPE and n > 2:
+        after = at(2)
+        if after in (_LBRACE, _STAR) or (after[0] == "id" and not (after[1] == "from" and at(3)[0] == "str")):
             type_only, i = True, 2
-    if i < n and toks[i][0] == "id":
+    if at(i)[0] == "id":
         pairs.append((toks[i][1], "default", False))
         i += 1
-        if i < n and toks[i] == _COMMA:
+        if at(i) == _COMMA:
             i += 1
-            if i >= n or toks[i] not in (_LBRACE, _STAR):
+            if at(i) not in (_LBRACE, _STAR):
                 _bad_import()
-        elif not (i < n and toks[i] == ("id", "from")):
+        elif at(i) != _FROM:
             _bad_import()
-    if i < n and toks[i] == _LBRACE:
-        i = _read_specifiers(toks, i, pairs)
-    elif i < n and toks[i] == _STAR:
-        if not (i + 2 < n and toks[i + 1] == ("id", "as") and toks[i + 2][0] == "id"):
+    if at(i) == _LBRACE:
+        i = _specifiers(toks, i, pairs)
+    elif at(i) == _STAR:
+        if not (at(i + 1) == _AS and at(i + 2)[0] == "id"):
             _bad_import()
         pairs.append((toks[i + 2][1], "*", False))
         i += 3
-    if not (i + 2 == n and toks[i] == ("id", "from") and toks[i + 1][0] == "str"):
+    if not (i + 2 == n and at(i) == _FROM and at(i + 1)[0] == "str"):
         _bad_import()
     module = toks[i + 1][1]
     if not pairs:
@@ -484,9 +323,7 @@ def _parse_import(sig):
 
 
 def _name_of(rest):
-    if rest and rest[0][0] == "id" and rest[0][1] not in ("extends", "implements"):
-        return frozenset((rest[0][1],))
-    return frozenset()
+    return frozenset(t[1] for t in rest[:1] if t[0] == "id" and t[1] not in ("extends", "implements"))
 
 
 def _declarators(rest):
@@ -494,121 +331,86 @@ def _declarators(rest):
     names, depth, mode = set(), 0, "bind"
     for typ, txt in rest:
         if typ == "punct":
-            if txt in _OPEN:
-                depth += 1
-            elif txt in _CLOSE_TO_OPEN:
-                depth -= 1
-            elif depth == 0 and txt == ";":
+            depth += (txt in _OPEN) - (txt in _CLOSE_TO_OPEN)
+            if depth == 0 and txt == ";":
                 break
-            elif depth == 0 and txt == ",":
+            if depth == 0 and txt == ",":
                 mode = "bind"
-                continue
             elif depth == 0 and txt == "=" and mode != "skip":
                 mode = "skip"
-                continue
             elif depth == 0 and txt == ":" and mode == "bind":
                 mode = "annotation"
-                continue
-        if mode == "bind" and typ == "id":
+        elif mode == "bind" and typ == "id":
             names.add(txt)
     return frozenset(names)
 
 
 def _binds(sig):
-    i = 0
-    while i < len(sig) and sig[i][0] == "id" and sig[i][1] in _DECL_PREFIX:
-        i += 1
-    if i >= len(sig) or sig[i][0] != "id":
+    sig = list(itertools.dropwhile(lambda t: t[0] == "id" and t[1] in _DECL_PREFIX, sig))
+    if not sig or sig[0][0] != "id":
         return frozenset()
-    kw, rest = sig[i][1], sig[i + 1:]
-    if kw == "function":
-        return _name_of(rest[1:] if rest and rest[0] == _STAR else rest)
-    if kw == "class" or kw in _NAMED_DECLS:
-        return _name_of(rest)
-    if kw in ("const", "let", "var") and rest:
-        if kw == "const" and rest[0] == ("id", "enum"):
-            return _name_of(rest[1:])
-        if rest[0][0] == "id" or (rest[0][0] == "punct" and rest[0][1] in ("[", "{")):
-            return _declarators(rest)
+    kw, rest = sig[0][1], sig[1:]
+    if kw == "function" or kw == "class" or kw in _NAMED_DECLS:
+        return _name_of(rest[1:] if kw == "function" and rest[:1] == [_STAR] else rest)
+    if kw == "const" and rest[:1] == [("id", "enum")]:
+        return _name_of(rest[1:])
+    if kw in ("const", "let", "var") and rest and (rest[0][0] == "id" or rest[0] in (("punct", "["), _LBRACE)):
+        return _declarators(rest)
     return frozenset()
 
 
 def _is_hook(sig):
-    if len(sig) < 2 or sig[0][0] != "id":
-        return False
-    if sig[0][1] in _HOOKS:
-        return sig[1] == ("punct", "(")
-    return sig[0][1] in _HOOK_OBJECTS and sig[1] == ("punct", ".")
+    (kind, name), after = (sig[:2] + [("", "")] * 2)[:2]
+    return kind == "id" and ((name in _HOOKS and after == _LPAREN) or (name in _HOOK_OBJECTS and after == _DOT))
 
 
-def _uses(sig):
-    return frozenset(
-        tok[1] for k, tok in enumerate(sig)
-        if tok[0] == "id" and not (k > 0 and sig[k - 1] in _MEMBER))
-
-
-def _framework_names(infos):
+def _framework_names(stmts):
     """The title callees (it, test, describe) that name the test framework in this file."""
-    # axis: a callee the file binds or imports from a non-framework module is not a framework name — see bite-proof record wo_b_2053_break_it_body_js
     bound, imported = set(), {}
-    for kind, _toks, sig, imports, binds in infos:
-        if kind == "stmt":
-            bound |= binds
-        else:
+    for _toks, sig, is_import, imports, binds in stmts:
+        if is_import:
             for local, target in imports:
                 if local is not None:
                     imported.setdefault(local, set()).add(target[0])
-        for here, after in zip(sig, sig[1:]):
-            if here[0] == "id" and here[1] in _DECLARING and after[0] == "id":
-                bound.add(after[1])
+        else:
+            bound |= binds
+        bound.update(after[1] for here, after in zip(sig, sig[1:])
+                     if here[0] == "id" and here[1] in _DECLARING and after[0] == "id")
+    # axis: a callee the file binds or imports from a non-framework module is not a framework name — see bite-proof record wo_b_2061_break_it_body_js
     return frozenset(
         name for name in _TITLE_CALLEES
         if name not in bound and imported.get(name, set()) <= _FRAMEWORK_MODULES)
 
 
-def _is_title_slot(toks, i):
-    if i + 3 >= len(toks) or toks[i + 1] != ("punct", "(") or toks[i + 2][0] not in ("str", "tpl"):
-        return False
-    if toks[i + 3] not in (_COMMA, ("punct", ")")):
-        return False
-    j = i - 1
-    while j >= 0 and toks[j][0] == "comment":
-        j -= 1
-    # axis: a title slot is a call at statement start, not an expression that happens to be named it — see bite-proof record wo_b_2053_break_it_body_js
-    return j < 0 or toks[j] in _STATEMENT_START
-
-
 def _keyed(toks, frameworks):
     key, titles = list(toks), []
     for i, tok in enumerate(toks):
-        if tok[0] == "id" and tok[1] in frameworks and _is_title_slot(toks, i):
-            titles.append(toks[i + 2][1])
+        slot = toks[i + 1:i + 4]
+        if not (tok[0] == "id" and tok[1] in frameworks and len(slot) == 3 and slot[0] == _LPAREN
+                and slot[1][0] in ("str", "tpl") and slot[2] in (_COMMA, _RPAREN)):
+            continue
+        prior = [t for t in toks[:i] if t[0] != "comment"]
+        # axis: a title slot is a call at statement start, not an expression that happens to be named it — see bite-proof record wo_b_2061_break_it_body_js
+        if not prior or prior[-1] in _STATEMENT_START:
+            titles.append(slot[1][1])
             key[i + 2] = ("str", TITLE)
     return tuple(key), tuple(titles)
 
 
 def _parse(text):
-    infos = []
+    stmts = []
     for toks in _split(_Scanner(text).run()):
         sig = [t for t in toks if t[0] != "comment"]
-        if _is_import(sig):
-            imports, binds = _parse_import(sig)
-            infos.append(("import", toks, sig, imports, binds))
-        else:
-            infos.append(("stmt", toks, sig, (), _binds(sig)))
-    frameworks = _framework_names(infos)
+        is_import = sig[:1] == [_IMPORT] and sig[1:2] not in ([_LPAREN], [_DOT])
+        imports, binds = _parse_import(sig) if is_import else ((), _binds(sig))
+        stmts.append((toks, sig, is_import, imports, binds))
+    frameworks = _framework_names(stmts)
     records = []
-    for kind, toks, sig, imports, binds in infos:
+    for toks, sig, is_import, imports, binds in stmts:
         key, titles = _keyed(toks, frameworks)
-        records.append({
-            "kind": kind,
-            "key": key,
-            "titles": titles,
-            "imports": imports,
-            "binds": binds,
-            "uses": _uses(sig),
-            "hook": kind == "stmt" and _is_hook(sig),
-        })
+        uses = frozenset(tok[1] for prev, tok in zip([None] + sig, sig) if tok[0] == "id" and prev not in _MEMBER)
+        records.append({"kind": "import" if is_import else "stmt", "key": key, "titles": titles, "imports": imports,
+                        "binds": binds, "uses": uses, "hook": not is_import and _is_hook(sig)})
     return records
 
 

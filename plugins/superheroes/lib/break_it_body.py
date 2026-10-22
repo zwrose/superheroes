@@ -17,7 +17,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-_FRONTS = ("break_it_body_py",)
+_FRONTS = ("break_it_body_py", "break_it_body_js")
 
 
 def _fronts():

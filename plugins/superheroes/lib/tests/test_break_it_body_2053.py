@@ -471,21 +471,21 @@ def test_a_go_record_missing_from_head_reads_missing(repo):
     assert _got(_check(repo, base, head, record)) == ("missing", "not-in-head")
 
 
-TS = "import { expect, test } from 'vitest';\n\ntest('x', () => {\n  expect(1).toBe(1);\n});\n"
+GO = "package pkg\n\nfunc TestX(t *testing.T) {\n\tif 1 != 1 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
 
 
-def test_a_ts_record_with_content_and_changed_bytes_reads_changed_never_searched(repo):
-    reformatted = TS.replace("'", '"')
-    base, head = _stage(repo, {"web/x.test.ts": reformatted, "web/copy.test.ts": TS})
-    record = _record(content=TS, path="web/x.test.ts", command="npx vitest run web/x.test.ts")
+def test_a_go_record_with_content_and_changed_bytes_reads_changed_never_searched(repo):
+    reformatted = GO.replace("\t", "    ")
+    base, head = _stage(repo, {"pkg/x_test.go": reformatted, "pkg/copy_test.go": GO})
+    record = _record(content=GO, path="pkg/x_test.go", command="go test ./pkg")
     calls = []
     assert _got(_check(repo, base, head, record, _stub(calls))) == ("changed", "sha256-differs")
     assert calls == []
 
 
-def test_a_ts_record_with_content_missing_from_head_reads_missing_though_a_copy_is_carried(repo):
-    base, head = _stage(repo, {"web/moved.test.ts": TS})
-    record = _record(content=TS, path="web/x.test.ts", command="npx vitest run web/x.test.ts")
+def test_a_go_record_with_content_missing_from_head_reads_missing_though_a_copy_is_carried(repo):
+    base, head = _stage(repo, {"pkg/moved_test.go": GO})
+    record = _record(content=GO, path="pkg/x_test.go", command="go test ./pkg")
     calls = []
     assert _got(_check(repo, base, head, record, _stub(calls))) == ("missing", "not-in-head")
     assert calls == []
