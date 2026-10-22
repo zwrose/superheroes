@@ -51,7 +51,9 @@ The advisor's input is one JSON object; any key not listed is refused.
                  entries as they stand (an entry whose finding the input does not name is inherited), and refuses a changed or
                  added determination, or a leftovers entry over an earlier one.
   items          Optional list. Each is {id, kind, title, ifLeft, options, recommendation?} with options
-                 "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items.
+                 "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items. ifLeft is a non-empty
+                 string, shown as one paragraph, or a list of at least 1 non-empty strings, shown as a bulleted list, one
+                 bullet each (the "What you're accepting" fold's routine notes).
   collectorItems Optional list. A decision from the owner's list that concerns this one PR, answered on this PR's sheet.
                  Each is {number, title, why, context, options, ifLeft, recommendation}, all required: number the collector
                  item's number (an integer, 1 or more, unique among the entries); title, why, context and ifLeft non-empty
@@ -310,7 +312,7 @@ def _check_list(name, entries, required, optional, problems):
         w = f"{name} entry {n}"
         if not _keys(w, e, required, optional, problems):
             continue
-        if not (all(_text(e[k]) for k in required if k not in ("pr", "options", "sendsBack")) and _ID.match(e["id"])):
+        if not (all(_text(e[k]) for k in required if k not in ("pr", "options", "sendsBack", "ifLeft")) and _ID.match(e["id"])):
             problems.append(f"{w} needs an id of lowercase letters, digits and hyphens and non-empty text")
         elif e["id"] in ids:
             problems.append(f"{w} repeats the id {e['id']}")
@@ -365,6 +367,9 @@ def _check_input(adv, words, problems):
                 problems.append(f"craftDeterminations {k}: reason must be a non-empty string")
     for it in _check_list("items", adv.get("items", []), ("id", "kind", "title", "ifLeft", "options"),
                           ("recommendation",), problems):
+        notes = it["ifLeft"]
+        if not (_text(notes) or isinstance(notes, list) and notes and all(_text(n) for n in notes)):
+            problems.append(f"items {it['id']}: ifLeft must be a non-empty string or a list of at least 1 non-empty strings")
         _check_call(f"items {it['id']}", it, words, problems, False)
     _check_collector(adv.get("collectorItems", []), words, problems)
     spec = adv.get("closesSpec")
@@ -624,7 +629,8 @@ def build(records, advisor, words, place=None, previous=None):
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
     for it in advisor.get("items", []):
-        cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], "paragraph", it["ifLeft"])],
+        block = "bullets" if isinstance(it["ifLeft"], list) else "paragraph"
+        cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], block, it["ifLeft"])],
                            _options(it["options"], words, False), it.get("recommendation")))
         places.append(f"items {it['id']}")
     for it in advisor.get("collectorItems", []):
