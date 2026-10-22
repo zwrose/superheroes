@@ -856,3 +856,32 @@ def test_core_a_nested_relative_import_moved_to_another_directory_is_a_binding_c
 def test_core_a_nested_relative_import_in_the_same_directory_is_found():
     got = break_it_body.locate(_NESTED, "pkg_a/test_old.py", [("pkg_a/test_host.py", _NESTED)])
     assert (got["status"], got["path"]) == ("found", "pkg_a/test_host.py")
+
+
+_V = "def test_x(value):\n    assert value == 1\n"
+
+
+def test_core_a_host_pytest_generate_tests_hook_is_host_setup():
+    host = _V + "\n\ndef pytest_generate_tests(metafunc):\n    metafunc.parametrize('value', [])\n"
+    got = break_it_body.locate(_V, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_core_a_host_fixture_under_an_aliased_fixture_import_with_the_same_name_is_a_binding_conflict():
+    orig = "from pytest import fixture as fx\n\n\n@fx(name='value')\ndef base_value():\n    return 0\n\n\n" + _V
+    host = orig + "\n\n@fx(name='value')\ndef z_host_value():\n    return 1\n"
+    got = break_it_body.locate(orig, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_a_global_assignment_inside_a_host_class_body_is_a_binding_conflict():
+    orig = "from math import sqrt\n\n\ndef test_x():\n    assert sqrt(4) == 3\n"
+    host = orig + "\n\nclass Host:\n    global sqrt\n    sqrt = lambda n: 3\n"
+    got = break_it_body.locate(orig, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_an_autouse_fixture_inside_module_level_control_flow_is_host_setup():
+    host = _V + "\n\nif True:\n    @pytest.fixture(autouse=True)\n    def _env():\n        pass\n"
+    got = break_it_body.locate(_V, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")

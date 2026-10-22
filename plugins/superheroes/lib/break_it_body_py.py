@@ -20,7 +20,8 @@ _SPACES = re.compile(r"\s+")
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 _HOOK_NAMES = frozenset(["pytestmark", "pytest_plugins", "setup_module", "teardown_module", "setUpModule",
-                         "tearDownModule", "setup_function", "teardown_function", "load_tests"])
+                         "tearDownModule", "setup_function", "teardown_function", "load_tests",
+                         "pytest_generate_tests"])
 
 
 def _directives(text):
@@ -52,31 +53,61 @@ def _import_pairs(node):
     return tuple(pairs)
 
 
-def _is_fixture(func):
-    """True when ``func`` (a decorator's callee) is ``fixture`` or ``<anything>.fixture``."""
-    return (isinstance(func, ast.Name) and func.id == "fixture") or (isinstance(func, ast.Attribute) and func.attr == "fixture")
+def _fixture_aliases(tree):
+    """Local names the module gives ``pytest.fixture`` through ``from pytest import fixture as <alias>``."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module == "pytest":
+            found.update(alias.asname for alias in node.names if alias.name == "fixture" and alias.asname)
+    return frozenset(found)
 
 
-def _binds(node, out):
+def _is_fixture(func, aliases=frozenset()):
+    """True when ``func`` (a decorator's callee) is ``fixture``, an import alias of it, or ``<anything>.fixture``."""
+    return ((isinstance(func, ast.Name) and (func.id == "fixture" or func.id in aliases))
+            or (isinstance(func, ast.Attribute) and func.attr == "fixture"))
+
+
+def _class_globals(body):
+    """Names declared ``global`` in a class body (or a nested class body), without entering a function or lambda."""
+    names = set()
+    stack = list(body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Global):
+            names.update(node.names)
+        elif not isinstance(node, _FUNCTIONS + (ast.Lambda,)):
+            stack.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def _binds(node, out, aliases=frozenset()):
     """Names ``node`` binds at module scope, without entering a nested function, lambda, class or comprehension."""
     if isinstance(node, _FUNCTIONS):
         out.add(node.name)
         # a fixture registered under an explicit name binds that name for pytest, whatever the function is called
         for decorator in node.decorator_list:
-            if not (isinstance(decorator, ast.Call) and _is_fixture(decorator.func)):
+            if not (isinstance(decorator, ast.Call) and _is_fixture(decorator.func, aliases)):
                 continue
             for sub in decorator.keywords:
                 if sub.arg == "name" and isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
                     out.add(sub.value.value)
         for sub in node.decorator_list + node.args.defaults + [d for d in node.args.kw_defaults if d]:
-            _binds(sub, out)
+            _binds(sub, out, aliases)
     elif isinstance(node, ast.ClassDef):
         out.add(node.name)
         for sub in node.decorator_list + node.bases + [k.value for k in node.keywords]:
-            _binds(sub, out)
+            _binds(sub, out, aliases)
+        # a class body runs at import: a store, import, def or del of a name it declared global rebinds the module name
+        declared = _class_globals(node.body)
+        if declared:
+            inner = set()
+            for sub in node.body:
+                _binds(sub, inner, aliases)
+            out.update(inner & declared)
     elif isinstance(node, ast.Lambda):
         for sub in node.args.defaults + [d for d in node.args.kw_defaults if d]:
-            _binds(sub, out)
+            _binds(sub, out, aliases)
     elif isinstance(node, _COMPREHENSIONS):
         # a walrus inside a comprehension binds in the enclosing scope
         for sub in ast.walk(node):
@@ -97,7 +128,7 @@ def _binds(node, out):
         elif isinstance(node, ast.MatchMapping) and node.rest:
             out.add(node.rest)
         for sub in ast.iter_child_nodes(node):
-            _binds(sub, out)
+            _binds(sub, out, aliases)
 
 
 def _uses(node):
@@ -137,13 +168,21 @@ def _uses(node):
 
 
 def _autouse(node):
-    if not isinstance(node, _FUNCTIONS):
-        return False
-    for decorator in node.decorator_list:
-        for sub in ast.walk(decorator):
-            if (isinstance(sub, ast.keyword) and sub.arg == "autouse"
-                    and not (isinstance(sub.value, ast.Constant) and sub.value.value is False)):
-                return True
+    """True when ``node`` is, or at import time (inside an if, try, with, loop or class) contains, a def carrying
+    an ``autouse`` keyword other than a literal False; a function body is not entered."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, _FUNCTIONS):
+            for decorator in cur.decorator_list:
+                for sub in ast.walk(decorator):
+                    if (isinstance(sub, ast.keyword) and sub.arg == "autouse"
+                            and not (isinstance(sub.value, ast.Constant) and sub.value.value is False)):
+                        return True
+        elif isinstance(cur, (ast.Lambda,) + _COMPREHENSIONS):
+            continue
+        else:
+            stack.extend(ast.iter_child_nodes(cur))
     return False
 
 
@@ -163,7 +202,7 @@ def _normalise(node):
     return clone, tuple(titles)
 
 
-def _record(node, directives):
+def _record(node, directives, aliases=frozenset()):
     lo, hi = _span(node)
     mine = tuple(text for line, text in directives if lo <= line <= hi)
     if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -172,7 +211,7 @@ def _record(node, directives):
         clone, titles = _normalise(node)
         key, kind = (ast.dump(clone, include_attributes=False), mine), "stmt"
     binds = set()
-    _binds(node, binds)
+    _binds(node, binds, aliases)
     return {"kind": kind, "key": key, "titles": titles, "imports": _import_pairs(node),
             "binds": frozenset(binds), "uses": _uses(node),
             "hook": _autouse(node) or bool(binds & _HOOK_NAMES),
@@ -187,6 +226,7 @@ def parse(text):
         tree = ast.parse(text)
         # axis: a directive comment inside a statement is part of its key, so an added `# type: ignore` is a different test — see bite-proof record wo_a_2053_break_it_body
         directives = _directives(text)
-        return [_record(node, directives) for node in tree.body]
+        aliases = _fixture_aliases(tree)
+        return [_record(node, directives, aliases) for node in tree.body]
     except Exception as exc:
         raise ValueError("unreadable python: %s" % type(exc).__name__) from exc
