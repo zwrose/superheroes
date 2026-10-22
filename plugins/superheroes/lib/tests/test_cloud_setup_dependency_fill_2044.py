@@ -88,6 +88,7 @@ class _Second:
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_step_follows_the_setup_commands_and_precedes_the_marker(tmp_path, mode):
+    # axis: the step sits after the setup commands and before the tool-steps marker; fails if it moves
     w, path, _ = _project(tmp_path, mode)
     _store_commands(w, ["npm ci"])
     fill = _fill(w)
@@ -104,6 +105,7 @@ def test_the_step_follows_the_setup_commands_and_precedes_the_marker(tmp_path, m
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_step_is_in_the_text_without_setup_commands_too(tmp_path, mode):
+    # axis: the step needs no setup commands to appear; fails if it is tied to them
     w, path, _ = _project(tmp_path, mode)
     text = _compose(w)["text"]
     assert "Run the project's own setup commands" not in text
@@ -113,6 +115,7 @@ def test_the_step_is_in_the_text_without_setup_commands_too(tmp_path, mode):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_a_working_launcher_runs_once_in_the_clone_and_logs_one_ok_line(tmp_path, mode):
+    # axis: the launcher runs once, in the clone, with `-c pass`, logging one ok line; fails if it runs elsewhere or twice
     w, path, calls = _project(tmp_path, mode)
     proc, _ = _run_script(w, _compose(w)["text"], git_clone=True)
     assert proc.returncode == 0, proc.stderr
@@ -122,6 +125,7 @@ def test_a_working_launcher_runs_once_in_the_clone_and_logs_one_ok_line(tmp_path
 
 
 def test_the_step_runs_in_the_working_directory_when_that_is_the_clone(tmp_path):
+    # axis: a working directory that is itself the clone is where the step runs; fails if it looks for a subdirectory
     w, path, calls = _project(tmp_path, "inside")
     proc, _ = _run_script(w, _compose(w)["text"], git_clone="here")
     assert proc.returncode == 0, proc.stderr
@@ -133,6 +137,7 @@ def test_the_step_runs_in_the_working_directory_when_that_is_the_clone(tmp_path)
 
 @pytest.mark.parametrize("mode", MODES)
 def test_a_failing_launcher_logs_one_failed_line_with_its_exit_code(tmp_path, mode):
+    # axis: a failing launcher logs one FAILED line with its exit code and runs once; fails if the code is lost or it retries
     w, path, calls = _project(tmp_path, mode, code=3)
     proc, _ = _run_script(w, _compose(w)["text"], git_clone=True)
     assert proc.returncode == 0, proc.stderr
@@ -144,6 +149,7 @@ def test_a_failing_launcher_logs_one_failed_line_with_its_exit_code(tmp_path, mo
 @pytest.mark.parametrize("commands, status", [(["true"], 0), (["false"], 1)])
 def test_a_failed_fill_leaves_the_exit_status_what_it_was_without_the_step(
         tmp_path, commands, status):
+    # axis: a failed fill leaves the script's exit status as it is without the step; fails if the fill changes it
     (tmp_path / "with").mkdir()
     w, path, _ = _project(tmp_path / "with", "inside", code=3)
     _store_commands(w, commands)
@@ -162,6 +168,7 @@ def test_a_failed_fill_leaves_the_exit_status_what_it_was_without_the_step(
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_stamp_is_still_published_when_the_commands_pass_and_the_fill_fails(tmp_path, mode):
+    # axis: passing commands publish the stamp even when the fill fails; fails if a failed fill withholds it
     w, path, _ = _project(tmp_path, mode, code=3)
     _store_commands(w, ["true"])
     result = _compose(w)
@@ -176,6 +183,7 @@ def test_the_stamp_is_still_published_when_the_commands_pass_and_the_fill_fails(
 
 @pytest.mark.parametrize("mode", MODES)
 def test_no_clone_logs_one_skipped_line_and_runs_nothing(tmp_path, mode):
+    # axis: with no clone the step logs one skipped line and runs nothing; fails if it runs or logs anything else
     w, path, calls = _project(tmp_path, mode)
     proc, _ = _run_script(w, _compose(w)["text"])
     assert proc.returncode == 0, proc.stderr
@@ -186,6 +194,7 @@ def test_no_clone_logs_one_skipped_line_and_runs_nothing(tmp_path, mode):
 
 
 def test_no_clone_leaves_a_failing_command_status_unchanged(tmp_path):
+    # axis: the skipped step leaves the non-zero status the missing clone already gives; fails if it masks it as ok
     w, path, _ = _project(tmp_path, "inside")
     _store_commands(w, ["true"])
     proc, _ = _run_script(w, _compose(w)["text"])
@@ -238,6 +247,8 @@ NO_STEP = [
         verify="UV_CACHE_DIR=.uv-cache scripts/pinned-python -m pytest"), True,
      _fix_env_assignment),
     ("env word", dict(verify="env FOO=1 scripts/pinned-python -m pytest"), True, _fix_env_word),
+    ("env word alone", dict(verify="/usr/bin/env -u UV_CACHE_DIR scripts/pinned-python -m pytest"),
+     True, _fix_env_word),
     ("invalid interpreter key", dict(verify="scripts/pinned-python -m pytest", interpreter="-x"),
      True, _fix_invalid_interpreter),
 ]
@@ -247,6 +258,7 @@ NO_STEP = [
 @pytest.mark.parametrize("name, core, requirements, fix", NO_STEP, ids=[c[0] for c in NO_STEP])
 def test_a_project_without_the_step_has_the_text_and_stamp_it_had(
         tmp_path, monkeypatch, mode, name, core, requirements, fix):
+    # axis: each project missing one fact gets no step and the text and stamp it had; fails if a step appears or the text shifts
     w = _world(tmp_path, mode)
     if core is not None:
         _set_core(w, **core)
@@ -273,6 +285,7 @@ def test_a_project_without_the_step_has_the_text_and_stamp_it_had(
 
 @pytest.mark.parametrize("mode", MODES)
 def test_no_core_record_leaves_the_golden_text_byte_for_byte(tmp_path, mode):
+    # axis: with no core record the text is the golden text byte for byte; fails if the step changes any byte
     w = _world(tmp_path, mode)
     expected = _golden(w, mode)
     _requirements(w)
@@ -285,6 +298,7 @@ def test_no_core_record_leaves_the_golden_text_byte_for_byte(tmp_path, mode):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_interpreter_key_beats_the_verify_commands_launcher(tmp_path, mode):
+    # axis: breakItInterpreter wins over the verify command's launcher; fails if the verify launcher runs instead
     w, verify_path, verify_calls = _project(tmp_path, mode)
     key_path, key_calls = _launcher(w, name="key-python")
     _set_core(w, verify="%s -m pytest" % verify_path, interpreter=key_path)
@@ -296,7 +310,21 @@ def test_the_interpreter_key_beats_the_verify_commands_launcher(tmp_path, mode):
     assert key_calls.exists() and not verify_calls.exists()
 
 
+@pytest.mark.parametrize("mode", MODES)
+def test_a_launcher_of_several_words_led_by_python_gets_the_step(tmp_path, mode):
+    # axis: a launcher of several words led by a Python interpreter runs uv, so it gets the step; fails if it does not
+    w = _world(tmp_path, mode)
+    _set_core(w, verify="npm test", interpreter="python3 -m uv run python")
+    _requirements(w)
+    assert _fill(w)
+    text = _compose(w)["text"]
+    assert "&& python3 -m uv run python -c pass </dev/null" in text
+    assert subprocess.run(["bash", "-n"], input=text, text=True,
+                          capture_output=True).returncode == 0
+
+
 def test_the_interpreter_key_words_are_quoted_and_the_text_parses(tmp_path):
+    # axis: launcher words are shell-quoted in the step and the text still parses; fails if a word is left raw
     w = _inside(tmp_path)
     _set_core(w, verify="npm test", interpreter="'my launcher' --flag $HOME")
     _requirements(w)
@@ -308,6 +336,7 @@ def test_the_interpreter_key_words_are_quoted_and_the_text_parses(tmp_path):
 
 
 def test_a_failed_line_names_the_launcher_words_whatever_they_hold(tmp_path):
+    # axis: the FAILED line prints the launcher words literally and the missing launcher exits 127; fails if they are expanded
     w = _inside(tmp_path)
     _set_core(w, verify="npm test", interpreter="/no/such/launcher 'a b' $HOME")
     _requirements(w)
@@ -332,6 +361,7 @@ def _viewed(w, **kw):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_both_stamp_views_hold_the_step_exactly_when_the_text_does(tmp_path, mode):
+    # axis: both stamp views hold the step's bytes exactly when the text does; fails if either view drops or alters it
     w, _, _ = _project(tmp_path, mode)
     _store_commands(w, ["true"])
     fill = _fill(w)
@@ -346,6 +376,7 @@ def test_both_stamp_views_hold_the_step_exactly_when_the_text_does(tmp_path, mod
 
 
 def test_the_outside_view_holds_the_step_with_no_setup_commands(tmp_path):
+    # axis: the outside stamp view holds the step with no setup commands; fails if the view needs commands to carry it
     w, _, _ = _project(tmp_path, "outside")
     view, _ = _viewed(w)
     assert view[CS.SETUP_FILL_STAMP_KEY] == ("\n".join(_fill(w)) + "\n").encode("utf-8")
@@ -354,6 +385,7 @@ def test_the_outside_view_holds_the_step_with_no_setup_commands(tmp_path):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_a_project_without_the_step_keeps_the_stamp_it_has(tmp_path, monkeypatch, mode):
+    # axis: a project with no step has no fill key in its stamp view and the stamp it had; fails if the key leaks in
     w, _, _ = _project(tmp_path, mode, requirements=False)
     _store_commands(w, ["true"])
     assert _fill(w) == []
@@ -367,6 +399,7 @@ def test_a_project_without_the_step_keeps_the_stamp_it_has(tmp_path, monkeypatch
 
 
 def test_a_text_with_no_stamp_gets_none_from_the_step(tmp_path):
+    # axis: a text composed with no stamp function stays stampless; fails if the step makes or adds a stamp
     w, _, _ = _project(tmp_path, "inside")
     assert _fill(w)
     result = _compose(w)
@@ -376,6 +409,7 @@ def test_a_text_with_no_stamp_gets_none_from_the_step(tmp_path):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_changing_the_steps_lines_moves_the_stamp(tmp_path, monkeypatch, mode):
+    # axis: the step's lines are stamped input; fails if changing them leaves the stamp where it was
     w, _, _ = _project(tmp_path, mode)
     _store_commands(w, ["true"])
     fill = _fill(w)
@@ -391,6 +425,7 @@ def test_changing_the_steps_lines_moves_the_stamp(tmp_path, monkeypatch, mode):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_text_with_the_step_passes_bash_n(tmp_path, mode):
+    # axis: the composed text with the step is valid bash; fails if the step breaks the script's syntax
     w, _, _ = _project(tmp_path, mode)
     _store_commands(w, ["npm ci"])
     text = _compose(w)["text"]

@@ -626,8 +626,8 @@ def _verify_launcher(verify):
 
 def _fill_launcher(cwd, root):
     """The Python launcher words the fill runs, from the project's placed core record, or None:
-    `breakItInterpreter` when set (invalid means none), else the verify command's launcher. A bare
-    Python interpreter fills nothing, so it is none too."""
+    `breakItInterpreter` when set (invalid means none), else the verify command's launcher. A
+    launcher that is a single bare Python interpreter word fills nothing, so it is none too."""
     try:
         core = core_md.read(cwd, root, persist_backfill=False)
     except Exception:
@@ -638,7 +638,8 @@ def _fill_launcher(cwd, root):
     # axis: a set key never falls back to the verify command's launcher
     words = break_it.launcher_argv(value) if value is not None \
         else _verify_launcher(core.get("verifyCommand"))
-    if not words or break_it._is_python_program(words[0]):
+    # axis: only a single bare interpreter word fetches nothing; `python3 -m uv run python` runs uv, so it is filled
+    if not words or (len(words) == 1 and break_it._is_python_program(words[0])):
         return None
     return words
 
