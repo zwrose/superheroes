@@ -9,6 +9,7 @@ Uses real git repositories in tmp_path; does not mock git.
 """
 import os
 import re
+import stat
 import subprocess
 
 import pytest
@@ -188,6 +189,44 @@ def test_edge5_unstaged_edit_on_merge_staged_path_denies(tmp_path, monkeypatch):
     with open(os.path.join(work, "a.txt"), "a") as f:
         f.write("builder's unstaged edit\n")
     assert wg.classify("git checkout --theirs a.txt", work) == _refusal("checkout-path", 1)
+
+
+def test_executable_bit_edit_on_conflicted_file_denies_with_filemode_off(tmp_path, monkeypatch):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _git(work, "config", "core.filemode", "false")
+    target = os.path.join(work, "f.txt")
+    os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
+    assert wg.classify("git checkout --theirs f.txt", work) == _refusal("checkout-path", 1)
+    assert wg.classify("git restore --theirs f.txt", work) == _refusal("restore", 1)
+
+
+def test_unclosed_opening_marker_like_line_is_ordinary_content(tmp_path, monkeypatch):
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    target = os.path.join(repo, "f.txt")
+    tail = "".join("unchanged context %d\n" % i for i in range(12)) + "<<<<<<< original-example\n"
+
+    def commit_version(first_line, message):
+        _write(repo, "f.txt", first_line + "\n" + tail)
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-q", "-m", message)
+
+    commit_version("base", "base")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    commit_version("feature", "feature")
+    _git(repo, "checkout", "-q", "main")
+    _write(repo, "other.txt", "main change\n")
+    commit_version("main", "main")
+    _git(repo, "checkout", "-q", "feature")
+    assert _git(repo, "merge", "--no-edit", "main", check=False).returncode == 1
+
+    command = "git checkout --theirs f.txt"
+    assert wg.classify(command, repo) == ("allow", "")
+    with open(target, "rb") as f:
+        original = f.read()
+    with open(target, "wb") as f:
+        f.write(original.replace(b"<<<<<<< original-example", b"<<<<<<< OWNER-ONLY-DRAFT"))
+    assert wg.classify(command, repo) == _refusal("checkout-path", 1)
 
 
 def test_edge6_merge_staged_changes_on_unnamed_paths_do_not_count(tmp_path, monkeypatch):
