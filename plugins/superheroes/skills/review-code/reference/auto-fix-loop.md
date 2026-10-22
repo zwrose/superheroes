@@ -405,7 +405,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > seat reads, lists and searches files inside the sanitized view to ground its findings and runs no
 > program: a codex seat runs with a closed tool set (user config ignored, its shell tools off, the
 > plugin's read-only file server as its only tool source), a claude seat runs restricted with no MCP
-> servers, a cursor seat runs in ask mode, and the driver refuses a result whose engine record shows any other action, naming
+> servers, and the driver refuses a result whose engine record shows any other action, naming
 > `seat-ran-outside-allowance`. Inlining the diff in the seat prompt remains available and is still reasonable for a
 > small diff, but it is no longer the only way a seat gets the change.
 >

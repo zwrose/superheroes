@@ -37,7 +37,6 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A review seat reads, lists and searches files and runs no program. Every review order now says so in a `What you may run` block, and the fixer's order states the commands it may run in the same place.
 - A codex review seat ignores the user's codex config: custom MCP servers, plugins, hooks and model-provider settings no longer apply to review seats. The seat's shell tools are off and the plugin's read-only file server is its only tool source. The model and effort are still passed explicitly.
 - A claude review seat runs restricted with no MCP servers.
-- A cursor review seat runs in ask mode, and a cursor record showing any tool beyond read, grep, glob or list forfeits the same way.
 - A result whose engine record shows a command, or any other action outside the allowance, makes the seat forfeit its result with `seat-ran-outside-allowance`.
 
 ## 0.46.0
