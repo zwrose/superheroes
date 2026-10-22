@@ -406,3 +406,19 @@ def test_c_correction_rewrites_a_bare_payload_landing_as_json(tmp_path):
     assert out["ok"] is True, out
     assert out["landingPath"] == bare
     assert RR.read_json(bare)[0] == dict(payload, refusals=[ENTRY])
+
+
+def test_c_correction_attempt_fence_refuses_a_stale_attempt_and_accepts_the_pending_one(tmp_path):
+    session_dir, _gitdir, head_path, _repo, _head = _fixer_session(tmp_path)
+    pend, _payload = _land_fixer(session_dir, head_path, refusals=[])
+    landing = _landing_path(session_dir, pend)
+    before = _read_bytes(landing)
+    refusals = _refusals_file(tmp_path, [ENTRY])
+    out = RD.cmd_correct_fixer_refusals(session_dir, refusals, attempt=pend["attempt"] + 1)
+    assert out["ok"] is False and out["reason"] == "attempt-not-pending"
+    assert out["pendingAttempt"] == pend["attempt"]
+    assert _read_bytes(landing) == before
+    assert _rows(session_dir, "fixer-refusals-corrected") == []
+    out = RD.cmd_correct_fixer_refusals(session_dir, refusals, attempt=pend["attempt"])
+    assert out["ok"] is True, out
+    assert RR.read_json(landing)[0]["payload"]["refusals"] == [ENTRY]
