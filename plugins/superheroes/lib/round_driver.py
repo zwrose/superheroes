@@ -8501,7 +8501,8 @@ def _fetch_ci_run(repo_root, run_id):
     """Fetch one GitHub Actions run through `gh`. Returns (run dict, None) or (None, reason)."""
     argv = ["gh", "api", "repos/{owner}/{repo}/actions/runs/%s" % run_id]
     try:
-        done = subprocess.run(argv, cwd=repo_root, capture_output=True, timeout=60)
+        done = subprocess.run(argv, cwd=repo_root, capture_output=True, timeout=60,
+                              stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as exc:
         return None, "gh api failed: %s" % exc
     if done.returncode != 0:

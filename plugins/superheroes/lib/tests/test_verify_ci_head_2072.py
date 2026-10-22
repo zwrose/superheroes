@@ -522,6 +522,7 @@ def test_the_fetch_seam_runs_gh_api_with_an_argv_list_and_a_timeout(monkeypatch)
     assert seen["argv"] == ["gh", "api", "repos/{owner}/{repo}/actions/runs/%s" % RUN_ID]
     assert seen["kw"]["cwd"] == "/repo" and seen["kw"]["timeout"] == 60
     assert seen["kw"]["capture_output"] is True and not seen["kw"].get("shell")
+    assert seen["kw"].get("stdin") is RD.subprocess.DEVNULL
 
 
 @pytest.mark.parametrize("result", [
