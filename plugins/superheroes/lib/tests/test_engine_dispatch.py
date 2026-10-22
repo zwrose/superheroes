@@ -317,7 +317,8 @@ def _codex_event_stream(payload_text, *, action_items=0, tokens_usage=None):
     for i in range(action_items):
         lines.append(json.dumps({
             "type": "item.completed",
-            "item": {"id": "action_%d" % i, "type": "command_execution"},
+            "item": {"id": "action_%d" % i, "type": "mcp_tool_call",
+                     "server": "superheroes_read"},
         }))
     lines.append(json.dumps({
         "type": "item.completed",
@@ -4637,6 +4638,7 @@ def test_grade_review_attempt_prompt_echo_payload_shape_prompt_echo_only(tmp_pat
                 "ended": {
                     "exit": 0, "timedOut": False, "refusal": None,
                     "stdoutBytes": len(fed), "wallSeconds": 1.0,
+                    "allowanceViolations": [], "allowanceScan": "ok",
                 },
             },
         },
@@ -4814,6 +4816,7 @@ def _grade_state_with_echo_nonce(tmp_path, run_dir, *, echo_nonce, stdout, repo_
                 "ended": {
                     "exit": 0, "timedOut": False, "refusal": None,
                     "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                    "allowanceViolations": [], "allowanceScan": "ok",
                 },
             },
         },
@@ -4949,6 +4952,7 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
                 "ended": {
                     "exit": 0, "timedOut": False, "refusal": None,
                     "stdoutBytes": 4, "wallSeconds": 1.0,
+                    "allowanceViolations": [], "allowanceScan": "ok",
                 },
             },
         },
@@ -5117,6 +5121,7 @@ def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+        "allowanceViolations": [], "allowanceScan": "ok",
         "at": time.time(),
     })
     ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
@@ -5136,6 +5141,7 @@ def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+        "allowanceViolations": [], "allowanceScan": "ok",
         "at": time.time(),
     })
     ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
@@ -5458,6 +5464,7 @@ def test_journal_state_legacy_attempt_ended_keys_grade_unchanged(tmp_path):
         {
             "kind": "attempt-ended", "attempt": 1,
             "exit": 0, "timedOut": False, "signal": None, "refusal": None,
+            "allowanceViolations": [], "allowanceScan": "ok",
             "at": time.time(),
         },
     ]
@@ -5885,6 +5892,7 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+        "allowanceViolations": [], "allowanceScan": "ok",
     })
     ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     records, _ = ED._journal_read(run_dir)
@@ -5948,6 +5956,7 @@ def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tm
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+        "allowanceViolations": [], "allowanceScan": "ok",
     })
     ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     records, _ = ED._journal_read(run_dir)
@@ -9909,6 +9918,7 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+        "allowanceViolations": [], "allowanceScan": "ok",
     })
     records, _ = ED._journal_read(run_dir)
     for rec in records:
@@ -11971,6 +11981,8 @@ def _native_review_grade_state(
         "refusal": None,
         "stdoutBytes": len(stdout),
         "wallSeconds": 1.0,
+        "allowanceViolations": [],
+        "allowanceScan": "ok",
     }
     if write_result:
         envelope = _wrap_native_review_result(branch)
@@ -12031,6 +12043,7 @@ def _execution_record_completed_attempt(
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(),
         "wallSeconds": 1.0, "stdoutBytes": len(stdout) if write_stdout else 0,
+        "allowanceViolations": [], "allowanceScan": "ok",
     }
     if ended_overrides:
         ended.update(ended_overrides)
@@ -12503,6 +12516,7 @@ def test_grade_native_review_attempt_result_malformed_no_result_key(tmp_path):
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": 0, "wallSeconds": 1.0,
+        "allowanceViolations": [], "allowanceScan": "ok",
     })
     _journal_test_attempt_ended(run_dir, 1, ended)
     state["attempts"][1]["ended"] = ended
@@ -12726,6 +12740,7 @@ def test_run_execution_record_native_parse_binding_survives_view_removal(tmp_pat
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(),
         "wallSeconds": 1.0, "stdoutBytes": len(stream),
+        "allowanceViolations": [], "allowanceScan": "ok",
     })
     ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     state = ED._journal_state(ED._journal_read(run_dir)[0])
@@ -13107,6 +13122,7 @@ def test_grade_review_attempt_engaged_by_nonempty_payload_without_investigated(t
                 "ended": {
                     "exit": 0, "timedOut": False, "refusal": None,
                     "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+                    "allowanceViolations": [], "allowanceScan": "ok",
                 },
             },
         },
@@ -13138,6 +13154,7 @@ def test_grade_review_attempt_vacuous_without_investigated_stamps_unknown(tmp_pa
                 "ended": {
                     "exit": 0, "timedOut": False, "refusal": None,
                     "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                    "allowanceViolations": [], "allowanceScan": "ok",
                 },
             },
         },
@@ -13586,6 +13603,8 @@ def test_grade_attempt2_does_not_read_attempt1_stale_result(tmp_path):
             "refusal": None,
             "stdoutBytes": 0,
             "wallSeconds": 1.0,
+            "allowanceViolations": [],
+            "allowanceScan": "ok",
         },
     }
     grade = ED._grade_review_attempt(run_dir, state, 2)
@@ -13723,6 +13742,7 @@ def test_native_review_retry_isolation_admits_attempt2_result_only(tmp_path):
         "ended": {
             "exit": 0, "timedOut": False, "refusal": None,
             "stdoutBytes": len(stream2), "wallSeconds": 1.0,
+            "allowanceViolations": [], "allowanceScan": "ok",
         },
     }
     grade = ED._grade_review_attempt(run_dir2, state2, 2)
@@ -13733,6 +13753,7 @@ def test_native_review_retry_isolation_admits_attempt2_result_only(tmp_path):
         "kind": "attempt-ended", "attempt": 2,
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": len(stream2), "at": time.time(),
+        "allowanceViolations": [], "allowanceScan": "ok",
     })
     record2, err2 = ED.run_execution_record(run_dir2)
     assert err2 is None
@@ -16416,6 +16437,7 @@ def _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload):
 
 
 def _review_admission_codex_argv(tmp_path, ended, envelope):
+    ended = dict(ended, allowanceViolations=[], allowanceScan="ok")
     branch = envelope["result"]
     run_dir, state = _native_review_grade_state(tmp_path, branch, write_result=False)
     with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:

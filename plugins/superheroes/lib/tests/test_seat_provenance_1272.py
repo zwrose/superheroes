@@ -487,6 +487,7 @@ def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 0.1, "stdoutBytes": len(stdout),
+        "allowanceViolations": [], "allowanceScan": "ok",
         "at": time.time(),
     }, 1)
     engine_dispatch._journal_append(run_dir, {

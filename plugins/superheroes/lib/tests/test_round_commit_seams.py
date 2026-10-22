@@ -591,7 +591,8 @@ def _codex_turn_completed_stdout():
 def _codex_event_stream_with_tool_call():
   lines = [
       json.dumps({"type": "item.completed",
-                  "item": {"id": "ce_0", "type": "command_execution"}}),
+                  "item": {"id": "ce_0", "type": "mcp_tool_call",
+                           "server": "superheroes_read"}}),
       _codex_turn_completed_stdout(),
   ]
   return "\n".join(lines)
@@ -652,6 +653,7 @@ def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
   ended = _stamp_ended_from_native_result(run_dir, {
     "exit": 0, "timedOut": False, "refusal": None,
     "wallSeconds": 0.1, "stdoutBytes": len(stdout),
+    "allowanceViolations": [], "allowanceScan": "ok",
     "at": time.time(),
   }, 1)
   ED._journal_append(run_dir, {

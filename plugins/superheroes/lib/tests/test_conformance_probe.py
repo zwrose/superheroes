@@ -135,7 +135,8 @@ def _codex_event_stream(action_items=1):
     for i in range(action_items):
         lines.append(json.dumps({
             "type": "item.completed",
-            "item": {"id": "action_%d" % i, "type": "command_execution"},
+            "item": {"id": "action_%d" % i, "type": "mcp_tool_call",
+                     "server": "superheroes_read"},
         }))
     payload = json.dumps({"verdicts": [{"id": "conformance-probe-1", "verdict": "CONFIRMED", "reason": "ok"}]})
     lines.append(json.dumps({
@@ -3379,7 +3380,7 @@ def _astra_codex_findings_stream():
     lines = [
         json.dumps({
             "type": "item.completed",
-            "item": {"id": "a0", "type": "command_execution"},
+            "item": {"id": "a0", "type": "mcp_tool_call", "server": "superheroes_read"},
         }),
         json.dumps({
             "type": "item.completed",
