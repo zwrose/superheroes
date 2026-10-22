@@ -587,6 +587,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                                     review_record._readers(readers)["engine_run"], raw_dir)
     reviewers += _grounding_reviewers(state, reviewers)
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
+    checked += _verify_via_checked(rounds)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
@@ -619,6 +620,19 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked}
+
+
+def _verify_via_checked(rounds):
+    """One `checked` line per round whose pass rested on a CI run in place of the local verify command."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        via = rounds[n].get("verifyVia") if isinstance(rounds[n], dict) else None
+        # axis: the review record names the verify used — see bite-proof record wo_b_2072_ci_verify
+        if isinstance(via, dict) and via.get("via") == "ci-exact-head":
+            out.append("Verify in round %s: CI workflow %s run %s on %s passed, in place of the local "
+                       "verify command (%s)" % (n, via.get("workflow"), via.get("runId"),
+                                                str(via.get("headSha"))[:7], via.get("reason")))
+    return out
 
 
 def _owner_rulings(entries, findings, merged):
