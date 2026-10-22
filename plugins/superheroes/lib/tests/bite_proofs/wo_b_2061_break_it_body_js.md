@@ -579,3 +579,597 @@ exit=1
 1 passed in 0.27s
 exit=0
 ```
+
+---
+
+## B3 — closed-world host check
+
+**Provenance:** claude / sonnet-5.5 (implementer, work order B3, layer 2 of the #2053 stack, issue #2061), maker family anthropic. `plugins/superheroes/lib/break_it_body_js.py` (`_allowed_host` and its helpers replace `_is_hook`, `_HOOKS` and `_HOOK_OBJECTS`); tests in `plugins/superheroes/lib/tests/test_break_it_body_js_2053.py` and `plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py`.
+
+Declared guarded-element set (from the order): **K1**, **K2**, **K3**, **K4**. Every element was neutralized on the implementation commit `887f5020a` (`fix(superheroes): a moved JS/TS break-it test's host may only add plain code and its own tests around it`) by one targeted edit (the Edit tool, exact-text match). Only its proving nodes were run, by exact node id and never `-k`; the inverse edit was applied; `git diff --stat -- plugins/superheroes/lib/break_it_body_js.py` was read empty against that commit; and the same node ids were run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used. Each command was `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <node ids> -q -n auto`, followed by `; echo "exit=$?"` to print the exit code.
+
+| ID | Guarded element | Axis | Proving nodes | Red / green exit |
+|---|---|---|---|---|
+| K1 | `_registration`, the `len(callee) != 1` clause | a test registration's callee is the bare framework name, so member access (`it.only`, `describe.skip`) is a hook | `test_break_it_body_js_2053.py::test_allowed_host_refuses[it-only]`, `::test_allowed_host_refuses[describe-skip]`, `test_break_it_body_js_e2e_2061.py::test_a_host_it_only_is_host_setup` | 1 / 0 |
+| K2 | `_allowed_host`, the `any(local is not None for local, _ in imports)` return of the import branch | an import that binds no name runs its module for effects, so it is a hook | `test_break_it_body_js_2053.py::test_allowed_host_refuses[side-effect-import]`, `test_break_it_body_js_e2e_2061.py::test_a_host_side_effect_import_is_host_setup` | 1 / 0 |
+| K3 | `_plain`, the `tok == _LPAREN and called` refusal | a call in an initialiser (a `(` after an identifier or a closing bracket) makes the declaration a hook | `test_break_it_body_js_2053.py::test_allowed_host_refuses[call-in-initializer]`, `::test_allowed_host_refuses[call-in-second-declarator]` | 1 / 0 |
+| K4 | `_parse`, the `"hook": not _allowed_host(sig, frameworks)` wiring | every record's hook flag is the allowlist's refusal | `test_break_it_body_js_2053.py::test_hook_ignores_a_leading_comment`, `::test_a_registration_needs_its_callee_to_be_a_framework_name`, `test_break_it_body_js_e2e_2061.py::test_a_host_top_level_before_each_is_host_setup`, `::test_a_host_it_only_is_host_setup`, `::test_a_host_side_effect_import_is_host_setup` | 1 / 0 |
+
+### Disclosures
+
+- Every element went red under its neutralization (pytest exit 1) and green after the restore (exit 0). Every restore receipt is `git diff --stat -- plugins/superheroes/lib/break_it_body_js.py` printing nothing (its own exit 0), read against `887f5020a`, plus a `grep -n` quoting the restored line.
+- **K2.** The first red run of K2 was piped through `grep -v` to drop pytest's echo of the parametrize list, which the order does not permit for a bite-proof capture. It was discarded and the red half re-run unfiltered; the capture below is the unfiltered one. That discarded run is one of the spare runs.
+- The parametrized nodes' failure output includes pytest's full echo of the `@pytest.mark.parametrize` list; it is kept verbatim.
+- All captures are well under 32 KiB, so none is written off-repo. Nothing in the captures is redacted.
+
+### K1 — the bare-callee clause of a test registration
+
+- **axis:** a registration's callee is the bare framework name, so `it.only` and `describe.skip` are hooks
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_js.py`, `_registration`):
+```diff
+-    if len(callee) != 1 or callee[0][0] != "id" or callee[0][1] not in frameworks:
++    if callee[0][0] != "id" or callee[0][1] not in frameworks:
+```
+
+**command:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[it-only]" "plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[describe-skip]" "plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_it_only_is_host_setup" -q -n auto`
+
+**raw red** (exit 1):
+```
+bringing up nodes...
+bringing up nodes...
+
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______________________ test_allowed_host_refuses[it-only] ______________________
+[gw0] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpXpKC5q/bin/python
+
+text = 'it.only("x", () => {})'
+
+    @pytest.mark.parametrize("text", [
+        pytest.param('import "./setup"', id="side-effect-import"),
+        pytest.param('import {} from "m"', id="empty-import"),
+        pytest.param('it.only("x", () => {})', id="it-only"),
+        pytest.param('describe.skip("x", () => {})', id="describe-skip"),
+        pytest.param('test.each([1])("x", () => {})', id="test-each"),
+        pytest.param("globalThis.fetch = f;", id="global-write"),
+        pytest.param("const x = load();", id="call-in-initializer"),
+        pytest.param("const y = new Map();", id="new-in-initializer"),
+        pytest.param("const z = await y;", id="await-in-initializer"),
+        pytest.param("const t = tag`x`;", id="tagged-template"),
+        pytest.param("const t = `${a}`;", id="template-substitution"),
+        pytest.param("const w = (q = 1);", id="assignment-in-initializer"),
+        pytest.param("const a = 1, b = load()", id="call-in-second-declarator"),
+        pytest.param("const f = (() => 1)()", id="immediately-invoked-arrow"),
+        pytest.param("@dec class C {}", id="decorated-class"),
+        pytest.param("class C { @d m() {} }", id="decorated-member"),
+        pytest.param("class C extends mk() {}", id="call-in-heritage"),
+        pytest.param("class C extends tag`x` {}", id="template-in-heritage"),
+        pytest.param("class C { static x = load(); }", id="static-field"),
+        pytest.param("class C { static { load() } }", id="static-block"),
+        pytest.param("class C { [load()] = 1 }", id="computed-key"),
+        pytest.param("if (a) {}", id="if"),
+        pytest.param("for (;;) {}", id="for"),
+        pytest.param("try {} catch (e) {}", id="try"),
+        pytest.param("{ load() }", id="bare-block"),
+        pytest.param('export * from "m";', id="re-export-all"),
+        pytest.param('export { a } from "m"', id="re-export"),
+        pytest.param("export { a }", id="export-list"),
+        pytest.param("export = x", id="export-equals"),
+        pytest.param("export default foo", id="export-default-expression"),
+        pytest.param("export default () => {}", id="export-default-arrow"),
+        pytest.param("enum E { A }", id="enum"),
+        pytest.param("const enum E { A }", id="const-enum"),
+        pytest.param("function f() {} load()", id="function-then-call-on-one-line"),
+        pytest.param("interface I {} load()", id="interface-then-call-on-one-line"),
+        pytest.param("foo()", id="call"),
+        pytest.param('describe("x", () => { globalThis.fetch = f; })', id="describe-global-write"),
+        pytest.param('describe("x", () => { beforeEach(() => {}); it("y", () => {}); })', id="describe-before-each"),
+        pytest.param('describe("x", () => { const k = load(); })', id="describe-call-in-initializer"),
+        pytest.param('describe("x", () => { describe.skip("y", () => {}) })', id="describe-nested-skip"),
+        pytest.param('describe("x", () => foo())', id="describe-expression-body"),
+        pytest.param('it("x", f(), () => {})', id="call-as-argument"),
+        pytest.param("it(`${load()}`, () => {})", id="substituted-title"),
+        pytest.param('it("x", f)', id="identifier-callback"),
+        pytest.param('it("x", () => {}, { timeout: 1 })', id="options-object"),
+        pytest.param('it("x" + n, () => {})', id="concatenated-title"),
+        pytest.param('it("x", () => {}, 1, 2)', id="extra-argument"),
+        pytest.param('it("x", () => {})()', id="called-result"),
+        pytest.param('export it("x", () => {})', id="exported-registration"),
+    ])
+    def test_allowed_host_refuses(text):
+>       assert _allowed(text) is False
+E       assert True is False
+E        +  where True = _allowed('it.only("x", () => {})')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:519: AssertionError
+___________________ test_allowed_host_refuses[describe-skip] ___________________
+[gw3] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpXpKC5q/bin/python
+
+text = 'describe.skip("x", () => {})'
+
+    @pytest.mark.parametrize("text", [
+        pytest.param('import "./setup"', id="side-effect-import"),
+        pytest.param('import {} from "m"', id="empty-import"),
+        pytest.param('it.only("x", () => {})', id="it-only"),
+        pytest.param('describe.skip("x", () => {})', id="describe-skip"),
+        pytest.param('test.each([1])("x", () => {})', id="test-each"),
+        pytest.param("globalThis.fetch = f;", id="global-write"),
+        pytest.param("const x = load();", id="call-in-initializer"),
+        pytest.param("const y = new Map();", id="new-in-initializer"),
+        pytest.param("const z = await y;", id="await-in-initializer"),
+        pytest.param("const t = tag`x`;", id="tagged-template"),
+        pytest.param("const t = `${a}`;", id="template-substitution"),
+        pytest.param("const w = (q = 1);", id="assignment-in-initializer"),
+        pytest.param("const a = 1, b = load()", id="call-in-second-declarator"),
+        pytest.param("const f = (() => 1)()", id="immediately-invoked-arrow"),
+        pytest.param("@dec class C {}", id="decorated-class"),
+        pytest.param("class C { @d m() {} }", id="decorated-member"),
+        pytest.param("class C extends mk() {}", id="call-in-heritage"),
+        pytest.param("class C extends tag`x` {}", id="template-in-heritage"),
+        pytest.param("class C { static x = load(); }", id="static-field"),
+        pytest.param("class C { static { load() } }", id="static-block"),
+        pytest.param("class C { [load()] = 1 }", id="computed-key"),
+        pytest.param("if (a) {}", id="if"),
+        pytest.param("for (;;) {}", id="for"),
+        pytest.param("try {} catch (e) {}", id="try"),
+        pytest.param("{ load() }", id="bare-block"),
+        pytest.param('export * from "m";', id="re-export-all"),
+        pytest.param('export { a } from "m"', id="re-export"),
+        pytest.param("export { a }", id="export-list"),
+        pytest.param("export = x", id="export-equals"),
+        pytest.param("export default foo", id="export-default-expression"),
+        pytest.param("export default () => {}", id="export-default-arrow"),
+        pytest.param("enum E { A }", id="enum"),
+        pytest.param("const enum E { A }", id="const-enum"),
+        pytest.param("function f() {} load()", id="function-then-call-on-one-line"),
+        pytest.param("interface I {} load()", id="interface-then-call-on-one-line"),
+        pytest.param("foo()", id="call"),
+        pytest.param('describe("x", () => { globalThis.fetch = f; })', id="describe-global-write"),
+        pytest.param('describe("x", () => { beforeEach(() => {}); it("y", () => {}); })', id="describe-before-each"),
+        pytest.param('describe("x", () => { const k = load(); })', id="describe-call-in-initializer"),
+        pytest.param('describe("x", () => { describe.skip("y", () => {}) })', id="describe-nested-skip"),
+        pytest.param('describe("x", () => foo())', id="describe-expression-body"),
+        pytest.param('it("x", f(), () => {})', id="call-as-argument"),
+        pytest.param("it(`${load()}`, () => {})", id="substituted-title"),
+        pytest.param('it("x", f)', id="identifier-callback"),
+        pytest.param('it("x", () => {}, { timeout: 1 })', id="options-object"),
+        pytest.param('it("x" + n, () => {})', id="concatenated-title"),
+        pytest.param('it("x", () => {}, 1, 2)', id="extra-argument"),
+        pytest.param('it("x", () => {})()', id="called-result"),
+        pytest.param('export it("x", () => {})', id="exported-registration"),
+    ])
+    def test_allowed_host_refuses(text):
+>       assert _allowed(text) is False
+E       assert True is False
+E        +  where True = _allowed('describe.skip("x", () => {})')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:519: AssertionError
+______________________ test_a_host_it_only_is_host_setup _______________________
+[gw1] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpXpKC5q/bin/python
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-388/popen-gw1/test_a_host_it_only_is_host_se0/repo')
+
+    def test_a_host_it_only_is_host_setup(repo):
+        base, head = _stage(repo, {HOST: _host(before='\nit.only("focused", () => {});\n')})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:228: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[it-only]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[describe-skip]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_it_only_is_host_setup
+3 failed in 7.06s
+exit=1
+```
+
+**restore:** the inverse edit put `    if len(callee) != 1 or callee[0][0] != "id" or callee[0][1] not in frameworks:` back.
+
+**restore receipt:** `git diff --stat -- plugins/superheroes/lib/break_it_body_js.py` printed nothing; `grep -n` found `532:    if len(callee) != 1 or callee[0][0] != "id" or callee[0][1] not in frameworks:`.
+
+**raw green** (exit 0):
+```
+bringing up nodes...
+bringing up nodes...
+
+...                                                                      [100%]
+3 passed in 8.99s
+exit=0
+```
+
+### K2 — the side-effect-only import refusal
+
+- **axis:** an import that binds no name runs its module for effects, so it is a hook
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_js.py`, `_allowed_host`):
+```diff
+-        return any(local is not None for local, _ in imports)
++        return True
+```
+
+**command:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[side-effect-import]" "plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_side_effect_import_is_host_setup" -q -n auto`
+
+**raw red** (exit 1):
+```
+bringing up nodes...
+bringing up nodes...
+
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+________________ test_allowed_host_refuses[side-effect-import] _________________
+[gw0] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpRsCGe1/bin/python
+
+text = 'import "./setup"'
+
+    @pytest.mark.parametrize("text", [
+        pytest.param('import "./setup"', id="side-effect-import"),
+        pytest.param('import {} from "m"', id="empty-import"),
+        pytest.param('it.only("x", () => {})', id="it-only"),
+        pytest.param('describe.skip("x", () => {})', id="describe-skip"),
+        pytest.param('test.each([1])("x", () => {})', id="test-each"),
+        pytest.param("globalThis.fetch = f;", id="global-write"),
+        pytest.param("const x = load();", id="call-in-initializer"),
+        pytest.param("const y = new Map();", id="new-in-initializer"),
+        pytest.param("const z = await y;", id="await-in-initializer"),
+        pytest.param("const t = tag`x`;", id="tagged-template"),
+        pytest.param("const t = `${a}`;", id="template-substitution"),
+        pytest.param("const w = (q = 1);", id="assignment-in-initializer"),
+        pytest.param("const a = 1, b = load()", id="call-in-second-declarator"),
+        pytest.param("const f = (() => 1)()", id="immediately-invoked-arrow"),
+        pytest.param("@dec class C {}", id="decorated-class"),
+        pytest.param("class C { @d m() {} }", id="decorated-member"),
+        pytest.param("class C extends mk() {}", id="call-in-heritage"),
+        pytest.param("class C extends tag`x` {}", id="template-in-heritage"),
+        pytest.param("class C { static x = load(); }", id="static-field"),
+        pytest.param("class C { static { load() } }", id="static-block"),
+        pytest.param("class C { [load()] = 1 }", id="computed-key"),
+        pytest.param("if (a) {}", id="if"),
+        pytest.param("for (;;) {}", id="for"),
+        pytest.param("try {} catch (e) {}", id="try"),
+        pytest.param("{ load() }", id="bare-block"),
+        pytest.param('export * from "m";', id="re-export-all"),
+        pytest.param('export { a } from "m"', id="re-export"),
+        pytest.param("export { a }", id="export-list"),
+        pytest.param("export = x", id="export-equals"),
+        pytest.param("export default foo", id="export-default-expression"),
+        pytest.param("export default () => {}", id="export-default-arrow"),
+        pytest.param("enum E { A }", id="enum"),
+        pytest.param("const enum E { A }", id="const-enum"),
+        pytest.param("function f() {} load()", id="function-then-call-on-one-line"),
+        pytest.param("interface I {} load()", id="interface-then-call-on-one-line"),
+        pytest.param("foo()", id="call"),
+        pytest.param('describe("x", () => { globalThis.fetch = f; })', id="describe-global-write"),
+        pytest.param('describe("x", () => { beforeEach(() => {}); it("y", () => {}); })', id="describe-before-each"),
+        pytest.param('describe("x", () => { const k = load(); })', id="describe-call-in-initializer"),
+        pytest.param('describe("x", () => { describe.skip("y", () => {}) })', id="describe-nested-skip"),
+        pytest.param('describe("x", () => foo())', id="describe-expression-body"),
+        pytest.param('it("x", f(), () => {})', id="call-as-argument"),
+        pytest.param("it(`${load()}`, () => {})", id="substituted-title"),
+        pytest.param('it("x", f)', id="identifier-callback"),
+        pytest.param('it("x", () => {}, { timeout: 1 })', id="options-object"),
+        pytest.param('it("x" + n, () => {})', id="concatenated-title"),
+        pytest.param('it("x", () => {}, 1, 2)', id="extra-argument"),
+        pytest.param('it("x", () => {})()', id="called-result"),
+        pytest.param('export it("x", () => {})', id="exported-registration"),
+    ])
+    def test_allowed_host_refuses(text):
+>       assert _allowed(text) is False
+E       assert True is False
+E        +  where True = _allowed('import "./setup"')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:519: AssertionError
+_________________ test_a_host_side_effect_import_is_host_setup _________________
+[gw1] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpRsCGe1/bin/python
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-391/popen-gw1/test_a_host_side_effect_import0/repo')
+
+    def test_a_host_side_effect_import_is_host_setup(repo):
+        base, head = _stage(repo, {HOST: _host(imports=HOST_IMPORTS + 'import "./setup";\n')})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:235: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[side-effect-import]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_side_effect_import_is_host_setup
+2 failed in 6.27s
+exit=1
+```
+
+**restore:** the inverse edit put `        return any(local is not None for local, _ in imports)` back.
+
+**restore receipt:** `git diff --stat -- plugins/superheroes/lib/break_it_body_js.py` printed nothing; `grep -n` found `561:        return any(local is not None for local, _ in imports)`.
+
+**raw green** (exit 0):
+```
+bringing up nodes...
+bringing up nodes...
+
+..                                                                       [100%]
+2 passed in 6.72s
+exit=0
+```
+
+### K3 — the call-in-initializer refusal
+
+- **axis:** a call in an initialiser (a `(` after an identifier or a closing bracket) makes the declaration a hook
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_js.py`, `_plain`):
+```diff
+-        if tok == _LPAREN and called:
++        if False and tok == _LPAREN and called:
+```
+
+**command:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[call-in-initializer]" "plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[call-in-second-declarator]" -q -n auto`
+
+**raw red** (exit 1):
+```
+bringing up nodes...
+bringing up nodes...
+
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+________________ test_allowed_host_refuses[call-in-initializer] ________________
+[gw0] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpFyoiX6/bin/python
+
+text = 'const x = load();'
+
+    @pytest.mark.parametrize("text", [
+        pytest.param('import "./setup"', id="side-effect-import"),
+        pytest.param('import {} from "m"', id="empty-import"),
+        pytest.param('it.only("x", () => {})', id="it-only"),
+        pytest.param('describe.skip("x", () => {})', id="describe-skip"),
+        pytest.param('test.each([1])("x", () => {})', id="test-each"),
+        pytest.param("globalThis.fetch = f;", id="global-write"),
+        pytest.param("const x = load();", id="call-in-initializer"),
+        pytest.param("const y = new Map();", id="new-in-initializer"),
+        pytest.param("const z = await y;", id="await-in-initializer"),
+        pytest.param("const t = tag`x`;", id="tagged-template"),
+        pytest.param("const t = `${a}`;", id="template-substitution"),
+        pytest.param("const w = (q = 1);", id="assignment-in-initializer"),
+        pytest.param("const a = 1, b = load()", id="call-in-second-declarator"),
+        pytest.param("const f = (() => 1)()", id="immediately-invoked-arrow"),
+        pytest.param("@dec class C {}", id="decorated-class"),
+        pytest.param("class C { @d m() {} }", id="decorated-member"),
+        pytest.param("class C extends mk() {}", id="call-in-heritage"),
+        pytest.param("class C extends tag`x` {}", id="template-in-heritage"),
+        pytest.param("class C { static x = load(); }", id="static-field"),
+        pytest.param("class C { static { load() } }", id="static-block"),
+        pytest.param("class C { [load()] = 1 }", id="computed-key"),
+        pytest.param("if (a) {}", id="if"),
+        pytest.param("for (;;) {}", id="for"),
+        pytest.param("try {} catch (e) {}", id="try"),
+        pytest.param("{ load() }", id="bare-block"),
+        pytest.param('export * from "m";', id="re-export-all"),
+        pytest.param('export { a } from "m"', id="re-export"),
+        pytest.param("export { a }", id="export-list"),
+        pytest.param("export = x", id="export-equals"),
+        pytest.param("export default foo", id="export-default-expression"),
+        pytest.param("export default () => {}", id="export-default-arrow"),
+        pytest.param("enum E { A }", id="enum"),
+        pytest.param("const enum E { A }", id="const-enum"),
+        pytest.param("function f() {} load()", id="function-then-call-on-one-line"),
+        pytest.param("interface I {} load()", id="interface-then-call-on-one-line"),
+        pytest.param("foo()", id="call"),
+        pytest.param('describe("x", () => { globalThis.fetch = f; })', id="describe-global-write"),
+        pytest.param('describe("x", () => { beforeEach(() => {}); it("y", () => {}); })', id="describe-before-each"),
+        pytest.param('describe("x", () => { const k = load(); })', id="describe-call-in-initializer"),
+        pytest.param('describe("x", () => { describe.skip("y", () => {}) })', id="describe-nested-skip"),
+        pytest.param('describe("x", () => foo())', id="describe-expression-body"),
+        pytest.param('it("x", f(), () => {})', id="call-as-argument"),
+        pytest.param("it(`${load()}`, () => {})", id="substituted-title"),
+        pytest.param('it("x", f)', id="identifier-callback"),
+        pytest.param('it("x", () => {}, { timeout: 1 })', id="options-object"),
+        pytest.param('it("x" + n, () => {})', id="concatenated-title"),
+        pytest.param('it("x", () => {}, 1, 2)', id="extra-argument"),
+        pytest.param('it("x", () => {})()', id="called-result"),
+        pytest.param('export it("x", () => {})', id="exported-registration"),
+    ])
+    def test_allowed_host_refuses(text):
+>       assert _allowed(text) is False
+E       AssertionError: assert True is False
+E        +  where True = _allowed('const x = load();')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:519: AssertionError
+_____________ test_allowed_host_refuses[call-in-second-declarator] _____________
+[gw2] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpFyoiX6/bin/python
+
+text = 'const a = 1, b = load()'
+
+    @pytest.mark.parametrize("text", [
+        pytest.param('import "./setup"', id="side-effect-import"),
+        pytest.param('import {} from "m"', id="empty-import"),
+        pytest.param('it.only("x", () => {})', id="it-only"),
+        pytest.param('describe.skip("x", () => {})', id="describe-skip"),
+        pytest.param('test.each([1])("x", () => {})', id="test-each"),
+        pytest.param("globalThis.fetch = f;", id="global-write"),
+        pytest.param("const x = load();", id="call-in-initializer"),
+        pytest.param("const y = new Map();", id="new-in-initializer"),
+        pytest.param("const z = await y;", id="await-in-initializer"),
+        pytest.param("const t = tag`x`;", id="tagged-template"),
+        pytest.param("const t = `${a}`;", id="template-substitution"),
+        pytest.param("const w = (q = 1);", id="assignment-in-initializer"),
+        pytest.param("const a = 1, b = load()", id="call-in-second-declarator"),
+        pytest.param("const f = (() => 1)()", id="immediately-invoked-arrow"),
+        pytest.param("@dec class C {}", id="decorated-class"),
+        pytest.param("class C { @d m() {} }", id="decorated-member"),
+        pytest.param("class C extends mk() {}", id="call-in-heritage"),
+        pytest.param("class C extends tag`x` {}", id="template-in-heritage"),
+        pytest.param("class C { static x = load(); }", id="static-field"),
+        pytest.param("class C { static { load() } }", id="static-block"),
+        pytest.param("class C { [load()] = 1 }", id="computed-key"),
+        pytest.param("if (a) {}", id="if"),
+        pytest.param("for (;;) {}", id="for"),
+        pytest.param("try {} catch (e) {}", id="try"),
+        pytest.param("{ load() }", id="bare-block"),
+        pytest.param('export * from "m";', id="re-export-all"),
+        pytest.param('export { a } from "m"', id="re-export"),
+        pytest.param("export { a }", id="export-list"),
+        pytest.param("export = x", id="export-equals"),
+        pytest.param("export default foo", id="export-default-expression"),
+        pytest.param("export default () => {}", id="export-default-arrow"),
+        pytest.param("enum E { A }", id="enum"),
+        pytest.param("const enum E { A }", id="const-enum"),
+        pytest.param("function f() {} load()", id="function-then-call-on-one-line"),
+        pytest.param("interface I {} load()", id="interface-then-call-on-one-line"),
+        pytest.param("foo()", id="call"),
+        pytest.param('describe("x", () => { globalThis.fetch = f; })', id="describe-global-write"),
+        pytest.param('describe("x", () => { beforeEach(() => {}); it("y", () => {}); })', id="describe-before-each"),
+        pytest.param('describe("x", () => { const k = load(); })', id="describe-call-in-initializer"),
+        pytest.param('describe("x", () => { describe.skip("y", () => {}) })', id="describe-nested-skip"),
+        pytest.param('describe("x", () => foo())', id="describe-expression-body"),
+        pytest.param('it("x", f(), () => {})', id="call-as-argument"),
+        pytest.param("it(`${load()}`, () => {})", id="substituted-title"),
+        pytest.param('it("x", f)', id="identifier-callback"),
+        pytest.param('it("x", () => {}, { timeout: 1 })', id="options-object"),
+        pytest.param('it("x" + n, () => {})', id="concatenated-title"),
+        pytest.param('it("x", () => {}, 1, 2)', id="extra-argument"),
+        pytest.param('it("x", () => {})()', id="called-result"),
+        pytest.param('export it("x", () => {})', id="exported-registration"),
+    ])
+    def test_allowed_host_refuses(text):
+>       assert _allowed(text) is False
+E       AssertionError: assert True is False
+E        +  where True = _allowed('const a = 1, b = load()')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:519: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[call-in-initializer]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_allowed_host_refuses[call-in-second-declarator]
+2 failed in 5.36s
+exit=1
+```
+
+**restore:** the inverse edit put `        if tok == _LPAREN and called:` back.
+
+**restore receipt:** `git diff --stat -- plugins/superheroes/lib/break_it_body_js.py` printed nothing; `grep -n` found `454:        if tok == _LPAREN and called:`.
+
+**raw green** (exit 0):
+```
+bringing up nodes...
+bringing up nodes...
+
+..                                                                       [100%]
+2 passed in 5.68s
+exit=0
+```
+
+### K4 — the `hook = not _allowed_host(…)` wiring
+
+- **axis:** every record's hook flag is the allowlist's refusal
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_js.py`, `_parse`):
+```diff
+-                        "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks)})
++                        "binds": binds, "uses": uses, "hook": False})
+```
+
+**command:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_hook_ignores_a_leading_comment plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_a_registration_needs_its_callee_to_be_a_framework_name plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_top_level_before_each_is_host_setup plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_it_only_is_host_setup plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_side_effect_import_is_host_setup -q -n auto`
+
+**raw red** (exit 1):
+```
+bringing up nodes...
+bringing up nodes...
+
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+_________ test_a_registration_needs_its_callee_to_be_a_framework_name __________
+[gw2] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpb8VZOu/bin/python
+
+    def test_a_registration_needs_its_callee_to_be_a_framework_name():
+        assert [rec["hook"] for rec in front.parse('import { it } from "vitest"\nit("a", () => {})')] == [False, False]
+        recs = front.parse('import { it } from "./helpers"\nit("a", () => {})')
+>       assert [rec["hook"] for rec in recs] == [False, True]
+E       assert [False, False] == [False, True]
+E         
+E         At index 1 diff: False != True
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:420: AssertionError
+_____________________ test_hook_ignores_a_leading_comment ______________________
+[gw0] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpb8VZOu/bin/python
+
+    def test_hook_ignores_a_leading_comment():
+>       assert _only("// reset\nbeforeEach(() => {})")["hook"] is True
+E       assert False is True
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_2053.py:410: AssertionError
+______________________ test_a_host_it_only_is_host_setup _______________________
+[gw3] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpb8VZOu/bin/python
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-395/popen-gw3/test_a_host_it_only_is_host_se0/repo')
+
+    def test_a_host_it_only_is_host_setup(repo):
+        base, head = _stage(repo, {HOST: _host(before='\nit.only("focused", () => {});\n')})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:228: AssertionError
+_______________ test_a_host_top_level_before_each_is_host_setup ________________
+[gw1] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpb8VZOu/bin/python
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-395/popen-gw1/test_a_host_top_level_before_e0/repo')
+
+    def test_a_host_top_level_before_each_is_host_setup(repo):
+        host = _host(imports=HOST_IMPORTS.replace("describe", "beforeEach, describe"),
+                     before="\nbeforeEach(() => {\n  window.localStorage.clear();\n});\n")
+        base, head = _stage(repo, {HOST: host})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:221: AssertionError
+_________________ test_a_host_side_effect_import_is_host_setup _________________
+[gw7] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmpb8VZOu/bin/python
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-395/popen-gw7/test_a_host_side_effect_import0/repo')
+
+    def test_a_host_side_effect_import_is_host_setup(repo):
+        base, head = _stage(repo, {HOST: _host(imports=HOST_IMPORTS + 'import "./setup";\n')})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2061-wo-b2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:235: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_a_registration_needs_its_callee_to_be_a_framework_name
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_2053.py::test_hook_ignores_a_leading_comment
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_it_only_is_host_setup
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_top_level_before_each_is_host_setup
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_host_side_effect_import_is_host_setup
+5 failed in 6.39s
+exit=1
+```
+
+**restore:** the inverse edit put `"hook": not _allowed_host(sig, frameworks)})` back.
+
+**restore receipt:** `git diff --stat -- plugins/superheroes/lib/break_it_body_js.py` printed nothing; `grep -n` found `628:                        "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks)})`.
+
+**raw green** (exit 0):
+```
+bringing up nodes...
+bringing up nodes...
+
+.....                                                                    [100%]
+5 passed in 6.35s
+exit=0
+```
