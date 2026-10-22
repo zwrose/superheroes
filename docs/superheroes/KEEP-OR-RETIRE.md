@@ -852,8 +852,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** capability-gap — compatibility with a retired artifact shape, not a property of the
-  loop.
+- **Notes.** structural — upgrade compatibility for panel artifacts written before 0.43.0, retired
+  by its version condition rather than by model strength.
 
 #### D19 — `check_unrun_review`
 
@@ -1656,8 +1656,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** capability-gap — compatibility with a retired journal shape, not a property of the
-  record.
+- **Notes.** structural — upgrade compatibility for journals written before 0.43.0, retired by its
+  version condition rather than by model strength.
 
 ### Supplemental entries
 

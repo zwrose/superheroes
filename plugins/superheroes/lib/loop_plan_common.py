@@ -26,7 +26,6 @@ import tempfile
 import circuit_breaker
 import review_round_policy
 
-DEEP = "reviewer-deep"
 CHEAP = "reviewer"
 # BLOCKING is the drift-guarded canonical blocking vocabulary (SSOT §11), re-exported into
 # spec_loop_plan / code_loop_plan namespaces. The blocking/critical PARTITION routes through
