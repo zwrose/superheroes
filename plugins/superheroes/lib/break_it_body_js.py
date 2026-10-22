@@ -674,13 +674,17 @@ def _keyed(toks, frameworks):
 def _relative(sig, imports):
     """True when the statement imports a module by a `./` or `../` path: an import statement, or a `require(...)` or
     `import(...)` call, whose module string is relative. Such a statement resolves against its own directory."""
-    if any(target[0].startswith(("./", "../")) for _, target in imports):
+    if any(not _bare_module("str", target[0]) for _, target in imports):
         return True
-    # axis: a substitution-free template names its module like a string, and a computed template cannot be resolved, so both count as relative — see bite-proof record wo_b_2061_break_it_body_js
+    # axis: only a plain, escape-free bare package name is non-relative; a template (substitution or not) or a string spelled with a backslash escape is never decoded, so it counts as relative and the move is refused — see bite-proof record wo_b_2061_break_it_body_js
     return any(here in (("id", "require"), _IMPORT) and after == _LPAREN
-               and ((mod[0] == "str" and mod[1].startswith(("./", "../")))
-                    or (mod[0] == "tpl" and (mod[1].startswith(("./", "../")) or "${" in mod[1])))
+               and mod[0] in ("str", "tpl") and not _bare_module(*mod)
                for here, after, mod in zip(sig, sig[1:], sig[2:]))
+
+
+def _bare_module(typ, text):
+    """True only for a module spelling known to be a bare package name: no backslash, no `${`, no leading `./` or `../`."""
+    return "\\" not in text and not (typ == "tpl" and "${" in text) and not text.startswith(("./", "../"))
 
 
 def source_names(text):

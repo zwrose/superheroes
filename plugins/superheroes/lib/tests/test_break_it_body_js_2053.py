@@ -753,3 +753,13 @@ def test_a_template_literal_module_load_counts_as_relative():
                                  "old/a.test.js",
                                  [("other/b.test.js", "const subject = require(`./subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });")])
     assert moved["status"] == "unresolved", moved
+
+
+def test_an_escaped_module_spelling_is_never_decoded_and_counts_as_relative():
+    assert _only("const subject = require(`\\x2e/subject`);")["relative"] is True
+    assert _only('const subject = require("\\x2e/subject");')["relative"] is True
+    assert _only("const subject = await import(`\\x2e/subject`);")["relative"] is True
+    assert _only('import { a } from "\\x2e/subject"')["relative"] is True
+    text = "const subject = require(`\\x2e/subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });"
+    moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", text)])
+    assert moved["status"] == "unresolved", moved
