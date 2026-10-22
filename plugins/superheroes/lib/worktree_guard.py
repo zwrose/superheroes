@@ -8,6 +8,7 @@ Stdlib-only.
 """
 import os
 import re
+import stat
 import subprocess
 
 # Git global options consumed before the subcommand (value-taking forms accept =value).
@@ -933,7 +934,8 @@ def _worktree_remove_target(command):
 
 
 _MERGE_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_MERGE_LABEL_RE = re.compile(rb"^(<{7,}|>{7,}|\|{7,})(?: .*)?$", re.MULTILINE)
+_MERGE_LABEL_RE = re.compile(rb"^(<{7,}|>{7,}|\|{7,})(?: .*)?$")
+_MERGE_SEPARATOR_RE = re.compile(rb"^={7,}$")
 _MERGE_CHECKOUT_OPTS = frozenset({"--ours", "--theirs", "-q", "--quiet"})
 _MERGE_RESTORE_OPTS = frozenset({"--ours", "--theirs", "-W", "--worktree", "-q", "--quiet"})
 # Path-count ceiling for one merge-branch call (each path costs a git call); over it -> indeterminate.
@@ -1064,6 +1066,57 @@ def _merge_source_operands_exact(cwd, operands):
     return True
 
 
+def _merge_content_matches(written, expected):
+    """True when the worktree bytes equal the recomputed merge, up to conflict-marker labels.
+
+    The labels on a conflict's own start, base and end marker lines name the merged refs and
+    differ between the recomputation and the worktree; a marker-looking line anywhere else is
+    ordinary content and must match exactly.
+    """
+    written_lines = written.split(b"\n")
+    expected_lines = expected.split(b"\n")
+    if len(written_lines) != len(expected_lines):
+        return False
+    region = None
+    for got, want in zip(written_lines, expected_lines):
+        label = _MERGE_LABEL_RE.match(want)
+        marker = label.group(1)[:1] if label else None
+        in_marker = (
+            (region is None and marker == b"<")
+            or (region == "ours" and marker == b"|")
+            or (region == "theirs" and marker == b">")
+        )
+        if in_marker:
+            other = _MERGE_LABEL_RE.match(got)
+            if other is None or other.group(1) != label.group(1):
+                return False
+            region = {b"<": "ours", b"|": "base", b">": None}[marker]
+            continue
+        if got != want:
+            return False
+        if region in ("ours", "base") and _MERGE_SEPARATOR_RE.match(want):
+            region = "theirs"
+    return True
+
+
+def _merge_filemode_tracked(cwd):
+    """Whether git honours the worktree executable bit (core.filemode); None when unreadable."""
+    result = _run_git(cwd, "config", "--type=bool", "core.filemode")
+    if result.returncode == 0:
+        return result.stdout.strip() != "false"
+    return True if result.returncode == 1 else None
+
+
+def _merge_tree_mode(cwd, tree, path):
+    """Octal mode string of ``path`` in the merge tree, or None when unreadable."""
+    result = _run_git(cwd, "ls-tree", "-z", tree, "--", path)
+    if result.returncode != 0:
+        return None
+    meta, _, entry_path = result.stdout.rstrip("\0").partition("\t")
+    fields = meta.split()
+    return fields[0] if fields and entry_path == path else None
+
+
 def _merge_side_probe(cwd, action, command):
     """Per-path probe for a merge-side checkout/restore during a merge in progress.
 
@@ -1130,9 +1183,16 @@ def _merge_side_probe(cwd, action, command):
                 return ("indeterminate", 0)
             with open(worktree_path, "rb") as f:
                 written = f.read()
-            if (
-                _MERGE_LABEL_RE.sub(rb"\1", written)
-                != _MERGE_LABEL_RE.sub(rb"\1", blob.stdout)
+            if not _merge_content_matches(written, blob.stdout):
+                risky += 1
+                continue
+            # Bytes alone miss a mode-only edit: the executable bit is the builder's too.
+            filemode = _merge_filemode_tracked(top)
+            merged_mode = _merge_tree_mode(top, tree, path)
+            if filemode is None or merged_mode is None:
+                return ("indeterminate", 0)
+            if filemode and bool(os.stat(worktree_path).st_mode & stat.S_IXUSR) != (
+                merged_mode == "100755"
             ):
                 risky += 1
         if risky:
