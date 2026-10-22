@@ -160,6 +160,7 @@ THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
 GUARDIAN_CADENCE_REASON_UNPARSEABLE = "guardian-config-unparseable"
+GUARDIAN_CADENCE_REASON_UNDECODABLE = "guardian-layer-not-utf8"
 GUARDIAN_CADENCE_REASON_INVALID_CADENCE = "guardian-cadence-invalid"
 GUARDIAN_CADENCE_REASON_ROUND_TRIP = "guardian-cadence-round-trip-refused"
 GATE_POLICY_REASON_INPUT_UNPARSEABLE = "gate-policy-input-unparseable"
@@ -2800,11 +2801,13 @@ def write_guardian_cadence(cwd, cadence, *, root=None):
             return {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
                     "detail": gate_refusal_detail(exc)}
-        if not os.path.isfile(layer_p) or _layer_is_empty(layer_p):
-            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_LAYER_ABSENT}
         try:
+            if not os.path.isfile(layer_p) or _layer_is_empty(layer_p):
+                return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_LAYER_ABSENT}
             with open(layer_p, encoding="utf-8") as fh:
                 text = fh.read()
+        except UnicodeDecodeError:
+            return {"action": "refused", "reason": GUARDIAN_CADENCE_REASON_UNDECODABLE}
         except OSError:
             mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
             return {
@@ -2882,6 +2885,11 @@ def _layer_is_empty(layer_p):
             text = fh.read()
     except OSError:
         return True
+    return _layer_text_is_empty(text)
+
+
+def _layer_text_is_empty(text):
+    """True when already-read layer text carries only its provenance line (no body sections)."""
     lines = text.splitlines()
     if lines and lines[0].lstrip().startswith("<!--"):
         lines = lines[1:]  # drop the §2.2 provenance comment line

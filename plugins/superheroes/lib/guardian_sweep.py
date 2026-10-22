@@ -78,9 +78,11 @@ def _resolve_cadence(raw):
 def read_config(cwd, root=None, *, persist_backfill=True):
     """Read guardian.md layer → thresholds, coverage, vitals knobs.
 
-    Empty/absent → defaults with `configStatus` healthy (defaults are authoritative).
-    Unreadable / malformed / non-object config → defaults with `configStatus` degraded
-    (benching authority revoked; the degradation is visible to report_card).
+    Absent / empty (provenance-only) / no guardian-config fence → defaults with
+    `configStatus` healthy (defaults are authoritative).
+    Unreadable (any other OSError) / not UTF-8 / malformed JSON / non-object block /
+    non-object `reportCard` → defaults with `configStatus` degraded and a `configNotes`
+    entry (benching authority revoked; the degradation is visible to report_card).
     Vitals collection is on by default; a guardian-config `vitals: false` (or
     `collectVitals: false`) disables it. `verifyBudgetSeconds` (alias
     `vitalsBudgetSeconds`) tunes the shared verify/vitals time budget."""
@@ -108,15 +110,17 @@ def read_config(cwd, root=None, *, persist_backfill=True):
             "configNotes": list(notes or []),
         }
 
-    if core_md._layer_is_empty(layer_p):
-        return _result("healthy")
     try:
         with open(layer_p, encoding="utf-8") as fh:
             text = fh.read()
-    except OSError as exc:
+    except FileNotFoundError:
+        return _result("healthy")
+    except (OSError, UnicodeDecodeError) as exc:
         return _result(
             "degraded",
             notes=["guardian-config unreadable (%s)" % type(exc).__name__])
+    if core_md._layer_text_is_empty(text):
+        return _result("healthy")
     m = _CONFIG_BLOCK.search(text)
     if not m:
         # Layer present but no config fence — defaults authoritative (healthy).
