@@ -1,19 +1,14 @@
-"""Tests for the canonical §6 identifier reference impls.
+"""Tests for the canonical §6.1 identifier reference impl (work_item_slug).
 
-These double as the conformance check that the reference matches CONVENTIONS §6.1/§6.3,
-and as the dogfooding that surfaces any remaining ambiguity in the spec.
+These double as the conformance check that the reference matches CONVENTIONS §6.1.
 
-The GOLDEN-VALUE tests are the load-bearing ones: a pure-property suite (determinism,
-sensitivity) stays green even if the byte-exact canonicalization drifts — which would
-silently change the exactly-once branch key (the content-addressed work branch, retired
-with the spine #478). The frozen golden values pin the
-exact output, so any drift fails loudly. If §6.1/§6.3 ever changes the canonicalization,
-update these goldens IN THE SAME COMMIT as the spec change (never to make a test pass).
+The GOLDEN-VALUE test is the load-bearing one: a pure-property suite (determinism,
+sensitivity) stays green even if the byte-exact derivation drifts. The frozen golden value
+pins the exact output, so any drift fails loudly. If §6.1 ever changes the derivation,
+update the golden IN THE SAME COMMIT as the spec change (never to make a test pass).
 """
 import re
 import unicodedata
-
-import pytest
 
 import identifiers as ids
 
@@ -72,81 +67,3 @@ def test_slug_unicode_nfc_nfd_equivalent():
     title_nfd = unicodedata.normalize("NFD", "Café Menu")
     assert title_nfc != title_nfd  # genuinely different byte sequences
     assert ids.work_item_slug(title_nfc, "n") == ids.work_item_slug(title_nfd, "n")
-
-
-# ---- §6.3 content_hash -----------------------------------------------------------
-
-BASE_FM = {
-    "workItem": "add-toggle-abc123",
-    "docType": "tasks",
-    "parent": {"workItem": "add-toggle-abc123", "docType": "plan"},
-    "size": "medium",
-}
-BODY = "# Tasks\n\n- [ ] do the thing\n"
-
-GOLDEN_FM = {
-    "workItem": "add-dark-mode-toggle-aa11bb",
-    "docType": "tasks",
-    "parent": {"workItem": "add-dark-mode-toggle-aa11bb", "docType": "plan"},
-    "size": "medium",
-}
-GOLDEN_BODY = "# Tasks\n\n- [ ] write the failing test\n- [ ] make it pass\n"
-
-
-def test_content_hash_golden_value():
-    # Frozen anchor: pins the exact byte-level canonicalization (separators, ensure_ascii,
-    # concatenation, 16-hex truncation). Drift here breaks the cross-plugin branch key.
-    assert ids.content_hash(GOLDEN_FM, GOLDEN_BODY) == "083de7d3d98af005"
-
-
-def test_content_hash_deterministic():
-    assert ids.content_hash(BASE_FM, BODY) == ids.content_hash(dict(BASE_FM), BODY)
-
-
-def test_content_hash_is_16_hex():
-    assert re.fullmatch(r"[0-9a-f]{16}", ids.content_hash(BASE_FM, BODY))
-
-
-def test_content_hash_ignores_volatile_fields():
-    noisy = dict(BASE_FM, updated="2026-06-14", created="2025-01-01", status="approved",
-                 gates={"review": "passed"}, issue=42, producedBy="the-architect@9.9.9")
-    assert ids.content_hash(noisy, BODY) == ids.content_hash(BASE_FM, BODY)
-
-
-def test_content_hash_changes_on_stable_fields():
-    assert ids.content_hash(dict(BASE_FM, size="large"), BODY) != ids.content_hash(BASE_FM, BODY)
-    assert ids.content_hash(dict(BASE_FM, workItem="other-def456"), BODY) != ids.content_hash(BASE_FM, BODY)
-    assert ids.content_hash(dict(BASE_FM, parent=None), BODY) != ids.content_hash(BASE_FM, BODY)
-
-
-def test_content_hash_changes_on_body():
-    assert ids.content_hash(BASE_FM, BODY + "- [ ] another\n") != ids.content_hash(BASE_FM, BODY)
-
-
-def test_content_hash_key_order_irrelevant():
-    reordered = {"size": "medium", "parent": {"docType": "plan", "workItem": "add-toggle-abc123"},
-                 "docType": "tasks", "workItem": "add-toggle-abc123"}
-    assert ids.content_hash(reordered, BODY) == ids.content_hash(BASE_FM, BODY)
-
-
-def test_content_hash_normalizes_line_endings():
-    assert ids.content_hash(BASE_FM, "a\r\nb\n") == ids.content_hash(BASE_FM, "a\nb\n")
-
-
-def test_content_hash_strips_trailing_whitespace_per_line():
-    assert ids.content_hash(BASE_FM, "a   \nb\t\n") == ids.content_hash(BASE_FM, "a\nb\n")
-
-
-def test_content_hash_unicode_nfc_nfd_equivalent():
-    # The §6.3 "byte-identical across hosts" guarantee: canonically-equivalent Unicode in
-    # the body must hash the same (NFC normalization). This is the macOS-NFD/Linux-NFC gap.
-    body_nfc = BODY + unicodedata.normalize("NFC", "café\n")
-    body_nfd = BODY + unicodedata.normalize("NFD", "café\n")
-    assert body_nfc != body_nfd  # genuinely different bytes
-    assert ids.content_hash(BASE_FM, body_nfc) == ids.content_hash(BASE_FM, body_nfd)
-
-
-def test_content_hash_fails_closed_on_missing_stable_field():
-    incomplete = {"docType": "tasks", "size": "medium", "parent": None}  # no workItem
-    with pytest.raises(ValueError):
-        ids.content_hash(incomplete, BODY)
