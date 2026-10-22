@@ -268,9 +268,16 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   with the entry id.
 - An item is only for a call that passes Test 2 (showrunner duty 5 in `skills/showrunner/SKILL.md`),
   and it names its ground as `skills/showrunner/reference/owner-decisions.md` § The filter says.
-- Disclosures that offer no choice fold into one "What you're accepting" item with a single Accept,
-  its `ifLeft` listing the disclosures, one sentence each (the page shows `ifLeft` as one paragraph).
-  The fold is not a call, so the item bar above does not apply to it.
+- An acceptance no Canon ruling covers that carries its own consequence for the owner to weigh is
+  its own Accept item, with a short title and a short `ifLeft`: for example a change near access or
+  identity, a cost or CI-time trade, a shift in what gets tested where, or an advisor craft call the
+  owner can veto.
+- Only routine notes with nothing to weigh fold into one "What you're accepting" item with a single
+  Accept: size against the estimate, "tests only, no app change", a heads-up about something the
+  owner already ruled. Doubt keeps a disclosure its own item. The fold gives its `ifLeft` as a list,
+  one short line per note, and the page shows it as a bulleted list, never one paragraph (the list
+  shape is in `lib/pr_sheet.py`'s docstring). Neither the fold nor these Accept items are calls, so
+  the item bar above does not apply to them.
 - A collector item that concerns this PR is its own card, from the input's `collectorItems`. It is never
   folded into the "What you're accepting" item and never only mentioned there by number. The builder
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435
