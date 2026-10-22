@@ -30,8 +30,9 @@ FIXER_ALLOWANCE = (
 
 ALLOWED_ITEM_TYPES = frozenset({"agent_message", "reasoning", "todo_list", "error", "web_search"})
 
+# editToolCall is in the set because a cursor review seat delivers its typed result file by editing it.
 CURSOR_ALLOWED_TOOL_CALLS = frozenset({
-    "readToolCall", "grepToolCall", "globToolCall", "lsToolCall"})
+    "readToolCall", "grepToolCall", "globToolCall", "lsToolCall", "editToolCall"})
 
 _JUDGED_EVENTS =("item.started", "item.completed")
 _DESCRIPTION_CAP = 200
@@ -76,7 +77,7 @@ def outside_allowance(obj):
     description (<= 200 chars) of what is outside it. Only item.started / item.completed events
     are judged; any other object is not a judged event and yields None. A cursor stream-json
     `tool_call` event is inside the allowance only when its call is a one-key dict whose key is in
-    `CURSOR_ALLOWED_TOOL_CALLS`; every other call (a shell, edit or mode call, an unknown key, a
+    `CURSOR_ALLOWED_TOOL_CALLS`; every other call (a shell or mode call, an unknown key, a
     dict that is not one-key, a non-dict) is outside it."""
     if isinstance(obj, dict) and obj.get("type") == "tool_call":
         call = obj.get("tool_call")

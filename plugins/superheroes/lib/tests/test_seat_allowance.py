@@ -1,5 +1,6 @@
 """The review-seat allowance (#2071): the closed codex tool set, the read-only MCP file server and
 the positive stream judge. See seat_allowance.py and seat_read_tool.py."""
+import ast
 import json
 import os
 import re
@@ -350,12 +351,64 @@ def test_default_root_is_the_working_directory(tmp_path):
         proc.stdout.close()
 
 
+_WRITE_OS_CALLS = frozenset({
+    "open", "remove", "unlink", "rename", "replace", "mkdir", "makedirs"})
+_WRITE_PATH_ATTRS = frozenset({"write_text", "write_bytes", "open"})
+
+
+def _dotted(node):
+    """The dotted name of a Name/Attribute chain (`os.path.join`), else None."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _write_calls(source):
+    """A description of each write-capable call in the Python `source`, found by an ast walk so a
+    call nested inside another call's arguments is seen. An `open` whose mode is not a constant
+    string is treated as a write."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func)
+        if name in ("open", "io.open"):
+            mode = node.args[1] if len(node.args) > 1 else None
+            for keyword in node.keywords:
+                if keyword.arg == "mode":
+                    mode = keyword.value
+            if mode is None:
+                continue
+            if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
+                found.append("line %d: %s with a mode that is not a constant" % (node.lineno, name))
+            elif any(flag in mode.value for flag in "wax+"):
+                found.append("line %d: %s mode %r" % (node.lineno, name, mode.value))
+        elif name is not None and name.startswith("os.") and name[3:] in _WRITE_OS_CALLS:
+            found.append("line %d: %s" % (node.lineno, name))
+        elif name is not None and name.startswith("shutil."):
+            found.append("line %d: %s" % (node.lineno, name))
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in _WRITE_PATH_ATTRS \
+                and isinstance(node.func.value, ast.Call) \
+                and _dotted(node.func.value.func) in ("Path", "pathlib.Path"):
+            found.append("line %d: Path(...).%s" % (node.lineno, node.func.attr))
+    return found
+
+
 def test_read_tool_source_starts_no_program_and_writes_no_file():
     with open(_TOOL, encoding="utf-8") as handle:
         text = handle.read()
     for needle in ("subprocess", "os.system", "os.exec", "os.spawn", "pty"):
         assert needle not in text, needle
-    assert not re.search(r"open\([^)]*[\"'][wax+]", text)
+    assert _write_calls(text) == []
+
+
+def test_write_calls_guard_sees_a_write_nested_in_another_call():
+    assert _write_calls("open(os.path.join(root, 'trace.txt'), 'w')")
 
 
 # --------------------------------------------------------------- outside_allowance
@@ -418,15 +471,14 @@ def test_outside_allowance_cursor_allowed_calls_are_inside(key):
     assert SA.outside_allowance(_cursor_call({key: {"args": {"path": "a.py"}}})) is None
 
 
-def test_cursor_allowed_tool_calls_are_exactly_the_read_list_search_set():
+def test_cursor_allowed_tool_calls_are_exactly_the_read_list_search_and_result_edit_set():
     assert SA.CURSOR_ALLOWED_TOOL_CALLS == frozenset(
-        {"readToolCall", "grepToolCall", "globToolCall", "lsToolCall"})
+        {"readToolCall", "grepToolCall", "globToolCall", "lsToolCall", "editToolCall"})
 
 
 @pytest.mark.parametrize("call, expected", [
     ({"shellToolCall": {"args": {"command": "make test"}}}, "shellToolCall: make test"),
     ({"shellToolCall": {}}, "shellToolCall"),
-    ({"editToolCall": {"args": {"path": "a.py"}}}, "editToolCall"),
     ({"switchModeToolCall": {"args": {}}}, "switchModeToolCall"),
     ({"getMcpToolsToolCall": {"args": {}}}, "getMcpToolsToolCall"),
     ({"neverSeenToolCall": {"args": {}}}, "neverSeenToolCall"),
