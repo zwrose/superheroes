@@ -222,6 +222,20 @@ def test_a_host_top_level_before_each_is_host_setup(repo):
     assert calls == []
 
 
+def test_a_host_it_only_is_host_setup(repo):
+    base, head = _stage(repo, {HOST: _host(before='\nit.only("focused", () => {});\n')})
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+    assert calls == []
+
+
+def test_a_host_side_effect_import_is_host_setup(repo):
+    base, head = _stage(repo, {HOST: _host(imports=HOST_IMPORTS + 'import "./setup";\n')})
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+    assert calls == []
+
+
 # ---- (f) moved but failing --------------------------------------------------------------------------------
 
 def test_a_moved_ts_test_whose_runner_fails_reads_failing(repo):
