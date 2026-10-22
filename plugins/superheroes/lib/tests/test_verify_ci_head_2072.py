@@ -418,6 +418,15 @@ def test_a_claimed_workflow_other_than_the_declared_one_is_refused(tmp_path, ada
     _refused(w, _payload(ci=_ci(headSha=w.head, workflow="pr-title")), "ci-verify-workflow-mismatch")
 
 
+def test_a_claimed_workflow_other_than_the_declared_one_is_refused_before_the_fetch(
+        tmp_path, adapters, fetch):
+    w = _hand(tmp_path, fetch, adapters)
+    # the fetch would return the declared `CI` run, so the fetched-run checks cannot tell the claim
+    # is wrong by token alone; only the claim check ahead of the fetch keeps the fetch from happening
+    _refused(w, _payload(ci=_ci(headSha=w.head, workflow="pr-title")), "ci-verify-workflow-mismatch")
+    assert fetch.calls == []
+
+
 def test_edge10_a_run_still_in_progress_is_a_conclusion_mismatch(tmp_path, adapters, fetch):
     w = _hand(tmp_path, fetch, adapters)
     # conclusion agrees with the claim, so only the status check can refuse it

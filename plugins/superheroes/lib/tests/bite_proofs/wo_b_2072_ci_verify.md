@@ -24,6 +24,9 @@ Capture directory (outside the repository; every pytest run below is redirected 
 | E7 | `round_adapters.py` `_assemble_verify`, the field copy (`for field in (..., "via", "ci", "reason")`) | the CI evidence rides the durable-seat assembly to the chokepoint | `::test_a_sha_mismatch_twin_is_refused_on_every_path[seat]`, `::test_an_accepted_ci_exact_head_payload_folds_pass_and_records_which_verify[seat]` | `E7_red.txt` / `E7_green.txt` |
 | E8a | `round_driver.py`, the `verifyVia` record (`_record_round(state, "verifyVia", _verify_via_row(config, artifact))`) | a passing verify records which verify stood behind it, `ci-exact-head` or `local` | `::test_an_accepted_ci_exact_head_payload_folds_pass_and_records_which_verify[hand]`, `[bare]`, `[seat]`, `::test_a_local_verify_never_calls_the_fetch_seam_and_records_it_local[hand]`, `[bare]`, `[seat]` | `E8a_red.txt` / `E8a_green.txt` |
 | E8b | `review_record_session.py` `_verify_via_checked` (`if isinstance(via, dict) and via.get("via") == "ci-exact-head":`) | the review record's `checked` lines name the CI run that stood in for the local verify | `::test_the_review_record_names_the_verify_used` | `E8b_red.txt` / `E8b_green.txt` |
+| E9a | `round_driver.py` `_ci_verify_run_refusal`, the declared-workflow gate (`if declared_kind != "declared" or not declared:`) | a project that declares no readable `ciWorkflow` is refused `ci-verify-workflow-unconfigured` before the fetch | `::test_an_undeclared_ci_workflow_is_refused_before_the_fetch[absent]`, `[unreadable]` | `E9a_red.txt` / `E9a_green.txt` |
+| E9b | `round_driver.py` `_ci_verify_run_refusal`, the claimed workflow vs the declared one (`if ci["workflow"] != declared:`) | a claimed workflow other than the declared one is refused `ci-verify-workflow-mismatch` before the fetch | `::test_a_claimed_workflow_other_than_the_declared_one_is_refused_before_the_fetch` (added in this order; the older `::test_a_claimed_workflow_other_than_the_declared_one_is_refused` stays green under this neutralization) | `E9b_red.txt` / `E9b_green.txt` |
+| E9c | `round_driver.py` `_ci_verify_run_refusal`, the declared clause of the run-workflow check (the `or run["name"] != declared` in `if run["name"] != ci["workflow"] or run["name"] != declared:`) | a fetched run whose workflow is not the declared one is refused `ci-verify-workflow-mismatch` | **not separately provable (subsumed)**: no node can go red; the nodes run are `::test_edge9_fetched_workflow_differs_from_the_claimed_workflow`, `::test_a_claimed_workflow_other_than_the_declared_one_is_refused`, `::test_a_claimed_workflow_other_than_the_declared_one_is_refused_before_the_fetch` | `E9c_neutralized.txt` (green under neutralization) / `E9c_green.txt` |
 
 ## Disclosures
 
@@ -37,6 +40,7 @@ Capture directory (outside the repository; every pytest run below is redirected 
 - `E5_red.txt` is 36629 bytes, over the 32 KiB per-element ceiling; it lives outside the repository (above), and its first and last lines are quoted here. All other captures are under 32 KiB each.
 - Redaction: none needed; local `/Users/zwrose/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
 - Not in the declared set: the receipt disclosure line (`receipt_disclosures.py`, the `verify-via-ci` line, tagged with an `# axis:` comment) has tests in the file but no neutralization of its own here, so this record claims no bite-proof for it.
+- E9a, E9b and E9c were added later (order FU3); their disclosures are in the bullets under `## E9a` below, and the E1-E8b bullets above describe E1-E8b only.
 
 ---
 
@@ -542,6 +546,136 @@ pytest exit: 1
 1 passed in 4.07s
 pytest exit: 0
 ```
+
+---
+
+**Provenance (E9a-E9c):** claude / sonnet-5.5 (implementer), maker family anthropic; order FU3 from the vet 606 send-back ([receipt](https://github.com/zwrose/superheroes/pull/2068#issuecomment-6348500652), item #2076 FU3), which found the declared-`ciWorkflow` guard added by commit `34a68409e` had tests but no recorded neutralization. The guard is in `plugins/superheroes/lib/round_driver.py`, `_ci_verify_run_refusal`. Same method as above (one Edit-tool neutralization, proving nodes by exact id, inverse edit, `git diff --stat -- <file>` receipt, same ids again; no `git checkout`, `git restore`, `git reset` or `git stash`). Capture directory (outside the repository; every run unfiltered, `pytest exit: N` appended):
+`/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-2053-b7af41d156396fa0/109398b2-b53a-4a76-90e5-2bf96c9a5df8/scratchpad/fu3/`
+
+Disclosures for E9a-E9c:
+
+- **Isolating test added (E9b).** The existing `test_a_claimed_workflow_other_than_the_declared_one_is_refused` claims and fetches `pr-title` together, so with E9b off the fetch happens and E9c (and E3, which also sees `pr-title` against the claim) still refuses with the same token; it stayed green under E9b's neutralization (`1 failed, 1 passed`, the passing one being that test). The new `test_a_claimed_workflow_other_than_the_declared_one_is_refused_before_the_fetch` in `test_verify_ci_head_2072.py` claims `pr-title` while the fetch seam would return the declared `CI` run, and asserts the refusal token and `fetch.calls == []`. Nothing existing was weakened or deleted.
+- **E9a's red is a different token, not a fold.** With the gate off, `declared` is `None`, so E9b refuses with `ci-verify-workflow-mismatch` ("not the project's declared None") and the fetch still does not happen; the red is the missing `ci-verify-workflow-unconfigured` token, which is E9a's axis. The two `or` halves of the condition (`declared_kind != "declared"`, `not declared`) are neutralized together as one element; `not declared` alone is not separately proven (a `declared` kind with an empty name cannot arise past the shape check's non-empty `workflow`, where E9b would refuse it with another token).
+- **E9a's neutralization is parenthesized**, `if False and (declared_kind != "declared" or not declared):`, because a bare `False and` prefix binds only to the first `or` operand and `not declared` would still refuse the `absent` case. The first form typed was corrected before any test ran against it.
+- **E9c is not separately provable (subsumed).** With E9b live, `ci["workflow"] == declared` whenever the code reaches the fetch; with E3 (`run["name"] != ci["workflow"]`) live, a run that gets past E3 has `run["name"] == ci["workflow"]`; equality is transitive, so `run["name"] != declared` is false on every input that reaches that line, and the clause can never fire while E9b and E3 are live. No test shape exists that only E9c catches. Under the clause-only neutralization (`or (False and run["name"] != declared)`, E3 kept live) the three workflow-mismatch nodes stay green (`3 passed`), which is the evidence of subsumption; no red is claimed. The clause is defence in depth, still guarding if E9b or E3 were removed.
+- **E9b's first green capture overlapped the next edit.** `E9b_green_first_overlapped.txt` (`2 passed`) was run in one tool batch with the E9c neutralization edit, so it may have run with that edit applied; its restore receipt (empty) was taken before the edit landed. It is not used as the green; `E9b_green.txt` is a clean re-run after E9c was restored and its receipt was empty (`2 passed`).
+- Redaction: none needed. All captures are far under 32 KiB.
+
+## E9a: the undeclared-workflow gate
+
+- **axis:** a project that declares no readable `ciWorkflow` is refused `ci-verify-workflow-unconfigured` before the fetch
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_ci_verify_run_refusal`):
+```diff
+-    if declared_kind != "declared" or not declared:
++    if False and (declared_kind != "declared" or not declared):
+```
+
+**red capture:** `.../scratchpad/fu3/E9a_red.txt` (exit 1), excerpt:
+```
+FF                                                                       [100%]
+E       AssertionError: {'ok': False, 'reason': 'ci-verify-workflow-mismatch', 'detail': "claimed workflow 'CI' is not the project's declared None"}
+E       assert (False is False and 'ci-verify-workflow-mismatch' == 'ci-verify-wo...-unconfigured'
+E         - ci-verify-workflow-unconfigured
+E         + ci-verify-workflow-mismatch)
+FAILED plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_an_undeclared_ci_workflow_is_refused_before_the_fetch[absent]
+FAILED plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_an_undeclared_ci_workflow_is_refused_before_the_fetch[unreadable]
+2 failed in 6.79s
+pytest exit: 1
+```
+(the `E` block appears once per id; shown once)
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`if False and (declared_kind != "declared" or not declared):` back to `if declared_kind != "declared" or not declared:`).
+
+**restore receipt** (`git diff --stat` over the file, printed nothing):
+```
+--- git diff --stat
+--- end diff
+```
+
+**green capture:** `.../scratchpad/fu3/E9a_green.txt` (exit 0), same ids:
+```
+..                                                                       [100%]
+2 passed in 6.79s
+pytest exit: 0
+```
+
+---
+
+## E9b: the claimed workflow against the declared one
+
+- **axis:** a claimed workflow other than the declared one is refused `ci-verify-workflow-mismatch` before the fetch (the fetch would return the declared run, so only the call count tells E9b from E3)
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_ci_verify_run_refusal`):
+```diff
+-    if ci["workflow"] != declared:
++    if False and ci["workflow"] != declared:
+```
+
+**red capture:** `.../scratchpad/fu3/E9b_red.txt` (exit 1), excerpt:
+```
+F.                                                                       [100%]
+>       assert fetch.calls == []
+E       AssertionError: assert [('/private/t...39773254322')] == []
+E         Left contains one more item: ('/private/tmp/claude-501/pytest-of-zwrose/pytest-445/test_a_claimed_workflow_other_0/checkout', '39773254322')
+FAILED plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_a_claimed_workflow_other_than_the_declared_one_is_refused_before_the_fetch
+1 failed, 1 passed in 11.07s
+pytest exit: 1
+```
+(the passing one is the older `::test_a_claimed_workflow_other_than_the_declared_one_is_refused`, masked by E9c; see the disclosures)
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`if False and ci["workflow"] != declared:` back to `if ci["workflow"] != declared:`).
+
+**restore receipt** (`git diff --stat` over the file, printed nothing):
+```
+--- git diff --stat
+--- end diff
+```
+
+**green capture:** `.../scratchpad/fu3/E9b_green.txt` (exit 0), same ids:
+```
+..                                                                       [100%]
+2 passed in 8.16s
+pytest exit: 0
+```
+
+---
+
+## E9c: the declared clause of the run-workflow check (not separately provable, subsumed)
+
+- **axis:** a fetched run whose workflow is not the declared one is refused `ci-verify-workflow-mismatch`; unreachable while E9b and E3 are live (reasoning in the disclosures above), so no red is claimed
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_ci_verify_run_refusal`; clause only, E3 stays live):
+```diff
+-    if run["name"] != ci["workflow"] or run["name"] != declared:
++    if run["name"] != ci["workflow"] or (False and run["name"] != declared):
+```
+
+**capture under neutralization:** `.../scratchpad/fu3/E9c_neutralized.txt` (exit 0), the evidence of subsumption, excerpt:
+```
+...                                                                      [100%]
+3 passed in 10.15s
+pytest exit: 0
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`or (False and run["name"] != declared)` back to `or run["name"] != declared`).
+
+**restore receipt** (`git diff --stat` over the file, printed nothing):
+```
+--- git diff --stat
+--- end diff
+```
+
+**green capture:** `.../scratchpad/fu3/E9c_green.txt` (exit 0), same ids:
+```
+...                                                                      [100%]
+3 passed in 10.85s
+pytest exit: 0
+```
+
+---
+
+**Closing run after FU3:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_verify_ci_head_2072.py -q -n auto` (capture `fu3/closing.txt`, exit 0): `122 passed in 23.30s`.
 
 ---
 
