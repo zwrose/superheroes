@@ -48,6 +48,20 @@ def pytest_collected(path):
     return bool(getattr(_front_for(_suffix(path)), "PYTEST_COLLECTION", False))
 
 
+def js_collected(path):
+    """True only when the front that reads ``path`` declares ``JS_COLLECTION`` (the JS/TS front): its titles are
+    ``it``/``test``/``describe`` strings a vitest or jest configuration can filter by name, so a caller gates
+    repository vitest/vite/jest configuration on it. False for a path no front reads and for any front that does
+    not declare the flag."""
+    return bool(getattr(_front_for(_suffix(path)), "JS_COLLECTION", False))
+
+
+def _type_names(rec):
+    """The local names ``rec`` binds by a TypeScript type-only import (its own specifier, or the whole statement,
+    is marked ``type``): TypeScript erases them, so they bind no runtime value."""
+    return {local for local, target in rec["imports"] if local is not None and len(target) == 3 and target[2] == "type"}
+
+
 def _result(status, reason=None, path=None, titles=None):
     return {"status": status, "reason": reason, "path": path, "titles": titles or []}
 
@@ -100,6 +114,18 @@ def _may_import_fixture(pair, python=True):
     return target[0] == "from" and not (target[1] == 0 and target[2] == "__future__")
 
 
+def _runtime_imports(records):
+    """``[(module, pairs)]``, one per import record that still evaluates a module once its type-only bindings are
+    dropped, in file order; a record whose every binding is type-only is erased by TypeScript and left out."""
+    out = []
+    for rec in records:
+        types = _type_names(rec)
+        pairs = frozenset(pair for pair in rec["imports"] if pair[0] is None or pair[0] not in types)
+        if pairs:
+            out.append((next(iter(pairs))[1][0], pairs))
+    return out
+
+
 def _rebinds(records):
     """True when a module binds one local name by more than one import, or by an import and any other module-level
     binding: which binding wins then depends on statement order, which the comparison does not model."""
@@ -149,8 +175,8 @@ def _outside(records, window, original, moved=False, python=True):
     for index, rec in enumerate(records):
         if index in window:
             continue
-        # axis: a type-only import (every target ends in "type") binds no runtime value, so the two window-name checks below skip it — see bite-proof record wo_b_2061_break_it_body_js
-        type_only = bool(rec["imports"]) and all(len(pair[1]) == 3 and pair[1][2] == "type" for pair in rec["imports"])
+        # axis: a type-only binding (its own specifier, or its whole import, marked "type") binds no runtime value, so the two window-name checks below exempt that binding alone and check every runtime binding of the same record — see bite-proof record wo_b_2061_break_it_body_js
+        types = _type_names(rec)
         # axis: module-level test setup the host adds is refused, because it would change the test's run — see bite-proof record wo_a_2053_break_it_body
         # axis: an effect-only import (no bound name) is judged by the in-order comparison after this loop, so a retained one is not host setup — see bite-proof record wo_b_2061_break_it_body_js
         if rec["hook"] and not (rec["kind"] == "import" and rec["imports"] and all(pair[0] is None for pair in rec["imports"])):
@@ -168,20 +194,21 @@ def _outside(records, window, original, moved=False, python=True):
         if rec["kind"] == "stmt" and rec["binds"] & names:
             return "binding-conflict"
         # axis: any record outside the window that binds a name the matched window binds (a renamed test's new name) overwrites or is overwritten by a retained test, so it is refused — see bite-proof record wo_a_2053_break_it_body
-        if not type_only and rec["binds"] & window_binds:
+        if (rec["binds"] - types) & window_binds:
             return "binding-conflict"
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
-        if not type_only and rec["uses"] & window_binds:
+        if (rec["uses"] - types) & window_binds:
             return "binding-conflict"
-    # axis: when either file holds an effect-only import, every import of the original appears in the host in the original's order (an effect-only import runs its module's code, so moving one across a named import changes the fixture the test sees), and the host holds no effect-only import the original lacks; an added, repeated or reordered one is host setup — see bite-proof record wo_b_2061_break_it_body_js
-    old_all = [pair for rec in original for pair in rec["imports"]]
-    new_all = [pair for rec in records for pair in rec["imports"]]
+    # axis: when either file holds an effect-only import, every runtime import of the original (effect-only and named, by module and binding) appears in the host in the original's order (an effect-only import runs its module's code, so moving one across a named import changes the fixture the test sees), and the host holds no effect-only import the original lacks; an added, repeated or reordered one is host setup. A type-only binding is dropped first, because TypeScript erases it and it evaluates nothing; a module in two runtime records keeps both positions — see bite-proof record wo_b_2061_break_it_body_js
+    old_runtime, new_runtime = (_runtime_imports(recs) for recs in (original, records))
+    old_all, new_all = ([pair for _, pairs in seq for pair in pairs] for seq in (old_runtime, new_runtime))
     if any(pair[0] is None for pair in old_all + new_all):
-        # a module runs once, where it is first imported, so the order is that of each module's first import
-        old_mods, new_mods = (list(dict.fromkeys(pair[1][0] for pair in pairs)) for pairs in (old_all, new_all))
-        remaining = iter(new_mods)
+        # each original import record is matched, in order, to a later host record of the same module that binds
+        # every one of its runtime bindings (specifier order inside one statement evaluates nothing)
+        remaining = iter(new_runtime)
         if ([pair for pair in new_all if pair[0] is None] != [pair for pair in old_all if pair[0] is None]
-                or not all(mod in remaining for mod in old_mods)):
+                or not all(any(mod == new_mod and pairs <= new_pairs for new_mod, new_pairs in remaining)
+                           for mod, pairs in old_runtime)):
             return "host-setup"
     # the host's own rebinding is checked last, so a more specific refusal above (host-setup) keeps its reason
     if _rebinds(records):

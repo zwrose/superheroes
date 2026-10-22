@@ -366,3 +366,76 @@ def test_a_runtime_import_and_a_value_declaration_of_one_name_reads_binding_conf
 def test_a_type_alias_is_harmless_only_when_nothing_executable_can_follow_it(alias, hook):
     records = break_it_body_js.parse(alias)
     assert [rec["hook"] for rec in records].count(True) == (1 if hook else 0), records
+
+
+# ---- round 3: per-binding type-only imports, type-erased import order, JS rename configuration -------------
+
+def _with_model(import_line, extra=""):
+    """The original and a host that both carry ``import_line`` and a ``const Model`` value (plus ``extra``)."""
+    content = import_line + ORIG.replace("const eats", "const Model = { id: 1 };\n" + extra + "const eats", 1)
+    host = HOST_IMPORTS + import_line + HOST_OWN + "const Model = { id: 1 };\n" + extra + HOST_BODY
+    return content, host
+
+
+def test_a_mixed_import_whose_type_binding_shares_a_value_name_reads_found():
+    content, host = _with_model('import { type Model, helper } from "types";\n')
+    assert _located(host, content) == ("found", None)
+
+
+def test_a_mixed_import_whose_runtime_binding_is_rebound_reads_binding_conflict():
+    content, host = _with_model('import { type Model, helper } from "types";\n', "const helper = 2;\n")
+    assert _located(host, content) == ("unresolved", "binding-conflict")
+
+
+TYPED_SETUP = 'import type { Model } from "./subject";\n'
+
+
+def test_a_setup_import_swapped_after_a_named_import_behind_a_type_import_reads_host_setup():
+    content = TYPED_SETUP + 'import "./setup";\nimport { value } from "./subject";\n' + ORIG
+    host = TYPED_SETUP + 'import { value } from "./subject";\nimport "./setup";\n' + _host()
+    assert _located(host, content) == ("unresolved", "host-setup")
+
+
+def test_a_setup_import_kept_in_order_behind_a_type_import_reads_found():
+    content = TYPED_SETUP + 'import "./setup";\nimport { value } from "./subject";\n' + ORIG
+    host = TYPED_SETUP + 'import "./setup";\nimport { value } from "./subject";\n' + _host()
+    assert _located(host, content) == ("found", None)
+
+
+def test_the_js_front_declares_its_own_rename_gate_and_the_python_front_does_not():
+    assert break_it_body_js.JS_COLLECTION is True
+    assert getattr(break_it_body_py, "JS_COLLECTION", False) is False
+    assert break_it_body.js_collected(HOST) is True
+    assert break_it_body.js_collected("tests/test_a.py") is False
+
+
+@pytest.mark.parametrize("files", [
+    pytest.param({"vitest.config.ts": "export default { test: { testNamePattern: /^regression/ } };\n"}, id="vitest-config"),
+    pytest.param({"jest.config.js": "module.exports = {};\n"}, id="jest-config"),
+    pytest.param({"vite.config.mts": "export default {};\n"}, id="vite-config"),
+    pytest.param({"vitest.workspace.json": "[]\n"}, id="vitest-workspace"),
+    pytest.param({"package.json": '{"name": "x", "jest": {"testNamePattern": "regression"}}\n'}, id="package-jest"),
+    pytest.param({"package.json": '{"name": "x", "vitest": {}}\n'}, id="package-vitest"),
+    pytest.param({"package.json": '{"name": "x",\n'}, id="package-unparseable"),
+    pytest.param({"package.json": '["not", "an", "object"]\n'}, id="package-not-an-object"),
+])
+def test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved(repo, files):
+    base, head = _stage(repo, dict(files, **{HOST: _host()}))
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+    assert calls == []
+
+
+def test_a_ts_rename_with_a_plain_package_json_and_no_js_config_is_kept(repo):
+    base, head = _stage(repo, {"package.json": '{"name": "x", "scripts": {"test": "vitest"}}\n', HOST: _host()})
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("kept", "body-match")
+    assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]
+
+
+def test_an_unrenamed_moved_ts_test_is_kept_beside_a_vitest_config(repo):
+    host = HOST_IMPORTS + HOST_OWN + FORMATTED.split('import { weeklyTotal } from "./weekly";\n\n', 1)[1]
+    base, head = _stage(repo, {"vitest.config.ts": "export default {};\n", HOST: host})
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("kept", "body-match")
+    assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]

@@ -6,7 +6,7 @@ Two texts give equal keys, statement for statement, only when they differ by for
 raises ValueError; a mis-scan may make two formattings unequal (fail closed) but never erases text,
 because comments are kept as tokens and every other character lands in a token.
 
-The front contract, shared with the core: EXTENSIONS, TITLE and parse(). Stdlib only; imports no other
+The front contract, shared with the core: EXTENSIONS, TITLE, JS_COLLECTION and parse(). Stdlib only; imports no other
 lib module.
 """
 import itertools
@@ -14,6 +14,9 @@ import re
 
 EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 TITLE = "\x00title"
+# This front's titles are it/test/describe strings that a vitest or jest configuration can filter by name, so a
+# caller gates a renamed title on the repository's vitest/vite/jest configuration (the JS front's own rename gate).
+JS_COLLECTION = True
 
 _BREAKS = "\n\r\u2028\u2029"
 _PUNCTS = (">>>= ... === !== **= <<= >>= >>> &&= ||= ??= => == != <= >= && || ?? ?. ++ -- += -= *= /= %= &= |= ^= "

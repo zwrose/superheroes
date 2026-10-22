@@ -1054,11 +1054,46 @@ def _collection_overrides(repo_root, head):
     return False
 
 
+_JS_CONFIG_STEMS = ("vitest.config.", "vitest.workspace.", "vite.config.", "jest.config.")
+
+
+def _js_collection_overrides(repo_root, head):
+    """True when the repository at ``head`` may filter JS/TS tests by name through configuration: a root
+    vitest.config.*, vitest.workspace.*, vite.config.* or jest.config.* (any content: none of them is parsed), or a
+    root package.json that cannot be read or parsed as a JSON object or that carries a top-level ``jest`` or
+    ``vitest`` key (fail closed)."""
+    import json
+    tree = _git(repo_root, "ls-tree", "-z", head)
+    if tree.returncode != 0:
+        return True
+    for entry in tree.stdout.decode("utf-8", errors="replace").split("\0"):
+        if not entry:
+            continue
+        meta, _, name = entry.partition("\t")
+        if name.lower().startswith(_JS_CONFIG_STEMS):
+            return True
+        if name != "package.json":
+            continue
+        meta = meta.split()
+        if len(meta) != 3 or meta[1] != "blob":
+            return True
+        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            return True
+        try:
+            manifest = json.loads(blob.stdout.decode("utf-8"))
+        except Exception:
+            return True
+        if not isinstance(manifest, dict) or "jest" in manifest or "vitest" in manifest:
+            return True
+    return False
+
+
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
     # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
-    from break_it_body import locate, pytest_collected, supported_suffixes
+    from break_it_body import js_collected, locate, pytest_collected, supported_suffixes
     suffixes = supported_suffixes()
     if posixpath.splitext(record["path"].lower())[1] not in suffixes:
         return today
@@ -1094,6 +1129,9 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
     # axis: a renamed pytest test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes; pytest configuration says nothing about a vitest or jest run, so only a test read by a pytest-collected front is gated — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js
     try:
         if found["titles"] and pytest_collected(record["path"]) and _collection_overrides(repo_root, head):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+        # axis: a renamed JS/TS test is accepted only when the repository at the reviewed head has no root vitest/vite/jest config file and no package.json jest or vitest key (an unreadable package.json fails closed), because a configured testNamePattern could skip the new title while another test passes; the gate is the JS front's own (``JS_COLLECTION``) — see bite-proof record wo_b_2061_break_it_body_js
+        if found["titles"] and js_collected(record["path"]) and _js_collection_overrides(repo_root, head):
             return res(KEPT_UNRESOLVED, "binding-conflict")
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")
