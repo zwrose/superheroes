@@ -178,6 +178,7 @@ def test_claude_review_argv_unchanged_by_sandbox_inputs():
     assert plain["argv"] == [
         "claude", "-p", "--model", "sonnet", "--effort", "high",
         "--output-format", "stream-json", "--verbose", "--restricted",
+        "--strict-mcp-config",
     ]
     loaded = EA.build_argv_result(
         _claude_seat(), "review",

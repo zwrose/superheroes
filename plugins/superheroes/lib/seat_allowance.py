@@ -69,7 +69,16 @@ def _cap(text, limit):
 def outside_allowance(obj):
     """None when the parsed codex JSONL event `obj` is inside the allowance, else a short
     description (<= 200 chars) of what is outside it. Only item.started / item.completed events
-    are judged; any other object is not a judged event and yields None."""
+    are judged; any other object is not a judged event and yields None. A cursor stream-json
+    `tool_call` event whose call is a `shellToolCall` is outside the allowance too."""
+    if isinstance(obj, dict) and obj.get("type") == "tool_call":
+        call = obj.get("tool_call")
+        if isinstance(call, dict) and "shellToolCall" in call:
+            shell = call.get("shellToolCall")
+            args = shell.get("args") if isinstance(shell, dict) else None
+            command = args.get("command") if isinstance(args, dict) else None
+            return _cap("shellToolCall: %s" % _cap(command, _COMMAND_CAP), _DESCRIPTION_CAP)
+        return None
     if not isinstance(obj, dict) or obj.get("type") not in _JUDGED_EVENTS:
         return None
     item = obj.get("item")

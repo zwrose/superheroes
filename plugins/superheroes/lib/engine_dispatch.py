@@ -3923,16 +3923,17 @@ def _fold_stream_activity(stdout_path, stderr_path, prev_stdout, prev_stderr,
 
 
 def _codex_review_run(opened):
-    """True for a codex review run: the one shape whose attempts carry the allowance scan."""
-    return (isinstance(opened, dict) and opened.get("engine") == "codex"
+    """True for a codex or cursor review run: the shapes whose attempts carry the allowance scan."""
+    return (isinstance(opened, dict) and opened.get("engine") in ("codex", "cursor")
             and opened.get("runKind") != RUN_KIND_WRITE)
 
 
 def _allowance_scan_fields(opened, stdout_path):
     """The journaled allowance scan of one attempt's whole stdout, before it is capped. {} when the
     run is not a codex review run. Never raises."""
-    # The scan covers codex because codex's event record lists the actions it ran; claude review
-    # seats run --restricted with --strict-mcp-config, so their record carries no commands.
+    # The scan covers codex and cursor because their event records list the actions they ran;
+    # claude review seats run --restricted with --strict-mcp-config, so their record carries no
+    # commands.
     if not _codex_review_run(opened):
         return {}
     violations, ok = seat_allowance.scan_stream(stdout_path)

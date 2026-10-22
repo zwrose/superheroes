@@ -967,6 +967,7 @@ def _marker_opened_review_attempt_state(tmp_path, *, stdout, engine="cursor"):
                 "ended": {
                     "exit": 0, "timedOut": False, "refusal": None,
                     "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                    "allowanceViolations": [], "allowanceScan": "ok",
                 },
             },
         },
@@ -13985,9 +13986,9 @@ def test_cursor_result_file_write_is_not_engagement(tmp_path):
         run_engine=FakeRunner([write_plus_shell_runner]),
         build_view=_fake_build_view(tmp_path),
     )
-    assert res2["ok"] is True
-    assert res2["engagement"]["toolCalls"] == 1
-    assert res2["engagement"]["read"] == "engaged"
+    # a cursor reviewer that ran a shell command is outside the allowance, result file or not
+    assert res2["ok"] is False
+    assert "seat-ran-outside-allowance" in str(res2)
 
 
 def test_stage_attempt_prompt_unreadable_prompt_refuses_prompt_unreadable(tmp_path):
@@ -16449,6 +16450,7 @@ def _review_admission_codex_argv(tmp_path, ended, envelope):
 
 
 def _review_admission_cursor_prompt(tmp_path, ended, envelope):
+    ended = dict(ended, allowanceViolations=[], allowanceScan="ok")
     repo_root = _repo(tmp_path)
     run_dir = str(tmp_path / "review-prompt")
     _plant_native_cursor_review_journal(tmp_path, run_dir, repo_root)

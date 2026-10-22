@@ -184,7 +184,7 @@ def test_write_run_with_command_record_is_unaffected(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("opened", [
     {"engine": "claude", "runKind": "review"},
-    {"engine": "cursor", "runKind": "review"},
+    {"engine": "cursor", "runKind": "write"},
     {"engine": "codex", "runKind": "write"},
 ])
 def test_helper_ignores_non_codex_engines_and_write_runs(opened):
@@ -192,6 +192,20 @@ def test_helper_ignores_non_codex_engines_and_write_runs(opened):
     assert ED._allowance_refusal(opened, dirty) is None
     assert ED._allowance_refusal(opened, {}) is None
     assert ED._allowance_scan_fields(opened, "/nonexistent/attempt-1.stdout") == {}
+
+
+def test_cursor_review_shell_tool_call_is_refused(tmp_path):
+    opened = {"engine": "cursor", "runKind": "review"}
+    stdout = tmp_path / "attempt-1.stdout"
+    stdout.write_text(
+        '{"type":"tool_call","subtype":"started","call_id":"c1","tool_call":'
+        '{"shellToolCall":{"args":{"command":"make test"}}}}\n', encoding="utf-8")
+    fields = ED._allowance_scan_fields(opened, str(stdout))
+    assert fields["allowanceScan"] == "ok"
+    assert fields["allowanceViolations"] == ["shellToolCall: make test"]
+    refusal = ED._allowance_refusal(opened, fields)
+    assert refusal["forfeit"] is True
+    assert refusal["detail"].startswith(ED.ALLOWANCE_VIOLATION_DETAIL)
 
 
 def test_helper_shape_and_missing_record_rule():
