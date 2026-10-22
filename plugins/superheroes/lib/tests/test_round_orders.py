@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import command_refusals
 import core_md as CM
 import round_adapters as RA
 import round_orders as RO
@@ -789,6 +790,59 @@ def test_dispatch_fixer_render_has_no_file_scope_guard():
     assert "Escalation guard" not in text
     assert "file-scope guard" not in text
     assert "--stdin-path" not in text
+
+
+_FIXER_WRITE_EDIT_ONLY = "Create and edit files only with the host's file-write and file-edit tools"
+_FIXER_NO_REWRITE_BREAK_IT = (
+    "Never run a formatter, a linter's autofix, or anything else that rewrites a committed "
+    "break-it test file"
+)
+
+
+def _fixer_render(host_seat):
+    if host_seat:
+        ctx = _GOLDEN_CONTEXTS[RP.P_FIXER]()
+    else:
+        ctx = _base_context(host_seat=False, placeholders=_fixer_placeholders())
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None, reason
+    return " ".join(text.split())
+
+
+def test_fixer_order_host_seat_carries_write_edit_break_it_and_land_last():
+    text = _fixer_render(host_seat=True)
+    assert _FIXER_WRITE_EDIT_ONLY in text
+    assert "never through a shell command that writes a file" in text
+    assert _FIXER_NO_REWRITE_BREAK_IT in text
+    assert "if a commit hook rewrites it, report that (it is not a pass)" in text
+    assert "keep the break-it test at the path its block names" in text
+    assert "write your payload landing" in text
+    assert "Land last, every time" in text
+    assert "after the step-4 commit when you made one" in text
+    assert "had nothing to commit" in text
+    assert "never commit broken code" in text
+    assert "A committed fix with no landing is read as an unlanded fix" in text
+
+
+def test_fixer_order_engine_seat_lands_last_without_a_landing_file():
+    text = _fixer_render(host_seat=False)
+    assert _FIXER_WRITE_EDIT_ONLY in text
+    assert _FIXER_NO_REWRITE_BREAK_IT in text
+    assert "Land last, every time" in text
+    assert ("your result on the runner's declared result channel is the last thing you deliver"
+            in text)
+    assert "after the step-4 commit when you made one, and anyway when you stopped without one" in text
+    assert "never commit broken code" in text
+    assert "Never write a landing file" in text
+    # the host-only wording must not reach the engine render
+    assert "write your payload landing" not in text
+    assert "A committed fix with no landing" not in text
+
+
+@pytest.mark.parametrize("host_seat", [True, False])
+def test_fixer_order_carries_the_refused_command_stop_rule_exactly_once(host_seat):
+    text = _fixer_render(host_seat=host_seat)
+    assert text.count(" ".join(command_refusals.ORDER_TEXT.split())) == 1
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
