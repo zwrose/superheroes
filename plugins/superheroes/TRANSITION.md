@@ -22,6 +22,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory or a dangling symlink at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
 - The guardian cadence write in `core_md` returns `{"action": "refused", "reason": "guardian-layer-not-utf8"}` (`GUARDIAN_CADENCE_REASON_UNDECODABLE`) on a non-UTF-8 layer instead of raising.
+- **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
+
+### PR sheet: the fold keeps only routine notes, as a list
+
+- `theme/review-template.md` § The items narrows the fold rule: an acceptance with its own consequence for the owner to weigh (a change near access or identity, a cost or CI-time trade, a shift in what gets tested where, an advisor craft call open to veto) is its own Accept item with a short title and `ifLeft`; only routine notes with nothing to weigh (size against the estimate, tests only, a heads-up about something already ruled) fold into the one "What you're accepting" item, and doubt keeps a disclosure its own item.
+- `pr_sheet.py build` takes an item's `ifLeft` as a non-empty string (one paragraph, as before) or a list of at least 1 non-empty strings, shown as a bulleted list, one bullet per note. An empty list, or an empty or blank note, is refused with `items <id>: ifLeft must be a non-empty string or a list of at least 1 non-empty strings`; an empty string `ifLeft` now refuses with that line too, in place of the generic "needs an id ... and non-empty text" line.
 
 ## 0.46.0
 
