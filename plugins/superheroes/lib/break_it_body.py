@@ -57,7 +57,7 @@ def _front_for(suffix):
 
 
 def _relative(rec):
-    return any(pair[1][0] == "from" and pair[1][1] > 0 for pair in rec["imports"])
+    return bool(rec.get("relative", False))
 
 
 def _source_names(content):

@@ -627,7 +627,7 @@ def test_front_fixture_explicit_name_is_a_binding():
 
 def test_front_records_have_exactly_the_contract_keys():
     records = front.parse("import os\nx = 1\n")
-    assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "hook"}] * 2
+    assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "hook", "relative"}] * 2
     assert [rec["kind"] for rec in records] == ["import", "stmt"]
     assert front.EXTENSIONS == (".py",) and front.TITLE == "\x00title"
 
@@ -843,3 +843,16 @@ def test_core_a_host_that_never_mentions_the_moved_tests_names_is_found():
     host = "import os\n\n" + content + "\n\ndef helper():\n    return os.name\n"
     got = break_it_body.locate(content, "a.py", [("b.py", host)])
     assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+_NESTED = "def test_x():\n    from .impl import value\n    assert value\n"
+
+
+def test_core_a_nested_relative_import_moved_to_another_directory_is_a_binding_conflict():
+    got = break_it_body.locate(_NESTED, "pkg_a/test_old.py", [("pkg_b/test_host.py", _NESTED)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_a_nested_relative_import_in_the_same_directory_is_found():
+    got = break_it_body.locate(_NESTED, "pkg_a/test_old.py", [("pkg_a/test_host.py", _NESTED)])
+    assert (got["status"], got["path"]) == ("found", "pkg_a/test_host.py")

@@ -175,7 +175,9 @@ def _record(node, directives):
     _binds(node, binds)
     return {"kind": kind, "key": key, "titles": titles, "imports": _import_pairs(node),
             "binds": frozenset(binds), "uses": _uses(node),
-            "hook": _autouse(node) or bool(binds & _HOOK_NAMES)}
+            "hook": _autouse(node) or bool(binds & _HOOK_NAMES),
+            # a relative import at any depth (inside a test function too) resolves against its file's package
+            "relative": any(isinstance(sub, ast.ImportFrom) and (sub.level or 0) > 0 for sub in ast.walk(node))}
 
 
 def parse(text):
