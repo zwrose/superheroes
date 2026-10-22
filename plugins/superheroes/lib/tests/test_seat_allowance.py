@@ -481,9 +481,26 @@ def _cursor_call(call):
     return {"type": "tool_call", "subtype": "started", "call_id": "c1", "tool_call": call}
 
 
-@pytest.mark.parametrize("key", sorted(SA.CURSOR_ALLOWED_TOOL_CALLS))
+@pytest.mark.parametrize("key", sorted(SA.CURSOR_ALLOWED_TOOL_CALLS - {"editToolCall"}))
 def test_outside_allowance_cursor_allowed_calls_are_inside(key):
     assert SA.outside_allowance(_cursor_call({key: {"args": {"path": "a.py"}}})) is None
+
+
+def test_outside_allowance_cursor_edit_is_inside_only_for_the_result_file(tmp_path):
+    result = str(tmp_path / "native-result-1.json")
+    permitted = [result, None]
+    assert SA.outside_allowance(
+        _cursor_call({"editToolCall": {"args": {"path": result}}}), permitted) is None
+    assert SA.outside_allowance(
+        _cursor_call({"editToolCall": {"args": {"path": "/src/a.py"}}}),
+        permitted) == "editToolCall: /src/a.py"
+    # no permitted path, or no verifiable target, is outside
+    assert SA.outside_allowance(
+        _cursor_call({"editToolCall": {"args": {"path": result}}})) is not None
+    assert SA.outside_allowance(
+        _cursor_call({"editToolCall": {"args": {}}}), permitted) == "editToolCall"
+    assert SA.outside_allowance(
+        _cursor_call({"editToolCall": {}}), permitted) == "editToolCall"
 
 
 def test_cursor_allowed_tool_calls_are_exactly_the_read_list_search_and_result_edit_set():
@@ -607,12 +624,15 @@ def test_scan_stream_cursor_stream_truth_table(tmp_path):
         _cursor_call({"readToolCall": {"args": {"path": "a"}}}),
         _cursor_call({"grepToolCall": {"args": {"pattern": "x"}}}),
         _cursor_call({"shellToolCall": {"args": {"command": "make test"}}}),
-        _cursor_call({"editToolCall": {"args": {"path": "a"}}}),
+        _cursor_call({"editToolCall": {"args": {"path": str(tmp_path / "result.json")}}}),
+        _cursor_call({"editToolCall": {"args": {"path": "a.py"}}}),
         _cursor_call({"shellToolCall": {"args": {"command": "make test"}}}),
         {"type": "tool_call", "subtype": "started", "call_id": "m1",
          "tool_call": {"switchModeToolCall": {}}},
     ])
-    assert SA.scan_stream(str(path)) == (["shellToolCall: make test", "switchModeToolCall"], True)
+    assert SA.scan_stream(
+        str(path), permitted_edit_paths=[str(tmp_path / "result.json")]
+    ) == (["shellToolCall: make test", "editToolCall: a.py", "switchModeToolCall"], True)
 
 
 def test_scan_stream_reports_a_violation_before_9_mib_of_allowed_lines(tmp_path):

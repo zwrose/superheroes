@@ -13996,6 +13996,32 @@ def test_cursor_result_file_write_is_not_engagement(tmp_path):
     assert "seat-ran-outside-allowance" in str(res2)
 
 
+def test_cursor_edit_of_reviewed_source_is_outside_the_allowance(tmp_path):
+    repo_root = _repo(tmp_path)
+    source = os.path.join(repo_root, "a.py")
+    with open(source, "w", encoding="utf-8") as fh:
+        fh.write("# reviewed\n")
+    branch = _native_review_branch("findings", findings=[])
+
+    def edit_source_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_edit_tool_call_stream(source), False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([edit_source_runner]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is False
+    assert res["detail"].startswith("seat-ran-outside-allowance")
+    assert res["attempts"] == 1
+
+
 def test_stage_attempt_prompt_unreadable_prompt_refuses_prompt_unreadable(tmp_path):
     run_dir = str(tmp_path / "unreadable-prompt")
     repo_root = _repo(tmp_path)

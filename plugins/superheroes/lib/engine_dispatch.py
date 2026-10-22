@@ -3928,15 +3928,17 @@ def _codex_review_run(opened):
             and opened.get("runKind") != RUN_KIND_WRITE)
 
 
-def _allowance_scan_fields(opened, stdout_path):
+def _allowance_scan_fields(opened, stdout_path, permitted_edit_paths=None):
     """The journaled allowance scan of one attempt's whole stdout, before it is capped. {} when the
-    run is not a codex review run. Never raises."""
+    run is not a codex review run. `permitted_edit_paths` are the only paths a cursor seat may edit
+    (its own result file and the handoff alias). Never raises."""
     # The scan covers codex and cursor because their event records list the actions they ran;
     # claude review seats run --restricted with --strict-mcp-config, so their record carries no
     # commands.
     if not _codex_review_run(opened):
         return {}
-    violations, ok = seat_allowance.scan_stream(stdout_path)
+    violations, ok = seat_allowance.scan_stream(
+        stdout_path, permitted_edit_paths=permitted_edit_paths)
     return {
         "allowanceViolations": list(violations),
         "allowanceScan": "ok" if ok else "unreadable",
@@ -4180,7 +4182,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     command_time = None
     if opened.get("engine") == "cursor":
         command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
-    allowance_fields = _allowance_scan_fields(opened, stdout_path)
+    allowance_fields = _allowance_scan_fields(
+        opened, stdout_path, [native_result_path, handoff_path])
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
     )
@@ -4397,7 +4400,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "hostLoadAtOpen": host_load_open,
         "commandTime": command_time,
     }
-    ended.update(_allowance_scan_fields(opened, stdout_path))
+    ended.update(_allowance_scan_fields(
+        opened, stdout_path, [native_result_path, handoff_path]))
     if stdout_result is not None:
         ended["stdoutResult"] = stdout_result
     if timed_out:

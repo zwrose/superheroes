@@ -72,21 +72,50 @@ def _cap(text, limit):
     return text[:limit - 3] + "..."
 
 
-def outside_allowance(obj):
+def _real(path):
+    try:
+        return os.path.realpath(path)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _edit_target_permitted(args, permitted_edit_paths):
+    """True only when the edit call's `path` argument is a string that resolves to one of the
+    permitted result-file paths. No permitted paths, or no verifiable target, is not permitted."""
+    if not permitted_edit_paths or not isinstance(args, dict):
+        return False
+    target = args.get("path")
+    if not isinstance(target, str) or not target:
+        return False
+    real = _real(target)
+    if real is None:
+        return False
+    return any(isinstance(p, str) and p and _real(p) == real for p in permitted_edit_paths)
+
+
+def outside_allowance(obj, permitted_edit_paths=None):
     """None when the parsed codex JSONL event `obj` is inside the allowance, else a short
     description (<= 200 chars) of what is outside it. Only item.started / item.completed events
     are judged; any other object is not a judged event and yields None. A cursor stream-json
     `tool_call` event is inside the allowance only when its call is a one-key dict whose key is in
     `CURSOR_ALLOWED_TOOL_CALLS`; every other call (a shell or mode call, an unknown key, a
-    dict that is not one-key, a non-dict) is outside it."""
+    dict that is not one-key, a non-dict) is outside it. An `editToolCall` is inside only when its
+    target path is one of `permitted_edit_paths` (the attempt's own result file and its handoff
+    alias); an edit of any other path, or one with no verifiable target, is outside."""
     if isinstance(obj, dict) and obj.get("type") == "tool_call":
         call = obj.get("tool_call")
         if isinstance(call, dict) and len(call) == 1:
             key = next(iter(call))
-            if key in CURSOR_ALLOWED_TOOL_CALLS:
-                return None
             body = call.get(key)
             args = body.get("args") if isinstance(body, dict) else None
+            if key in CURSOR_ALLOWED_TOOL_CALLS:
+                if key != "editToolCall":
+                    return None
+                if _edit_target_permitted(args, permitted_edit_paths):
+                    return None
+                target = args.get("path") if isinstance(args, dict) else None
+                return _cap("%s: %s" % (key, _cap(target, _COMMAND_CAP)), _DESCRIPTION_CAP) \
+                    if isinstance(target, str) and target else _cap(key, _DESCRIPTION_CAP)
             command = args.get("command") if isinstance(args, dict) else None
             if command is None:
                 return _cap(key, _DESCRIPTION_CAP)
@@ -113,7 +142,7 @@ def outside_allowance(obj):
     return _cap(item_type, _DESCRIPTION_CAP)
 
 
-def scan_stream(path, limit=20):
+def scan_stream(path, limit=20, permitted_edit_paths=None):
     """(violations, ok) for the codex JSONL stream file at `path`. Reads the whole file one line
     at a time (binary), skips unparseable lines, dedupes violations and caps them at `limit`.
     ok is True only when the whole file was read to EOF: it is False when the file cannot be
@@ -132,7 +161,7 @@ def scan_stream(path, limit=20):
                 except (ValueError, RecursionError):
                     continue
                 try:
-                    found = outside_allowance(obj)
+                    found = outside_allowance(obj, permitted_edit_paths)
                 except Exception:
                     continue
                 if found is None or found in seen:
