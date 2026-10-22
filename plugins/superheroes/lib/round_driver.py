@@ -12065,7 +12065,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                                     seat_key, occurrence)
             if unlanded is not None:
                 return unlanded
-        if phase == P_FIXER and has_landing and os.path.exists(spath) and fixer_transcript is not None:
+        if phase == P_FIXER and os.path.exists(spath) and fixer_transcript is not None:
             # A slot recorded earlier without a transcript is still cross-checked when this call
             # supplies one: an omitted refusal the transcript shows is never folded as clean.
             stored_env, _serr = round_records.read_json(spath)
@@ -12430,6 +12430,23 @@ def _cmd_correct_fixer_refusals_locked(session_dir, refusals_file, fixer_transcr
             final is not None and final.get("schema") not in round_records.SEAT_RESULT_SCHEMAS):
         return _refuse_cmd(session_dir, cmd, "correction-landing-not-payload", phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+    if final is not None:
+        # A correction must not legitimize unrelated damage: the landing's own declared hashes
+        # are checked BEFORE they are recomputed over the corrected payload.
+        declared_payload_sha = round_records.payload_sha256(payload)
+        if declared_payload_sha != final.get("payloadSha256"):
+            return _refuse_cmd(session_dir, cmd, "landing-torn", phase=phase, rnd=rnd,
+                               attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                               computed=declared_payload_sha, declared=final.get("payloadSha256"),
+                               landingPath=target)
+        if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
+            computed_env_sha = round_records.envelope_sha256(
+                payload, final.get("executionEvidence"))
+            if computed_env_sha != final.get("envelopeSha256"):
+                return _refuse_cmd(session_dir, cmd, "envelope-torn", phase=phase, rnd=rnd,
+                                   attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                                   computed=computed_env_sha, declared=final.get("envelopeSha256"),
+                                   landingPath=target)
     new_payload = dict(payload, refusals=new_refusals)
     if final is None:
         new_bytes = round_records.canonical(new_payload).encode("utf-8")

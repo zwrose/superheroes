@@ -245,6 +245,17 @@ def test_b3_advance_refuses_an_unreported_refusal_then_folds_when_listed(tmp_pat
             if row.get("seat") == SEAT] == ["checked"]
 
 
+def test_b3_advance_checks_a_stored_fixer_even_when_its_landing_is_gone(tmp_path):
+    session_dir, gitdir, head_path, _repo, _head = _fixer_session(tmp_path)
+    transcript = _transcript(tmp_path, [HEREDOC])
+    pend, _payload = _land_fixer(session_dir, head_path, refusals=[])
+    assert RD.cmd_record_result(session_dir, SEAT)["ok"] is True
+    os.unlink(_landing_path(session_dir, pend))
+    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir), fixer_transcript=transcript)
+    assert out["ok"] is False and out["reason"] == "fixer-refusals-unreported", out
+    assert _state(session_dir)["pending"]["phase"] == RD.P_FIXER
+
+
 def test_b4_hand_submit_refuses_an_unreported_refusal_then_accepts_when_listed(tmp_path, monkeypatch):
     cli = hand._Cli(tmp_path, monkeypatch)
     transcript = _transcript(tmp_path, [HEREDOC])
@@ -383,6 +394,21 @@ def test_c_correction_that_still_leaves_out_an_observed_refusal_refuses(tmp_path
                                         fixer_transcript=transcript)
     assert out["ok"] is False and out["reason"] == "fixer-refusals-unreported"
     assert _read_bytes(landing) == before
+
+
+def test_c_correction_refuses_a_landing_whose_declared_hash_is_already_stale(tmp_path):
+    session_dir, _gitdir, head_path, _repo, _head = _fixer_session(tmp_path)
+    pend, _payload = _land_fixer(session_dir, head_path, refusals=[])
+    landing = _landing_path(session_dir, pend)
+    env = RR.read_json(landing)[0]
+    env["payload"] = dict(env["payload"], summary="damaged after landing")
+    with open(landing, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(env))
+    before = _read_bytes(landing)
+    out = RD.cmd_correct_fixer_refusals(session_dir, _refusals_file(tmp_path, [ENTRY]))
+    assert out["ok"] is False and out["reason"] in ("landing-torn", "envelope-torn"), out
+    assert _read_bytes(landing) == before
+    assert _rows(session_dir, "fixer-refusals-corrected") == []
 
 
 def test_c_correction_without_a_landing_refuses_landing_missing(tmp_path):
