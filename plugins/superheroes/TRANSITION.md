@@ -19,11 +19,16 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Nothing is owed.** A caller that reads a `dispatch-write` write forfeit now also finds `dirtiedPaths` on the "forfeited twice" result, and both write-forfeit disclosures say whether the timeout cut the engine off and whether work landed. See [Dispatch: both write forfeits name what landed](#dispatch-both-write-forfeits-name-what-landed).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 - **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
+- **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
 
 ### Dispatch: both write forfeits name what landed
 
 - The `dispatch-write` "forfeited twice (timeout or unreadable)" result gains `dirtiedPaths`, in the shape the `worktree-dirtied-by-attempt` result already carries (`status`, `paths`, `headMoved`, `truncated`, or `status: indeterminate` with a `reason`). Before, a second attempt that timed out after its edits landed returned no list of what changed.
 - Both write-forfeit `disclosure` strings now end with what landed: `The timeout cut the engine off and its report is missing.` when the attempt's detail is a `timeout-*` token, then `Work landed: <n> path(s) changed (see dirtiedPaths); verify them before re-ordering.`, `No paths landed.`, or `Whether work landed could not be read (dirtiedPaths: <reason>); inspect the worktree.` The keys `reason`, `detail`, `attemptDetail` and `attempts` are unchanged.
+
+### Retired: the identifiers content hash and the cross-vendor escalation step
+
+- `identifiers.py` drops `content_hash`, `STABLE_FIELDS` and `_normalize_body` (no non-test caller; `work_item_slug` stays), and `model_registry.escalate()` at the top of a vendor's ladder returns `None` instead of the next vendor's first rung (its one caller already treats `None` as no escalation).
 
 ### Cloud setup: the setup text fills the launcher's dependency caches
 
