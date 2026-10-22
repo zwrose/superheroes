@@ -61,6 +61,7 @@ import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
 import command_refusals  # noqa: E402
+import observed_refusals  # noqa: E402
 import mode_registry  # noqa: E402
 import decision_kinds  # noqa: E402
 import delta_surface  # noqa: E402
@@ -11145,6 +11146,15 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     return anchor
 
 
+FIXER_COMMITTED_UNLANDED = "fixer-committed-unlanded"
+FIXER_COMMITS_LISTED = 20
+FIXER_REFUSALS_UNREPORTED = "fixer-refusals-unreported"
+FIXER_TRANSCRIPT_UNREADABLE = "fixer-transcript-unreadable"
+FIXER_REFUSALS_CORRECTED_OUTCOME = "fixer-refusals-corrected"
+FIXER_REFUSALS_FILE_PLACEHOLDER = "<refusals.json>"
+REFUSAL_CHECK_CHECKED = "checked"
+REFUSAL_CHECK_UNOBSERVED = "unobserved"
+
 # --- the durable per-seat records ---------------------------------------------------------------
 
 def _slot_label(seat_key, occurrence):
@@ -11157,16 +11167,44 @@ def _slot_label(seat_key, occurrence):
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
 
 
-def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt):
+def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt,
+                                fixer_transcript=None):
     """Shell-ready per-slot supersede command — matches round-driver.md invocation spelling.
 
     Round and phase are not separately addressable on this CLI; ``--attempt`` is the fence
     that binds the command to the slot it was produced for."""
     driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
-    return ("python3 -B %s record-result --session-dir %s --seat %s "
-            "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
-            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
-               occurrence, attempt, shlex.quote(cas_token)))
+    cmd = ("python3 -B %s record-result --session-dir %s --seat %s "
+           "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
+           % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
+              occurrence, attempt, shlex.quote(cas_token)))
+    if fixer_transcript:
+        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
+    return cmd
+
+
+def _record_result_cmd(session_dir, seat_key, occurrence, attempt, fixer_transcript=None):
+    """Shell-ready first-ingest `record-result` for one slot (no stored record to supersede yet)."""
+    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
+    cmd = ("python3 -B %s record-result --session-dir %s --seat %s --occurrence %d --attempt %d"
+           % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
+              occurrence, attempt))
+    if fixer_transcript:
+        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
+    return cmd
+
+
+def _correct_fixer_refusals_cmd(session_dir, attempt, fixer_transcript=None):
+    """Shell-ready `correct-fixer-refusals` for this session. The refusals file is the advisor's to
+    write (a JSON list of the fixer's refusal entries), so it stays a named placeholder."""
+    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
+    cmd = ("python3 -B %s correct-fixer-refusals --session-dir %s --refusals-file %s"
+           % (shlex.quote(driver_path), shlex.quote(session_dir), FIXER_REFUSALS_FILE_PLACEHOLDER))
+    if isinstance(attempt, int) and not isinstance(attempt, bool):
+        cmd += " --attempt %d" % attempt
+    if fixer_transcript:
+        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
+    return cmd
 
 
 def _store_file_exists(spath):
@@ -11345,6 +11383,91 @@ def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt, occurre
     return payload, payload.get("headDiffPath")
 
 
+def _fixer_unlanded_commits(state, session_dir, rnd, attempt):
+    """The SHAs (oldest first, at most FIXER_COMMITS_LISTED) of commits the session's repo holds
+    after the fixer order's emission head, or None when that cannot be told.
+
+    None covers every case where git gave no answer — no emission head recorded, no repo root, git
+    unavailable or declining — and an empty list is git answering "no commits since". The caller
+    treats both as "no evidence of a commit" and keeps its existing refusal, so a git failure can
+    never turn into a pass."""
+    emission_head = _anchor_cited_head(state, session_dir, rnd, P_FIXER, attempt)
+    if not isinstance(emission_head, str) or not emission_head:
+        return None
+    repo_root = _resolve_repo_root(session_dir, state)
+    if not repo_root:
+        return None
+    result = store_core.run_git_result(repo_root, "rev-list", "--reverse",
+                                       "%s..HEAD" % emission_head)
+    if result.status != store_core.GIT_OK or result.out is None:
+        return None
+    return [sha for sha in result.out.splitlines() if sha.strip()][:FIXER_COMMITS_LISTED]
+
+
+def _fixer_slot_unlanded_refusal(session_dir, state, cmd, phase, rnd, attempt, seat_key,
+                                 occurrence=0):
+    """The `fixer-committed-unlanded` refusal for a fixer slot that has neither a landing nor a
+    stored record while the repo holds commits past the order's emission head; else None.
+
+    THE chokepoint of invariant A: every path that would read the slot as missing calls this. The
+    driver does not recover the fix from git — which findings a commit addresses is the fixer's
+    claim, not something git records — so it names the advisor's action instead."""
+    if phase != P_FIXER:
+        return None
+    try:
+        skey = round_records.storage_key(seat_key, occurrence)
+        spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+        lpath = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+        bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+    except ValueError:
+        return None
+    if any(os.path.lexists(path) for path in (spath, lpath, bare_path)):
+        return None
+    commits = _fixer_unlanded_commits(state, session_dir, rnd, attempt)
+    if not commits:
+        return None
+    return _refuse_cmd(
+        session_dir, cmd, FIXER_COMMITTED_UNLANDED, phase=phase, rnd=rnd, attempt=attempt,
+        seat=_slot_label(seat_key, occurrence), commits=commits,
+        detail=("the fixer committed but wrote no landing; its commit stays; re-dispatch the same "
+                "fixer order so it writes only its landing (or record the fix by hand-submit), "
+                "then record-result — the driver does not recover the fix from git, because which "
+                "findings a commit addresses is the fixer's claim, not something git records."))
+
+
+def _fixer_refusal_check(session_dir, payload, transcript_path, attempt=None, correctable=True):
+    """(refusalCheck value, refusal fields or None) for a fixer payload against a transcript.
+
+    THE chokepoint of invariant B. No transcript means nobody looked: `unobserved`, never a pass
+    that reads like "looked, found none". A transcript fault refuses and never degrades to
+    `unobserved`. A refusal the transcript shows and the payload's `refusals` leaves out refuses
+    `fixer-refusals-unreported` carrying the list and (when a landing exists to correct) the exact
+    `correct-fixer-refusals` command. The refusal fields hold `reason` plus the extras."""
+    if transcript_path is None:
+        return REFUSAL_CHECK_UNOBSERVED, None
+    observed, fault = observed_refusals.read_transcript(transcript_path)
+    if fault:
+        return None, {"reason": FIXER_TRANSCRIPT_UNREADABLE, "detail": fault}
+    reported = payload.get("refusals") if isinstance(payload, dict) else None
+    missing = observed_refusals.unreported(observed, reported or [])
+    if missing:
+        fields = {"reason": FIXER_REFUSALS_UNREPORTED, "unreported": missing}
+        if correctable:
+            fields["correction"] = _correct_fixer_refusals_cmd(session_dir, attempt,
+                                                               transcript_path)
+        return None, fields
+    return REFUSAL_CHECK_CHECKED, None
+
+
+def _fixer_envelope_refusal_check(session_dir, envelope, transcript_path, attempt):
+    """`_fixer_refusal_check` over a normalized landing envelope. Only a seat-result envelope
+    carries a fixer payload to check; any other schema is `unobserved` (nothing claimed)."""
+    if (not isinstance(envelope, dict)
+            or envelope.get("schema") not in round_records.SEAT_RESULT_SCHEMAS):
+        return REFUSAL_CHECK_UNOBSERVED, None
+    return _fixer_refusal_check(session_dir, envelope.get("payload"), transcript_path, attempt)
+
+
 def _read_head_diff(path):
     """(content, reason). A non-absolute or unreadable `headDiffPath` is `head-diff-unreadable` —
     refused at RECORD time, not degraded at fold time. `_resolve_head_diff` would otherwise
@@ -11489,7 +11612,7 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
                       sweep=False, occurrence=0, expect_round=None, expect_phase=None,
-                      evidence_run_dir=None):
+                      evidence_run_dir=None, fixer_transcript=None):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
@@ -11515,7 +11638,8 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                                              sweep=sweep, occurrence=occurrence,
                                              expect_round=expect_round,
                                              expect_phase=expect_phase,
-                                             evidence_run_dir=evidence_run_dir)
+                                             evidence_run_dir=evidence_run_dir,
+                                             fixer_transcript=fixer_transcript)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
@@ -11645,7 +11769,8 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
 
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
                               expect_sha256=None, sweep=False, occurrence=0,
-                              expect_round=None, expect_phase=None, evidence_run_dir=None):
+                              expect_round=None, expect_phase=None, evidence_run_dir=None,
+                              fixer_transcript=None):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -11745,7 +11870,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            detail=detail, recovery=recovery)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
-                             anchor, expect_round=expect_round, expect_phase=expect_phase)
+                             anchor, expect_round=expect_round, expect_phase=expect_phase,
+                             fixer_transcript=fixer_transcript)
 
     seat_schema = _seat_result_schema(state)
     if seat_schema is None:
@@ -11755,12 +11881,18 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     # Validate BEFORE storing: a refusal must leave nothing behind.
     landing_replace_path = None
     assembled = None
+    refusal_fields = {}
     cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr, landing_replace_path = _read_landing_envelope(
             session_dir, rnd, phase, seat, cur_attempt, occurrence)
         if _lerr is not None:
+            if _lerr == "landing-missing":
+                unlanded = _fixer_slot_unlanded_refusal(session_dir, state, "record-result", phase,
+                                                        rnd, cur_attempt, seat, occurrence)
+                if unlanded is not None:
+                    return unlanded
             return _refuse_cmd(session_dir, "record-result", _lerr, phase=phase, rnd=rnd,
                                attempt=cur_attempt, seat=_slot_label(seat, occurrence))
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
@@ -11787,6 +11919,13 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                 if why is not None:
                     return _refuse_cmd(session_dir, "record-result", why, phase=phase, rnd=rnd,
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
+            refusal_check, check_refusal = _fixer_envelope_refusal_check(
+                session_dir, preflight_envelope, fixer_transcript, cur_attempt)
+            if check_refusal is not None:
+                return _refuse_cmd(session_dir, "record-result", check_refusal.pop("reason"),
+                                   phase=phase, rnd=rnd, attempt=cur_attempt,
+                                   seat=_slot_label(seat, occurrence), **check_refusal)
+            refusal_fields = {"refusalCheck": refusal_check}
     else:
         head_content = None
     # axis: a record-result over a damaged journal is refused before it stores a seat record
@@ -11821,6 +11960,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         **round_records.recorded_row_fields(envelope, row_cited_head, cited_head_source),
         **_journal_transport_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
+        **refusal_fields,
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
@@ -11848,7 +11988,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
 
 
 def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
-                  expect_round=None, expect_phase=None):
+                  expect_round=None, expect_phase=None, fixer_transcript=None):
     """Ingest every unclaimed landing for the pending phase. Idempotent by construction (a seat
     already stored comes back `already-stored`); ANY refusal in the sweep refuses the whole call,
     with the refusing seat's own reason — a landing nobody could ingest is never skipped in
@@ -11883,6 +12023,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     # axis: a sweep over a damaged journal is refused before it ingests any landing
     if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
         return _refuse_journal_damaged(session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
+    refusal_checks = {}
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -11896,6 +12037,11 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             bare_path = None
         has_landing = os.path.exists(lpath) or (
             bare_path is not None and os.path.exists(bare_path))
+        if not has_landing and not os.path.exists(spath):
+            unlanded = _fixer_slot_unlanded_refusal(session_dir, state, cmd, phase, rnd, attempt,
+                                                    seat_key, occurrence)
+            if unlanded is not None:
+                return unlanded
         if not has_landing or os.path.exists(spath):
             continue
         envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
@@ -11904,6 +12050,14 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
                                attempt=attempt, seat=seat_key, detail=fault)
+        if phase == P_FIXER:
+            refusal_check, check_refusal = _fixer_envelope_refusal_check(
+                session_dir, envelope, fixer_transcript, attempt)
+            if check_refusal is not None:
+                return _refuse_cmd(session_dir, cmd, check_refusal.pop("reason"), phase=phase,
+                                   rnd=rnd, attempt=attempt, seat=_slot_label(seat_key, occurrence),
+                                   **check_refusal)
+            refusal_checks[(seat_key, occurrence)] = refusal_check
     seat_schema = _seat_result_schema(state)
     if seat_schema is None:
         return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
@@ -11962,6 +12116,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 journal_entry = _journal_entry_for_commit(
                     session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                     seat=seat, occurrence=occurrence,
+                    refusalCheck=refusal_checks.get((seat, occurrence),
+                                                    REFUSAL_CHECK_UNOBSERVED),
                     **_journal_transport_fields(stored),
                     **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
@@ -11995,6 +12151,9 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             revision_fields = round_records.recorded_row_fields(
                 stored_envelope, cited_head, cited_head_source)
             revision_fields.update(_journal_transport_fields(stored_envelope))
+            if phase == P_FIXER:
+                revision_fields["refusalCheck"] = refusal_checks.get((seat, occurrence),
+                                                                     REFUSAL_CHECK_UNOBSERVED)
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
