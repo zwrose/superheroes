@@ -17,12 +17,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **A project whose guardian config file is unreadable or not valid UTF-8 now sweeps as `degraded` and loses benching until the file is fixed; nothing else is owed.** See [Guardian: an unreadable or non-UTF-8 config is degraded](#guardian-an-unreadable-or-non-utf-8-config-is-degraded).
+- **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 
 ### Guardian: an unreadable or non-UTF-8 config is degraded
 
 - `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory or a dangling symlink at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
 - The guardian cadence write in `core_md` returns `{"action": "refused", "reason": "guardian-layer-not-utf8"}` (`GUARDIAN_CADENCE_REASON_UNDECODABLE`) on a non-UTF-8 layer instead of raising.
-- **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 
 ### PR sheet: the fold keeps only routine notes, as a list
 
