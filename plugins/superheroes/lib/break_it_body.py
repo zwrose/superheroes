@@ -108,6 +108,9 @@ def locate(content, path, candidates):
     for rec in body:
         names |= rec["binds"] | rec["uses"]
     names -= set(old_titles)
+    # the textual prefilter requires only names that occur in the original's own text: a derived runtime spelling
+    # (a mangled private name) never makes an identical candidate fail it
+    prefilter = {name for name in names if name in content}
     keys = [rec["key"] for rec in body]
     unparseable = False
     matches = []
@@ -117,7 +120,7 @@ def locate(content, path, candidates):
         if text is None:
             unparseable = True
             continue
-        if not all(name in text for name in names):
+        if not all(name in text for name in prefilter):
             continue
         try:
             records = front.parse(text)

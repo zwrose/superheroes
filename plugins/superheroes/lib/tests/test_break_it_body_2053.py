@@ -795,3 +795,17 @@ def test_core_a_window_is_consecutive_statements():
     content = "x = 1\ny = 2\n"
     assert break_it_body.locate(content, "a.py", [("b.py", "x = 1\nz = 0\ny = 2\n")])["status"] == "none"
     assert break_it_body.locate(content, "a.py", [("b.py", "z = 0\nx = 1\ny = 2\n")])["status"] == "found"
+
+
+_PRIVATE = ("class TestExample:\n    def test_a(self):\n        try:\n            value = __value\n"
+            "        except NameError:\n            value = 0\n        assert value == 1\n")
+
+
+def test_core_a_host_binding_the_runtime_name_of_a_private_class_read_is_a_binding_conflict():
+    got = break_it_body.locate(_PRIVATE, "a.py", [("b.py", "_TestExample__value = 1\n\n" + _PRIVATE)])
+    assert got["status"] == "unresolved" and got["reason"] == "binding-conflict"
+
+
+def test_core_an_unchanged_moved_class_with_a_private_attribute_is_found():
+    got = break_it_body.locate(_PRIVATE, "a.py", [("b.py", "import os\n\n" + _PRIVATE)])
+    assert got["status"] == "found"

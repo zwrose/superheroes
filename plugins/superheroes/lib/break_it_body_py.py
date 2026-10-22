@@ -108,8 +108,8 @@ def _uses(node):
 
     def walk(table, parent):
         # a class body's reads fall back to module and builtin names, so a class contributes every name it reads;
-        # an assignment-only class attribute is not a dependency, and a compiler-mangled private name is mapped
-        # back to its source spelling
+        # an assignment-only class attribute is not a dependency, and a compiler-mangled private name keeps both
+        # spellings: the runtime name (what a module binding must not override) and the source spelling
         if parent is None:
             names.update(sym.get_name() for sym in table.get_symbols())
         elif table.get_type() == "class":
@@ -118,7 +118,7 @@ def _uses(node):
                 if sym.is_referenced():
                     sym_name = sym.get_name()
                     if table.get_name().strip("_") and sym_name.startswith(prefix) and len(sym_name) > len(prefix):
-                        sym_name = "__" + sym_name[len(prefix):]
+                        names.add("__" + sym_name[len(prefix):])
                     names.add(sym_name)
         else:
             names.update(sym.get_name() for sym in table.get_symbols() if sym.is_global())
