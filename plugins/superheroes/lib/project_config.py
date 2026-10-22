@@ -1242,6 +1242,9 @@ def _git_run(root, reason, *args, timeout=10):
     try:
         return subprocess.run(["git", "-C", root, *args], capture_output=True,
                               encoding="utf-8", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise _MigrationRefusal(
+            reason, "git %s timed out after %ss" % (args[0], timeout))
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise _MigrationRefusal(
             reason, "git could not be run (%s: %s)" % (type(exc).__name__, exc))
@@ -1564,7 +1567,7 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
     canon_path = info["path"]
     # axis: a Canon with uncommitted changes is never built on — see bite-proof record wo_a_1618_clean-baseline
     status = _git_run(git_root, "canon-dirty", "status", "--porcelain",
-                      "--untracked-files=all", "--", *paths)
+                      "--untracked-files=all", "--", *paths, timeout=60)
     if status.returncode != 0:
         raise _MigrationRefusal("canon-dirty", _first_line(status.stderr, "git status failed"))
     if status.stdout.strip():
