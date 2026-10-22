@@ -710,6 +710,23 @@ def test_front_uses_respect_nested_scopes():
     assert "fx" in uses("class K:\n    def test_a(self, fx):\n        pass\n")
 
 
+def test_front_uses_ignore_implicit_generator_parameters():
+    def uses(text):
+        return front.parse(text)[0]["uses"]
+    got = uses("total = sum(i for i in range(3))\n")
+    assert all(name.isidentifier() for name in got)
+    assert "i" not in got and "range" in got
+    assert "x" not in uses("f = lambda x: x\n")
+
+
+def test_class_body_global_fallback_read_is_a_dependency():
+    content = ("class TestExample:\n    len = len([])\n\n    def test_x(self):\n        assert self.len == 1\n")
+    assert "len" in front.parse(content)[0]["uses"]
+    host = "len = lambda xs: 1\n\n" + content
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
 def test_front_hook():
     def hook(text):
         return front.parse(text)[0]["hook"]

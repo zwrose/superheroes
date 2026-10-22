@@ -107,12 +107,18 @@ def _uses(node):
     names = set()
 
     def walk(table, parent):
-        if parent is None:
+        # a class body's reads fall back to module and builtin names, so a class contributes every name it mentions
+        if parent is None or table.get_type() == "class":
             names.update(sym.get_name() for sym in table.get_symbols())
         else:
             names.update(sym.get_name() for sym in table.get_symbols() if sym.is_global())
-        if table.get_type() == "function" and parent is not None and parent.get_type() in ("module", "class"):
-            names.update(sym.get_name() for sym in table.get_symbols() if sym.is_parameter())
+        # only a real def requests fixtures: a lambda, comprehension or generator scope is a function table whose
+        # name is not an identifier (``<genexpr>``) or is ``lambda``, and carries implicit parameters such as ``.0``
+        name = table.get_name()
+        if (table.get_type() == "function" and parent is not None and parent.get_type() in ("module", "class")
+                and name.isidentifier() and name != "lambda"):
+            names.update(sym.get_name() for sym in table.get_symbols()
+                         if sym.is_parameter() and sym.get_name().isidentifier())
         for child in table.get_children():
             walk(child, table)
 
