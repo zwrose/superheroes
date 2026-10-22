@@ -66,6 +66,24 @@ def _is_fixture(func, aliases=frozenset()):
             or (isinstance(func, ast.Attribute) and func.attr == "fixture"))
 
 
+def _decorator_is(decorator, name):
+    """True when ``decorator`` is ``<name>`` or ``<anything>.<name>``."""
+    return ((isinstance(decorator, ast.Name) and decorator.id == name)
+            or (isinstance(decorator, ast.Attribute) and decorator.attr == name))
+
+
+def _defs(node):
+    """``((scope, name), ...)`` for the defs and classes ``node`` binds by name: ``("m", name)`` for the statement itself
+    when it is a def or class (module namespace), and ``("c", name)`` for each def or class directly in its body when
+    it is a class (that class's own namespace). The names are the source names, titles included."""
+    found = []
+    if isinstance(node, _FUNCTIONS + (ast.ClassDef,)):
+        found.append(("m", node.name))
+    if isinstance(node, ast.ClassDef):
+        found.extend(("c", sub.name) for sub in node.body if isinstance(sub, _FUNCTIONS + (ast.ClassDef,)))
+    return tuple(found)
+
+
 def _class_globals(body):
     """Names declared ``global`` in a class body (or a nested class body), without entering a function or lambda."""
     names = set()
@@ -129,11 +147,39 @@ def _binds(node, out, aliases=frozenset()):
             _binds(sub, out, aliases)
 
 
-def _uses(node):
+def _requests(node, aliases):
+    """``{(name, lineno): parameter names}`` for each def that requests pytest fixtures: a ``test*`` function at
+    module level, a ``test*`` method of a module-level class (minus its first ``self`` / ``cls`` parameter), or a def
+    decorated ``fixture`` / ``<anything>.fixture`` (or an alias of it; a class-level one also minus its first
+    parameter). Every other function's parameters are locals."""
+    found = {}
+
+    def visit(sub, scope):
+        if isinstance(sub, _FUNCTIONS):
+            fixture = any(_is_fixture(d.func if isinstance(d, ast.Call) else d, aliases) for d in sub.decorator_list)
+            if scope in ("module", "class") and (sub.name.startswith("test") or fixture):
+                params = sub.args.posonlyargs + sub.args.args
+                # a staticmethod has no implicit first parameter: every parameter of it is a fixture request
+                static = any(_decorator_is(d, "staticmethod") for d in sub.decorator_list)
+                skipped = params[0].arg if scope == "class" and params and not static else None
+                every = params + sub.args.kwonlyargs + [a for a in (sub.args.vararg, sub.args.kwarg) if a]
+                found[(sub.name, sub.lineno)] = frozenset(a.arg for a in every if a.arg != skipped)
+            scope = "other"
+        elif isinstance(sub, ast.ClassDef):
+            scope = "class" if scope == "module" else "other"
+        for child in ast.iter_child_nodes(sub):
+            visit(child, scope)
+
+    visit(ast.parse(ast.unparse(node)), "module")
+    return found
+
+
+def _uses(node, aliases=frozenset()):
     """The names ``node`` depends on from outside itself: every name its own level binds or reads, the global
     reads of each nested scope (a nested scope's own locals are not dependencies, and do not hide an outer one),
-    and every parameter of a function that sits at module or class level (a pytest fixture request)."""
+    and the parameters of a test or fixture def (a pytest fixture request; see ``_requests``)."""
     names = set()
+    requests = _requests(node, aliases)
 
     def walk(table, parent):
         # a class body's reads fall back to module and builtin names, so a class contributes every name it reads;
@@ -151,13 +197,9 @@ def _uses(node):
                     names.add(sym_name)
         else:
             names.update(sym.get_name() for sym in table.get_symbols() if sym.is_global())
-        # only a real def requests fixtures: a lambda, comprehension or generator scope is a function table whose
-        # name is not an identifier (``<genexpr>``) or is ``lambda``, and carries implicit parameters such as ``.0``
-        name = table.get_name()
-        if (table.get_type() == "function" and parent is not None and parent.get_type() in ("module", "class")
-                and name.isidentifier() and name != "lambda"):
-            names.update(sym.get_name() for sym in table.get_symbols()
-                         if sym.is_parameter() and sym.get_name().isidentifier())
+        # only a test or fixture def requests fixtures; a lambda, comprehension or helper's parameters are locals
+        if table.get_type() == "function" and parent is not None:
+            names.update(requests.get((table.get_name(), table.get_lineno()), ()))
         for child in table.get_children():
             walk(child, table)
 
@@ -209,7 +251,30 @@ def _plain_class(node):
     if any(isinstance(sub, (ast.Global, ast.Nonlocal)) or getattr(sub, "decorator_list", None)
            for sub in ast.walk(node)):
         return False
-    return all(isinstance(sub, _FUNCTIONS) or _plain_assignment(sub) or _docstring(sub) for sub in node.body)
+    return all((isinstance(sub, _FUNCTIONS) and _plain_signature(sub)) or _plain_assignment(sub) or _docstring(sub)
+               for sub in node.body)
+
+
+def _plain_signature(node):
+    """True when every default, keyword default and annotation (arguments and return) of the def ``node`` runs no
+    code at import: a def evaluates them when it is defined."""
+    args = node.args
+    every = args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]
+    parts = args.defaults + args.kw_defaults + [a.annotation for a in every] + [node.returns]
+    return all(_plain_value(part) for part in parts)
+
+
+def _plain_import(node):
+    """True when no name ``node`` binds is a runner hook (see ``_hook_name``) and it is no star import. The one
+    exemption is the plain ``import pytest``, the normal test-file import (``pytest_*`` and ``pytestmark`` stay hooks)."""
+    for alias in node.names:
+        local = alias.asname or (alias.name.split(".")[0] if isinstance(node, ast.Import) else alias.name)
+        if isinstance(node, ast.Import) and alias.name == "pytest" and local == "pytest":
+            continue
+        # axis: an imported name that a runner treats as setup (setUpModule, setup_module, pytestmark) or a star import is a hook — see bite-proof record wo_a_2053_break_it_body
+        if local == "*" or _hook_name(local):
+            return False
+    return True
 
 
 def _allowed_host(node):
@@ -218,10 +283,10 @@ def _allowed_host(node):
     (a decorated def or class, control flow, a call statement, an augmented assignment, ``global``, ``del``,
     ``assert``, ``raise``) can change how the test runs and is not allowed."""
     if isinstance(node, (ast.Import, ast.ImportFrom)):
-        return True
+        return _plain_import(node)
     if isinstance(node, _FUNCTIONS):
-        # axis: a decorated def (a fixture under any spelling or alias) is a hook, and so is a runner-named def — see bite-proof record wo_a_2053_break_it_body
-        return not node.decorator_list and not _hook_name(node.name)
+        # axis: a decorated def (a fixture under any spelling or alias) is a hook, and so is a runner-named def or one whose defaults or annotations run code — see bite-proof record wo_a_2053_break_it_body
+        return not node.decorator_list and not _hook_name(node.name) and _plain_signature(node)
     if isinstance(node, ast.ClassDef):
         return _plain_class(node)
     if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -257,7 +322,7 @@ def _record(node, directives, aliases=frozenset()):
     binds = set()
     _binds(node, binds, aliases)
     return {"kind": kind, "key": key, "titles": titles, "imports": _import_pairs(node),
-            "binds": frozenset(binds), "uses": _uses(node),
+            "binds": frozenset(binds), "uses": _uses(node, aliases), "defs": _defs(node),
             "hook": not _allowed_host(node),
             # a relative import at any depth (inside a test function too) resolves against its file's package
             "relative": any(isinstance(sub, ast.ImportFrom) and (sub.level or 0) > 0 for sub in ast.walk(node))}

@@ -339,7 +339,8 @@ fallback of CONVENTIONS `§7.5`, where the engine is not configured or available
 fold each finding in or dispute it with a reason.
 
 **Dispatch it through `dispatch-review --mode brief-check`.** A hand-rolled `codex exec` is allowed
-only when the runner itself is unavailable, as a disclosed degradation in the PR body.
+only when the runner itself is unavailable, as a disclosed degradation in the PR body. A hand-rolled
+engine call redirects stdin from a file or `/dev/null`.
 
 **Never kill a configured reviewer dispatch before its structural timeout.** The timeout is the
 tripwire, not your read of intermediate signals. A memory recalls context and is never a standing

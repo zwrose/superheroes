@@ -8,6 +8,7 @@ _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import break_it_body  # noqa: E402
 import break_it_body_js as front  # noqa: E402
 
 
@@ -42,7 +43,7 @@ def test_contract_constants():
 
 def test_record_shape():
     rec = _only("const a = 1")
-    assert set(rec) == {"kind", "key", "titles", "imports", "binds", "uses", "hook"}
+    assert set(rec) == {"kind", "key", "titles", "imports", "binds", "uses", "hook", "relative"}
     assert rec["kind"] == "stmt"
     assert isinstance(rec["key"], tuple) and isinstance(rec["titles"], tuple) and isinstance(rec["imports"], tuple)
     assert isinstance(rec["binds"], frozenset) and isinstance(rec["uses"], frozenset)
@@ -139,14 +140,16 @@ def test_restricted_production_line_break_is_a_statement_end():
     pairs = [
         ("function f() {\n  return\n  (1)\n}", "function f() { return (1) }"),
         ("function f() {\n  return\n  [1]\n}", "function f() { return [1] }"),
-        ("function f() {\n  return\n}", "function f() { return }"),
         ("function f() {\n  throw\n  (e)\n}", "function f() { throw (e) }"),
         ("function* g() {\n  yield\n  (1)\n}", "function* g() { yield (1) }"),
-        ("while (1) {\n  break\n}", "while (1) { break }"),
-        ("while (1) {\n  continue\n}", "while (1) { continue }"),
     ]
     for a, b in pairs:
         _assert_differ(a, b)
+    # a statement end directly before a closing brace ends nothing, so a bare jump at a block end reads equal
+    for a, b in [("function f() {\n  return\n}", "function f() { return }"),
+                 ("while (1) {\n  break\n}", "while (1) { break }"),
+                 ("while (1) {\n  continue\n}", "while (1) { continue }")]:
+        _assert_same(a, b)
 
 
 def test_statement_end_before_a_parenthesis_is_not_a_call():
@@ -645,3 +648,71 @@ def test_nothing_but_value_error_escapes():
         front.parse(None)
     with pytest.raises(ValueError):
         front.parse(b"const a = 1")
+
+
+# --- review round 1: relative imports, block-ending semicolons, template titles, lexical bindings ---------------
+
+_RELATIVE_TEST = 'import { read } from "./subject";\nit("reads", () => { expect(read()).toBe(1); });\n'
+
+
+def test_a_moved_test_with_a_relative_import_is_refused_but_a_same_directory_copy_is_found():
+    moved = break_it_body.locate(_RELATIVE_TEST, "web/a.test.ts", [("other/b.test.ts", _RELATIVE_TEST)])
+    assert (moved["status"], moved["reason"]) == ("unresolved", "binding-conflict")
+    same = break_it_body.locate(_RELATIVE_TEST, "web/a.test.ts", [("web/b.test.ts", _RELATIVE_TEST)])
+    assert same["status"] == "found"
+
+
+@pytest.mark.parametrize("text, relative", [
+    ('import { a } from "./m"', True),
+    ('import { a } from "../m"', True),
+    ('import "./m"', True),
+    ('import { a } from "vitest"', False),
+    ('const a = require("./m")', True),
+    ('const a = require("m")', False),
+    ('const a = await import("../m")', True),
+    ('const a = await import("m")', False),
+])
+def test_relative_flag_marks_relative_module_paths(text, relative):
+    assert _only(text)["relative"] is relative
+
+
+@pytest.mark.parametrize("a, b", [
+    ("{ expect(1).toBe(1) }", "{ expect(1).toBe(1); }"),
+    ("{\n  expect(1).toBe(1)\n}", "{\n  expect(1).toBe(1);\n}"),
+    ("{\n  expect(1).toBe(1) // done\n}", "{\n  expect(1).toBe(1); // done\n}"),
+    ('it("x", () => { expect(1).toBe(1) })', 'it("x", () => { expect(1).toBe(1); })'),
+])
+def test_a_semicolon_before_a_closing_brace_reads_equal(a, b):
+    _assert_same(a, b)
+
+
+def test_a_semicolon_before_a_closing_brace_does_not_hide_a_changed_statement():
+    _assert_differ("{ expect(1).toBe(1) }", "{ expect(1).toBe(2); }")
+
+
+def test_a_template_title_with_a_substitution_stays_in_the_key():
+    a = "let fixture = [];\nit(`case ${fixture.push(1)}`, () => { expect(fixture).toHaveLength(1); });"
+    _assert_differ(a, a.replace("push(1)", "push(2)"))
+    plain = "it(`case one`, f)"
+    _assert_same(plain, plain.replace("one", "two"))
+
+
+def test_a_callee_name_used_as_a_parameter_is_no_framework_name():
+    a = 'it("x", () => { [expect].forEach(test => { test("bad").toBe("good"); }); });'
+    _assert_differ(a, a.replace('"bad"', '"good"'))
+    _assert_same('it("a", f)', 'it("b", f)')
+
+
+def test_a_callee_name_imported_under_a_rename_is_no_framework_name():
+    a = 'import { expect as test, it } from "vitest";\nit("x", () => { test("bad").toBe("good"); });'
+    _assert_differ(a, a.replace('"bad"', '"good"'))
+    own = 'import { test } from "vitest";\ntest("a", f)'
+    _assert_same(own, own.replace('"a"', '"b"'))
+
+
+def test_an_own_name_framework_import_still_normalizes_the_title():
+    for module in ("vitest", "@jest/globals", "node:test", "bun:test"):
+        own = 'import { it } from "%s";\nit("a", () => { expect(1).toBe(1); });' % module
+        _assert_same(own, own.replace('"a"', '"b"'))
+    default = 'import test from "vitest";\ntest("a", f)'
+    _assert_differ(default, default.replace('"a"', '"b"'))

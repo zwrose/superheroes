@@ -1394,18 +1394,20 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** F3 is substrate: doctor, readout, CLI contract, identifiers, catalog, core_md, and
   hostinfo helpers, so a proposal on it is a shrink or split, not row deletion. The identifiers.py
-  content_hash half and the cli_contract census pair are already slated to retire (K4, sitting
-  ruling).
+  content_hash half is retired (#2050: `content_hash`, `STABLE_FIELDS` and `_normalize_body`
+  removed, `work_item_slug` kept), as is `model_registry.escalate()`'s unreached cross-vendor step
+  (#2050: the top of a ladder returns None). The cli_contract census pair is still slated to retire
+  (K4, sitting ruling).
 - **Start date.** 2026-09-15.
-- **Condition.** Usage-based, 60 days: live imports of the retiring members (identifiers
-  content_hash, cli_contract census helpers) after their retirement lands. On firing, a shrink
-  proposal to chase stragglers at a gardening pass.
+- **Condition.** Usage-based, 60 days: live imports of the retiring members (cli_contract census
+  helpers) after their retirement lands. On firing, a shrink proposal to chase stragglers at a
+  gardening pass.
 - **Last demonstrated benefit.** core_md carried five real calibration hardenings with eighteen live
   consumers (the assessment record, F3 split verdict).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — core_md is structural substrate; the census-pair and content_hash vestige are
-  capability-gap machinery scheduled for deletion.
+- **Notes.** mixed — core_md is structural substrate; the census pair is capability-gap machinery
+  scheduled for deletion (the content_hash vestige was deleted in #2050).
 
 ### G. CI validators & the test estate
 

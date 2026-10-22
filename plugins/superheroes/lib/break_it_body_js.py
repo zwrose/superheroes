@@ -172,6 +172,9 @@ class _Scanner:
             self.p_ends = False
         elif typ == "punct" and txt in _CLOSE_TO_OPEN:
             self._drop_trailing_comma()
+            # a semicolon, written or automatic, directly before a closing brace ends nothing, so `{ a() }` and `{ a(); }` read equal
+            if txt == "}" and self._last_sig() == _SEMI:
+                del self.out[self._sig_at()]
             if not self.stack or self.stack[-1][0] != _CLOSE_TO_OPEN[txt]:
                 raise ValueError("unbalanced brackets")
             self.out.append(tok)
@@ -581,12 +584,19 @@ def _allowed_host(sig, frameworks):
 
 def _framework_names(stmts):
     """The title callees (it, test, describe) that name the test framework in this file."""
-    bound, imported = set(), {}
+    bound, imported, loose = set(), {}, set()
     for _toks, sig, is_import, imports, binds in stmts:
+        # a callee name that appears anywhere but as a call or member head may be a parameter, binding or value, so it is no framework name
+        if not is_import:
+            loose.update(here[1] for here, after in zip(sig, sig[1:] + [("", "")])
+                         if here[0] == "id" and here[1] in _TITLE_CALLEES and after not in (_LPAREN, _DOT))
         if is_import:
             for local, target in imports:
                 if local is not None:
                     imported.setdefault(local, set()).add(target[0])
+                    # a local name bound to a different imported name (`expect as test`) or by a default import is never a framework name
+                    if target[1] != local:
+                        bound.add(local)
         else:
             bound |= binds
         bound.update(after[1] for here, after in zip(sig, sig[1:])
@@ -594,7 +604,7 @@ def _framework_names(stmts):
     # axis: a callee the file binds or imports from a non-framework module is not a framework name — see bite-proof record wo_b_2061_break_it_body_js
     return frozenset(
         name for name in _TITLE_CALLEES
-        if name not in bound and imported.get(name, set()) <= _FRAMEWORK_MODULES)
+        if name not in bound and name not in loose and imported.get(name, set()) <= _FRAMEWORK_MODULES)
 
 
 def _keyed(toks, frameworks):
@@ -602,7 +612,7 @@ def _keyed(toks, frameworks):
     for i, tok in enumerate(toks):
         slot = toks[i + 1:i + 4]
         if not (tok[0] == "id" and tok[1] in frameworks and len(slot) == 3 and slot[0] == _LPAREN
-                and slot[1][0] in ("str", "tpl") and slot[2] in (_COMMA, _RPAREN)):
+                and (slot[1][0] == "str" or (slot[1][0] == "tpl" and "${" not in slot[1][1])) and slot[2] in (_COMMA, _RPAREN)):
             continue
         prior = [t for t in toks[:i] if t[0] != "comment"]
         # axis: a title slot is a call at statement start, not an expression that happens to be named it — see bite-proof record wo_b_2061_break_it_body_js
@@ -610,6 +620,15 @@ def _keyed(toks, frameworks):
             titles.append(slot[1][1])
             key[i + 2] = ("str", TITLE)
     return tuple(key), tuple(titles)
+
+
+def _relative(sig, imports):
+    """True when the statement imports a module by a `./` or `../` path: an import statement, or a `require(...)` or
+    `import(...)` call, whose module string is relative. Such a statement resolves against its own directory."""
+    if any(target[0].startswith(("./", "../")) for _, target in imports):
+        return True
+    return any(here in (("id", "require"), _IMPORT) and after == _LPAREN and mod[0] == "str"
+               and mod[1].startswith(("./", "../")) for here, after, mod in zip(sig, sig[1:], sig[2:]))
 
 
 def _parse(text):
@@ -625,7 +644,8 @@ def _parse(text):
         key, titles = _keyed(toks, frameworks)
         uses = frozenset(tok[1] for prev, tok in zip([None] + sig, sig) if tok[0] == "id" and prev not in _MEMBER)
         records.append({"kind": "import" if is_import else "stmt", "key": key, "titles": titles, "imports": imports,
-                        "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks)})
+                        "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks),
+                        "relative": _relative(sig, imports)})
     return records
 
 

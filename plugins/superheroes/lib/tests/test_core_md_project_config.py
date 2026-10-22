@@ -408,6 +408,17 @@ def test_write_guardian_cadence_refused_non_object_fence(tmp_path):
     assert res["reason"] == CM.GUARDIAN_CADENCE_REASON_UNPARSEABLE
 
 
+def test_write_guardian_cadence_refused_non_utf8_layer(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    layer = _write_guardian_layer(repo, store, dict(_GUARDIAN_BLOCK))
+    with open(layer, "ab") as fh:
+        fh.write(b"\xff\xfe\x80 bad bytes\n")
+    before = open(layer, "rb").read()
+    res = CM.write_guardian_cadence(repo, _CADENCE, root=store)
+    assert res == {"action": "refused", "reason": CM.GUARDIAN_CADENCE_REASON_UNDECODABLE}
+    assert open(layer, "rb").read() == before
+
+
 def test_write_guardian_cadence_refused_invalid_cadence_not_object():
     res = CM.write_guardian_cadence(".", "bad", root=None)
     assert res["action"] == "refused"
