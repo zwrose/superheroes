@@ -41,8 +41,15 @@ def _suffix(path):
     return posixpath.splitext(path.lower())[1] if isinstance(path, str) else ""
 
 
-def _result(status, reason=None, path=None, titles=None, pytest_collected=False):
-    return {"status": status, "reason": reason, "path": path, "titles": titles or [], "pytest_collected": pytest_collected}
+def pytest_collected(path):
+    """True only when the front that reads ``path`` declares ``PYTEST_COLLECTION`` (the Python front): its titles are
+    function names pytest collects by pattern, so a caller gates repository pytest configuration on it. False for a
+    path no front reads and for any front that does not declare the flag."""
+    return bool(getattr(_front_for(_suffix(path)), "PYTEST_COLLECTION", False))
+
+
+def _result(status, reason=None, path=None, titles=None):
+    return {"status": status, "reason": reason, "path": path, "titles": titles or []}
 
 
 def _unresolved(reason):
@@ -183,12 +190,10 @@ def locate(content, path, candidates):
     """Find the test ``content`` (the file at ``path``) in ``candidates``, a list of ``(path, text)`` where ``text``
     is the decoded file or ``None`` when it could not be decoded.
 
-    Returns ``{"status", "reason", "path", "titles", "pytest_collected"}``. ``status`` is ``unsupported`` (no front reads
+    Returns ``{"status", "reason", "path", "titles"}``. ``status`` is ``unsupported`` (no front reads
     ``path``), ``none`` (no candidate holds the test), ``unresolved`` (``reason`` says why the search
     cannot decide) or ``found`` (``path`` is the candidate; ``titles`` the ``(old, new)`` pairs that differ).
-    ``pytest_collected`` is True only when the front that read the test declares ``PYTEST_COLLECTION`` (the Python
-    front): its titles are function names pytest collects by pattern, so a caller gates repository pytest
-    configuration on it; it is False for every other status and every front that does not declare the flag."""
+    Whether the front is pytest-collected is a property of the front: see ``pytest_collected``."""
     front = _front_for(_suffix(path))
     if front is None:
         return _result("unsupported")
@@ -247,11 +252,9 @@ def locate(content, path, candidates):
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]
     # axis: a renamed pytest test must keep the ``test_`` prefix, because a project may collect only ``test_*`` and a rename to ``testing_x`` would leave it uncollected while the host still passes; the rule is a property of the front (``PYTEST_COLLECTION``), since a JS/TS title is an ``it``/``test``/``describe`` string — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js
-    pytest_collected = bool(getattr(front, "PYTEST_COLLECTION", False))
-    if pytest_collected and any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):
+    if getattr(front, "PYTEST_COLLECTION", False) and any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):
         return _unresolved("binding-conflict")
     # axis: a rename that makes two defs or classes of the matched window share a name inside one namespace (the module, or one class body) runs only the last, so it is refused; the same name in two different classes is fine — see bite-proof record wo_a_2053_break_it_body
     if _collides([rec for rec in original if rec["kind"] == "stmt"], [records[i] for i in window]):
         return _unresolved("binding-conflict")
-    return _result("found", None, cand_path, [(old, new) for old, new in zip(old_titles, new_titles) if old != new],
-                   pytest_collected)
+    return _result("found", None, cand_path, [(old, new) for old, new in zip(old_titles, new_titles) if old != new])

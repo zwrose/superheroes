@@ -16,6 +16,8 @@ if _LIB not in sys.path:
 
 import break_it  # noqa: E402
 import break_it_body  # noqa: E402
+import break_it_body_js  # noqa: E402
+import break_it_body_py  # noqa: E402
 
 # The fixture repo's commits pass an inline identity (a CI runner has no configured one); the throwaway fixture repo also signs nothing.
 _ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
@@ -147,6 +149,38 @@ def test_a_ts_test_folded_into_a_host_with_merged_vitest_imports_is_kept_and_run
     assert calls[0]["path"] == HOST
     assert break_it_body.locate(ORIG, OWN, [(HOST, _host())])["titles"] == [
         ("weekly eats", "weekly eats (folded)"), ("sums a week of eats", "sums a week of eats (folded)")]
+
+
+# ---- (a2) the pytest rename rules are the Python front's alone ---------------------------------------------
+
+def test_a_js_title_change_without_a_test_prefix_reads_found_and_is_not_pytest_collected():
+    found = break_it_body.locate(ORIG, OWN, [(HOST, _host())])
+    assert found["status"] == "found" and found["reason"] is None and found["path"] == HOST
+    assert found["titles"] and all(not new.startswith("test_") for _, new in found["titles"])
+    assert break_it_body.pytest_collected(OWN) is False and break_it_body.pytest_collected(HOST) is False
+
+
+def test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept(repo):
+    base, head = _stage(repo, {"pytest.ini": "[pytest]\naddopts = -k test_x\n", HOST: _host()})
+    calls = []
+    result = _check(repo, base, head, _record(), _stub(calls))
+    assert _got(result) == ("kept", "body-match")
+    assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]
+
+
+def test_the_python_front_declares_pytest_collection_and_the_js_front_does_not():
+    assert break_it_body_py.PYTEST_COLLECTION is True
+    assert getattr(break_it_body_js, "PYTEST_COLLECTION", False) is False
+    assert break_it_body.pytest_collected("tests/test_a.py") is True
+    assert break_it_body.pytest_collected("README.md") is False
+
+
+def test_a_python_rename_keeps_the_pytest_rules():
+    old = "def test_x():\n    assert 1 == 1\n"
+    kept = break_it_body.locate(old, "tests/test_a.py", [("tests/test_b.py", old.replace("test_x", "test_y"))])
+    assert kept["status"] == "found" and kept["titles"] == [("test_x", "test_y")]
+    refused = break_it_body.locate(old, "tests/test_a.py", [("tests/test_b.py", old.replace("test_x", "testing_x"))])
+    assert (refused["status"], refused["reason"]) == ("unresolved", "binding-conflict")
 
 
 # ---- (b) a prettier-style reformat at the test's own path -----------------------------------------------

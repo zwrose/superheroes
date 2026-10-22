@@ -1058,7 +1058,7 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
     # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
-    from break_it_body import locate, supported_suffixes
+    from break_it_body import locate, pytest_collected, supported_suffixes
     suffixes = supported_suffixes()
     if posixpath.splitext(record["path"].lower())[1] not in suffixes:
         return today
@@ -1093,7 +1093,7 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
         return res(KEPT_UNRESOLVED, found["reason"])
     # axis: a renamed pytest test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes; pytest configuration says nothing about a vitest or jest run, so only a test read by a pytest-collected front is gated — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js
     try:
-        if found["titles"] and found["pytest_collected"] and _collection_overrides(repo_root, head):
+        if found["titles"] and pytest_collected(record["path"]) and _collection_overrides(repo_root, head):
             return res(KEPT_UNRESOLVED, "binding-conflict")
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")
