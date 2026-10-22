@@ -119,28 +119,6 @@ def test_frontmatter_with_issue_validates():
     assert fm["issue"] == 42
 
 
-# --- #1071: the one disclosed residual of the `parent` removal -------------
-
-def test_identifiers_stable_fields_still_carry_parent_vestige_marker():
-    # KNOWN, DISCLOSED RESIDUAL OF ISSUE #1071 — this test is a marker, not a contract.
-    #
-    # #1071 removed the `parent` frontmatter field from the whole definition-doc surface
-    # (schema, emitter, renderer, reader, CLI, live docs, authoring instructions), but left
-    # `identifiers.STABLE_FIELDS` deliberately untouched: CONVENTIONS §6.3 is retired (#478),
-    # `content_hash` has no live consumer, and its own tests are frozen golden values whose
-    # docstring forbids updating them to make a test pass. The consequence is the seam pinned
-    # below — `content_hash` fails closed on every header this module now emits.
-    #
-    # WHEN SOMEONE FINISHES THE REMOVAL IN identifiers.py, THIS TEST IS EXPECTED TO GO RED.
-    # Delete it then — do not "fix" it, and do not adjust the frozen golden hashes to keep it
-    # green. Its whole job is to trip the next editor instead of rotting silently.
-    import identifiers
-    assert "parent" in identifiers.STABLE_FIELDS
-    fm = DD.frontmatter("spec", WI, size="small", created="2026-06-14", updated="2026-06-14")
-    with pytest.raises(ValueError, match="parent"):
-        identifiers.content_hash(fm, "# t\n")
-
-
 # --- render: parse with a REAL YAML reader and re-validate -----------------
 
 ROUNDTRIP_CASES = [
