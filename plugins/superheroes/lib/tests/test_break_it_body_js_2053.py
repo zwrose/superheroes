@@ -701,3 +701,10 @@ def test_a_callee_name_used_as_a_parameter_is_no_framework_name():
     a = 'it("x", () => { [expect].forEach(test => { test("bad").toBe("good"); }); });'
     _assert_differ(a, a.replace('"bad"', '"good"'))
     _assert_same('it("a", f)', 'it("b", f)')
+
+
+def test_a_callee_name_imported_under_a_rename_is_no_framework_name():
+    a = 'import { expect as test, it } from "vitest";\nit("x", () => { test("bad").toBe("good"); });'
+    _assert_differ(a, a.replace('"bad"', '"good"'))
+    own = 'import { test } from "vitest";\ntest("a", f)'
+    _assert_same(own, own.replace('"a"', '"b"'))
