@@ -584,6 +584,7 @@ def test_crlf_marker_line_losing_its_carriage_return_refuses(tmp_path, monkeypat
 
 @pytest.mark.parametrize("attribute", [
     "text", "-text", "eol=crlf", "ident", "filter=lfs", "working-tree-encoding=UTF-16",
+    "crlf", "-crlf", "crlf=input",
 ])
 @pytest.mark.parametrize("target", ["a.txt", "f.txt"])
 def test_target_with_a_transforming_attribute_is_indeterminate(
@@ -595,14 +596,24 @@ def test_target_with_a_transforming_attribute_is_indeterminate(
     assert wg.classify(f"git checkout --theirs {target}", work) == _indeterminate("checkout-path")
 
 
-@pytest.mark.parametrize("value,decision", [("true", "deny"), ("input", "deny"), ("false", "allow")])
-def test_autocrlf_true_or_input_is_indeterminate(tmp_path, monkeypatch, value, decision):
+@pytest.mark.parametrize("value,decision", [
+    ("true", "deny"), ("input", "deny"), ("yes", "deny"), ("on", "deny"), ("1", "deny"),
+    ("false", "allow"), ("no", "allow"), ("off", "allow"), ("0", "allow"),
+])
+def test_autocrlf_not_parsed_as_false_is_indeterminate(tmp_path, monkeypatch, value, decision):
     work = _merge_repo(tmp_path, monkeypatch)
     _git(work, "config", "core.autocrlf", value)
     got = wg.classify("git checkout --theirs a.txt", work)
     assert got[0] == decision
     if decision == "deny":
         assert got == _indeterminate("checkout-path")
+
+
+@pytest.mark.parametrize("value", ["crlf", "lf", "native"])
+def test_any_core_eol_is_indeterminate(tmp_path, monkeypatch, value):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _git(work, "config", "core.eol", value)
+    assert wg.classify("git checkout --theirs a.txt", work) == _indeterminate("checkout-path")
 
 
 def test_unreadable_attribute_check_is_indeterminate(tmp_path, monkeypatch):

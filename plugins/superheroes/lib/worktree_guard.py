@@ -1193,16 +1193,20 @@ def _merge_label_resolver(cwd):
 def _merge_checkout_transforms(cwd, paths):
     """True when git may rewrite a path's bytes between index and worktree, or that cannot be read.
 
-    ``text``, ``eol``, ``ident``, ``filter`` and ``working-tree-encoding`` attributes, and
-    ``core.autocrlf`` of ``true`` or ``input``, can make a clean ``git diff`` hide an edit.
+    ``text``, ``eol``, ``ident``, ``filter``, ``working-tree-encoding`` and the legacy ``crlf``
+    attributes, any ``core.eol``, and any ``core.autocrlf`` git does not parse as false (``true``,
+    ``yes``, ``1``, ``input``, ...), can make a clean ``git diff`` hide an edit.
     """
-    autocrlf = _run_git(cwd, "config", "--get", "core.autocrlf")
-    if autocrlf.returncode not in (0, 1):
+    autocrlf = _run_git(cwd, "config", "--type=bool", "--get", "core.autocrlf")
+    if autocrlf.returncode != 1 and (
+        autocrlf.returncode != 0 or autocrlf.stdout.strip() != "false"
+    ):
         return True
-    if autocrlf.stdout.strip().lower() in ("true", "input"):
+    eol = _run_git(cwd, "config", "--get", "core.eol")
+    if eol.returncode != 1:
         return True
     attrs = _run_git(
-        cwd, "check-attr", "-z", "text", "eol", "ident", "filter", "working-tree-encoding",
+        cwd, "check-attr", "-z", "text", "eol", "ident", "filter", "working-tree-encoding", "crlf",
         "--", *paths,
     )
     if attrs.returncode != 0:
@@ -1210,7 +1214,7 @@ def _merge_checkout_transforms(cwd, paths):
     fields = attrs.stdout.split("\0")
     if fields and fields[-1] == "":
         fields.pop()
-    if len(fields) != len(paths) * 15:
+    if len(fields) != len(paths) * 18:
         return True
     return any(value != "unspecified" for value in fields[2::3])
 
