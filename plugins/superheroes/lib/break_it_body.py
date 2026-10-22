@@ -65,6 +65,21 @@ def _source_names(content):
     return {tok.string for tok in tokenize.generate_tokens(io.StringIO(content).readline) if tok.type == tokenize.NAME}
 
 
+def _futures(records):
+    """The ``__future__`` features the module's records import."""
+    return {pair[1][3] for rec in records for pair in rec["imports"]
+            if pair[1][0] == "from" and pair[1][1] == 0 and pair[1][2] == "__future__"}
+
+
+def _may_import_fixture(pair):
+    """True when ``pair`` (a bound name and its import target) can bring in a fixture: a ``from`` import that is
+    relative or reads a module outside the standard library and pytest."""
+    target = pair[1]
+    if target[0] != "from" or target[2] == "__future__":
+        return False
+    return target[1] > 0 or target[2].split(".")[0] not in (set(sys.stdlib_module_names) | {"pytest"})
+
+
 def _outside(records, window, original, moved=False):
     """The refusal reason for the first candidate record outside the matched window that changes what the test
     means, else ``None``. ``moved`` is true when the candidate sits in a different directory than the original."""
@@ -81,6 +96,9 @@ def _outside(records, window, original, moved=False):
     # axis: a relative import resolves against its file's package, so a test moved to another directory cannot keep one — see bite-proof record wo_a_2053_break_it_body
     if moved and any(_relative(rec) for rec in original):
         return "binding-conflict"
+    # axis: the future compiler features (annotations semantics) of the original and the host must match — see bite-proof record wo_a_2053_break_it_body
+    if _futures(original) != _futures(records):
+        return "binding-conflict"
     # axis: every import the original bound is bound the same way in the file that holds the test — see bite-proof record wo_a_2053_break_it_body
     if not orig_pairs <= {pair for rec in records for pair in rec["imports"]}:
         return "binding-conflict"
@@ -93,6 +111,9 @@ def _outside(records, window, original, moved=False):
         for pair in rec["imports"]:
             if pair in orig_pairs:
                 continue
+            # axis: a name the host imports from a module outside the standard library (or a relative one) may be a fixture, and pytest registers an imported autouse fixture as module setup, so it is refused — see bite-proof record wo_a_2053_break_it_body
+            if _may_import_fixture(pair):
+                return "host-setup"
             # axis: an import outside the window that rebinds a name the test uses, or star-imports over it, is refused — see bite-proof record wo_a_2053_break_it_body
             if pair[0] == "*" or pair[0] in names:
                 return "binding-conflict"
@@ -197,6 +218,9 @@ def locate(content, path, candidates):
     if reason:
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]
+    # axis: a renamed test must keep the ``test_`` prefix, because a project may collect only ``test_*`` and a rename to ``testing_x`` would leave it uncollected while the host still passes — see bite-proof record wo_a_2053_break_it_body
+    if any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):
+        return _unresolved("binding-conflict")
     # axis: a rename that makes two defs or classes of the matched window share a name inside one namespace (the module, or one class body) runs only the last, so it is refused; the same name in two different classes is fine — see bite-proof record wo_a_2053_break_it_body
     if _collides([rec for rec in original if rec["kind"] == "stmt"], [records[i] for i in window]):
         return _unresolved("binding-conflict")

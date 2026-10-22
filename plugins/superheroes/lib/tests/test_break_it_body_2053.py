@@ -339,8 +339,26 @@ def test_an_imported_runner_hook_binding_is_host_setup(imports):
 
 def test_an_import_of_a_plain_name_is_still_allowed_host_code():
     original = "def test_a():\n    assert 1 == 1\n"
-    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from helpers import util\n" + original)])
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from os import path\n" + original)])
     assert got["status"] == "found"
+
+
+def test_a_name_imported_from_a_project_module_may_be_an_autouse_fixture_and_is_refused():
+    original = "def test_a():\n    assert False\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from shared_fixtures import shared_environment\n" + original)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_a_host_that_adds_future_annotations_is_refused():
+    original = "def helper(value: int):\n    return value\n\n\ndef test_a():\n    assert helper.__annotations__['value'] == 'int'\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from __future__ import annotations\n" + original)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_a_rename_that_loses_the_test_underscore_prefix_is_refused():
+    original = "def test_regression():\n    assert False\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", original.replace("test_regression", "testing_regression"))])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
 
 
 def test_an_ordinary_helper_parameter_is_no_fixture_dependency():
