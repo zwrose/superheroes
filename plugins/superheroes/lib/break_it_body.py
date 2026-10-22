@@ -65,6 +65,40 @@ def _source_names(content):
     return {tok.string for tok in tokenize.generate_tokens(io.StringIO(content).readline) if tok.type == tokenize.NAME}
 
 
+def _futures(records):
+    """The ``__future__`` features the module's records import."""
+    return {pair[1][3] for rec in records for pair in rec["imports"]
+            if pair[1][0] == "from" and pair[1][1] == 0 and pair[1][2] == "__future__"}
+
+
+def _may_import_fixture(pair):
+    """True when ``pair`` (a bound name and its import target) is a ``from`` import, which can bring in a fixture.
+    A module name proves nothing (a project-local file can shadow a standard-library name), so every ``from``
+    import is suspect, relative or absolute, except the compiler's own absolute ``from __future__``; a relative
+    ``from .__future__`` reads a project file like any other. The caller allows one only when the original
+    carries the identical binding. A plain ``import x`` binds a module object, which pytest never registers."""
+    target = pair[1]
+    # axis: only an absolute (level 0) from-import of exactly __future__ is exempt; a relative one (from .__future__ import x) loads a project-local module that can define an autouse fixture — see bite-proof record wo_a_2053_break_it_body
+    return target[0] == "from" and not (target[1] == 0 and target[2] == "__future__")
+
+
+def _rebinds(records):
+    """True when a module binds one local name by more than one import, or by an import and any other module-level
+    binding: which binding wins then depends on statement order, which the comparison does not model."""
+    seen = {}
+    for index, rec in enumerate(records):
+        for local, _ in rec["imports"]:
+            if local == "*":
+                continue
+            if local in seen:
+                return True
+            seen[local] = index
+    for index, rec in enumerate(records):
+        if any(seen.get(name, index) != index for name in rec["binds"]):
+            return True
+    return False
+
+
 def _outside(records, window, original, moved=False):
     """The refusal reason for the first candidate record outside the matched window that changes what the test
     means, else ``None``. ``moved`` is true when the candidate sits in a different directory than the original."""
@@ -81,6 +115,12 @@ def _outside(records, window, original, moved=False):
     # axis: a relative import resolves against its file's package, so a test moved to another directory cannot keep one — see bite-proof record wo_a_2053_break_it_body
     if moved and any(_relative(rec) for rec in original):
         return "binding-conflict"
+    # axis: the future compiler features (annotations semantics) of the original and the host must match — see bite-proof record wo_a_2053_break_it_body
+    if _futures(original) != _futures(records):
+        return "binding-conflict"
+    # axis: a name the original or the host binds by two imports (or an import and another module-level binding) is refused, because import order then decides the binding — see bite-proof record wo_a_2053_break_it_body
+    if _rebinds(original):
+        return "binding-conflict"
     # axis: every import the original bound is bound the same way in the file that holds the test — see bite-proof record wo_a_2053_break_it_body
     if not orig_pairs <= {pair for rec in records for pair in rec["imports"]}:
         return "binding-conflict"
@@ -93,6 +133,9 @@ def _outside(records, window, original, moved=False):
         for pair in rec["imports"]:
             if pair in orig_pairs:
                 continue
+            # axis: a name the host imports with a from-import (any module, relative or not: a project file can shadow a standard-library name) may be a fixture, and pytest registers an imported autouse fixture as module setup, so it is refused — see bite-proof record wo_a_2053_break_it_body
+            if _may_import_fixture(pair):
+                return "host-setup"
             # axis: an import outside the window that rebinds a name the test uses, or star-imports over it, is refused — see bite-proof record wo_a_2053_break_it_body
             if pair[0] == "*" or pair[0] in names:
                 return "binding-conflict"
@@ -105,6 +148,9 @@ def _outside(records, window, original, moved=False):
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
         if rec["uses"] & window_binds:
             return "binding-conflict"
+    # the host's own rebinding is checked last, so a more specific refusal above (host-setup) keeps its reason
+    if _rebinds(records):
+        return "binding-conflict"
     return None
 
 
@@ -197,6 +243,9 @@ def locate(content, path, candidates):
     if reason:
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]
+    # axis: a renamed test must keep the ``test_`` prefix, because a project may collect only ``test_*`` and a rename to ``testing_x`` would leave it uncollected while the host still passes — see bite-proof record wo_a_2053_break_it_body
+    if any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):
+        return _unresolved("binding-conflict")
     # axis: a rename that makes two defs or classes of the matched window share a name inside one namespace (the module, or one class body) runs only the last, so it is refused; the same name in two different classes is fine — see bite-proof record wo_a_2053_break_it_body
     if _collides([rec for rec in original if rec["kind"] == "stmt"], [records[i] for i in window]):
         return _unresolved("binding-conflict")
