@@ -149,6 +149,8 @@ def _outside(records, window, original, moved=False, python=True):
     for index, rec in enumerate(records):
         if index in window:
             continue
+        # axis: a type-only import (every target ends in "type") binds no runtime value, so the two window-name checks below skip it — see bite-proof record wo_b_2061_break_it_body_js
+        type_only = bool(rec["imports"]) and all(len(pair[1]) == 3 and pair[1][2] == "type" for pair in rec["imports"])
         # axis: module-level test setup the host adds is refused, because it would change the test's run — see bite-proof record wo_a_2053_break_it_body
         # axis: an effect-only import (no bound name) is judged by the in-order comparison after this loop, so a retained one is not host setup — see bite-proof record wo_b_2061_break_it_body_js
         if rec["hook"] and not (rec["kind"] == "import" and rec["imports"] and all(pair[0] is None for pair in rec["imports"])):
@@ -166,15 +168,21 @@ def _outside(records, window, original, moved=False, python=True):
         if rec["kind"] == "stmt" and rec["binds"] & names:
             return "binding-conflict"
         # axis: any record outside the window that binds a name the matched window binds (a renamed test's new name) overwrites or is overwritten by a retained test, so it is refused — see bite-proof record wo_a_2053_break_it_body
-        if rec["kind"] != "import" and rec["binds"] & window_binds:
+        if not type_only and rec["binds"] & window_binds:
             return "binding-conflict"
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
-        if rec["kind"] != "import" and rec["uses"] & window_binds:
+        if not type_only and rec["uses"] & window_binds:
             return "binding-conflict"
-    # axis: the effect-only imports of the host are exactly the original's, in the original's order; an added, repeated or reordered one is host setup — see bite-proof record wo_b_2061_break_it_body_js
-    if [pair for rec in records for pair in rec["imports"] if pair[0] is None] != [
-            pair for rec in original for pair in rec["imports"] if pair[0] is None]:
-        return "host-setup"
+    # axis: when either file holds an effect-only import, every import of the original appears in the host in the original's order (an effect-only import runs its module's code, so moving one across a named import changes the fixture the test sees), and the host holds no effect-only import the original lacks; an added, repeated or reordered one is host setup — see bite-proof record wo_b_2061_break_it_body_js
+    old_all = [pair for rec in original for pair in rec["imports"]]
+    new_all = [pair for rec in records for pair in rec["imports"]]
+    if any(pair[0] is None for pair in old_all + new_all):
+        # a module runs once, where it is first imported, so the order is that of each module's first import
+        old_mods, new_mods = (list(dict.fromkeys(pair[1][0] for pair in pairs)) for pairs in (old_all, new_all))
+        remaining = iter(new_mods)
+        if ([pair for pair in new_all if pair[0] is None] != [pair for pair in old_all if pair[0] is None]
+                or not all(mod in remaining for mod in old_mods)):
+            return "host-setup"
     # the host's own rebinding is checked last, so a more specific refusal above (host-setup) keeps its reason
     if _rebinds(records):
         return "binding-conflict"

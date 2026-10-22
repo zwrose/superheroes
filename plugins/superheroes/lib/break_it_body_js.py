@@ -51,8 +51,10 @@ _MEMBER_START = frozenset(("punct", c) for c in (";", "}", "*"))
 _MEMBER_MODIFIERS = frozenset(("get set async readonly public private protected override declare abstract accessor").split())
 _TITLE_CALLEES = ("it", "test", "describe")
 _FRAMEWORK_MODULES = frozenset(("vitest", "@jest/globals", "node:test", "bun:test"))
-_TYPE_END = frozenset(("punct", c) for c in (")", "]", ">", ">>", ">>>", "}"))
 _TYPE_OPERATORS = frozenset(("keyof readonly infer new unique extends is asserts typeof abstract in").split())
+_TYPE_ENDING = frozenset((") ] } > >> >>> ++ -- ! ; ?.").split())
+_TYPE_CONTINUERS = frozenset(("| & ? : => . , = ) ] } >").split())
+_NEVER_START = frozenset(("extends", "in", "instanceof", "else", "catch", "finally"))
 _STATEMENT_START = frozenset((_SEMI, _LBRACE, _RBRACE))
 
 _LINE_END = re.compile("[%s]" % _BREAKS)
@@ -127,6 +129,11 @@ def _skip_template(text, j, sub=False):
                 return j
 
 
+class _Tok(tuple):
+    """A token (type, text) that remembers whether a line break came before it; equality and hashing are the tuple's."""
+    bol = False
+
+
 class _Scanner:
     """Tokenise one text, applying the emit-time normalisation (statement ends, commas, arrow parens)."""
 
@@ -153,7 +160,8 @@ class _Scanner:
             del self.out[k]
 
     def _emit(self, typ, txt):
-        tok, prev = (typ, txt), self._last_sig()
+        tok, prev = _Tok((typ, txt)), self._last_sig()
+        tok.bol = self.nl
         starts = ((typ == "id" and txt not in _NOT_START_IDS) or typ in ("num", "str")
                   or (typ == "punct" and txt in _START_PUNCT))
         if self.nl and prev is not None and prev != _SEMI:
@@ -517,14 +525,32 @@ def _class_decl(rest):
     return _LPAREN not in heritage and all(tok[0] != "tpl" for tok in heritage) and _load_free(rest[brace + 1:-1])
 
 
+def _continues(prev):
+    """True when the token `prev` cannot end a type, so the next line still belongs to the same type."""
+    return (prev[0] == "punct" and prev[1] not in _TYPE_ENDING) or (prev[0] == "id" and prev[1] in _TYPE_OPERATORS)
+
+
+def _alias_contained(rest):
+    """True when the tokens of a `type` alias hold no template literal and no top-level line after the first begins
+    with anything but a continuation of the type (an operator after an operator, or `extends`, `in` and the like)."""
+    depth = 0
+    for k, tok in enumerate(rest):
+        if tok[0] == "tpl":
+            return False
+        if k > 1 and depth == 0 and getattr(tok, "bol", False) and not _continues(rest[k - 1]):
+            if not (tok[0] == "punct" and tok[1] in _TYPE_CONTINUERS) and not (tok[0] == "id" and tok[1] in _NEVER_START):
+                return False
+        if tok[0] == "punct":
+            depth += (tok[1] in _OPEN) - (tok[1] in _CLOSE_TO_OPEN)
+    return True
+
+
 def _type_decl(rest):
     if rest[:1] not in ([_TYPE], [_INTERFACE]) or not rest[1:2] or rest[1][0] != "id":
         return False
     if rest[0] == _TYPE:
-        # axis: a `(` or `{` that follows a type's last token with no operator between is a separate statement ASI would have split, not part of the alias, so the record is refused — see bite-proof record wo_b_2061_break_it_body_js
-        return rest[2:3] in ([_EQUALS], [("punct", "<")]) and not any(
-            tok in (_LPAREN, _LBRACE) and (prev[0] in ("num", "str", "tpl") or prev in _TYPE_END or (prev[0] == "id" and prev[1] not in _TYPE_OPERATORS))
-            for prev, tok in zip(rest[2:], rest[3:]))
+        # axis: a type alias holds no template literal, and no top-level line after its first starts something that is not a continuation of the type, because ASI inserts no separator before `(`, `[`, `{` or a template and such a line is a separate executable statement; over-refusing an exotic multi-line alias is accepted — see bite-proof record wo_b_2061_break_it_body_js
+        return rest[2:3] in ([_EQUALS], [("punct", "<")]) and _alias_contained(rest)
     brace = next((k for k in range(2, len(rest)) if rest[k] == _LBRACE), -1)
     return brace >= 0 and _match(rest, brace) == len(rest) - 1
 

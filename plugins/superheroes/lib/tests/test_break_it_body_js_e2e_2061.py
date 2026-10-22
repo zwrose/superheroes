@@ -300,3 +300,69 @@ def test_a_moved_ts_test_whose_runner_fails_reads_failing(repo):
     assert result["outcome"] == "failing"
     assert result["run"]["outcome"] == "failed"
     assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]
+
+
+# ---- round 2: import order, runtime imports, type aliases -------------------------------------------------
+
+SETUP_ORIG = 'import "./setup";\n' + ORIG
+
+
+def _located(host, content=SETUP_ORIG):
+    found = break_it_body.locate(content, OWN, [(HOST, host)])
+    return found["status"], found["reason"]
+
+
+def test_a_setup_import_kept_before_the_named_imports_in_order_reads_found():
+    host = 'import "./setup";\n' + _host()
+    assert _located(host) == ("found", None)
+
+
+def test_a_setup_import_moved_after_a_named_import_reads_host_setup():
+    host = 'import { describe, expect, it } from "vitest";\nimport { weeklyTotal } from "./weekly";\nimport "./setup";\n' \
+        + HOST_OWN + HOST_BODY
+    assert _located(host) == ("unresolved", "host-setup")
+
+
+def test_a_setup_import_added_to_a_host_whose_original_had_none_reads_host_setup():
+    assert _located('import "./setup";\n' + _host(), ORIG) == ("unresolved", "host-setup")
+
+
+def test_a_runtime_host_import_that_rebinds_a_name_the_test_uses_reads_binding_conflict():
+    host = _host(imports=HOST_IMPORTS + 'import { eats } from "./fixtures";\n')
+    assert _located(host, ORIG) == ("unresolved", "binding-conflict")
+
+
+def test_a_runtime_host_import_that_rebinds_a_name_the_test_uses_reads_binding_conflict_beside_a_setup_import():
+    host = 'import "./setup";\n' + _host(imports=HOST_IMPORTS + 'import { eats } from "./fixtures";\n')
+    assert _located(host) == ("unresolved", "binding-conflict")
+
+
+def test_a_type_only_import_does_not_make_a_same_named_value_declaration_a_rebinding():
+    content = ORIG.replace("const eats", 'const Model = { id: 1 };\nconst eats', 1)
+    content = 'import type { Model } from "./types";\n' + content
+    host = HOST_IMPORTS + 'import type { Model } from "./types";\n' + HOST_OWN + "const Model = { id: 1 };\n" + HOST_BODY
+    assert _located(host, content) == ("found", None)
+
+
+def test_a_runtime_import_and_a_value_declaration_of_one_name_reads_binding_conflict():
+    content = ORIG.replace("const eats", 'const Model = { id: 1 };\nconst eats', 1)
+    content = 'import { Model } from "./types";\n' + content
+    host = HOST_IMPORTS + 'import { Model } from "./types";\n' + HOST_OWN + "const Model = { id: 1 };\n" + HOST_BODY
+    assert _located(host, content) == ("unresolved", "binding-conflict")
+
+
+@pytest.mark.parametrize("alias, hook", [
+    ("type T = { m(): void }", False),
+    ("type T = { m(): void; n(x: number): string }", False),
+    ("type T = number\n(test.only)('focused', () => {})", True),
+    ("type T = number\n[test.only]", True),
+    ("type T = Array<number>\nfoo()", True),
+    ("type T = number\n`x${test.only('f', () => {})}`", True),
+    ("type T = `focused${test.only('f', () => {})}`", True),
+    ("type T = { a: number\n b: string }", False),
+    ("type T =\n  | { a: 1 }\n  | { b: 2 }", False),
+    ("type T = A\n  extends B ? 1 : 2", False),
+])
+def test_a_type_alias_is_harmless_only_when_nothing_executable_can_follow_it(alias, hook):
+    records = break_it_body_js.parse(alias)
+    assert [rec["hook"] for rec in records].count(True) == (1 if hook else 0), records
