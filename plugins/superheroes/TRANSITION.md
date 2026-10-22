@@ -20,8 +20,6 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed, except that a consumer that reads refusals entries with a closed key set must accept `route`.** An implementer may take the one route a hook's own refusal message names, and the entry then carries it. See [Refusals: a hook-named route](#refusals-a-hook-named-route).
 - **After switching.** **Nothing is owed.** The worktree guard no longer refuses a `git checkout --ours|--theirs` or `git restore` of paths the merge left unedited because of the merge's staged changes elsewhere. See [Worktree guard: a merge in progress](#worktree-guard-a-merge-in-progress).
-- **After switching.** **Nothing is owed.** A heredoc body fed to `cat`, `tee`, `gh` or `git commit` is no longer scanned for commands. See [Worktree guard: text that only names a command](#worktree-guard-text-that-only-names-a-command).
-- **After switching.** **Nothing is owed.** Every worktree guard refusal text now ends with the exact command or tool to use next. See [Worktree guard: every refusal names its next step](#worktree-guard-every-refusal-names-its-next-step).
 
 ### Refusals: a hook-named route
 
@@ -32,14 +30,6 @@ Check these in a consuming project when it adopts this release. Each step names 
 ### Worktree guard: a merge in progress
 
 - During a merge (`MERGE_HEAD` present), `git checkout --ours|--theirs <paths>` and `git restore --ours|--theirs <paths>`, and `git restore --source=<x> <file>` for exact indexed files, are judged only on the paths they name. Each is allowed when every named path is unedited since the merge, meaning its content equals what the merge itself wrote or it matches the index; the merge's staged changes elsewhere no longer count against it. A merge state the guard cannot read still refuses.
-
-### Worktree guard: text that only names a command
-
-- A heredoc body fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` is read as text, not as commands, and the guard reads backslash-escaped quotes as bash does. A heredoc fed to a shell or any other program is still scanned.
-
-### Worktree guard: every refusal names its next step
-
-- Each worktree guard refusal text ends with the exact command or tool to use next, which is the route the stop rule's exception lets an agent take.
 
 ## 0.46.0
 
