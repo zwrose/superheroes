@@ -20,7 +20,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Guardian: an unreadable or non-UTF-8 config is degraded
 
-- `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
+- `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory or a dangling symlink at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
 - The guardian cadence write in `core_md` returns `{"action": "refused", "reason": "guardian-layer-not-utf8"}` (`GUARDIAN_CADENCE_REASON_UNDECODABLE`) on a non-UTF-8 layer instead of raising.
 
 ## 0.46.0

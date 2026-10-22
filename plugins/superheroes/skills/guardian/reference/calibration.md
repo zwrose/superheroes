@@ -18,7 +18,7 @@ In `guardian.md`, embed one fenced block tagged `guardian-config`:
 
 An **absent** layer, an **empty** layer, or a layer with **no** `guardian-config` fence is
 **healthy** — plugin defaults are authoritative and benching authority is retained. An
-**unreadable** or **non-UTF-8** layer is `degraded` and revokes benching authority for that sweep,
+**unreadable** (a dangling symlink included) or **non-UTF-8** layer is `degraded` and revokes benching authority for that sweep,
 like malformed JSON. **Malformed JSON** or a fence whose parsed value is **not an object** sets
 `configStatus: "degraded"`, which **revokes benching authority for that sweep** (plugin defaults
 still govern thresholds and cadence on those paths). A **`reportCard` value that is present but not

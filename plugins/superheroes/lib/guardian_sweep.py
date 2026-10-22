@@ -80,9 +80,11 @@ def read_config(cwd, root=None, *, persist_backfill=True):
 
     Absent / empty (provenance-only) / no guardian-config fence → defaults with
     `configStatus` healthy (defaults are authoritative).
-    Unreadable (any other OSError) / not UTF-8 / malformed JSON / non-object block /
-    non-object `reportCard` → defaults with `configStatus` degraded and a `configNotes`
+    Unreadable (any other OSError, a dangling symlink included) / not UTF-8 / malformed
+    JSON / non-object block → defaults with `configStatus` degraded and a `configNotes`
     entry (benching authority revoked; the degradation is visible to report_card).
+    A non-object `reportCard` is degraded too, but the overrides parsed before it
+    (thresholds, coverage, vitals, budgets) stay in effect; cadence stays default.
     Vitals collection is on by default; a guardian-config `vitals: false` (or
     `collectVitals: false`) disables it. `verifyBudgetSeconds` (alias
     `vitalsBudgetSeconds`) tunes the shared verify/vitals time budget."""
@@ -113,8 +115,13 @@ def read_config(cwd, root=None, *, persist_backfill=True):
     try:
         with open(layer_p, encoding="utf-8") as fh:
             text = fh.read()
-    except FileNotFoundError:
-        return _result("healthy")
+    except FileNotFoundError as exc:
+        if not os.path.lexists(layer_p):
+            return _result("healthy")
+        # A dangling symlink at the layer path is present but unreadable.
+        return _result(
+            "degraded",
+            notes=["guardian-config unreadable (%s)" % type(exc).__name__])
     except (OSError, UnicodeDecodeError) as exc:
         return _result(
             "degraded",

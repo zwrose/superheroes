@@ -1748,6 +1748,15 @@ def test_read_config_unreadable_layer_directory_is_degraded(tmp_path):
     assert any("unreadable" in n for n in cfg["configNotes"])
 
 
+def test_read_config_dangling_symlink_layer_is_degraded(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    layer = _guardian_layer(tmp_path)
+    os.symlink(str(tmp_path / "missing-target.md"), str(layer))
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    _assert_degraded_with_defaults(cfg)
+    assert any("FileNotFoundError" in n for n in cfg["configNotes"])
+
+
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
                     reason="chmod 000 does not block reads for root")
 def test_read_config_unreadable_layer_permission_denied_is_degraded(tmp_path):
