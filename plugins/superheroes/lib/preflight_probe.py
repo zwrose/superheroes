@@ -35,6 +35,7 @@ import engine_pref            # noqa: E402
 import liveness_cache          # noqa: E402
 import model_registry          # noqa: E402
 import model_tier_overrides    # noqa: E402
+import seat_allowance          # noqa: E402
 import seat_bundle             # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
@@ -71,7 +72,8 @@ def cross_vendor_no_op_argv(engine):
     """The harmless authenticated no-op argv for `engine` (a DEFAULT — the caller may override
     it with an explicit `argv`)."""
     if engine == "codex":
-        return ("codex", "exec", "--sandbox", "read-only", "-")
+        return ("codex", "exec", "--sandbox", "read-only",
+                *seat_allowance.codex_review_args(None), "-")
     if engine == "cursor":
         # The cursor probe must dispatch the project's configured cursor model (the SSOT default
         # in engine_adapter), not a hard-coded id — `cursor-small` was observed unavailable in a

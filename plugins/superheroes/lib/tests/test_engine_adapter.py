@@ -20,6 +20,8 @@ def _load():
 
 EA = _load()
 
+import seat_allowance as SA  # noqa: E402  (lib dir is on sys.path via conftest)
+
 def _seat(vendor, model, effort):
     return {"vendor": vendor, "model": model, "effort": effort}
 
@@ -178,7 +180,7 @@ def test_codex_argv_unchanged_by_delivery_table():
     review_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "review", {"cwd": "/wt"})
     assert review_argv == [
         "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
-        "-c", "model_reasoning_effort=high", "-C", "/wt", "-",
+        "-c", "model_reasoning_effort=high", *SA.codex_review_args("/wt"), "-C", "/wt", "-",
     ]
     build_argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "high"), "build", {"cwd": "/wt"})
     assert build_argv == [
@@ -638,7 +640,7 @@ def test_build_argv_claude_review_exact_shape():
     argv = EA.build_argv(_seat("claude", "sonnet-5.5", "high"), "review", {})
     assert argv == [
         "claude", "-p", "--model", "sonnet", "--effort", "high",
-        "--output-format", "stream-json", "--verbose", "--restricted",
+        "--output-format", "stream-json", "--verbose", "--restricted", "--strict-mcp-config",
     ]
 
 
@@ -680,7 +682,7 @@ def test_build_argv_claude_print_mode_explicit_unchanged():
         argv = EA.build_argv(_seat("claude", "sonnet-5.5", "high"), "review", opts)
         assert argv == [
             "claude", "-p", "--model", "sonnet", "--effort", "high",
-            "--output-format", "stream-json", "--verbose", "--restricted",
+            "--output-format", "stream-json", "--verbose", "--restricted", "--strict-mcp-config",
         ]
 
 
@@ -699,7 +701,7 @@ def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
     assert cursor["reason"] is None
     assert codex["argv"] == [
         "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
-        "-c", "model_reasoning_effort=high", "-",
+        "-c", "model_reasoning_effort=high", *SA.codex_review_args(None), "-",
     ]
     assert cursor["argv"] == [
         "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
@@ -893,7 +895,7 @@ def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "xhigh"), "review", {})
     assert argv == [
         "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
-        "-c", "model_reasoning_effort=xhigh", "-",
+        "-c", "model_reasoning_effort=xhigh", *SA.codex_review_args(None), "-",
     ]
     argv = EA.build_argv(_seat("cursor", "composer-2.5", None), "build", {})
     assert argv == [

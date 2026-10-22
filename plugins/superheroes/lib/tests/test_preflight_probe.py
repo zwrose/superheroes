@@ -12,6 +12,7 @@ import pytest
 import core_md
 import mode_registry as mr
 import model_registry as MR
+import seat_allowance
 import seat_bundle
 import store_core as sc
 
@@ -652,7 +653,8 @@ def test_cross_vendor_cli_probe_ok_and_tool_label():
 
 def test_cross_vendor_no_op_argv_codex():
     assert pp.cross_vendor_no_op_argv("codex") == (
-        "codex", "exec", "--sandbox", "read-only", "-")
+        "codex", "exec", "--sandbox", "read-only",
+        *seat_allowance.codex_review_args(None), "-")
 
 
 def test_cross_vendor_no_op_argv_cursor():

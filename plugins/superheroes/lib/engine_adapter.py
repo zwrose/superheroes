@@ -26,6 +26,7 @@ import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
 import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree sibling)
 import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import seat_bundle  # noqa: E402  (single dispatch seat entry; #1269 WO-A1)
+import seat_allowance  # noqa: E402  (review-seat allowance + closed codex tool set; #2071)
 
 # The SINGLE-SOURCED commit trailer. The committer (commit_result, Task 7) and the
 # build_state_cli git-log parser both reference this so the convention cannot fork.
@@ -632,6 +633,8 @@ def build_argv_result(seat, role_kind, opts):
         argv = ["codex", "exec", "--sandbox", sandbox,
                 "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
+        if is_read:
+            argv += seat_allowance.codex_review_args(cwd)
         if cwd:
             argv += ["-C", cwd]
         argv += ["-"]
@@ -717,7 +720,7 @@ def build_argv_result(seat, role_kind, opts):
             "--output-format", "stream-json", "--verbose",
         ]
         if is_read:
-            argv += ["--restricted"]
+            argv += ["--restricted", "--strict-mcp-config"]
         else:
             argv += [
                 "--permission-mode", "acceptEdits", "--restricted",
