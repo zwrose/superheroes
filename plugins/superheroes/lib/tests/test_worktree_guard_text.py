@@ -328,8 +328,11 @@ def test_a_substitution_inside_double_quotes_is_scanned_as_a_command(command, di
     'echo "$(date)" "quoted"',
     'echo "$(echo hi"',
     'echo "never run git reset --hard"',
+    'git checkout -b "feature/$(date +%s)"',
+    'git switch "$(git branch --show-current)"',
 ], ids=["escaped-dollar", "escaped-backtick", "benign-substitution", "unclosed-benign",
-        "prose-without-substitution"])
+        "prose-without-substitution", "branch-creating-checkout-harmless-substitution",
+        "switch-harmless-substitution"])
 def test_an_escaped_or_harmless_substitution_in_double_quotes_is_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", "")
 

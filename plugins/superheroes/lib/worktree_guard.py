@@ -1046,19 +1046,23 @@ _DESTRUCTIVE_WORD = re.compile(
 
 
 def _double_quoted_substitution_mention(text):
-    """True when a double-quoted span holds `$(` or a backtick and the raw text has a destructive word.
+    """True when a double-quoted span holds `$(` or a backtick and the text from that span on has a destructive word.
 
     Bash runs a `$(...)` or backtick substitution inside double quotes, and no quote or boundary
-    parsing of its body is trusted: the test is blunt. Any destructive subcommand word anywhere in
-    the segment's raw text counts. Double-quoted prose with neither `$(` nor a backtick is not
-    caught here.
+    parsing of its body is trusted: the test is blunt. Once a double-quoted span holds a
+    substitution, quotes nested in its body can end the span early as far as this scan can tell,
+    so the span is read as running from its opening quote to the end of the segment, and any
+    destructive subcommand word in that raw text counts. The text before the span, the outer
+    command's own verb included, does not count, so `git checkout -b "feature/$(date +%s)"` is
+    not a mention. Double-quoted prose with neither `$(` nor a backtick is not caught here.
     """
-    if not isinstance(text, str) or not _DESTRUCTIVE_WORD.search(text):
+    if not isinstance(text, str):
         return False
     i = 0
     n = len(text)
     in_single = False
     in_double = False
+    span_start = 0
     while i < n:
         ch = text[i]
         if in_single:
@@ -1068,7 +1072,7 @@ def _double_quoted_substitution_mention(text):
                 i += 2
                 continue
             if ch == "`" or text.startswith("$(", i):
-                return True
+                return bool(_DESTRUCTIVE_WORD.search(text[span_start:]))
             in_double = ch != '"'
         elif ch == "\\":
             i += 2 if i + 1 < n and text[i + 1] in "'\"\\" else 1
@@ -1077,6 +1081,7 @@ def _double_quoted_substitution_mention(text):
             in_single = True
         elif ch == '"':
             in_double = True
+            span_start = i
         i += 1
     return False
 
@@ -1084,8 +1089,9 @@ def _double_quoted_substitution_mention(text):
 def _segment_mentions_destructive_git(text):
     """Crude per-segment scan for destructive git subcommand mentions.
 
-    A double-quoted span holding `$(` or a backtick makes the segment a mention whenever its raw
-    text holds any destructive subcommand word (see `_double_quoted_substitution_mention`).
+    A double-quoted span holding `$(` or a backtick makes the segment a mention whenever the raw
+    text from that span on holds any destructive subcommand word (see
+    `_double_quoted_substitution_mention`).
     Double-quoted prose with neither stays allowed.
     """
     if not isinstance(text, str):
