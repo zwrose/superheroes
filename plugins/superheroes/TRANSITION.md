@@ -19,6 +19,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
+- **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 
 ### Review fixer: Write/Edit only, every refusal reported, and the landing always written
 
@@ -29,6 +30,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 - A fixer slot with no landing while HEAD has commits past the order's emission head refuses `fixer-committed-unlanded` (with `commits`) on `record-result`, `record-result --sweep`, `advance` and `record-missing`. The driver does not rebuild which findings a commit fixed from git, so the recovery is to re-dispatch the order so it lands.
 - Every recorded or accepted fixer row journals a new field, `refusalCheck`: `checked` when a transcript was read and showed nothing unreported, `unobserved` when none was passed.
 - No existing key or flag changes. A consumer owes nothing, except that an orchestrator that wants the cross-check passes `--fixer-transcript`.
+
+### PR sheet: the fold keeps only routine notes, as a list
+
+- `theme/review-template.md` § The items narrows the fold rule: an acceptance with its own consequence for the owner to weigh (a change near access or identity, a cost or CI-time trade, a shift in what gets tested where, an advisor craft call open to veto) is its own Accept item with a short title and `ifLeft`; only routine notes with nothing to weigh (size against the estimate, tests only, a heads-up about something already ruled) fold into the one "What you're accepting" item, and doubt keeps a disclosure its own item.
+- `pr_sheet.py build` takes an item's `ifLeft` as a non-empty string (one paragraph, as before) or a list of at least 1 non-empty strings, shown as a bulleted list, one bullet per note. An empty list, or an empty or blank note, is refused with `items <id>: ifLeft must be a non-empty string or a list of at least 1 non-empty strings`; an empty string `ifLeft` now refuses with that line too, in place of the generic "needs an id ... and non-empty text" line.
 
 ## 0.46.0
 
