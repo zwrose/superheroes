@@ -8525,6 +8525,13 @@ def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
     # axis: an unresolved head or root is refused, never compared against None — see bite-proof record wo_b_2072_ci_verify
     if head_err or not verified_head or not repo_root:
         return "ci-verify-run-unreadable", head_err or "verified head or repo root unresolvable"
+    # axis: the substitute must be the project's declared CI workflow, never a workflow the submitter names — see bite-proof record wo_b_2072_ci_verify
+    import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
+    declared_kind, declared = review_record._ci_workflow(repo_root)
+    if declared_kind != "declared" or not declared:
+        return "ci-verify-workflow-unconfigured", "the project declares no readable ciWorkflow (%s)" % declared_kind
+    if ci["workflow"] != declared:
+        return "ci-verify-workflow-mismatch", "claimed workflow %r is not the project's declared %r" % (ci["workflow"], declared)
     try:
         run, err = _fetch_ci_run(repo_root, ci["runId"])
     except Exception as exc:  # noqa: BLE001 — the seam is a foreign call; any failure is unreadable
@@ -8540,8 +8547,8 @@ def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
     if str(run["id"]) != str(ci["runId"]):
         return "ci-verify-sha-mismatch", "fetched run id %s is not the claimed runId %s" % (run["id"], ci["runId"])
     # axis: the run is the claimed workflow — see bite-proof record wo_b_2072_ci_verify
-    if run["name"] != ci["workflow"]:
-        return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r" % (run["id"], run["name"], ci["workflow"])
+    if run["name"] != ci["workflow"] or run["name"] != declared:
+        return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r or the declared %r" % (run["id"], run["name"], ci["workflow"], declared)
     # axis: only a completed run that concluded `success`, as claimed, stands in — see bite-proof record wo_b_2072_ci_verify
     if run["status"] != "completed":
         return "ci-verify-conclusion-mismatch", "run %s is %r, not completed" % (run["id"], run["status"])

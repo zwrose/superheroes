@@ -183,6 +183,8 @@ class _Fetch(object):
 def fetch(monkeypatch):
     seam = _Fetch()
     monkeypatch.setattr(RD, "_fetch_ci_run", seam)
+    import review_record
+    monkeypatch.setattr(review_record, "_ci_workflow", lambda repo_root: ("declared", "CI"))
     return seam
 
 
@@ -399,6 +401,21 @@ def test_edge9_fetched_workflow_differs_from_the_claimed_workflow(tmp_path, adap
     w = _hand(tmp_path, fetch, adapters)
     fetch.result = (_run(head=w.head, name="pr-title"), None)
     _refused(w, w.good, "ci-verify-workflow-mismatch")
+
+
+@pytest.mark.parametrize("kind", ["absent", "unreadable"])
+def test_an_undeclared_ci_workflow_is_refused_before_the_fetch(tmp_path, adapters, fetch, monkeypatch, kind):
+    import review_record
+    w = _hand(tmp_path, fetch, adapters)
+    monkeypatch.setattr(review_record, "_ci_workflow", lambda repo_root: (kind, None))
+    _refused(w, w.good, "ci-verify-workflow-unconfigured")
+    assert fetch.calls == []
+
+
+def test_a_claimed_workflow_other_than_the_declared_one_is_refused(tmp_path, adapters, fetch):
+    w = _hand(tmp_path, fetch, adapters)
+    fetch.result = (_run(head=w.head, name="pr-title"), None)
+    _refused(w, _payload(ci=_ci(headSha=w.head, workflow="pr-title")), "ci-verify-workflow-mismatch")
 
 
 def test_edge10_a_run_still_in_progress_is_a_conclusion_mismatch(tmp_path, adapters, fetch):
