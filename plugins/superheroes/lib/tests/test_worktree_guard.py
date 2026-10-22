@@ -2,6 +2,8 @@
 
 Uses real git repositories in tmp_path; does not mock subprocess or git.
 """
+import importlib.util
+import json
 import os
 import subprocess
 
@@ -170,7 +172,13 @@ def test_refusal_message_verbatim():
         "path. Recover the intent instead — commit the work first, `git stash -u` "
         "it (add `-a` to include ignored files; in a conflicted tree `git add` the "
         "unmerged paths first), or revert a probe edit with an inverse Edit rather "
-        "than a git discard."
+        "than a git discard. "
+        "Next step: commit the work (`git add <path>` then `git commit`) or run "
+        "`git stash push -u`, then re-run this command; revert a probe edit with the Edit "
+        "tool's inverse edit. During a merge: `git checkout --theirs <path>` or "
+        "`git checkout --ours <path>` takes one side of a conflicted path you have not "
+        "edited since the merge; a path you have edited is finished with the Edit tool and "
+        "then `git add <path>`."
     )
     assert wg.refusal_message("checkout-path", 3) == expected
 
@@ -181,7 +189,14 @@ def test_indeterminate_message_verbatim():
         "`git restore` would destroy uncommitted work — it may target another "
         "worktree, or the repository could not be inspected — so it is refused "
         "(fail-closed). Commit or `git stash -u` your work first, or revert a probe "
-        "edit with an inverse Edit rather than a git discard."
+        "edit with an inverse Edit rather than a git discard. "
+        "Next step: commit the work (`git add <path>` then `git commit`) or run "
+        "`git stash push -u`, then re-run it as a plain `git ...` command from inside the "
+        "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
+        "`GIT_DIR`/`GIT_WORK_TREE`). During a merge: `git checkout --theirs <path>` or "
+        "`git checkout --ours <path>` takes one side of a conflicted path you have not "
+        "edited since the merge; a path you have edited is finished with the Edit tool and "
+        "then `git add <path>`."
     )
     assert wg.indeterminate_message("restore") == expected
 
@@ -603,16 +618,18 @@ def test_unparsed_message_verbatim():
         "message — that prose is the trigger: text naming a destructive git subcommand "
         "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
         "`worktree`) reads as a command wherever this guard loses track of the quoting "
-        "around it — a heredoc body, whose lines read as bare command text, or a quote of "
-        "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
-        "`$(...)` substitution. Write the text to a file with a file-writing tool rather "
-        "than a shell heredoc, whose bare lines trip this same refusal, and pass the file: "
-        "`gh ... --body-file <path>`, `git commit -F <path>`. "
+        "around it — a heredoc body this guard cannot show is only text, or a quote of "
+        "the same kind as the one enclosing it nested inside a `$(...)` substitution. "
+        "A heredoc fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` with a "
+        "quoted delimiter (`<<'EOF'`) is read as text; a heredoc fed to anything else, or "
+        "left unterminated, is read as command text. "
+        "Next step: write the text with the Write tool and pass the file "
+        "(`gh ... --body-file <path>`, `git commit -F <path>`), or re-issue an intended "
+        "discard as a plain `git ...` command this guard can parse. "
         "If a discard is intended, note that this refusal does not depend on what your tree "
-        "holds, so committing or stashing alone will not clear it: re-issue the command as "
-        "a plain `git ...` invocation this guard can parse. Keep the work you care about by "
-        "committing or `git stash -u` first, and revert a probe edit with an inverse Edit "
-        "rather than a git discard."
+        "holds, so committing or stashing alone will not clear it. Keep the work you care "
+        "about by committing or `git stash push -u` first, and revert a probe edit with an "
+        "inverse Edit rather than a git discard."
     )
     assert wg.unparsed_message() == expected
 
@@ -625,19 +642,22 @@ def test_unparsed_message_names_the_prose_case_and_the_file_remedy():
     assert "commit -F" in message
 
 
-# The shapes that put prose outside the guard's quote tracking, so the text reads as a command.
-# All of them are refused today and stay refused — #842 changes the message, not behavior.
+# The shape that still puts prose outside the guard's quote tracking, so the text reads as a
+# command. (The backslash-escaped quote and the heredoc body that used to sit here are read as
+# text now — see _PROSE_NOW_ALLOWED and test_worktree_guard_text.py, #2054.)
 _PROSE_ONLY_MENTIONS = (
-    # a comment body quoting someone with a backslash-escaped quote of the enclosing kind;
-    # the scanner has no escape handling, so its quote state desynchronizes from the shell's
-    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt"',
-    # a heredoc body whose lines are bare command text as far as any shell-text scanner knows
-    "cat > /tmp/note.md <<'EOF'\n"
-    "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
-    "EOF",
     # same-delimiter quotes nested inside a command substitution: legal shell, but the scanner
     # toggles its outer quote state on the inner quotes and the prose reads as bare text
     'gh pr comment 1 --body "$(echo "never git reset --hard")"',
+)
+
+# Prose shapes #2054 moved out of the refused list: bash reads the escaped quote as part of the
+# string, and the heredoc body is data fed to `cat`, so neither is a command.
+_PROSE_NOW_ALLOWED = (
+    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt\\""',
+    "cat > /tmp/note.md <<'EOF'\n"
+    "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
+    "EOF",
 )
 
 # The counterpart the message must NOT send an operator away from: prose in a body whose quoting
@@ -673,6 +693,17 @@ def test_classify_prose_only_mention_denies_with_the_prose_hint(tmp_path, monkey
         decision, reason = wg.classify(command, repo)
         assert decision == "deny", command
         assert reason == wg.unparsed_message(), command
+
+
+def test_classify_prose_the_guard_now_reads_as_text_is_allowed(tmp_path, monkeypatch):
+    """The escaped-quote comment body and the `cat` heredoc body are data, not commands (#2054)."""
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    with open(os.path.join(repo, "f.txt"), "w") as f:
+        f.write("dirty")
+    for command in _PROSE_NOW_ALLOWED:
+        assert wg.classify(command, repo) == ("allow", ""), command
 
 
 def test_classify_prose_in_tracked_quoting_stays_allowed(tmp_path, monkeypatch):
@@ -1022,3 +1053,60 @@ def test_find_git_dir_not_a_repository_returns_none(tmp_path):
     if ancestor is not None:
         pytest.skip("tmp_path unexpectedly sits under a real .git ancestor on this machine")
     assert wg._find_git_dir(str(tmp_path)) is None
+
+
+# --- every refusal names its next step (#2054) --------------------------------
+
+_PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_GATE = os.path.join(_PLUGIN, "hooks", "worktree_guard_gate.py")
+_HOOKS_JSON = os.path.join(_PLUGIN, "hooks", "hooks.json")
+_GUARD_PREFIX = "superheroes worktree guard"
+
+
+def _module_refusal_texts():
+    spec = importlib.util.spec_from_file_location("worktree_guard_gate_census", _GATE)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    texts = {}
+    for module in (wg, gate):
+        for name, value in vars(module).items():
+            if isinstance(value, str) and value.startswith(_GUARD_PREFIX):
+                texts[f"{module.__name__}.{name}"] = value
+    return texts
+
+
+def _hooks_json_fallback_reason():
+    with open(_HOOKS_JSON) as f:
+        cfg = json.load(f)
+    bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    gate_cmd = next(h["command"] for entry in bash for h in entry["hooks"]
+                    if "worktree_guard_gate.py" in h["command"])
+    start = gate_cmd.index("printf ") + len("printf ")
+    assert gate_cmd[start] == "'", "printf argument must be single-quoted"
+    end = gate_cmd.index("'", start + 1)
+    return json.loads(gate_cmd[start + 1:end])["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_census_every_refusal_text_names_its_next_step():
+    """Reflect over the modules so a refusal text added later cannot skip the Next step."""
+    texts = _module_refusal_texts()
+    assert {"worktree_guard._REFUSAL_TEMPLATE", "worktree_guard._INDETERMINATE_TEMPLATE",
+            "worktree_guard._UNPARSED_TEMPLATE"} <= set(texts)
+    assert any(key.endswith("._DENY_INSPECT") and not key.startswith("worktree_guard.")
+               for key in texts)
+    texts["hooks.json fallback"] = _hooks_json_fallback_reason()
+    for source, text in texts.items():
+        assert "Next step:" in text, source
+
+
+def test_hooks_json_fallback_reason_carries_no_quote_that_breaks_the_printf():
+    reason = _hooks_json_fallback_reason()
+    assert "worktree guard unavailable" in reason
+    assert "'" not in reason
+
+
+def test_at_risk_and_indeterminate_texts_name_the_merge_route():
+    for text in (wg.refusal_message("checkout-path", 1), wg.indeterminate_message("restore")):
+        assert "git checkout --theirs" in text
+        assert "git checkout --ours" in text
+        assert "git add <path>" in text
