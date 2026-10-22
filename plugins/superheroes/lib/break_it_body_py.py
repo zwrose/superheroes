@@ -87,17 +87,67 @@ def _binds(node, out):
             _binds(sub, out)
 
 
+def _local_names(func):
+    """Every name bound inside ``func``'s own body: a function-local, which no module-level binding can reach."""
+    local = set()
+    for stmt in func.body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
+                local.add(sub.id)
+            elif isinstance(sub, ast.arg):
+                local.add(sub.arg)
+            elif isinstance(sub, _FUNCTIONS + (ast.ClassDef,)):
+                local.add(sub.name)
+            elif isinstance(sub, (ast.Import, ast.ImportFrom)):
+                local.update(name for name, _ in _import_pairs(sub) if name != "*")
+            elif isinstance(sub, ast.ExceptHandler) and sub.name:
+                local.add(sub.name)
+            elif isinstance(sub, (ast.Global, ast.Nonlocal)):
+                local.difference_update(sub.names)
+    for sub in ast.walk(func):
+        if isinstance(sub, (ast.Global, ast.Nonlocal)):
+            local.difference_update(sub.names)
+    return local
+
+
 def _uses(node):
+    """The names ``node`` depends on from outside itself: its loaded names minus its function-locals, plus every
+    parameter name (a pytest fixture request) and every name it defines at its own level."""
     names = set()
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Name):
-            names.add(sub.id)
-        elif isinstance(sub, ast.arg):
-            names.add(sub.arg)
-        elif isinstance(sub, _FUNCTIONS + (ast.ClassDef,)):
+
+    def visit(sub):
+        if isinstance(sub, _FUNCTIONS):
             names.add(sub.name)
+            local = _local_names(sub)
+            args = sub.args
+            for arg in args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]:
+                names.add(arg.arg)
+            for part in sub.decorator_list + args.defaults + [d for d in args.kw_defaults if d]:
+                names.update(n.id for n in ast.walk(part) if isinstance(n, ast.Name))
+            for stmt in sub.body:
+                for inner in ast.walk(stmt):
+                    if isinstance(inner, ast.Name) and inner.id not in local:
+                        names.add(inner.id)
+        elif isinstance(sub, ast.ClassDef):
+            names.add(sub.name)
+            for part in sub.decorator_list + sub.bases + [k.value for k in sub.keywords]:
+                names.update(n.id for n in ast.walk(part) if isinstance(n, ast.Name))
+            for stmt in sub.body:
+                visit(stmt)
         elif isinstance(sub, (ast.Import, ast.ImportFrom)):
             names.update(local for local, _ in _import_pairs(sub) if local != "*")
+        else:
+            for inner in ast.walk(sub):
+                if isinstance(inner, ast.Name):
+                    names.add(inner.id)
+                elif isinstance(inner, ast.arg):
+                    names.add(inner.arg)
+                elif isinstance(inner, _FUNCTIONS + (ast.ClassDef,)):
+                    names.add(inner.name)
+                elif isinstance(inner, (ast.Import, ast.ImportFrom)):
+                    names.update(local for local, _ in _import_pairs(inner) if local != "*")
+
+    visit(node)
     return frozenset(names)
 
 

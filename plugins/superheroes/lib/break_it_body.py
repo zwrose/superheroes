@@ -61,6 +61,9 @@ def _outside(records, window, original):
     names = set()
     for rec in original:
         names |= rec["binds"] | rec["uses"]
+    # the matched copy's own bindings (a renamed test's new name) are protected too, so a later definition cannot overwrite it
+    for index in window:
+        names |= records[index]["binds"]
     orig_keys = {rec["key"] for rec in original}
     # axis: every import the original bound is bound the same way in the file that holds the test — see bite-proof record wo_a_2053_break_it_body
     if not orig_pairs <= {pair for rec in records for pair in rec["imports"]}:
