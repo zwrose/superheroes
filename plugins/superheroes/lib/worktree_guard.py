@@ -1046,7 +1046,7 @@ def _merge_tree_id(cwd, ours, theirs):
 
 
 def _merge_index_entries(cwd, operands):
-    """{repo-relative path: set of stages} for the operands; None when one matches no entry."""
+    """{repo-relative path: {stage: index mode string}} for the operands; None when one matches no entry."""
     entries = {}
     for operand in operands:
         result = _run_git(cwd, "ls-files", "--stage", "-z", "--full-name", "--", operand)
@@ -1057,7 +1057,8 @@ def _merge_index_entries(cwd, operands):
             return None
         for entry in found:
             meta, _, path = entry.partition("\t")
-            entries.setdefault(path, set()).add(int(meta.split()[2]))
+            fields = meta.split()
+            entries.setdefault(path, {})[int(fields[2])] = fields[0]
     return entries
 
 
@@ -1217,8 +1218,8 @@ def _merge_side_probe(cwd, action, command):
         tree = None
         base_markers = None
         risky = 0
-        for path, stages in entries.items():
-            if stages == {0}:
+        for path, modes in entries.items():
+            if set(modes) == {0}:
                 listed = _run_git(top, "--literal-pathspecs", "ls-files", "-v", "-z", "--", path)
                 if listed.returncode != 0:
                     return ("indeterminate", 0)
@@ -1231,8 +1232,18 @@ def _merge_side_probe(cwd, action, command):
                 )
                 if diff.returncode == 1:
                     risky += 1
-                elif diff.returncode != 0:
+                    continue
+                if diff.returncode != 0:
                     return ("indeterminate", 0)
+                # core.filemode=false hides a mode-only edit from git diff: compare the bit here.
+                index_mode = modes[0]
+                if index_mode not in ("100644", "100755"):
+                    return ("indeterminate", 0)
+                worktree_mode = os.lstat(os.path.join(top, path)).st_mode
+                if not stat.S_ISREG(worktree_mode):
+                    return ("indeterminate", 0)
+                if bool(worktree_mode & stat.S_IXUSR) != (index_mode == "100755"):
+                    risky += 1
                 continue
 
             worktree_path = os.path.join(top, path)

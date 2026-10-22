@@ -200,6 +200,49 @@ def test_executable_bit_edit_on_conflicted_file_denies_with_filemode_off(tmp_pat
     assert wg.classify("git restore --theirs f.txt", work) == _refusal("restore", 1)
 
 
+@pytest.mark.parametrize("filemode", ["false", "true"])
+def test_edge1_2_executable_bit_edit_on_stage_zero_path_denies_whatever_filemode_says(
+    tmp_path, monkeypatch, filemode,
+):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _git(work, "config", "core.filemode", filemode)
+    target = os.path.join(work, "a.txt")
+    os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
+    assert _git(work, "ls-files", "--stage", "a.txt").stdout.startswith("100644 ")
+    assert wg.classify("git checkout --theirs a.txt", work) == _refusal("checkout-path", 1)
+    assert wg.classify("git restore --theirs a.txt", work) == _refusal("restore", 1)
+
+
+@pytest.mark.parametrize("filemode", ["false", "true"])
+def test_edge3_stage_zero_path_with_content_and_mode_unchanged_allows(
+    tmp_path, monkeypatch, filemode,
+):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _git(work, "config", "core.filemode", filemode)
+    assert wg.classify("git checkout --theirs a.txt", work) == ("allow", "")
+    assert wg.classify("git restore --theirs a.txt", work) == ("allow", "")
+
+
+@pytest.mark.parametrize("kind", ["symlink", "gitlink"])
+def test_edge4_stage_zero_symlink_or_gitlink_entry_is_indeterminate(tmp_path, monkeypatch, kind):
+    work = _merge_repo(tmp_path, monkeypatch)
+    if kind == "symlink":
+        target = os.path.join(work, "a.txt")
+        os.remove(target)
+        os.symlink("b.txt", target)
+        _git(work, "add", "a.txt")
+        name, mode = "a.txt", "120000"
+    else:
+        nested = _init_repo(os.path.join(work, "sm"))
+        _commit_file(nested, "n.txt", "nested\n")
+        _git(work, "add", "sm")
+        name, mode = "sm", "160000"
+    assert _git(work, "ls-files", "--stage", name).stdout.startswith(mode + " ")
+    assert _git(work, "diff", "--quiet", "--ignore-submodules=none", "--", name).returncode == 0
+    assert wg.classify(f"git checkout --theirs {name}", work) == _indeterminate("checkout-path")
+    assert wg.classify(f"git restore --theirs {name}", work) == _indeterminate("restore")
+
+
 def test_unclosed_opening_marker_like_line_is_ordinary_content(tmp_path, monkeypatch):
     _calibrated(monkeypatch)
     repo = _init_repo(tmp_path / "repo")
