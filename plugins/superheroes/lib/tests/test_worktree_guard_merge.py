@@ -508,7 +508,17 @@ def test_text_appended_to_a_marker_label_refuses(tmp_path, monkeypatch, marker, 
     assert wg.classify("git restore --theirs f.txt", work) == _refusal("restore", 1)
 
 
+@pytest.mark.parametrize("marker", [b"<<<<<<<", b">>>>>>>"])
+@pytest.mark.parametrize("suffix", [b": OWNER-NOTE", b":OWNER-NOTE", b":f.txt"])
+def test_colon_suffix_appended_to_a_marker_label_refuses(tmp_path, monkeypatch, marker, suffix):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _edit_marker_line(work, marker, suffix)
+    assert wg.classify("git restore --theirs f.txt", work) == _refusal("restore", 1)
+
+
 @pytest.mark.parametrize("marker,label", [
+    (b"<<<<<<< ", b"HEAD:anything"),
+    (b">>>>>>> ", b"main:anything"),
     (b"<<<<<<< ", b"main"),
     (b">>>>>>> ", b"HEAD"),
     (b"<<<<<<< ", b""),

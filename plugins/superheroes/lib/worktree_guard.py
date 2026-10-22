@@ -1091,9 +1091,12 @@ def _merge_content_matches(written, expected, ours, theirs, resolve):
     start or end marker line is recognised by that exact id, never by its look. Compared by
     position: equal line counts, each generated marker line matched by a worktree line carrying
     the same marker run and a label that ``resolve`` maps to the commit the recomputed line names
-    (open: ``ours``, close: ``theirs``), every other line byte for byte. A label that is empty,
-    does not resolve or resolves elsewhere is a mismatch, so text appended to a marker line is
-    never taken for git's own label. One trailing carriage return is ignored on a marker line, but
+    (open: ``ours``, close: ``theirs``), every other line byte for byte. The label is the whole
+    text after the run and one space: it is accepted when it resolves as a whole, or as
+    ``<name>:<suffix>`` when ``<name>`` resolves and ``<suffix>`` equals the recomputed line's own
+    ``:<suffix>`` byte for byte (only a rename conflict carries one). A label that is empty,
+    does not resolve or resolves elsewhere, or carries any other suffix, is a mismatch, so text
+    appended to a marker line is never taken for git's own label. One trailing carriage return is ignored on a marker line, but
     the recomputed line and the worktree line must both carry it or both lack it. A ``|||||||``
     base-marker line is not relaxed: git writes it identically in the real merge and in the
     recomputed one (the label is an abbreviated base id), so it is compared like any other line.
@@ -1112,24 +1115,31 @@ def _merge_content_matches(written, expected, ours, theirs, resolve):
             if got != want:
                 return False
             continue
-        kind, run = marker
+        kind, run, suffix = marker
         if got.endswith(b"\r") != want.endswith(b"\r"):
             return False
         got = got[:-1] if got.endswith(b"\r") else got
         if not got.startswith(run + b" "):
             return False
-        label = got[len(run) + 1:].partition(b":")[0]
+        label = got[len(run) + 1:]
         try:
             label = label.decode("utf-8")
+            suffix = suffix.decode("utf-8")
         except UnicodeDecodeError:
             return False
-        if resolve(label) != (ours if kind == "open" else theirs):
+        commit = ours if kind == "open" else theirs
+        if resolve(label) == commit:
+            continue
+        # ``<name>:<suffix>``: the suffix is git's own only when the recomputed line carries the
+        # same one (a rename conflict); a suffix is never discarded unchecked.
+        name, colon, tail = label.partition(":")
+        if not (colon and suffix and tail == suffix[1:] and resolve(name) == commit):
             return False
     return True
 
 
 def _merge_generated_markers(lines, ours, theirs):
-    """{line index: (kind, marker run)} for the generated marker lines of ``lines``, or None.
+    """{line index: (kind, marker run, ``:<path>`` suffix or b"")} for the marker lines, or None.
 
     A generated conflict opens with exactly ``<<<<<<< <ours>`` and closes with exactly
     ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``, and by one carriage return
@@ -1137,8 +1147,8 @@ def _merge_generated_markers(lines, ours, theirs):
     base marker and the ``=======`` separator stay ordinary lines. An open that never closes,
     or opens again before closing, is an unexpected shape (None).
     """
-    open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"(?::[^\r]*)?\r?$")
-    close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"(?::[^\r]*)?\r?$")
+    open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"((?::[^\r]*)?)\r?$")
+    close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"((?::[^\r]*)?)\r?$")
     markers = {}
     index = 0
     while index < len(lines):
@@ -1146,14 +1156,14 @@ def _merge_generated_markers(lines, ours, theirs):
         if opened is None:
             index += 1
             continue
-        markers[index] = ("open", opened.group(1))
+        markers[index] = ("open", opened.group(1), opened.group(2))
         index += 1
         while True:
             if index >= len(lines):
                 return None
             closed = close_re.match(lines[index])
             if closed:
-                markers[index] = ("close", closed.group(1))
+                markers[index] = ("close", closed.group(1), closed.group(2))
                 break
             if open_re.match(lines[index]):
                 return None
