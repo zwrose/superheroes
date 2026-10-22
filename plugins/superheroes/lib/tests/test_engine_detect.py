@@ -25,7 +25,7 @@ class _Proc:
 
 def _fake_run(script):
     """script: dict mapping the FIRST argv token -> _Proc (or an Exception to raise)."""
-    def run(args, capture_output=True, text=True, timeout=10, cwd=None):
+    def run(args, capture_output=True, text=True, timeout=10, cwd=None, stdin=None):
         key = args[0]
         val = script.get(key, _Proc(returncode=1))
         if isinstance(val, Exception):

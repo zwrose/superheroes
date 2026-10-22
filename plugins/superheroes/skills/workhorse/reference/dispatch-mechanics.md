@@ -592,7 +592,9 @@ and `unrunnable`.
 The workhorse charter §5 names *who* reviews the brief; this subsection carries the standing lens the
 check always applies, and the mechanics for *how* it is dispatched. The sanctioned channel is
 `dispatch-review --mode brief-check` — not a hand-rolled `codex exec`, which is permitted **only when
-the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path).
+the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path). The
+sanctioned call is `engine_dispatch.py dispatch-review`, and a hand-rolled engine call must redirect
+stdin from a file or `/dev/null`.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

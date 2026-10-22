@@ -12,6 +12,18 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
+
+### Engine CLI calls: one stdin chokepoint
+
+- `engine_adapter.run_engine_cli(argv, run=None, **kwargs)` runs an engine CLI (`codex`, `cursor-agent`, `claude`) with stdin closed. Without `input=` the child's stdin is `subprocess.DEVNULL`; with `input=` (a string, including empty) the text is piped in and stdin is not set. It raises `ValueError` before calling `run` for any `stdin=` other than `subprocess.DEVNULL`, for `input=None`, and for `stdin=` together with `input=`. `run` defaults to `subprocess.run` and its result is returned unchanged.
+- `engine_authz.implementation_dispatch_allowed`, `engine_detect.probe`, `cloud_relay._call` and `preflight_probe.probe_command` spawn through it. Each keeps its `run=` seam and its `except Exception`, so a refusal reads as a failed probe.
+- `plugins/superheroes/lib/tests/test_engine_cli_stdin_census.py` scans the shipped Python and fails on a spawner call in a file that holds an engine argv source when the call neither starts with a non-engine literal argv nor passes `input=` or a `stdin=` other than `None`, `0` or `sys.stdin`. A call that carries `**kwargs` and no explicit `stdin=` or `input=` fails too. `engine_adapter.py` and `engine_dispatch.py` are exempt by name.
+
 ## 0.46.0
 
 ### Before you upgrade
