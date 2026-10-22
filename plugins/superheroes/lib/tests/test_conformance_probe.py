@@ -247,6 +247,7 @@ def _probe_result(engine, **overrides):
         "failed": [n for n in CP._LEG_NAMES if not legs[n]["ok"]],
         "dependentRoles": [],
         "dependentLanes": "no calibrated role routes to %s" % engine,
+        "configDir": CP._launch_config_dir(None, "/") if engine == "claude" else None,
         "preflightCheck": {"state": "pass", "reason": "ok", "evidence": "evidence"},
     }
     base.update(overrides)
@@ -3684,3 +3685,118 @@ def test_probe_completion_payload_mismatch_forfeits(tmp_path, monkeypatch):
     assert payload["modeLegs"]["default"]["resultProduction"]["detail"] == (
         "result-completion-payload-mismatch"
     )
+
+
+# --- #889: the claude probe's config dir must match the launch's ----------------
+
+
+def _claude_probe_under(tmp_path, monkeypatch, cfg):
+    """Run a healthy faked claude probe with CLAUDE_CONFIG_DIR pinned to `cfg`."""
+    os.makedirs(cfg, exist_ok=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run-claude")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout = _claude_event_stream(tool_calls=1, structured_output={"result": _native_verdicts_branch()})
+
+    def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    payload, code, _ = CP.probe(
+        "claude", repo_root=repo, run_dir=run_dir, timeout=30,
+        run_engine=FakeRunner([print_runner], sync_native=False),
+        build_view=_fake_build_view(tmp_path),
+    )
+    return repo, payload, code
+
+
+def test_889_claude_probe_stamps_its_config_dir_and_other_engines_stamp_null(tmp_path, monkeypatch):
+    cfg = str(tmp_path / "claude-cfg")
+    _repo_root, payload, code = _claude_probe_under(tmp_path, monkeypatch, cfg)
+    assert code == 0
+    assert payload["configDir"] == cfg
+    assert "configDir=%s" % cfg in payload["preflightCheck"]["evidence"]
+    codex_run = str(tmp_path / "run-codex")
+    os.makedirs(codex_run, exist_ok=True)
+    codex_payload, codex_code, _ = CP.probe(
+        "codex", repo_root=_repo_root, run_dir=codex_run, timeout=30,
+        run_engine=FakeRunner([(_codex_event_stream(action_items=1), False, 0, "")]),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert codex_code == 0
+    assert codex_payload["configDir"] is None
+    assert "configDir=" not in codex_payload["preflightCheck"]["evidence"]
+
+
+def test_889_preflight_entry_passes_a_probed_claude_record_under_the_launch_dir(tmp_path, monkeypatch):
+    cfg = str(tmp_path / "claude-cfg")
+    repo, claude_record, code = _claude_probe_under(tmp_path, monkeypatch, cfg)
+    assert code == 0
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_record)
+    payload, rc = CP.preflight_entry(
+        repo, paths, calibration_rows=_calibration_rows(), launch_config_dir=cfg,
+    )
+    assert rc == 0
+    assert payload["engine-auth"]["state"] == "pass"
+    assert "configDir=%s" % cfg in payload["engine-auth"]["evidence"]
+
+
+def test_889_wave11_claude_failed_others_green_holds_naming_claude_and_its_dir(tmp_path):
+    repo = _repo(tmp_path)
+    cfg = str(tmp_path / "claude-cfg")
+    claude_fail = _failed_probe_result("claude", "completionDetection", repo=repo, configDir=cfg)
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_fail)
+    payload, rc = CP.preflight_entry(
+        repo, paths, calibration_rows=_calibration_rows(), launch_config_dir=cfg,
+    )
+    assert rc == 0
+    assert payload["engine-auth"]["state"] == "fail"
+    reason = payload["engine-auth"]["reason"]
+    assert "claude (completionDetection)" in reason
+    assert "configDir=%s" % cfg in reason
+
+
+@pytest.mark.parametrize("recorded,token", [
+    ("other", "probe-config-dir-mismatch:claude"),
+    (None, "probe-config-dir-unrecorded:claude"),
+])
+def test_889_preflight_entry_refuses_a_claude_record_off_the_launch_dir(tmp_path, recorded, token):
+    repo = _repo(tmp_path)
+    launch = str(tmp_path / "launch-cfg")
+    claude_kw = {"configDir": str(tmp_path / "other-cfg") if recorded else None}
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=claude_kw)
+    payload, rc = CP.preflight_entry(
+        repo, paths, calibration_rows=_calibration_rows(), launch_config_dir=launch,
+    )
+    assert rc == 1
+    assert payload["reason"].startswith(token)
+    assert launch in payload["reason"]
+
+
+def test_889_preflight_entry_default_launch_dir_is_this_process_resolved_dir(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    own = str(tmp_path / "own-cfg")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", own)
+    ok_paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude={"configDir": own})
+    payload, rc = CP.preflight_entry(repo, ok_paths, calibration_rows=_calibration_rows())
+    assert rc == 0 and payload["engine-auth"]["state"] == "pass"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere"))
+    payload, rc = CP.preflight_entry(repo, ok_paths, calibration_rows=_calibration_rows())
+    assert rc == 1
+    assert payload["reason"].startswith("probe-config-dir-mismatch:claude")
+
+
+@pytest.mark.parametrize("flag", [["--config-dir", "/cfg/launch"], []])
+def test_889_cli_preflight_entry_passes_config_dir_through(tmp_path, monkeypatch, capsys, flag):
+    seen = {}
+
+    def _capture(repo_root, results, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True}, 0
+
+    monkeypatch.setattr(CP, "preflight_entry", _capture)
+    code = CP.main(["conformance_probe", "preflight-entry", "--repo-root", str(tmp_path),
+                    "--result", str(tmp_path / "r.json")] + flag)
+    capsys.readouterr()
+    assert code == 0
+    assert seen["launch_config_dir"] == ("/cfg/launch" if flag else None)
