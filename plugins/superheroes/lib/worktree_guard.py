@@ -1258,6 +1258,14 @@ def _merge_side_probe(cwd, action, command):
         top = store_core.repo_root(cwd)
         if not isinstance(top, str) or not top or not os.path.isdir(top):
             return ("indeterminate", 0)
+        # store_core strips all surrounding whitespace, so a root whose name ends in a space
+        # resolves to a sibling: the root must contain cwd and be a checkout root itself.
+        real_cwd = os.path.realpath(cwd)
+        if os.path.commonpath([top, real_cwd]) != top:
+            return ("indeterminate", 0)
+        dot_git = os.path.join(top, ".git")
+        if not (os.path.isdir(dot_git) or os.path.isfile(dot_git)):
+            return ("indeterminate", 0)
         if _merge_checkout_transforms(top, list(entries)):
             return ("indeterminate", 0)
 
