@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+import command_refusals as CR
 import observed_refusals as OR
 
 
@@ -63,7 +64,7 @@ def test_hook_marker_is_recognized_as_hook(tmp_path):
 
 def test_marker_list_is_closed_and_uses_the_three_refused_by_values():
     assert isinstance(OR.MARKERS, tuple)
-    assert {row[2] for row in OR.MARKERS} <= {"permission", "hook", "sandbox"}
+    assert {row[2] for row in OR.MARKERS} <= set(CR.REFUSED_BY)
     assert all(row[0] for row in OR.MARKERS)
 
 
