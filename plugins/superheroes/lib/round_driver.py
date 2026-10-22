@@ -12065,6 +12065,16 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                                     seat_key, occurrence)
             if unlanded is not None:
                 return unlanded
+        if phase == P_FIXER and has_landing and os.path.exists(spath) and fixer_transcript is not None:
+            # A slot recorded earlier without a transcript is still cross-checked when this call
+            # supplies one: an omitted refusal the transcript shows is never folded as clean.
+            stored_env, _serr = round_records.read_json(spath)
+            _stored_check, stored_refusal = _fixer_envelope_refusal_check(
+                session_dir, stored_env, fixer_transcript, attempt)
+            if stored_refusal is not None:
+                return _refuse_cmd(session_dir, cmd, stored_refusal.pop("reason"), phase=phase,
+                                   rnd=rnd, attempt=attempt, seat=_slot_label(seat_key, occurrence),
+                                   **stored_refusal)
         if not has_landing or os.path.exists(spath):
             continue
         envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,

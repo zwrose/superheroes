@@ -225,12 +225,18 @@ def test_b2_sweep_refuses_an_unreported_refusal_then_records_when_listed(tmp_pat
             if row.get("seat") == SEAT] == ["checked"]
 
 
-def test_b3_advance_refuses_an_unreported_refusal_then_folds_when_listed(tmp_path):
+@pytest.mark.parametrize("pre_recorded", [False, True])
+def test_b3_advance_refuses_an_unreported_refusal_then_folds_when_listed(tmp_path, pre_recorded):
     session_dir, gitdir, head_path, _repo, _head = _fixer_session(tmp_path)
     transcript = _transcript(tmp_path, [HEREDOC])
     pend, _payload = _land_fixer(session_dir, head_path, refusals=[])
+    if pre_recorded:
+        assert RD.cmd_record_result(session_dir, SEAT)["ok"] is True
     out = RD.cmd_advance(session_dir, git=_fake_git(gitdir), fixer_transcript=transcript)
-    assert out["ok"] is False and out["reason"] == "fixer-refusals-unreported"
+    assert out["ok"] is False and out["reason"] == "fixer-refusals-unreported", out
+    assert _state(session_dir)["pending"]["phase"] == RD.P_FIXER
+    if pre_recorded:
+        return
     assert not os.path.exists(_store_path(session_dir, pend))
     _land_fixer(session_dir, head_path, refusals=[ENTRY])
     out = RD.cmd_advance(session_dir, git=_fake_git(gitdir), fixer_transcript=transcript)
