@@ -39,8 +39,16 @@ _START_PUNCT = frozenset(("++", "--", "!", "~", "@"))
 _DECL_PREFIX = frozenset(("export", "default", "declare", "abstract", "async"))
 _NAMED_DECLS = frozenset(("enum", "interface", "type", "namespace", "module"))
 _DECLARING = frozenset(("const", "let", "var", "function", "class"))
-_HOOKS = frozenset(("beforeEach", "beforeAll", "afterEach", "afterAll"))
-_HOOK_OBJECTS = frozenset(("vi", "jest"))
+_EXPORT, _DEFAULT, _DECLARE, _ASYNC, _ABSTRACT, _FUNCTION, _CLASS, _STATIC, _INTERFACE = (
+    ("id", word) for word in ("export default declare async abstract function class static interface").split())
+_COLON, _EQUALS, _BANG, _AT = (("punct", c) for c in (":", "=", "!", "@"))
+_VAR_KEYWORDS = frozenset(("const", "let", "var"))
+_ASSIGNING = frozenset(("= += -= *= /= %= **= <<= >>= >>>= &= |= ^= &&= ||= ??= ++ --").split())
+_RUNS_AT_LOAD = frozenset(("new", "await", "yield", "delete"))
+_CALLEE_END = frozenset(("punct", c) for c in (")", "]", "}", ">", ">>", ">>>", "?."))
+_ANGLES = {"<": 1, ">": -1, ">>": -2, ">>>": -3}
+_MEMBER_START = frozenset(("punct", c) for c in (";", "}", "*"))
+_MEMBER_MODIFIERS = frozenset(("get set async readonly public private protected override declare abstract accessor").split())
 _TITLE_CALLEES = ("it", "test", "describe")
 _FRAMEWORK_MODULES = frozenset(("vitest", "@jest/globals", "node:test", "bun:test"))
 _STATEMENT_START = frozenset((_SEMI, _LBRACE, _RBRACE))
@@ -359,9 +367,216 @@ def _binds(sig):
     return frozenset()
 
 
-def _is_hook(sig):
-    (kind, name), after = (sig[:2] + [("", "")] * 2)[:2]
-    return kind == "id" and ((name in _HOOKS and after == _LPAREN) or (name in _HOOK_OBJECTS and after == _DOT))
+def _match(toks, i):
+    """The index of the bracket that closes the opener at toks[i], or -1."""
+    depth = 0
+    for k in range(i, len(toks)):
+        if toks[k][0] == "punct":
+            depth += (toks[k][1] in _OPEN) - (toks[k][1] in _CLOSE_TO_OPEN)
+            if depth == 0:
+                return k
+    return -1
+
+
+def _split_top(toks, sep):
+    """`toks` cut at each `sep` token that sits at bracket depth 0."""
+    parts, depth = [[]], 0
+    for tok in toks:
+        if tok[0] == "punct":
+            depth += (tok[1] in _OPEN) - (tok[1] in _CLOSE_TO_OPEN)
+            if depth == 0 and tok == sep:
+                parts.append([])
+                continue
+        parts[-1].append(tok)
+    return parts
+
+
+def _past_angles(toks, i):
+    """The index just past the `<...>` list that opens at toks[i], or -1."""
+    depth = 0
+    for k in range(i, len(toks)):
+        depth += _ANGLES.get(toks[k][1], 0) if toks[k][0] == "punct" else 0
+        if depth <= 0:
+            return k + 1 if depth == 0 else -1
+    return -1
+
+
+def _past_params(toks, j):
+    """The index just past the parameter list that starts at toks[j], after any type parameters, or -1."""
+    if toks[j:j + 1] == [("punct", "<")]:
+        j = _past_angles(toks, j)
+    if j < 0 or toks[j:j + 1] != [_LPAREN]:
+        return -1
+    close = _match(toks, j)
+    return close + 1 if close >= 0 else -1
+
+
+def _tail_block(tail):
+    """The tokens inside the `{ }` block that is all of `tail` once an optional `: type` is skipped, else None."""
+    if tail[:1] == [_COLON]:
+        brace = next((k for k, tok in enumerate(tail) if tok == _LBRACE), -1)
+        tail = tail[brace:] if brace >= 0 else []
+    return tail[1:-1] if tail[:1] == [_LBRACE] and _match(tail, 0) == len(tail) - 1 else None
+
+
+def _fn_body(toks):
+    """For an arrow or `function` expression that is all of `toks`, (True, the tokens inside its `{ }` body, or None
+    for an expression body); otherwise (False, None)."""
+    i = 1 if toks[:1] == [_ASYNC] else 0
+    if toks[i:i + 1] == [_FUNCTION]:
+        j = i + 1 + (toks[i + 1:i + 2] == [_STAR])
+        j += bool(toks[j:j + 1]) and toks[j][0] == "id"
+        past = _past_params(toks, j)
+        inner = _tail_block(toks[past:]) if past >= 0 else None
+        return inner is not None, inner
+    if toks[i:i + 1] and toks[i][0] == "id" and toks[i + 1:i + 2] == [_ARROW]:
+        body = toks[i + 2:]
+    elif toks[i:i + 1] == [_LPAREN]:
+        close = _match(toks, i)
+        after = toks[close + 1:] if close >= 0 else []
+        if after[:1] == [_COLON]:
+            after = after[next((k for k, tok in enumerate(after) if tok == _ARROW), len(after)):]
+        body = after[1:] if after[:1] == [_ARROW] else []
+    else:
+        body = []
+    if not body:
+        return False, None
+    return True, (body[1:-1] if body[0] == _LBRACE and _match(body, 0) == len(body) - 1 else None)
+
+
+def _plain(toks):
+    """True when `toks` evaluate without a call, `new`, `await`, `yield`, `delete`, tagged template or assignment."""
+    for k, tok in enumerate(toks):
+        typ, txt = tok
+        prev, before = (toks[k - 1] if k else ("", "")), (toks[k - 2] if k > 1 else ("", ""))
+        called = prev[0] == "id" or prev in _CALLEE_END or (prev == _BANG and (before[0] == "id" or before in _CALLEE_END))
+        # axis: a call in an initialiser, a `(` after an identifier or a closing bracket, makes the declaration a hook — see bite-proof record wo_b_2061_break_it_body_js
+        if tok == _LPAREN and called:
+            return False
+        if (typ == "id" and txt in _RUNS_AT_LOAD) or (typ == "punct" and txt in _ASSIGNING):
+            return False
+        if typ == "tpl" and ("${" in txt or called):
+            return False
+    return True
+
+
+def _declaration(rest):
+    """True when every declarator after `const`, `let` or `var` binds a name to a function or to a plain expression."""
+    if rest[:1] == [("id", "enum")]:
+        return False
+    for piece in _split_top(rest, _COMMA):
+        binding, *init = _split_top(piece, _EQUALS)
+        if len(init) > 1 or not binding or not _plain(binding):
+            return False
+        if not (binding[0][0] == "id" or binding[0] in (("punct", "["), _LBRACE)):
+            return False
+        if init and not (init[0] and (_fn_body(init[0])[0] or _plain(init[0]))):
+            return False
+    return True
+
+
+def _function_decl(rest):
+    i = 1 if rest[:1] == [_ASYNC] else 0
+    if rest[i:i + 1] != [_FUNCTION]:
+        return False
+    j = i + 1 + (rest[i + 1:i + 2] == [_STAR])
+    if not (rest[j:j + 1] and rest[j][0] == "id"):
+        return False
+    past = _past_params(rest, j + 1)
+    return past >= 0 and _tail_block(rest[past:]) is not None
+
+
+def _load_free(body):
+    """True when a class body has no `static` and no computed member key, the two things that run at class load."""
+    depth = 0
+    for k, tok in enumerate(body):
+        if tok == _STATIC:
+            return False
+        if tok[0] == "punct":
+            prev = body[k - 1] if k else _SEMI
+            if tok == ("punct", "[") and depth == 0 and (
+                    prev in _MEMBER_START or (prev[0] == "id" and prev[1] in _MEMBER_MODIFIERS)):
+                return False
+            depth += (tok[1] in _OPEN) - (tok[1] in _CLOSE_TO_OPEN)
+    return True
+
+
+def _class_decl(rest):
+    i = 1 if rest[:1] == [_ABSTRACT] else 0
+    if rest[i:i + 1] != [_CLASS] or not rest[i + 1:i + 2] or rest[i + 1][0] != "id" or rest[i + 1][1] in ("extends", "implements"):
+        return False
+    brace = next((k for k in range(i + 2, len(rest)) if rest[k] == _LBRACE), -1)
+    if _AT in rest or brace < 0 or _match(rest, brace) != len(rest) - 1:
+        return False
+    heritage = rest[i + 2:brace]
+    return _LPAREN not in heritage and all(tok[0] != "tpl" for tok in heritage) and _load_free(rest[brace + 1:-1])
+
+
+def _type_decl(rest):
+    if rest[:1] not in ([_TYPE], [_INTERFACE]) or not rest[1:2] or rest[1][0] != "id":
+        return False
+    if rest[0] == _TYPE:
+        return rest[2:3] in ([_EQUALS], [("punct", "<")])
+    brace = next((k for k in range(2, len(rest)) if rest[k] == _LBRACE), -1)
+    return brace >= 0 and _match(rest, brace) == len(rest) - 1
+
+
+def _registration(toks, frameworks):
+    """A top-level `it`, `test` or `describe` call: a plain title, one function and an optional timeout. A `describe`
+    callback runs at collection, so each statement in its body must itself be allowed."""
+    if _LPAREN not in toks:
+        return False
+    opening = toks.index(_LPAREN)
+    callee = toks[:opening]
+    # axis: a registration's callee is the bare framework name, so `it.only` and `describe.skip` are hooks — see bite-proof record wo_b_2061_break_it_body_js
+    if len(callee) != 1 or callee[0][0] != "id" or callee[0][1] not in frameworks:
+        return False
+    if _match(toks, opening) != len(toks) - 1:
+        return False
+    args = _split_top(toks[opening + 1:-1], _COMMA)
+    if len(args) not in (2, 3) or len(args[0]) != 1 or (len(args) == 3 and [t[0] for t in args[2]] != ["num"]):
+        return False
+    (typ, txt), = args[0]
+    if typ != "str" and not (typ == "tpl" and "${" not in txt):
+        return False
+    is_fn, body = _fn_body(args[1])
+    if not is_fn or callee[0][1] != "describe":
+        return is_fn
+    return body is not None and all(
+        _allowed_host(stmt, frameworks) for stmt in _split([tok for tok in body if tok[0] != "comment"]))
+
+
+def _allowed_host(sig, frameworks):
+    """True when a module-level statement outside the moved test only adds plain code or its own tests: a binding
+    import, a function, class, variable or type declaration, or a test registration. Everything else is a hook."""
+    toks = sig[:-1] if sig[-1:] == [_SEMI] else list(sig)
+    if not toks:
+        return True
+    if toks[0] == _IMPORT and toks[1:2] not in ([_LPAREN], [_DOT]):
+        try:
+            imports = _parse_import(sig)[0]
+        except ValueError:
+            return False
+        # axis: an import that binds no name runs the module for its effects, so it is a hook — see bite-proof record wo_b_2061_break_it_body_js
+        return any(local is not None for local, _ in imports)
+    exported = toks[0] == _EXPORT
+    rest = toks[1:] if exported else toks
+    default = rest[:1] == [_DEFAULT]
+    rest = rest[1:] if default else rest
+    first = rest[0] if rest else ("", "")
+    if first in (_ASYNC, _FUNCTION):
+        return _function_decl(rest)
+    if first in (_ABSTRACT, _CLASS):
+        return _class_decl(rest)
+    if default:
+        return False
+    if first[0] == "id" and first[1] in _VAR_KEYWORDS:
+        return _declaration(rest[1:])
+    if first == _DECLARE:
+        return _type_decl(rest[1:])
+    if first in (_TYPE, _INTERFACE):
+        return _type_decl(rest)
+    return not exported and _registration(rest, frameworks)
 
 
 def _framework_names(stmts):
@@ -410,7 +625,7 @@ def _parse(text):
         key, titles = _keyed(toks, frameworks)
         uses = frozenset(tok[1] for prev, tok in zip([None] + sig, sig) if tok[0] == "id" and prev not in _MEMBER)
         records.append({"kind": "import" if is_import else "stmt", "key": key, "titles": titles, "imports": imports,
-                        "binds": binds, "uses": uses, "hook": not is_import and _is_hook(sig)})
+                        "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks)})
     return records
 
 

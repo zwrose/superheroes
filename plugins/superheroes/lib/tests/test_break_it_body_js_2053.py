@@ -318,7 +318,7 @@ def test_import_forms(text, imports, binds):
     assert rec["kind"] == "import"
     assert rec["imports"] == imports
     assert rec["binds"] == frozenset(binds)
-    assert rec["hook"] is False
+    assert rec["hook"] is (not binds)
 
 
 def test_import_key_is_its_tokens():
@@ -393,13 +393,14 @@ def test_binds_of_an_annotated_declaration_include_the_name():
 @pytest.mark.parametrize("text", [
     "beforeEach(() => {})", "beforeAll(setup)", "afterEach(() => {})", "afterAll(teardown)",
     'vi.mock("x")', 'jest.mock("x")', "vi.useFakeTimers()", "jest.setTimeout(5000)",
+    'it("a", f)', "beforeEach.each", "vi(x)", 'import "./setup"',
 ])
 def test_hook_true_for_module_level_setup(text):
     assert _only(text)["hook"] is True
 
 
 @pytest.mark.parametrize("text", [
-    'describe("a", () => {})', 'it("a", f)', "const beforeEach = 1", "beforeEach.each", "vi(x)", "const vi = 1", 'import { vi } from "vitest"',
+    'describe("a", () => {})', "const beforeEach = 1", "const vi = 1", 'import { vi } from "vitest"',
 ])
 def test_hook_false_otherwise(text):
     assert _only(text)["hook"] is False
@@ -407,6 +408,120 @@ def test_hook_false_otherwise(text):
 
 def test_hook_ignores_a_leading_comment():
     assert _only("// reset\nbeforeEach(() => {})")["hook"] is True
+
+
+def test_a_comment_only_record_is_not_a_hook():
+    assert [rec["hook"] for rec in front.parse("const a = 1\n// the end")] == [False, False]
+
+
+def test_a_registration_needs_its_callee_to_be_a_framework_name():
+    assert [rec["hook"] for rec in front.parse('import { it } from "vitest"\nit("a", () => {})')] == [False, False]
+    recs = front.parse('import { it } from "./helpers"\nit("a", () => {})')
+    assert [rec["hook"] for rec in recs] == [False, True]
+
+
+# --- the allowlist for a host statement outside the moved test ------------------------------------------------
+
+_FRAMEWORKS = frozenset(("it", "test", "describe"))
+
+
+def _allowed(text, frameworks=_FRAMEWORKS):
+    stmts = front._split(front._Scanner(text).run())
+    assert len(stmts) == 1, stmts
+    return front._allowed_host([tok for tok in stmts[0] if tok[0] != "comment"], frameworks)
+
+
+@pytest.mark.parametrize("text", [
+    pytest.param('import { a } from "m"', id="a-import-named"),
+    pytest.param('import a from "m"', id="a-import-default"),
+    pytest.param('import * as ns from "m"', id="a-import-namespace"),
+    pytest.param('import type { T } from "m"', id="a-import-type"),
+    pytest.param("function f(a, b) { return a }", id="b-function"),
+    pytest.param("export default async function* g() {}", id="b-export-default-async-generator"),
+    pytest.param("export async function h(): Promise<void> {}", id="b-return-type"),
+    pytest.param("function f<T>(x: T): T { return x }", id="b-type-parameters"),
+    pytest.param("class C {}", id="c-class"),
+    pytest.param("export default class D extends Base { m() {} x = 1 }", id="c-extends-and-members"),
+    pytest.param("export abstract class E<T> implements I {}", id="c-abstract-implements"),
+    pytest.param("const a = 1", id="d-const"),
+    pytest.param("export const f = x => load(x)", id="d-arrow"),
+    pytest.param("let g = async function () { load() }", id="d-function-expression"),
+    pytest.param("const o = { a: 1, b: [1, 2], c: `t` }", id="d-plain-expression"),
+    pytest.param("var v", id="d-no-initializer"),
+    pytest.param("const a = 1, b = x => x", id="d-two-declarators"),
+    pytest.param("const m: Record<string, number> = {}", id="d-annotation-with-comma"),
+    pytest.param("type T = number", id="e-type"),
+    pytest.param("export interface I { a: string }", id="e-interface"),
+    pytest.param("declare type U = string", id="e-declare"),
+    pytest.param('it("x", () => {})', id="f-it"),
+    pytest.param("test(`x`, function () {}, 5000)", id="f-test-with-timeout"),
+    pytest.param('describe("x", () => { it("y", () => {}) })', id="f-describe"),
+    pytest.param('describe("x", () => { it("y", () => {}); const k = 1; })', id="f-describe-with-plain-code"),
+    pytest.param('describe("x", () => { describe("y", () => { test("z", () => {}) }) })', id="f-nested-describe"),
+    pytest.param(";", id="lone-semicolon"),
+])
+def test_allowed_host_allows(text):
+    assert _allowed(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    pytest.param('import "./setup"', id="side-effect-import"),
+    pytest.param('import {} from "m"', id="empty-import"),
+    pytest.param('it.only("x", () => {})', id="it-only"),
+    pytest.param('describe.skip("x", () => {})', id="describe-skip"),
+    pytest.param('test.each([1])("x", () => {})', id="test-each"),
+    pytest.param("globalThis.fetch = f;", id="global-write"),
+    pytest.param("const x = load();", id="call-in-initializer"),
+    pytest.param("const y = new Map();", id="new-in-initializer"),
+    pytest.param("const z = await y;", id="await-in-initializer"),
+    pytest.param("const t = tag`x`;", id="tagged-template"),
+    pytest.param("const t = `${a}`;", id="template-substitution"),
+    pytest.param("const w = (q = 1);", id="assignment-in-initializer"),
+    pytest.param("const a = 1, b = load()", id="call-in-second-declarator"),
+    pytest.param("const f = (() => 1)()", id="immediately-invoked-arrow"),
+    pytest.param("@dec class C {}", id="decorated-class"),
+    pytest.param("class C { @d m() {} }", id="decorated-member"),
+    pytest.param("class C extends mk() {}", id="call-in-heritage"),
+    pytest.param("class C extends tag`x` {}", id="template-in-heritage"),
+    pytest.param("class C { static x = load(); }", id="static-field"),
+    pytest.param("class C { static { load() } }", id="static-block"),
+    pytest.param("class C { [load()] = 1 }", id="computed-key"),
+    pytest.param("if (a) {}", id="if"),
+    pytest.param("for (;;) {}", id="for"),
+    pytest.param("try {} catch (e) {}", id="try"),
+    pytest.param("{ load() }", id="bare-block"),
+    pytest.param('export * from "m";', id="re-export-all"),
+    pytest.param('export { a } from "m"', id="re-export"),
+    pytest.param("export { a }", id="export-list"),
+    pytest.param("export = x", id="export-equals"),
+    pytest.param("export default foo", id="export-default-expression"),
+    pytest.param("export default () => {}", id="export-default-arrow"),
+    pytest.param("enum E { A }", id="enum"),
+    pytest.param("const enum E { A }", id="const-enum"),
+    pytest.param("function f() {} load()", id="function-then-call-on-one-line"),
+    pytest.param("interface I {} load()", id="interface-then-call-on-one-line"),
+    pytest.param("foo()", id="call"),
+    pytest.param('describe("x", () => { globalThis.fetch = f; })', id="describe-global-write"),
+    pytest.param('describe("x", () => { beforeEach(() => {}); it("y", () => {}); })', id="describe-before-each"),
+    pytest.param('describe("x", () => { const k = load(); })', id="describe-call-in-initializer"),
+    pytest.param('describe("x", () => { describe.skip("y", () => {}) })', id="describe-nested-skip"),
+    pytest.param('describe("x", () => foo())', id="describe-expression-body"),
+    pytest.param('it("x", f(), () => {})', id="call-as-argument"),
+    pytest.param("it(`${load()}`, () => {})", id="substituted-title"),
+    pytest.param('it("x", f)', id="identifier-callback"),
+    pytest.param('it("x", () => {}, { timeout: 1 })', id="options-object"),
+    pytest.param('it("x" + n, () => {})', id="concatenated-title"),
+    pytest.param('it("x", () => {}, 1, 2)', id="extra-argument"),
+    pytest.param('it("x", () => {})()', id="called-result"),
+    pytest.param('export it("x", () => {})', id="exported-registration"),
+])
+def test_allowed_host_refuses(text):
+    assert _allowed(text) is False
+
+
+def test_allowed_host_needs_the_callee_to_be_a_framework_name():
+    assert _allowed('it("x", () => {})', frozenset()) is False
+    assert _allowed('describe("x", () => { it("y", () => {}) })', frozenset(("describe",))) is False
 
 
 def test_uses_excludes_the_name_after_a_dot():

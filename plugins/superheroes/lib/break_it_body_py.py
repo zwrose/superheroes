@@ -9,6 +9,7 @@ import ast
 import copy
 import io
 import re
+import symtable
 import tokenize
 
 EXTENSIONS = (".py",)
@@ -18,8 +19,7 @@ _DIRECTIVE = re.compile(r"^#\s*(type:|pyright:|mypy:|noqa|pragma)", re.IGNORECAS
 _SPACES = re.compile(r"\s+")
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-_HOOK_NAMES = frozenset(["pytestmark", "pytest_plugins", "setup_module", "teardown_module", "setUpModule",
-                         "tearDownModule", "setup_function", "teardown_function", "load_tests"])
+_VALUE_REFUSED = (ast.Call, ast.Lambda, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom) + _COMPREHENSIONS
 
 
 def _directives(text):
@@ -51,19 +51,61 @@ def _import_pairs(node):
     return tuple(pairs)
 
 
-def _binds(node, out):
+def _fixture_aliases(tree):
+    """Local names the module gives ``pytest.fixture`` through ``from pytest import fixture as <alias>``."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module == "pytest":
+            found.update(alias.asname for alias in node.names if alias.name == "fixture" and alias.asname)
+    return frozenset(found)
+
+
+def _is_fixture(func, aliases=frozenset()):
+    """True when ``func`` (a decorator's callee) is ``fixture``, an import alias of it, or ``<anything>.fixture``."""
+    return ((isinstance(func, ast.Name) and (func.id == "fixture" or func.id in aliases))
+            or (isinstance(func, ast.Attribute) and func.attr == "fixture"))
+
+
+def _class_globals(body):
+    """Names declared ``global`` in a class body (or a nested class body), without entering a function or lambda."""
+    names = set()
+    stack = list(body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Global):
+            names.update(node.names)
+        elif not isinstance(node, _FUNCTIONS + (ast.Lambda,)):
+            stack.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def _binds(node, out, aliases=frozenset()):
     """Names ``node`` binds at module scope, without entering a nested function, lambda, class or comprehension."""
     if isinstance(node, _FUNCTIONS):
         out.add(node.name)
+        # a fixture registered under an explicit name binds that name for pytest, whatever the function is called
+        for decorator in node.decorator_list:
+            if not (isinstance(decorator, ast.Call) and _is_fixture(decorator.func, aliases)):
+                continue
+            for sub in decorator.keywords:
+                if sub.arg == "name" and isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
+                    out.add(sub.value.value)
         for sub in node.decorator_list + node.args.defaults + [d for d in node.args.kw_defaults if d]:
-            _binds(sub, out)
+            _binds(sub, out, aliases)
     elif isinstance(node, ast.ClassDef):
         out.add(node.name)
         for sub in node.decorator_list + node.bases + [k.value for k in node.keywords]:
-            _binds(sub, out)
+            _binds(sub, out, aliases)
+        # a class body runs at import: a store, import, def or del of a name it declared global rebinds the module name
+        declared = _class_globals(node.body)
+        if declared:
+            inner = set()
+            for sub in node.body:
+                _binds(sub, inner, aliases)
+            out.update(inner & declared)
     elif isinstance(node, ast.Lambda):
         for sub in node.args.defaults + [d for d in node.args.kw_defaults if d]:
-            _binds(sub, out)
+            _binds(sub, out, aliases)
     elif isinstance(node, _COMPREHENSIONS):
         # a walrus inside a comprehension binds in the enclosing scope
         for sub in ast.walk(node):
@@ -84,32 +126,108 @@ def _binds(node, out):
         elif isinstance(node, ast.MatchMapping) and node.rest:
             out.add(node.rest)
         for sub in ast.iter_child_nodes(node):
-            _binds(sub, out)
+            _binds(sub, out, aliases)
 
 
 def _uses(node):
+    """The names ``node`` depends on from outside itself: every name its own level binds or reads, the global
+    reads of each nested scope (a nested scope's own locals are not dependencies, and do not hide an outer one),
+    and every parameter of a function that sits at module or class level (a pytest fixture request)."""
     names = set()
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Name):
-            names.add(sub.id)
-        elif isinstance(sub, ast.arg):
-            names.add(sub.arg)
-        elif isinstance(sub, _FUNCTIONS + (ast.ClassDef,)):
-            names.add(sub.name)
-        elif isinstance(sub, (ast.Import, ast.ImportFrom)):
-            names.update(local for local, _ in _import_pairs(sub) if local != "*")
+
+    def walk(table, parent):
+        # a class body's reads fall back to module and builtin names, so a class contributes every name it reads;
+        # an assignment-only class attribute is not a dependency, and a compiler-mangled private name keeps both
+        # spellings: the runtime name (what a module binding must not override) and the source spelling
+        if parent is None:
+            names.update(sym.get_name() for sym in table.get_symbols())
+        elif table.get_type() == "class":
+            prefix = "_" + table.get_name().lstrip("_") + "__"
+            for sym in table.get_symbols():
+                if sym.is_referenced():
+                    sym_name = sym.get_name()
+                    if table.get_name().strip("_") and sym_name.startswith(prefix) and len(sym_name) > len(prefix):
+                        names.add("__" + sym_name[len(prefix):])
+                    names.add(sym_name)
+        else:
+            names.update(sym.get_name() for sym in table.get_symbols() if sym.is_global())
+        # only a real def requests fixtures: a lambda, comprehension or generator scope is a function table whose
+        # name is not an identifier (``<genexpr>``) or is ``lambda``, and carries implicit parameters such as ``.0``
+        name = table.get_name()
+        if (table.get_type() == "function" and parent is not None and parent.get_type() in ("module", "class")
+                and name.isidentifier() and name != "lambda"):
+            names.update(sym.get_name() for sym in table.get_symbols()
+                         if sym.is_parameter() and sym.get_name().isidentifier())
+        for child in table.get_children():
+            walk(child, table)
+
+    walk(symtable.symtable(ast.unparse(node), "<break-it>", "exec"), None)
     return frozenset(names)
 
 
-def _autouse(node):
-    if not isinstance(node, _FUNCTIONS):
+def _hook_name(name):
+    """True for a name a test runner treats as module setup: ``pytest*`` (``pytest_generate_tests``, ``pytestmark``),
+    ``setup*`` / ``teardown*`` (``setup_module``, ``setUpModule``), in any case, and ``load_tests``."""
+    return name.lower().startswith(("pytest", "setup", "teardown")) or name == "load_tests"
+
+
+def _plain_value(value):
+    """True when ``value`` (an expression or ``None``) runs no code at import: no call, lambda, walrus,
+    comprehension, generator, await or yield anywhere inside it."""
+    return value is None or not any(isinstance(sub, _VALUE_REFUSED) for sub in ast.walk(value))
+
+
+def _docstring(node):
+    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+
+
+def _plain_assignment(node):
+    """True for an assignment or annotated assignment whose every target is a simple name that is no runner hook
+    (see ``_hook_name``, or a dunder) and whose value runs no code at import."""
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, [node.value]
+    elif isinstance(node, ast.AnnAssign):
+        targets, value = [node.target], [node.value, node.annotation]
+    else:
         return False
-    for decorator in node.decorator_list:
-        for sub in ast.walk(decorator):
-            if (isinstance(sub, ast.keyword) and sub.arg == "autouse"
-                    and not (isinstance(sub.value, ast.Constant) and sub.value.value is False)):
-                return True
-    return False
+    if not all(isinstance(target, ast.Name) for target in targets):
+        return False
+    for target in targets:
+        name = target.id
+        if _hook_name(name) or (name.startswith("__") and name.endswith("__")):
+            return False
+    # axis: a value that runs code at import (a call, lambda, walrus, comprehension, await or yield) is a hook — see bite-proof record wo_a_2053_break_it_body
+    return all(_plain_value(part) for part in value)
+
+
+def _plain_class(node):
+    """True for an undecorated class whose bases and body run no code at import: no call in a base or keyword, no
+    ``global`` / ``nonlocal`` or decorator at any depth, and only defs, plain assignments and docstrings directly
+    in its body (a class body runs at load, so it meets the module-level rules)."""
+    if node.decorator_list or not all(_plain_value(sub) for sub in node.bases + [k.value for k in node.keywords]):
+        return False
+    if any(isinstance(sub, (ast.Global, ast.Nonlocal)) or getattr(sub, "decorator_list", None)
+           for sub in ast.walk(node)):
+        return False
+    return all(isinstance(sub, _FUNCTIONS) or _plain_assignment(sub) or _docstring(sub) for sub in node.body)
+
+
+def _allowed_host(node):
+    """True when the module-level statement ``node`` is plain code a host may add around a moved test: an import,
+    an undecorated def or class that is no runner hook, a constant assignment or a docstring. Anything else
+    (a decorated def or class, control flow, a call statement, an augmented assignment, ``global``, ``del``,
+    ``assert``, ``raise``) can change how the test runs and is not allowed."""
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return True
+    if isinstance(node, _FUNCTIONS):
+        # axis: a decorated def (a fixture under any spelling or alias) is a hook, and so is a runner-named def — see bite-proof record wo_a_2053_break_it_body
+        return not node.decorator_list and not _hook_name(node.name)
+    if isinstance(node, ast.ClassDef):
+        return _plain_class(node)
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return _plain_assignment(node)
+    # axis: module-level control flow, an expression statement, an augmented assignment, global, del, assert and raise are all hooks — see bite-proof record wo_a_2053_break_it_body
+    return _docstring(node)
 
 
 def _normalise(node):
@@ -128,7 +246,7 @@ def _normalise(node):
     return clone, tuple(titles)
 
 
-def _record(node, directives):
+def _record(node, directives, aliases=frozenset()):
     lo, hi = _span(node)
     mine = tuple(text for line, text in directives if lo <= line <= hi)
     if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -137,10 +255,12 @@ def _record(node, directives):
         clone, titles = _normalise(node)
         key, kind = (ast.dump(clone, include_attributes=False), mine), "stmt"
     binds = set()
-    _binds(node, binds)
+    _binds(node, binds, aliases)
     return {"kind": kind, "key": key, "titles": titles, "imports": _import_pairs(node),
             "binds": frozenset(binds), "uses": _uses(node),
-            "hook": _autouse(node) or bool(binds & _HOOK_NAMES)}
+            "hook": not _allowed_host(node),
+            # a relative import at any depth (inside a test function too) resolves against its file's package
+            "relative": any(isinstance(sub, ast.ImportFrom) and (sub.level or 0) > 0 for sub in ast.walk(node))}
 
 
 def parse(text):
@@ -150,6 +270,7 @@ def parse(text):
         tree = ast.parse(text)
         # axis: a directive comment inside a statement is part of its key, so an added `# type: ignore` is a different test — see bite-proof record wo_a_2053_break_it_body
         directives = _directives(text)
-        return [_record(node, directives) for node in tree.body]
+        aliases = _fixture_aliases(tree)
+        return [_record(node, directives, aliases) for node in tree.body]
     except Exception as exc:
         raise ValueError("unreadable python: %s" % type(exc).__name__) from exc

@@ -1363,3 +1363,1034 @@ pytest exit: 1
 2 passed in 1.56s
 pytest exit: 0
 ```
+
+---
+
+## A4 — closed-world host check
+
+**Provenance:** claude / sonnet-5.5 (implementer, work order A4c), maker family anthropic. Refs #2060. Production under proof: `plugins/superheroes/lib/break_it_body_py.py` (`_allowed_host`, `_plain_assignment`, and the record dict in `_record`, which `parse` returns). Tests: `plugins/superheroes/lib/tests/test_break_it_body_2053.py` (the closed-world section, from `# ---- the closed-world host check (#2060)`).
+
+Declared guarded-element set (from the order): **H1**, **H2**, **H3**, **H4**. Each was neutralized by one targeted edit (the Edit tool, exact-text match), only its proving nodes run by exact node id (never `-k`), the inverse edit applied, `git diff --stat` taken over the file (empty: the file equals the last commit), and the same ids run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used.
+
+### Guarded elements
+
+| ID | Guarded element | Axis | Proving nodes (all in `test_break_it_body_2053.py`) |
+|---|---|---|---|
+| H1 | `_allowed_host`'s decorator refusal, `break_it_body_py.py:224` (`return not node.decorator_list and not _hook_name(node.name)`) | a decorated module-level def is a hook (a fixture under any spelling or alias), so a host that adds one is refused | `::test_allowed_host_refuses_each_forbidden_shape[decorated-def]`, `[decorated-async-def]`; `::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper]` |
+| H2 | `_allowed_host`'s refusal of module-level control flow, `break_it_body_py.py:230` (`return _docstring(node)`, the fall-through for every statement kind not listed above it) | `if`, `try`, `for`, `while`, `with` and `match` at module level are hooks | `::test_allowed_host_refuses_each_forbidden_shape[if]`, `[try]`, `[for]`, `[while]`, `[with]`, `[match]`; `::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[if-holding-a-def]` |
+| H3 | `_allowed_host`'s refusal of a call in an assigned value, `break_it_body_py.py:200` (`return all(_plain_value(part) for part in value)` in `_plain_assignment`) | an assignment or annotated assignment whose value calls something, at module level or in a class body, is a hook | `::test_allowed_host_refuses_each_forbidden_shape[call-value]`, `[annotated-call]`, `[class-call-assignment]`; `::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-in-assignment]` |
+| H4 | the wiring, `break_it_body_py.py:261` (the `"hook": not _allowed_host(node),` entry of the record dict that `parse` returns) | `parse` records a statement as a hook exactly when `_allowed_host` refuses it, so `locate` reads `host-setup` | `::test_front_records_hook_is_the_negation_of_allowed_host`; `::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-statement]`, `[decorated-helper]` |
+
+### Disclosures
+
+- Every element went red under its neutralization (the harness reported `Exit code 1` for each red run) and green after the restore (each green run completed with no error code, exit 0). The command shape is `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <exact node ids> -q`, run as a single command, so there is no trailing `echo "pytest exit: $?"` line as in the entries above; the exit codes are the harness's. Everything else is verbatim (default `--tb`, no filter).
+- H2's first red run was printed to the session by the harness with 11291 characters cut out of its middle. That output was not reconstructed. With the neutralization still applied, the same seven ids were run once more (a spare run) with the output redirected to a file outside the repository and read back whole; the H2 red below is that second run, and its summary (`7 failed`) matches the visible head and tail of the first. The H3 and H4 reds were captured the same way from the start, to a file outside the repository, read back whole, and pasted unedited. The H1 red is the harness's own printout, untruncated. The greens are the harness's printout.
+- Scope of each neutralization: H1 drops only the decorator test on a def (a decorated class is `_plain_class`'s own check, outside this element). H2 lets only the six control-flow statement kinds through; every other forbidden shape stays refused. H3 returns `True` from `_plain_assignment` before the value test, which also lifts the lambda, walrus, comprehension, generator, await and yield refusals; the proving ids are limited to a call in the value, the axis claimed. H4 replaces the entry with a constant `False`, so no statement is ever a hook.
+- The tests' parametrized forms print their full `@pytest.mark.parametrize` decorator block above each failing assertion; it is shown as printed, once per failing id.
+- Redaction: none needed; local `/Users/zwrose/...` paths are kept as printed, no secret, token or private URL appears.
+- Test commands: 10 of the 12 budgeted (H1: 2, H2: 3 including the one re-run, H3: 2, H4: 2, and the final run of the whole file). All captures are under 32 KiB each and under 128 KiB together, so none is written off-repo as an overflow. The final run of the file:
+
+```
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 34%]
+........................................................................ [ 69%]
+................................................................         [100%]
+208 passed in 19.71s
+```
+
+---
+
+### H1: the decorator refusal
+
+- **axis:** a decorated module-level def is a hook (a fixture under any spelling or alias), so a host that adds one is refused
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_py.py`, `_allowed_host`):
+```diff
+-        return not node.decorator_list and not _hook_name(node.name)
++        return not _hook_name(node.name)
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[decorated-def]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[decorated-async-def]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper]" -q
+```
+
+**raw red** (exit 1):
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+________ test_allowed_host_refuses_each_forbidden_shape[decorated-def] _________
+
+text = '@pytest.fixture\ndef f():\n    pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x105de2480>(<ast.FunctionDef object at 0x104ead410>)
+E        +    where <function _allowed_host at 0x105de2480> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_____ test_allowed_host_refuses_each_forbidden_shape[decorated-async-def] ______
+
+text = '@fx(autouse=True)\nasync def f():\n    pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x105de2480>(<ast.AsyncFunctionDef object at 0x104c43490>)
+E        +    where <function _allowed_host at 0x105de2480> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper] _
+
+extra = '@functools.lru_cache\ndef helper():\n    return 1\n'
+
+    @pytest.mark.parametrize("extra", [
+        "if True:\n    def helper():\n        return 1\n",
+        "setup_things()\n",
+        "@functools.lru_cache\ndef helper():\n    return 1\n",
+        "COUNT += 1\n",
+        "CONFIG = load()\n",
+    ], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+    def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+        got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+>       assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+E       AssertionError: assert ('found', None) == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'found' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[decorated-def]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[decorated-async-def]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper]
+3 failed in 1.40s
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/break_it_body_py.py` (`return not _hook_name(node.name)` back to `return not node.decorator_list and not _hook_name(node.name)`).
+
+**restore receipt** (`git diff --stat -- plugins/superheroes/lib/break_it_body_py.py` printed nothing, so the file equals its last commit; the restored line, quoted back from `_allowed_host`):
+```
+        return not node.decorator_list and not _hook_name(node.name)
+```
+
+**raw green** (exit 0), same command:
+```
+...                                                                      [100%]
+3 passed in 1.24s
+```
+
+---
+
+### H2: the refusal of module-level control flow
+
+- **axis:** `if`, `try`, `for`, `while`, `with` and `match` at module level are hooks, so a host that adds one is refused
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_py.py`, `_allowed_host`, the fall-through return; the edit's match text included the following blank lines and `def _normalise` to be unique):
+```diff
+-    return _docstring(node)
++    return _docstring(node) or isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.Match))
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[if]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[try]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[for]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[while]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[with]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[match]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[if-holding-a-def]" -q
+```
+
+**raw red** (exit 1; the second run of this command, see the disclosures):
+```
+FFFFFFF                                                                  [100%]
+=================================== FAILURES ===================================
+______________ test_allowed_host_refuses_each_forbidden_shape[if] ______________
+
+text = 'if c:\n    x = 1\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x107d87560>(<ast.If object at 0x107cefb90>)
+E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_____________ test_allowed_host_refuses_each_forbidden_shape[try] ______________
+
+text = 'try:\n    x = 1\nexcept E:\n    pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x107d87560>(<ast.Try object at 0x107c02910>)
+E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_____________ test_allowed_host_refuses_each_forbidden_shape[for] ______________
+
+text = 'for i in v:\n    pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x107d87560>(<ast.For object at 0x107bc5610>)
+E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+____________ test_allowed_host_refuses_each_forbidden_shape[while] _____________
+
+text = 'while c:\n    pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x107d87560>(<ast.While object at 0x107cefa10>)
+E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_____________ test_allowed_host_refuses_each_forbidden_shape[with] _____________
+
+text = 'with c:\n    pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x107d87560>(<ast.With object at 0x107c188d0>)
+E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+____________ test_allowed_host_refuses_each_forbidden_shape[match] _____________
+
+text = 'match c:\n    case 1:\n        pass\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x107d87560>(<ast.Match object at 0x107c78fd0>)
+E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[if-holding-a-def] _
+
+extra = 'if True:\n    def helper():\n        return 1\n'
+
+    @pytest.mark.parametrize("extra", [
+        "if True:\n    def helper():\n        return 1\n",
+        "setup_things()\n",
+        "@functools.lru_cache\ndef helper():\n    return 1\n",
+        "COUNT += 1\n",
+        "CONFIG = load()\n",
+    ], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+    def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+        got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+>       assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+E       AssertionError: assert ('found', None) == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'found' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[if]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[try]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[for]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[while]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[with]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[match]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[if-holding-a-def]
+7 failed in 1.83s
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/break_it_body_py.py` (`return _docstring(node) or isinstance(node, (ast.If, ...))` back to `return _docstring(node)`).
+
+**restore receipt** (`git diff --stat -- plugins/superheroes/lib/break_it_body_py.py` printed nothing, so the file equals its last commit; the restored line, quoted back from `_allowed_host`):
+```
+    return _docstring(node)
+```
+
+**raw green** (exit 0), same command:
+```
+.......                                                                  [100%]
+7 passed in 0.85s
+```
+
+---
+
+### H3: the refusal of a call in an assigned value
+
+- **axis:** an assignment or annotated assignment whose value calls something, at module level or in a class body, is a hook, so a host that adds one is refused
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_py.py`, `_plain_assignment`, its last line):
+```diff
+-    return all(_plain_value(part) for part in value)
++    return True
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[call-value]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[annotated-call]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[class-call-assignment]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-in-assignment]" -q
+```
+
+**raw red** (exit 1):
+```
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+__________ test_allowed_host_refuses_each_forbidden_shape[call-value] __________
+
+text = 'x = f()\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x105f8e980>(<ast.Assign object at 0x105f2b510>)
+E        +    where <function _allowed_host at 0x105f8e980> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+________ test_allowed_host_refuses_each_forbidden_shape[annotated-call] ________
+
+text = 'x: int = f()\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x105f8e980>(<ast.AnnAssign object at 0x105f15d90>)
+E        +    where <function _allowed_host at 0x105f8e980> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+____ test_allowed_host_refuses_each_forbidden_shape[class-call-assignment] _____
+
+text = 'class K:\n    x = f()\n'
+
+    @pytest.mark.parametrize("text", [
+        "@pytest.fixture\ndef f():\n    pass\n",
+        "@fx(autouse=True)\nasync def f():\n    pass\n",
+        "def pytest_generate_tests(metafunc):\n    pass\n",
+        "def pytestmark():\n    pass\n",
+        "def setup_module():\n    pass\n",
+        "def setUpModule():\n    pass\n",
+        "def tearDownModule():\n    pass\n",
+        "def load_tests(loader, tests, pattern):\n    pass\n",
+        "@register\nclass K:\n    pass\n",
+        "class K:\n    global g\n    g = 1\n",
+        "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+        "class K(make()):\n    pass\n",
+        "class K(metaclass=make()):\n    pass\n",
+        "class K:\n    register()\n",
+        "class K:\n    if c:\n        x = 1\n",
+        "class K:\n    x = f()\n",
+        "class K:\n    pytestmark = 1\n",
+        "class K:\n    x += 1\n",
+        "PYTESTMARK = 1\n",
+        "pytestmark = 1\n",
+        "pytest_plugins = ['x']\n",
+        "setup_module = other\n",
+        "__unittest_skip__ = True\n",
+        "A.b = 1\n",
+        "x, y = 1, 2\n",
+        "x = f()\n",
+        "x = lambda: 1\n",
+        "x = (y := 1)\n",
+        "x = [i for i in range(3)]\n",
+        "x = {i for i in ()}\n",
+        "x = (i for i in ())\n",
+        "x: int = f()\n",
+        "if c:\n    x = 1\n",
+        "try:\n    x = 1\nexcept E:\n    pass\n",
+        "for i in v:\n    pass\n",
+        "while c:\n    pass\n",
+        "with c:\n    pass\n",
+        "match c:\n    case 1:\n        pass\n",
+        "f()\n",
+        "'a' + 'b'\n",
+        "x += 1\n",
+        "global g\n",
+        "del x\n",
+        "assert x\n",
+        "raise E\n",
+    ], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+            "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+            "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+            "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+            "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+            "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+            "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+            "raise"])
+    def test_allowed_host_refuses_each_forbidden_shape(text):
+>       assert not front._allowed_host(ast.parse(text).body[0])
+E       assert not True
+E        +  where True = <function _allowed_host at 0x105f8e980>(<ast.ClassDef object at 0x1050c7150>)
+E        +    where <function _allowed_host at 0x105f8e980> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+_ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-in-assignment] _
+
+extra = 'CONFIG = load()\n'
+
+    @pytest.mark.parametrize("extra", [
+        "if True:\n    def helper():\n        return 1\n",
+        "setup_things()\n",
+        "@functools.lru_cache\ndef helper():\n    return 1\n",
+        "COUNT += 1\n",
+        "CONFIG = load()\n",
+    ], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+    def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+        got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+>       assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+E       AssertionError: assert ('found', None) == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'found' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[call-value]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[annotated-call]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[class-call-assignment]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-in-assignment]
+4 failed in 1.89s
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/break_it_body_py.py` (`return True` back to `return all(_plain_value(part) for part in value)`; the edit's match text included the following blank lines and `def _plain_class` to be unique).
+
+**restore receipt** (`git diff --stat -- plugins/superheroes/lib/break_it_body_py.py` printed nothing, so the file equals its last commit; the restored line, quoted back from `_plain_assignment`):
+```
+    return all(_plain_value(part) for part in value)
+```
+
+**raw green** (exit 0), same command:
+```
+....                                                                     [100%]
+4 passed in 1.25s
+```
+
+---
+
+### H4: the wiring of `_allowed_host` into the record
+
+- **axis:** `parse` records a statement as a hook exactly when `_allowed_host` refuses it, so `locate` reads `host-setup`
+
+**neutralization** (`plugins/superheroes/lib/break_it_body_py.py`, the record dict in `_record`, which `parse` returns):
+```diff
+-            "hook": not _allowed_host(node),
++            "hook": False,
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_front_records_hook_is_the_negation_of_allowed_host "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-statement]" "plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper]" -q
+```
+
+**raw red** (exit 1):
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+___________ test_front_records_hook_is_the_negation_of_allowed_host ____________
+
+    def test_front_records_hook_is_the_negation_of_allowed_host():
+        for text in ("import os\n", "x = 1\n", "x = f()\n", "@d\ndef f(): pass\n", "if c:\n    pass\n"):
+            node = ast.parse(text).body[0]
+>           assert front.parse(text)[0]["hook"] is (not front._allowed_host(node))
+E           assert False is not False
+E            +  where False = <function _allowed_host at 0x103d7e980>(<ast.Assign object at 0x103ceddd0>)
+E            +    where <function _allowed_host at 0x103d7e980> = front._allowed_host
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1013: AssertionError
+_ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-statement] _
+
+extra = 'setup_things()\n'
+
+    @pytest.mark.parametrize("extra", [
+        "if True:\n    def helper():\n        return 1\n",
+        "setup_things()\n",
+        "@functools.lru_cache\ndef helper():\n    return 1\n",
+        "COUNT += 1\n",
+        "CONFIG = load()\n",
+    ], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+    def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+        got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+>       assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+E       AssertionError: assert ('found', None) == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'found' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+_ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper] _
+
+extra = '@functools.lru_cache\ndef helper():\n    return 1\n'
+
+    @pytest.mark.parametrize("extra", [
+        "if True:\n    def helper():\n        return 1\n",
+        "setup_things()\n",
+        "@functools.lru_cache\ndef helper():\n    return 1\n",
+        "COUNT += 1\n",
+        "CONFIG = load()\n",
+    ], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+    def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+        got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+>       assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+E       AssertionError: assert ('found', None) == ('unresolved', 'host-setup')
+E         
+E         At index 0 diff: 'found' != 'unresolved'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_front_records_hook_is_the_negation_of_allowed_host
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-statement]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper]
+3 failed in 1.73s
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/break_it_body_py.py` (`"hook": False,` back to `"hook": not _allowed_host(node),`).
+
+**restore receipt** (`git diff --stat -- plugins/superheroes/lib/break_it_body_py.py` printed nothing, so the file equals its last commit; the restored line, quoted back from the record dict in `_record`):
+```
+            "hook": not _allowed_host(node),
+```
+
+**raw green** (exit 0), same command:
+```
+...                                                                      [100%]
+3 passed in 1.27s
+```
