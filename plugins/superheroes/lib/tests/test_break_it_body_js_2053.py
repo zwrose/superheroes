@@ -716,3 +716,40 @@ def test_an_own_name_framework_import_still_normalizes_the_title():
         _assert_same(own, own.replace('"a"', '"b"'))
     default = 'import test from "vitest";\ntest("a", f)'
     _assert_differ(default, default.replace('"a"', '"b"'))
+
+
+# --- review round 1 (#2053 L2) -----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    'test("regex", () => { expect("(").toMatch(/\\(/); });',
+    'test("comment", () => {\n  // f(\n  expect(1).toBe(1);\n});',
+])
+def test_valid_js_with_a_paren_in_a_regex_or_comment_locates_an_identical_candidate(text):
+    found = break_it_body.locate(text, "a.test.js", [("moved.test.js", text)])
+    assert (found["status"], found["path"]) == ("found", "moved.test.js"), found
+
+
+@pytest.mark.parametrize("params, hook", [
+    ("()", False),
+    ("(a, b)", False),
+    ("a", False),
+    ("({ unused = (globalThis.disabled = true) } = {})", True),
+    ("(a = globalThis.x())", True),
+    ("({ a })", True),
+    ("(...rest)", True),
+])
+def test_a_describe_callback_with_a_parameter_default_or_pattern_is_a_hook(params, hook):
+    arrow = 'describe("extra", %s => {});' % params
+    assert _only(arrow)["hook"] is hook
+    func = 'describe("extra", function %s {});' % (params if params.startswith("(") else "(%s)" % params)
+    assert _only(func)["hook"] is hook
+
+
+def test_a_template_literal_module_load_counts_as_relative():
+    assert _only("const subject = require(`./subject`);")["relative"] is True
+    assert _only("const subject = require(`../x/${name}`);")["relative"] is True
+    assert _only("const subject = require(`left-pad`);")["relative"] is False
+    moved = break_it_body.locate("const subject = require(`./subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });",
+                                 "old/a.test.js",
+                                 [("other/b.test.js", "const subject = require(`./subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });")])
+    assert moved["status"] == "unresolved", moved

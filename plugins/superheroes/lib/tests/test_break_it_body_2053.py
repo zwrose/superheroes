@@ -1230,3 +1230,14 @@ def test_front_records_hook_is_the_negation_of_allowed_host():
     for text in ("import os\n", "x = 1\n", "x = f()\n", "@d\ndef f(): pass\n", "if c:\n    pass\n"):
         node = ast.parse(text).body[0]
         assert front.parse(text)[0]["hook"] is (not front._allowed_host(node))
+
+
+@pytest.mark.parametrize("flag", ["--test-name-pattern=regression", "--test-skip-pattern=smoke"])
+def test_node_name_filters_refuse_a_renamed_test_command(flag):
+    import break_it
+    command, reason = break_it._rewrite_command(
+        "node --test %s web/a.test.mjs" % flag, "web/a.test.mjs", "web/b.test.mjs", [("regression case", "renamed case")])
+    assert (command, reason) == (None, "command-selects-tests")
+    command, reason = break_it._rewrite_command(
+        "node --test %s web/a.test.mjs" % flag, "web/a.test.mjs", "web/b.test.mjs", [])
+    assert reason is None

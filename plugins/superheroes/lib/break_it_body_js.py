@@ -529,6 +529,23 @@ def _type_decl(rest):
     return brace >= 0 and _match(rest, brace) == len(rest) - 1
 
 
+def _plain_params(toks):
+    """True when the parameters of the arrow or `function` expression `toks` are bare names: no default value, pattern,
+    rest element or type, which would evaluate (or be unreadable) when the framework calls the callback."""
+    i = 1 if toks[:1] == [_ASYNC] else 0
+    if toks[i:i + 1] == [_FUNCTION]:
+        j = i + 1 + (toks[i + 1:i + 2] == [_STAR])
+        j += bool(toks[j:j + 1]) and toks[j][0] == "id"
+    elif toks[i:i + 1] == [_LPAREN]:
+        j = i
+    else:
+        return True
+    if toks[j:j + 1] != [_LPAREN]:
+        return False
+    close = _match(toks, j)
+    return close >= 0 and all(tok[0] == "id" or tok == _COMMA for tok in toks[j + 1:close])
+
+
 def _registration(toks, frameworks):
     """A top-level `it`, `test` or `describe` call: a plain title, one function and an optional timeout. A `describe`
     callback runs at collection, so each statement in its body must itself be allowed."""
@@ -550,7 +567,8 @@ def _registration(toks, frameworks):
     is_fn, body = _fn_body(args[1])
     if not is_fn or callee[0][1] != "describe":
         return is_fn
-    return body is not None and all(
+    # axis: a describe callback's parameter list runs at collection before its body, so a default or pattern in it is a hook — see bite-proof record wo_b_2061_break_it_body_js
+    return _plain_params(args[1]) and body is not None and all(
         _allowed_host(stmt, frameworks) for stmt in _split([tok for tok in body if tok[0] != "comment"]))
 
 
@@ -632,8 +650,11 @@ def _relative(sig, imports):
     `import(...)` call, whose module string is relative. Such a statement resolves against its own directory."""
     if any(target[0].startswith(("./", "../")) for _, target in imports):
         return True
-    return any(here in (("id", "require"), _IMPORT) and after == _LPAREN and mod[0] == "str"
-               and mod[1].startswith(("./", "../")) for here, after, mod in zip(sig, sig[1:], sig[2:]))
+    # axis: a substitution-free template names its module like a string, and a computed template cannot be resolved, so both count as relative — see bite-proof record wo_b_2061_break_it_body_js
+    return any(here in (("id", "require"), _IMPORT) and after == _LPAREN
+               and ((mod[0] == "str" and mod[1].startswith(("./", "../")))
+                    or (mod[0] == "tpl" and (mod[1].startswith(("./", "../")) or "${" in mod[1])))
+               for here, after, mod in zip(sig, sig[1:], sig[2:]))
 
 
 def source_names(text):

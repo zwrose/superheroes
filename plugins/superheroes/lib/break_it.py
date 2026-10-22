@@ -953,7 +953,7 @@ def _coerce_line(value):
 
 
 _SELECT_SHORT = ("-k", "-t", "-g")
-_SELECT_LONG = ("--testNamePattern", "--grep", "--filter", "--match")
+_SELECT_LONG = ("--testNamePattern", "--grep", "--filter", "--match", "--test-name-pattern", "--test-skip-pattern")
 
 
 def _names_path(tok, path):
