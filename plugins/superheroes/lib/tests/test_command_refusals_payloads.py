@@ -35,7 +35,8 @@ _SECRET_COMMAND = "curl --fail https://example.test/x?token=" + _SECRET
 
 
 def _entry(**over):
-    entry = {"command": "git push", "refusedBy": "hook", "hook": "no-push", "next": "stopped"}
+    # the schema channels always emit `hook` and `route` (null when unused), so the default carries both
+    entry = {"command": "git push", "refusedBy": "hook", "hook": "no-push", "route": None, "next": "stopped"}
     entry.update(over)
     return entry
 
@@ -46,16 +47,27 @@ def _without(key):
     return entry
 
 
+# a hook-named route the implementer took under the stop rule's one exception
+_ROUTE_ENTRY = {"command": "git checkout --theirs f.txt", "refusedBy": "hook", "hook": "worktree-guard",
+                "route": "git checkout --theirs f.txt", "next": "took the route the guard named"}
+
 VALID_LISTS = [
     [],
     [_entry()],
     [_without("hook")],
+    [_without("route")],
     [_entry(hook=None)],
     [_entry(refusedBy="permission", hook=None), _entry(refusedBy="sandbox")],
+    [_entry(route="git checkout --theirs f.txt")],
+    [_ROUTE_ENTRY],
 ]
 
+# the valid lists the strict write schema accepts: it needs `hook` and `route` on every entry, null when unused
+SCHEMA_VALID_LISTS = [v for v in VALID_LISTS if all("hook" in e and "route" in e for e in v)]
+
 # every malformed case `refusals_fault` refuses: not a list, a non-dict element, an unknown key, a
-# refusedBy outside the enum, a missing key, a blank command / next / hook
+# refusedBy outside the enum, a missing key, a blank command / next / hook / route, a route that is not
+# a string, a route on a refusal that is not a hook's
 MALFORMED_LISTS = [
     "not-a-list",
     {"command": "x"},
@@ -70,6 +82,11 @@ MALFORMED_LISTS = [
     [_entry(command="   ")],
     [_entry(next="  ")],
     [_entry(hook="  ")],
+    [_entry(route="")],
+    [_entry(route="  ")],
+    [_entry(route=5)],
+    [_entry(refusedBy="permission", hook=None, route="git status")],
+    [_entry(refusedBy="sandbox", route="git status")],
 ]
 
 # the cases the native write schema refuses itself: shape and enum, never a blank string
@@ -83,21 +100,27 @@ SCHEMA_REFUSED_LISTS = [
     [_without("next")],
     [_without("refusedBy")],
     [_without("hook")],
+    [_without("route")],
+    [_entry(route=5)],
 ]
 
-# the cases only the admission check refuses: well-shaped but blank strings
+# the cases only the admission check refuses: well-shaped but blank strings, and a route on a refusal
+# that is not a hook's
 BLANK_LISTS = [
     [_entry(command="")],
     [_entry(command="   ")],
     [_entry(next="  ")],
     [_entry(hook="  ")],
+    [_entry(route="  ")],
+    [_entry(refusedBy="permission", hook=None, route="git status")],
 ]
 
 
 def test_the_case_tables_agree_with_refusals_fault():
+    omitting = ([_without("hook")], [_without("route")])
     assert all(CR.refusals_fault(v) is None for v in VALID_LISTS)
     assert all(CR.refusals_fault(v) is not None for v in MALFORMED_LISTS)
-    assert all(CR.refusals_fault(v) is not None for v in SCHEMA_REFUSED_LISTS if v != [_without("hook")])
+    assert all(CR.refusals_fault(v) is not None for v in SCHEMA_REFUSED_LISTS if v not in omitting)
     assert all(CR.refusals_fault(v) is not None for v in BLANK_LISTS)
 
 
@@ -134,12 +157,27 @@ def test_fixer_refusals_contract_is_built_from_the_one_home():
     assert elem["required"] == list(CR.ENTRY_REQUIRED)
     assert elem["optional"] == list(CR.ENTRY_OPTIONAL)
     assert elem["enums"]["refusedBy"] == list(CR.REFUSED_BY)
+    assert "route" in elem["optional"] and "route" in elem["types"]
+
+
+def test_fixer_payload_accepts_a_taken_route():
+    payload = {"fixes": [], "refusals": [_ROUTE_ENTRY]}
+    assert PC.payload_fault(PC.P_FIXER, payload, PC.SEAT_FIXER) is None
+
+
+# axis: a route on a refusal that is not a hook's is refused at the fixer payload contract — see bite-proof record wo_a_2054_route
+@pytest.mark.parametrize("by", ["permission", "sandbox"])
+def test_fixer_payload_refuses_a_route_on_a_refusal_that_is_not_a_hooks(by):
+    entry = dict(_ROUTE_ENTRY, refusedBy=by, hook=None)
+    fault = PC.payload_fault(PC.P_FIXER, {"fixes": [], "refusals": [entry]}, PC.SEAT_FIXER)
+    assert fault is not None
+    assert "route needs refusedBy hook" in fault
 
 
 # --- the native write schema and the report grader -----------------------------------------
 
 
-@pytest.mark.parametrize("refusals", VALID_LISTS[:1] + VALID_LISTS[1:2] + VALID_LISTS[3:])
+@pytest.mark.parametrize("refusals", SCHEMA_VALID_LISTS)
 def test_write_schema_accepts_a_valid_refusals_list(refusals):
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
     ok, reason = ERC.validate(schema, _write_obj(refusals=refusals))
@@ -152,6 +190,17 @@ def test_write_schema_refuses_a_malformed_refusals_list(refusals):
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
     ok, _reason = ERC.validate(schema, _write_obj(refusals=refusals))
     assert not ok
+
+
+@pytest.mark.parametrize("route", ["git checkout --theirs f.txt", None])
+def test_write_schema_accepts_a_taken_route_and_a_null_route(route):
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
+    ok, reason = ERC.validate(schema, _write_obj(refusals=[dict(_ROUTE_ENTRY, route=route)]))
+    assert ok, reason
+
+
+def test_write_contract_prose_names_route():
+    assert "route" in EA.WRITE_REPORT_FIELD_SEMANTICS
 
 
 def test_write_schema_requires_the_refusals_key():
@@ -186,6 +235,11 @@ def test_grade_build_report_carries_a_valid_refusals_list():
     assert EA._grade_build_report_obj(ok_obj)["refusals"] == refusals
     graded = EA._grade_build_report_obj(bad_obj)
     assert graded["refusals"] == refusals and graded["signal"] == "plan_wrong"
+
+
+def test_grade_build_report_carries_a_taken_route():
+    obj = {"ok": True, "signal": "ok", "evidence": {}, "refusals": [_ROUTE_ENTRY]}
+    assert EA._grade_build_report_obj(obj)["refusals"] == [_ROUTE_ENTRY]
 
 
 def test_grade_build_report_adds_nothing_when_no_list_was_sent():
