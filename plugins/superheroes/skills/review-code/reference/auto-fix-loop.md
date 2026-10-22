@@ -446,7 +446,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > autofix or anything else that rewrites a committed break-it test, and it reports a commit hook that
 > rewrites one. The fixer's result lists every refusal it met, and when the orchestrator passes the fixer
 > subagent's transcript (`--fixer-transcript`; on Claude Code the file `agent-<agentId>.jsonl` under the
-> config dir's `projects/*/*/subagents/`, found by the agent id the Agent tool returns) a refusal the
+> config dir's `projects/*/*/subagents/`, found by the agent id the subagent dispatch returns) a refusal the
 > transcript shows and the result leaves out refuses the record as `fixer-refusals-unreported`, corrected
 > only by `correct-fixer-refusals` run from the session's own repo root; the reader is best effort over a
 > closed list of Claude Code refusal messages, and with no transcript the record says
