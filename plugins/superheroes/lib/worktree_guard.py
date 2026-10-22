@@ -346,9 +346,11 @@ def _mask_heredoc_bodies(command):
     operator line has no backtick, `{` or `(` and does not hand the consumer's output on (a trailing
     pipe) — except one `"$(cat <<'DELIM'` that follows consumers only, whose terminator is followed
     by a lone `)"` or `)` that ends the command; no earlier line (outside masked bodies) holds a
-    backtick, `{`, `(` or `|` anywhere, or ends in a backslash or `&&`; and an unquoted delimiter's body has no `$(`, backtick or trailing backslash
-    (bash folds backslash-newline before it matches the terminator). Anything the scan cannot read
-    stops masking for the rest of the command. Terminator lines are kept.
+    backtick, `{`, `(` or `|` anywhere, or ends in a backslash or `&&`; the operator line carries
+    exactly one heredoc operator; and an unquoted delimiter's body has no `$(`, backtick or
+    trailing backslash (bash folds backslash-newline before it matches the terminator). Anything
+    the scan cannot read, and any body that cannot be masked, stops masking for the rest of the
+    command, never to resume after it. Terminator lines are kept.
     """
     if "\n" not in command:
         return command
@@ -366,11 +368,11 @@ def _mask_heredoc_bodies(command):
             checked += 1
         substitution = _DATA_SUBSTITUTION.search(lines[i])
         plain_part = lines[i][:substitution.start()] if substitution else lines[i]
+        if len(ops) > 1:
+            break
         consumed = bool(ops) and not bad and not pipe and not opened and bool(pieces) and all(
             _piece_is_data_consumer(piece) for piece in pieces
         ) and not any(mark in plain_part for mark in ("`", "{", "("))
-        if substitution and len(ops) != 1:
-            consumed = False
         following = i + 1
         for dash, word, quoted in ops:
             end = None
@@ -391,11 +393,15 @@ def _mask_heredoc_bodies(command):
                 maskable = bool(after) and after[0].rstrip() == closer and not any(
                     ln.strip() for ln in after[1:]
                 )
-            if maskable:
-                for k in range(following, end):
-                    lines[k] = ""
+            if not maskable:
+                break
+            for k in range(following, end):
+                lines[k] = ""
             following = end + 1
-        i = following
+        else:
+            i = following
+            continue
+        break
     return "\n".join(lines)
 
 
@@ -1030,42 +1036,18 @@ def destructive_discard_action(command):
     return actions[0] if actions else None
 
 
-def _substitution_end(text, start, closer):
-    """Index of the `closer` that ends a `$(` or backtick substitution whose body starts at `start`.
-
-    Returns -1 when the substitution is never closed. Quoted text and escaped characters inside the
-    body are skipped; parentheses nest for `$(`.
-    """
-    depth = 0
-    i = start
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if closer == ")" and ch in "'\"":
-            j = i + 1
-            while j < n and text[j] != ch:
-                j += 2 if ch == '"' and text[j] == "\\" else 1
-            i = j + 1
-            continue
-        if closer == ")" and ch == "(":
-            depth += 1
-        elif ch == closer:
-            if depth == 0:
-                return i
-            depth -= 1
-        i += 1
-    return -1
+_DESTRUCTIVE_WORD = re.compile(
+    r"(?<![\w-])(?:" + "|".join(sorted(_DESTRUCTIVE_SUBCOMMANDS, key=len, reverse=True)) + r")(?![\w-])"
+)
 
 
 def _segment_mentions_destructive_git(text):
     """Crude per-segment scan for destructive git subcommand mentions.
 
-    Bash runs a `$(...)` or backtick substitution inside double quotes, so its body is scanned as
-    command text with its double quotes opened up (double-quoted prose in it still counts); one that never closes
-    counts as a mention.
+    Bash runs a `$(...)` or backtick substitution inside double quotes, and no quote or boundary
+    parsing of its body is trusted. A double-quoted span holding `$(` or a backtick makes the
+    segment a mention whenever its raw text holds any destructive subcommand word. Double-quoted
+    prose with neither stays allowed.
     """
     if not isinstance(text, str):
         return False
@@ -1084,13 +1066,8 @@ def _segment_mentions_destructive_git(text):
             if ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
                 i += 2
                 continue
-            if ch == "`" or text.startswith("$(", i):
-                body = i + (1 if ch == "`" else 2)
-                end = _substitution_end(text, body, "`" if ch == "`" else ")")
-                if end < 0 or _segment_mentions_destructive_git(text[body:end].replace('"', " ")):
-                    return True
-                i = end + 1
-                continue
+            if (ch == "`" or text.startswith("$(", i)) and _DESTRUCTIVE_WORD.search(text):
+                return True
             if ch == '"':
                 in_double = False
             i += 1

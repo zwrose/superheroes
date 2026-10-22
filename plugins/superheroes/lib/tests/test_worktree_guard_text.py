@@ -93,8 +93,6 @@ _ALLOWED_HEREDOCS = {
         "cat 2>&1 <<'EOF'\ngit reset --hard\nEOF",
     "redirect-all":
         "cat <<'EOF' &>/dev/null\ngit reset --hard\nEOF",
-    "two-heredocs-one-line":
-        "cat <<'A' <<'B'\ngit reset --hard\nA\ngit checkout -- f.txt\nB",
     "tee-then-cat":
         "cat <<'EOF' | tee out.md\ngit reset --hard\nEOF",
     "blank-line-in-body":
@@ -308,9 +306,13 @@ def test_any_earlier_line_with_a_nesting_mark_stops_masking(command, dirty_repo)
     'echo "$(echo $(git reset --hard))"',
     'echo "$(git reset --hard"',
     'echo "`git reset --hard"',
-    'echo "$(echo hi"',
+    'echo "$(printf "%s" "\'"; git reset --hard)"',
+    'echo "\\"$(echo "\'"; git reset --hard)\\""',
+    'echo "\\"$(echo before # )\ngit reset --hard\n)\\""',
+    'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
 ], ids=["plain", "escaped-outer-quotes", "escaped-inner-quotes", "backtick", "backtick-escaped-quotes",
-        "nested", "unclosed-substitution", "unclosed-backtick", "unclosed-benign"])
+        "nested", "unclosed-substitution", "unclosed-backtick", "printf-apostrophe",
+        "escaped-quotes-apostrophe", "commented-paren", "single-quoted-prose-in-substitution"])
 def test_a_substitution_inside_double_quotes_is_scanned_as_a_command(command, dirty_repo):
     assert wg.mentions_destructive_git(command) is True
     assert "unaccounted" in _kinds(command) or "destructive" in _kinds(command)
@@ -321,9 +323,28 @@ def test_a_substitution_inside_double_quotes_is_scanned_as_a_command(command, di
     'echo "\\$(git reset --hard)"',
     'echo "\\`git reset --hard\\`"',
     'echo "$(date)" "quoted"',
-], ids=["escaped-dollar", "escaped-backtick", "benign-substitution"])
+    'echo "$(echo hi"',
+    'echo "never run git reset --hard"',
+], ids=["escaped-dollar", "escaped-backtick", "benign-substitution", "unclosed-benign",
+        "prose-without-substitution"])
 def test_an_escaped_or_harmless_substitution_in_double_quotes_is_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", "")
+
+
+@pytest.mark.parametrize("command", [
+    "cat <<'A' <<'B'\ngit reset --hard\nA\ngit checkout -- f.txt\nB",
+    "cat <<EOF <<'END'\nE\\\nOF\nEND\nEOF\ngit reset --hard\nEND",
+    "cat <<EOF\nE\\\nOF\ngit reset --hard\nEOF",
+], ids=["two-heredocs-one-line", "folded-terminator-two-heredocs", "folded-terminator"])
+def test_an_operator_line_with_two_heredocs_or_a_folded_body_stops_masking(command, dirty_repo):
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
+
+
+def test_a_body_that_cannot_be_masked_stops_masking_for_the_rest_of_the_command(dirty_repo):
+    command = "cat <<EOF\nline \\\nEOF\ncat <<'X'\ngit reset --hard\nX"
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
 
 
 def test_a_real_command_after_a_masked_heredoc_is_still_scanned(dirty_repo):
