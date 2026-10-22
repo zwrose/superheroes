@@ -17,6 +17,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Nothing is owed.** A fixed Python, JavaScript or TypeScript break-it finding's test now counts as kept when its fixture and assertions appear unchanged in a file the final diff carries, at any path, so a formatter run or a move of the test no longer parks the review with `changed` or `missing`. A `breakItKept` row can now read `kept` with reason `body-match`, or `unresolved` with one of the new reasons below. See [Break-it tests: the keep check matches a test by what it checks](#break-it-tests-the-keep-check-matches-a-test-by-what-it-checks).
+- **After switching.** **Nothing is owed.** A break-it finding that the owner or advisor ruled out of scope through the `rule` verb, and that a round's audit then cleared, no longer parks the review for want of a kept test; it reads `ruled-out-of-scope` and the review record lists it as a ruling. An `out-of-scope` disposition with no clearing audit now runs the keep check, where before it read `not-required`. A `run-verify` payload may also carry `via: "ci-exact-head"` with the CI run's evidence when the local verify command cannot run; a payload without `via` folds as before, and `ci` or `reason` without `via: "ci-exact-head"` is refused. See [Break-it tests: a ruled-out test is exempt](#break-it-tests-a-ruled-out-test-is-exempt) and [Verify: CI on the exact head can stand in](#verify-ci-on-the-exact-head-can-stand-in).
 
 ### Break-it tests: the keep check matches a test by what it checks
 
@@ -24,6 +25,20 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The test must be found exactly once among the files the final diff carries, at module level, with its imports binding the same way and nothing outside it rebinding its names or adding module-level test setup, and it must pass there. Every comparison the check cannot make reads not kept. Every other `check_kept` outcome reads as before.
 - The `break-it-run/1` record gains `content`, the test file's text. A record without it keeps the byte-exact check.
 - A `breakItKept` row can read `kept` with reason `body-match`, or `unresolved` with `body-unparseable`, `body-empty`, `match-ambiguous`, `binding-conflict`, `host-setup`, `command-unmapped` or `command-selects-tests`. A test found at its own path runs the command the loop ran, unchanged; a test found at another path runs that command with the path replaced.
+
+### Break-it tests: a ruled-out test is exempt
+
+- Before the loop certifies `converged`, a break-it finding whose test the keep check would otherwise demand is exempt when two things hold. The finding's effective decision is an `out-of-scope` ruling from the driver's `rule` verb whose provenance names `ruledBy` and `ruledAt`, and a round's audit cleared the finding (`discharged` or `discharged-but-new-issue`).
+- Its `breakItKept` row reads `ruled-out-of-scope`, with `reason`, `ruledBy` and `ruledAt`. The review record lists the finding as a ruling, "ruled out of scope: <reason> (ruled by <who>, <when>)", never as fixed, and the `break-it-kept` decision counts it separately.
+- Anything less still requires the test kept: a ruling with no clearing audit, an audit with no ruling, or an unattributed ruling runs the keep check. An `out-of-scope` disposition with no clearing audit runs the keep check too; before, any non-fixed disposition read `not-required`.
+
+### Verify: CI on the exact head can stand in
+
+- A `run-verify` payload may carry `via: "ci-exact-head"` with `ci: {workflow, runId, headSha, conclusion}` and a non-empty `reason` naming why the local verify command cannot run. `result` must be `pass`. A payload with `via` absent or `"local"` folds as before, and `ci` or `reason` without `via: "ci-exact-head"` is refused.
+- A malformed claim is refused at the shape guard with a reason starting `ci-verify-shape:`.
+- Before the fold, the driver fetches the run (`gh api repos/{owner}/{repo}/actions/runs/<runId>` in the repository root) and refuses the submit with `ci-verify-run-unreadable` (the head or repository root is unresolved, the fetch failed, or a field is missing), `ci-verify-sha-mismatch` (the run's `head_sha` differs from the claimed `headSha` or from the head the fold verifies, or its `id` differs from `runId`), `ci-verify-workflow-mismatch` (its `name` differs from `workflow`) or `ci-verify-conclusion-mismatch` (it is not `completed`, its conclusion differs from the claimed one, or it is not `success`), checked in that order. The refusal is not terminal and the pending step is kept, so a corrected resubmit folds.
+- The check sits at the one submit chokepoint, so hand `submit`, the bare-payload `advance` and the durable-seat `advance` all get it. The durable-seat assembly carries `via`, `ci` and `reason`.
+- A passing verify fold records the round key `verifyVia`: `{"via": "local", "command"}` for a local run, or the CI evidence with its `reason`. The receipt's disclosures carry a `verify-via-ci (round N): …` line for a CI round, and the review record adds a "Verify in round N: CI workflow … run … on … passed, in place of the local verify command (…)" line to what it checked.
 
 ## 0.46.0
 
