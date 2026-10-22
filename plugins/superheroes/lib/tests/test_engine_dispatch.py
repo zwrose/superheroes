@@ -1691,9 +1691,12 @@ def test_dispatch_codex_engagement_tokens_from_event_stream(tmp_path):
 def test_dispatch_cursor_engagement_tool_calls(tmp_path):
     repo_root = _repo(tmp_path)
     stream = "\n".join([
-        '{"type":"tool_call","call_id":"c1","subtype":"started"}',
-        '{"type":"tool_call","call_id":"c2","subtype":"started"}',
-        '{"type":"tool_call","call_id":"c1","subtype":"completed"}',
+        '{"type":"tool_call","call_id":"c1","subtype":"started",'
+        '"tool_call":{"readToolCall":{"args":{"path":"notes.txt"}}}}',
+        '{"type":"tool_call","call_id":"c2","subtype":"started",'
+        '"tool_call":{"readToolCall":{"args":{"path":"notes.txt"}}}}',
+        '{"type":"tool_call","call_id":"c1","subtype":"completed",'
+        '"tool_call":{"readToolCall":{"args":{"path":"notes.txt"}}}}',
         '{"type":"result","findings":[{"id":"f1","message":"ok"}]}',
     ])
 
@@ -13802,9 +13805,11 @@ def _cursor_stream_with_tool_calls(count):
         call_id = "c%d" % (i + 1)
         lines.append(json.dumps({
             "type": "tool_call", "call_id": call_id, "subtype": "started",
+            "tool_call": {"readToolCall": {"args": {"path": "notes.txt"}}},
         }))
         lines.append(json.dumps({
             "type": "tool_call", "call_id": call_id, "subtype": "completed",
+            "tool_call": {"readToolCall": {"args": {"path": "notes.txt"}}},
         }))
     return "\n".join(lines)
 

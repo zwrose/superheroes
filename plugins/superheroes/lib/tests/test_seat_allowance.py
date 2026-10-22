@@ -368,6 +368,13 @@ def _dotted(node):
     return None
 
 
+def _is_stdout_fileno_call(node):
+    """True only for the call `sys.stdout.fileno()`, the server's own protocol reply channel."""
+    return (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "fileno"
+            and _dotted(node.func.value) == "sys.stdout")
+
+
 def _write_calls(source):
     """A description of each write-capable call in the Python `source`, found by an ast walk so a
     call nested inside another call's arguments is seen. An `open` whose mode is not a constant
@@ -378,6 +385,8 @@ def _write_calls(source):
             continue
         name = _dotted(node.func)
         if name in ("open", "io.open"):
+            if node.args and _is_stdout_fileno_call(node.args[0]):
+                continue
             mode = node.args[1] if len(node.args) > 1 else None
             for keyword in node.keywords:
                 if keyword.arg == "mode":
@@ -409,6 +418,12 @@ def test_read_tool_source_starts_no_program_and_writes_no_file():
 
 def test_write_calls_guard_sees_a_write_nested_in_another_call():
     assert _write_calls("open(os.path.join(root, 'trace.txt'), 'w')")
+
+
+def test_write_calls_guard_exempts_only_the_stdout_fileno_open():
+    assert _write_calls("open(sys.stdout.fileno(), 'w')") == []
+    assert _write_calls("open(sys.stderr.fileno(), 'w')")
+    assert _write_calls("open(1, 'w')")
 
 
 # --------------------------------------------------------------- outside_allowance
@@ -594,8 +609,10 @@ def test_scan_stream_cursor_stream_truth_table(tmp_path):
         _cursor_call({"shellToolCall": {"args": {"command": "make test"}}}),
         _cursor_call({"editToolCall": {"args": {"path": "a"}}}),
         _cursor_call({"shellToolCall": {"args": {"command": "make test"}}}),
+        {"type": "tool_call", "subtype": "started", "call_id": "m1",
+         "tool_call": {"switchModeToolCall": {}}},
     ])
-    assert SA.scan_stream(str(path)) == (["shellToolCall: make test", "editToolCall"], True)
+    assert SA.scan_stream(str(path)) == (["shellToolCall: make test", "switchModeToolCall"], True)
 
 
 def test_scan_stream_reports_a_violation_before_9_mib_of_allowed_lines(tmp_path):
