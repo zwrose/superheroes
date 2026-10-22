@@ -24,6 +24,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import break_it
+import break_it_key
 import cloud_dependency_hook
 import cloud_pass
 import cloud_plugin_pin
@@ -47,6 +49,7 @@ SETUP_INPUTS_STAMP_KEY = "setup-inputs"
 SETUP_HOOK_STAMP_KEY = "setup-dependency-hook"
 SETUP_STEPS_STAMP_KEY = "setup-steps"
 SETUP_INVENTORY_STAMP_KEY = "setup-plugin-inventory"
+SETUP_FILL_STAMP_KEY = "setup-dependency-fill"
 # What the setup steps entry holds in place of the plugin source, commit and subdirectory, so it
 # depends on no discovery.
 STEPS_SOURCE, STEPS_COMMIT, STEPS_SUBDIR = "SOURCE", "PINNED", "SUBDIR"
@@ -598,7 +601,99 @@ def _pin_view(cwd):
             SETUP_INVENTORY_STAMP_KEY: _plugin_inventory()}
 
 
-def _view_for(cwd, files, commands, inputs, hook_on, pin_on=False):
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _verify_launcher(verify):
+    """The launcher words the verify command `verify` runs, or None. A command that carries an
+    environment assignment or an `env` word has none: a fill run without that environment would
+    warm the wrong cache."""
+    if not isinstance(verify, str):
+        return None
+    try:
+        lexer = shlex.shlex(verify, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        # axis: a "#" inside a word is no comment to the shell, so no word is dropped before the scan
+        lexer.commenters = ""
+        words = list(lexer)
+    except ValueError:
+        return None
+    if any(_ENV_ASSIGNMENT.match(w) or os.path.basename(w) == "env" for w in words):
+        return None
+    launcher = break_it.project_interpreter(verify)
+    return [launcher] if launcher else None
+
+
+def _fill_launcher(cwd, root):
+    """The Python launcher words the fill runs, from the project's placed core record, or None:
+    `breakItInterpreter` when set (invalid means none), else the verify command's launcher. A
+    launcher that is a single bare Python interpreter word fills nothing, so it is none too."""
+    try:
+        core = core_md.read(cwd, root, persist_backfill=False)
+    except Exception:
+        return None
+    if not isinstance(core, dict):
+        return None
+    value = core.get(break_it_key.INTERPRETER_KEY)
+    # axis: a set key never falls back to the verify command's launcher
+    words = break_it.launcher_argv(value) if value is not None \
+        else _verify_launcher(core.get("verifyCommand"))
+    # axis: only a single bare interpreter word fetches nothing; `python3 -m uv run python` runs uv, so it is filled
+    if not words or (len(words) == 1 and break_it._is_python_program(words[0])):
+        return None
+    return words
+
+
+_FILL_USERINFO_RE = re.compile(r"://[^/\s]*:[^/\s]+@")
+
+
+def _fill_lines(cwd, root, clone):
+    """The setup text's dependency fill step, or []: it exists only when the project declares a
+    Python launcher and the repository root declares Python dependencies (a lockfile or a
+    requirements file). Any read failure leaves no step; the launcher is never guessed."""
+    words = _fill_launcher(cwd, root)
+    if not words:
+        return []
+    # axis: fail closed - a launcher word carrying a credential (URL userinfo with a password, or
+    # anything `_scan` reports) gets no step at all; it is never redacted or guessed
+    if any(_FILL_USERINFO_RE.search(w) or _scan(w) for w in words):
+        return []
+    try:
+        declared = detect_inputs(store_core.repo_root(cwd))
+    except (store_core.RepoRootUnavailable, OSError):
+        return []
+    if not declared:
+        return []
+    run = " ".join(shlex.quote(w) for w in words)
+    return [
+        "",
+        "# Fill the dependency caches the project's Python launcher needs, by running it once in the",
+        "# project's clone, so a session's offline write sandbox finds them on disk.",
+        "(",
+        '  DIR=""',
+        '  if [ -e "$PWD/.git" ]; then DIR="$PWD"',
+        *(['  elif [ -e "$PWD/$CLONE/.git" ]; then DIR="$PWD/$CLONE"'] if clone is not None else []),
+        "  fi",
+        '  if [ -z "$DIR" ]; then echo "dependency fill skipped: no clone in $PWD%s"'
+        % (" or $PWD/$CLONE" if clone is not None else ""),
+        '  elif (cd "$DIR" && %s -c pass </dev/null >/dev/null 2>&1); then '
+        'echo "dependency fill ok"' % run,
+        # axis: `rc=$?` comes first, so the line names the launcher's own exit status
+        '  else rc=$?; echo "dependency fill FAILED: "%s" -c pass exited $rc"; fi'
+        % shlex.quote(" ".join(words)),
+        ') >> "$LOG" 2>&1',
+    ]
+
+
+def _fill_view(fill):
+    """The stamp entry for the fill step's lines, read in one place for both callers; none without
+    a step."""
+    if not fill:
+        return {}
+    return {SETUP_FILL_STAMP_KEY: ("\n".join(fill) + "\n").encode("utf-8")}
+
+
+def _view_for(cwd, files, commands, inputs, hook_on, pin_on=False, root=None):
     """The stamp's view of `files`, built for both callers (`stamped_files` and `_compose`): the
     files the setup depends on join it exactly when commands are listed, item 18 is stored and the
     dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
@@ -612,6 +707,9 @@ def _view_for(cwd, files, commands, inputs, hook_on, pin_on=False):
     # axis: only a valid pin hook adds these two entries, so a project without one keeps its stamp
     if pin_on:
         view.update(_pin_view(cwd))
+    # axis: a text with no stamp gets none from the fill step, so it joins only a view `_compose` builds
+    if files or commands or pin_on:
+        view.update(_fill_view(_fill_lines(cwd, root, _clone_dir(cwd))))
     return view
 
 
@@ -633,7 +731,7 @@ def stamped_files(cwd, root=None):
         raise _pin_broken(state)
     return _view_for(cwd, calibration_files(cwd, root), commands,
                      _stored_setup_inputs(cwd, root, commands),
-                     _dependency_hook_on(cwd, root, commands), state["state"] == "valid")
+                     _dependency_hook_on(cwd, root, commands), state["state"] == "valid", root=root)
 
 
 def _project_name(cwd):
@@ -872,7 +970,7 @@ def _steps(source, commit, subdir, source_dir, plugin_dir, clone):
 
 
 def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp, clone,
-            commands, cleared=False, expected=(), record=None):
+            commands, cleared=False, expected=(), record=None, fill=()):
     out = [
         "#!/bin/bash",
         "# " + head,
@@ -909,6 +1007,8 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
     if commands:
         out += _commands_block(commands, clone, stamp if (files or stamp is not None) else None,
                                len(files), expected, record)
+    # axis: no step without a Python launcher and Python dependencies, so the text is as it was
+    out += fill
     out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', 'exit "$setup_rc"' if commands else "exit 0", ""]
     return "\n".join(out)
@@ -963,6 +1063,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         raise _Refused("calibration-unplaceable", "A calibration file cannot be written safely "
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
+    fill = _fill_lines(cwd, root, _clone_dir(cwd))
     stamp = date = None
     inputs_view = None
     if files or commands or pin_on:
@@ -974,6 +1075,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                                if commands and hook_on else inputs_view)
             if pin_on:
                 view.update(_pin_view(cwd))
+            view.update(_fill_view(fill))
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(view)
         except _Refused:
             raise
@@ -998,7 +1100,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         expected = _expectations_from_view(inputs_view, inputs)
     text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp,
                    _clone_dir(cwd), commands, cleared, expected,
-                   cloud_dependency_hook.fingerprint(commands, inputs or []) if hook_on else None)
+                   cloud_dependency_hook.fingerprint(commands, inputs or []) if hook_on else None, fill)
     # axis: the command list is scanned as written (as `set` scans it), never as the quoted
     # word list, whose quote concatenation reads as a literal; the rest of the script is scanned
     # in full
