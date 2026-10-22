@@ -41,6 +41,19 @@ PER_FILE_ERROR_DEGRADE_THRESHOLD = 3
 
 PY_EXTS = (".py",)
 JS_EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+# lizard (pinned 1.24.0) loses brace tracking in JSX — a hyphenated attribute after a
+# {...}-valued one mis-nests functions, so it drops or inflates their CCN. These files are
+# never handed to lizard; each reads unmeasured with this reason, never a confident number.
+JSX_EXTS = (".jsx", ".tsx")
+JSX_UNMEASURED_REASON = "jsx-unreliable"
+JSX_UNMEASURED_DETAIL = (
+    "lizard mis-tracks braces in JSX, so .tsx/.jsx complexity is unmeasured")
+
+
+def _jsx_gap(count):
+    return "javascript: %d .tsx/.jsx file(s) unmeasured — %s" % (
+        count, JSX_UNMEASURED_DETAIL)
+
 
 # The one hotspots red-line kind, sourced from the authoritative tuple (I3) — not a bare
 # literal. Fails closed at import if guardian_lens drops the kind.
@@ -684,7 +697,8 @@ class HotspotsLens:
     required_facts = ()
     cost = {
         "collectorSeconds": 0.5,
-        "note": "radon (py) + lizard (js/ts) + git churn; needs git history",
+        "note": ("radon (py) + lizard (js/ts; .tsx/.jsx unmeasured) + git churn; "
+                 "needs git history"),
     }
     validation_guidance = VALIDATION_GUIDANCE
     consequence_template = CONSEQUENCE_TEMPLATE
@@ -839,6 +853,15 @@ class HotspotsLens:
             partial_reason = "partial complexity coverage — %s" % "; ".join(
                 "%s: %s" % (lang, reason) for lang, reason in failed_langs)
             self._merge_prev_for_failed(prev_files, files_digest, failed_names)
+        # Unmeasured JSX files must reach the report, which reads only status + reason. A
+        # JSX-only gap is a permanent capability boundary; with a failed language it is not.
+        jsx_count = len(_paths_with_ext(js_paths, JSX_EXTS))
+        jsx_boundary = False
+        if jsx_count:
+            jsx_reason = _jsx_gap(jsx_count)
+            jsx_boundary = partial_reason is None
+            partial_reason = (jsx_reason if jsx_boundary
+                              else "%s; %s" % (partial_reason, jsx_reason))
 
         digest = {
             "schemaVersion": SCHEMA_VERSION,
@@ -882,6 +905,8 @@ class HotspotsLens:
         }
         if partial_reason is not None:
             result.update(gc.partial(partial_reason))
+            if jsx_boundary:
+                result[guardian_lens.PERMANENT_BOUNDARY_KEY] = True
         else:
             result.update(gc.collected())
         return result
@@ -924,8 +949,11 @@ class HotspotsLens:
             coverage["python"] = "not-collected"
 
         # ---- lizard (js/ts) --------------------------------------------------------
-        if js_paths:
-            parsed, err = _run_lizard(ctx, cwd, js_paths)
+        jsx_paths = _paths_with_ext(js_paths, JSX_EXTS)
+        jsx_set = set(jsx_paths)
+        lizard_paths = [p for p in js_paths if p not in jsx_set]
+        if lizard_paths:
+            parsed, err = _run_lizard(ctx, cwd, lizard_paths)
             if err is not None:
                 coverage["javascript"] = "failed"
                 coverage_gaps.append(err)
@@ -935,6 +963,17 @@ class HotspotsLens:
                 coverage["javascript"] = "collected"
         else:
             coverage["javascript"] = "not-collected"
+        # After lizard's rows, so no lizard figure for a JSX file can survive.
+        for jsx_path in jsx_paths:
+            complexity[jsx_path] = {
+                "_unmeasured": True, "_reason": JSX_UNMEASURED_REASON}
+            collector_errors.append({
+                "collector": "lizard",
+                "path": jsx_path,
+                "kind": JSX_UNMEASURED_REASON,
+            })
+        if jsx_paths:
+            coverage_gaps.append(_jsx_gap(len(jsx_paths)))
 
         return complexity, coverage, coverage_gaps, collector_errors, failed_langs
 
@@ -949,6 +988,9 @@ class HotspotsLens:
         }
         for info_path, info in complexity.items():
             cid = "hotspots:%s" % info_path
+            if info.get("_reason"):
+                files_digest[cid] = {"unmeasured": True, "reason": info["_reason"]}
+                continue
             if info.get("_unmeasured") or info.get("_error"):
                 files_digest[cid] = {"unmeasured": True, "error": True}
                 continue

@@ -17,6 +17,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **Nothing is owed.** A caller that reads a `dispatch-write` write forfeit now also finds `dirtiedPaths` on the "forfeited twice" result, and both write-forfeit disclosures say whether the timeout cut the engine off and whether work landed. See [Dispatch: both write forfeits name what landed](#dispatch-both-write-forfeits-name-what-landed).
+- **After switching.** **Nothing is owed.** Guardian's hotspots lens stops ranking `.tsx`/`.jsx` files on lizard's complexity figures, which lizard mis-measures in JSX. Those files now read unmeasured, so a TSX-heavy project's hotspot list gets shorter and the sweep lists the hotspots lens as degraded with the count of unmeasured files. See [Guardian: TSX/JSX complexity reads unmeasured](#guardian-tsxjsx-complexity-reads-unmeasured).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 - **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
 - **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
@@ -25,6 +26,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - The `dispatch-write` "forfeited twice (timeout or unreadable)" result gains `dirtiedPaths`, in the shape the `worktree-dirtied-by-attempt` result already carries (`status`, `paths`, `headMoved`, `truncated`, or `status: indeterminate` with a `reason`). Before, a second attempt that timed out after its edits landed returned no list of what changed.
 - Both write-forfeit `disclosure` strings now end with what landed: `The timeout cut the engine off and its report is missing.` when the attempt's detail is a `timeout-*` token, then `Work landed: <n> path(s) changed (see dirtiedPaths); verify them before re-ordering.`, `No paths landed.`, or `Whether work landed could not be read (dirtiedPaths: <reason>); inspect the worktree.` The keys `reason`, `detail`, `attemptDetail` and `attempts` are unchanged.
+
+### Guardian: TSX/JSX complexity reads unmeasured
+
+- `lib/guardian_lens_hotspots.py` no longer passes `.tsx`/`.jsx` files to lizard. Each tracked one gets a digest record `{"unmeasured": true, "reason": "jsx-unreliable"}` and a `collectorErrors` entry `{"collector": "lizard", "path": …, "kind": "jsx-unreliable"}`, and `coverageGaps` gains one line counting them. When every JS-family file is `.tsx`/`.jsx`, lizard does not run and `complexityCoverage.javascript` reads `not-collected`.
+- When any tracked `.tsx`/`.jsx` file exists, `collect()` returns `partial` with a reason that counts them, so the sweep report shows the gap in `degradedLenses`. When that is the only gap, the result also carries `permanentBoundary: true`, so it can seed a baseline. When a language also failed, the reason names both and `permanentBoundary` is not set.
+- A `.tsx`/`.jsx` file measured by an earlier sweep produces no `new`, `worsened` or `resolved` drift and no red line once it reads unmeasured. The collector version is unchanged.
+- The lizard install guidance (`guardian_tools.INSTALL_COMMANDS`) pins `pip install lizard==1.24.0`. `.js`, `.ts`, `.mjs` and `.cjs` figures are unchanged.
 
 ### Retired: the identifiers content hash and the cross-vendor escalation step
 
