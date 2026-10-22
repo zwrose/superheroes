@@ -12,6 +12,19 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
+
+### Cloud setup: the setup text fills the launcher's dependency caches
+
+- `cloud_setup_text._fill_lines(cwd, root, clone)` returns the fill step's script lines, or `[]`. The step exists only when the project's core record names a Python launcher (`breakItInterpreter` when set, invalid meaning none; else the launcher the `verifyCommand` runs) and the repository root has a lockfile or `requirements*.txt`. A verify command carrying an environment assignment or an `env` word, a bare Python interpreter as the launcher, and any read or parse failure each give no step.
+- The step runs the launcher once as `<launcher> -c pass` in the project's clone, after the setup commands and before the project's tool steps, and logs exactly one line: `dependency fill ok`, `dependency fill FAILED: <launcher> -c pass exited <code>`, or `dependency fill skipped: no clone in …`.
+- The step never changes the setup script's exit status: a failed or skipped fill leaves it what it would have been without the step.
+- The stamp gains the entry `setup-dependency-fill`, holding the step's lines, in a project that has the step and a stamp. A project without the step keeps its setup text and stamp byte for byte.
+
 ## 0.46.0
 
 ### Before you upgrade
