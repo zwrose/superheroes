@@ -49,6 +49,12 @@ JSX_UNMEASURED_REASON = "jsx-unreliable"
 JSX_UNMEASURED_DETAIL = (
     "lizard mis-tracks braces in JSX, so .tsx/.jsx complexity is unmeasured")
 
+
+def _jsx_gap(count):
+    return "javascript: %d .tsx/.jsx file(s) unmeasured — %s" % (
+        count, JSX_UNMEASURED_DETAIL)
+
+
 # The one hotspots red-line kind, sourced from the authoritative tuple (I3) — not a bare
 # literal. Fails closed at import if guardian_lens drops the kind.
 _RED_LINE_KIND = next(
@@ -847,6 +853,15 @@ class HotspotsLens:
             partial_reason = "partial complexity coverage — %s" % "; ".join(
                 "%s: %s" % (lang, reason) for lang, reason in failed_langs)
             self._merge_prev_for_failed(prev_files, files_digest, failed_names)
+        # Unmeasured JSX files must reach the report, which reads only status + reason. A
+        # JSX-only gap is a permanent capability boundary; with a failed language it is not.
+        jsx_count = len(_paths_with_ext(js_paths, JSX_EXTS))
+        jsx_boundary = False
+        if jsx_count:
+            jsx_reason = _jsx_gap(jsx_count)
+            jsx_boundary = partial_reason is None
+            partial_reason = (jsx_reason if jsx_boundary
+                              else "%s; %s" % (partial_reason, jsx_reason))
 
         digest = {
             "schemaVersion": SCHEMA_VERSION,
@@ -890,6 +905,8 @@ class HotspotsLens:
         }
         if partial_reason is not None:
             result.update(gc.partial(partial_reason))
+            if jsx_boundary:
+                result[guardian_lens.PERMANENT_BOUNDARY_KEY] = True
         else:
             result.update(gc.collected())
         return result
@@ -956,8 +973,7 @@ class HotspotsLens:
                 "kind": JSX_UNMEASURED_REASON,
             })
         if jsx_paths:
-            coverage_gaps.append("javascript: %d .tsx/.jsx file(s) unmeasured — %s"
-                                 % (len(jsx_paths), JSX_UNMEASURED_DETAIL))
+            coverage_gaps.append(_jsx_gap(len(jsx_paths)))
 
         return complexity, coverage, coverage_gaps, collector_errors, failed_langs
 

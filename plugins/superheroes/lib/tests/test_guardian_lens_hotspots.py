@@ -1514,7 +1514,11 @@ def test_weekly_eats_jsx_shape_reads_unmeasured_with_reason(tmp_path):
     )
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
-    assert gl.classify_collect(out)[0] == "collected"
+    # The report reads only status + reason, so the gap must ride them.
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "2 .tsx/.jsx file(s) unmeasured" in reason
+    assert gl.permanent_boundary(out) is True
     assert [c["path"] for c in out["candidates"]] == ["util.ts"]
     files = out["digest"]["files"]
     for path in ("PickerSession.tsx", "Legacy.JSX"):
@@ -1541,6 +1545,8 @@ def test_plain_js_ts_figures_unchanged(tmp_path):
     )
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
+    assert gl.classify_collect(out)[0] == "collected"
+    assert gl.permanent_boundary(out) is False
     by_path = {c["path"]: c["maxFunctionCCN"] for c in out["candidates"]}
     assert by_path == {"a.js": 11, "b.ts": 13, "c.mjs": 17, "d.cjs": 19}
     assert all(not rec.get("unmeasured") for rec in out["digest"]["files"].values())
@@ -1557,7 +1563,8 @@ def test_jsx_only_repo_never_runs_lizard_and_is_not_a_clean_read(tmp_path):
         lizard=_lizard_row("App.tsx", 88))
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
-    assert gl.classify_collect(out)[0] == "collected"
+    assert gl.classify_collect(out)[0] == "partial"
+    assert gl.permanent_boundary(out) is True
     assert out["candidates"] == []
     assert out["diagnostics"]["complexityCoverage"]["javascript"] == "not-collected"
     assert out["digest"]["files"] == {
@@ -1576,3 +1583,22 @@ def test_previously_measured_tsx_turning_unmeasured_is_no_drift(tmp_path):
 
     assert lens.diff(prev, out["digest"]) == {"new": [], "worsened": [], "resolved": []}
     assert lens.red_lines(out["candidates"]) == []
+
+
+def test_jsx_gap_beside_a_failed_language_is_not_a_permanent_boundary(tmp_path):
+    _write(tmp_path, "App.tsx", _WEEKLY_EATS_TSX)
+    _write(tmp_path, "hot.js", 20)
+    _write(tmp_path, "mod.py", 20)
+    run = _basic_tools(
+        tmp_path, numstat="20\t0\tApp.tsx\n20\t0\thot.js\n20\t0\tmod.py\n",
+        lsfiles=["App.tsx", "hot.js", "mod.py"],
+        radon={"mod.py": [{"complexity": 12, "name": "m", "lineno": 1}]},
+        fail_markers={"lizard": 1})
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript: lizard" in reason
+    assert "1 .tsx/.jsx file(s) unmeasured" in reason
+    # A transient lizard failure must not seed a baseline as a permanent boundary.
+    assert gl.permanent_boundary(out) is False
