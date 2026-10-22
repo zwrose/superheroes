@@ -361,6 +361,45 @@ def test_a_name_imported_from_a_project_module_may_be_an_autouse_fixture_and_is_
     assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
 
 
+def test_a_relative_future_from_import_the_host_adds_is_never_found():
+    # the pinned CPython refuses to compile this shape (it reads the module as a future statement), so the
+    # front cannot read it; where an interpreter does read it, the level check makes it host-setup
+    original = "def test_a():\n    assert False\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from .__future__ import shared_environment\n" + original)])
+    assert got["status"] == "unresolved" and got["reason"] in ("host-setup", "body-unparseable")
+
+
+def test_a_relative_future_from_import_of_a_real_feature_name_is_host_setup():
+    # compiles, yet loads the package's own __future__.py, whose ``annotations`` can be an autouse fixture
+    original = "def test_a():\n    assert False\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from .__future__ import annotations\n" + original)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_the_relative_future_pair_alone_is_classed_as_a_possible_fixture():
+    assert break_it_body._may_import_fixture(("shared_environment", ("from", 1, "__future__", "shared_environment")))
+    assert not break_it_body._may_import_fixture(("annotations", ("from", 0, "__future__", "annotations")))
+
+
+def test_reversed_imports_binding_one_name_twice_are_a_binding_conflict():
+    original = "from math import floor as value\nfrom math import ceil as value\n\n\ndef test_a():\n    assert value(0.1) == 0\n"
+    host = "from math import ceil as value\nfrom math import floor as value\n\n\ndef test_a():\n    assert value(0.1) == 0\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_a_host_that_binds_an_imported_name_by_a_later_assignment_is_a_binding_conflict():
+    original = "from math import floor as value\n\n\ndef test_a():\n    assert value(0.1) == 0\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", original + "\n\nvalue = 1\n")])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_one_import_per_name_is_unaffected_by_the_rebinding_rule():
+    original = "from math import floor as value\nimport os\n\n\ndef test_a():\n    assert value(0.1) == 0 and os.sep\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", original)])
+    assert (got["status"], got["path"]) == ("found", "tests/test_b.py")
+
+
 def test_a_host_that_adds_future_annotations_is_refused():
     original = "def helper(value: int):\n    return value\n\n\ndef test_a():\n    assert helper.__annotations__['value'] == 'int'\n"
     got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from __future__ import annotations\n" + original)])
@@ -548,9 +587,16 @@ def test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions(repo):
 
 
 def test_the_same_rename_without_a_collection_override_is_found(repo):
-    base, head = _stage(repo, {"pytest.ini": "[pytest]\naddopts = -q\n", OWN: FORMATTED.replace("test_x", "test_y")})
+    base, head = _stage(repo, {"pytest.ini": "[pytest]\nminversion = 6\n", OWN: FORMATTED.replace("test_x", "test_y")})
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("kept", "body-match")
+
+
+def test_a_rename_is_unresolved_when_pytest_ini_sets_addopts(repo):
+    base, head = _stage(repo, {"pytest.ini": "[pytest]\naddopts = -k test_x\n", OWN: FORMATTED.replace("test_x", "test_y")})
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+    assert calls == []
 
 
 # ---- 7. census: every other reason reads exactly as today, with a content-bearing record ---------

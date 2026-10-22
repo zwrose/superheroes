@@ -1015,13 +1015,14 @@ def _rewrite_command(command, old_path, new_path, titles):
     return " ".join([shlex.quote("%s=%s" % pair) for pair in env.items()] + [shlex.join(moved)]), None
 
 
-_COLLECTION_SETTINGS = ("python_functions", "python_classes", "python_files")
+_COLLECTION_SETTINGS = ("python_functions", "python_classes", "python_files", "addopts")
 
 
 def _collection_overrides(repo_root, head):
     """True when the repository at ``head`` may declare a pytest collection override: a root pytest.ini,
     pyproject.toml ([tool.pytest.ini_options]), setup.cfg ([tool:pytest]) or tox.ini ([pytest]) that sets
-    python_functions, python_classes or python_files, or one that cannot be read or parsed (fail closed)."""
+    python_functions, python_classes, python_files or addopts (any value: addopts can carry a ``-k`` selector that
+    deselects the new name, and it is not parsed), or one that cannot be read or parsed (fail closed)."""
     import configparser
     sections = (("pytest.ini", "pytest"), ("setup.cfg", "tool:pytest"), ("tox.ini", "pytest"), ("pyproject.toml", None))
     for name, section in sections:
@@ -1090,7 +1091,7 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
         return today
     if found["status"] != "found":
         return res(KEPT_UNRESOLVED, found["reason"])
-    # axis: a renamed test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected while the host still passes — see bite-proof record wo_a_2053_break_it_body
+    # axis: a renamed test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes — see bite-proof record wo_a_2053_break_it_body
     try:
         if found["titles"] and _collection_overrides(repo_root, head):
             return res(KEPT_UNRESOLVED, "binding-conflict")

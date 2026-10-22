@@ -74,10 +74,29 @@ def _futures(records):
 def _may_import_fixture(pair):
     """True when ``pair`` (a bound name and its import target) is a ``from`` import, which can bring in a fixture.
     A module name proves nothing (a project-local file can shadow a standard-library name), so every ``from``
-    import is suspect, relative or absolute, except ``__future__``; the caller allows one only when the original
+    import is suspect, relative or absolute, except the compiler's own absolute ``from __future__``; a relative
+    ``from .__future__`` reads a project file like any other. The caller allows one only when the original
     carries the identical binding. A plain ``import x`` binds a module object, which pytest never registers."""
     target = pair[1]
-    return target[0] == "from" and target[2] != "__future__"
+    # axis: only an absolute (level 0) from-import of exactly __future__ is exempt; a relative one (from .__future__ import x) loads a project-local module that can define an autouse fixture — see bite-proof record wo_a_2053_break_it_body
+    return target[0] == "from" and not (target[1] == 0 and target[2] == "__future__")
+
+
+def _rebinds(records):
+    """True when a module binds one local name by more than one import, or by an import and any other module-level
+    binding: which binding wins then depends on statement order, which the comparison does not model."""
+    seen = {}
+    for index, rec in enumerate(records):
+        for local, _ in rec["imports"]:
+            if local == "*":
+                continue
+            if local in seen:
+                return True
+            seen[local] = index
+    for index, rec in enumerate(records):
+        if any(seen.get(name, index) != index for name in rec["binds"]):
+            return True
+    return False
 
 
 def _outside(records, window, original, moved=False):
@@ -98,6 +117,9 @@ def _outside(records, window, original, moved=False):
         return "binding-conflict"
     # axis: the future compiler features (annotations semantics) of the original and the host must match — see bite-proof record wo_a_2053_break_it_body
     if _futures(original) != _futures(records):
+        return "binding-conflict"
+    # axis: a name the original or the host binds by two imports (or an import and another module-level binding) is refused, because import order then decides the binding — see bite-proof record wo_a_2053_break_it_body
+    if _rebinds(original):
         return "binding-conflict"
     # axis: every import the original bound is bound the same way in the file that holds the test — see bite-proof record wo_a_2053_break_it_body
     if not orig_pairs <= {pair for rec in records for pair in rec["imports"]}:
@@ -126,6 +148,9 @@ def _outside(records, window, original, moved=False):
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
         if rec["uses"] & window_binds:
             return "binding-conflict"
+    # the host's own rebinding is checked last, so a more specific refusal above (host-setup) keeps its reason
+    if _rebinds(records):
+        return "binding-conflict"
     return None
 
 
