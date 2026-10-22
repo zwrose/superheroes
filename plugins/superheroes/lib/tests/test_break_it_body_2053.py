@@ -3,6 +3,7 @@
 Covers the core (`break_it_body`), the Python front (`break_it_body_py`) and the body search in
 `break_it.check_kept` / `break_it._rewrite_command`. Real `check_kept` runs use real `python -m pytest`
 commands in a throwaway fixture repo; a stub runner stands in only where a test needs to see the command."""
+import ast
 import hashlib
 import os
 import shlex
@@ -290,12 +291,18 @@ def test_host_star_import_is_a_binding_conflict(repo):
 @pytest.mark.parametrize("before", [
     "def sqrt(x):\n    return 3\n\n\n",
     "LABEL = 'ten'\n\n\n",
-    "for side in (1, 2):\n    pass\n\n\n",
-], ids=["helper-def", "assignment", "loop-target"])
+], ids=["helper-def", "assignment"])
 def test_host_statement_that_rebinds_a_name_the_test_uses_is_a_binding_conflict(repo, before):
     base, head = _stage(repo, {"tests/test_weekly.py": _host(before=before)})
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+    assert calls == []
+
+
+def test_host_loop_that_rebinds_a_name_the_test_uses_is_host_setup(repo):
+    base, head = _stage(repo, {"tests/test_weekly.py": _host(before="for side in (1, 2):\n    pass\n\n\n")})
+    calls = []
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
     assert calls == []
 
 
@@ -310,11 +317,12 @@ def test_host_module_level_test_setup_is_host_setup(repo, before):
     assert calls == []
 
 
-def test_host_fixture_with_autouse_false_is_not_setup(repo):
+def test_host_fixture_with_autouse_false_is_still_host_setup(repo):
     before = "@pytest.fixture(autouse=False)\ndef other():\n    return 1\n\n\n"
     base, head = _stage(repo, {"tests/test_weekly.py": _host(before=before)})
     calls = []
-    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("kept", "body-match")
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
+    assert calls == []
 
 
 def test_an_added_skip_decorator_is_not_kept(repo):
@@ -566,6 +574,22 @@ def test_rewrite_refuses_a_renamed_test_whose_command_selects_tests(extra):
     assert break_it._rewrite_command("python -m pytest a.py " + extra, "a.py", "a.py", [])[1] is None
 
 
+def test_rewrite_ignores_environment_data_that_is_not_runner_options():
+    titles = [("test_original", "test_moved")]
+    for assign in ("PYTHONPATH=/tmp/test_original_support", "APP_LABEL=\"owner's\"", "TESTS_DIR=-k"):
+        got = break_it._rewrite_command("%s python -m pytest a.py" % assign, "a.py", "b.py", titles)
+        assert got[1] is None, assign
+
+
+@pytest.mark.parametrize("assign", [
+    "PYTEST_ADDOPTS='-k test_original'", "PYTEST_ADDOPTS='a.py::test_original'", "VITEST_OPTIONS='--grep=x'",
+    "NODE_OPTIONS='-t x'", "MY_ADDOPTS=\"it's\"", "PYTEST_ADDOPTS=test_original",
+])
+def test_rewrite_refuses_a_selector_carried_by_a_runner_options_variable(assign):
+    got = break_it._rewrite_command("%s python -m pytest a.py" % assign, "a.py", "b.py", [("test_original", "test_moved")])
+    assert got == (None, "command-selects-tests")
+
+
 # ---- 10. the Python front ------------------------------------------------------------------------
 
 def _keys(text):
@@ -600,9 +624,18 @@ def test_front_unequal_keys_for_semantic_differences(left, right):
     assert _keys(left) != _keys(right)
 
 
+def test_front_fixture_explicit_name_is_a_binding():
+    rec = front.parse("@pytest.fixture(name=\"side\")\ndef z_host_side():\n    return 1\n")[0]
+    assert {"z_host_side", "side"} <= rec["binds"]
+    other = front.parse("@marker(name=\"side\")\ndef z_host_side():\n    return 1\n")[0]
+    assert other["binds"] == frozenset(["z_host_side"])
+    plain = front.parse("@pytest.fixture(scope=\"module\")\ndef z_host_side():\n    return 1\n")[0]
+    assert plain["binds"] == frozenset(["z_host_side"])
+
+
 def test_front_records_have_exactly_the_contract_keys():
     records = front.parse("import os\nx = 1\n")
-    assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "hook"}] * 2
+    assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "hook", "relative"}] * 2
     assert [rec["kind"] for rec in records] == ["import", "stmt"]
     assert front.EXTENSIONS == (".py",) and front.TITLE == "\x00title"
 
@@ -671,14 +704,64 @@ def test_front_uses_exclude_keyword_names_and_attributes():
     assert front.parse("import a.b as c\n")[0]["uses"] == frozenset({"c"})
 
 
+def test_front_uses_respect_nested_scopes():
+    def uses(text):
+        return front.parse(text)[0]["uses"]
+    for local in ("len = 0", "import len", "def len(): pass", "class len: pass", "for len in (): pass"):
+        text = "def test_x():\n    def helper():\n        %s\n    assert len([]) == 1\n" % local
+        assert "len" in uses(text), local
+    assert "value" not in uses("def test_x():\n    value = 1\n    assert value == 1\n")
+    assert "value" not in uses("def test_x():\n    import value\n    assert value\n")
+    assert "len" in uses("def test_x():\n    assert [len for len in (1,)] and len([])\n")
+    assert "g" in uses("def test_x():\n    def h():\n        global g\n        g = 1\n")
+    assert "z" not in uses("def test_x():\n    z = 1\n    def h():\n        return z\n")
+    assert "fx" in uses("class K:\n    def test_a(self, fx):\n        pass\n")
+
+
+def test_front_uses_ignore_implicit_generator_parameters():
+    def uses(text):
+        return front.parse(text)[0]["uses"]
+    got = uses("total = sum(i for i in range(3))\n")
+    assert all(name.isidentifier() for name in got)
+    assert "i" not in got and "range" in got
+    assert "x" not in uses("f = lambda x: x\n")
+
+
+def test_class_body_global_fallback_read_is_a_dependency():
+    content = ("class TestExample:\n    len = len([])\n\n    def test_x(self):\n        assert self.len == 1\n")
+    assert "len" in front.parse(content)[0]["uses"]
+    host = "len = lambda xs: 1\n\n" + content
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_class_private_name_keeps_source_spelling_and_moves():
+    content = "class TestExample:\n    __value = 1\n\n    def test_x(self):\n        assert self._TestExample__value == 1\n"
+    assert "__value" not in front.parse(content)[0]["uses"]
+    content = "class TestExample:\n    x = __value\n\n    def test_x(self):\n        assert self.x\n"
+    assert "__value" in front.parse(content)[0]["uses"]
+    moved = "class _Example:\n    y = __value\n"
+    assert "__value" in front.parse(moved)[0]["uses"]
+    got = break_it_body.locate(moved, "a.py", [("b.py", "import os\n\n" + moved)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+def test_class_assignment_only_attribute_is_not_a_dependency():
+    content = "class TestExample:\n    label = 1\n\n    def test_x(self):\n        assert self.label == 1\n"
+    assert "label" not in front.parse(content)[0]["uses"]
+    host = "label = 'x'\n\n" + content
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
 def test_front_hook():
     def hook(text):
         return front.parse(text)[0]["hook"]
     assert hook("@pytest.fixture(autouse=True)\ndef f(): pass\n")
     assert hook("@pytest.fixture(scope='module', autouse=flag)\ndef f(): pass\n")
-    assert not hook("@pytest.fixture(autouse=False)\ndef f(): pass\n")
-    assert not hook("@pytest.fixture\ndef f(): pass\n")
-    assert not hook("@pytest.fixture(scope='module')\ndef f(): pass\n")
+    assert hook("@pytest.fixture(autouse=False)\ndef f(): pass\n")
+    assert hook("@pytest.fixture\ndef f(): pass\n")
+    assert hook("@pytest.fixture(scope='module')\ndef f(): pass\n")
     for name in ("pytestmark", "pytest_plugins", "setup_module", "teardown_module", "setUpModule", "tearDownModule",
                  "setup_function", "teardown_function", "load_tests"):
         assert hook("%s = 1\n" % name)
@@ -720,3 +803,211 @@ def test_core_a_window_is_consecutive_statements():
     content = "x = 1\ny = 2\n"
     assert break_it_body.locate(content, "a.py", [("b.py", "x = 1\nz = 0\ny = 2\n")])["status"] == "none"
     assert break_it_body.locate(content, "a.py", [("b.py", "z = 0\nx = 1\ny = 2\n")])["status"] == "found"
+
+
+_PRIVATE = ("class TestExample:\n    def test_a(self):\n        try:\n            value = __value\n"
+            "        except NameError:\n            value = 0\n        assert value == 1\n")
+
+
+def test_core_a_host_binding_the_runtime_name_of_a_private_class_read_is_a_binding_conflict():
+    got = break_it_body.locate(_PRIVATE, "a.py", [("b.py", "_TestExample__value = 1\n\n" + _PRIVATE)])
+    assert got["status"] == "unresolved" and got["reason"] == "binding-conflict"
+
+
+def test_core_an_unchanged_moved_class_with_a_private_attribute_is_found():
+    got = break_it_body.locate(_PRIVATE, "a.py", [("b.py", "import os\n\n" + _PRIVATE)])
+    assert got["status"] == "found"
+
+
+_RELATIVE = "from . import helpers\n\n\ndef test_x():\n    assert helpers.ok()\n"
+
+
+def test_core_a_relative_import_moved_to_another_directory_is_a_binding_conflict():
+    got = break_it_body.locate(_RELATIVE, "pkg/a.py", [("other/b.py", _RELATIVE)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_a_relative_import_in_the_same_directory_is_found():
+    got = break_it_body.locate(_RELATIVE, "pkg/a.py", [("pkg/b.py", _RELATIVE)])
+    assert (got["status"], got["path"]) == ("found", "pkg/b.py")
+
+
+def test_core_a_comment_only_runtime_spelling_does_not_fail_the_prefilter():
+    content = "class TestR:\n    # note: _TestR__v\n    __v = 1\n\n    def test_x(self):\n        assert self.__v == 1\n"
+    candidate = content.replace("    # note: _TestR__v\n", "")
+    got = break_it_body.locate(content, "a.py", [("b.py", "import os\n\n" + candidate)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+def test_core_a_host_statement_that_references_the_moved_test_is_host_setup():
+    content = "class TestR:\n    def test_x(self):\n        assert True\n"
+    host = "import os\n\n" + content + "\nTestR.__unittest_skip__ = True\n"
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_core_a_host_that_never_mentions_the_moved_tests_names_is_found():
+    content = "class TestR:\n    def test_x(self):\n        assert True\n"
+    host = "import os\n\n" + content + "\n\ndef helper():\n    return os.name\n"
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+_NESTED = "def test_x():\n    from .impl import value\n    assert value\n"
+
+
+def test_core_a_nested_relative_import_moved_to_another_directory_is_a_binding_conflict():
+    got = break_it_body.locate(_NESTED, "pkg_a/test_old.py", [("pkg_b/test_host.py", _NESTED)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_a_nested_relative_import_in_the_same_directory_is_found():
+    got = break_it_body.locate(_NESTED, "pkg_a/test_old.py", [("pkg_a/test_host.py", _NESTED)])
+    assert (got["status"], got["path"]) == ("found", "pkg_a/test_host.py")
+
+
+_V = "def test_x(value):\n    assert value == 1\n"
+
+
+def test_core_a_host_pytest_generate_tests_hook_is_host_setup():
+    host = _V + "\n\ndef pytest_generate_tests(metafunc):\n    metafunc.parametrize('value', [])\n"
+    got = break_it_body.locate(_V, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_core_a_host_fixture_under_an_aliased_fixture_import_with_the_same_name_is_host_setup():
+    orig = "from pytest import fixture as fx\n\n\n@fx(name='value')\ndef base_value():\n    return 0\n\n\n" + _V
+    host = orig + "\n\n@fx(name='value')\ndef z_host_value():\n    return 1\n"
+    got = break_it_body.locate(orig, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_core_a_global_assignment_inside_a_host_class_body_is_host_setup():
+    orig = "from math import sqrt\n\n\ndef test_x():\n    assert sqrt(4) == 3\n"
+    host = orig + "\n\nclass Host:\n    global sqrt\n    sqrt = lambda n: 3\n"
+    got = break_it_body.locate(orig, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+@pytest.mark.parametrize("extra", [
+    "import sqrt_helpers as value\n",
+    "def value():\n    return 2\n",
+    "value = 2\n",
+], ids=["import", "undecorated-def", "constant"])
+def test_core_an_allowed_host_shape_that_rebinds_a_used_name_is_a_binding_conflict(extra):
+    got = break_it_body.locate(_V, "a.py", [("b.py", extra + "\n\n" + _V)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_an_autouse_fixture_inside_module_level_control_flow_is_host_setup():
+    host = _V + "\n\nif True:\n    @pytest.fixture(autouse=True)\n    def _env():\n        pass\n"
+    got = break_it_body.locate(_V, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+# ---- the closed-world host check (#2060) -----------------------------------------------------------
+
+@pytest.mark.parametrize("extra", [
+    "if True:\n    def helper():\n        return 1\n",
+    "setup_things()\n",
+    "@functools.lru_cache\ndef helper():\n    return 1\n",
+    "COUNT += 1\n",
+    "CONFIG = load()\n",
+], ids=["if-holding-a-def", "call-statement", "decorated-helper", "augassign", "call-in-assignment"])
+def test_core_a_host_that_adds_anything_but_plain_code_is_host_setup(extra):
+    got = break_it_body.locate(_V, "a.py", [("b.py", _V + "\n\n" + extra)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+@pytest.mark.parametrize("extra", [
+    "def helper():\n    return 1\n",
+    "class Helper:\n    size = 2\n\n    def grow(self):\n        return self.size + 1\n",
+    "LIMIT = 3\n",
+    '"""Notes on this module."""\n',
+], ids=["helper-def", "helper-class", "constant", "docstring"])
+def test_core_a_host_that_adds_plain_code_is_found(extra):
+    got = break_it_body.locate(_V, "a.py", [("b.py", extra + "\n\n" + _V)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+@pytest.mark.parametrize("text", [
+    "import os\n",
+    "from os import path as p\n",
+    "def helper():\n    return 1\n",
+    "async def helper():\n    return 1\n",
+    "def check_setup():\n    return 1\n",
+    "class Helper:\n    size = 2\n\n    def grow(self):\n        return self.size\n",
+    "class Helper(Base, metaclass=Meta):\n    '''Doc.'''\n    size: int = 2\n\n    async def grow(self):\n        return self.size\n",
+    "LIMIT = 3\n",
+    "A = B = (1, 'x', [2])\n",
+    "LIMIT: int = 3\n",
+    "LIMIT: int\n",
+    '"""A docstring."""\n',
+], ids=["import", "import-from", "def", "async-def", "def-with-setup-inside", "class", "class-with-bases-and-doc", "assign", "chained-assign",
+        "annotated-assign", "bare-annotation", "docstring"])
+def test_allowed_host_accepts_each_allowed_shape(text):
+    assert front._allowed_host(ast.parse(text).body[0])
+
+
+@pytest.mark.parametrize("text", [
+    "@pytest.fixture\ndef f():\n    pass\n",
+    "@fx(autouse=True)\nasync def f():\n    pass\n",
+    "def pytest_generate_tests(metafunc):\n    pass\n",
+    "def pytestmark():\n    pass\n",
+    "def setup_module():\n    pass\n",
+    "def setUpModule():\n    pass\n",
+    "def tearDownModule():\n    pass\n",
+    "def load_tests(loader, tests, pattern):\n    pass\n",
+    "@register\nclass K:\n    pass\n",
+    "class K:\n    global g\n    g = 1\n",
+    "class K:\n    def f(self):\n        nonlocal_ = 1\n\n    class Inner:\n        @property\n        def p(self):\n            return 1\n",
+    "class K(make()):\n    pass\n",
+    "class K(metaclass=make()):\n    pass\n",
+    "class K:\n    register()\n",
+    "class K:\n    if c:\n        x = 1\n",
+    "class K:\n    x = f()\n",
+    "class K:\n    pytestmark = 1\n",
+    "class K:\n    x += 1\n",
+    "PYTESTMARK = 1\n",
+    "pytestmark = 1\n",
+    "pytest_plugins = ['x']\n",
+    "setup_module = other\n",
+    "__unittest_skip__ = True\n",
+    "A.b = 1\n",
+    "x, y = 1, 2\n",
+    "x = f()\n",
+    "x = lambda: 1\n",
+    "x = (y := 1)\n",
+    "x = [i for i in range(3)]\n",
+    "x = {i for i in ()}\n",
+    "x = (i for i in ())\n",
+    "x: int = f()\n",
+    "if c:\n    x = 1\n",
+    "try:\n    x = 1\nexcept E:\n    pass\n",
+    "for i in v:\n    pass\n",
+    "while c:\n    pass\n",
+    "with c:\n    pass\n",
+    "match c:\n    case 1:\n        pass\n",
+    "f()\n",
+    "'a' + 'b'\n",
+    "x += 1\n",
+    "global g\n",
+    "del x\n",
+    "assert x\n",
+    "raise E\n",
+], ids=["decorated-def", "decorated-async-def", "pytest-hook-def", "pytestmark-def", "setup-def", "setUpModule-def", "tearDownModule-def",
+        "load_tests-def", "decorated-class", "class-global", "class-nested-decorator", "class-call-base",
+        "class-call-keyword", "class-call-statement", "class-if-body", "class-call-assignment",
+        "class-pytest-assign", "class-augassign", "pytestmark-upper", "pytestmark", "pytest_plugins",
+        "setup-assign", "dunder-assign", "attribute-target", "tuple-target", "call-value", "lambda-value",
+        "walrus-value", "listcomp-value", "setcomp-value", "generator-value", "annotated-call", "if", "try", "for",
+        "while", "with", "match", "call-statement", "non-docstring-expr", "augassign", "global", "del", "assert",
+        "raise"])
+def test_allowed_host_refuses_each_forbidden_shape(text):
+    assert not front._allowed_host(ast.parse(text).body[0])
+
+
+def test_front_records_hook_is_the_negation_of_allowed_host():
+    for text in ("import os\n", "x = 1\n", "x = f()\n", "@d\ndef f(): pass\n", "if c:\n    pass\n"):
+        node = ast.parse(text).body[0]
+        assert front.parse(text)[0]["hook"] is (not front._allowed_host(node))
