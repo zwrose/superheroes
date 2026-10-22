@@ -18,12 +18,20 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
+- **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
 
 ### Engine CLI calls: one stdin chokepoint
 
 - `engine_adapter.run_engine_cli(argv, run=None, **kwargs)` runs an engine CLI (`codex`, `cursor-agent`, `claude`) with stdin closed. Without `input=` the child's stdin is `subprocess.DEVNULL`; with `input=` (a string, including empty) the text is piped in and stdin is not set. It raises `ValueError` before calling `run` for any `stdin=` other than `subprocess.DEVNULL`, for `input=None`, and for `stdin=` together with `input=`. `run` defaults to `subprocess.run` and its result is returned unchanged.
 - `engine_authz.implementation_dispatch_allowed`, `engine_detect.probe`, `cloud_relay._call` and `preflight_probe.probe_command` spawn through it. Each keeps its `run=` seam and its `except Exception`, so a refusal reads as a failed probe.
 - `plugins/superheroes/lib/tests/test_engine_cli_stdin_census.py` scans the shipped Python and fails on a spawner call in a file that holds an engine argv source when the call neither starts with a non-engine literal argv nor passes `input=` or a `stdin=` other than `None`, `0` or `sys.stdin`. A call that carries `**kwargs` and no explicit `stdin=` or `input=` fails too. `engine_adapter.py` and `engine_dispatch.py` are exempt by name.
+
+### Cloud setup: the setup text fills the launcher's dependency caches
+
+- `cloud_setup_text._fill_lines(cwd, root, clone)` returns the fill step's script lines, or `[]`. The step exists only when the project's core record names a Python launcher (`breakItInterpreter` when set, invalid meaning none; else the launcher the `verifyCommand` runs) and the repository root has a lockfile or `requirements*.txt`. A verify command carrying an environment assignment or an `env` word, a launcher that is a single bare Python interpreter word (a longer launcher such as `python3 -m uv run python` does get the step), and any read or parse failure each give no step.
+- The step runs the launcher once as `<launcher> -c pass` in the project's clone, after the setup commands and before the project's tool steps, and logs exactly one line: `dependency fill ok`, `dependency fill FAILED: <launcher> -c pass exited <code>`, or `dependency fill skipped: no clone in …`.
+- The step never changes the setup script's exit status: a failed or skipped fill leaves it what it would have been without the step.
+- The stamp gains the entry `setup-dependency-fill`, holding the step's lines, in a project that has the step and a stamp. A project without the step keeps its setup text and stamp byte for byte.
 
 ### PR sheet: the fold keeps only routine notes, as a list
 
