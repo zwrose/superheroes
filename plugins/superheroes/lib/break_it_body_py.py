@@ -107,9 +107,19 @@ def _uses(node):
     names = set()
 
     def walk(table, parent):
-        # a class body's reads fall back to module and builtin names, so a class contributes every name it mentions
-        if parent is None or table.get_type() == "class":
+        # a class body's reads fall back to module and builtin names, so a class contributes every name it reads;
+        # an assignment-only class attribute is not a dependency, and a compiler-mangled private name is mapped
+        # back to its source spelling
+        if parent is None:
             names.update(sym.get_name() for sym in table.get_symbols())
+        elif table.get_type() == "class":
+            prefix = "_" + table.get_name().lstrip("_") + "__"
+            for sym in table.get_symbols():
+                if sym.is_referenced():
+                    sym_name = sym.get_name()
+                    if table.get_name().strip("_") and sym_name.startswith(prefix) and len(sym_name) > len(prefix):
+                        sym_name = "__" + sym_name[len(prefix):]
+                    names.add(sym_name)
         else:
             names.update(sym.get_name() for sym in table.get_symbols() if sym.is_global())
         # only a real def requests fixtures: a lambda, comprehension or generator scope is a function table whose

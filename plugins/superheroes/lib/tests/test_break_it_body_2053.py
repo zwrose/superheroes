@@ -727,6 +727,25 @@ def test_class_body_global_fallback_read_is_a_dependency():
     assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
 
 
+def test_class_private_name_keeps_source_spelling_and_moves():
+    content = "class TestExample:\n    __value = 1\n\n    def test_x(self):\n        assert self._TestExample__value == 1\n"
+    assert "__value" not in front.parse(content)[0]["uses"]
+    content = "class TestExample:\n    x = __value\n\n    def test_x(self):\n        assert self.x\n"
+    assert "__value" in front.parse(content)[0]["uses"]
+    moved = "class _Example:\n    y = __value\n"
+    assert "__value" in front.parse(moved)[0]["uses"]
+    got = break_it_body.locate(moved, "a.py", [("b.py", "import os\n\n" + moved)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+def test_class_assignment_only_attribute_is_not_a_dependency():
+    content = "class TestExample:\n    label = 1\n\n    def test_x(self):\n        assert self.label == 1\n"
+    assert "label" not in front.parse(content)[0]["uses"]
+    host = "label = 'x'\n\n" + content
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
 def test_front_hook():
     def hook(text):
         return front.parse(text)[0]["hook"]
