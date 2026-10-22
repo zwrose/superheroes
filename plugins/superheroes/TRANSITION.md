@@ -12,6 +12,16 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
+
+### Retired: the identifiers content hash and the cross-vendor escalation step
+
+- `identifiers.py` drops `content_hash`, `STABLE_FIELDS` and `_normalize_body` (no non-test caller; `work_item_slug` stays), and `model_registry.escalate()` at the top of a vendor's ladder returns `None` instead of the next vendor's first rung (its one caller already treats `None` as no escalation).
+
 ## 0.46.0
 
 ### Before you upgrade
