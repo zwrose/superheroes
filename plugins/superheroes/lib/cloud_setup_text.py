@@ -643,12 +643,19 @@ def _fill_launcher(cwd, root):
     return words
 
 
+_FILL_USERINFO_RE = re.compile(r"://[^/\s@:]*:[^/\s@]+@")
+
+
 def _fill_lines(cwd, root, clone):
     """The setup text's dependency fill step, or []: it exists only when the project declares a
     Python launcher and the repository root declares Python dependencies (a lockfile or a
     requirements file). Any read failure leaves no step; the launcher is never guessed."""
     words = _fill_launcher(cwd, root)
     if not words:
+        return []
+    # axis: fail closed - a launcher word carrying a credential (URL userinfo with a password, or
+    # anything `_scan` reports) gets no step at all; it is never redacted or guessed
+    if any(_FILL_USERINFO_RE.search(w) or _scan(w) for w in words):
         return []
     try:
         declared = detect_inputs(store_core.repo_root(cwd))
