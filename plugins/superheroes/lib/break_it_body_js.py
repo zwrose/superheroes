@@ -594,8 +594,8 @@ def _framework_names(stmts):
             for local, target in imports:
                 if local is not None:
                     imported.setdefault(local, set()).add(target[0])
-                    # a local name bound to a different imported name (`expect as test`) is never a framework name
-                    if target[1] not in (local, "default"):
+                    # a local name bound to a different imported name (`expect as test`) or by a default import is never a framework name
+                    if target[1] != local:
                         bound.add(local)
         else:
             bound |= binds

@@ -708,3 +708,11 @@ def test_a_callee_name_imported_under_a_rename_is_no_framework_name():
     _assert_differ(a, a.replace('"bad"', '"good"'))
     own = 'import { test } from "vitest";\ntest("a", f)'
     _assert_same(own, own.replace('"a"', '"b"'))
+
+
+def test_an_own_name_framework_import_still_normalizes_the_title():
+    for module in ("vitest", "@jest/globals", "node:test", "bun:test"):
+        own = 'import { it } from "%s";\nit("a", () => { expect(1).toBe(1); });' % module
+        _assert_same(own, own.replace('"a"', '"b"'))
+    default = 'import test from "vitest";\ntest("a", f)'
+    _assert_differ(default, default.replace('"a"', '"b"'))
