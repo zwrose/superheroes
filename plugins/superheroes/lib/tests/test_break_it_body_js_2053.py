@@ -41,9 +41,22 @@ def test_contract_constants():
     assert front.TITLE == "\x00title"
 
 
+@pytest.mark.parametrize("text, declaration", [
+    ('import type { A } from "m"', True),
+    ('import { type A } from "m"', False),
+    ('import type Def from "m"', True),
+    ('import type from "m"', False),
+    ('import { a } from "m"', False),
+    ('import "m"', False),
+    ("const a = 1", False),
+])
+def test_type_only_marks_only_a_declaration_level_import_type(text, declaration):
+    assert _only(text)["type_only"] is declaration
+
+
 def test_record_shape():
     rec = _only("const a = 1")
-    assert set(rec) == {"kind", "key", "titles", "imports", "binds", "uses", "hook", "relative"}
+    assert set(rec) == {"kind", "type_only", "key", "titles", "imports", "binds", "uses", "hook", "relative"}
     assert rec["kind"] == "stmt"
     assert isinstance(rec["key"], tuple) and isinstance(rec["titles"], tuple) and isinstance(rec["imports"], tuple)
     assert isinstance(rec["binds"], frozenset) and isinstance(rec["uses"], frozenset)

@@ -1089,6 +1089,13 @@ def _js_collection_overrides(repo_root, head):
     return False
 
 
+def _carries_option_token(command):
+    """True when the plain argv command ``command`` carries any option token (one starting with ``-``) after its
+    leading ``NAME=value`` entries, or cannot be parsed as a plain command (fail closed)."""
+    argv, _, refusal = parse_command(command)
+    return bool(refusal) or any(tok.startswith("-") for tok in argv)
+
+
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
@@ -1132,6 +1139,9 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
             return res(KEPT_UNRESOLVED, "binding-conflict")
         # axis: a renamed JS/TS test is accepted only when the repository at the reviewed head has no root vitest/vite/jest config file and no package.json jest or vitest key (an unreadable package.json fails closed), because a configured testNamePattern could skip the new title while another test passes; the gate is the JS front's own (``JS_COLLECTION``) — see bite-proof record wo_b_2061_break_it_body_js
         if found["titles"] and js_collected(record["path"]) and _js_collection_overrides(repo_root, head):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+        # axis: a renamed JS/TS test's run command may carry no option token at all (nothing starting with `-`, after the leading VAR=value pairs), because --config, -c, --root, --dir, --project or --workspace can select a configuration the root listing above never reads, which could filter the new title out; an unrenamed moved test is unaffected — see bite-proof record wo_b_2061_break_it_body_js
+        if found["titles"] and js_collected(record["path"]) and _carries_option_token(record["command"]):
             return res(KEPT_UNRESOLVED, "binding-conflict")
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")

@@ -115,14 +115,16 @@ def _may_import_fixture(pair, python=True):
 
 
 def _runtime_imports(records):
-    """``[(module, pairs)]``, one per import record that still evaluates a module once its type-only bindings are
-    dropped, in file order; a record whose every binding is type-only is erased by TypeScript and left out."""
+    """``[(module, pairs)]``, one per import record that still evaluates a module once TypeScript erases its types,
+    in file order. A declaration-level ``import type`` is erased whole and left out; every other import stays, even
+    when each of its specifiers is an inline ``type`` (TypeScript keeps it as an empty import that still evaluates
+    the module), with only its runtime bindings in ``pairs``."""
     out = []
     for rec in records:
+        if rec["kind"] != "import" or not rec["imports"] or rec.get("type_only", False):
+            continue
         types = _type_names(rec)
-        pairs = frozenset(pair for pair in rec["imports"] if pair[0] is None or pair[0] not in types)
-        if pairs:
-            out.append((next(iter(pairs))[1][0], pairs))
+        out.append((rec["imports"][0][1][0], frozenset(pair for pair in rec["imports"] if pair[0] is None or pair[0] not in types)))
     return out
 
 
@@ -199,17 +201,10 @@ def _outside(records, window, original, moved=False, python=True):
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
         if (rec["uses"] - types) & window_binds:
             return "binding-conflict"
-    # axis: when either file holds an effect-only import, every runtime import of the original (effect-only and named, by module and binding) appears in the host in the original's order (an effect-only import runs its module's code, so moving one across a named import changes the fixture the test sees), and the host holds no effect-only import the original lacks; an added, repeated or reordered one is host setup. A type-only binding is dropped first, because TypeScript erases it and it evaluates nothing; a module in two runtime records keeps both positions — see bite-proof record wo_b_2061_break_it_body_js
+    # axis: when either file holds an effect-only import, the host's runtime import records (a declaration-level `import type` dropped, every other import kept in file order, compared by module and the set of runtime names each binds) must equal the original's exactly, with nothing added, removed or reordered, because an effect-only import runs its module's code and any other change to the module evaluation order changes the fixture the test sees; an inline `import { type X }` stays, since TypeScript keeps it as an empty import that still evaluates the module — see bite-proof record wo_b_2061_break_it_body_js
     old_runtime, new_runtime = (_runtime_imports(recs) for recs in (original, records))
-    old_all, new_all = ([pair for _, pairs in seq for pair in pairs] for seq in (old_runtime, new_runtime))
-    if any(pair[0] is None for pair in old_all + new_all):
-        # each original import record is matched, in order, to a later host record of the same module that binds
-        # every one of its runtime bindings (specifier order inside one statement evaluates nothing)
-        remaining = iter(new_runtime)
-        if ([pair for pair in new_all if pair[0] is None] != [pair for pair in old_all if pair[0] is None]
-                or not all(any(mod == new_mod and pairs <= new_pairs for new_mod, new_pairs in remaining)
-                           for mod, pairs in old_runtime)):
-            return "host-setup"
+    if any(pair[0] is None for _, pairs in old_runtime + new_runtime for pair in pairs) and old_runtime != new_runtime:
+        return "host-setup"
     # the host's own rebinding is checked last, so a more specific refusal above (host-setup) keeps its reason
     if _rebinds(records):
         return "binding-conflict"

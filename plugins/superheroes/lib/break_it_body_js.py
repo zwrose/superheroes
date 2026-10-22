@@ -300,6 +300,17 @@ def _specifiers(toks, i, pairs):
     return end + 1
 
 
+def _type_declaration(sig):
+    """True when the import statement `sig` is a declaration-level `import type ...` (TypeScript erases it whole), as
+    opposed to one whose specifiers are each marked `type` inline."""
+    toks = sig[:-1] if sig[-1:] == [_SEMI] else sig
+    at = lambda k: toks[k] if k < len(toks) else ("", "")
+    if at(1) != _TYPE or len(toks) <= 2 or at(2)[0] == "str":
+        return False
+    after = at(2)
+    return after in (_LBRACE, _STAR) or (after[0] == "id" and not (after[1] == "from" and at(3)[0] == "str"))
+
+
 def _parse_import(sig):
     """Return (imports, binds) for an import statement, or raise ValueError for a form it does not read."""
     toks = sig[:-1] if sig[-1] == _SEMI else sig
@@ -314,11 +325,9 @@ def _parse_import(sig):
         if n != 2:
             _bad_import()
         return ((None, (toks[1][1], None)),), frozenset()
-    i, type_only, pairs = 1, False, []
-    if at(1) == _TYPE and n > 2:
-        after = at(2)
-        if after in (_LBRACE, _STAR) or (after[0] == "id" and not (after[1] == "from" and at(3)[0] == "str")):
-            type_only, i = True, 2
+    i, type_only, pairs = 1, _type_declaration(sig), []
+    if type_only:
+        i = 2
     if at(i)[0] == "id":
         pairs.append((toks[i][1], "default", False))
         i += 1
@@ -708,7 +717,7 @@ def _parse(text):
     for toks, sig, is_import, imports, binds in stmts:
         key, titles = _keyed(toks, frameworks)
         uses = frozenset(tok[1] for prev, tok in zip([None] + sig, sig) if tok[0] == "id" and prev not in _MEMBER)
-        records.append({"kind": "import" if is_import else "stmt", "key": key, "titles": titles, "imports": imports,
+        records.append({"kind": "import" if is_import else "stmt", "type_only": is_import and _type_declaration(sig), "key": key, "titles": titles, "imports": imports,
                         "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks),
                         "relative": _relative(sig, imports)})
     return records

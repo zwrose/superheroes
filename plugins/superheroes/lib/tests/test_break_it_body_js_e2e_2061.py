@@ -312,9 +312,21 @@ def _located(host, content=SETUP_ORIG):
     return found["status"], found["reason"]
 
 
+SAME_IMPORTS = 'import { describe, expect, it } from "vitest";\nimport { weeklyTotal } from "./weekly";\n'
+
+
 def test_a_setup_import_kept_before_the_named_imports_in_order_reads_found():
-    host = 'import "./setup";\n' + _host()
+    host = 'import "./setup";\n' + SAME_IMPORTS + HOST_OWN + HOST_BODY
     assert _located(host) == ("found", None)
+
+
+def test_an_extra_runtime_import_prepended_beside_a_setup_import_reads_host_setup():
+    host = 'import { probe } from "./subject.mjs";\nimport "./setup";\n' + SAME_IMPORTS + HOST_OWN + HOST_BODY
+    assert _located(host) == ("unresolved", "host-setup")
+
+
+def test_an_extra_name_in_a_shared_module_import_beside_a_setup_import_reads_host_setup():
+    assert _located('import "./setup";\n' + _host()) == ("unresolved", "host-setup")
 
 
 def test_a_setup_import_moved_after_a_named_import_reads_host_setup():
@@ -398,7 +410,22 @@ def test_a_setup_import_swapped_after_a_named_import_behind_a_type_import_reads_
 
 def test_a_setup_import_kept_in_order_behind_a_type_import_reads_found():
     content = TYPED_SETUP + 'import "./setup";\nimport { value } from "./subject";\n' + ORIG
-    host = TYPED_SETUP + 'import "./setup";\nimport { value } from "./subject";\n' + _host()
+    host = TYPED_SETUP + 'import "./setup";\nimport { value } from "./subject";\n' + SAME_IMPORTS + HOST_OWN + HOST_BODY
+    assert _located(host, content) == ("found", None)
+
+
+INLINE_TYPED = 'import { type Model } from "./subject";\n'
+
+
+def test_an_inline_type_only_import_moved_across_a_setup_import_reads_host_setup():
+    content = INLINE_TYPED + 'import "./setup";\n' + ORIG
+    host = 'import "./setup";\n' + INLINE_TYPED + SAME_IMPORTS + HOST_OWN + HOST_BODY
+    assert _located(host, content) == ("unresolved", "host-setup")
+
+
+def test_an_inline_type_only_import_kept_in_order_beside_a_setup_import_reads_found():
+    content = INLINE_TYPED + 'import "./setup";\n' + ORIG
+    host = INLINE_TYPED + 'import "./setup";\n' + SAME_IMPORTS + HOST_OWN + HOST_BODY
     assert _located(host, content) == ("found", None)
 
 
@@ -431,6 +458,36 @@ def test_a_ts_rename_with_a_plain_package_json_and_no_js_config_is_kept(repo):
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("kept", "body-match")
     assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]
+
+
+@pytest.mark.parametrize("command", [
+    "npx vitest run --config web/vitest.config.ts %s" % OWN,
+    "npx vitest run -c web/vitest.config.ts %s" % OWN,
+    "npx vitest run --root web %s" % OWN,
+    "npx vitest run --project unit %s" % OWN,
+    "npx vitest run --config=web/vitest.config.ts %s" % OWN,
+], ids=["config", "short-config", "root", "project", "config-equals"])
+def test_a_ts_rename_whose_command_carries_an_option_reads_unresolved(repo, command):
+    base, head = _stage(repo, {"web/vitest.config.ts": "export default { test: { testNamePattern: /^regression/ } };\n", HOST: _host()})
+    calls = []
+    assert _got(_check(repo, base, head, _record(command=command), _stub(calls))) == ("unresolved", "binding-conflict")
+    assert calls == []
+
+
+def test_a_ts_rename_whose_command_carries_only_env_pairs_and_runner_words_is_kept(repo):
+    base, head = _stage(repo, {HOST: _host()})
+    calls = []
+    record = _record(command="CI=1 pnpm vitest run %s" % OWN)
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("kept", "body-match")
+    assert [c["run"] for c in calls] == ["CI=1 pnpm vitest run %s" % HOST]
+
+
+def test_an_unrenamed_moved_ts_test_with_an_option_is_not_refused_by_the_option_rule(repo):
+    host = HOST_IMPORTS + HOST_OWN + FORMATTED.split('import { weeklyTotal } from "./weekly";\n\n', 1)[1]
+    base, head = _stage(repo, {HOST: host})
+    calls = []
+    record = _record(command="npx vitest run --reporter=dot %s" % OWN)
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("kept", "body-match")
 
 
 def test_an_unrenamed_moved_ts_test_is_kept_beside_a_vitest_config(repo):
