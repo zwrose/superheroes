@@ -154,8 +154,11 @@ def _cursor_event_stream(tool_calls=1, verdicts=None):
     lines = []
     for i in range(tool_calls):
         call_id = "c%d" % (i + 1)
-        lines.append(json.dumps({"type": "tool_call", "call_id": call_id, "subtype": "started"}))
-        lines.append(json.dumps({"type": "tool_call", "call_id": call_id, "subtype": "completed"}))
+        payload = {"readToolCall": {"args": {"path": "notes.txt"}}}
+        lines.append(json.dumps({"type": "tool_call", "call_id": call_id, "subtype": "started",
+                                 "tool_call": payload}))
+        lines.append(json.dumps({"type": "tool_call", "call_id": call_id, "subtype": "completed",
+                                 "tool_call": payload}))
     if verdicts is None:
         verdicts = [{"id": "conformance-probe-1", "verdict": "CONFIRMED", "reason": "ok"}]
     lines.append(json.dumps({"type": "result", "verdicts": verdicts}))
