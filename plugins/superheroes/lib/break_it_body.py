@@ -9,9 +9,11 @@ this module compares the records and refuses whatever it cannot compare: every u
 second copy, every binding the host file changes and every module-level test setup the host adds.
 Nothing is raised, and a result that is not ``found`` never reads as kept."""
 import importlib
+import io
 import os
 import posixpath
 import sys
+import tokenize
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -54,9 +56,18 @@ def _front_for(suffix):
     return None
 
 
-def _outside(records, window, original):
+def _relative(rec):
+    return any(pair[1][0] == "from" and pair[1][1] > 0 for pair in rec["imports"])
+
+
+def _source_names(content):
+    """The identifiers that appear as NAME tokens in ``content``, outside comments and strings."""
+    return {tok.string for tok in tokenize.generate_tokens(io.StringIO(content).readline) if tok.type == tokenize.NAME}
+
+
+def _outside(records, window, original, moved=False):
     """The refusal reason for the first candidate record outside the matched window that changes what the test
-    means, else ``None``."""
+    means, else ``None``. ``moved`` is true when the candidate sits in a different directory than the original."""
     orig_pairs = {pair for rec in original for pair in rec["imports"]}
     names = set()
     for rec in original:
@@ -65,6 +76,12 @@ def _outside(records, window, original):
     for index in window:
         names |= records[index]["binds"]
     orig_keys = {rec["key"] for rec in original}
+    window_binds = set()
+    for index in window:
+        window_binds |= records[index]["binds"]
+    # axis: a relative import resolves against its file's package, so a test moved to another directory cannot keep one — see bite-proof record wo_a_2053_break_it_body
+    if moved and any(_relative(rec) for rec in original):
+        return "binding-conflict"
     # axis: every import the original bound is bound the same way in the file that holds the test — see bite-proof record wo_a_2053_break_it_body
     if not orig_pairs <= {pair for rec in records for pair in rec["imports"]}:
         return "binding-conflict"
@@ -82,6 +99,9 @@ def _outside(records, window, original):
                 return "binding-conflict"
         # axis: a statement outside the window that rebinds a name the test uses is refused — see bite-proof record wo_a_2053_break_it_body
         if rec["kind"] == "stmt" and rec["binds"] & names:
+            return "binding-conflict"
+        # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
+        if rec["uses"] & window_binds:
             return "binding-conflict"
     return None
 
@@ -110,7 +130,11 @@ def locate(content, path, candidates):
     names -= set(old_titles)
     # the textual prefilter requires only names that occur in the original's own text: a derived runtime spelling
     # (a mangled private name) never makes an identical candidate fail it
-    prefilter = {name for name in names if name in content}
+    try:
+        spelled = _source_names(content)
+    except Exception:
+        return _unresolved("body-unparseable")
+    prefilter = {name for name in names if name in spelled}
     keys = [rec["key"] for rec in body]
     unparseable = False
     matches = []
@@ -141,7 +165,8 @@ def locate(content, path, candidates):
     if len(matches) > 1:
         return _unresolved("match-ambiguous")
     cand_path, records, window = matches[0]
-    reason = _outside(records, set(window), original)
+    moved = posixpath.dirname(cand_path) != posixpath.dirname(path)
+    reason = _outside(records, set(window), original, moved)
     if reason:
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]

@@ -809,3 +809,37 @@ def test_core_a_host_binding_the_runtime_name_of_a_private_class_read_is_a_bindi
 def test_core_an_unchanged_moved_class_with_a_private_attribute_is_found():
     got = break_it_body.locate(_PRIVATE, "a.py", [("b.py", "import os\n\n" + _PRIVATE)])
     assert got["status"] == "found"
+
+
+_RELATIVE = "from . import helpers\n\n\ndef test_x():\n    assert helpers.ok()\n"
+
+
+def test_core_a_relative_import_moved_to_another_directory_is_a_binding_conflict():
+    got = break_it_body.locate(_RELATIVE, "pkg/a.py", [("other/b.py", _RELATIVE)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_a_relative_import_in_the_same_directory_is_found():
+    got = break_it_body.locate(_RELATIVE, "pkg/a.py", [("pkg/b.py", _RELATIVE)])
+    assert (got["status"], got["path"]) == ("found", "pkg/b.py")
+
+
+def test_core_a_comment_only_runtime_spelling_does_not_fail_the_prefilter():
+    content = "class TestR:\n    # note: _TestR__v\n    __v = 1\n\n    def test_x(self):\n        assert self.__v == 1\n"
+    candidate = content.replace("    # note: _TestR__v\n", "")
+    got = break_it_body.locate(content, "a.py", [("b.py", "import os\n\n" + candidate)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
+
+
+def test_core_a_host_statement_that_references_the_moved_test_is_a_binding_conflict():
+    content = "class TestR:\n    def test_x(self):\n        assert True\n"
+    host = "import os\n\n" + content + "\nTestR.__unittest_skip__ = True\n"
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_core_a_host_that_never_mentions_the_moved_tests_names_is_found():
+    content = "class TestR:\n    def test_x(self):\n        assert True\n"
+    host = "import os\n\n" + content + "\n\ndef helper():\n    return os.name\n"
+    got = break_it_body.locate(content, "a.py", [("b.py", host)])
+    assert (got["status"], got["path"]) == ("found", "b.py")
