@@ -75,7 +75,6 @@ def _outside(records, window, original, moved=False):
     # the matched copy's own bindings (a renamed test's new name) are protected too, so a later definition cannot overwrite it
     for index in window:
         names |= records[index]["binds"]
-    orig_keys = {rec["key"] for rec in original}
     window_binds = set()
     for index in window:
         window_binds |= records[index]["binds"]
@@ -89,7 +88,7 @@ def _outside(records, window, original, moved=False):
         if index in window:
             continue
         # axis: module-level test setup the host adds is refused, because it would change the test's run — see bite-proof record wo_a_2053_break_it_body
-        if rec["hook"] and rec["key"] not in orig_keys:
+        if rec["hook"]:
             return "host-setup"
         for pair in rec["imports"]:
             if pair in orig_pairs:
@@ -107,6 +106,31 @@ def _outside(records, window, original, moved=False):
         if rec["uses"] & window_binds:
             return "binding-conflict"
     return None
+
+
+def _namespaces(recs):
+    """``{namespace: [names]}``: the names bound by defs and classes, grouped by the module (one namespace) or by each
+    record's own class body."""
+    spaces = {}
+    for pos, rec in enumerate(recs):
+        for scope, name in rec.get("defs", ()):
+            spaces.setdefault("m" if scope == "m" else pos, []).append(name)
+    return spaces
+
+
+def _collides(original, matched):
+    """True when a rename gave two names of one namespace the same spelling that were distinct in the original's
+    same namespace. ``original`` and ``matched`` are the equal-keyed statement records, in order."""
+    old, new = _namespaces(original), _namespaces(matched)
+    for space, olds in old.items():
+        news = new.get(space, [])
+        if len(news) != len(olds):
+            return True
+        for i in range(len(olds)):
+            for j in range(i + 1, len(olds)):
+                if olds[i] != olds[j] and news[i] == news[j]:
+                    return True
+    return False
 
 
 def locate(content, path, candidates):
@@ -173,7 +197,7 @@ def locate(content, path, candidates):
     if reason:
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]
-    # axis: a rename that makes two of the matched tests share a name inside one class runs only the last, so it is refused — see bite-proof record wo_a_2053_break_it_body
-    if len(set(new_titles)) < len(set(old_titles)):
+    # axis: a rename that makes two defs or classes of the matched window share a name inside one namespace (the module, or one class body) runs only the last, so it is refused; the same name in two different classes is fine — see bite-proof record wo_a_2053_break_it_body
+    if _collides([rec for rec in original if rec["kind"] == "stmt"], [records[i] for i in window]):
         return _unresolved("binding-conflict")
     return _result("found", None, cand_path, [(old, new) for old, new in zip(old_titles, new_titles) if old != new])

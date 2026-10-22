@@ -66,6 +66,24 @@ def _is_fixture(func, aliases=frozenset()):
             or (isinstance(func, ast.Attribute) and func.attr == "fixture"))
 
 
+def _decorator_is(decorator, name):
+    """True when ``decorator`` is ``<name>`` or ``<anything>.<name>``."""
+    return ((isinstance(decorator, ast.Name) and decorator.id == name)
+            or (isinstance(decorator, ast.Attribute) and decorator.attr == name))
+
+
+def _defs(node):
+    """``((scope, name), ...)`` for the defs and classes ``node`` binds by name: ``("m", name)`` for the statement itself
+    when it is a def or class (module namespace), and ``("c", name)`` for each def or class directly in its body when
+    it is a class (that class's own namespace). The names are the source names, titles included."""
+    found = []
+    if isinstance(node, _FUNCTIONS + (ast.ClassDef,)):
+        found.append(("m", node.name))
+    if isinstance(node, ast.ClassDef):
+        found.extend(("c", sub.name) for sub in node.body if isinstance(sub, _FUNCTIONS + (ast.ClassDef,)))
+    return tuple(found)
+
+
 def _class_globals(body):
     """Names declared ``global`` in a class body (or a nested class body), without entering a function or lambda."""
     names = set()
@@ -141,7 +159,9 @@ def _requests(node, aliases):
             fixture = any(_is_fixture(d.func if isinstance(d, ast.Call) else d, aliases) for d in sub.decorator_list)
             if scope in ("module", "class") and (sub.name.startswith("test") or fixture):
                 params = sub.args.posonlyargs + sub.args.args
-                skipped = params[0].arg if scope == "class" and params else None
+                # a staticmethod has no implicit first parameter: every parameter of it is a fixture request
+                static = any(_decorator_is(d, "staticmethod") for d in sub.decorator_list)
+                skipped = params[0].arg if scope == "class" and params and not static else None
                 every = params + sub.args.kwonlyargs + [a for a in (sub.args.vararg, sub.args.kwarg) if a]
                 found[(sub.name, sub.lineno)] = frozenset(a.arg for a in every if a.arg != skipped)
             scope = "other"
@@ -245,9 +265,12 @@ def _plain_signature(node):
 
 
 def _plain_import(node):
-    """True when no name ``node`` binds is a runner hook (see ``_hook_name``) and it is no star import."""
+    """True when no name ``node`` binds is a runner hook (see ``_hook_name``) and it is no star import. The one
+    exemption is the plain ``import pytest``, the normal test-file import (``pytest_*`` and ``pytestmark`` stay hooks)."""
     for alias in node.names:
         local = alias.asname or (alias.name.split(".")[0] if isinstance(node, ast.Import) else alias.name)
+        if isinstance(node, ast.Import) and alias.name == "pytest" and local == "pytest":
+            continue
         # axis: an imported name that a runner treats as setup (setUpModule, setup_module, pytestmark) or a star import is a hook — see bite-proof record wo_a_2053_break_it_body
         if local == "*" or _hook_name(local):
             return False
@@ -299,7 +322,7 @@ def _record(node, directives, aliases=frozenset()):
     binds = set()
     _binds(node, binds, aliases)
     return {"kind": kind, "key": key, "titles": titles, "imports": _import_pairs(node),
-            "binds": frozenset(binds), "uses": _uses(node, aliases),
+            "binds": frozenset(binds), "uses": _uses(node, aliases), "defs": _defs(node),
             "hook": not _allowed_host(node),
             # a relative import at any depth (inside a test function too) resolves against its file's package
             "relative": any(isinstance(sub, ast.ImportFrom) and (sub.level or 0) > 0 for sub in ast.walk(node))}
