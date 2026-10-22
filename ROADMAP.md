@@ -115,55 +115,36 @@ across the epic's children (#1615) and the owner accepted delivery in full on 20
 the disclosed paths recorded on the epic's closure receipt.) (**Cloud builders** — priority 2 of the
 2026-10-10 order — closes with the 0.43.0 cut: exit met, every issue in it is closed, the stack of
 children landed whole, and the owner accepted delivery in full on 2026-10-16, with two live checks
-deferred to their first occurrence on the epic's closure receipt.)
+deferred to their first occurrence on the epic's closure receipt.) (**The reset lands** — priority 1 of
+the 2026-10-10 order — closed 2026-10-22 with the board sweep, the reset's closing act: every open
+issue dispositioned with the owner's word per group, and the landing epic's closure receipt
+posted.) (**Engine dispatch you can trust**, **Unattended waves run themselves**, **The machine
+runs lean**, **Cross-session messaging**, **Mission control**, **Guardian earns its keep** and
+**Plumbing fails closed** — retired 2026-10-22 at the same sweep under Spec A FR-A6: from the
+reset's landing every milestone is product-forward, so machinery enters through the front door
+into the Backlog, where their open issues now sit.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
 (seam-independent items from a lower milestone routinely ride the same wave). Per cut rule 1,
-receipts decide the actual cut order. The owner set this order 2026-08-15 with one stated
-reason: the hardening milestones (review panels, engine dispatch, unattended waves) protect
-machinery that is working well enough today, so they defer behind the two lingering features
-the owner is the direct consumer of.
+receipts decide the actual cut order. Since the reset's board sweep (2026-10-22) every
+milestone here is product-forward and labelled so in its description (Spec A FR-A6);
+machinery work enters through the front door into the Backlog.
 
-1. **The reset lands** — the landing epic of the owner-stamped Part B specs (#1259): the
-   forward doctrine, the front door, and the two re-derived contracts land in their one homes
-   across seventeen children; the closure receipt posts and the gardening record names the
-   day the dial starts counting. Outside the dial by rule; graded once on the per-role
-   startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
-   owner-ruled its own milestone the same day; placed first at filing on the stamp's own
-   logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)* It stays
-   open after the 0.43.0 cut: the review epic it carried is delivered, but its exit is not yet
-   met, because the reset's closing act, an owner-attended board sweep that settles what is still
-   filed under the milestone, has not run.
-2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+1. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
-   coverage; the parallel authenticated-pilot epic closes.
-3. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+   coverage; the test-pilot discovery also decides whether the dormant parallel-wave layer stays.
+   Product-forward.
+2. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
-   what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
-   under Review-spec keeps pace by the same word.)*
-4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
-   re-verification: the result contract is test-bound, the run-dir failure class is deleted,
-   the dispatch guard is hard-wired, seat bundles travel intact.
-5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
-   hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
-   garbage collection, the owner-authority gate's remaining side doors.
-6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
-   two largest charters finally under one; the activation record bound to what it certifies;
-   the harness tripwire leaving a durable result.
-7. **Cross-session messaging** — a discovery starter: where the host's cross-session
-   messaging primitive replaces the deaf-session workarounds, per surface.
-8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
-   actually is, for the owner first. Low priority.
-9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
-   trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
-   Owner-ruled lower priority; revisit.
+   what if anything earns building. *(Opened 2026-08-28 by owner word, in-session.)*
+   Product-forward.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
 condition, parked options with a tripwire, parking citations, the eval story, doc hygiene,
-the ledger re-walks, and standing machinery with a standing note. Anything that doesn't earn
+the ledger re-walks, standing machinery with a standing note, and machinery work graded at the
+front door. Anything that doesn't earn
 a place there closes with a tripwire instead.
 
 **Version numbers float free of the milestones** — a release cuts whenever merged receipts
