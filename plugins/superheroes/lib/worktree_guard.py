@@ -107,6 +107,9 @@ _PIECE_SKIP_WORDS = frozenset({"!", "{", "then", "do", "else", "elif", "time"})
 _GH_DATA_SUBCOMMANDS = frozenset({"issue", "pr", "release", "api"})
 _HEREDOC_DELIMITER_END = " \t;|&()<>"
 _COMMENT_PRECEDERS = " \t;|&()`"
+_OPEN_LINE_ENDINGS = ("{", "(", "|", "&&", "||", "\\")
+_NESTING_MARKS = ("`", "$(", "<(", ">(")
+_DATA_SUBSTITUTION = re.compile(r"(\"?)\$\(cat <<'[A-Za-z_][A-Za-z0-9_.-]*'\s*$")
 
 
 def _piece_is_data_consumer(piece):
@@ -126,6 +129,11 @@ def _piece_is_data_consumer(piece):
     if base == "git":
         return following == "commit"
     return False
+
+
+def _line_opens_context(line):
+    """True when a line may leave a group, substitution, pipe or continuation open for the next."""
+    return line.rstrip().endswith(_OPEN_LINE_ENDINGS) or any(mark in line for mark in _NESTING_MARKS)
 
 
 def _read_heredoc_delimiter(line, q):
@@ -325,25 +333,37 @@ def _scan_operator_line(line, stack):
 def _mask_heredoc_bodies(command):
     """Blank the body lines of heredocs that provably feed data to a program that does not run it.
 
-    A body is blanked only when all hold: the operator sits outside quotes; the body is terminated;
-    every command word on the operator line is a data consumer (`cat`, `tee`, `gh issue|pr|release|api`,
-    `git commit`); the operator line does not hand the consumer's output on (a trailing pipe) or run a
-    command substitution as a command word; and the delimiter is quoted or the body has no `$(` or
-    backtick. Anything the scan cannot read stops masking for the rest of the command, so the
-    remaining text is scanned exactly as it always was (fail-closed). Terminator lines are kept.
+    A body is blanked only when all hold (fail closed, no deeper parsing; otherwise it is scanned as
+    always): the operator sits outside quotes; the body is terminated; every command word on the
+    operator line is a data consumer (`cat`, `tee`, `gh issue|pr|release|api`, `git commit`); the
+    operator line has no backtick, `{` or `(` and does not hand the consumer's output on (a trailing
+    pipe) — except one `"$(cat <<'DELIM'` that follows consumers only, whose terminator is followed
+    by a lone `)"` or `)` that ends the command; no earlier line opens a group, substitution, pipe
+    or continuation; and an unquoted delimiter's body has no `$(`, backtick or trailing backslash
+    (bash folds backslash-newline before it matches the terminator). Anything the scan cannot read
+    stops masking for the rest of the command. Terminator lines are kept.
     """
     if "\n" not in command:
         return command
     lines = command.split("\n")
     stack = [["u", 0, False, False]]
     i = 0
+    opened = False
+    checked = 0
     while i < len(lines):
         ops, pieces, stop, bad, pipe = _scan_operator_line(lines[i], stack)
         if stop:
             break
-        consumed = bool(ops) and not bad and not pipe and bool(pieces) and all(
+        while checked < i and not opened:
+            opened = _line_opens_context(lines[checked])
+            checked += 1
+        substitution = _DATA_SUBSTITUTION.search(lines[i])
+        plain_part = lines[i][:substitution.start()] if substitution else lines[i]
+        consumed = bool(ops) and not bad and not pipe and not opened and bool(pieces) and all(
             _piece_is_data_consumer(piece) for piece in pieces
-        )
+        ) and not any(mark in plain_part for mark in ("`", "{", "("))
+        if substitution and len(ops) != 1:
+            consumed = False
         following = i + 1
         for dash, word, quoted in ops:
             end = None
@@ -355,8 +375,16 @@ def _mask_heredoc_bodies(command):
             if end is None:
                 return "\n".join(lines)
             body = lines[following:end]
-            expands = any("$(" in ln or "`" in ln for ln in body)
-            if consumed and (quoted or not expands):
+            maskable = consumed and (
+                quoted or not any("$(" in ln or "`" in ln or ln.endswith("\\") for ln in body)
+            )
+            if maskable and substitution:
+                closer = ')"' if substitution.group(1) else ")"
+                after = lines[end + 1:]
+                maskable = bool(after) and after[0].rstrip() == closer and not any(
+                    ln.strip() for ln in after[1:]
+                )
+            if maskable:
                 for k in range(following, end):
                     lines[k] = ""
             following = end + 1

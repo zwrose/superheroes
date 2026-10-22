@@ -1097,6 +1097,14 @@ def test_census_every_refusal_text_names_its_next_step():
     texts["hooks.json fallback"] = _hooks_json_fallback_reason()
     for source, text in texts.items():
         assert "Next step:" in text, source
+        tail = text.split("Next step:", 1)[1]
+        assert "`" in tail or "Edit tool" in tail or "Write tool" in tail, source
+
+
+def test_hooks_json_fallback_reason_names_the_gate_command():
+    tail = _hooks_json_fallback_reason().split("Next step:", 1)[1]
+    assert "python3" in tail
+    assert "hooks/worktree_guard_gate.py" in tail
 
 
 def test_hooks_json_fallback_reason_carries_no_quote_that_breaks_the_printf():

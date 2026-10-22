@@ -24,7 +24,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 
 _DENY_INSPECT = ("superheroes worktree guard: could not inspect this command "
-                 "(fail-closed). Next step: re-issue the Bash call with its command "
+                 "(fail-closed). Next step: re-issue the `Bash` call with its command "
                  "as a plain string.")
 
 

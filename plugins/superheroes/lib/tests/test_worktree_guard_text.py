@@ -254,6 +254,37 @@ def test_assignment_only_substitution_is_not_masked(dirty_repo):
     _refused(command, dirty_repo)
 
 
+@pytest.mark.parametrize("command", [
+    "cat <<EOF\nE\\\nOF\ngit reset --hard\nEOF",
+    "`cat <<'EOF'\ngit reset --hard\nEOF\n`",
+    "`\ncat <<'EOF'\ngit reset --hard\nEOF\n`",
+    "sh < <(\ncat <<'EOF'\ngit reset --hard\nEOF\n)",
+    "(\ncat <<'EOF'\ngit reset --hard\nEOF\n) | sh",
+    "{\ncat <<'EOF'\ngit reset --hard\nEOF\n} | sh",
+    "cat <<'EOF' > >(sh)\ngit reset --hard\nEOF",
+    "git commit -m \"$(cat <<'EOF'\ngit reset --hard\nEOF\n)\" && git reset --hard",
+], ids=["folded-terminator", "backtick-enclosed", "backtick-opened-earlier", "process-substitution",
+        "grouped-pipeline", "brace-group-pipeline",
+        "output-process-substitution", "chained-after-substitution"])
+def test_a_heredoc_whose_output_may_reach_a_shell_is_not_masked(command, dirty_repo):
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
+
+
+@pytest.mark.parametrize("command", [
+    "sh -c \"$(echo hi\ncat <<'EOF'\ngit reset --hard\nEOF\n)\"",
+    "sh -c \"$(cat <<'EOF'\ngit reset --hard\nEOF\n)\"",
+], ids=["substitution-opened-earlier", "substitution-into-shell"])
+def test_a_substitution_feeding_a_shell_is_not_masked(command):
+    assert wg._mask_heredoc_bodies(command) == command
+
+
+def test_a_commit_message_substitution_that_ends_the_command_is_masked(dirty_repo):
+    command = "git commit -m \"$(cat <<'EOF'\ngit reset --hard\nEOF\n)\""
+    assert wg._mask_heredoc_bodies(command) == "git commit -m \"$(cat <<'EOF'\n\nEOF\n)\""
+    assert wg.classify(command, dirty_repo) == ("allow", "")
+
+
 def test_a_real_command_after_a_masked_heredoc_is_still_scanned(dirty_repo):
     command = "cat <<'EOF'\ntext\nEOF\ngit reset --hard"
     assert _refused(command, dirty_repo) == wg.refusal_message("reset-hard", 1)
