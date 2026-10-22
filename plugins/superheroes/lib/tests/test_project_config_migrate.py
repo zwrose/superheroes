@@ -451,6 +451,27 @@ def test_e14_dirty_gitattributes_refused_canon_dirty(tmp_path):
     assert w.head() == head
 
 
+# a slow git status is a timeout, never local edits, and gets the fetch's bound — #1112
+def test_e14_timed_out_canon_status_says_timed_out_not_dirty(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    real_run = PC.subprocess.run
+    bounds = []
+
+    def _slow_status(cmd, *args, **kw):
+        if "status" in cmd:
+            bounds.append(kw.get("timeout"))
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return real_run(cmd, *args, **kw)
+
+    monkeypatch.setattr(PC.subprocess, "run", _slow_status)
+    head = w.head()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-dirty")
+    assert got["detail"] == "git status timed out after 60s"
+    assert bounds == [60]
+    assert w.head() == head
+
+
 # --- E15: the default-branch probe ---
 
 def test_e15_default_branch_probe_failure_refused(tmp_path, monkeypatch):
@@ -1102,7 +1123,8 @@ def test_e19g_a_superseded_migrated_entry_finishes_once_item_13_equals_the_recor
     w.land()
     head = w.head()
     got = _shape(w.migrate())
-    assert (got["action"], got["reason"]) == ("migrated", None)
+    # the detail rides along so a load flake names its own cause — #1112
+    assert (got["action"], got["reason"]) == ("migrated", None), got["detail"]
     assert got["skipped"] == ["2026-10-05-abcdef12-1"]
     assert w.head() == head
     assert w.item13()["raw"] == _MARKER
