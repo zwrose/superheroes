@@ -935,6 +935,7 @@ def _worktree_remove_target(command):
 
 _MERGE_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _MERGE_BASE_MARKER_RE = re.compile(rb"^(\|{7,})(?: .*)?$")
+_MERGE_SEPARATOR_RE = re.compile(rb"^={7,}$")
 _MERGE_CHECKOUT_OPTS = frozenset({"--ours", "--theirs", "-q", "--quiet"})
 _MERGE_RESTORE_OPTS = frozenset({"--ours", "--theirs", "-W", "--worktree", "-q", "--quiet"})
 # Path-count ceiling for one merge-branch call (each path costs a git call); over it -> indeterminate.
@@ -1081,20 +1082,42 @@ def _merge_source_operands_exact(cwd, operands):
     return True
 
 
-def _merge_content_matches(written, expected, ours, theirs):
+def _merge_has_base_markers(cwd):
+    """True when ``merge.conflictStyle`` writes a base marker, False when it never does, None when unreadable.
+
+    Only ``diff3`` and ``zdiff3`` write one; an absent value or ``merge`` writes none. Any other
+    value, or a config read that fails, cannot be established (None).
+    """
+    result = _run_git(cwd, "config", "--get", "merge.conflictStyle")
+    if result.returncode == 1 and not result.stdout.strip():
+        return False
+    if result.returncode != 0:
+        return None
+    style = result.stdout.rstrip("\n")
+    if style == "merge":
+        return False
+    if style in ("diff3", "zdiff3"):
+        return True
+    return None
+
+
+def _merge_content_matches(written, expected, ours, theirs, base_markers):
     """True when the worktree bytes equal the recomputed merge, up to conflict-marker labels.
 
     ``expected`` was written with the full commit ids ``ours`` and ``theirs`` as its labels, so a
     start or end marker line is recognised by that exact id, never by its look. Compared by
     position: equal line counts, each generated marker line matched by a worktree line carrying
-    the same marker run (any label), every other line byte for byte. An unexpected shape is a
-    mismatch (fail closed).
+    the same marker run (any label), every other line byte for byte. ``base_markers`` says
+    whether the conflict style writes a base marker at all. An unexpected shape is a mismatch
+    (fail closed).
     """
     written_lines = written.split(b"\n")
     expected_lines = expected.split(b"\n")
     if len(written_lines) != len(expected_lines):
         return False
-    markers = _merge_generated_markers(expected_lines, ours.encode(), theirs.encode())
+    markers = _merge_generated_markers(
+        expected_lines, ours.encode(), theirs.encode(), base_markers,
+    )
     if markers is None:
         return False
     for index, (got, want) in enumerate(zip(written_lines, expected_lines)):
@@ -1107,14 +1130,16 @@ def _merge_content_matches(written, expected, ours, theirs):
     return True
 
 
-def _merge_generated_markers(lines, ours, theirs):
+def _merge_generated_markers(lines, ours, theirs, base_markers):
     """{line index: marker run} for the generated marker lines of ``lines``, or None.
 
     A generated conflict opens with exactly ``<<<<<<< <ours>`` and closes with exactly
-    ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``); the one base line
-    (``|||||||`` run, any label) between them is generated too. The ``=======`` separator
-    carries no label and stays an ordinary line. An open that never closes, or opens again
-    before closing, is an unexpected shape (None).
+    ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``). When ``base_markers`` is
+    set (diff3/zdiff3), the first ``|||||||`` line after the open and before the first
+    ``=======`` is generated too (any label); every other ``|||||||`` line, and every one when
+    the style writes no base marker, is ordinary content. The ``=======`` separator carries no
+    label and stays an ordinary line. An open that never closes, or opens again before
+    closing, is an unexpected shape (None).
     """
     open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"(?::.*)?$")
     close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"(?::.*)?$")
@@ -1126,7 +1151,7 @@ def _merge_generated_markers(lines, ours, theirs):
             index += 1
             continue
         markers[index] = opened.group(1)
-        base_seen = False
+        base_open = base_markers
         index += 1
         while True:
             if index >= len(lines):
@@ -1137,10 +1162,13 @@ def _merge_generated_markers(lines, ours, theirs):
                 break
             if open_re.match(lines[index]):
                 return None
-            base = None if base_seen else _MERGE_BASE_MARKER_RE.match(lines[index])
-            if base:
-                markers[index] = base.group(1)
-                base_seen = True
+            if _MERGE_SEPARATOR_RE.match(lines[index]):
+                base_open = False
+            elif base_open:
+                base = _MERGE_BASE_MARKER_RE.match(lines[index])
+                if base:
+                    markers[index] = base.group(1)
+                    base_open = False
             index += 1
         index += 1
     return markers
@@ -1187,6 +1215,7 @@ def _merge_side_probe(cwd, action, command):
         top = top.stdout.rstrip("\n")
 
         tree = None
+        base_markers = None
         risky = 0
         for path, stages in entries.items():
             if stages == {0}:
@@ -1226,7 +1255,11 @@ def _merge_side_probe(cwd, action, command):
                 return ("indeterminate", 0)
             with open(worktree_path, "rb") as f:
                 written = f.read()
-            if not _merge_content_matches(written, blob.stdout, ours, theirs):
+            if base_markers is None:
+                base_markers = _merge_has_base_markers(top)
+                if base_markers is None:
+                    return ("indeterminate", 0)
+            if not _merge_content_matches(written, blob.stdout, ours, theirs, base_markers):
                 risky += 1
                 continue
             # Bytes alone miss a mode-only edit: the executable bit is the builder's too.
