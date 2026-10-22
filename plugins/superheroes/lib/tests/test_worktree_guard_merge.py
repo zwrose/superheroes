@@ -103,7 +103,7 @@ def _merge_head_file(work):
 
 
 def _normalize(data):
-    return re.sub(rb"^(<{7,}|>{7,}|\|{7,})(?: .*)?$", rb"\1", data, flags=re.MULTILINE)
+    return re.sub(rb"^(<{7,}|>{7,})(?: .*)?$", rb"\1", data, flags=re.MULTILINE)
 
 
 def _refusal(action, count):
@@ -333,23 +333,13 @@ def test_base_marker_like_line_in_the_theirs_half_is_ordinary_content(
     assert wg.classify(command, repo) == _refusal("checkout-path", 1)
 
 
-def test_unrecognised_conflict_style_is_indeterminate(tmp_path, monkeypatch):
-    work = _merge_repo(tmp_path, monkeypatch, conflict_style="zdiff3")
-    _git(work, "config", "merge.conflictStyle", "bogus")
-    assert wg.classify("git checkout --theirs f.txt", work) == _indeterminate("checkout-path")
-
-
-def test_unreadable_conflict_style_is_indeterminate(tmp_path, monkeypatch):
+def test_multiple_checkout_paths_without_separator_are_all_paths(tmp_path, monkeypatch):
     work = _merge_repo(tmp_path, monkeypatch)
-    real_run_git = wg._run_git
-
-    def failing_config_read(cwd, *args):
-        if args[:1] == ("config",):
-            return subprocess.CompletedProcess(args, 128, "", "fatal: bad config")
-        return real_run_git(cwd, *args)
-
-    monkeypatch.setattr(wg, "_run_git", failing_config_read)
-    assert wg.classify("git checkout --theirs f.txt", work) == _indeterminate("checkout-path")
+    # --theirs takes no tree-ish, so both operands are paths and are judged per path.
+    assert wg.classify("git checkout --theirs f.txt a.txt", work) == ("allow", "")
+    with open(os.path.join(work, "a.txt"), "a") as f:
+        f.write("builder's unstaged edit\n")
+    assert wg.classify("git checkout --theirs f.txt a.txt", work) == _refusal("checkout-path", 1)
 
 
 def test_edge6_merge_staged_changes_on_unnamed_paths_do_not_count(tmp_path, monkeypatch):
