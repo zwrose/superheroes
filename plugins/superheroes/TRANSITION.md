@@ -12,6 +12,17 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** A caller that reads a `dispatch-write` write forfeit now also finds `dirtiedPaths` on the "forfeited twice" result, and both write-forfeit disclosures say whether the timeout cut the engine off and whether work landed. See [Dispatch: both write forfeits name what landed](#dispatch-both-write-forfeits-name-what-landed).
+
+### Dispatch: both write forfeits name what landed
+
+- The `dispatch-write` "forfeited twice (timeout or unreadable)" result gains `dirtiedPaths`, in the shape the `worktree-dirtied-by-attempt` result already carries (`status`, `paths`, `headMoved`, `truncated`, or `status: indeterminate` with a `reason`). Before, a second attempt that timed out after its edits landed returned no list of what changed.
+- Both write-forfeit `disclosure` strings now end with what landed: `The timeout cut the engine off and its report is missing.` when the attempt's detail is a `timeout-*` token, then `Work landed: <n> path(s) changed (see dirtiedPaths); verify them before re-ordering.`, `No paths landed.`, or `Whether work landed could not be read (dirtiedPaths: <reason>); inspect the worktree.` The keys `reason`, `detail`, `attemptDetail` and `attempts` are unchanged.
+
 ## 0.46.0
 
 ### Before you upgrade
