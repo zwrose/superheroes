@@ -16,10 +16,12 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
-
-- **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
+- **After switching.** **A project whose guardian config file is unreadable or not valid UTF-8 now sweeps as `degraded` and loses benching until the file is fixed; nothing else is owed.** See [Guardian: an unreadable or non-UTF-8 config is degraded](#guardian-an-unreadable-or-non-utf-8-config-is-degraded).
+- **After switching.** **Nothing is owed.** Guardian's hotspots lens stops ranking `.tsx`/`.jsx` files on lizard's complexity figures, which lizard mis-measures in JSX. Those files now read unmeasured, so a TSX-heavy project's hotspot list gets shorter and the sweep lists the hotspots lens as degraded with the count of unmeasured files. See [Guardian: TSX/JSX complexity reads unmeasured](#guardian-tsxjsx-complexity-reads-unmeasured).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
+- **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
+- **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
+- **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
 
 ### Review fixer: Write/Edit only, every refusal reported, and the landing always written
 
@@ -30,6 +32,29 @@ Check these in a consuming project when it adopts this release. Each step names 
 - A fixer slot with no landing while HEAD has commits past the order's emission head refuses `fixer-committed-unlanded` (with `commits`) on `record-result`, `record-result --sweep`, `advance` and `record-missing`. The driver does not rebuild which findings a commit fixed from git, so the recovery is to re-dispatch the order so it lands.
 - Every recorded or accepted fixer row journals a new field, `refusalCheck`: `checked` when a transcript was read and showed nothing unreported, `unobserved` when none was passed.
 - No existing key or flag changes. A consumer owes nothing, except that an orchestrator that wants the cross-check passes `--fixer-transcript`.
+
+### Guardian: an unreadable or non-UTF-8 config is degraded
+
+- `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory or a dangling symlink at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
+- The guardian cadence write in `core_md` returns `{"action": "refused", "reason": "guardian-layer-not-utf8"}` (`GUARDIAN_CADENCE_REASON_UNDECODABLE`) on a non-UTF-8 layer instead of raising.
+
+### Guardian: TSX/JSX complexity reads unmeasured
+
+- `lib/guardian_lens_hotspots.py` no longer passes `.tsx`/`.jsx` files to lizard. Each tracked one gets a digest record `{"unmeasured": true, "reason": "jsx-unreliable"}` and a `collectorErrors` entry `{"collector": "lizard", "path": …, "kind": "jsx-unreliable"}`, and `coverageGaps` gains one line counting them. When every JS-family file is `.tsx`/`.jsx`, lizard does not run and `complexityCoverage.javascript` reads `not-collected`.
+- When any tracked `.tsx`/`.jsx` file exists, `collect()` returns `partial` with a reason that counts them, so the sweep report shows the gap in `degradedLenses`. When that is the only gap, the result also carries `permanentBoundary: true`, so it can seed a baseline. When a language also failed, the reason names both and `permanentBoundary` is not set.
+- A `.tsx`/`.jsx` file measured by an earlier sweep produces no `new`, `worsened` or `resolved` drift and no red line once it reads unmeasured. The collector version is unchanged.
+- The lizard install guidance (`guardian_tools.INSTALL_COMMANDS`) pins `pip install lizard==1.24.0`. `.js`, `.ts`, `.mjs` and `.cjs` figures are unchanged.
+
+### Retired: the identifiers content hash and the cross-vendor escalation step
+
+- `identifiers.py` drops `content_hash`, `STABLE_FIELDS` and `_normalize_body` (no non-test caller; `work_item_slug` stays), and `model_registry.escalate()` at the top of a vendor's ladder returns `None` instead of the next vendor's first rung (its one caller already treats `None` as no escalation).
+
+### Cloud setup: the setup text fills the launcher's dependency caches
+
+- `cloud_setup_text._fill_lines(cwd, root, clone)` returns the fill step's script lines, or `[]`. The step exists only when the project's core record names a Python launcher (`breakItInterpreter` when set, invalid meaning none; else the launcher the `verifyCommand` runs) and the repository root has a lockfile or `requirements*.txt`. A verify command carrying an environment assignment or an `env` word, a launcher that is a single bare Python interpreter word (a longer launcher such as `python3 -m uv run python` does get the step), and any read or parse failure each give no step.
+- The step runs the launcher once as `<launcher> -c pass` in the project's clone, after the setup commands and before the project's tool steps, and logs exactly one line: `dependency fill ok`, `dependency fill FAILED: <launcher> -c pass exited <code>`, or `dependency fill skipped: no clone in …`.
+- The step never changes the setup script's exit status: a failed or skipped fill leaves it what it would have been without the step.
+- The stamp gains the entry `setup-dependency-fill`, holding the step's lines, in a project that has the step and a stamp. A project without the step keeps its setup text and stamp byte for byte.
 
 ### PR sheet: the fold keeps only routine notes, as a list
 
