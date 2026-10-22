@@ -151,6 +151,18 @@ def test_3186_merge_side_checkout_of_untouched_conflicted_file_allows(
     assert wg.classify(command, work) == ("allow", "")
 
 
+def test_3186_shape_is_indeterminate_when_repo_root_resolution_raises(tmp_path, monkeypatch):
+    import store_core
+
+    work = _merge_repo(tmp_path, monkeypatch)
+
+    def _unavailable(cwd, **kwargs):
+        raise store_core.RepoRootUnavailable("git could not answer", git_status="unavailable")
+
+    monkeypatch.setattr(store_core, "repo_root", _unavailable)
+    assert wg.classify("git checkout --theirs f.txt", work) == _indeterminate("checkout-path")
+
+
 def test_merge_staged_path_without_builder_edit_allows(tmp_path, monkeypatch):
     work = _merge_repo(tmp_path, monkeypatch)
     assert wg.classify("git checkout --theirs a.txt", work) == ("allow", "")

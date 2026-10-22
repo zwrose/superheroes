@@ -1254,10 +1254,10 @@ def _merge_side_probe(cwd, action, command):
             return ("indeterminate", 0)
         if len(entries) > _MERGE_PATH_LIMIT:
             return ("indeterminate", 0)
-        top = _run_git(cwd, "rev-parse", "--show-toplevel")
-        if top.returncode != 0:
+        import store_core
+        top = store_core.repo_root(cwd)
+        if not isinstance(top, str) or not top or not os.path.isdir(top):
             return ("indeterminate", 0)
-        top = top.stdout.rstrip("\n")
         if _merge_checkout_transforms(top, list(entries)):
             return ("indeterminate", 0)
 
