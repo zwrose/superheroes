@@ -1714,6 +1714,111 @@ def test_read_config_non_object_report_card_is_degraded(tmp_path):
     assert cfg["reportCard"] is None
 
 
+# --- #886: an unreadable or non-UTF-8 layer is degraded, never healthy -------
+
+
+def _guardian_layer(tmp_path):
+    layer = tmp_path / ".claude" / "superheroes" / "guardian.md"
+    layer.parent.mkdir(parents=True, exist_ok=True)
+    return layer
+
+
+def _make_layer_directory(tmp_path):
+    _guardian_layer(tmp_path).mkdir()
+
+
+def _make_layer_non_utf8(tmp_path):
+    _guardian_layer(tmp_path).write_bytes(
+        b"<!-- guardian: schemaVersion=1 status=confirmed -->\n\n"
+        b"```json guardian-config\n{\"vitals\": false}\n```\n\xff\xfe\x80 bad bytes\n")
+
+
+def _assert_degraded_with_defaults(cfg):
+    assert cfg["configStatus"] == "degraded"
+    assert cfg["configNotes"] and all(n for n in cfg["configNotes"])
+    assert cfg["thresholds"] == dict(gl.RED_LINE_THRESHOLDS)
+    assert cfg["cadence"] == dict(gsw.CADENCE_DEFAULTS)
+
+
+def test_read_config_unreadable_layer_directory_is_degraded(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    _make_layer_directory(tmp_path)
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    _assert_degraded_with_defaults(cfg)
+    assert any("unreadable" in n for n in cfg["configNotes"])
+
+
+def test_read_config_dangling_symlink_layer_is_degraded(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    layer = _guardian_layer(tmp_path)
+    os.symlink(str(tmp_path / "missing-target.md"), str(layer))
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    _assert_degraded_with_defaults(cfg)
+    assert any("FileNotFoundError" in n for n in cfg["configNotes"])
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="chmod 000 does not block reads for root")
+def test_read_config_unreadable_layer_permission_denied_is_degraded(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    layer = _guardian_layer(tmp_path)
+    layer.write_text(
+        "<!-- guardian: schemaVersion=1 status=confirmed -->\n\n"
+        "```json guardian-config\n{\"vitals\": false}\n```\n")
+    os.chmod(layer, 0)
+    try:
+        cfg = gsw.read_config(repo, root=_store(tmp_path))
+    finally:
+        os.chmod(layer, 0o644)
+    _assert_degraded_with_defaults(cfg)
+    assert cfg["vitalsEnabled"] is True
+    assert any("PermissionError" in n for n in cfg["configNotes"])
+
+
+def test_read_config_non_utf8_layer_is_degraded(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    _make_layer_non_utf8(tmp_path)
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    _assert_degraded_with_defaults(cfg)
+    assert cfg["vitalsEnabled"] is True
+    assert any("UnicodeDecodeError" in n for n in cfg["configNotes"])
+
+
+@pytest.mark.parametrize("body", [
+    None,
+    "",
+    "<!-- guardian: schemaVersion=1 status=confirmed -->\n",
+    "<!-- guardian: schemaVersion=1 status=confirmed -->\n\n# Guardian\n\nno fence here\n",
+], ids=["absent", "empty", "provenance-only", "no-fence"])
+def test_read_config_absent_empty_and_no_fence_stay_healthy(tmp_path, body):
+    repo = init_calibrated_repo(tmp_path)
+    if body is not None:
+        _guardian_layer(tmp_path).write_text(body)
+    cfg = gsw.read_config(repo, root=_store(tmp_path))
+    assert cfg["configStatus"] == "healthy"
+    assert cfg["configNotes"] == []
+
+
+@pytest.mark.parametrize("make_bad_layer", [_make_layer_directory, _make_layer_non_utf8],
+                         ids=["directory", "non-utf8"])
+def test_unreadable_or_non_utf8_config_revokes_benching_authority(tmp_path, make_bad_layer):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_ledger(tmp_path, benched_fixture_ledger(), root=root)
+    make_bad_layer(tmp_path)
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(digest={"v": 2}, diff_new=["fixture:tool:new"], emit_normal=True)
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert bundle["reportCard"].get("fixture", {}).get("benched") is not True
+    assert any("degraded" in n for n in bundle.get("reportCardNotes") or [])
+
+
 def test_malformed_config_revokes_benching_authority(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)
