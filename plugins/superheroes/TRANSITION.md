@@ -17,6 +17,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 ### Before you upgrade
 
 - **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
+- **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 
 ### Cloud setup: the setup text fills the launcher's dependency caches
 
@@ -24,7 +25,6 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - The step runs the launcher once as `<launcher> -c pass` in the project's clone, after the setup commands and before the project's tool steps, and logs exactly one line: `dependency fill ok`, `dependency fill FAILED: <launcher> -c pass exited <code>`, or `dependency fill skipped: no clone in …`.
 - The step never changes the setup script's exit status: a failed or skipped fill leaves it what it would have been without the step.
 - The stamp gains the entry `setup-dependency-fill`, holding the step's lines, in a project that has the step and a stamp. A project without the step keeps its setup text and stamp byte for byte.
-- **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 
 ### PR sheet: the fold keeps only routine notes, as a list
 
