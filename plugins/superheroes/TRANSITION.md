@@ -12,6 +12,19 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** A fixed break-it finding's test now counts as kept when its fixture and assertions appear unchanged in a file the final diff carries, at any path, so a formatter run or a move of the test no longer parks the review with `changed` or `missing`. A `breakItKept` row can now read `kept` with reason `body-match`, or `unresolved` with one of the new reasons below. See [Break-it tests: the keep check matches a test by what it checks](#break-it-tests-the-keep-check-matches-a-test-by-what-it-checks).
+
+### Break-it tests: the keep check matches a test by what it checks
+
+- The keep check (`break_it.check_kept`, `breakItKept`) matches a break-it test by its normalised body, at any path in the final diff, when the committed file at the test's path is missing from the head (`not-in-head`), is not in the final diff (`not-in-diff`) or has other bytes (`sha256-differs`). Python is compared by syntax tree (quotes, line breaks, parentheses, comments and blank lines drop out; decorators, indentation, tuple commas and `# type:`, `# noqa` and similar directive comments stay), JavaScript and TypeScript by tokens with statement ends modelled. The test's title may differ.
+- The test must be found exactly once among the files the final diff carries, at module level, with its imports binding the same way and nothing outside it rebinding its names or adding module-level test setup, and it must pass there. Every comparison the check cannot make reads not kept. Every other `check_kept` outcome reads as before.
+- The `break-it-run/1` record gains `content`, the test file's text. A record without it keeps the byte-exact check.
+- A `breakItKept` row can read `kept` with reason `body-match`, or `unresolved` with `body-unparseable`, `body-empty`, `match-ambiguous`, `binding-conflict`, `host-setup`, `command-unmapped` or `command-selects-tests`. A test found at its own path runs the command the loop ran, unchanged; a test found at another path runs that command with the path replaced.
+
 ## 0.46.0
 
 ### Before you upgrade

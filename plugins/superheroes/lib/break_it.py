@@ -479,6 +479,7 @@ def _record(head, block, outcome, reason=None, exit_code=None, output="", interp
     output = readout.scrub(output)[0] if output else ""
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
+            "content": block.get("content"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
             "interpreter": shlex.join(interpreter) if isinstance(interpreter, list) else interpreter}
 
@@ -951,6 +952,89 @@ def _coerce_line(value):
     return coerce_line(value)
 
 
+_SELECT_SHORT = ("-k", "-t", "-g")
+_SELECT_LONG = ("--testNamePattern", "--grep", "--filter", "--match")
+
+
+def _selects_tests(tok, titles):
+    """True when the argv token ``tok`` filters which tests run: by a flag, a ``::`` selector or an old title."""
+    return (tok in _SELECT_SHORT or tok in _SELECT_LONG
+            or any(tok.startswith(flag + "=") for flag in _SELECT_LONG)
+            or any(tok.startswith(flag) and not tok.startswith("--") for flag in _SELECT_SHORT)
+            or "::" in tok or any(old in tok for old, _ in titles))
+
+
+def _rewrite_command(command, old_path, new_path, titles):
+    """``(command, None)`` to run for the test found at ``new_path``, or ``(None, reason)`` when the command cannot
+    be pointed at it: ``command-unmapped`` (not a plain command, or no token names ``old_path``) or
+    ``command-selects-tests`` (a renamed test whose command filters by name)."""
+    argv, env, refusal = parse_command(command)
+    if refusal:
+        return None, "command-unmapped"
+    # axis: a renamed test's command that filters by flag, selector or old title is refused, because the filter would select nothing in the moved copy — see bite-proof record wo_a_2053_break_it_body
+    if titles and any(_selects_tests(tok, titles) for tok in argv):
+        return None, "command-selects-tests"
+    # axis: a test found at its own path runs the command exactly as the loop ran it — see bite-proof record wo_a_2053_break_it_body
+    if new_path == old_path:
+        return command, None
+    moved, replaced = [], False
+    for tok in argv:
+        if tok == old_path or tok.startswith(old_path + "::"):
+            tok, replaced = new_path, True
+        moved.append(tok)
+    if not replaced:
+        return None, "command-unmapped"
+    return " ".join([shlex.quote("%s=%s" % pair) for pair in env.items()] + [shlex.join(moved)]), None
+
+
+def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
+    """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
+    found, unchanged up to formatting and its title, once among the files the final diff carries."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
+    from break_it_body import locate, supported_suffixes
+    suffixes = supported_suffixes()
+    if posixpath.splitext(record["path"].lower())[1] not in suffixes:
+        return today
+    try:
+        diff = _git(repo_root, "diff", "--name-only", "-z", base + "..." + head)
+        if diff.returncode != 0:
+            return res(KEPT_UNRESOLVED, "diff-failed")
+        candidates = []
+        for name in diff.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+            if not name or posixpath.splitext(name.lower())[1] not in suffixes or _path_unsafe(name):
+                continue
+            tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
+            if tree.returncode != 0:
+                return res(KEPT_UNRESOLVED, "ls-tree-failed")
+            meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
+            if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
+                continue
+            blob = _git(repo_root, "cat-file", "blob", meta[2])
+            if blob.returncode != 0:
+                return res(KEPT_UNRESOLVED, "cat-file-failed")
+            try:
+                text = blob.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                text = None
+            candidates.append((name, text))
+    except (OSError, subprocess.TimeoutExpired):
+        return res(KEPT_UNRESOLVED, "git-failed")
+    found = locate(record["content"], record["path"], candidates)
+    if found["status"] in ("unsupported", "none"):
+        return today
+    if found["status"] != "found":
+        return res(KEPT_UNRESOLVED, found["reason"])
+    command, refusal = _rewrite_command(record["command"], record["path"], found["path"], found["titles"])
+    if refusal:
+        return res(KEPT_UNRESOLVED, refusal)
+    run = _safe_run(runner, repo_root, head,
+                    {"path": found["path"], "run": command, "content": "", "sha256": record["sha256"]},
+                    interpreter, write=False)
+    if run["outcome"] == OUTCOME_PASSED:
+        return res(KEPT, "body-match", run)
+    return res(KEPT_FAILING, run.get("reason"), run)
+
+
 def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET):
     """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
     Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
@@ -959,6 +1043,12 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
 
     def res(outcome, reason=None, run=None):
         return {"path": path, "outcome": outcome, "reason": reason, "run": run}
+
+    def searched(today):
+        # axis: a record without content never searches, so it keeps the byte-exact check — see bite-proof record wo_a_2053_break_it_body
+        if not isinstance(record.get("content"), str):
+            return today
+        return _body_search(repo_root, base, head, record, today, res, runner, interpreter)
 
     for value in (repo_root, base, head, path, record.get("command"), record.get("sha256")):
         if not isinstance(value, str) or not value:
@@ -971,7 +1061,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
             return res(KEPT_UNRESOLVED, "ls-tree-failed")
         entry = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0]
         if not entry:
-            return res(KEPT_MISSING, "not-in-head")
+            return searched(res(KEPT_MISSING, "not-in-head"))
         meta = entry.partition("\t")[0].split()
         if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
             return res(KEPT_NOT_REGULAR, "not-a-regular-file")
@@ -980,7 +1070,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
             return res(KEPT_UNRESOLVED, "diff-failed")
         # axis: a file the final diff does not carry is missing, even when head holds a file at that path — see bite-proof record wo_a_1800_break-it
         if not diff.stdout.strip():
-            return res(KEPT_MISSING, "not-in-diff")
+            return searched(res(KEPT_MISSING, "not-in-diff"))
         blob = _git(repo_root, "cat-file", "blob", meta[2])
         if blob.returncode != 0:
             return res(KEPT_UNRESOLVED, "cat-file-failed")
@@ -988,7 +1078,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
         return res(KEPT_UNRESOLVED, "git-failed")
     # axis: the committed bytes must hash to the sha256 the loop ran, else the test was changed — see bite-proof record wo_a_1800_break-it
     if hashlib.sha256(blob.stdout).hexdigest() != record["sha256"]:
-        return res(KEPT_CHANGED, "sha256-differs")
+        return searched(res(KEPT_CHANGED, "sha256-differs"))
     run = _safe_run(runner, repo_root, head,
                     {"path": path, "run": record["command"], "content": "",
                      "sha256": record["sha256"]}, interpreter, write=False)
