@@ -566,6 +566,22 @@ def test_rewrite_refuses_a_renamed_test_whose_command_selects_tests(extra):
     assert break_it._rewrite_command("python -m pytest a.py " + extra, "a.py", "a.py", [])[1] is None
 
 
+def test_rewrite_ignores_environment_data_that_is_not_runner_options():
+    titles = [("test_original", "test_moved")]
+    for assign in ("PYTHONPATH=/tmp/test_original_support", "APP_LABEL=\"owner's\"", "TESTS_DIR=-k"):
+        got = break_it._rewrite_command("%s python -m pytest a.py" % assign, "a.py", "b.py", titles)
+        assert got[1] is None, assign
+
+
+@pytest.mark.parametrize("assign", [
+    "PYTEST_ADDOPTS='-k test_original'", "PYTEST_ADDOPTS='a.py::test_original'", "VITEST_OPTIONS='--grep=x'",
+    "NODE_OPTIONS='-t x'", "MY_ADDOPTS=\"it's\"", "PYTEST_ADDOPTS=test_original",
+])
+def test_rewrite_refuses_a_selector_carried_by_a_runner_options_variable(assign):
+    got = break_it._rewrite_command("%s python -m pytest a.py" % assign, "a.py", "b.py", [("test_original", "test_moved")])
+    assert got == (None, "command-selects-tests")
+
+
 # ---- 10. the Python front ------------------------------------------------------------------------
 
 def _keys(text):
@@ -603,6 +619,8 @@ def test_front_unequal_keys_for_semantic_differences(left, right):
 def test_front_fixture_explicit_name_is_a_binding():
     rec = front.parse("@pytest.fixture(name=\"side\")\ndef z_host_side():\n    return 1\n")[0]
     assert {"z_host_side", "side"} <= rec["binds"]
+    other = front.parse("@marker(name=\"side\")\ndef z_host_side():\n    return 1\n")[0]
+    assert other["binds"] == frozenset(["z_host_side"])
     plain = front.parse("@pytest.fixture(scope=\"module\")\ndef z_host_side():\n    return 1\n")[0]
     assert plain["binds"] == frozenset(["z_host_side"])
 
@@ -676,6 +694,20 @@ def test_front_uses_exclude_keyword_names_and_attributes():
     assert rec["uses"] == frozenset({"test_a", "fx", "obj", "call", "val"})
     assert front.parse("class K:\n    pass\n")[0]["uses"] == frozenset({"K"})
     assert front.parse("import a.b as c\n")[0]["uses"] == frozenset({"c"})
+
+
+def test_front_uses_respect_nested_scopes():
+    def uses(text):
+        return front.parse(text)[0]["uses"]
+    for local in ("len = 0", "import len", "def len(): pass", "class len: pass", "for len in (): pass"):
+        text = "def test_x():\n    def helper():\n        %s\n    assert len([]) == 1\n" % local
+        assert "len" in uses(text), local
+    assert "value" not in uses("def test_x():\n    value = 1\n    assert value == 1\n")
+    assert "value" not in uses("def test_x():\n    import value\n    assert value\n")
+    assert "len" in uses("def test_x():\n    assert [len for len in (1,)] and len([])\n")
+    assert "g" in uses("def test_x():\n    def h():\n        global g\n        g = 1\n")
+    assert "z" not in uses("def test_x():\n    z = 1\n    def h():\n        return z\n")
+    assert "fx" in uses("class K:\n    def test_a(self, fx):\n        pass\n")
 
 
 def test_front_hook():

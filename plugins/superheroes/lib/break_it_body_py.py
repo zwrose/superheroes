@@ -9,6 +9,7 @@ import ast
 import copy
 import io
 import re
+import symtable
 import tokenize
 
 EXTENSIONS = (".py",)
@@ -51,15 +52,21 @@ def _import_pairs(node):
     return tuple(pairs)
 
 
+def _is_fixture(func):
+    """True when ``func`` (a decorator's callee) is ``fixture`` or ``<anything>.fixture``."""
+    return (isinstance(func, ast.Name) and func.id == "fixture") or (isinstance(func, ast.Attribute) and func.attr == "fixture")
+
+
 def _binds(node, out):
     """Names ``node`` binds at module scope, without entering a nested function, lambda, class or comprehension."""
     if isinstance(node, _FUNCTIONS):
         out.add(node.name)
         # a fixture registered under an explicit name binds that name for pytest, whatever the function is called
         for decorator in node.decorator_list:
-            for sub in ast.walk(decorator):
-                if (isinstance(sub, ast.keyword) and sub.arg == "name"
-                        and isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str)):
+            if not (isinstance(decorator, ast.Call) and _is_fixture(decorator.func)):
+                continue
+            for sub in decorator.keywords:
+                if sub.arg == "name" and isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str):
                     out.add(sub.value.value)
         for sub in node.decorator_list + node.args.defaults + [d for d in node.args.kw_defaults if d]:
             _binds(sub, out)
@@ -93,67 +100,23 @@ def _binds(node, out):
             _binds(sub, out)
 
 
-def _local_names(func):
-    """Every name bound inside ``func``'s own body: a function-local, which no module-level binding can reach."""
-    local = set()
-    for stmt in func.body:
-        for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
-                local.add(sub.id)
-            elif isinstance(sub, ast.arg):
-                local.add(sub.arg)
-            elif isinstance(sub, _FUNCTIONS + (ast.ClassDef,)):
-                local.add(sub.name)
-            elif isinstance(sub, (ast.Import, ast.ImportFrom)):
-                local.update(name for name, _ in _import_pairs(sub) if name != "*")
-            elif isinstance(sub, ast.ExceptHandler) and sub.name:
-                local.add(sub.name)
-            elif isinstance(sub, (ast.Global, ast.Nonlocal)):
-                local.difference_update(sub.names)
-    for sub in ast.walk(func):
-        if isinstance(sub, (ast.Global, ast.Nonlocal)):
-            local.difference_update(sub.names)
-    return local
-
-
 def _uses(node):
-    """The names ``node`` depends on from outside itself: its loaded names minus its function-locals, plus every
-    parameter name (a pytest fixture request) and every name it defines at its own level."""
+    """The names ``node`` depends on from outside itself: every name its own level binds or reads, the global
+    reads of each nested scope (a nested scope's own locals are not dependencies, and do not hide an outer one),
+    and every parameter of a function that sits at module or class level (a pytest fixture request)."""
     names = set()
 
-    def visit(sub):
-        if isinstance(sub, _FUNCTIONS):
-            names.add(sub.name)
-            local = _local_names(sub)
-            args = sub.args
-            for arg in args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]:
-                names.add(arg.arg)
-            for part in sub.decorator_list + args.defaults + [d for d in args.kw_defaults if d]:
-                names.update(n.id for n in ast.walk(part) if isinstance(n, ast.Name))
-            for stmt in sub.body:
-                for inner in ast.walk(stmt):
-                    if isinstance(inner, ast.Name) and inner.id not in local:
-                        names.add(inner.id)
-        elif isinstance(sub, ast.ClassDef):
-            names.add(sub.name)
-            for part in sub.decorator_list + sub.bases + [k.value for k in sub.keywords]:
-                names.update(n.id for n in ast.walk(part) if isinstance(n, ast.Name))
-            for stmt in sub.body:
-                visit(stmt)
-        elif isinstance(sub, (ast.Import, ast.ImportFrom)):
-            names.update(local for local, _ in _import_pairs(sub) if local != "*")
+    def walk(table, parent):
+        if parent is None:
+            names.update(sym.get_name() for sym in table.get_symbols())
         else:
-            for inner in ast.walk(sub):
-                if isinstance(inner, ast.Name):
-                    names.add(inner.id)
-                elif isinstance(inner, ast.arg):
-                    names.add(inner.arg)
-                elif isinstance(inner, _FUNCTIONS + (ast.ClassDef,)):
-                    names.add(inner.name)
-                elif isinstance(inner, (ast.Import, ast.ImportFrom)):
-                    names.update(local for local, _ in _import_pairs(inner) if local != "*")
+            names.update(sym.get_name() for sym in table.get_symbols() if sym.is_global())
+        if table.get_type() == "function" and parent is not None and parent.get_type() in ("module", "class"):
+            names.update(sym.get_name() for sym in table.get_symbols() if sym.is_parameter())
+        for child in table.get_children():
+            walk(child, table)
 
-    visit(node)
+    walk(symtable.symtable(ast.unparse(node), "<break-it>", "exec"), None)
     return frozenset(names)
 
 

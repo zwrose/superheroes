@@ -974,8 +974,14 @@ def _selects_tests(tok, titles, old_path):
             or "::" in tok or any(old in tok for old, _ in titles))
 
 
+def _carries_options(name):
+    """True when the environment variable ``name`` carries runner options (``PYTEST_ADDOPTS``, ``*_ADDOPTS``,
+    ``*_OPTIONS``); every other variable is plain data."""
+    return name == "PYTEST_ADDOPTS" or name.endswith("_ADDOPTS") or name.endswith("_OPTIONS")
+
+
 def _env_selects(value, titles, old_path):
-    """True when an environment value, read as a command line, carries a test selector (or cannot be read)."""
+    """True when an option-carrying environment value, read as a command line, carries a test selector (or cannot be read)."""
     try:
         parts = shlex.split(value)
     except ValueError:
@@ -994,7 +1000,7 @@ def _rewrite_command(command, old_path, new_path, titles):
     if titles and any(_selects_tests(tok, titles, old_path) for tok in argv):
         return None, "command-selects-tests"
     # axis: a selector the environment carries (PYTEST_ADDOPTS=-k ...) filters like one in argv, so it is refused the same way — see bite-proof record wo_a_2053_break_it_body
-    if titles and any(_env_selects(value, titles, old_path) for value in env.values()):
+    if titles and any(_env_selects(value, titles, old_path) for name, value in env.items() if _carries_options(name)):
         return None, "command-selects-tests"
     # axis: a test found at its own path runs the command exactly as the loop ran it — see bite-proof record wo_a_2053_break_it_body
     if new_path == old_path:
