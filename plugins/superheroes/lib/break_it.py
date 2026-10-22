@@ -1091,9 +1091,9 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
         return today
     if found["status"] != "found":
         return res(KEPT_UNRESOLVED, found["reason"])
-    # axis: a renamed test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes — see bite-proof record wo_a_2053_break_it_body
+    # axis: a renamed pytest test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes; pytest configuration says nothing about a vitest or jest run, so only a test read by a pytest-collected front is gated — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js
     try:
-        if found["titles"] and _collection_overrides(repo_root, head):
+        if found["titles"] and found["pytest_collected"] and _collection_overrides(repo_root, head):
             return res(KEPT_UNRESOLVED, "binding-conflict")
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")

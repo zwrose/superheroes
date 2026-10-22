@@ -13,6 +13,8 @@ import symtable
 import tokenize
 
 EXTENSIONS = (".py",)
+# pytest collects these titles (function names) by pattern, so the core applies its rename rules to this front only
+PYTEST_COLLECTION = True
 TITLE = "\x00title"
 
 _DIRECTIVE = re.compile(r"^#\s*(type:|pyright:|mypy:|noqa|pragma)", re.IGNORECASE)
