@@ -760,7 +760,15 @@ one needs no new setup text: the hook re-runs the commands at the next cloud ses
 setup text then records the hook after the commands finish, logging `dependency hook recorded` or
 `dependency hook record FAILED`. The hook files must be committed and pushed before the setup text
 is pasted: with no script in the clone, or a failed record, the stamp is withheld and the setup
-does not finish.
+does not finish. When the project's calibration names a Python launcher (`breakItInterpreter`, or
+the launcher its verify command runs) and the repository root has a lockfile or `requirements*.txt`,
+the setup text then runs that launcher once in the clone, logging one line, `dependency fill ok`,
+`dependency fill FAILED` with the exit code, or `dependency fill skipped` when no clone is found,
+without failing the setup, so a cloud implementer's offline write sandbox (which runs uv offline
+against the same cache) can run the tests on its first dispatch; a project that opens sandbox
+network domains must include its package index, and a project with no Python launcher or no
+dependency files gets no such step (Node dependencies come from the setup commands, such as
+`npm ci`).
 
 A launch that names an id matching no environment lands in the account's default environment
 without an error. The check catches this, because the pass block names its environment and the
