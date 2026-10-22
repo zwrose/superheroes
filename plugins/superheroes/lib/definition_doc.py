@@ -517,8 +517,8 @@ def _apply_approved_pass(lines, end, review, current_review):
 def read_frontmatter(path):
     """Parse a definition-doc's §3.1 frontmatter into (frontmatter_dict, body) — the reader paired
     with `render_frontmatter` (the writer), co-located so the two sides change in lockstep. Every
-    §3.1 field is a scalar, and reads back as one. This is the canonical frontmatter→dict reader
-    (e.g. for the §6.3 content-hash); callers must not re-implement it.
+    §3.1 field is a scalar, and reads back as one. This is the canonical frontmatter→dict reader;
+    callers must not re-implement it.
     """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
