@@ -12,6 +12,18 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Re-run the claude conformance probe before the next wave's `preflight-entry`.** A claude probe result taken before the upgrade records no config dir and is refused as `probe-config-dir-unrecorded:claude`. See [Preflight: the claude probe runs under the launch's config dir](#preflight-the-claude-probe-runs-under-the-launchs-config-dir).
+
+### Preflight: the claude probe runs under the launch's config dir
+
+- `conformance_probe.py run` stamps `configDir` on its result: the `CLAUDE_CONFIG_DIR` the claude child was pinned to, and `null` for every other engine. The schema stays `conformance-probe/2`; the key is additive.
+- `preflight-entry` gained `--config-dir <dir>`, the dir the launch will spawn builders with; omitted, it is this process's own resolved dir. A claude record taken under a different dir is refused as `probe-config-dir-mismatch:claude`, and one with no `configDir` as `probe-config-dir-unrecorded:claude`. The owner's `--launch-without claude --owner-word` still covers claude, whatever dir it ran under.
+- A claude fail reason and the pass evidence name the dir as `configDir=<dir>`.
+
 ## 0.46.0
 
 ### Before you upgrade
