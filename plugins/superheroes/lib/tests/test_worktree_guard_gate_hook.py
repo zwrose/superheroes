@@ -17,7 +17,10 @@ import mode_registry
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _HOOK = os.path.join(_PLUGIN, "hooks", "worktree_guard_gate.py")
 
-_DENY_INSPECT = "superheroes worktree guard: could not inspect this command (fail-closed)"
+_DENY_INSPECT = (
+    "superheroes worktree guard: could not inspect this command (fail-closed). "
+    "Next step: re-issue the Bash call with its command as a plain string."
+)
 _DESTRUCTIVE = "git checkout -- f.txt"
 
 
