@@ -310,9 +310,12 @@ def test_any_earlier_line_with_a_nesting_mark_stops_masking(command, dirty_repo)
     'echo "\\"$(echo "\'"; git reset --hard)\\""',
     'echo "\\"$(echo before # )\ngit reset --hard\n)\\""',
     'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
+    'git checkout -b "\\"$(git reset --hard)\\""',
+    'git checkout -b feat "$(git reset --hard)"',
 ], ids=["plain", "escaped-outer-quotes", "escaped-inner-quotes", "backtick", "backtick-escaped-quotes",
         "nested", "unclosed-substitution", "unclosed-backtick", "printf-apostrophe",
-        "escaped-quotes-apostrophe", "commented-paren", "single-quoted-prose-in-substitution"])
+        "escaped-quotes-apostrophe", "commented-paren", "single-quoted-prose-in-substitution",
+        "branch-checkout-escaped-quotes", "branch-checkout-substitution"])
 def test_a_substitution_inside_double_quotes_is_scanned_as_a_command(command, dirty_repo):
     assert wg.mentions_destructive_git(command) is True
     assert "unaccounted" in _kinds(command) or "destructive" in _kinds(command)

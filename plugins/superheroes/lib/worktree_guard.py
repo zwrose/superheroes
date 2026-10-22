@@ -1002,7 +1002,11 @@ def segment_accounting(command, cwd=None):
         tokens = _strip_shell_prefixes(tokens[start:])
         parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
-        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
+        if _double_quoted_substitution_mention(segment):
+            # Checked before the parsed-git branch: whatever the outer command parses as (a
+            # branch-creating checkout included), the substitution inside it still runs.
+            records.append({"segment": segment, "kind": "unaccounted", "action": None})
+        elif parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
             action = _segment_destructive_action(parsed, cwd)
             if action is not None:
                 records.append({
@@ -1041,16 +1045,53 @@ _DESTRUCTIVE_WORD = re.compile(
 )
 
 
+def _double_quoted_substitution_mention(text):
+    """True when a double-quoted span holds `$(` or a backtick and the raw text has a destructive word.
+
+    Bash runs a `$(...)` or backtick substitution inside double quotes, and no quote or boundary
+    parsing of its body is trusted: the test is blunt. Any destructive subcommand word anywhere in
+    the segment's raw text counts. Double-quoted prose with neither `$(` nor a backtick is not
+    caught here.
+    """
+    if not isinstance(text, str) or not _DESTRUCTIVE_WORD.search(text):
+        return False
+    i = 0
+    n = len(text)
+    in_single = False
+    in_double = False
+    while i < n:
+        ch = text[i]
+        if in_single:
+            in_single = ch != "'"
+        elif in_double:
+            if ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
+                i += 2
+                continue
+            if ch == "`" or text.startswith("$(", i):
+                return True
+            in_double = ch != '"'
+        elif ch == "\\":
+            i += 2 if i + 1 < n and text[i + 1] in "'\"\\" else 1
+            continue
+        elif ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        i += 1
+    return False
+
+
 def _segment_mentions_destructive_git(text):
     """Crude per-segment scan for destructive git subcommand mentions.
 
-    Bash runs a `$(...)` or backtick substitution inside double quotes, and no quote or boundary
-    parsing of its body is trusted. A double-quoted span holding `$(` or a backtick makes the
-    segment a mention whenever its raw text holds any destructive subcommand word. Double-quoted
-    prose with neither stays allowed.
+    A double-quoted span holding `$(` or a backtick makes the segment a mention whenever its raw
+    text holds any destructive subcommand word (see `_double_quoted_substitution_mention`).
+    Double-quoted prose with neither stays allowed.
     """
     if not isinstance(text, str):
         return False
+    if _double_quoted_substitution_mention(text):
+        return True
     i = 0
     n = len(text)
     in_single = False
@@ -1066,8 +1107,6 @@ def _segment_mentions_destructive_git(text):
             if ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
                 i += 2
                 continue
-            if (ch == "`" or text.startswith("$(", i)) and _DESTRUCTIVE_WORD.search(text):
-                return True
             if ch == '"':
                 in_double = False
             i += 1
