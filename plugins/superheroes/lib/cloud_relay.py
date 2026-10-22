@@ -82,10 +82,9 @@ def relay_name(config_dir):
 
 def _call(run, argv, env, timeout, cwd=None):
     """(exit code, stdout, stderr) of one command; (None, "", "") when it could not run at all."""
-    runner = subprocess.run if run is None else run
     try:
-        proc = runner(list(argv), capture_output=True, text=True, timeout=timeout, env=env,
-                      cwd=cwd)
+        proc = _sibling("engine_adapter").run_engine_cli(
+            argv, run=run, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
     except Exception:
         return None, "", ""
     code = getattr(proc, "returncode", None)

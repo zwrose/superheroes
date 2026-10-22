@@ -481,8 +481,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    that disclosure**.
 >
 > **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout.** Prefer the
-> supervised runner above; when a builder hand-rolls an engine CLI dispatch (exactly when the adapter
-> path fails), three verified rules keep it from wedging:
+> supervised runner above: the sanctioned call is `engine_dispatch.py dispatch-review`, and a
+> hand-rolled engine call must redirect stdin from a file or `/dev/null`. When a builder hand-rolls an
+> engine CLI dispatch (exactly when the adapter path fails), three verified rules keep it from wedging:
 > 1. **Always feed the prompt from a real file over redirected stdin — `codex exec … - < promptfile`
 >    — never an inherited/open stdin.** codex `exec` reads its prompt from stdin when given `-`, no
 >    positional prompt, or even an empty-string positional; if that stdin is an open source that

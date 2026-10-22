@@ -16,6 +16,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
+- **After switching.** **Re-run the claude conformance probe before the next wave's `preflight-entry`.** A claude probe result taken before the upgrade records no config dir and is refused as `probe-config-dir-unrecorded:claude`. See [Preflight: the claude probe runs under the launch's config dir](#preflight-the-claude-probe-runs-under-the-launchs-config-dir).
 - **After switching.** **Nothing is owed.** A caller that reads a `dispatch-write` write forfeit now also finds `dirtiedPaths` on the "forfeited twice" result, and both write-forfeit disclosures say whether the timeout cut the engine off and whether work landed. See [Dispatch: both write forfeits name what landed](#dispatch-both-write-forfeits-name-what-landed).
 - **After switching.** **A project whose guardian config file is unreadable or not valid UTF-8 now sweeps as `degraded` and loses benching until the file is fixed; nothing else is owed.** See [Guardian: an unreadable or non-UTF-8 config is degraded](#guardian-an-unreadable-or-non-utf-8-config-is-degraded).
 - **After switching.** **Nothing is owed.** Guardian's hotspots lens stops ranking `.tsx`/`.jsx` files on lizard's complexity figures, which lizard mis-measures in JSX. Those files now read unmeasured, so a TSX-heavy project's hotspot list gets shorter and the sweep lists the hotspots lens as degraded with the count of unmeasured files. See [Guardian: TSX/JSX complexity reads unmeasured](#guardian-tsxjsx-complexity-reads-unmeasured).
@@ -33,6 +35,18 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A fixer slot with no landing while HEAD has commits past the order's emission head refuses `fixer-committed-unlanded` (with `commits`) on `record-result`, `record-result --sweep`, `advance` and `record-missing`. The driver does not rebuild which findings a commit fixed from git, so the recovery is to re-dispatch the order so it lands.
 - Every recorded or accepted fixer row journals a new field, `refusalCheck`: `checked` when a transcript was read and showed nothing unreported, `unobserved` when none was passed.
 - No existing key or flag changes. A consumer owes nothing, except that an orchestrator that wants the cross-check passes `--fixer-transcript`.
+
+### Engine CLI calls: one stdin chokepoint
+
+- `engine_adapter.run_engine_cli(argv, run=None, **kwargs)` runs an engine CLI (`codex`, `cursor-agent`, `claude`) with stdin closed. Without `input=` the child's stdin is `subprocess.DEVNULL`; with `input=` (a string, including empty) the text is piped in and stdin is not set. It raises `ValueError` before calling `run` for any `stdin=` other than `subprocess.DEVNULL`, for `input=None`, and for `stdin=` together with `input=`. `run` defaults to `subprocess.run` and its result is returned unchanged.
+- `engine_authz.implementation_dispatch_allowed`, `engine_detect.probe`, `cloud_relay._call` and `preflight_probe.probe_command` spawn through it. Each keeps its `run=` seam and its `except Exception`, so a refusal reads as a failed probe.
+- `plugins/superheroes/lib/tests/test_engine_cli_stdin_census.py` scans the shipped Python and fails on a spawner call in a file that holds an engine argv source when the call neither starts with a non-engine literal argv nor passes `input=` or a `stdin=` other than `None`, `0` or `sys.stdin`. A call that carries `**kwargs` and no explicit `stdin=` or `input=` fails too. `engine_adapter.py` and `engine_dispatch.py` are exempt by name.
+
+### Preflight: the claude probe runs under the launch's config dir
+
+- `conformance_probe.py run` stamps `configDir` on its result: the `CLAUDE_CONFIG_DIR` the claude child was pinned to, as the dispatch journaled it (a probe whose dispatch never opened records `null`), and `null` for every other engine. The schema stays `conformance-probe/2`; the key is additive.
+- `preflight-entry` gained `--config-dir <dir>`, the dir the launch will spawn builders with; omitted, it is this process's own resolved dir. A claude record taken under a different dir is refused as `probe-config-dir-mismatch:claude` (the two paths are compared exactly as written, so a differently spelled path to the same dir is refused too; re-run the probe with the launch's spelling), and one with no `configDir` as `probe-config-dir-unrecorded:claude`. The owner's `--launch-without claude --owner-word` still covers claude, whatever dir it ran under.
+- A claude fail reason and the pass evidence name the dir as `configDir=<dir>`.
 
 ### Dispatch: both write forfeits name what landed
 

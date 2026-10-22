@@ -93,7 +93,7 @@ def probe_command(tool, argv, run=None, *, stdin_text=None, cwd=None):
                   "input": stdin_text or ""}
         if cwd is not None:
             run_kw["cwd"] = cwd
-        proc = run(list(argv), **run_kw)
+        proc = engine_adapter.run_engine_cli(argv, run=run, **run_kw)
         exit_code = getattr(proc, "returncode", None)
         stdout = getattr(proc, "stdout", "") or ""
         stderr = getattr(proc, "stderr", "") or ""
