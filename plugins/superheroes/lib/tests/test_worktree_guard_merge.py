@@ -477,3 +477,132 @@ def test_edge9_no_merge_in_progress_keeps_the_whole_tree_probe(tmp_path, monkeyp
     _commit_file(repo, "other.txt", "base\n")
     _write(repo, "other.txt", "builder's unrelated edit\n")
     assert wg.classify("git checkout --theirs f.txt", repo) == _refusal("checkout-path", 1)
+
+
+# --- generated marker labels: an edit on a marker line is the builder's -------
+
+def _edit_marker_line(work, marker, suffix):
+    path = os.path.join(work, "f.txt")
+    with open(path, "rb") as f:
+        lines = f.read().split(b"\n")
+    index = next(i for i, ln in enumerate(lines) if ln.startswith(marker))
+    carriage = b"\r" if lines[index].endswith(b"\r") else b""
+    lines[index] = lines[index].rstrip(b"\r") + suffix + carriage
+    with open(path, "wb") as f:
+        f.write(b"\n".join(lines))
+
+
+def test_untouched_git_merge_main_conflict_markers_allow(tmp_path, monkeypatch):
+    work = _merge_repo(tmp_path, monkeypatch)
+    with open(os.path.join(work, "f.txt"), "rb") as f:
+        written = f.read()
+    assert b"<<<<<<< HEAD\n" in written and b">>>>>>> main\n" in written
+    assert wg.classify("git restore --theirs f.txt", work) == ("allow", "")
+
+
+@pytest.mark.parametrize("marker", [b"<<<<<<<", b">>>>>>>"])
+@pytest.mark.parametrize("suffix", [b" owner-only resolution note", b"x"])
+def test_text_appended_to_a_marker_label_refuses(tmp_path, monkeypatch, marker, suffix):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _edit_marker_line(work, marker, suffix)
+    assert wg.classify("git restore --theirs f.txt", work) == _refusal("restore", 1)
+
+
+@pytest.mark.parametrize("marker,label", [
+    (b"<<<<<<< ", b"main"),
+    (b">>>>>>> ", b"HEAD"),
+    (b"<<<<<<< ", b""),
+])
+def test_marker_label_resolving_to_the_wrong_commit_or_none_refuses(
+    tmp_path, monkeypatch, marker, label,
+):
+    work = _merge_repo(tmp_path, monkeypatch)
+    path = os.path.join(work, "f.txt")
+    with open(path, "rb") as f:
+        lines = f.read().split(b"\n")
+    index = next(i for i, ln in enumerate(lines) if ln.startswith(marker.strip()))
+    lines[index] = marker.strip() + (b" " + label if label else b" ")
+    with open(path, "wb") as f:
+        f.write(b"\n".join(lines))
+    assert wg.classify("git restore --theirs f.txt", work) == _refusal("restore", 1)
+
+
+# --- CRLF conflict markers ----------------------------------------------------
+
+def _crlf_merge_repo(tmp_path, monkeypatch):
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _git(repo, "config", "core.autocrlf", "false")
+
+    def commit_version(body, message):
+        with open(os.path.join(repo, "f.txt"), "wb") as f:
+            f.write(body)
+        _git(repo, "add", "f.txt")
+        _git(repo, "commit", "-q", "-m", message)
+
+    commit_version(b"base\r\n", "base")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    commit_version(b"feature\r\n", "feature edits f")
+    _git(repo, "checkout", "-q", "main")
+    commit_version(b"main\r\n", "main edits")
+    _git(repo, "checkout", "-q", "feature")
+    merged = _git(repo, "merge", "--no-edit", "main", check=False)
+    assert merged.returncode == 1, merged.stdout + merged.stderr
+    with open(os.path.join(repo, "f.txt"), "rb") as f:
+        assert b"<<<<<<< HEAD\r\n" in f.read()
+    return repo
+
+
+def test_crlf_conflict_untouched_allows_and_edited_refuses(tmp_path, monkeypatch):
+    work = _crlf_merge_repo(tmp_path, monkeypatch)
+    assert wg.classify("git checkout --theirs f.txt", work) == ("allow", "")
+    _edit_marker_line(work, b">>>>>>>", b" owner note")
+    assert wg.classify("git checkout --theirs f.txt", work) == _refusal("checkout-path", 1)
+
+
+def test_crlf_marker_line_losing_its_carriage_return_refuses(tmp_path, monkeypatch):
+    work = _crlf_merge_repo(tmp_path, monkeypatch)
+    path = os.path.join(work, "f.txt")
+    with open(path, "rb") as f:
+        data = f.read()
+    with open(path, "wb") as f:
+        f.write(data.replace(b"<<<<<<< HEAD\r\n", b"<<<<<<< HEAD\n"))
+    assert wg.classify("git checkout --theirs f.txt", work) == _refusal("checkout-path", 1)
+
+
+# --- bytes git may rewrite on checkout: the clean-diff proof does not hold ----
+
+@pytest.mark.parametrize("attribute", [
+    "text", "-text", "eol=crlf", "ident", "filter=lfs", "working-tree-encoding=UTF-16",
+])
+@pytest.mark.parametrize("target", ["a.txt", "f.txt"])
+def test_target_with_a_transforming_attribute_is_indeterminate(
+    tmp_path, monkeypatch, attribute, target,
+):
+    work = _merge_repo(tmp_path, monkeypatch)
+    with open(os.path.join(work, ".gitattributes"), "w") as f:
+        f.write(f"{target} {attribute}\n")
+    assert wg.classify(f"git checkout --theirs {target}", work) == _indeterminate("checkout-path")
+
+
+@pytest.mark.parametrize("value,decision", [("true", "deny"), ("input", "deny"), ("false", "allow")])
+def test_autocrlf_true_or_input_is_indeterminate(tmp_path, monkeypatch, value, decision):
+    work = _merge_repo(tmp_path, monkeypatch)
+    _git(work, "config", "core.autocrlf", value)
+    got = wg.classify("git checkout --theirs a.txt", work)
+    assert got[0] == decision
+    if decision == "deny":
+        assert got == _indeterminate("checkout-path")
+
+
+def test_unreadable_attribute_check_is_indeterminate(tmp_path, monkeypatch):
+    work = _merge_repo(tmp_path, monkeypatch)
+    real = wg._run_git
+
+    def wrapped(cwd, *args):
+        if "check-attr" in args:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: boom")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(wg, "_run_git", wrapped)
+    assert wg.classify("git checkout --theirs a.txt", work) == _indeterminate("checkout-path")
