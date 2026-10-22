@@ -803,7 +803,8 @@ def _codex_item_completed(item_type, item_id="item_0", **item_extra):
 def _codex_event_stream(payload_text, *, action_items=1):
     lines = []
     for i in range(action_items):
-        lines.append(_codex_item_completed("command_execution", "ce_%d" % i))
+        lines.append(_codex_item_completed(
+            "mcp_tool_call", "ce_%d" % i, server="superheroes_read"))
     lines.append(_codex_item_completed(
         "agent_message", "agent_msg", text=payload_text))
     lines.append(json.dumps({
@@ -926,6 +927,7 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
     ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 0.1, "stdoutBytes": len(stdout),
+        "allowanceViolations": [], "allowanceScan": "ok",
         "at": time.time(),
     }, 1)
     engine_dispatch._journal_append(run_dir, {

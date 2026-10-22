@@ -50,6 +50,7 @@ import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import engine_result_channel  # noqa: E402  native result channel (#1270 WO-B1)
+import seat_allowance  # noqa: E402  review-seat allowance scan of the codex event record (#2071)
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import git_routing  # noqa: E402  the one home of the git routing-var list
@@ -119,6 +120,9 @@ _CLAUDE_MODE_HELP = (
     "print only; background is retired and refuses claude-mode-retired before spawn"
 )
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
+ALLOWANCE_VIOLATION_DETAIL = "seat-ran-outside-allowance"
+ALLOWANCE_RECORD_UNREADABLE = "record unreadable"
+ALLOWANCE_DETAIL_MAX = 900
 RUN_KIND_WRITE = session_contract.RUN_KIND_WRITE
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
@@ -3916,6 +3920,57 @@ def _fold_stream_activity(stdout_path, stderr_path, prev_stdout, prev_stderr,
     return last_activity_at, silence, activity_stream
 
 
+def _codex_review_run(opened):
+    """True for a codex review run: the one shape whose attempts carry the allowance scan."""
+    return (isinstance(opened, dict) and opened.get("engine") == "codex"
+            and opened.get("runKind") != RUN_KIND_WRITE)
+
+
+def _allowance_scan_fields(opened, stdout_path):
+    """The journaled allowance scan of one attempt's whole stdout, before it is capped. {} when the
+    run is not a codex review run. Never raises."""
+    # The scan covers codex because codex's event record lists the actions it ran; claude review
+    # seats run --restricted with --strict-mcp-config, so their record carries no commands.
+    if not _codex_review_run(opened):
+        return {}
+    violations, ok = seat_allowance.scan_stream(stdout_path)
+    return {
+        "allowanceViolations": list(violations),
+        "allowanceScan": "ok" if ok else "unreadable",
+    }
+
+
+def _allowance_refusal(opened, ended):
+    """The refusal for a codex review attempt whose journaled event record shows an action outside
+    the allowance, or carries no clean scan; None otherwise. The one authority every review
+    success path asks first. An attempt that ended in a refusal (the engine never ran) keeps its
+    existing grading. Never raises."""
+    if not _codex_review_run(opened):
+        return None
+    ended = ended if isinstance(ended, dict) else {}
+    if ended and (ended.get("refusal") or ended.get("guardRefusal")):
+        return None
+    violations = ended.get("allowanceViolations")
+    if not isinstance(violations, list):
+        violations = []
+    violations = [str(v) for v in violations]
+    if not violations and ended.get("allowanceScan") == "ok":
+        return None
+    if violations:
+        tail = "; ".join(violations)
+        if len(tail) > ALLOWANCE_DETAIL_MAX:
+            tail = tail[:ALLOWANCE_DETAIL_MAX - 3] + "..."
+    else:
+        tail = ALLOWANCE_RECORD_UNREADABLE
+    return {
+        "forfeit": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "%s: %s" % (ALLOWANCE_VIOLATION_DETAIL, tail),
+        "allowanceViolations": violations,
+        "allowanceTerminal": True,
+    }
+
+
 def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path,
                       stderr_path, timeout, progress_path):
     """Run-child engine spawn: durable files, never pipes. Never raises to caller.
@@ -4122,6 +4177,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     command_time = None
     if opened.get("engine") == "cursor":
         command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
+    allowance_fields = _allowance_scan_fields(opened, stdout_path)
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
     )
@@ -4141,6 +4197,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "hostLoadAtEnd": host_load_end,
         "commandTime": command_time,
     }
+    ended_record.update(allowance_fields)
     _apply_completion_stamp(
         ended_record, engine_result_channel.deadline_stamp(start + timeout),
     )
@@ -4337,6 +4394,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "hostLoadAtOpen": host_load_open,
         "commandTime": command_time,
     }
+    ended.update(_allowance_scan_fields(opened, stdout_path))
     if stdout_result is not None:
         ended["stdoutResult"] = stdout_result
     if timed_out:
@@ -5088,6 +5146,9 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
+    allowance_refusal = _allowance_refusal(opened, ended)
+    if allowance_refusal is not None:
+        return allowance_refusal
     if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
         result["detail"] = ended["refusal"]
@@ -5307,7 +5368,24 @@ def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=N
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                             investigated_rejected=None, investigated_rejected_records=None,
-                            payload_shape=None, detail=None, dropped_cause=None):
+                            payload_shape=None, detail=None, dropped_cause=None,
+                            allowance_violations=None):
+    if allowance_violations is not None:
+        return {
+            "ok": False,
+            "terminal": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "attempts": attempts,
+            "forfeited": True,
+            "detail": detail,
+            "allowanceViolations": list(allowance_violations),
+            "disclosure": (
+                "%s reviewer ran outside the review allowance (%s); its result is refused and "
+                "not retried; fall open to a reviewer on the host model and disclose the "
+                "degraded vendor mix" % (engine, ALLOWANCE_VIOLATION_DETAIL)
+            ),
+            "engagement": engagement,
+        }
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         terminal = {
             "ok": False,
@@ -5623,7 +5701,10 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     ))
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
-                if latest < MAX_ATTEMPTS:
+                # An attempt outside the allowance ends the run on that attempt: a retry would
+                # only run the same closed tool set past the same gap.
+                allowance_terminal = bool(grade.get("allowanceTerminal"))
+                if latest < MAX_ATTEMPTS and not allowance_terminal:
                     if run_kind == RUN_KIND_WRITE:
                         baseline = opened.get("worktreeBaseline")
                         dirt_verdict = _worktree_dirt_verdict(baseline, opened["cwd"])
@@ -5657,13 +5738,15 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                 else:
                     terminal = _review_terminal_forfeit(
-                        engine, reason, MAX_ATTEMPTS,
+                        engine, reason, latest if allowance_terminal else MAX_ATTEMPTS,
                         engagement=grade.get("engagement"),
                         investigated_rejected=grade.get("investigatedRejected"),
                         investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
                         detail=grade.get("detail"),
                         dropped_cause=grade.get("droppedCause"),
+                        allowance_violations=(
+                            grade.get("allowanceViolations") if allowance_terminal else None),
                     )
                     view = opened.get("viewMeta")
                     if view:
@@ -7239,6 +7322,8 @@ def _parse_review_attempt(run_dir_real, state, attempt):
             ended = slot.get("ended") or {}
             if ended.get("guardRefusal"):
                 return None
+            if _allowance_refusal(opened, ended) is not None:
+                return None
             if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
                 return None
             stderr_path = os.path.join(run_dir_real, "attempt-%d.stderr" % attempt)
@@ -7370,6 +7455,8 @@ def _observation_from_attempt(run_dir_real, state, attempt):
         native_result_handoff_path=slot.get("nativeResultHandoffPath"))
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         if opened.get("runKind") == RUN_KIND_WRITE:
+            return _engagement_with_read(engagement)
+        if _allowance_refusal(opened, ended) is not None:
             return _engagement_with_read(engagement)
         echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
         admitted = _admit_native_review_result(
