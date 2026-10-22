@@ -14,6 +14,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import config_dir  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
@@ -263,18 +264,21 @@ def _stderr_failure_line(engine, legs, dependent_lanes):
     return "CONFORMANCE PROBE FAILED engine=%s failed=%s dependent lanes: %s" % (
         engine, ",".join(parts), dependent_lanes)
 
-def _preflight_check_entry(engine, channel, seat, wall_seconds, legs, run_dir, all_ok):
+def _preflight_check_entry(engine, channel, seat, wall_seconds, legs, run_dir, all_ok, cfg_dir=None):
     cell = [seat["vendor"], seat["model"], seat.get("effort")]
     leg_summary = ",".join(
         "%s=%s" % (n, "ok" if legs[n]["ok"] else legs[n].get("detail") or "fail") for n in _LEG_NAMES)
     evidence = "%s channel=%s cell=%s wall=%.1fs legs=%s runDir=%s" % (
         engine, channel, "/".join(str(c) for c in cell if c is not None),
         wall_seconds, leg_summary, run_dir)
+    dir_note = " configDir=%s" % cfg_dir if cfg_dir else ""
+    evidence += dir_note
     if all_ok:
         return {"state": "pass", "reason": "%s conformance probe passed" % engine,
                 "evidence": _scrub_text(evidence)}
     return {"state": "fail",
-            "reason": "%s conformance probe failed: %s" % (engine, ",".join(_failed_leg_names(legs))),
+            "reason": "%s conformance probe failed: %s%s" % (
+                engine, ",".join(_failed_leg_names(legs)), dir_note),
             "evidence": _scrub_text(evidence)}
 
 def _read_stderr_tail(run_dir_real, attempt):
@@ -342,7 +346,7 @@ def _grade_legs(terminal, state, bound_exceeded):
     return {"resultProduction": rp, "completionDetection": cd, "progressTelemetry": pt}
 
 def _payload(engine, channel, seat, repo_root, started_at, completed_at, wall, run_dir,
-             mode_legs, probed_modes, dependent_roles, dependent_lanes, wave=None):
+             mode_legs, probed_modes, dependent_roles, dependent_lanes, wave=None, cfg_dir=None):
     legs = _derive_flat_legs(mode_legs)
     all_ok = all(legs[n]["ok"] for n in _LEG_NAMES)
     out = {
@@ -352,8 +356,8 @@ def _payload(engine, channel, seat, repo_root, started_at, completed_at, wall, r
         "wallSeconds": wall, "runDir": run_dir, "probedModes": list(probed_modes),
         "modeLegs": mode_legs, "legs": legs,
         "failed": _failed_leg_names(legs), "dependentRoles": dependent_roles,
-        "dependentLanes": dependent_lanes,
-        "preflightCheck": _preflight_check_entry(engine, channel, seat, wall, legs, run_dir, all_ok),
+        "dependentLanes": dependent_lanes, "configDir": cfg_dir,
+        "preflightCheck": _preflight_check_entry(engine, channel, seat, wall, legs, run_dir, all_ok, cfg_dir),
     }
     if wave:
         out["wave"] = wave
@@ -413,13 +417,14 @@ def _ensure_mode_run_dir(mode_run_dir):
 
 def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
                     run_engine, build_view, order_suffix):
+    """Returns (legs, configDir): configDir is the dir the run journaled as the child's pin. (#889)"""
     mode_run_dir = _mode_run_dir(parent_run_dir, mode)
     mode_run_dir_real, reused, setup_error = _ensure_mode_run_dir(mode_run_dir)
     if setup_error:
-        return _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_run_dir_real)
+        return _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_run_dir_real), None
     if reused:
         return _stamp_mode_run_dir(
-            _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_run_dir_real)
+            _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_run_dir_real), None
     claude_mode = mode if engine == "claude" else None
     order_id = "conformance-probe:%s:%s:%s" % (engine, mode, order_suffix)
     deadline = time.monotonic() + timeout + BOUND_PAD_SECONDS
@@ -455,8 +460,10 @@ def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, 
             pass
         terminal = dict(terminal, terminal=True, ok=False)
     records, _ = engine_dispatch._journal_read(mode_run_dir_real)
-    legs = _grade_legs(terminal, engine_dispatch._journal_state(records), bound_exceeded)
-    return _stamp_mode_run_dir(legs, mode_run_dir_real)
+    state = engine_dispatch._journal_state(records)
+    legs = _grade_legs(terminal, state, bound_exceeded)
+    pinned = (state.get("opened") or {}).get("configDir")
+    return _stamp_mode_run_dir(legs, mode_run_dir_real), (pinned if isinstance(pinned, str) else None)
 
 def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, build_view=None,
           wave=None):
@@ -546,7 +553,7 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
         if err and setup_error is None:
             setup_error = err
         any_reused = any_reused or reused
-    mode_legs = {}
+    mode_legs, cfg_dir = {}, None
     if setup_error:
         for mode in modes:
             mode_legs[mode] = _stamp_mode_run_dir(_all_legs_failed(setup_error), mode_dirs[mode])
@@ -556,15 +563,16 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
                 _all_legs_failed(dispatch_outcome.DETAIL_RUN_DIR_REUSED), mode_dirs[mode])
     else:
         for mode in modes:
-            mode_legs[mode] = _probe_one_mode(
+            mode_legs[mode], pinned = _probe_one_mode(
                 engine, mode, seat, repo_real, parent_run_dir, prompt_path, timeout,
                 run_engine, build_view, order_suffix)
+            cfg_dir = cfg_dir or pinned
     wall = time.monotonic() - t0
     dep_roles, dep_lanes = _dependent_from_calibration(
         preflight_probe.dispatch_calibration(cwd=repo_real), engine)
     payload = _scrub_obj(_payload(
         engine, channel, seat, repo_real, started_at, _utc_now_iso(), round(wall, 1),
-        parent_run_dir, mode_legs, modes, dep_roles, dep_lanes, wave=wave))
+        parent_run_dir, mode_legs, modes, dep_roles, dep_lanes, wave=wave, cfg_dir=cfg_dir))
     legs = payload["legs"]
     all_ok = payload["ok"]
     return payload, (0 if all_ok else 1), (_stderr_failure_line(engine, legs, dep_lanes) if not all_ok else None)
@@ -660,6 +668,8 @@ def _validate_probe_record(raw, path_hint=""):
         return "probe-result-malformed:%s" % path_hint
     if not isinstance(raw.get("preflightCheck"), dict):
         return "probe-result-malformed:%s" % path_hint
+    if raw.get("configDir") is not None and not isinstance(raw.get("configDir"), str):
+        return "probe-result-malformed:%s" % path_hint
     return None
 
 def _required_probe_engines(repo_root, calibration_rows=None):
@@ -687,13 +697,22 @@ def _entry_result(entry, required, failed, sm, wave=None):
            "waveBinding": wave if wave else "none"}
     return out, 0
 
+def _launch_config_dir(launch_config_dir, repo_real):
+    """The config dir builders spawn under: `--config-dir` when given, else this seat's own. (#889)"""
+    env = dict(os.environ)
+    if launch_config_dir:
+        env[config_dir.CONFIG_DIR_ENV] = launch_config_dir
+    return config_dir.resolve(env=env, cwd=repo_real)
+
 def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
-                    max_age_seconds=DEFAULT_MAX_AGE_SECONDS, calibration_rows=None, wave=None):
+                    max_age_seconds=DEFAULT_MAX_AGE_SECONDS, calibration_rows=None, wave=None,
+                    launch_config_dir=None):
     """Build the engine-auth preflight entry from probe results. Returns (payload, exit_code)."""
     try:
         repo_real = os.path.realpath(repo_root)
     except OSError:
         return {"ok": False, "reason": "repo-root-unresolvable"}, 1
+    launch_dir = _launch_config_dir(launch_config_dir, repo_real)
     launch_pairs, words = list(launch_without or []), list(owner_words or [])
     if len(launch_pairs) != len(words) and len(launch_pairs) > len(words):
         return {"ok": False, "reason": "owner-word-missing"}, 1
@@ -739,6 +758,16 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
         probed_cell = res.get("probedCell")
         if expected_cell is None or list(probed_cell[:len(expected_cell)]) != expected_cell:
             return {"ok": False, "reason": "probe-cell-mismatch:%s" % eng}, 1
+        # the owner's word to launch without claude still covers it, whatever dir it ran under
+        if eng == "claude" and eng not in launch_pairs:
+            probed_dir = res.get("configDir")
+            if not probed_dir:
+                return {"ok": False, "reason": "probe-config-dir-unrecorded:claude — re-run the claude "
+                                               "probe; builders spawn under %s" % launch_dir}, 1
+            # exact: a differently spelled path to the same dir fails closed (re-run the probe)
+            if launch_dir is None or probed_dir != launch_dir:
+                return {"ok": False, "reason": "probe-config-dir-mismatch:claude — probed under %s, "
+                                               "builders spawn under %s" % (probed_dir, launch_dir)}, 1
         (passing if res.get("ok") else failed).append(eng)
     owner_map = {}
     for eng, word in zip(launch_pairs, words):
@@ -753,7 +782,10 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                               "evidence": ev_join}, required, [], None, wave=wave)
     uncovered = [e for e in failed if e not in owner_map]
     if uncovered:
-        legs = ["%s (%s)" % (e, ",".join(results_by_engine[e][1].get("failed") or [])) for e in uncovered]
+        legs = ["%s (%s)%s" % (e, ",".join(results_by_engine[e][1].get("failed") or []),
+                               " configDir=%s" % results_by_engine[e][1]["configDir"]
+                               if results_by_engine[e][1].get("configDir") else "")
+                for e in uncovered]
         return _entry_result({
             "state": "fail",
             "reason": "conformance probe failed: %s — hold; nothing launches without the owner's word" % "; ".join(legs),
@@ -1301,6 +1333,8 @@ def main(argv):
     pe.add_argument("--owner-word", action="append", default=[], dest="owner_words")
     pe.add_argument("--max-age-seconds", type=int, default=DEFAULT_MAX_AGE_SECONDS)
     pe.add_argument("--wave", default=None)
+    pe.add_argument("--config-dir", default=None, dest="config_dir",
+                    help="the CLAUDE_CONFIG_DIR builders will spawn with (default: this process's own)")
     def _add_registration_probe_subparser(name, help_text):
         parser = sub.add_parser(name, help=help_text)
         parser.add_argument("--repo-root", required=True)
@@ -1335,7 +1369,7 @@ def main(argv):
                                         launch_without=args.launch_without,
                                         owner_words=args.owner_words,
                                         max_age_seconds=args.max_age_seconds,
-                                        wave=args.wave)
+                                        wave=args.wave, launch_config_dir=args.config_dir)
         sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
         return code
     if args.cmd in ("registration-probe", "astra-probe"):
