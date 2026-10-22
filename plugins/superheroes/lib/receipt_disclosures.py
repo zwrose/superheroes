@@ -670,6 +670,7 @@ def build_degraded_prose(state, form, journal=None):
                 "key while the fold recorded none for them — row-carried text is never rendered "
                 "as owner guidance" % (rkey, len(ggc)))
         vvia = declared.get("verifyVia")
+        # axis: the receipt discloses a CI stand-in for the local verify — see bite-proof record wo_b_2072_ci_verify
         if vvia and vvia.get("via") == "ci-exact-head":
             degraded_out.append(
                 "verify-via-ci (round %s): CI workflow %s run %s on %s (%s) stood in for the local "

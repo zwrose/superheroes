@@ -8487,6 +8487,7 @@ def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
     ci = artifact["ci"]
     verified_head, head_err = resolution
     repo_root = _resolve_repo_root(session_dir, state)
+    # axis: an unresolved head or root is refused, never compared against None — see bite-proof record wo_b_2072_ci_verify
     if head_err or not verified_head or not repo_root:
         return "ci-verify-run-unreadable", head_err or "verified head or repo root unresolvable"
     try:
