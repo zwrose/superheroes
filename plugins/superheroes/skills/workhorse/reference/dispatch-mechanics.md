@@ -436,7 +436,7 @@ attempt ended by natural exit 0 inside the wait and the run folded terminal), an
 stamp). Failure is loud: exit **1** and one stderr line `CONFORMANCE PROBE FAILED engine=<e>
 failed=<legs> dependent lanes: <…>`; the JSON result carries `legs`, `failed`, `dependentRoles` /
 `dependentLanes` (derived from the project's dispatch calibration — the roles routed to that engine),
-`probedCell`, `repoRoot`, `completedAt`, and a `preflightCheck` member shaped as the launcher's
+`probedCell`, `repoRoot`, `completedAt`, `configDir` (the `CLAUDE_CONFIG_DIR` a claude probe ran under; `null` for other engines), and a `preflightCheck` member shaped as the launcher's
 `engine-auth` check entry. Per-leg failure vocabulary: `result-did-not-validate` or the shell's own
 `native-result-*` / parser detail; `no-response-within-wait`, `attempt-ended-missing`, or
 `auth-or-config-refusal`; `telemetry-absent`. The engine set is the adapter's dispatchable vendors
@@ -449,13 +449,17 @@ engine (`codex`, `cursor`, and `claude` — not merely the engines the calibrati
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" preflight-entry --repo-root <abs> --result <probe.json>… \
-  [--wave <id>] [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
+  [--wave <id>] [--config-dir <dir>] [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
 ```
 
 Without `--wave`, binding is repository path plus age only and the entry records
 `waveBinding: none`. With `--wave`, each result's `wave` must match or the entry refuses
 `probe-wave-mismatch:<e>`. Each result's `probedCell` must match the engine's current
-`reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
+`reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`. The claude result's
+`configDir` must equal the dir builders will spawn under (`--config-dir`, default this process's own
+resolved dir) or the entry refuses `probe-config-dir-mismatch:claude`, or
+`probe-config-dir-unrecorded:claude` when the result has none; the owner's word to launch without
+claude skips this check.
 
 It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
 `probe-stale:<e>` (default max age 86400 s, one day; future `completedAt` timestamps count as stale),
@@ -592,7 +596,9 @@ and `unrunnable`.
 The workhorse charter §5 names *who* reviews the brief; this subsection carries the standing lens the
 check always applies, and the mechanics for *how* it is dispatched. The sanctioned channel is
 `dispatch-review --mode brief-check` — not a hand-rolled `codex exec`, which is permitted **only when
-the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path).
+the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path). The
+sanctioned call is `engine_dispatch.py dispatch-review`, and a hand-rolled engine call must redirect
+stdin from a file or `/dev/null`.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -993,7 +999,7 @@ on-disk work already complete and correct.
 (`worktree-dirtied-by-attempt`): no admissible result is graded — `attemptDetail` names why (for
 example `native-result-missing`) — and a partial landing can lack its tests. Split long write
 orders into smaller ones. After any write forfeit, verify the declared paths yourself — that each
-is present and that its tests exist and run — before you re-order; the forfeit's `dirtiedPaths` lists the paths whose git status changed and the paths the attempt committed (an edit to a file already dirty at open whose status did not change is not listed). Never retry a forfeit blind.
+is present and that its tests exist and run — before you re-order; the forfeit's `dirtiedPaths` lists the paths whose git status changed and the paths the attempt committed (an edit to a file already dirty at open whose status did not change is not listed). Both write-forfeit shapes carry `dirtiedPaths`: `worktree-dirtied-by-attempt` and the "forfeited twice" result. A timeout forfeit whose `dirtiedPaths` lists paths means work landed and the report is missing, so verify those paths before you re-order; an empty list with `status: ok` means nothing landed. Never retry a forfeit blind.
 
 **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
 decision rule:

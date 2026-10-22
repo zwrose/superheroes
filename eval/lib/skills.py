@@ -1,9 +1,8 @@
 # eval/lib/skills.py
 """Parse a SKILL.md, content-digest it, and enumerate skills. Stdlib-only.
 
-The digest mirrors plugins/superheroes/lib/identifiers.py's normalization (NFC, \n line endings,
-per-line trailing-whitespace strip) but over a skill's (description + body) rather
-than a definition-doc's stable frontmatter fields — so a carve-out keyed to it
+The digest normalizes (NFC, \n line endings, per-line trailing-whitespace strip) a skill's
+(description + body) — so a carve-out keyed to it
 lapses the moment the skill's description or body changes.
 """
 import glob

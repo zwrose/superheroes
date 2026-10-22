@@ -253,8 +253,24 @@ def test_dispatch_token():
 
 def test_escalate():
     assert MR.escalate("claude", "sonnet-5.5", "high") == ("claude", "opus-5.5", "high")
-    assert MR.escalate("cursor", "cursor-grok-4.6", "xhigh") == ("claude", "haiku-4.5", "medium")
+    assert MR.escalate("cursor", "cursor-grok-4.6", "xhigh") is None
     assert MR.escalate("claude", "fable-5.1", "high") is None
+
+
+def test_escalate_top_rung_is_none_for_every_vendor():
+    # #2050: the cross-vendor step retired — the top of every ladder escalates nowhere.
+    for vendor in MR.VENDORS:
+        rungs = MR.ladder(vendor)
+        assert rungs, vendor
+        top_m, top_e = rungs[-1]
+        assert MR.escalate(vendor, top_m, top_e) is None, vendor
+
+
+def test_escalate_steps_up_within_vendor_below_the_top():
+    for vendor in MR.VENDORS:
+        rungs = MR.ladder(vendor)
+        for (m, e), (nxt_m, nxt_e) in zip(rungs, rungs[1:]):
+            assert MR.escalate(vendor, m, e) == (vendor, nxt_m, nxt_e), (vendor, m, e)
 
 
 def test_fable_never_default():
