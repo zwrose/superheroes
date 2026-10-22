@@ -533,6 +533,11 @@ JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 # `build_receipt` share the same home.
 TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
 
+# Per-round disclosure channel `_fold_verify` records on a verify fold that reaches a `pass` (not
+# `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and
+# `build_receipt` share the same home.
+VERIFY_FOLD_DISCLOSURE_CHANNELS = ("verifyVia",)
+
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
 # census fails. None of these is restorable on resume — `compileDrops` and `unverified` carry
@@ -5535,6 +5540,17 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
+def _verify_via_row(config, artifact):
+    """Which verify a pass rests on: the local command, or a CI run on the exact head."""
+    if artifact.get("via") == "ci-exact-head":
+        ci = artifact["ci"]
+        return {"via": "ci-exact-head", "workflow": ci["workflow"], "runId": str(ci["runId"]),
+                "headSha": ci["headSha"], "conclusion": ci["conclusion"], "reason": artifact["reason"]}
+    command = artifact.get("command")
+    return {"via": "local", "command": command if isinstance(command, str) and command
+            else config.get("verifyCommand")}
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -5585,6 +5601,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "verify result %r is not pass/skip — fail closed, certification withheld" % (result,))
         state["step"] = P_TERMINAL
         return
+    if result == "pass":
+        # axis: the receipt and review record name which verify stood behind the pass — see bite-proof record wo_b_2072_ci_verify
+        _record_round(state, "verifyVia", _verify_via_row(config, artifact))
     then = state.pop("_verifyThen", None)
     if then == VERIFY_THEN_POST_AUDITS:
         _after_audits(state, config)
@@ -8443,6 +8462,60 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     return response
 
 
+def _fetch_ci_run(repo_root, run_id):
+    """Fetch one GitHub Actions run through `gh`. Returns (run dict, None) or (None, reason)."""
+    argv = ["gh", "api", "repos/{owner}/{repo}/actions/runs/%s" % run_id]
+    try:
+        done = subprocess.run(argv, cwd=repo_root, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, "gh api failed: %s" % exc
+    if done.returncode != 0:
+        return None, "gh api exited %s: %s" % (done.returncode,
+                                               done.stdout[-200:] + done.stderr[-200:])
+    try:
+        run = json.loads(done.stdout)
+    except ValueError:
+        return None, "gh api returned non-JSON"
+    return (run, None) if isinstance(run, dict) else (None, "gh api returned a non-object")
+
+
+def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
+    """(token, detail) when a `ci-exact-head` verify artifact is not backed by the fetched run on the
+    verified head; None when it is, and None for a local verify (which never fetches)."""
+    if artifact.get("via") != "ci-exact-head":
+        return None
+    ci = artifact["ci"]
+    verified_head, head_err = resolution
+    repo_root = _resolve_repo_root(session_dir, state)
+    if head_err or not verified_head or not repo_root:
+        return "ci-verify-run-unreadable", head_err or "verified head or repo root unresolvable"
+    try:
+        run, err = _fetch_ci_run(repo_root, ci["runId"])
+    except Exception as exc:  # noqa: BLE001 — the seam is a foreign call; any failure is unreadable
+        run, err = None, "%s: %s" % (type(exc).__name__, exc)
+    # axis: a run that cannot be read is refused, never compared — see bite-proof record wo_b_2072_ci_verify
+    if not isinstance(run, dict) or any(k not in run for k in ("id", "name", "head_sha", "status", "conclusion")):
+        return "ci-verify-run-unreadable", err or "the fetched run lacks id, name, head_sha, status or conclusion"
+    # axis: the run is the claimed run on the claimed and the verified head — see bite-proof record wo_b_2072_ci_verify
+    if run["head_sha"] != ci["headSha"]:
+        return "ci-verify-sha-mismatch", "run %s ran on %s, not the claimed %s" % (run["id"], run["head_sha"], ci["headSha"])
+    if run["head_sha"] != verified_head:
+        return "ci-verify-sha-mismatch", "run %s ran on %s, not the verified head %s" % (run["id"], run["head_sha"], verified_head)
+    if str(run["id"]) != str(ci["runId"]):
+        return "ci-verify-sha-mismatch", "fetched run id %s is not the claimed runId %s" % (run["id"], ci["runId"])
+    # axis: the run is the claimed workflow — see bite-proof record wo_b_2072_ci_verify
+    if run["name"] != ci["workflow"]:
+        return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r" % (run["id"], run["name"], ci["workflow"])
+    # axis: only a completed run that concluded `success`, as claimed, stands in — see bite-proof record wo_b_2072_ci_verify
+    if run["status"] != "completed":
+        return "ci-verify-conclusion-mismatch", "run %s is %r, not completed" % (run["id"], run["status"])
+    if run["conclusion"] != ci["conclusion"]:
+        return "ci-verify-conclusion-mismatch", "run %s concluded %r, not the claimed %r" % (run["id"], run["conclusion"], ci["conclusion"])
+    if run["conclusion"] != "success":
+        return "ci-verify-conclusion-mismatch", "run %s concluded %r, not success" % (run["id"], run["conclusion"])
+    return None
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
                _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
@@ -8505,6 +8578,12 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = _verified_head_at_fold(session_dir, state)
                 except OSError as exc:
                     resolution = (None, "verified head: %s" % exc)
+                # axis: the run check is called at the one submit chokepoint — see bite-proof record wo_b_2072_ci_verify
+                refusal = _ci_verify_run_refusal(session_dir, state, artifact, resolution)
+                if refusal:
+                    _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": round_no,
+                                                  "attempt": attempt, "outcome": refusal[0]})
+                    return {"ok": False, "reason": refusal[0], "detail": refusal[1]}
             else:
                 resolution = None
             if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):

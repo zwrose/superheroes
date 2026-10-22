@@ -644,7 +644,8 @@ def _assemble_fixer(roster, indexed, disclosures, phase, session_dir):
 def _assemble_verify(roster, indexed, disclosures):
     payload = indexed[(roster[0], 0)]["payload"]
     artifact = {"result": payload.get("result")}
-    for field in ("command", "exit", "outputSha256"):
+    # axis: the CI evidence rides the durable-seat assembly to the chokepoint — see bite-proof record wo_b_2072_ci_verify
+    for field in ("command", "exit", "outputSha256", "via", "ci", "reason"):
         if field in payload:
             artifact[field] = payload[field]
     return artifact

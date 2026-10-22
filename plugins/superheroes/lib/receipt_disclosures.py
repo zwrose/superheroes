@@ -37,6 +37,10 @@ def bool_value(value):
     return isinstance(value, bool)
 
 
+def verify_via_shape(value):
+    return isinstance(value, dict) and isinstance(value.get("via"), str)
+
+
 def adapter_provenance_shape(value):
     if not isinstance(value, dict):
         return False
@@ -93,6 +97,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
     "breakItKept": dict_list,
+    "verifyVia": verify_via_shape,
 }
 
 
@@ -664,6 +669,13 @@ def build_degraded_prose(state, form, journal=None):
                 "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
                 "key while the fold recorded none for them — row-carried text is never rendered "
                 "as owner guidance" % (rkey, len(ggc)))
+        vvia = declared.get("verifyVia")
+        if vvia and vvia.get("via") == "ci-exact-head":
+            degraded_out.append(
+                "verify-via-ci (round %s): CI workflow %s run %s on %s (%s) stood in for the local "
+                "verify command: %s" % (rkey, vvia.get("workflow"), vvia.get("runId"),
+                                        str(vvia.get("headSha"))[:7], vvia.get("conclusion"),
+                                        vvia.get("reason")))
         bir = declared.get("breakItRuns")
         if bir:
             not_run = [r for r in bir if r.get("outcome") == "not-run"]

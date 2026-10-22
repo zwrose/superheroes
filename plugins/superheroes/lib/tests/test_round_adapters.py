@@ -370,7 +370,8 @@ def test_fixer_passes_its_payload_through(tmp_path):
 
 def test_verify_assembles_the_result_token(tmp_path):
     def build(n, state):
-        hand = {"result": "pass"}
+        # `command` is consumed now: the fold records it as the round's `verifyVia`
+        hand = {"result": "pass", "command": "pytest -q"}
         payload = {"result": "pass", "command": "pytest -q", "exit": 0, "outputSha256": "ab" * 32}
         return hand, [_result_env(RA.SEAT_VERIFY, payload)], {}
 
