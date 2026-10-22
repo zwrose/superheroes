@@ -600,6 +600,13 @@ def test_front_unequal_keys_for_semantic_differences(left, right):
     assert _keys(left) != _keys(right)
 
 
+def test_front_fixture_explicit_name_is_a_binding():
+    rec = front.parse("@pytest.fixture(name=\"side\")\ndef z_host_side():\n    return 1\n")[0]
+    assert {"z_host_side", "side"} <= rec["binds"]
+    plain = front.parse("@pytest.fixture(scope=\"module\")\ndef z_host_side():\n    return 1\n")[0]
+    assert plain["binds"] == frozenset(["z_host_side"])
+
+
 def test_front_records_have_exactly_the_contract_keys():
     records = front.parse("import os\nx = 1\n")
     assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "hook"}] * 2

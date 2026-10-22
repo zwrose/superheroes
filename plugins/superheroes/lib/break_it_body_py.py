@@ -55,6 +55,12 @@ def _binds(node, out):
     """Names ``node`` binds at module scope, without entering a nested function, lambda, class or comprehension."""
     if isinstance(node, _FUNCTIONS):
         out.add(node.name)
+        # a fixture registered under an explicit name binds that name for pytest, whatever the function is called
+        for decorator in node.decorator_list:
+            for sub in ast.walk(decorator):
+                if (isinstance(sub, ast.keyword) and sub.arg == "name"
+                        and isinstance(sub.value, ast.Constant) and isinstance(sub.value.value, str)):
+                    out.add(sub.value.value)
         for sub in node.decorator_list + node.args.defaults + [d for d in node.args.kw_defaults if d]:
             _binds(sub, out)
     elif isinstance(node, ast.ClassDef):
