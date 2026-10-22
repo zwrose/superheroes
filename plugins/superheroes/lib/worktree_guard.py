@@ -934,8 +934,7 @@ def _worktree_remove_target(command):
 
 
 _MERGE_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_MERGE_LABEL_RE = re.compile(rb"^(<{7,}|>{7,}|\|{7,})(?: .*)?$")
-_MERGE_SEPARATOR_RE = re.compile(rb"^={7,}$")
+_MERGE_BASE_MARKER_RE = re.compile(rb"^(\|{7,})(?: .*)?$")
 _MERGE_CHECKOUT_OPTS = frozenset({"--ours", "--theirs", "-q", "--quiet"})
 _MERGE_RESTORE_OPTS = frozenset({"--ours", "--theirs", "-W", "--worktree", "-q", "--quiet"})
 # Path-count ceiling for one merge-branch call (each path costs a git call); over it -> indeterminate.
@@ -1020,9 +1019,25 @@ def _merge_state_valid(cwd, head_file):
     return len(lines) == 1 and _MERGE_OBJECT_ID_RE.match(lines[0]) is not None
 
 
-def _merge_tree_id(cwd):
-    """Tree id of the recomputed merge (exit 0 clean, 1 conflicted), or None."""
-    result = _run_git(cwd, "merge-tree", "--write-tree", "HEAD", "MERGE_HEAD")
+def _merge_commit_ids(cwd):
+    """(HEAD, MERGE_HEAD) as full commit ids, or None when either does not resolve."""
+    ids = []
+    for ref in ("HEAD", "MERGE_HEAD"):
+        result = _run_git(cwd, "rev-parse", "-q", "--verify", ref + "^{commit}")
+        commit = result.stdout.strip() if result.returncode == 0 else ""
+        if not _MERGE_OBJECT_ID_RE.match(commit):
+            return None
+        ids.append(commit)
+    return tuple(ids)
+
+
+def _merge_tree_id(cwd, ours, theirs):
+    """Tree id of the recomputed merge (exit 0 clean, 1 conflicted), or None.
+
+    The branches are passed as full commit ids so the conflict labels git writes are those ids,
+    never text a file could hold.
+    """
+    result = _run_git(cwd, "merge-tree", "--write-tree", ours, theirs)
     if result.returncode not in (0, 1):
         return None
     first = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
@@ -1066,55 +1081,69 @@ def _merge_source_operands_exact(cwd, operands):
     return True
 
 
-def _merge_content_matches(written, expected):
+def _merge_content_matches(written, expected, ours, theirs):
     """True when the worktree bytes equal the recomputed merge, up to conflict-marker labels.
 
-    The labels on a conflict's own start, base and end marker lines name the merged refs and
-    differ between the recomputation and the worktree; a marker-looking line anywhere else
-    (including an opening line that never closes into a conflict) is ordinary content and
-    must match exactly.
+    ``expected`` was written with the full commit ids ``ours`` and ``theirs`` as its labels, so a
+    start or end marker line is recognised by that exact id, never by its look. Compared by
+    position: equal line counts, each generated marker line matched by a worktree line carrying
+    the same marker run (any label), every other line byte for byte. An unexpected shape is a
+    mismatch (fail closed).
     """
     written_lines = written.split(b"\n")
     expected_lines = expected.split(b"\n")
     if len(written_lines) != len(expected_lines):
         return False
-    label_lines = _merge_conflict_label_lines(expected_lines)
+    markers = _merge_generated_markers(expected_lines, ours.encode(), theirs.encode())
+    if markers is None:
+        return False
     for index, (got, want) in enumerate(zip(written_lines, expected_lines)):
-        if index in label_lines:
-            other = _MERGE_LABEL_RE.match(got)
-            if other is None or other.group(1) != _MERGE_LABEL_RE.match(want).group(1):
+        run = markers.get(index)
+        if run is None:
+            if got != want:
                 return False
-        elif got != want:
+        elif not got.startswith(run) or got[len(run):len(run) + 1] not in (b"", b" "):
             return False
     return True
 
 
-def _merge_conflict_label_lines(lines):
-    """Indices of the start, base and end marker lines of each closed conflict in ``lines``."""
-    found = set()
+def _merge_generated_markers(lines, ours, theirs):
+    """{line index: marker run} for the generated marker lines of ``lines``, or None.
+
+    A generated conflict opens with exactly ``<<<<<<< <ours>`` and closes with exactly
+    ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``); the one base line
+    (``|||||||`` run, any label) between them is generated too. The ``=======`` separator
+    carries no label and stays an ordinary line. An open that never closes, or opens again
+    before closing, is an unexpected shape (None).
+    """
+    open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"(?::.*)?$")
+    close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"(?::.*)?$")
+    markers = {}
     index = 0
     while index < len(lines):
-        label = _MERGE_LABEL_RE.match(lines[index])
-        if label is None or label.group(1)[:1] != b"<":
+        opened = open_re.match(lines[index])
+        if opened is None:
             index += 1
             continue
-        group = [index]
-        cursor = index + 1
-        while cursor < len(lines) and not _MERGE_SEPARATOR_RE.match(lines[cursor]):
-            marker = _MERGE_LABEL_RE.match(lines[cursor])
-            if len(group) == 1 and marker and marker.group(1)[:1] == b"|":
-                group.append(cursor)
-            cursor += 1
-        cursor += 1
-        while cursor < len(lines) and not lines[cursor].startswith(b">>>>>>>"):
-            cursor += 1
-        if cursor < len(lines) and _MERGE_LABEL_RE.match(lines[cursor]):
-            found.update(group)
-            found.add(cursor)
-            index = cursor + 1
-        else:
+        markers[index] = opened.group(1)
+        base_seen = False
+        index += 1
+        while True:
+            if index >= len(lines):
+                return None
+            closed = close_re.match(lines[index])
+            if closed:
+                markers[index] = closed.group(1)
+                break
+            if open_re.match(lines[index]):
+                return None
+            base = None if base_seen else _MERGE_BASE_MARKER_RE.match(lines[index])
+            if base:
+                markers[index] = base.group(1)
+                base_seen = True
             index += 1
-    return found
+        index += 1
+    return markers
 
 
 def _merge_tree_mode(cwd, tree, path):
@@ -1185,7 +1214,11 @@ def _merge_side_probe(cwd, action, command):
             if not os.path.isfile(worktree_path):
                 return ("indeterminate", 0)
             if tree is None:
-                tree = _merge_tree_id(top)
+                ids = _merge_commit_ids(top)
+                if ids is None:
+                    return ("indeterminate", 0)
+                ours, theirs = ids
+                tree = _merge_tree_id(top, ours, theirs)
                 if tree is None:
                     return ("indeterminate", 0)
             blob = _run_git_bytes(top, "cat-file", "blob", f"{tree}:{path}")
@@ -1193,7 +1226,7 @@ def _merge_side_probe(cwd, action, command):
                 return ("indeterminate", 0)
             with open(worktree_path, "rb") as f:
                 written = f.read()
-            if not _merge_content_matches(written, blob.stdout):
+            if not _merge_content_matches(written, blob.stdout, ours, theirs):
                 risky += 1
                 continue
             # Bytes alone miss a mode-only edit: the executable bit is the builder's too.

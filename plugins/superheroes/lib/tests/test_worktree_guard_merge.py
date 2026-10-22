@@ -229,6 +229,35 @@ def test_unclosed_opening_marker_like_line_is_ordinary_content(tmp_path, monkeyp
     assert wg.classify(command, repo) == _refusal("checkout-path", 1)
 
 
+def test_unlabeled_closing_marker_like_content_inside_a_conflict_does_not_hide_the_markers(
+    tmp_path, monkeypatch,
+):
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    target = os.path.join(repo, "f.txt")
+
+    def commit_version(first_line, message):
+        _write(repo, "f.txt", first_line + "\n>>>>>>>literal\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-q", "-m", message)
+
+    commit_version("base", "base")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    commit_version("feature", "feature")
+    _git(repo, "checkout", "-q", "main")
+    commit_version("main", "main")
+    _git(repo, "checkout", "-q", "feature")
+    assert _git(repo, "merge", "--no-edit", "main", check=False).returncode == 1
+
+    command = "git checkout --theirs f.txt"
+    assert wg.classify(command, repo) == ("allow", "")
+    with open(target, "rb") as f:
+        original = f.read()
+    with open(target, "wb") as f:
+        f.write(original.replace(b">>>>>>>literal", b">>>>>>>OWNER-ONLY-DRAFT"))
+    assert wg.classify(command, repo) == _refusal("checkout-path", 1)
+
+
 def test_edge6_merge_staged_changes_on_unnamed_paths_do_not_count(tmp_path, monkeypatch):
     work = _merge_repo(tmp_path, monkeypatch)
     with open(os.path.join(work, "a.txt"), "a") as f:
