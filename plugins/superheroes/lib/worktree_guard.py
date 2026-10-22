@@ -848,6 +848,18 @@ def _run_git(cwd, *args):
     )
 
 
+def _run_git_bytes(cwd, *args):
+    """``_run_git`` without text decoding, for reading blob bytes."""
+    env = os.environ.copy()
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return subprocess.run(
+        ["git", "-C", cwd, *args],
+        capture_output=True,
+        timeout=_GIT_TIMEOUT,
+        env=env,
+    )
+
+
 def _clean_has_flag(command, flag):
     for parsed in _iter_git_segments(command):
         if parsed["subcommand"] == "clean":
@@ -920,6 +932,216 @@ def _worktree_remove_target(command):
     return None
 
 
+_MERGE_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_MERGE_LABEL_RE = re.compile(rb"^(<{7,}|>{7,}|\|{7,})(?: .*)?$", re.MULTILINE)
+_MERGE_CHECKOUT_OPTS = frozenset({"--ours", "--theirs", "-q", "--quiet"})
+_MERGE_RESTORE_OPTS = frozenset({"--ours", "--theirs", "-W", "--worktree", "-q", "--quiet"})
+# Path-count ceiling for one merge-branch call (each path costs a git call); over it -> indeterminate.
+_MERGE_PATH_LIMIT = 200
+
+
+def _merge_side_form(action, command):
+    """Parse a merge-side checkout/restore this branch judges, or None when it does not apply.
+
+    Returns {"operands": [...], "source": bool}. Requires exactly `git checkout|restore ...` (no
+    git globals, no VAR= prefix). Options are an allowlist, so --staged, --patch and
+    --pathspec-from-file* never pass; a checkout carrying a tree-ish operand does not apply.
+    """
+    if action not in ("checkout-path", "restore") or not isinstance(command, str):
+        return None
+    subcommand = "checkout" if action == "checkout-path" else "restore"
+    parsed = list(_iter_git_segments(command))
+    if len(parsed) != 1 or parsed[0]["subcommand"] != subcommand:
+        return None
+    args = parsed[0]["args"]
+    tokens = _tokenize_segment(command)
+    if len(tokens) < 2 or not _is_git_token(tokens[0]) or tokens[1] != subcommand:
+        return None
+    if tokens[2:] != args:
+        return None
+    pre, has_sep, post = _args_before_separator(args)
+    allowed = _MERGE_CHECKOUT_OPTS if subcommand == "checkout" else _MERGE_RESTORE_OPTS
+    merge_side = False
+    source = False
+    operands = []
+    i = 0
+    while i < len(pre):
+        tok = pre[i]
+        if len(tok) > 1 and tok.startswith("-"):
+            if tok in ("--ours", "--theirs"):
+                merge_side = True
+            elif subcommand == "restore" and tok in ("-s", "--source"):
+                if i + 1 >= len(pre):
+                    return None
+                merge_side = source = True
+                i += 1
+            elif subcommand == "restore" and tok.startswith("--source="):
+                merge_side = source = True
+            elif tok not in allowed:
+                return None
+        else:
+            operands.append(tok)
+        i += 1
+    if not merge_side:
+        return None
+    if subcommand == "checkout":
+        if _checkout_path_has_treeish_operand(args):
+            return None
+        operands = list(post) if has_sep else operands
+    else:
+        operands = operands + list(post)
+    if not operands:
+        return None
+    return {"operands": operands, "source": source}
+
+
+def _merge_head_file(cwd):
+    """The MERGE_HEAD file path when a merge is in progress, else None. Raises when git fails."""
+    result = _run_git(cwd, "rev-parse", "--git-path", "MERGE_HEAD")
+    if result.returncode != 0:
+        raise OSError("git rev-parse --git-path MERGE_HEAD failed")
+    path = result.stdout.rstrip("\n")
+    if not path:
+        raise OSError("git rev-parse --git-path MERGE_HEAD printed nothing")
+    if not os.path.isabs(path):
+        path = os.path.join(cwd, path)
+    return path if os.path.exists(path) else None
+
+
+def _merge_state_valid(cwd, head_file):
+    """True when MERGE_HEAD resolves to a commit and the file holds exactly one commit line."""
+    verify = _run_git(cwd, "rev-parse", "-q", "--verify", "MERGE_HEAD^{commit}")
+    if verify.returncode != 0:
+        return False
+    with open(head_file) as f:
+        lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+    return len(lines) == 1 and _MERGE_OBJECT_ID_RE.match(lines[0]) is not None
+
+
+def _merge_tree_id(cwd):
+    """Tree id of the recomputed merge (exit 0 clean, 1 conflicted), or None."""
+    result = _run_git(cwd, "merge-tree", "--write-tree", "HEAD", "MERGE_HEAD")
+    if result.returncode not in (0, 1):
+        return None
+    first = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
+    return first if _MERGE_OBJECT_ID_RE.match(first) else None
+
+
+def _merge_index_entries(cwd, operands):
+    """{repo-relative path: set of stages} for the operands; None when one matches no entry."""
+    entries = {}
+    for operand in operands:
+        result = _run_git(cwd, "ls-files", "--stage", "-z", "--full-name", "--", operand)
+        if result.returncode != 0:
+            raise OSError("git ls-files --stage failed")
+        found = [entry for entry in result.stdout.split("\0") if entry]
+        if not found:
+            return None
+        for entry in found:
+            meta, _, path = entry.partition("\t")
+            entries.setdefault(path, set()).add(int(meta.split()[2]))
+    return entries
+
+
+def _merge_source_operands_exact(cwd, operands):
+    """True when every operand is exactly one indexed file (no directory, glob or pathspec magic)."""
+    result = _run_git(cwd, "rev-parse", "--show-prefix")
+    if result.returncode != 0:
+        return False
+    prefix = result.stdout.rstrip("\n")
+    for operand in operands:
+        if operand.startswith(":") or any(ch in operand for ch in "*?[\\"):
+            return False
+        expected = os.path.normpath(prefix + operand).replace(os.sep, "/")
+        if expected == "." or expected == ".." or expected.startswith("../"):
+            return False
+        listed = _run_git(cwd, "ls-files", "--stage", "-z", "--full-name", "--", operand)
+        if listed.returncode != 0:
+            return False
+        paths = {e.partition("\t")[2] for e in listed.stdout.split("\0") if e}
+        if paths != {expected}:
+            return False
+    return True
+
+
+def _merge_side_probe(cwd, action, command):
+    """Per-path probe for a merge-side checkout/restore during a merge in progress.
+
+    Returns None when this branch does not apply (the whole-tree probe decides), else
+    (state, count). Never raises: any error is ("indeterminate", 0).
+    Axis: each named path is judged by whether it holds anything the builder wrote (refusal);
+    every read this decision rests on that fails or cannot be established is a refusal.
+    """
+    try:
+        form = _merge_side_form(action, command)
+        if form is None:
+            return None
+        head_file = _merge_head_file(cwd)
+        if head_file is None:
+            return None
+        if form["source"] and not _merge_source_operands_exact(cwd, form["operands"]):
+            return None
+
+        if not _merge_state_valid(cwd, head_file):
+            return ("indeterminate", 0)
+        entries = _merge_index_entries(cwd, form["operands"])
+        if entries is None:
+            return ("indeterminate", 0)
+        if len(entries) > _MERGE_PATH_LIMIT:
+            return ("indeterminate", 0)
+        top = _run_git(cwd, "rev-parse", "--show-toplevel")
+        if top.returncode != 0:
+            return ("indeterminate", 0)
+        top = top.stdout.rstrip("\n")
+
+        tree = None
+        risky = 0
+        for path, stages in entries.items():
+            if stages == {0}:
+                listed = _run_git(top, "--literal-pathspecs", "ls-files", "-v", "-z", "--", path)
+                if listed.returncode != 0:
+                    return ("indeterminate", 0)
+                for entry in listed.stdout.split("\0"):
+                    if entry and (entry[0].islower() or entry[0] == "S"):
+                        return ("indeterminate", 0)
+                diff = _run_git(
+                    top, "--literal-pathspecs", "diff", "--quiet",
+                    "--ignore-submodules=none", "--", path,
+                )
+                if diff.returncode == 1:
+                    risky += 1
+                elif diff.returncode != 0:
+                    return ("indeterminate", 0)
+                continue
+
+            worktree_path = os.path.join(top, path)
+            if os.path.islink(worktree_path):
+                return ("indeterminate", 0)
+            if not os.path.lexists(worktree_path):
+                continue
+            if not os.path.isfile(worktree_path):
+                return ("indeterminate", 0)
+            if tree is None:
+                tree = _merge_tree_id(top)
+                if tree is None:
+                    return ("indeterminate", 0)
+            blob = _run_git_bytes(top, "cat-file", "blob", f"{tree}:{path}")
+            if blob.returncode != 0:
+                return ("indeterminate", 0)
+            with open(worktree_path, "rb") as f:
+                written = f.read()
+            if (
+                _MERGE_LABEL_RE.sub(rb"\1", written)
+                != _MERGE_LABEL_RE.sub(rb"\1", blob.stdout)
+            ):
+                risky += 1
+        if risky:
+            return ("at-risk", risky)
+        return ("clean", 0)
+    except Exception:
+        return ("indeterminate", 0)
+
+
 def at_risk(cwd, action, command):
     """Read-only worktree probe. Returns (state, count). Never raises."""
     if not isinstance(cwd, str) or not cwd:
@@ -941,6 +1163,10 @@ def at_risk(cwd, action, command):
         return ("indeterminate", 0)
     if git_dir is None:
         return ("not-a-repo", 0)
+
+    merge_state = _merge_side_probe(probe_cwd, action, command)
+    if merge_state is not None:
+        return merge_state
 
     try:
         checkout_path_treeish = (
