@@ -199,3 +199,89 @@ def test_t6_edit_of_already_dirty_file_with_unchanged_status_is_not_listed(tmp_p
     _write(repo, "README.md", "edited again by the attempt\n")
     got = ED._worktree_dirtied_paths(baseline, repo)
     assert got == {"status": "ok", "paths": [], "headMoved": False, "truncated": False}
+
+
+# --- #1768: a timed-out write forfeit names what landed on either attempt --------
+# The retry attempt's timeout is floored at RETRY_MIN_TIMEOUT (900 s) in the run-child, so an
+# attempt-2 timeout is driven through the in-process run_engine seam; attempt 1 stays real-path.
+
+
+def _timeout_engine(write_on_attempt, out_file):
+    """Injected run_engine: writes out_file only on the named attempt; every attempt times out."""
+    calls = []
+
+    def run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
+        calls.append(timeout)
+        if len(calls) == write_on_attempt:
+            with open(out_file, "w", encoding="utf-8") as fh:
+                fh.write("landed\n")
+        return "", True, 0, ""
+
+    run_engine.calls = calls
+    return run_engine
+
+
+def _dispatch_injected(tmp_path, wt, run_engine):
+    return ED.dispatch_write(
+        seat=E2E._cursor_seat(), prompt_path=E2E._prompt(tmp_path), cwd=wt,
+        run_dir=E2E._run_dir(tmp_path, "run-injected"), order_id="dirtied-1768",
+        run_engine=run_engine,
+    )
+
+
+def test_1768_second_attempt_timeout_after_write_names_landed_path(tmp_path):
+    wt, _main = E2E._linked_worktree(tmp_path)
+    engine = _timeout_engine(2, os.path.join(wt, "attempt2-landed.txt"))
+    res = _dispatch_injected(tmp_path, wt, engine)
+    assert len(engine.calls) == ED.MAX_ATTEMPTS
+    assert res["terminal"] is True
+    assert res["attempts"] == ED.MAX_ATTEMPTS
+    assert res["detail"] == "timeout-no-native-result"
+    assert res["dirtiedPaths"] == {
+        "status": "ok", "paths": ["attempt2-landed.txt"], "headMoved": False, "truncated": False,
+    }
+    assert "timeout cut the engine off and its report is missing" in res["disclosure"]
+    assert "Work landed: 1 path(s)" in res["disclosure"]
+
+
+def test_1768_first_attempt_timeout_after_write_says_report_missing(tmp_path, monkeypatch):
+    wt, _main = E2E._linked_worktree(tmp_path)
+    run_dir = E2E._run_dir(tmp_path, "run-attempt1-landed")
+    prompt_path = E2E._prompt(tmp_path)
+    E2E._install_fake_engine(
+        tmp_path, monkeypatch, "cursor-agent",
+        out_file=os.path.join(wt, "attempt1-landed.txt"), sleep_s=20,
+    )
+    res = _poll_short(wt, run_dir, prompt_path)
+    assert res["terminal"] is True
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert res["attempts"] == 1
+    assert res["dirtiedPaths"]["status"] == "ok"
+    assert res["dirtiedPaths"]["paths"] == ["attempt1-landed.txt"]
+    assert "timeout cut the engine off and its report is missing" in res["disclosure"]
+    assert "Work landed: 1 path(s)" in res["disclosure"]
+
+
+def test_1768_second_attempt_timeout_that_wrote_nothing_says_no_paths_landed(tmp_path):
+    wt, _main = E2E._linked_worktree(tmp_path)
+    engine = _timeout_engine(0, os.path.join(wt, "never.txt"))
+    res = _dispatch_injected(tmp_path, wt, engine)
+    assert res["terminal"] is True
+    assert res["attempts"] == ED.MAX_ATTEMPTS
+    assert res["dirtiedPaths"] == {
+        "status": "ok", "paths": [], "headMoved": False, "truncated": False,
+    }
+    assert "No paths landed." in res["disclosure"]
+    assert "Work landed" not in res["disclosure"]
+
+
+def test_1768_write_terminal_forfeit_unreadable_git_is_indeterminate_and_never_raises(
+        tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    state = {"opened": {"worktreeBaseline": ED._worktree_baseline(repo), "cwd": repo}}
+    monkeypatch.setattr(ED, "_worktree_entry_set", lambda *a, **k: None)
+    terminal = ED._write_terminal_forfeit(
+        "cursor", ED.MAX_ATTEMPTS, state=state, detail="timeout-no-admission",
+    )
+    assert terminal["dirtiedPaths"] == {"status": "indeterminate", "reason": "git-status-unreadable"}
+    assert "could not be read (dirtiedPaths: git-status-unreadable)" in terminal["disclosure"]
