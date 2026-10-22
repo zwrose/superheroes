@@ -18,6 +18,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
+- **After switching.** **Review seats now run no programs, and codex review seats ignore your codex config; nothing is owed unless a review relied on a custom MCP server, plugin, hook or model-provider setting in codex.** See [Review seats: a closed tool set, and a forfeit on any program run](#review-seats-a-closed-tool-set-and-a-forfeit-on-any-program-run).
 
 ### Cloud setup: the setup text fills the launcher's dependency caches
 
@@ -30,6 +31,13 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 - `theme/review-template.md` § The items narrows the fold rule: an acceptance with its own consequence for the owner to weigh (a change near access or identity, a cost or CI-time trade, a shift in what gets tested where, an advisor craft call open to veto) is its own Accept item with a short title and `ifLeft`; only routine notes with nothing to weigh (size against the estimate, tests only, a heads-up about something already ruled) fold into the one "What you're accepting" item, and doubt keeps a disclosure its own item.
 - `pr_sheet.py build` takes an item's `ifLeft` as a non-empty string (one paragraph, as before) or a list of at least 1 non-empty strings, shown as a bulleted list, one bullet per note. An empty list, or an empty or blank note, is refused with `items <id>: ifLeft must be a non-empty string or a list of at least 1 non-empty strings`; an empty string `ifLeft` now refuses with that line too, in place of the generic "needs an id ... and non-empty text" line.
+
+### Review seats: a closed tool set, and a forfeit on any program run
+
+- A review seat reads, lists and searches files and runs no program. Every review order now says so in a `What you may run` block, and the fixer's order states the commands it may run in the same place.
+- A codex review seat ignores the user's codex config: custom MCP servers, plugins, hooks and model-provider settings no longer apply to review seats. The seat's shell tools are off and the plugin's read-only file server is its only tool source. The model and effort are still passed explicitly.
+- A claude review seat runs restricted with no MCP servers.
+- A result whose engine record shows a command, or any other action outside the allowance, makes the seat forfeit its result with `seat-ran-outside-allowance`.
 
 ## 0.46.0
 

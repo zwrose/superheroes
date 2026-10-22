@@ -3,8 +3,8 @@ Review session mode branch (from session metadata).
 
 ## Your assignment
 Review the diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt for your dimension.
-Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
-available, or an equivalent bounded shell range. Never one whole-file read.
+Read `diff.txt` in bounded chunks (<=800 lines): use your read tool's
+offset/limit window. Never one whole-file read.
 Continue with later offsets until the diff is covered.
 Read the base rubric (absolute path below) for severity calibration,
 verification rules, and the panel output format. Read the project calibration
@@ -43,7 +43,7 @@ positives.
   before writing it out. Cite `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
   string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
   (`line is not an integer`) and the finding is dropped.
-- Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
+- Before flagging "missing X", search the codebase (PR checkout, in PR mode)
   for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
   If the only caller already guards the edge case, downgrade or drop.
@@ -69,6 +69,10 @@ issue has multiple valid fix approaches (a judgment call); omit it otherwise (se
 rubric's "Triage rubric"). Set `dimension` to "Code" on every entry. Severity caps
 from the base rubric apply (at most 5 code-quality-only Nits reported per review round across all seats; real-consequence Nits are uncapped).
 Deliver per the base rubric's panel output-format section. Write your payload artifact to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+
+## What you may run
+
+You may read, list and search files with your read tools, and you run no program: a test, check or command run you need is the driver's, which runs the project's declared verify command.
 
 ## Ratified residuals (owner-ratified, quoted data)
 
