@@ -72,12 +72,12 @@ def _futures(records):
 
 
 def _may_import_fixture(pair):
-    """True when ``pair`` (a bound name and its import target) can bring in a fixture: a ``from`` import that is
-    relative or reads a module outside the standard library and pytest."""
+    """True when ``pair`` (a bound name and its import target) is a ``from`` import, which can bring in a fixture.
+    A module name proves nothing (a project-local file can shadow a standard-library name), so every ``from``
+    import is suspect, relative or absolute, except ``__future__``; the caller allows one only when the original
+    carries the identical binding. A plain ``import x`` binds a module object, which pytest never registers."""
     target = pair[1]
-    if target[0] != "from" or target[2] == "__future__":
-        return False
-    return target[1] > 0 or target[2].split(".")[0] not in (set(sys.stdlib_module_names) | {"pytest"})
+    return target[0] == "from" and target[2] != "__future__"
 
 
 def _outside(records, window, original, moved=False):
@@ -111,7 +111,7 @@ def _outside(records, window, original, moved=False):
         for pair in rec["imports"]:
             if pair in orig_pairs:
                 continue
-            # axis: a name the host imports from a module outside the standard library (or a relative one) may be a fixture, and pytest registers an imported autouse fixture as module setup, so it is refused — see bite-proof record wo_a_2053_break_it_body
+            # axis: a name the host imports with a from-import (any module, relative or not: a project file can shadow a standard-library name) may be a fixture, and pytest registers an imported autouse fixture as module setup, so it is refused — see bite-proof record wo_a_2053_break_it_body
             if _may_import_fixture(pair):
                 return "host-setup"
             # axis: an import outside the window that rebinds a name the test uses, or star-imports over it, is refused — see bite-proof record wo_a_2053_break_it_body

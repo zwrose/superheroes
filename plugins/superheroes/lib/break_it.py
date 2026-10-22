@@ -1015,6 +1015,44 @@ def _rewrite_command(command, old_path, new_path, titles):
     return " ".join([shlex.quote("%s=%s" % pair) for pair in env.items()] + [shlex.join(moved)]), None
 
 
+_COLLECTION_SETTINGS = ("python_functions", "python_classes", "python_files")
+
+
+def _collection_overrides(repo_root, head):
+    """True when the repository at ``head`` may declare a pytest collection override: a root pytest.ini,
+    pyproject.toml ([tool.pytest.ini_options]), setup.cfg ([tool:pytest]) or tox.ini ([pytest]) that sets
+    python_functions, python_classes or python_files, or one that cannot be read or parsed (fail closed)."""
+    import configparser
+    sections = (("pytest.ini", "pytest"), ("setup.cfg", "tool:pytest"), ("tox.ini", "pytest"), ("pyproject.toml", None))
+    for name, section in sections:
+        tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
+        if tree.returncode != 0:
+            return True
+        meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
+        if not meta:
+            continue
+        if len(meta) != 3 or meta[1] != "blob":
+            return True
+        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            return True
+        try:
+            text = blob.stdout.decode("utf-8")
+            if section is None:
+                import tomllib
+                table = tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options", {})
+                if not isinstance(table, dict) or any(key in table for key in _COLLECTION_SETTINGS):
+                    return True
+            else:
+                parser = configparser.ConfigParser(interpolation=None, strict=False)
+                parser.read_string(text)
+                if parser.has_section(section) and any(parser.has_option(section, key) for key in _COLLECTION_SETTINGS):
+                    return True
+        except Exception:
+            return True
+    return False
+
+
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
@@ -1052,6 +1090,12 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
         return today
     if found["status"] != "found":
         return res(KEPT_UNRESOLVED, found["reason"])
+    # axis: a renamed test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected while the host still passes — see bite-proof record wo_a_2053_break_it_body
+    try:
+        if found["titles"] and _collection_overrides(repo_root, head):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+    except (OSError, subprocess.TimeoutExpired):
+        return res(KEPT_UNRESOLVED, "git-failed")
     command, refusal = _rewrite_command(record["command"], record["path"], found["path"], found["titles"])
     if refusal:
         return res(KEPT_UNRESOLVED, refusal)
