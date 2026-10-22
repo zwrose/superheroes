@@ -142,6 +142,20 @@ def outside_allowance(obj, permitted_edit_paths=None):
     return _cap(item_type, _DESCRIPTION_CAP)
 
 
+def _call_id(obj):
+    """The string call_id of a cursor tool_call lifecycle event, else None."""
+    if isinstance(obj, dict) and obj.get("type") == "tool_call":
+        call_id = obj.get("call_id")
+        if isinstance(call_id, str) and call_id:
+            return call_id
+    return None
+
+
+def _is_payloadless_start(obj):
+    """True for a cursor `started` tool_call event that carries no call payload yet."""
+    return obj.get("subtype") == "started" and obj.get("tool_call") is None
+
+
 def scan_stream(path, limit=20, permitted_edit_paths=None):
     """(violations, ok) for the codex JSONL stream file at `path`. Reads the whole file one line
     at a time (binary), skips unparseable lines, dedupes violations and caps them at `limit`.
@@ -149,6 +163,15 @@ def scan_stream(path, limit=20, permitted_edit_paths=None):
     opened and when a read fails part-way (the violations seen so far are kept). Never raises."""
     violations = []
     seen = set()
+    pending_starts = set()
+
+    def _record(found):
+        if found is None or found in seen:
+            return
+        seen.add(found)
+        if len(violations) < limit:
+            violations.append(found)
+
     try:
         handle = open(path, "rb")
     except (OSError, TypeError, ValueError):
@@ -160,15 +183,21 @@ def scan_stream(path, limit=20, permitted_edit_paths=None):
                     obj = json.loads(raw)
                 except (ValueError, RecursionError):
                     continue
+                call_id = _call_id(obj)
+                if call_id is not None:
+                    if _is_payloadless_start(obj):
+                        # A cursor start can carry its details only on completion: hold it
+                        # until the same call_id's later event is judged.
+                        pending_starts.add(call_id)
+                        continue
+                    pending_starts.discard(call_id)
                 try:
                     found = outside_allowance(obj, permitted_edit_paths)
                 except Exception:
                     continue
-                if found is None or found in seen:
-                    continue
-                seen.add(found)
-                if len(violations) < limit:
-                    violations.append(found)
+                _record(found)
+        for _ in pending_starts:
+            _record(outside_allowance({"type": "tool_call"}))
     except (OSError, MemoryError):
         return violations, False
     return violations, True

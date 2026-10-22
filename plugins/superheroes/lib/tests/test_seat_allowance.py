@@ -635,6 +635,22 @@ def test_scan_stream_cursor_stream_truth_table(tmp_path):
     ) == (["shellToolCall: make test", "editToolCall: a.py", "switchModeToolCall"], True)
 
 
+def test_scan_stream_payloadless_cursor_start_is_judged_on_its_completion(tmp_path):
+    result = str(tmp_path / "result.json")
+    path = tmp_path / "late.jsonl"
+    _write_lines(path, [
+        {"type": "tool_call", "subtype": "started", "call_id": "w1"},
+        {"type": "tool_call", "subtype": "completed", "call_id": "w1",
+         "tool_call": {"editToolCall": {"args": {"path": result}}}},
+        {"type": "tool_call", "subtype": "started", "call_id": "w2"},
+        {"type": "tool_call", "subtype": "completed", "call_id": "w2",
+         "tool_call": {"shellToolCall": {"args": {"command": "make test"}}}},
+        {"type": "tool_call", "subtype": "started", "call_id": "w3"},
+    ])
+    assert SA.scan_stream(str(path), permitted_edit_paths=[result]) == (
+        ["shellToolCall: make test", "tool_call: NoneType"], True)
+
+
 def test_scan_stream_reports_a_violation_before_9_mib_of_allowed_lines(tmp_path):
     path = tmp_path / "padded.jsonl"
     padding = (json.dumps(_item("agent_message", text="p" * 900)) + "\n").encode()
