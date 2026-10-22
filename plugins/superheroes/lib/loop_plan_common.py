@@ -172,37 +172,3 @@ def _carry_forward(state, dimension, round_no, sched):
                 "carriedFromRound": sched.get("carriedFromRound") or rec.get("round")})
     return rec
 
-
-# --- confirmation-panel economics bookkeeping (#174) --------------------------
-
-def _full_deep_executed(state, round_no, dimensions):
-    """True only when round N's every dimension ran FRESH at reviewer-deep with high
-    confidence — the round shape the contract requires before any exit."""
-    entry = (state.get("rounds") or {}).get(str(round_no)) or {}
-    dims = entry.get("dims") or {}
-    for d in dimensions:
-        rec = dims.get(d)
-        if not isinstance(rec, dict):
-            return False
-        if rec.get("status") != "run" or rec.get("confidence") != "high" or rec.get("tier") != DEEP:
-            return False
-    return True
-
-
-def _surfaced_severities(entry):
-    """The blocking severities one round surfaced — 'Critical' when a dimension flagged a Critical,
-    else 'Important' for any other blocker. Carried/skipped dims never count. #174 finding 5: a
-    record written before this PR has no `criticalCount`; a surfaced blocker with a MISSING
-    criticalCount reads as Critical (fail toward more review), never silently as Important."""
-    sevs = []
-    for rec in (entry.get("dims") or {}).values():
-        if not isinstance(rec, dict) or rec.get("status") != "run":
-            continue
-        if not (rec.get("blockingCount") or 0):
-            continue
-        if rec.get("criticalCount") or "criticalCount" not in rec:
-            sevs.append("Critical")
-        else:
-            sevs.append("Important")
-    return sevs
-

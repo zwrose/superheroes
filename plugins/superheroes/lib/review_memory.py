@@ -304,10 +304,6 @@ def load_records_state(path, dimensions):
     return {"ok": True, "state": "loaded", "records": records, "contentHash": content_hash(text)}
 
 
-def load_records(path, dimensions):
-    return load_records_state(path, dimensions)["records"]
-
-
 # The skeleton summary: everything the loop needs IN MEMORY to run, bounded.
 # Findings keep only their small identity/class/severity skeleton — the circuit breaker
 # (file+title identity), recurrence (classKey/severity/carried), the round policy

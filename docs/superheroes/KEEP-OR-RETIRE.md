@@ -491,12 +491,12 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — a fail-closed gate's zero count may mean it works, and an option that
   silently does nothing is a property of the system, not a model quirk.
 
-### D. Certified review loop
+### D. Review loop (round driver)
 
 #### D1 — Round driver core
 
-- **Component.** The certified review loop's round driver substrate and gate; it costs ongoing
-  contract maintenance and is the hub where certification drop-off is measured.
+- **Component.** The review loop's round driver substrate and gate; it costs ongoing contract
+  maintenance and is the hub where review-loop drop-off is measured.
 - **Start date.** 2026-09-15.
 - **Condition.** Usage-based:
   - **Signal.** Post-shrink full lanes that end on the driver's terminal receipt (`round-receipt.json`
@@ -550,11 +550,13 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — deterministic composition from `model_registry` guards a build property,
   not a single vendor.
+- **Shrink — dead helper.** Removed `panel_tally.blocking_findings_from_dimension_results` (no
+  callers). Receipt: issue #2073.
 
 #### D3 — Loop plan/state/memory
 
 - **Component.** This row is substrate — a proposal on it is a shrink proposal, not a deletion. The
-  certified-loop plan, state, memory, and policy store (`review_loop_plan.py`, `loop_state.py`,
+  review loop's plan, state, memory, and policy store (`review_loop_plan.py`, `loop_state.py`,
   `review_memory.py`, and siblings) costs contract surface and over-records relative to what the
   driver shell demands.
 - **Start date.** 2026-09-15.
@@ -567,6 +569,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — halt-integrity storage is structural; the 52% fix-share over-storage signature
   is capability-gap until D1's contract shrink lands.
+- **Shrink — dead helpers.** Removed `loop_plan_common._full_deep_executed` and
+  `_surfaced_severities` (confirmation-panel economics, #174, no callers) and
+  `review_memory.load_records` (`load_records_state` is the live reader). Receipt: issue #2073.
 
 #### D4 — Grounding seat/stage
 
@@ -833,6 +838,23 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a leaf rule beside a type-declared one, pinned equal.
 
+#### D35 — The panel artifact's `canaryResult` tolerance
+
+- **Component.** `round_driver._PANEL_ENVELOPE_KEYS` accepts and ignores a `canaryResult` key on a
+  panel artifact, a compatibility shim for artifacts shaped before the seat canaries retired
+  (0.43.0, PR #1765); it costs one envelope name the driver must keep subtracting.
+- **Start date.** 2026-10-22.
+- **Condition.** Usage-based, no window: every consuming project runs 0.43.0 or later. A session
+  opened before 0.43.0 restarts at upgrade (`session-from-earlier-version`), so nothing a newer
+  version runs writes the key. The window is the version fact, not a day count, because an ignored
+  key leaves no record to count. On firing, a retirement proposal to the owner at a gardening pass,
+  landing in the first minor release after it.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — compatibility with a retired artifact shape, not a property of the
+  loop.
+
 #### D19 — `check_unrun_review`
 
 - **Component.** `round_certification.check_unrun_review` — refuses when a dispatch-observed or
@@ -938,14 +960,14 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
 
 - **Component.** `test_receipt_disclosures_home.py` — by-construction identity assertions over each
-  leaf module's own `__all__`: every name the driver and the certification writer (retired) re-exported must be
+  leaf module's own `__all__`: every name the driver re-exports must be
   the same function object as the leaf defines, so a re-introduced mirror copy fails instead of
   drifting quietly; it costs two import walks per suite run.
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
-  `test_receipt_disclosures_exports_match_driver_and_writer` or
-  `test_record_paths_exports_match_records_and_writer` as the thing that caught a re-introduced copy
-  or a writer/driver alias drift. On firing, a proposal to the owner at a gardening pass.
+  `test_receipt_disclosures_exports_match_driver` or
+  `test_record_paths_exports_match_records` as the thing that caught a re-introduced copy
+  or a driver alias drift. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Bite-proof recorded at
   `plugins/superheroes/lib/tests/bite_proofs/receipt-disclosures-home.md` (planted duplicate
   `declared_disclosures` in the writer).
@@ -1618,6 +1640,24 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — the record is the one place a review's findings and outcomes are kept, and no change of host or model removes the need for it.
+
+#### I7 — The review record's reading of retired re-emit rows
+
+- **Component.** `review_record_session._historical_orders_superseded`, under I6: it reads the
+  `re-emit` / `orders-superseded` journal rows a version before 0.43.0 wrote, so a finished session
+  from that version still yields a correct record (pinned by
+  `test_a_superseded_attempt_of_an_older_journal_is_no_reviewer`). It costs one row shape the
+  writer keeps reading for a verb that no longer exists.
+- **Start date.** 2026-10-22.
+- **Condition.** Usage-based, no window: every consuming project runs 0.43.0 or later and has no
+  review session opened before 0.43.0 still waiting for its record. The window is that fact, not a
+  day count, because the shim leaves no record of being read. On firing, a retirement proposal to
+  the owner at a gardening pass, removing the function and its test together.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — compatibility with a retired journal shape, not a property of the
+  record.
 
 ### Supplemental entries
 
