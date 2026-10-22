@@ -79,9 +79,9 @@ _UNPARSED_TEMPLATE = (
     "A heredoc fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` with a "
     "quoted delimiter (`<<'EOF'`) is read as text; a heredoc fed to anything else, or "
     "left unterminated, is read as command text. Heredoc masking is also off for the "
-    "rest of the command once any earlier line holds a `$(`, backtick, `(`, `{` or `|` "
-    "(even a completed or quoted one), and off for the whole command when any non-blank "
-    "line follows the heredoc (a later command could run what it wrote) or a shell "
+    "whole command when any non-blank line comes before the line holding the heredoc "
+    "operator (a `trap`, say) or that line starts with a variable assignment, and when any "
+    "non-blank line follows the heredoc (a later command could run what it wrote) or a shell "
     "keyword such as `if`, `for`, `while`, `do` or `case` sits outside the body, so "
     "there the text route is the Write tool and `--body-file`/`-F`. "
     "A `$(...)` or backtick substitution in a git global option before a discard-named "
@@ -115,8 +115,6 @@ _PIECE_SKIP_WORDS = frozenset({"!", "{", "then", "do", "else", "elif", "time"})
 _GH_DATA_SUBCOMMANDS = frozenset({"issue", "pr", "release", "api"})
 _HEREDOC_DELIMITER_END = " \t;|&()<>"
 _COMMENT_PRECEDERS = " \t;|&()`"
-_NESTING_MARKS = ("`", "{", "(", "|")
-_CONTINUING_LINE_ENDINGS = ("\\", "&&")
 _COMPOUND_KEYWORD = re.compile(
     r"(?<![\w-])(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function)(?![\w-])"
 )
@@ -124,12 +122,17 @@ _DATA_SUBSTITUTION = re.compile(r"(\"?)\$\(cat <<'[A-Za-z_][A-Za-z0-9_.-]*'\s*$"
 
 
 def _piece_is_data_consumer(piece):
-    """True when the piece's command word is a program that reads stdin as data, never runs it."""
+    """True when the piece's command word is a program that reads stdin as data, never runs it.
+
+    A piece that opens with a variable assignment is never a data consumer.
+    """
     words = piece.split()
     k = 0
-    while k < len(words) and (_ASSIGNMENT_WORD.match(words[k]) or words[k] in _PIECE_SKIP_WORDS):
+    while k < len(words) and words[k] in _PIECE_SKIP_WORDS:
         k += 1
-    if k >= len(words):
+    if k >= len(words) or _ASSIGNMENT_WORD.match(words[k]):
+        # An assignment prefix never matches a shape: a quoted value can hold spaces and a word
+        # that looks like the command, so splitting on whitespace cannot find the real one.
         return False
     base = os.path.basename(words[k])
     following = words[k + 1] if k + 1 < len(words) else None
@@ -140,15 +143,6 @@ def _piece_is_data_consumer(piece):
     if base == "git":
         return following == "commit"
     return False
-
-
-def _line_opens_context(line):
-    """True when a line may leave a group, substitution, pipe or continuation open for the next.
-
-    Tests the whole line, not its ending: a trailing comment or a later word must not hide an
-    opener (`$(`, `<(` and `>(` hold a `(`).
-    """
-    return line.rstrip().endswith(_CONTINUING_LINE_ENDINGS) or any(mark in line for mark in _NESTING_MARKS)
 
 
 def _read_heredoc_delimiter(line, q):
@@ -353,9 +347,10 @@ def _mask_heredoc_bodies(command):
     operator line is a data consumer (`cat`, `tee`, `gh issue|pr|release|api`, `git commit`); the
     operator line has no backtick, `{` or `(` and does not hand the consumer's output on (a trailing
     pipe) — except one `"$(cat <<'DELIM'` that follows consumers only, whose terminator is followed
-    by a lone `)"` or `)` that ends the command; no earlier line (outside masked bodies) holds a
-    backtick, `{`, `(` or `|` anywhere, or ends in a backslash or `&&`; the operator line carries
-    exactly one heredoc operator; and an unquoted delimiter's body has no `$(`, backtick or
+    by a lone `)"` or `)` that ends the command; no non-blank line comes before the operator line
+    (a `trap`, a function, a pipe or a continuation there can run what the heredoc writes); no
+    command word on the operator line follows a variable assignment (a quoted value can hide the
+    real command word); the operator line carries exactly one heredoc operator; and an unquoted delimiter's body has no `$(`, backtick or
     trailing backslash (bash folds backslash-newline before it matches the terminator). Anything
     the scan cannot read, and any body that cannot be masked, stops masking for the rest of the
     command, never to resume after it. Terminator lines are kept.
@@ -372,20 +367,16 @@ def _mask_heredoc_bodies(command):
     lines = command.split("\n")
     stack = [["u", 0, False, False]]
     i = 0
-    opened = False
-    checked = 0
     while i < len(lines):
         ops, pieces, stop, bad, pipe = _scan_operator_line(lines[i], stack)
         if stop:
             break
-        while checked < i and not opened:
-            opened = _line_opens_context(lines[checked])
-            checked += 1
         substitution = _DATA_SUBSTITUTION.search(lines[i])
         plain_part = lines[i][:substitution.start()] if substitution else lines[i]
         if len(ops) > 1:
             break
-        consumed = bool(ops) and not bad and not pipe and not opened and bool(pieces) and all(
+        preceded = any(ln.strip() for ln in lines[:i])
+        consumed = bool(ops) and not preceded and not bad and not pipe and bool(pieces) and all(
             _piece_is_data_consumer(piece) for piece in pieces
         ) and not any(mark in plain_part for mark in ("`", "{", "("))
         following = i + 1
@@ -1063,6 +1054,9 @@ def destructive_discard_action(command):
 _DESTRUCTIVE_WORD = re.compile(
     r"(?<![\w-])(?:" + "|".join(sorted(_DESTRUCTIVE_SUBCOMMANDS, key=len, reverse=True)) + r")(?![\w-])"
 )
+_GIT_THEN_DESTRUCTIVE_WORD = re.compile(
+    r"(?<![\w-])git(?![\w-])[\s\S]*?" + _DESTRUCTIVE_WORD.pattern
+)
 
 
 def _double_quoted_substitution_mention(text):
@@ -1071,10 +1065,12 @@ def _double_quoted_substitution_mention(text):
     Bash runs a `$(...)` or backtick substitution inside double quotes, and no quote or boundary
     parsing of its body is trusted: the test is blunt. Once a double-quoted span holds a
     substitution, quotes nested in its body can end the span early as far as this scan can tell,
-    so the span is read as running from its opening quote to the end of the segment, and any
-    destructive subcommand word in that raw text counts. The text before the span, the outer
-    command's own verb included, does not count, so `git checkout -b "feature/$(date +%s)"` is
-    not a mention. Double-quoted prose with neither `$(` nor a backtick is not caught here.
+    so the span is read as running from its opening quote to the end of the segment, and it
+    counts when a whole-word `git` there is followed later by a destructive subcommand word
+    (a raw-text regex, no parsing). The text before the span, the outer command's own verb
+    included, does not count, so `git checkout -b "feature/$(date +%s)"` is not a mention; nor is
+    prose such as `fix: restore state ($(date))` or a path ending in `/worktree`, with no `git`
+    in the span. Double-quoted prose with neither `$(` nor a backtick is not caught here.
     """
     if not isinstance(text, str):
         return False
@@ -1092,7 +1088,7 @@ def _double_quoted_substitution_mention(text):
                 i += 2
                 continue
             if ch == "`" or text.startswith("$(", i):
-                return bool(_DESTRUCTIVE_WORD.search(text[span_start:]))
+                return bool(_GIT_THEN_DESTRUCTIVE_WORD.search(text[span_start:]))
             in_double = ch != '"'
         elif ch == "\\":
             i += 2 if i + 1 < n and text[i + 1] in "'\"\\" else 1

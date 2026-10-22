@@ -77,8 +77,6 @@ _ALLOWED_HEREDOCS = {
         "cat << 'EOF'\ngit reset --hard\nEOF",
     "tee":
         "tee notes.md <<'EOF'\ngit reset --hard\nEOF",
-    "assignment-prefix":
-        "FOO=1 cat <<'EOF'\ngit reset --hard\nEOF",
     "path-spelled-consumer":
         "/bin/cat <<'EOF'\ngit reset --hard\nEOF",
     "gh-api":
@@ -126,6 +124,20 @@ def _refused(command, repo):
 def test_edge_1_heredoc_fed_to_a_shell_is_denied(shell, dirty_repo):
     command = f"{shell} <<'EOF'\ngit checkout -- f.txt\nEOF"
     assert _refused(command, dirty_repo) == wg.refusal_message("checkout-path", 1)
+
+
+@pytest.mark.parametrize("prefix", ["FOO=1", "NOTE='use cat here'", 'NOTE="use cat to debug"'])
+def test_assignment_prefix_never_masks_a_heredoc_body(prefix, dirty_repo):
+    command = f"{prefix} bash <<'EOF'\ngit reset --hard\nEOF"
+    assert wg._mask_heredoc_bodies(command) == command
+    assert _refused(command, dirty_repo) == wg.refusal_message("reset-hard", 1)
+    assert _refused(f"{prefix} cat <<'EOF'\ngit reset --hard\nEOF", dirty_repo)
+
+
+def test_a_line_before_the_operator_line_never_masks_a_heredoc_body(dirty_repo):
+    command = "echo start\ncat <<'EOF'\ngit reset --hard\nEOF"
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
 
 
 def test_edge_2_heredoc_piped_to_a_shell_is_denied(dirty_repo):
@@ -330,9 +342,12 @@ def test_a_substitution_inside_double_quotes_is_scanned_as_a_command(command, di
     'echo "never run git reset --hard"',
     'git checkout -b "feature/$(date +%s)"',
     'git switch "$(git branch --show-current)"',
+    'git commit -m "fix: restore state ($(date +%F))"',
+    'git status --porcelain "$(pwd)/worktree"',
 ], ids=["escaped-dollar", "escaped-backtick", "benign-substitution", "unclosed-benign",
         "prose-without-substitution", "branch-creating-checkout-harmless-substitution",
-        "switch-harmless-substitution"])
+        "switch-harmless-substitution", "commit-prose-naming-a-subcommand",
+        "path-ending-in-worktree"])
 def test_an_escaped_or_harmless_substitution_in_double_quotes_is_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", "")
 
