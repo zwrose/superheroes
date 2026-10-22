@@ -406,14 +406,21 @@ def _decided_by(rep, outcome):
     return held if outcome is not None and isinstance(held, dict) else None
 
 
-def _decide(own, by_key, rulings):
-    """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding."""
+def _decide(own, by_key, rulings, exempt=None):
+    """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding.
+
+    `exempt` maps a finding key to the driver's `ruled-out-of-scope` break-it row: a fixed finding named there
+    was ruled out of scope and only cleared by the audit, so it reads as the ruling, never as fixed."""
     rep = sc.resolve_merged_into_entry(own, by_key)
     if not isinstance(rep, dict):
         return None, STILL_OPEN, None
     disp, seq, raised = rep.get("disposition"), rep.get(sc.DISPOSITION_SEQ_FIELD), own.get(sc.RAISED_SEQ_FIELD)
     if disp not in sc.DISPOSITIONS or not (_int(seq) and _int(raised) and seq > raised):  # a stale disposition decides nothing
         return None, STILL_OPEN, rep
+    held = (exempt or {}).get(sc.finding_identity_key(rep))
+    # axis: a fixed finding the driver ruled out of scope is the ruling in the record, never "fixed and audited" — see bite-proof record wo_a_2072_ruled_exempt
+    if disp == "fixed" and isinstance(held, dict):
+        return _RULING, f"ruled out of scope: {held.get('reason')} (ruled by {held.get('ruledBy')}, {held.get('ruledAt')})", rep
     if disp == "fixed":
         receipt = rep.get("dispositionReceipt")
         if isinstance(receipt, dict) and receipt.get("kind") == sc.FULL_PANEL_NOT_RERAISED:
@@ -478,11 +485,15 @@ def _findings_and_merges(state):
             for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
                 if isinstance(d, dict) and d.get("disposition") == "skip" and isinstance(d.get("id"), str):
                     rulings.setdefault(d["id"], {"ruling": "out-of-scope", "provenance": prov})
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    exempt = {r["findingKey"]: r for rec in rounds.values() if isinstance(rec, dict)
+              for r in (rec.get("breakItKept") if isinstance(rec.get("breakItKept"), list) else [])
+              if isinstance(r, dict) and r.get("outcome") == "ruled-out-of-scope" and isinstance(r.get("findingKey"), str)}
     out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
             continue
-        outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings)
+        outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings, exempt)
         if rep is not None and sc.finding_identity_key(rep) != key:
             merged[key] = sc.finding_identity_key(rep)
         if rep is not None and reason and sc.finding_identity_key(rep) != key:

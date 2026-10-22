@@ -6887,10 +6887,35 @@ def _fold_stall(state, config, artifact):
 
 # ---- terminal certification -----------------------------------------------------------------
 
+def _break_it_ruled_exempt(state, key):
+    """The ``rule``-verb out-of-scope ruling row that exempts a break-it finding's test from the kept
+    check, or None. Exempt only when the finding's effective decision is that attributed ruling AND
+    some round's recorded audit cleared the finding; either leg alone leaves the check owed."""
+    live = _live_ruling_by_key(state).get(key)
+    # axis: only an out-of-scope ruling from the rule verb exempts — a fixed finding with no ruling still owes the kept check — see bite-proof record wo_a_2072_ruled_exempt
+    if not (isinstance(live, dict) and live.get("ruling") == "out-of-scope"
+            and live.get("source") == "rule"):
+        return None
+    prov = live.get("provenance")
+    # axis: an unattributed ruling exempts nothing — ruledBy and ruledAt must both be non-empty strings — see bite-proof record wo_a_2072_ruled_exempt
+    if not (isinstance(prov, dict)
+            and all(isinstance(prov.get(f), str) and prov[f].strip() for f in ("ruledBy", "ruledAt"))):
+        return None
+    rounds = state.get("rounds")
+    for rec in (rounds.values() if isinstance(rounds, dict) else ()):
+        entries = rec.get("audits") if isinstance(rec, dict) else None
+        for audit in (entries if isinstance(entries, list) else ()):
+            # axis: a ruling with no clearing audit exempts nothing — the test must still be kept — see bite-proof record wo_a_2072_ruled_exempt
+            if isinstance(audit, dict) and audit.get("id") == key and audit.get("ruling") in audits._CLEARS:
+                return live
+    return None
+
+
 def _break_it_kept_step(state, config):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
-    parked (certification withheld). A finding with any other disposition owes no check."""
+    parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
+    check; a finding with any other disposition besides fixed or out-of-scope owes none either."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             # axis: a failed or not-run break-it run that compile dropped never reaches verification, so it withholds certification
@@ -6924,9 +6949,17 @@ def _break_it_kept_step(state, config):
             rows.append(row)
             failed.append(row)
             continue
-        if disposition != "fixed":
+        # axis: an out-of-scope disposition owes the kept check like a fixed one unless the exemption holds, never a bare not-required — see bite-proof record wo_a_2072_ruled_exempt
+        if disposition not in ("fixed", "out-of-scope"):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
                          "reason": disposition})
+            continue
+        # axis: the exemption is consulted before the kept check; without it a ruled-out-of-scope test parks — see bite-proof record wo_a_2072_ruled_exempt
+        ruled = _break_it_ruled_exempt(state, key)
+        if ruled is not None:
+            rows.append({"findingKey": key, "path": run.get("path"), "outcome": "ruled-out-of-scope",
+                         "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
+                         "ruledAt": ruled["provenance"]["ruledAt"]})
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
                                   interpreter=break_it.resolve_interpreter(config))
@@ -6937,11 +6970,13 @@ def _break_it_kept_step(state, config):
         if got.get("outcome") != break_it.KEPT:
             failed.append(row)
     _record_round(state, "breakItKept", rows)
+    unchecked = sum(1 for r in rows if r["outcome"] == "not-required")
+    ruled_out = sum(1 for r in rows if r["outcome"] == "ruled-out-of-scope")
     _decision(state, "break-it-kept",
-              "%d checked: %d kept, %d not kept, %d not required"
-              % (len(rows) - sum(1 for r in rows if r["outcome"] == "not-required"),
+              "%d checked: %d kept, %d not kept, %d not required, %d ruled out of scope"
+              % (len(rows) - unchecked - ruled_out,
                  sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
-                 sum(1 for r in rows if r["outcome"] == "not-required")))
+                 unchecked, ruled_out))
     if failed:
         why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
         _park_cannot_certify(
