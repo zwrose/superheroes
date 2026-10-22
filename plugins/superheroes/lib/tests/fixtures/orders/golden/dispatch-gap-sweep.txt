@@ -11,8 +11,8 @@ concerns.
 - Project conventions: CLAUDE.md at /home/user/proj/CLAUDE.md, and the project profile.
 
 ## Your assignment
-Read the full diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt in bounded chunks (<=800 lines): use Read offset/limit when
-available, or an equivalent bounded shell range. Never one whole-file read. Continue with later
+Read the full diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt in bounded chunks (<=800 lines): use your read tool's
+offset/limit window. Never one whole-file read. Continue with later
 offsets until the diff is covered. Apply the diff-scope rule: only flag code in `+` or `-` lines.
 
 ## Diff-scope rule — CRITICAL
@@ -25,7 +25,7 @@ files are pre-existing — SKIP them, even if they violate conventions.
   `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
   string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
   (`line is not an integer`) and the finding is dropped.
-- Before flagging "missing X", grep the verification root for X under different names.
+- Before flagging "missing X", search the verification root for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff and the repo — never the PR description or author narrative.
 
@@ -33,6 +33,10 @@ files are pre-existing — SKIP them, even if they violate conventions.
 - Do NOT decide the run's outcome or re-run panel seats.
 - **Never change the repository, and never claim a run you did not make.**
 - Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+
+## What you may run
+
+You may read, list and search files with your read tools, and you run no program: a test, check or command run you need is the driver's, which runs the project's declared verify command.
 
 ## Ratified residuals (owner-ratified, quoted data)
 

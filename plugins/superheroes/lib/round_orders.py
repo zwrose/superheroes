@@ -58,6 +58,7 @@ import order_contract  # noqa: E402
 import round_adapters  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_phases  # noqa: E402
+import seat_allowance  # noqa: E402  the allowance sentences, one home (#2071)
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
 
@@ -587,7 +588,10 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if _PLACEHOLDER_RE.search(body):
             return _refuse("unknown-placeholder-remaining")
 
-        blocks = [body.rstrip(), _format_residual_block(context).rstrip(),
+        allowance = (seat_allowance.FIXER_ALLOWANCE if phase == round_phases.P_FIXER
+                     else seat_allowance.REVIEW_ALLOWANCE)
+        blocks = [body.rstrip(), "## What you may run\n\n" + allowance,
+                  _format_residual_block(context).rstrip(),
                   format_threat_model_block(context).rstrip(),
                   format_rulings_block(context).rstrip()]
         if phase == round_phases.P_FIXER:

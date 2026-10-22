@@ -29,7 +29,7 @@ hunks. Only flag code in `+` or `-` lines of the scoped surface.
   `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
   string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
   (`line is not an integer`) and the finding is dropped.
-- Before flagging "missing X", grep the verification root for X under different names.
+- Before flagging "missing X", search the verification root for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff, the scoped hunks, and the repo.
 

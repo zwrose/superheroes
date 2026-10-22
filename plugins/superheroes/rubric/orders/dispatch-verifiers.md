@@ -23,8 +23,8 @@ Return one object per input issue:
 - severity: optional — the single rubric tier the evidence justifies (Critical/Important/
   Minor/Nit); omit to keep the issue's pre-verification tier.
 - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote what
-  proves the issue is real: the code you read, a read-only command you actually ran (with
-  its output), or an execution output the orchestrator captured and supplied.
+  proves the issue is real: the code you read, or an execution output the orchestrator
+  captured and supplied.
 
 Verdict semantics:
 - CONFIRMED — you found the triggering input and can cite it.
@@ -49,10 +49,9 @@ Verdict semantics:
   or never started) is never evidence for REFUTED: judge from the code. A REFUTED whose reason
   rests on such a check is kept as an unverified finding, not dropped.
 - **Never change the repository, and never claim a run you did not make.** Quote code
-  you read, a read-only command you actually ran (with its output), or an execution
-  output the orchestrator captured and handed you — and never imply a run you did not
-  make. Never write a probe into the tree: a verdict that needs the code **changed** to
-  establish it stays **PLAUSIBLE**, with the needed check named in `reason` for the
-  orchestrator. (Base rubric: "A review seat never changes the repository, and never
+  you read, or an execution output the orchestrator captured and handed you — and never
+  imply a run you did not make. Never write a probe into the tree: a verdict that needs
+  the code **changed** to establish it stays **PLAUSIBLE**, with the needed check named in
+  `reason` for the orchestrator. (Base rubric: "A review seat never changes the repository, and never
   claims a run it did not make.")
 - {{OUTPUT_CHANNEL_BLOCK}}

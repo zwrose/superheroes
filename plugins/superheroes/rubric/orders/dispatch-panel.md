@@ -3,8 +3,8 @@ You are reviewing {{MODE}} for repo {{REPO}}, target {{TARGET}}.
 
 ## Your assignment
 Review the diff at {{DIFF_PATH}} for your dimension.
-Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
-available, or an equivalent bounded shell range. Never one whole-file read.
+Read `diff.txt` in bounded chunks (<=800 lines): use your read tool's
+offset/limit window. Never one whole-file read.
 Continue with later offsets until the diff is covered.
 Read the base rubric (absolute path below) for severity calibration,
 verification rules, and the panel output format. Read the project calibration
@@ -43,7 +43,7 @@ positives.
   before writing it out. Cite `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
   string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
   (`line is not an integer`) and the finding is dropped.
-- Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
+- Before flagging "missing X", search the codebase (PR checkout, in PR mode)
   for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
   If the only caller already guards the edge case, downgrade or drop.
