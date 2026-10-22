@@ -703,6 +703,7 @@ def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_pat
     ended = {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": 0, "wallSeconds": 1.0,
+        "allowanceScan": "ok", "allowanceViolations": [],
     }
     ended.update(ERC.completion_stamp(1.0, ERC.canonical_payload_digest(scrubbed)))
     ed._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})

@@ -42,6 +42,7 @@ _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "review_memory",
     "round_phases",
     "round_panel_contract",  # stdlib-only panel-contract leaf round_phases re-exports from
+    "seat_allowance",  # stdlib-only: the review-seat allowance's one home
     "seat_bundle",
 })
 

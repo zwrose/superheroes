@@ -30,7 +30,10 @@ FIXER_ALLOWANCE = (
 
 ALLOWED_ITEM_TYPES = frozenset({"agent_message", "reasoning", "todo_list", "error", "web_search"})
 
-_JUDGED_EVENTS = ("item.started", "item.completed")
+CURSOR_ALLOWED_TOOL_CALLS = frozenset({
+    "readToolCall", "grepToolCall", "globToolCall", "lsToolCall"})
+
+_JUDGED_EVENTS =("item.started", "item.completed")
 _DESCRIPTION_CAP = 200
 _COMMAND_CAP = 120
 
@@ -39,8 +42,10 @@ _READ_TOOL_PATH = os.path.join(
 
 
 def _toml_string(value):
-    """A TOML basic string for `value` (json.dumps output is a valid TOML basic string)."""
-    return json.dumps(value)
+    """A TOML basic string for `value` (json.dumps output is a valid TOML basic string;
+    ensure_ascii=False keeps a character outside the BMP whole, where the ASCII escape would
+    write a UTF-16 surrogate pair, which TOML rejects)."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def codex_review_args(cwd):
@@ -70,15 +75,24 @@ def outside_allowance(obj):
     """None when the parsed codex JSONL event `obj` is inside the allowance, else a short
     description (<= 200 chars) of what is outside it. Only item.started / item.completed events
     are judged; any other object is not a judged event and yields None. A cursor stream-json
-    `tool_call` event whose call is a `shellToolCall` is outside the allowance too."""
+    `tool_call` event is inside the allowance only when its call is a one-key dict whose key is in
+    `CURSOR_ALLOWED_TOOL_CALLS`; every other call (a shell, edit or mode call, an unknown key, a
+    dict that is not one-key, a non-dict) is outside it."""
     if isinstance(obj, dict) and obj.get("type") == "tool_call":
         call = obj.get("tool_call")
-        if isinstance(call, dict) and "shellToolCall" in call:
-            shell = call.get("shellToolCall")
-            args = shell.get("args") if isinstance(shell, dict) else None
+        if isinstance(call, dict) and len(call) == 1:
+            key = next(iter(call))
+            if key in CURSOR_ALLOWED_TOOL_CALLS:
+                return None
+            body = call.get(key)
+            args = body.get("args") if isinstance(body, dict) else None
             command = args.get("command") if isinstance(args, dict) else None
-            return _cap("shellToolCall: %s" % _cap(command, _COMMAND_CAP), _DESCRIPTION_CAP)
-        return None
+            if command is None:
+                return _cap(key, _DESCRIPTION_CAP)
+            return _cap("%s: %s" % (key, _cap(command, _COMMAND_CAP)), _DESCRIPTION_CAP)
+        return _cap("tool_call: %s" % _cap(
+            sorted(call) if isinstance(call, dict) else type(call).__name__, _COMMAND_CAP),
+            _DESCRIPTION_CAP)
     if not isinstance(obj, dict) or obj.get("type") not in _JUDGED_EVENTS:
         return None
     item = obj.get("item")
@@ -101,7 +115,8 @@ def outside_allowance(obj):
 def scan_stream(path, limit=20):
     """(violations, ok) for the codex JSONL stream file at `path`. Reads the whole file one line
     at a time (binary), skips unparseable lines, dedupes violations and caps them at `limit`.
-    ok is False only when the file cannot be opened. Never raises."""
+    ok is True only when the whole file was read to EOF: it is False when the file cannot be
+    opened and when a read fails part-way (the violations seen so far are kept). Never raises."""
     violations = []
     seen = set()
     try:
@@ -125,5 +140,5 @@ def scan_stream(path, limit=20):
                 if len(violations) < limit:
                     violations.append(found)
     except (OSError, MemoryError):
-        return violations, True
+        return violations, False
     return violations, True

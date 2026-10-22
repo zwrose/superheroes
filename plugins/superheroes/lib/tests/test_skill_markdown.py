@@ -99,7 +99,7 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
         "rubric/orders/dispatch-panel.md": ("## Your assignment", "## Context files", (
             "diff.txt",
             "offset/limit",
-            "bounded shell",
+            "read tool",
             "<=800",
             "never one whole-file",
             "until the diff is covered",

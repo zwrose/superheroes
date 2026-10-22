@@ -677,8 +677,11 @@ def build_argv_result(seat, role_kind, opts):
             model = _CURSOR_MODEL
         argv = [
             "cursor-agent", "--model", model, "-p", "--trust", "-f",
-            "--sandbox", "enabled", "--output-format", "stream-json",
+            "--sandbox", "enabled",
         ]
+        if is_read:
+            argv += ["--mode", "ask"]
+        argv += ["--output-format", "stream-json"]
         return _ok(argv)
     if vendor == "claude":
         if not is_read:

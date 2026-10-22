@@ -170,10 +170,24 @@ def test_build_argv_codex_invalid_engine_model_pin_refuses_unregistered():
 @pytest.mark.parametrize("role_kind", ["review", "build"])
 def test_cursor_argv_shape_both_roles(role_kind):
     argv = EA.build_argv(_seat("cursor", "composer-2.5", None), role_kind, {"cwd": "/wt"})
+    mode = ["--mode", "ask"] if role_kind == "review" else []
     assert argv == [
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust", "-f",
-        "--sandbox", "enabled", "--output-format", "stream-json",
+        "--sandbox", "enabled", *mode, "--output-format", "stream-json",
     ]
+
+
+def test_cursor_review_argv_carries_ask_mode_once_and_write_argv_none():
+    seat = _seat("cursor", "composer-2.5", None)
+    review = EA.build_argv_result(seat, "review", {"cwd": "/wt"})
+    assert review["reason"] is None
+    assert review["argv"].count("--mode") == 1
+    assert review["argv"][review["argv"].index("--mode") + 1] == "ask"
+    for write_kind in ("build", "fix"):
+        write = EA.build_argv_result(seat, write_kind, {"cwd": "/wt"})
+        assert write["reason"] is None
+        assert "--mode" not in write["argv"]
+        assert "ask" not in write["argv"]
 
 
 def test_codex_argv_unchanged_by_delivery_table():
@@ -705,7 +719,7 @@ def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
     ]
     assert cursor["argv"] == [
         "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
-        "--sandbox", "enabled", "--output-format", "stream-json",
+        "--sandbox", "enabled", "--mode", "ask", "--output-format", "stream-json",
     ]
 
 
@@ -890,7 +904,7 @@ def test_build_argv_must_not_regress_measured_invariants():
     argv = EA.build_argv(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
     assert argv == [
         "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
-        "--sandbox", "enabled", "--output-format", "stream-json",
+        "--sandbox", "enabled", "--mode", "ask", "--output-format", "stream-json",
     ]
     argv = EA.build_argv(_seat("codex", "gpt-5.6-sol", "xhigh"), "review", {})
     assert argv == [

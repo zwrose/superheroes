@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -58,6 +59,15 @@ def test_codex_review_args_quotes_paths_as_valid_toml_strings():
     value = args[8].split("=", 1)[1]
     assert json.loads(value) == ["-I", "-B", _TOOL, "--root", cwd]
     assert value.startswith("[") and value.endswith("]")
+
+
+def test_codex_review_args_keep_supplementary_characters_as_valid_toml():
+    cwd = "/tmp/emoji-\U0001F600-dir"
+    args = SA.codex_review_args(cwd)
+    value = args[8].split("=", 1)[1]
+    assert "\\ud83d" not in value.lower()
+    parsed = tomllib.loads("x = " + value)
+    assert parsed["x"] == ["-I", "-B", _TOOL, "--root", cwd]
 
 
 # --------------------------------------------------------------- census
@@ -399,6 +409,49 @@ def test_outside_allowance_other_item_kinds_are_outside():
     assert len(SA.outside_allowance(_item("x" * 900))) <= 200
 
 
+def _cursor_call(call):
+    return {"type": "tool_call", "subtype": "started", "call_id": "c1", "tool_call": call}
+
+
+@pytest.mark.parametrize("key", sorted(SA.CURSOR_ALLOWED_TOOL_CALLS))
+def test_outside_allowance_cursor_allowed_calls_are_inside(key):
+    assert SA.outside_allowance(_cursor_call({key: {"args": {"path": "a.py"}}})) is None
+
+
+def test_cursor_allowed_tool_calls_are_exactly_the_read_list_search_set():
+    assert SA.CURSOR_ALLOWED_TOOL_CALLS == frozenset(
+        {"readToolCall", "grepToolCall", "globToolCall", "lsToolCall"})
+
+
+@pytest.mark.parametrize("call, expected", [
+    ({"shellToolCall": {"args": {"command": "make test"}}}, "shellToolCall: make test"),
+    ({"shellToolCall": {}}, "shellToolCall"),
+    ({"editToolCall": {"args": {"path": "a.py"}}}, "editToolCall"),
+    ({"switchModeToolCall": {"args": {}}}, "switchModeToolCall"),
+    ({"getMcpToolsToolCall": {"args": {}}}, "getMcpToolsToolCall"),
+    ({"neverSeenToolCall": {"args": {}}}, "neverSeenToolCall"),
+    ({"neverSeenToolCall": "not-a-dict"}, "neverSeenToolCall"),
+    ({"readToolCall": {}, "shellToolCall": {}}, "tool_call: ['readToolCall', 'shellToolCall']"),
+    ({}, "tool_call: []"),
+    ("shellToolCall", "tool_call: str"),
+    (["readToolCall"], "tool_call: list"),
+    (None, "tool_call: NoneType"),
+])
+def test_outside_allowance_cursor_other_calls_are_outside(call, expected):
+    assert SA.outside_allowance(_cursor_call(call)) == expected
+
+
+def test_outside_allowance_cursor_tool_call_without_the_key_is_outside():
+    assert SA.outside_allowance({"type": "tool_call"}) == "tool_call: NoneType"
+
+
+def test_outside_allowance_cursor_description_is_capped():
+    found = SA.outside_allowance(_cursor_call(
+        {"shellToolCall": {"args": {"command": "c" * 500}}}))
+    assert found.startswith("shellToolCall: ccc") and len(found) <= 200
+    assert len(SA.outside_allowance(_cursor_call({"k" * 900: {}}))) <= 200
+
+
 # --------------------------------------------------------------- scan_stream
 
 
@@ -451,6 +504,46 @@ def test_scan_stream_unreadable_file_is_not_ok(tmp_path):
     assert SA.scan_stream(str(tmp_path / "absent.jsonl")) == ([], False)
     assert SA.scan_stream(str(tmp_path)) == ([], False)
     assert SA.scan_stream(None) == ([], False)
+
+
+class _FailingHandle:
+    """A binary file object whose iteration yields one line and then raises `error`."""
+
+    def __init__(self, first_line, error):
+        self._first_line = first_line
+        self._error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def __iter__(self):
+        yield self._first_line
+        raise self._error
+
+
+@pytest.mark.parametrize("error", [OSError("read failed"), MemoryError()])
+def test_scan_stream_mid_read_failure_is_not_ok_and_keeps_violations(monkeypatch, error):
+    line = (json.dumps(_item("command_execution", command="./run_me.sh")) + "\n").encode()
+    monkeypatch.setattr(SA, "open", lambda path, mode="r": _FailingHandle(line, error),
+                        raising=False)
+    violations, ok = SA.scan_stream("ignored.jsonl")
+    assert ok is False
+    assert violations == ["command_execution: ./run_me.sh"]
+
+
+def test_scan_stream_cursor_stream_truth_table(tmp_path):
+    path = tmp_path / "cursor.jsonl"
+    _write_lines(path, [
+        _cursor_call({"readToolCall": {"args": {"path": "a"}}}),
+        _cursor_call({"grepToolCall": {"args": {"pattern": "x"}}}),
+        _cursor_call({"shellToolCall": {"args": {"command": "make test"}}}),
+        _cursor_call({"editToolCall": {"args": {"path": "a"}}}),
+        _cursor_call({"shellToolCall": {"args": {"command": "make test"}}}),
+    ])
+    assert SA.scan_stream(str(path)) == (["shellToolCall: make test", "editToolCall"], True)
 
 
 def test_scan_stream_reports_a_violation_before_9_mib_of_allowed_lines(tmp_path):
