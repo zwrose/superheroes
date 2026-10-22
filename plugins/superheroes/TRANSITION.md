@@ -16,10 +16,16 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **A project whose guardian config file is unreadable or not valid UTF-8 now sweeps as `degraded` and loses benching until the file is fixed; nothing else is owed.** See [Guardian: an unreadable or non-UTF-8 config is degraded](#guardian-an-unreadable-or-non-utf-8-config-is-degraded).
 - **After switching.** **Nothing is owed.** Guardian's hotspots lens stops ranking `.tsx`/`.jsx` files on lizard's complexity figures, which lizard mis-measures in JSX. Those files now read unmeasured, so a TSX-heavy project's hotspot list gets shorter and the sweep lists the hotspots lens as degraded with the count of unmeasured files. See [Guardian: TSX/JSX complexity reads unmeasured](#guardian-tsxjsx-complexity-reads-unmeasured).
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 - **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
 - **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
+
+### Guardian: an unreadable or non-UTF-8 config is degraded
+
+- `guardian_sweep.read_config` returns `configStatus: "degraded"` with a `configNotes` entry `guardian-config unreadable (<error type>)` when the guardian layer exists but cannot be read (a permission error, a directory or a dangling symlink at the path, an I/O error) or is not valid UTF-8. Before, an unreadable layer read as `healthy` with benching authority kept, and a non-UTF-8 layer raised `UnicodeDecodeError` out of the sweep. An absent layer, an empty or provenance-only layer, and a layer with no `guardian-config` fence stay `healthy`.
+- The guardian cadence write in `core_md` returns `{"action": "refused", "reason": "guardian-layer-not-utf8"}` (`GUARDIAN_CADENCE_REASON_UNDECODABLE`) on a non-UTF-8 layer instead of raising.
 
 ### Guardian: TSX/JSX complexity reads unmeasured
 
