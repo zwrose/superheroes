@@ -511,13 +511,8 @@ def escalate(
     if pos + 1 < len(rungs):
         nxt_m, nxt_e = rungs[pos + 1]
         return (vendor, nxt_m, nxt_e)
-    vi = VENDORS.index(vendor)
-    next_vendor = VENDORS[(vi + 1) % len(VENDORS)]
-    next_rungs = ladder(next_vendor)
-    if not next_rungs:
-        return None
-    first_m, first_e = next_rungs[0]
-    return (next_vendor, first_m, first_e)
+    # Top of the vendor's ladder: no escalation (the cross-vendor step retired, #2050).
+    return None
 
 
 def default_claude_tiers() -> dict[str, str | None]:
