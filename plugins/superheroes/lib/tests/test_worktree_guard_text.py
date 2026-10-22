@@ -368,6 +368,34 @@ def test_masking_blanks_the_body_and_keeps_the_terminator():
     assert wg._mask_heredoc_bodies(command) == "cat <<'EOF'\n\nEOF"
 
 
+@pytest.mark.parametrize("command", [
+    "cat > /tmp/reset-script.sh <<'EOF'\ngit reset --hard\nEOF\nbash /tmp/reset-script.sh",
+    "cat > /tmp/reset-script.sh <<'EOF'\ngit reset --hard\nEOF\n\nbash /tmp/reset-script.sh",
+    "git commit -m \"$(cat <<'EOF'\ngit reset --hard\nEOF\n)\"\nbash /tmp/reset-script.sh",
+], ids=["write-then-run", "write-blank-then-run", "commit-message-then-run"])
+def test_a_heredoc_followed_by_a_later_command_is_not_masked(command, dirty_repo):
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
+
+
+def test_a_lone_heredoc_that_writes_a_file_is_still_masked(dirty_repo):
+    command = "cat > /tmp/notes.sh <<'EOF'\ngit reset --hard\nEOF\n"
+    assert wg._mask_heredoc_bodies(command) == "cat > /tmp/notes.sh <<'EOF'\n\nEOF\n"
+    assert wg.classify(command, dirty_repo) == ("allow", "")
+
+
+@pytest.mark.parametrize("command", [
+    "if true; then\ncat <<'EOF'\ngit reset --hard\nEOF\nfi | bash",
+    "for x in once; do\ncat <<'EOF'\ngit reset --hard\nEOF\ndone | bash",
+    "while true; do\ncat <<'EOF'\ngit reset --hard\nEOF\nbreak\ndone | sh",
+    "case x in x)\ncat <<'EOF'\ngit reset --hard\nEOF\n;; esac",
+    "if true; then\ncat <<'EOF'\ngit reset --hard\nEOF\nfi",
+], ids=["if-fi-pipe-bash", "for-done-pipe-bash", "while-done-pipe-sh", "case-esac", "if-fi-alone"])
+def test_a_heredoc_inside_a_compound_command_is_not_masked(command, dirty_repo):
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
+
+
 def test_command_without_a_newline_is_untouched():
     command = "cat <<'EOF'"
     assert wg._mask_heredoc_bodies(command) == command

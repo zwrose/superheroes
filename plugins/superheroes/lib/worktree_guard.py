@@ -80,8 +80,13 @@ _UNPARSED_TEMPLATE = (
     "quoted delimiter (`<<'EOF'`) is read as text; a heredoc fed to anything else, or "
     "left unterminated, is read as command text. Heredoc masking is also off for the "
     "rest of the command once any earlier line holds a `$(`, backtick, `(`, `{` or `|` "
-    "(even a completed or quoted one), so there the text route is the Write tool and "
-    "`--body-file`/`-F`. "
+    "(even a completed or quoted one), and off for the whole command when any non-blank "
+    "line follows the heredoc (a later command could run what it wrote) or a shell "
+    "keyword such as `if`, `for`, `while`, `do` or `case` sits outside the body, so "
+    "there the text route is the Write tool and `--body-file`/`-F`. "
+    "A `$(...)` or backtick substitution in a git global option before a discard-named "
+    "verb (a `-c` value, say) is refused here too: put such a value in a variable on an "
+    "earlier command, or run the command without the substitution. "
     "Next step: write the text with the Write tool and pass the file "
     "(`gh ... --body-file <path>`, `git commit -F <path>`), or re-issue an intended "
     "discard as a plain `git ...` command this guard can parse. "
@@ -112,6 +117,9 @@ _HEREDOC_DELIMITER_END = " \t;|&()<>"
 _COMMENT_PRECEDERS = " \t;|&()`"
 _NESTING_MARKS = ("`", "{", "(", "|")
 _CONTINUING_LINE_ENDINGS = ("\\", "&&")
+_COMPOUND_KEYWORD = re.compile(
+    r"(?<![\w-])(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function)(?![\w-])"
+)
 _DATA_SUBSTITUTION = re.compile(r"(\"?)\$\(cat <<'[A-Za-z_][A-Za-z0-9_.-]*'\s*$")
 
 
@@ -351,6 +359,13 @@ def _mask_heredoc_bodies(command):
     trailing backslash (bash folds backslash-newline before it matches the terminator). Anything
     the scan cannot read, and any body that cannot be masked, stops masking for the rest of the
     command, never to resume after it. Terminator lines are kept.
+
+    Two whole-command conditions hold too; when either fails, nothing is masked. The masked
+    heredoc is the last thing in the command: after its terminator there is no non-blank line but
+    the one `)"` or `)` closer of the commit-message form, and nothing follows that closer, so a
+    file the heredoc writes is not run by a later command in the same call. And no shell
+    compound-command keyword (`if`, `for`, `while`, `do`, `case`, ...) appears as a whole word on
+    any line outside a masked body, since the output of such a compound can feed an interpreter.
     """
     if "\n" not in command:
         return command
@@ -387,12 +402,15 @@ def _mask_heredoc_bodies(command):
             maskable = consumed and (
                 quoted or not any("$(" in ln or "`" in ln or ln.endswith("\\") for ln in body)
             )
-            if maskable and substitution:
-                closer = ')"' if substitution.group(1) else ")"
+            if maskable:
                 after = lines[end + 1:]
-                maskable = bool(after) and after[0].rstrip() == closer and not any(
-                    ln.strip() for ln in after[1:]
-                )
+                if substitution:
+                    closer = ')"' if substitution.group(1) else ")"
+                    maskable = bool(after) and after[0].rstrip() == closer and not any(
+                        ln.strip() for ln in after[1:]
+                    )
+                else:
+                    maskable = not any(ln.strip() for ln in after)
             if not maskable:
                 break
             for k in range(following, end):
@@ -402,6 +420,8 @@ def _mask_heredoc_bodies(command):
             i = following
             continue
         break
+    if any(_COMPOUND_KEYWORD.search(ln) for ln in lines):
+        return command
     return "\n".join(lines)
 
 
