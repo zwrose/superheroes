@@ -166,15 +166,50 @@ def _uses(node):
 
 
 def _hook_name(name):
-    """True for a name a test runner treats as module setup: ``pytest_*``, ``setup*`` / ``teardown*`` in any case
-    (``setup_module``, ``setUpModule``) and ``load_tests``."""
-    return name.lower().startswith(("pytest_", "setup", "teardown")) or name == "load_tests"
+    """True for a name a test runner treats as module setup: ``pytest*`` (``pytest_generate_tests``, ``pytestmark``),
+    ``setup*`` / ``teardown*`` (``setup_module``, ``setUpModule``), in any case, and ``load_tests``."""
+    return name.lower().startswith(("pytest", "setup", "teardown")) or name == "load_tests"
 
 
 def _plain_value(value):
     """True when ``value`` (an expression or ``None``) runs no code at import: no call, lambda, walrus,
     comprehension, generator, await or yield anywhere inside it."""
     return value is None or not any(isinstance(sub, _VALUE_REFUSED) for sub in ast.walk(value))
+
+
+def _docstring(node):
+    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+
+
+def _plain_assignment(node):
+    """True for an assignment or annotated assignment whose every target is a simple name that is no runner hook
+    (see ``_hook_name``, or a dunder) and whose value runs no code at import."""
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, [node.value]
+    elif isinstance(node, ast.AnnAssign):
+        targets, value = [node.target], [node.value, node.annotation]
+    else:
+        return False
+    if not all(isinstance(target, ast.Name) for target in targets):
+        return False
+    for target in targets:
+        name = target.id
+        if _hook_name(name) or (name.startswith("__") and name.endswith("__")):
+            return False
+    # axis: a value that runs code at import (a call, lambda, walrus, comprehension, await or yield) is a hook — see bite-proof record wo_a_2053_break_it_body
+    return all(_plain_value(part) for part in value)
+
+
+def _plain_class(node):
+    """True for an undecorated class whose bases and body run no code at import: no call in a base or keyword, no
+    ``global`` / ``nonlocal`` or decorator at any depth, and only defs, plain assignments and docstrings directly
+    in its body (a class body runs at load, so it meets the module-level rules)."""
+    if node.decorator_list or not all(_plain_value(sub) for sub in node.bases + [k.value for k in node.keywords]):
+        return False
+    if any(isinstance(sub, (ast.Global, ast.Nonlocal)) or getattr(sub, "decorator_list", None)
+           for sub in ast.walk(node)):
+        return False
+    return all(isinstance(sub, _FUNCTIONS) or _plain_assignment(sub) or _docstring(sub) for sub in node.body)
 
 
 def _allowed_host(node):
@@ -188,27 +223,11 @@ def _allowed_host(node):
         # axis: a decorated def (a fixture under any spelling or alias) is a hook, and so is a runner-named def — see bite-proof record wo_a_2053_break_it_body
         return not node.decorator_list and not _hook_name(node.name)
     if isinstance(node, ast.ClassDef):
-        if node.decorator_list:
-            return False
-        return not any(isinstance(sub, (ast.Global, ast.Nonlocal)) or getattr(sub, "decorator_list", None)
-                       for sub in ast.walk(node))
-    if isinstance(node, ast.Assign):
-        targets, value = node.targets, [node.value]
-    elif isinstance(node, ast.AnnAssign):
-        targets, value = [node.target], [node.value, node.annotation]
-    elif isinstance(node, ast.Expr):
-        return isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
-    else:
-        # axis: module-level control flow, an expression statement, an augmented assignment, global, del, assert and raise are all hooks — see bite-proof record wo_a_2053_break_it_body
-        return False
-    if not all(isinstance(target, ast.Name) for target in targets):
-        return False
-    for target in targets:
-        name = target.id
-        if _hook_name(name) or name.startswith("pytest") or (name.startswith("__") and name.endswith("__")):
-            return False
-    # axis: a value that runs code at import (a call, lambda, walrus, comprehension, await or yield) is a hook — see bite-proof record wo_a_2053_break_it_body
-    return all(_plain_value(part) for part in value)
+        return _plain_class(node)
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return _plain_assignment(node)
+    # axis: module-level control flow, an expression statement, an augmented assignment, global, del, assert and raise are all hooks — see bite-proof record wo_a_2053_break_it_body
+    return _docstring(node)
 
 
 def _normalise(node):
