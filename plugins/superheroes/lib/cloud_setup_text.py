@@ -644,7 +644,7 @@ def _fill_launcher(cwd, root):
     return words
 
 
-_FILL_USERINFO_RE = re.compile(r"://[^/\s@:]*:[^/\s@]+@")
+_FILL_USERINFO_RE = re.compile(r"://[^/\s]*:[^/\s]+@")
 
 
 def _fill_lines(cwd, root, clone):
