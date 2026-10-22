@@ -96,7 +96,7 @@ def test_install_commands_cover_the_collector_tools():
     assert gt.INSTALL_COMMANDS == {
         "jscpd": "npm install -g jscpd",
         "radon": "pip install radon",
-        "lizard": "pip install lizard",
+        "lizard": "pip install lizard==1.24.0",
         "npm": "install Node.js, which bundles npm",
         "npm-check-updates": "npm install -g npm-check-updates",
         "knip": "npm install -g knip",
