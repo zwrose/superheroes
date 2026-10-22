@@ -107,8 +107,8 @@ _PIECE_SKIP_WORDS = frozenset({"!", "{", "then", "do", "else", "elif", "time"})
 _GH_DATA_SUBCOMMANDS = frozenset({"issue", "pr", "release", "api"})
 _HEREDOC_DELIMITER_END = " \t;|&()<>"
 _COMMENT_PRECEDERS = " \t;|&()`"
-_OPEN_LINE_ENDINGS = ("{", "(", "|", "&&", "||", "\\")
-_NESTING_MARKS = ("`", "$(", "<(", ">(")
+_NESTING_MARKS = ("`", "{", "(", "|")
+_CONTINUING_LINE_ENDINGS = ("\\", "&&")
 _DATA_SUBSTITUTION = re.compile(r"(\"?)\$\(cat <<'[A-Za-z_][A-Za-z0-9_.-]*'\s*$")
 
 
@@ -132,8 +132,12 @@ def _piece_is_data_consumer(piece):
 
 
 def _line_opens_context(line):
-    """True when a line may leave a group, substitution, pipe or continuation open for the next."""
-    return line.rstrip().endswith(_OPEN_LINE_ENDINGS) or any(mark in line for mark in _NESTING_MARKS)
+    """True when a line may leave a group, substitution, pipe or continuation open for the next.
+
+    Tests the whole line, not its ending: a trailing comment or a later word must not hide an
+    opener (`$(`, `<(` and `>(` hold a `(`).
+    """
+    return line.rstrip().endswith(_CONTINUING_LINE_ENDINGS) or any(mark in line for mark in _NESTING_MARKS)
 
 
 def _read_heredoc_delimiter(line, q):
@@ -338,8 +342,8 @@ def _mask_heredoc_bodies(command):
     operator line is a data consumer (`cat`, `tee`, `gh issue|pr|release|api`, `git commit`); the
     operator line has no backtick, `{` or `(` and does not hand the consumer's output on (a trailing
     pipe) — except one `"$(cat <<'DELIM'` that follows consumers only, whose terminator is followed
-    by a lone `)"` or `)` that ends the command; no earlier line opens a group, substitution, pipe
-    or continuation; and an unquoted delimiter's body has no `$(`, backtick or trailing backslash
+    by a lone `)"` or `)` that ends the command; no earlier line (outside masked bodies) holds a
+    backtick, `{`, `(` or `|` anywhere, or ends in a backslash or `&&`; and an unquoted delimiter's body has no `$(`, backtick or trailing backslash
     (bash folds backslash-newline before it matches the terminator). Anything the scan cannot read
     stops masking for the rest of the command. Terminator lines are kept.
     """
@@ -1023,8 +1027,43 @@ def destructive_discard_action(command):
     return actions[0] if actions else None
 
 
+def _substitution_end(text, start, closer):
+    """Index of the `closer` that ends a `$(` or backtick substitution whose body starts at `start`.
+
+    Returns -1 when the substitution is never closed. Quoted text and escaped characters inside the
+    body are skipped; parentheses nest for `$(`.
+    """
+    depth = 0
+    i = start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if closer == ")" and ch in "'\"":
+            j = i + 1
+            while j < n and text[j] != ch:
+                j += 2 if ch == '"' and text[j] == "\\" else 1
+            i = j + 1
+            continue
+        if closer == ")" and ch == "(":
+            depth += 1
+        elif ch == closer:
+            if depth == 0:
+                return i
+            depth -= 1
+        i += 1
+    return -1
+
+
 def _segment_mentions_destructive_git(text):
-    """Crude per-segment scan for destructive git subcommand mentions."""
+    """Crude per-segment scan for destructive git subcommand mentions.
+
+    Bash runs a `$(...)` or backtick substitution inside double quotes, so its body is scanned as
+    command text with its double quotes opened up (double-quoted prose in it still counts); one that never closes
+    counts as a mention.
+    """
     if not isinstance(text, str):
         return False
     i = 0
@@ -1041,6 +1080,13 @@ def _segment_mentions_destructive_git(text):
         if in_double:
             if ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
                 i += 2
+                continue
+            if ch == "`" or text.startswith("$(", i):
+                body = i + (1 if ch == "`" else 2)
+                end = _substitution_end(text, body, "`" if ch == "`" else ")")
+                if end < 0 or _segment_mentions_destructive_git(text[body:end].replace('"', " ")):
+                    return True
+                i = end + 1
                 continue
             if ch == '"':
                 in_double = False

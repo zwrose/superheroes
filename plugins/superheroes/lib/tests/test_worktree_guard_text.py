@@ -285,6 +285,47 @@ def test_a_commit_message_substitution_that_ends_the_command_is_masked(dirty_rep
     assert wg.classify(command, dirty_repo) == ("allow", "")
 
 
+@pytest.mark.parametrize("command", [
+    "( # group\ncat <<'EOF'\ngit reset --hard\nEOF\n) | sh",
+    "{ # group\ncat <<'EOF'\ngit reset --hard\nEOF\n} | sh",
+    "echo \"(\"\ncat <<'EOF'\ngit reset --hard\nEOF",
+    "echo a | cat\ncat <<'EOF'\ngit reset --hard\nEOF",
+    "echo a &&\ncat <<'EOF'\ngit reset --hard\nEOF",
+    "echo a \\\ncat <<'EOF'\ngit reset --hard\nEOF",
+], ids=["commented-paren-group", "commented-brace-group", "quoted-paren-earlier",
+        "pipe-earlier", "and-continuation", "backslash-continuation"])
+def test_any_earlier_line_with_a_nesting_mark_stops_masking(command, dirty_repo):
+    assert wg._mask_heredoc_bodies(command) == command
+    _refused(command, dirty_repo)
+
+
+@pytest.mark.parametrize("command", [
+    'echo "$(git reset --hard)"',
+    'echo "\\"$(git reset --hard)\\""',
+    'echo "\\"$(git commit -m \\"x\\"; git reset --hard)\\""',
+    'echo "`git reset --hard`"',
+    'echo "\\"`git reset --hard`\\""',
+    'echo "$(echo $(git reset --hard))"',
+    'echo "$(git reset --hard"',
+    'echo "`git reset --hard"',
+    'echo "$(echo hi"',
+], ids=["plain", "escaped-outer-quotes", "escaped-inner-quotes", "backtick", "backtick-escaped-quotes",
+        "nested", "unclosed-substitution", "unclosed-backtick", "unclosed-benign"])
+def test_a_substitution_inside_double_quotes_is_scanned_as_a_command(command, dirty_repo):
+    assert wg.mentions_destructive_git(command) is True
+    assert "unaccounted" in _kinds(command) or "destructive" in _kinds(command)
+    _refused(command, dirty_repo)
+
+
+@pytest.mark.parametrize("command", [
+    'echo "\\$(git reset --hard)"',
+    'echo "\\`git reset --hard\\`"',
+    'echo "$(date)" "quoted"',
+], ids=["escaped-dollar", "escaped-backtick", "benign-substitution"])
+def test_an_escaped_or_harmless_substitution_in_double_quotes_is_allowed(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("allow", "")
+
+
 def test_a_real_command_after_a_masked_heredoc_is_still_scanned(dirty_repo):
     command = "cat <<'EOF'\ntext\nEOF\ngit reset --hard"
     assert _refused(command, dirty_repo) == wg.refusal_message("reset-hard", 1)
