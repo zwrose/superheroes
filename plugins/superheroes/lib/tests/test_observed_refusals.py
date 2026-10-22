@@ -118,12 +118,13 @@ def test_orphan_tool_use_id_still_counts(tmp_path):
 
 def test_order_is_transcript_order_and_results_match_by_id(tmp_path):
     rows = [_use("a", tool_input={"command": "first"}), _use("b", tool_input={"command": "second"}),
-            _result("b", "This command requires approval"), _result("a", "Exit code 2"),
+            _result("b", "This command requires approval"), _result("a", "PreToolUse:Bash hook error: [x]: no"),
             _use("c", tool_input={"command": "third"}),
             _result("c", "PreToolUse:Bash hook error: [x]: no")]
     observed, fault = OR.read_transcript(_write(tmp_path, rows))
     assert fault is None
-    assert [(o["command"], o["refusedBy"]) for o in observed] == [("second", "permission"), ("third", "hook")]
+    assert [(o["command"], o["refusedBy"]) for o in observed] == [
+        ("second", "permission"), ("first", "hook"), ("third", "hook")]
 
 
 def test_malformed_lines_and_non_object_rows_are_skipped(tmp_path):
