@@ -77,18 +77,24 @@ def _source_names(content, front=None):
     return {tok.string for tok in tokenize.generate_tokens(io.StringIO(content).readline) if tok.type == tokenize.NAME}
 
 
-def _futures(records):
-    """The ``__future__`` features the module's records import."""
+def _futures(records, python=True):
+    """The ``__future__`` features the module's records import. Only the Python front's import targets have the
+    ``("from", level, module, name)`` shape; a JS target starts with its module name, so a module literally named
+    ``from`` or ``__future__`` is never read here (``python`` is false for any front that is not pytest-collected)."""
+    if not python:
+        return set()
     return {pair[1][3] for rec in records for pair in rec["imports"]
             if pair[1][0] == "from" and pair[1][1] == 0 and pair[1][2] == "__future__"}
 
 
-def _may_import_fixture(pair):
+def _may_import_fixture(pair, python=True):
     """True when ``pair`` (a bound name and its import target) is a ``from`` import, which can bring in a fixture.
     A module name proves nothing (a project-local file can shadow a standard-library name), so every ``from``
     import is suspect, relative or absolute, except the compiler's own absolute ``from __future__``; a relative
     ``from .__future__`` reads a project file like any other. The caller allows one only when the original
     carries the identical binding. A plain ``import x`` binds a module object, which pytest never registers."""
+    if not python:
+        return False
     target = pair[1]
     # axis: only an absolute (level 0) from-import of exactly __future__ is exempt; a relative one (from .__future__ import x) loads a project-local module that can define an autouse fixture — see bite-proof record wo_a_2053_break_it_body
     return target[0] == "from" and not (target[1] == 0 and target[2] == "__future__")
@@ -115,7 +121,7 @@ def _rebinds(records):
     return False
 
 
-def _outside(records, window, original, moved=False):
+def _outside(records, window, original, moved=False, python=True):
     """The refusal reason for the first candidate record outside the matched window that changes what the test
     means, else ``None``. ``moved`` is true when the candidate sits in a different directory than the original."""
     orig_pairs = {pair for rec in original for pair in rec["imports"]}
@@ -132,7 +138,7 @@ def _outside(records, window, original, moved=False):
     if moved and any(_relative(rec) for rec in original):
         return "binding-conflict"
     # axis: the future compiler features (annotations semantics) of the original and the host must match — see bite-proof record wo_a_2053_break_it_body
-    if _futures(original) != _futures(records):
+    if _futures(original, python) != _futures(records, python):
         return "binding-conflict"
     # axis: a name the original or the host binds by two imports (or an import and another module-level binding) is refused, because import order then decides the binding — see bite-proof record wo_a_2053_break_it_body
     if _rebinds(original):
@@ -151,7 +157,7 @@ def _outside(records, window, original, moved=False):
             if pair in orig_pairs:
                 continue
             # axis: a name the host imports with a from-import (any module, relative or not: a project file can shadow a standard-library name) may be a fixture, and pytest registers an imported autouse fixture as module setup, so it is refused — see bite-proof record wo_a_2053_break_it_body
-            if _may_import_fixture(pair):
+            if _may_import_fixture(pair, python):
                 return "host-setup"
             # axis: an import outside the window that rebinds a name the test uses, or star-imports over it, is refused — see bite-proof record wo_a_2053_break_it_body
             if pair[0] == "*" or pair[0] in names:
@@ -261,7 +267,7 @@ def locate(content, path, candidates):
         return _unresolved("match-ambiguous")
     cand_path, records, window = matches[0]
     moved = posixpath.dirname(cand_path) != posixpath.dirname(path)
-    reason = _outside(records, set(window), original, moved)
+    reason = _outside(records, set(window), original, moved, getattr(front, "PYTEST_COLLECTION", False))
     if reason:
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]

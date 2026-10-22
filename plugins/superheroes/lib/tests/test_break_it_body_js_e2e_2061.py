@@ -270,6 +270,27 @@ def test_a_host_side_effect_import_is_host_setup(repo):
     assert calls == []
 
 
+def test_a_host_import_from_a_module_named_from_is_not_host_setup(repo):
+    base, head = _stage(repo, {HOST: _host(imports=HOST_IMPORTS + 'import stream from "from";\n')})
+    found = break_it_body.locate(ORIG, OWN, [(HOST, (repo / HOST).read_text())])
+    assert (found["status"], found["reason"]) == ("found", None)
+
+
+def test_a_host_import_from_a_module_named_future_does_not_change_the_future_comparison(repo):
+    host = _host(imports=HOST_IMPORTS + 'import { annotations } from "__future__";\n')
+    found = break_it_body.locate(ORIG, OWN, [(HOST, host)])
+    assert (found["status"], found["reason"]) == ("found", None)
+
+
+def test_the_python_import_predicates_ignore_a_non_python_front():
+    pair = ("x", ("from", 0, "other"))
+    assert break_it_body._may_import_fixture(pair)
+    assert not break_it_body._may_import_fixture(pair, python=False)
+    rec = {"imports": (("annotations", ("from", 0, "__future__", "annotations")),)}
+    assert break_it_body._futures([rec]) == {"annotations"}
+    assert break_it_body._futures([rec], python=False) == set()
+
+
 # ---- (f) moved but failing --------------------------------------------------------------------------------
 
 def test_a_moved_ts_test_whose_runner_fails_reads_failing(repo):
