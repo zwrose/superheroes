@@ -51,6 +51,8 @@ _MEMBER_START = frozenset(("punct", c) for c in (";", "}", "*"))
 _MEMBER_MODIFIERS = frozenset(("get set async readonly public private protected override declare abstract accessor").split())
 _TITLE_CALLEES = ("it", "test", "describe")
 _FRAMEWORK_MODULES = frozenset(("vitest", "@jest/globals", "node:test", "bun:test"))
+_TYPE_END = frozenset(("punct", c) for c in (")", "]", ">", ">>", ">>>", "}"))
+_TYPE_OPERATORS = frozenset(("keyof readonly infer new unique extends is asserts typeof abstract in").split())
 _STATEMENT_START = frozenset((_SEMI, _LBRACE, _RBRACE))
 
 _LINE_END = re.compile("[%s]" % _BREAKS)
@@ -519,7 +521,10 @@ def _type_decl(rest):
     if rest[:1] not in ([_TYPE], [_INTERFACE]) or not rest[1:2] or rest[1][0] != "id":
         return False
     if rest[0] == _TYPE:
-        return rest[2:3] in ([_EQUALS], [("punct", "<")])
+        # axis: a `(` or `{` that follows a type's last token with no operator between is a separate statement ASI would have split, not part of the alias, so the record is refused — see bite-proof record wo_b_2061_break_it_body_js
+        return rest[2:3] in ([_EQUALS], [("punct", "<")]) and not any(
+            tok in (_LPAREN, _LBRACE) and (prev[0] in ("num", "str", "tpl") or prev in _TYPE_END or (prev[0] == "id" and prev[1] not in _TYPE_OPERATORS))
+            for prev, tok in zip(rest[2:], rest[3:]))
     brace = next((k for k in range(2, len(rest)) if rest[k] == _LBRACE), -1)
     return brace >= 0 and _match(rest, brace) == len(rest) - 1
 
@@ -629,6 +634,12 @@ def _relative(sig, imports):
         return True
     return any(here in (("id", "require"), _IMPORT) and after == _LPAREN and mod[0] == "str"
                and mod[1].startswith(("./", "../")) for here, after, mod in zip(sig, sig[1:], sig[2:]))
+
+
+def source_names(text):
+    """The identifiers that appear as names in `text`, outside comments, strings, templates and regular expressions,
+    read with the JS/TS scanner; raises ValueError for text it cannot read."""
+    return {tok[1] for tok in _Scanner(text).run() if tok[0] == "id"}
 
 
 def _parse(text):

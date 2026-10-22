@@ -67,8 +67,13 @@ def _relative(rec):
     return bool(rec.get("relative", False))
 
 
-def _source_names(content):
-    """The identifiers that appear as NAME tokens in ``content``, outside comments and strings."""
+def _source_names(content, front=None):
+    """The identifiers that appear as names in ``content``, outside comments and strings, read by the selected
+    front when it declares ``source_names`` (a JS comment or regular expression is not Python), else by Python's
+    tokenizer."""
+    reader = getattr(front, "source_names", None)
+    if reader is not None:
+        return reader(content)
     return {tok.string for tok in tokenize.generate_tokens(io.StringIO(content).readline) if tok.type == tokenize.NAME}
 
 
@@ -92,16 +97,20 @@ def _may_import_fixture(pair):
 def _rebinds(records):
     """True when a module binds one local name by more than one import, or by an import and any other module-level
     binding: which binding wins then depends on statement order, which the comparison does not model."""
-    seen = {}
+    seen, types = {}, set()
     for index, rec in enumerate(records):
-        for local, _ in rec["imports"]:
-            if local == "*":
+        for local, target in rec["imports"]:
+            # an effect-only import binds no name (local None)
+            if local == "*" or local is None:
                 continue
             if local in seen:
                 return True
             seen[local] = index
+            # axis: a type-only import (its target ends in "type") binds no runtime value, so a value declaration of the same name does not rebind it — see bite-proof record wo_b_2061_break_it_body_js
+            if len(target) == 3 and target[2] == "type":
+                types.add(local)
     for index, rec in enumerate(records):
-        if any(seen.get(name, index) != index for name in rec["binds"]):
+        if any(seen.get(name, index) != index and name not in types for name in rec["binds"]):
             return True
     return False
 
@@ -135,7 +144,8 @@ def _outside(records, window, original, moved=False):
         if index in window:
             continue
         # axis: module-level test setup the host adds is refused, because it would change the test's run — see bite-proof record wo_a_2053_break_it_body
-        if rec["hook"]:
+        # axis: an effect-only import (no bound name) is judged by the in-order comparison after this loop, so a retained one is not host setup — see bite-proof record wo_b_2061_break_it_body_js
+        if rec["hook"] and not (rec["kind"] == "import" and rec["imports"] and all(pair[0] is None for pair in rec["imports"])):
             return "host-setup"
         for pair in rec["imports"]:
             if pair in orig_pairs:
@@ -150,11 +160,15 @@ def _outside(records, window, original, moved=False):
         if rec["kind"] == "stmt" and rec["binds"] & names:
             return "binding-conflict"
         # axis: any record outside the window that binds a name the matched window binds (a renamed test's new name) overwrites or is overwritten by a retained test, so it is refused — see bite-proof record wo_a_2053_break_it_body
-        if rec["binds"] & window_binds:
+        if rec["kind"] != "import" and rec["binds"] & window_binds:
             return "binding-conflict"
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
-        if rec["uses"] & window_binds:
+        if rec["kind"] != "import" and rec["uses"] & window_binds:
             return "binding-conflict"
+    # axis: the effect-only imports of the host are exactly the original's, in the original's order; an added, repeated or reordered one is host setup — see bite-proof record wo_b_2061_break_it_body_js
+    if [pair for rec in records for pair in rec["imports"] if pair[0] is None] != [
+            pair for rec in original for pair in rec["imports"] if pair[0] is None]:
+        return "host-setup"
     # the host's own rebinding is checked last, so a more specific refusal above (host-setup) keeps its reason
     if _rebinds(records):
         return "binding-conflict"
@@ -212,7 +226,7 @@ def locate(content, path, candidates):
     # the textual prefilter requires only names that occur in the original's own text: a derived runtime spelling
     # (a mangled private name) never makes an identical candidate fail it
     try:
-        spelled = _source_names(content)
+        spelled = _source_names(content, front)
     except Exception:
         return _unresolved("body-unparseable")
     prefilter = {name for name in names if name in spelled}
