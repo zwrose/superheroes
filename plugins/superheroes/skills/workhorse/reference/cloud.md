@@ -271,7 +271,11 @@ refuses.
 - The setup text installs `bubblewrap` and `socat` (the Claude write sandbox needs both on Linux;
   without them every claude implementer dispatch fails at start) and the project's pinned
   interpreter. When any of them is missing, install it with the package manager (or
-  `uv python install`) before the first dispatch and disclose it in the build record.
+  `uv python install`) before the first dispatch and disclose it in the build record. The setup
+  text also fills the dependency caches the project's Python launcher needs; when the setup log
+  shows `dependency fill FAILED` (or no fill line for a project that should have one), run the
+  launcher once from the builder's own shell before the first dispatch and disclose it in the build
+  record.
 - The write sandbox has no network. An implementer order inlines or cites only what is in the
   worktree.
 - The commit signer is not reachable from inside the write sandbox, so implementers never commit.

@@ -895,6 +895,49 @@ def test_an_item_keeps_none_or_a_list_for_options(given):
                for p in problems_of(records, advisor))
 
 
+FOLD_NOTES = ["Size: 41 lines against an estimate of 30 to 80.", "Tests only, no app change.", "The nightly audit was already red; ruled last week."]
+
+
+def test_an_item_with_a_list_if_left_shows_its_notes_as_a_bulleted_list():
+    # Axis: a list ifLeft lands as one bullets block, one bullet per note in input order, and the sheet passes the schema and the page check.
+    # Bites on: the list rendered as a paragraph, joined into one string, reordered, or a list ifLeft refused.
+    records, advisor = bundle(BIG)
+    advisor["items"][0]["ifLeft"] = list(FOLD_NOTES)
+    sheet = build(records, advisor)
+    card = next(c for c in sheet["cards"] if c["question"] == advisor["items"][0]["title"])
+    assert card["context"] == [{"title": WORDS["ifLeft"], "blocks": [{"bullets": FOLD_NOTES}]}]
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == []
+    assert check_sheet_problems(sheet) == []
+
+
+def test_a_string_if_left_builds_the_sheet_exactly_as_before():
+    # Axis: a string ifLeft stays one paragraph block, and the list form changes that item's block and id and nothing else.
+    # Bites on: the string path re-shaped (wrapped in a list, split into bullets), or the list path touching any other part of the sheet.
+    records, advisor = bundle(BIG)
+    text = advisor["items"][0]["ifLeft"]
+    plain = build(records, advisor)
+    card = next(c for c in plain["cards"] if c["question"] == advisor["items"][0]["title"])
+    assert card["context"] == [{"title": WORDS["ifLeft"], "blocks": [{"paragraph": text}]}]
+    advisor["items"][0]["ifLeft"] = [text]
+    listed = build(records, advisor)
+    at = plain["cards"].index(card)
+    swapped = {k: v for k, v in listed["cards"][at].items() if k != "id"}
+    swapped["context"] = card["context"]
+    listed["cards"][at] = {"id": pr_sheet.card_id("i-", advisor["number"], advisor["items"][0]["id"], swapped), **swapped}
+    assert listed["cards"][at]["id"] == card["id"]
+    assert json.dumps(listed, sort_keys=True) == json.dumps(plain, sort_keys=True)
+
+
+@pytest.mark.parametrize("given", ["", "   ", [], [""], ["A note.", "  "], ["A note.", 3], 3, None],
+                         ids=["empty-string", "blank-string", "empty-list", "empty-note", "blank-note", "non-string-note", "number", "null"])
+def test_an_item_refuses_an_empty_if_left_list_or_note(given):
+    # Axis: ifLeft is a non-empty string or a list of at least 1 non-empty strings; anything else is refused, naming the item.
+    # Bites on: an empty list or an empty or blank note let through (an empty bullet on the page), or a non-string note accepted.
+    records, advisor = bundle(BIG)
+    advisor["items"][0]["ifLeft"] = given
+    assert "items retry-window: ifLeft must be a non-empty string or a list of at least 1 non-empty strings" in problems_of(records, advisor)
+
+
 PICTURE_FILES = ["cart-empty.png", "cart-paid.png", "declined-screen.png"]
 FIXED_SRC = "pictures/0123456789ab.png"
 

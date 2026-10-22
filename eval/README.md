@@ -22,7 +22,7 @@ contracts in [`CONVENTIONS.md`](../CONVENTIONS.md)? This is buildable today beca
 conventions are frozen and these checks need no running loop:
 
 - [`plugins/superheroes/lib/identifiers.py`](../plugins/superheroes/lib/identifiers.py) — the **canonical reference impls** of the
-  new §6 pure functions (`work_item_slug`, `content_hash`). The executable spec of §6.
+  §6.1 pure function (`work_item_slug`; the §6.3 `content_hash` retired, #2050). The executable spec of §6.1.
   Plugins consume these instead of re-implementing them, so they can't drift (the #1
   theme of the convention reviews). *How a plugin consumes them — vendor vs shared dep —
   is decided when the first plugin needs them (Phase 1+).*

@@ -281,10 +281,10 @@ def test_host_that_binds_an_imported_name_another_way_is_a_binding_conflict(repo
     assert calls == []
 
 
-def test_host_star_import_is_a_binding_conflict(repo):
+def test_host_star_import_is_host_setup(repo):
     base, head = _stage(repo, {"tests/test_weekly.py": _host(imports=IMPORTS + "from os.path import *\n")})
     calls = []
-    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+    assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
     assert calls == []
 
 
@@ -323,6 +323,135 @@ def test_host_fixture_with_autouse_false_is_still_host_setup(repo):
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "host-setup")
     assert calls == []
+
+
+@pytest.mark.parametrize("imports", [
+    "from helpers import setup_module\n",
+    "from helpers import setUpModule\n",
+    "from helpers import anything as pytestmark\n",
+    "from helpers import *\n",
+], ids=["setup_module", "setUpModule", "aliased-pytestmark", "star"])
+def test_an_imported_runner_hook_binding_is_host_setup(imports):
+    original = "def test_a():\n    assert 1 == 1\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", imports + original)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_an_import_of_a_plain_name_is_still_allowed_host_code():
+    original = "def test_a():\n    assert 1 == 1\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "from helpers import util\n" + original)])
+    assert got["status"] == "found"
+
+
+def test_an_ordinary_helper_parameter_is_no_fixture_dependency():
+    original = "def helper(value):\n    return value + 1\n\n\ndef test_x():\n    assert helper(1) == 2\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "value = 99\n" + original)])
+    assert got["status"] == "found"
+
+
+@pytest.mark.parametrize("source", [
+    "def test_x(value):\n    assert value\n",
+    "class TestX:\n    def test_x(self, value):\n        assert value\n",
+    "@pytest.fixture\ndef value(other):\n    return other\n",
+    "@fx\ndef value(other):\n    return other\n",
+], ids=["test-function", "test-method", "fixture", "aliased-fixture"])
+def test_a_test_or_fixture_parameter_is_still_a_dependency(source):
+    source = "import pytest\nfrom pytest import fixture as fx\n" + source
+    got = break_it_body.locate(source, "tests/test_a.py", [("tests/test_b.py", "value = 1\nother = 2\n" + source)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_a_test_methods_self_parameter_is_no_dependency():
+    original = "class TestX:\n    def test_x(self):\n        assert 1\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "self = 1\n" + original)])
+    assert got["status"] == "found"
+
+
+@pytest.mark.parametrize("helper", [
+    "def helper(_=setattr(TestR, '__unittest_skip__', True)):\n    pass\n",
+    "def helper(*, _=print()):\n    pass\n",
+    "def helper(x: print() = 1):\n    pass\n",
+    "def helper() -> print():\n    pass\n",
+], ids=["default", "kw-default", "annotation", "return"])
+def test_a_host_def_whose_signature_runs_code_is_host_setup(helper):
+    original = "class TestR:\n    def test_a(self):\n        assert 1 == 1\n"
+    for host in (helper + "\n\n" + original, original + "\n\n" + helper):
+        got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", host)])
+        assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_a_host_method_whose_signature_runs_code_is_host_setup():
+    original = "class TestR:\n    def test_a(self):\n        assert 1 == 1\n"
+    host = original + "\n\nclass Aux:\n    def meth(self, _=print()):\n        pass\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_a_plain_host_def_is_allowed():
+    original = "def test_a():\n    assert 1 == 1\n"
+    host = "def helper(x=1, *, y: int = 2) -> int:\n    return x\n\n\n" + original
+    assert break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", host)])["status"] == "found"
+
+
+@pytest.mark.parametrize("order", ["after", "before"])
+def test_a_rename_onto_another_retained_tests_name_is_a_binding_conflict(order):
+    original = "def test_regression():\n    assert 1 == 2\n"
+    renamed = "def test_x():\n    assert 1 == 2\n"
+    other = "def test_x():\n    assert True\n"
+    host = renamed + "\n\n" + other if order == "after" else other + "\n\n" + renamed
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_a_rename_onto_a_sibling_test_inside_one_class_is_a_binding_conflict():
+    original = "class TestX:\n    def test_regression(self):\n        assert 1 == 2\n\n    def test_smoke(self):\n        assert True\n"
+    renamed = original.replace("test_regression", "test_smoke", 1)
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", renamed)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_a_rename_that_collides_two_classes_of_one_module_is_a_binding_conflict():
+    original = ("class TestFirst:\n    def test_a(self):\n        assert 1 == 2\n\n    def test_b(self):\n        assert 1 == 4\n\n\n"
+                "class TestSecond:\n    def test_a(self):\n        assert 1 == 3\n")
+    # the whole file still holds two distinct test names, yet TestFirst runs only its last test_x
+    renamed = (original.replace("TestFirst:\n    def test_a", "TestFirst:\n    def test_x").replace("def test_b", "def test_x")
+               .replace("TestSecond:\n    def test_a", "TestSecond:\n    def test_y"))
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", renamed)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
+
+
+def test_independent_renames_in_different_classes_are_found():
+    original = ("class TestA:\n    def test_x(self):\n        assert 1 == 2\n\n\n"
+                "class TestB:\n    def test_y(self):\n        assert 1 == 3\n")
+    renamed = original.replace("test_x", "test_one").replace("test_y", "test_one")
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", renamed)])
+    assert got["status"] == "found"
+
+
+def test_a_duplicated_setup_statement_in_the_host_is_host_setup():
+    original = "state = []\nstate.append(1)\n\n\ndef test_a():\n    assert state == [1]\n"
+    host = "state.append(1)\n\n\n" + original
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", host)])
+    assert (got["status"], got["reason"]) == ("unresolved", "host-setup")
+
+
+def test_a_host_with_import_pytest_and_a_moved_test_is_found():
+    original = "def test_a():\n    assert 1 == 1\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "import pytest\n\n\n" + original)])
+    assert got["status"] == "found"
+
+
+def test_a_host_importing_pytest_under_another_name_or_a_hook_name_is_host_setup():
+    original = "def test_a():\n    assert 1 == 1\n"
+    for line in ("import pytest as setup_module\n", "import pytest_cov as pytest\n", "from pytest import pytestmark\n"):
+        got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", line + "\n\n" + original)])
+        assert (got["status"], got["reason"]) == ("unresolved", "host-setup"), line
+
+
+def test_a_staticmethod_first_parameter_is_a_fixture_dependency():
+    original = "class TestX:\n    @staticmethod\n    def test_x(value):\n        assert value\n"
+    got = break_it_body.locate(original, "tests/test_a.py", [("tests/test_b.py", "import os\nvalue = 1\n" + original)])
+    assert (got["status"], got["reason"]) == ("unresolved", "binding-conflict")
 
 
 def test_an_added_skip_decorator_is_not_kept(repo):
@@ -635,7 +764,7 @@ def test_front_fixture_explicit_name_is_a_binding():
 
 def test_front_records_have_exactly_the_contract_keys():
     records = front.parse("import os\nx = 1\n")
-    assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "hook", "relative"}] * 2
+    assert [set(rec) for rec in records] == [{"kind", "key", "titles", "imports", "binds", "uses", "defs", "hook", "relative"}] * 2
     assert [rec["kind"] for rec in records] == ["import", "stmt"]
     assert front.EXTENSIONS == (".py",) and front.TITLE == "\x00title"
 
