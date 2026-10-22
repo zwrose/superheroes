@@ -147,7 +147,7 @@ WRITE_REPORT_FIELD_SEMANTICS = (
     "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
     "failing / passing during this attempt; false when not observed.\n"
     "  refusals — every refused or denied command you met, as the stop rule in this prompt "
-    "defines it, one entry each (command, refusedBy, hook, next); [] when you met none.\n"
+    "defines it, one entry each (command, refusedBy, hook, route, next); [] when you met none.\n"
 )
 
 WRITE_REPORT_CONTRACT = (

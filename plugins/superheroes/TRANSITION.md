@@ -12,6 +12,35 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed, except that a consumer that reads refusals entries with a closed key set must accept `route`.** An implementer may take the one route a hook's own refusal message names, and the entry then carries it. See [Refusals: a hook-named route](#refusals-a-hook-named-route).
+- **After switching.** **Nothing is owed.** The worktree guard no longer refuses a `git checkout --ours|--theirs` or `git restore` of paths the merge left unedited because of the merge's staged changes elsewhere. See [Worktree guard: a merge in progress](#worktree-guard-a-merge-in-progress).
+- **After switching.** **Nothing is owed.** A heredoc body fed to `cat`, `tee`, `gh` or `git commit` is no longer scanned for commands. See [Worktree guard: text that only names a command](#worktree-guard-text-that-only-names-a-command).
+- **After switching.** **Nothing is owed.** Every worktree guard refusal text now ends with the exact command or tool to use next. See [Worktree guard: every refusal names its next step](#worktree-guard-every-refusal-names-its-next-step).
+
+### Refusals: a hook-named route
+
+- The refused-command stop rule (`lib/command_refusals.py`, `STOP_RULE`) gains one exception: when the refusing guard's or hook's own refusal message names a route, an exact command or tool to use instead, the agent may take exactly that route, once, and records it as that refusal's `route`. Every other form, and every auto-mode classifier denial, stays a stop.
+- A refusals entry gains an optional `route` key: a non-blank string, or null when no route was taken. A non-null `route` is valid only with `refusedBy: hook`; `refusals_fault` refuses any other value with `refusals[i].route` and a non-null `route` on a `permission` or `sandbox` entry with `refusals[i].route needs refusedBy hook`.
+- A schema-channel engine (codex, cursor) always emits `route`, null when unused. The marker channel and the native implementer may omit it. A consumer that reads refusals entries with a closed key set must accept `route`; the review record's refusals line shows a taken route beside its refusal.
+
+### Worktree guard: a merge in progress
+
+- During a merge (`MERGE_HEAD` present), `git checkout --ours|--theirs <paths>` and `git restore --ours|--theirs <paths>`, and `git restore --source=<x> <file>` for exact indexed files, are judged only on the paths they name. Each is allowed when every named path is unedited since the merge, meaning its content equals what the merge itself wrote or it matches the index; the merge's staged changes elsewhere no longer count against it. A merge state the guard cannot read still refuses.
+
+### Worktree guard: text that only names a command
+
+- A heredoc body fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` is read as text, not as commands, and the guard reads backslash-escaped quotes as bash does. A heredoc fed to a shell or any other program is still scanned.
+
+### Worktree guard: every refusal names its next step
+
+- Each worktree guard refusal text ends with the exact command or tool to use next, which is the route the stop rule's exception lets an agent take.
+
 ## 0.46.0
 
 ### Before you upgrade

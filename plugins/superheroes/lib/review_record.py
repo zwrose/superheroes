@@ -1462,7 +1462,8 @@ def _command_refusals_line(refusals, compact):
     parts = []
     for x in refusals:
         by = x.get("refusedBy") + (f": {x['hook']}" if x.get("hook") else "")
-        parts.append(f"round {x.get('round')}: {_inline_code(_clip(x.get('command')))} ({by}) → {_clip(x.get('next'))}")
+        took = f", took {_inline_code(_clip(x['route']))}" if x.get("route") else ""
+        parts.append(f"round {x.get('round')}: {_inline_code(_clip(x.get('command')))} ({by}{took}) → {_clip(x.get('next'))}")
     return f"Refusals met: {len(refusals)} — " + "; ".join(parts) + "."
 
 

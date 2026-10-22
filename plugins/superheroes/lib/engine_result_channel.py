@@ -703,14 +703,15 @@ def _review_root_schema(expected_result_kind):
 
 
 def _write_refusal_entry_schema():
-    # strict mode needs required == properties, so `hook` is required and nullable here
-    # although command_refusals lists it optional
+    # strict mode needs required == properties, so `hook` and `route` are required and nullable
+    # here although command_refusals lists them optional
     fields = list(command_refusals.ENTRY_REQUIRED) + list(command_refusals.ENTRY_OPTIONAL)
-    order = ["command", "refusedBy", "hook", "next"]
+    order = ["command", "refusedBy", "hook", "route", "next"]
     assert set(order) == set(fields)
     properties = {name: {"type": "string"} for name in order}
     properties["refusedBy"]["enum"] = list(command_refusals.REFUSED_BY)
     properties["hook"] = {"type": ["string", "null"]}
+    properties["route"] = {"type": ["string", "null"]}
     return {
         "type": "object",
         "additionalProperties": False,
