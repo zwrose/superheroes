@@ -100,6 +100,9 @@ def _outside(records, window, original, moved=False):
         # axis: a statement outside the window that rebinds a name the test uses is refused — see bite-proof record wo_a_2053_break_it_body
         if rec["kind"] == "stmt" and rec["binds"] & names:
             return "binding-conflict"
+        # axis: any record outside the window that binds a name the matched window binds (a renamed test's new name) overwrites or is overwritten by a retained test, so it is refused — see bite-proof record wo_a_2053_break_it_body
+        if rec["binds"] & window_binds:
+            return "binding-conflict"
         # axis: any record outside the window that names a definition the window binds can mutate or disable the test (TestR.__unittest_skip__ = True), so it is refused — see bite-proof record wo_a_2053_break_it_body
         if rec["uses"] & window_binds:
             return "binding-conflict"
@@ -170,4 +173,7 @@ def locate(content, path, candidates):
     if reason:
         return _unresolved(reason)
     new_titles = [title for i in window for title in records[i]["titles"]]
+    # axis: a rename that makes two of the matched tests share a name inside one class runs only the last, so it is refused — see bite-proof record wo_a_2053_break_it_body
+    if len(set(new_titles)) < len(set(old_titles)):
+        return _unresolved("binding-conflict")
     return _result("found", None, cand_path, [(old, new) for old, new in zip(old_titles, new_titles) if old != new])
