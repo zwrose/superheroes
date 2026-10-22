@@ -28,6 +28,19 @@ _SHELL_PREFIXES = frozenset({
     "!", "then", "do", "else", "elif", "(", ";;",
 })
 
+# Sentences carried word for word by more than one template below; no braces, so each
+# template stays usable with str.format.
+_NEXT_STEP_COMMIT_OR_STASH = (
+    "Next step: commit the work (`git add <path>` then `git commit`) or run "
+    "`git stash push -u`, then re-run"
+)
+_DURING_A_MERGE = (
+    "During a merge: `git checkout --theirs <path>` or "
+    "`git checkout --ours <path>` takes one side of a conflicted path you have not "
+    "edited since the merge; a path you have edited is finished with the Edit tool and "
+    "then `git add <path>`."
+)
+
 _REFUSAL_TEMPLATE = (
     "superheroes worktree guard: this `git {action}` would discard {count} uncommitted "
     "change(s) in this worktree, and git keeps no copy of them. This is the checkout-revert "
@@ -36,12 +49,9 @@ _REFUSAL_TEMPLATE = (
     "first, `git stash -u` it (add `-a` to include ignored files; in a conflicted tree "
     "`git add` the unmerged paths first), or revert a probe edit with an inverse Edit "
     "rather than a git discard. "
-    "Next step: commit the work (`git add <path>` then `git commit`) or run "
-    "`git stash push -u`, then re-run this command; revert a probe edit with the Edit "
-    "tool's inverse edit. During a merge: `git checkout --theirs <path>` or "
-    "`git checkout --ours <path>` takes one side of a conflicted path you have not "
-    "edited since the merge; a path you have edited is finished with the Edit tool and "
-    "then `git add <path>`."
+    + _NEXT_STEP_COMMIT_OR_STASH
+    + " this command; revert a probe edit with the Edit tool's inverse edit. "
+    + _DURING_A_MERGE
 )
 
 _INDETERMINATE_TEMPLATE = (
@@ -49,13 +59,11 @@ _INDETERMINATE_TEMPLATE = (
     "destroy uncommitted work — it may target another worktree, or the repository could "
     "not be inspected — so it is refused (fail-closed). Commit or `git stash -u` your "
     "work first, or revert a probe edit with an inverse Edit rather than a git discard. "
-    "Next step: commit the work (`git add <path>` then `git commit`) or run "
-    "`git stash push -u`, then re-run it as a plain `git ...` command from inside the "
+    + _NEXT_STEP_COMMIT_OR_STASH
+    + " it as a plain `git ...` command from inside the "
     "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
-    "`GIT_DIR`/`GIT_WORK_TREE`). During a merge: `git checkout --theirs <path>` or "
-    "`git checkout --ours <path>` takes one side of a conflicted path you have not "
-    "edited since the merge; a path you have edited is finished with the Edit tool and "
-    "then `git add <path>`."
+    "`GIT_DIR`/`GIT_WORK_TREE`). "
+    + _DURING_A_MERGE
 )
 
 _UNPARSED_TEMPLATE = (
