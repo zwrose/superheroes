@@ -691,7 +691,8 @@ def build_degraded_prose(state, form, journal=None):
                 "proven cell — findings were not grouped (nothing dropped)" % rkey)
         bik = declared.get("breakItKept")
         if bik:
-            not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]
+            # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt
+            not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required", "ruled-out-of-scope")]
             if not_kept:
                 degraded_out.append(
                     "break-it-test-not-kept (round %s): %d fixed break-it test(s) not held in the "
