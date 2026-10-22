@@ -956,8 +956,12 @@ _SELECT_SHORT = ("-k", "-t", "-g")
 _SELECT_LONG = ("--testNamePattern", "--grep", "--filter", "--match")
 
 
-def _selects_tests(tok, titles):
-    """True when the argv token ``tok`` filters which tests run: by a flag, a ``::`` selector or an old title."""
+def _selects_tests(tok, titles, old_path):
+    """True when the argv token ``tok`` filters which tests run: by a flag, a ``::`` selector or an old title. The
+    token naming ``old_path`` is judged by its ``::`` selector alone, so a path that contains a title is no filter."""
+    if tok == old_path or tok.startswith(old_path + "::"):
+        # axis: the path token is judged by the `::` rule alone, so a test file named after its own test still renames — see bite-proof record wo_a_2053_break_it_body
+        return "::" in tok
     return (tok in _SELECT_SHORT or tok in _SELECT_LONG
             or any(tok.startswith(flag + "=") for flag in _SELECT_LONG)
             or any(tok.startswith(flag) and not tok.startswith("--") for flag in _SELECT_SHORT)
@@ -972,7 +976,7 @@ def _rewrite_command(command, old_path, new_path, titles):
     if refusal:
         return None, "command-unmapped"
     # axis: a renamed test's command that filters by flag, selector or old title is refused, because the filter would select nothing in the moved copy — see bite-proof record wo_a_2053_break_it_body
-    if titles and any(_selects_tests(tok, titles) for tok in argv):
+    if titles and any(_selects_tests(tok, titles, old_path) for tok in argv):
         return None, "command-selects-tests"
     # axis: a test found at its own path runs the command exactly as the loop ran it — see bite-proof record wo_a_2053_break_it_body
     if new_path == old_path:

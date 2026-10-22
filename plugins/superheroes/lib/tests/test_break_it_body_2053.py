@@ -224,7 +224,7 @@ def test_original_with_only_imports_is_body_empty(repo):
 
 
 def test_prefilter_passing_unparseable_candidate_is_unresolved_beside_a_match(repo):
-    broken = "from math import sqrt\nimport pytest\nLABEL = side = (\n"
+    broken = ORIG + "\nbroken = (\n"
     base, head = _stage(repo, {"tests/test_weekly.py": ORIG.replace("test_x", "test_y"), "tests/broken.py": broken})
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "body-unparseable")
@@ -232,7 +232,7 @@ def test_prefilter_passing_unparseable_candidate_is_unresolved_beside_a_match(re
 
 
 def test_prefilter_passing_unparseable_candidate_without_a_match_is_unresolved(repo):
-    broken = "from math import sqrt\nimport pytest\nLABEL = side = (\n"
+    broken = ORIG + "\nbroken = (\n"
     base, head = _stage(repo, {"tests/broken.py": broken})
     assert _got(_check(repo, base, head, _record())) == ("unresolved", "body-unparseable")
 
@@ -471,6 +471,26 @@ def test_a_go_record_missing_from_head_reads_missing(repo):
     assert _got(_check(repo, base, head, record)) == ("missing", "not-in-head")
 
 
+TS = "import { expect, test } from 'vitest';\n\ntest('x', () => {\n  expect(1).toBe(1);\n});\n"
+
+
+def test_a_ts_record_with_content_and_changed_bytes_reads_changed_never_searched(repo):
+    reformatted = TS.replace("'", '"')
+    base, head = _stage(repo, {"web/x.test.ts": reformatted, "web/copy.test.ts": TS})
+    record = _record(content=TS, path="web/x.test.ts", command="npx vitest run web/x.test.ts")
+    calls = []
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("changed", "sha256-differs")
+    assert calls == []
+
+
+def test_a_ts_record_with_content_missing_from_head_reads_missing_though_a_copy_is_carried(repo):
+    base, head = _stage(repo, {"web/moved.test.ts": TS})
+    record = _record(content=TS, path="web/x.test.ts", command="npx vitest run web/x.test.ts")
+    calls = []
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("missing", "not-in-head")
+    assert calls == []
+
+
 # ---- 9. _record and _rewrite_command -------------------------------------------------------------
 
 def test_record_carries_content():
@@ -495,6 +515,30 @@ def test_rewrite_keeps_and_quotes_env_entries_on_a_move():
 def test_rewrite_replaces_a_selector_token_on_a_move():
     assert break_it._rewrite_command("python -m pytest a.py::test_x", "a.py", "b.py", []) == (
         "python -m pytest b.py", None)
+
+
+def test_rewrite_a_path_token_that_contains_an_old_title_is_no_filter():
+    titles = [("test_x", "test_y")]
+    assert break_it._rewrite_command("python -m pytest t/test_x.py", "t/test_x.py", "t/test_y.py", titles) == (
+        "python -m pytest t/test_y.py", None)
+    assert break_it._rewrite_command("python -m pytest t/test_x.py", "t/test_x.py", "t/test_x.py", titles) == (
+        "python -m pytest t/test_x.py", None)
+
+
+def test_rewrite_a_path_selector_token_still_refuses_when_the_path_contains_an_old_title():
+    titles = [("test_x", "test_y")]
+    assert break_it._rewrite_command("python -m pytest t/test_x.py::other", "t/test_x.py", "t/test_y.py", titles) == (
+        None, "command-selects-tests")
+    assert break_it._rewrite_command("python -m pytest t/test_x.py test_x", "t/test_x.py", "t/test_y.py", titles) == (
+        None, "command-selects-tests")
+
+
+def test_a_test_file_named_after_its_own_test_is_kept_when_the_test_is_renamed_in_place(repo):
+    path = "tests/test_x.py"
+    base, head = _stage(repo, {path: FORMATTED.replace("test_x", "test_y")})
+    calls = []
+    assert _got(_check(repo, base, head, _record(path=path), _spy(calls))) == ("kept", "body-match")
+    assert [c["run"] for c in calls] == [_cmd(path)]
 
 
 def test_rewrite_replaces_every_path_token():
