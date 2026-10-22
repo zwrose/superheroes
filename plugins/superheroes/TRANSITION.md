@@ -12,6 +12,24 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
+
+### Review fixer: Write/Edit only, every refusal reported, and the landing always written
+
+- The fixer order (`rubric/orders/dispatch-fixer.md`, filled by `lib/round_orders.py`) gains three lines. The fixer creates and edits files only with the host's Write and Edit tools, never a shell command that writes a file. It never rewrites a committed break-it test (a formatter, an autofix, a commit hook), and it reports a commit hook that rewrites one. It writes its landing (a host seat) or its result (an engine seat) last on every ending.
+- `lib/observed_refusals.py` reads refused tool calls from a Claude Code subagent transcript, best effort over the closed `MARKERS` list of Claude Code refusal messages. On Claude Code the transcript is `agent-<agentId>.jsonl` under the config dir's `projects/*/*/subagents/`, found by the agent id the Agent tool returns.
+- `lib/round_driver.py` takes a new flag, `--fixer-transcript <path>`, on `record-result`, `advance` and `submit`. A refusal the transcript shows that the fixer payload's `refusals` leaves out refuses `fixer-refusals-unreported`, carrying `unreported` and, off the hand path, a `correction` command. A transcript that cannot be read refuses `fixer-transcript-unreadable`.
+- A new verb, `correct-fixer-refusals --session-dir <dir> --refusals-file <json list> [--fixer-transcript <path>] [--attempt N] [--occurrence N]`, rewrites only the landed payload's `refusals`, journals `fixer-refusals-corrected`, and returns `next`, the exact `record-result` (or `--supersede --expect-sha256`) command to resume. It runs from the session's own repo root and refuses `correction-not-fixer-phase`, `correction-session-repo-unknown`, `correction-outside-session-repo`, `correction-refusals-invalid` and `landing-missing`, besides the two refusals above.
+- A fixer slot with no landing while HEAD has commits past the order's emission head refuses `fixer-committed-unlanded` (with `commits`) on `record-result`, `record-result --sweep`, `advance` and `record-missing`. The driver does not rebuild which findings a commit fixed from git, so the recovery is to re-dispatch the order so it lands.
+- Every recorded or accepted fixer row journals a new field, `refusalCheck`: `checked` when a transcript was read and showed nothing unreported, `unobserved` when none was passed.
+- No existing key or flag changes. A consumer owes nothing, except that an orchestrator that wants the cross-check passes `--fixer-transcript`.
+
 ## 0.46.0
 
 ### Before you upgrade
