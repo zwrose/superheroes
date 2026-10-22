@@ -76,8 +76,8 @@ class _ToolError(Exception):
 
 def _resolve(root, path):
     if not isinstance(path, str) or not path:
-        raise _ToolError("path must be a non-empty string")
-    return path if os.path.isabs(path) else os.path.join(root, path)
+        raise _ToolError("path must be a string with at least one character")
+    return path if os.path.isabs(path) else os.path.normpath(os.path.join(root, path))
 
 
 def _int_arg(args, key, default, low, high):

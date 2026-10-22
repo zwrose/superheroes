@@ -662,7 +662,7 @@ def test_confirm_all_true_row(tmp_path):
     result = CP.confirm(env=env, run=_fake_run(calls=calls), now=NOW)
     assert result == {"schema": "cloud-pass-confirmation/1", "reviewerAnswered": True,
                       "passLapses": EXP_DATE, "reason": None}
-    assert ["codex", "exec", "--sandbox", "read-only", "-"] in [argv for argv, _ in calls]
+    assert list(_probe_module().cross_vendor_no_op_argv("codex")) in [argv for argv, _ in calls]
 
 
 def test_confirm_probe_child_environment_carries_no_pass(tmp_path):

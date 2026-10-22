@@ -39,7 +39,7 @@ def test_codex_review_args_exact_shape_with_cwd():
     assert args[6] == "mcp_servers.superheroes_read.command=" + json.dumps(sys.executable)
     assert args[7] == "-c"
     assert args[8] == "mcp_servers.superheroes_read.args=" + json.dumps(
-        ["-I", "-B", _TOOL, "--root", "/work/wt"])
+        ["-I", "-B", _TOOL, "--root", "/work/wt"], separators=(",", ":"))
     assert args[9:] == ["-c", 'mcp_servers.superheroes_read.default_tools_approval_mode="approve"']
     assert os.path.isabs(_TOOL) and os.path.isfile(_TOOL)
 
@@ -48,7 +48,8 @@ def test_codex_review_args_exact_shape_with_cwd():
 def test_codex_review_args_without_usable_cwd_has_no_root_pair(cwd):
     args = SA.codex_review_args(cwd)
     assert "--root" not in "".join(args)
-    assert args[8] == "mcp_servers.superheroes_read.args=" + json.dumps(["-I", "-B", _TOOL])
+    assert args[8] == "mcp_servers.superheroes_read.args=" + json.dumps(
+        ["-I", "-B", _TOOL], separators=(",", ":"))
 
 
 def test_codex_review_args_quotes_paths_as_valid_toml_strings():

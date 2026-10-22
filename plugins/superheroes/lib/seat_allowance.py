@@ -54,7 +54,7 @@ def codex_review_args(cwd):
         "--disable", "shell_tool",
         "--disable", "unified_exec",
         "-c", prefix + "command=" + _toml_string(str(sys.executable)),
-        "-c", prefix + "args=[" + ", ".join(_toml_string(a) for a in tool_args) + "]",
+        "-c", prefix + "args=[" + ",".join(_toml_string(a) for a in tool_args) + "]",
         "-c", prefix + 'default_tools_approval_mode="approve"',
     ]
 
