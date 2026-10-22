@@ -1475,3 +1475,104 @@ def test_unknown_hotspot_tool_fails_without_spawning(tmp_path):
     assert "eslint" in err and "unknown hotspot tool" in err
     assert sink == []
     assert run.calls == []
+
+
+# ---------------------------------------------------------------------------
+# #2047: lizard mis-nests JSX — .tsx/.jsx complexity reads unmeasured, never a number
+# ---------------------------------------------------------------------------
+
+# The weekly-eats shape: a hyphenated JSX attribute right after a {...}-valued one. Real
+# lizard 1.24.0 drops PickerSession from a .tsx file and reads CCN 7 (true 2) in a .jsx.
+_WEEKLY_EATS_TSX = textwrap.dedent("""\
+    export function PickerSession(props: { a: number }) {
+      if (props.a > 1) {
+        return <div style={{ color: "red" }} data-testid="picker">x</div>;
+      }
+      return <span>y</span>;
+    }
+""")
+
+
+def _lizard_argv_paths(run):
+    return [a for call in run.calls if os.path.basename(call[0]) == "lizard"
+            for a in call[1:] if os.path.isabs(a)]
+
+
+def test_weekly_eats_jsx_shape_reads_unmeasured_with_reason(tmp_path):
+    _write(tmp_path, "PickerSession.tsx", _WEEKLY_EATS_TSX)
+    _write(tmp_path, "Legacy.JSX", _WEEKLY_EATS_TSX)
+    _write(tmp_path, "util.ts", 20)
+    # The mis-nested figures lizard reported on weekly-eats; a lens that still hands JSX
+    # files to lizard ranks on them.
+    run = _basic_tools(
+        tmp_path,
+        numstat="20\t0\tPickerSession.tsx\n20\t0\tLegacy.JSX\n20\t0\tutil.ts\n",
+        lsfiles=["PickerSession.tsx", "Legacy.JSX", "util.ts"],
+        lizard=(_lizard_row("PickerSession.tsx", 88, "PickerSession")
+                + _lizard_row("Legacy.JSX", 77, "PickerSession")
+                + _lizard_row("util.ts", 12, "util")),
+    )
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert gl.classify_collect(out)[0] == "collected"
+    assert [c["path"] for c in out["candidates"]] == ["util.ts"]
+    files = out["digest"]["files"]
+    for path in ("PickerSession.tsx", "Legacy.JSX"):
+        assert files["hotspots:%s" % path] == {"unmeasured": True, "reason": "jsx-unreliable"}
+    diag = out["diagnostics"]
+    assert {"collector": "lizard", "path": "PickerSession.tsx",
+            "kind": "jsx-unreliable"} in diag["collectorErrors"]
+    assert {"collector": "lizard", "path": "Legacy.JSX",
+            "kind": "jsx-unreliable"} in diag["collectorErrors"]
+    assert any("2 .tsx/.jsx file(s) unmeasured" in g for g in diag["coverageGaps"])
+    assert diag["complexityCoverage"]["javascript"] == "collected"
+    assert [os.path.basename(p) for p in _lizard_argv_paths(run)] == ["util.ts"]
+
+
+def test_plain_js_ts_figures_unchanged(tmp_path):
+    for name in ("a.js", "b.ts", "c.mjs", "d.cjs"):
+        _write(tmp_path, name, 20)
+    run = _basic_tools(
+        tmp_path,
+        numstat="".join("20\t0\t%s\n" % n for n in ("a.js", "b.ts", "c.mjs", "d.cjs")),
+        lsfiles=["a.js", "b.ts", "c.mjs", "d.cjs"],
+        lizard=(_lizard_row("a.js", 11) + _lizard_row("b.ts", 13)
+                + _lizard_row("c.mjs", 17) + _lizard_row("d.cjs", 19)),
+    )
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    by_path = {c["path"]: c["maxFunctionCCN"] for c in out["candidates"]}
+    assert by_path == {"a.js": 11, "b.ts": 13, "c.mjs": 17, "d.cjs": 19}
+    assert all(not rec.get("unmeasured") for rec in out["digest"]["files"].values())
+    assert out["diagnostics"]["collectorErrors"] == []
+    assert out["diagnostics"]["coverageGaps"] == []
+    assert sorted(os.path.basename(p) for p in _lizard_argv_paths(run)) == [
+        "a.js", "b.ts", "c.mjs", "d.cjs"]
+
+
+def test_jsx_only_repo_never_runs_lizard_and_is_not_a_clean_read(tmp_path):
+    _write(tmp_path, "App.tsx", _WEEKLY_EATS_TSX)
+    run = _basic_tools(
+        tmp_path, numstat="20\t0\tApp.tsx\n", lsfiles=["App.tsx"],
+        lizard=_lizard_row("App.tsx", 88))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["candidates"] == []
+    assert out["diagnostics"]["complexityCoverage"]["javascript"] == "not-collected"
+    assert out["digest"]["files"] == {
+        "hotspots:App.tsx": {"unmeasured": True, "reason": "jsx-unreliable"}}
+    assert out["diagnostics"]["joinAnomaly"] is None
+    assert _lizard_argv_paths(run) == []
+
+
+def test_previously_measured_tsx_turning_unmeasured_is_no_drift(tmp_path):
+    _write(tmp_path, "App.tsx", _WEEKLY_EATS_TSX)
+    prev = {"files": {"hotspots:App.tsx": {"score": 50.0, "ccn": 88}},
+            "surfaceIds": ["hotspots:App.tsx"]}
+    run = _basic_tools(tmp_path, numstat="20\t0\tApp.tsx\n", lsfiles=["App.tsx"])
+    lens = hot.HotspotsLens()
+    out = lens.collect(_ctx(tmp_path, run, prev_digest=prev))
+
+    assert lens.diff(prev, out["digest"]) == {"new": [], "worsened": [], "resolved": []}
+    assert lens.red_lines(out["candidates"]) == []

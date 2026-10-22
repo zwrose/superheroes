@@ -12,6 +12,18 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** Guardian's hotspots lens stops ranking `.tsx`/`.jsx` files on lizard's complexity figures, which lizard mis-measures in JSX. Those files now read unmeasured, so a TSX-heavy project's hotspot list gets shorter. See [Guardian: TSX/JSX complexity reads unmeasured](#guardian-tsxjsx-complexity-reads-unmeasured).
+
+### Guardian: TSX/JSX complexity reads unmeasured
+
+- `lib/guardian_lens_hotspots.py` no longer passes `.tsx`/`.jsx` files to lizard. Each tracked one gets a digest record `{"unmeasured": true, "reason": "jsx-unreliable"}` and a `collectorErrors` entry `{"collector": "lizard", "path": …, "kind": "jsx-unreliable"}`, and `coverageGaps` gains one line counting them. When every JS-family file is `.tsx`/`.jsx`, lizard does not run and `complexityCoverage.javascript` reads `not-collected`.
+- A `.tsx`/`.jsx` file measured by an earlier sweep produces no `new`, `worsened` or `resolved` drift and no red line once it reads unmeasured. The collector version is unchanged.
+- The lizard install guidance (`guardian_tools.INSTALL_COMMANDS`) pins `pip install lizard==1.24.0`. `.js`, `.ts`, `.mjs` and `.cjs` figures are unchanged.
+
 ## 0.46.0
 
 ### Before you upgrade
