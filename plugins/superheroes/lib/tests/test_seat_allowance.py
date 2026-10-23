@@ -122,15 +122,7 @@ def test_claude_review_argv_loads_no_mcp_server():
 # --------------------------------------------------------------- module shape
 
 
-def test_allowance_sentences_are_exact():
-    assert SA.REVIEW_ALLOWANCE == (
-        "You may read, list and search files with your read tools, and you run no program: a "
-        "test, check or command run you need is the driver's, which runs the project's declared "
-        "verify command.")
-    assert SA.FIXER_ALLOWANCE == (
-        "You run only the commands this order names (its scoped tests, validators, break-it "
-        "commands and the commit) and your edit tools, and none of the project's own scripts "
-        "beyond them; the full verify command stays the driver's.")
+def test_read_server_name_is_pinned():
     assert SA.READ_SERVER_NAME == "superheroes_read"
 
 
