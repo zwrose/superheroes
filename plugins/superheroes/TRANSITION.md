@@ -16,6 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **Nothing is owed.** An implementer order that names a bite-proof now carries the record format inline, and an order that names one while the plugin's bite-proof rubric cannot be read is refused at open. See [Implementer orders: the bite-proof record format rides inline](#implementer-orders-the-bite-proof-record-format-rides-inline).
 - **After switching.** **Nothing is owed.** The certification loop's leftovers are gone: dead helpers in the review-loop libraries (`_write_interim_receipt`, `_pending_step`, `_row_matches_ruling_id`, six re-export aliases in `round_driver.py`, `load_records`, `blocking_findings_from_dimension_results`, and unused constants), with no caller anywhere; the keep-or-retire list's review-loop section stops calling it the certified review loop.
 - **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
 - **After switching.** **Re-run the claude conformance probe before the next wave's `preflight-entry`.** A claude probe result taken before the upgrade records no config dir and is refused as `probe-config-dir-unrecorded:claude`. See [Preflight: the claude probe runs under the launch's config dir](#preflight-the-claude-probe-runs-under-the-launchs-config-dir).
@@ -36,6 +37,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - A fixer slot with no landing while HEAD has commits past the order's emission head refuses `fixer-committed-unlanded` (with `commits`) on `record-result`, `record-result --sweep`, `advance` and `record-missing`. The driver does not rebuild which findings a commit fixed from git, so the recovery is to re-dispatch the order so it lands.
 - Every recorded or accepted fixer row journals a new field, `refusalCheck`: `checked` when a transcript was read and showed nothing unreported, `unobserved` when none was passed.
 - No existing key or flag changes. A consumer owes nothing, except that an orchestrator that wants the cross-check passes `--fixer-transcript`.
+
+### Implementer orders: the bite-proof record format rides inline
+
+- `dispatch-write` and the native engine's `open` insert a `## Bite-proof record format` block into the staged prompt when the authored order (every verbatim implementer-template copy masked) names a bite-proof. The block is cut at dispatch time from the plugin's bite-proof rubric: the record's shape and the three disclosures owed when a proof cannot be produced. An order that names none is staged as before.
+- New refusal: when an order names a bite-proof and the rubric cannot be read or its format markers are not found exactly once, `dispatch-write` returns terminal `unrunnable` with detail `bite-proof-format-unreadable`, and native `open` refuses with reason `bite-proof-format-unreadable`. Nothing is dispatched.
 
 ### Engine CLI calls: one stdin chokepoint
 
