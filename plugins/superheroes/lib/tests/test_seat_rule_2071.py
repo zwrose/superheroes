@@ -1,13 +1,20 @@
 """Every rendered seat order carries the standing rule (#2071): a review seat reviews by reading and
 never runs the project's own files, a fixer runs only what its order names. The rule comes from the
 renderer itself, and neither it nor any order's rule block lists forbidden programs."""
+import os
 import re
+import subprocess
+import sys
 
 import pytest
 
 import round_orders as RO
 import round_phases as RP
 from test_round_orders import _GOLDEN_CONTEXTS
+
+_LIB_DIR = os.path.dirname(os.path.abspath(RO.__file__))
+_VERIFICATION_PASS = os.path.join(
+    _LIB_DIR, "..", "skills", "review-code", "reference", "verification-pass.md")
 
 # The guard's probe data: a sample of program names, kept here and nowhere in shipped code.
 _PROGRAM_SAMPLE = ("security", "curl", "bash", "sh", "zsh", "python", "node", "rm", "mongosh",
@@ -62,6 +69,37 @@ def test_review_rule_says_read_and_never_run_the_projects_files():
     assert "driver's" in RO.REVIEW_SEAT_RULE
     assert "run only the commands this order names" in RO.FIXER_SEAT_RULE
     assert "none of the project's own files, scripts or tests beyond those" in RO.FIXER_SEAT_RULE
+
+
+def test_rule_prose_is_pinned_to_the_approved_text():
+    # Pinned independently of the goldens: any added clause (a program list included) fails here.
+    assert RO.REVIEW_SEAT_RULE == (
+        "You review by reading. You may read, list and search files, including with read-only "
+        "inspection commands. You never run the project's own files, scripts or tests. A run you "
+        "need is the driver's: name it in your result, and the driver runs the project's declared "
+        "verify command.")
+    assert RO.FIXER_SEAT_RULE == (
+        "You run only the commands this order names, plus the file reads and searches that "
+        "inspect its inputs and the sources you fix, and the staging your commit needs. You run "
+        "none of the project's own files, scripts or tests beyond those, and the full verify "
+        "command stays the driver's.")
+
+
+@pytest.mark.parametrize("phase", [RP.P_VERIFIERS, RP.P_SYNTHESIS])
+def test_read_only_hand_dispatch_prints_the_rule_from_its_one_home(phase):
+    # verification-pass.md's read-only path hand-composes verifier and synthesis orders; the
+    # command it gives must print the renderer's own block for that phase.
+    with open(_VERIFICATION_PASS, encoding="utf-8") as fh:
+        doc = fh.read()
+    commands = re.findall(r'`(python3 -B -c "[^`]*seat_rule_block[^`]*")`', doc)
+    assert len(commands) == 1
+    assert "'%s'" % phase in doc
+    command = commands[0].replace("'dispatch-verifiers'", "'%s'" % phase)
+    command = command.replace("$ROOT_DIR", os.path.dirname(_LIB_DIR))
+    out = subprocess.run(["bash", "-c", command.replace("python3", sys.executable, 1)],
+                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.rstrip("\n") == RO.seat_rule_block(phase)
 
 
 def test_rules_and_order_blocks_list_no_programs():
