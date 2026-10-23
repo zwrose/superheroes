@@ -752,7 +752,7 @@ def test_review_result_contract_from_schema_lists_active_payload_properties():
 def test_write_report_contract_bytes_unchanged_by_field_semantics_lift():
     import hashlib
     assert hashlib.sha256(EA.WRITE_REPORT_CONTRACT.encode()).hexdigest() == (
-        "a1a4c1d75591842cc62846175e15676bfa982485fd02037f580df2a19d36a0c5"
+        "c872388d28e67efccfdf93296597d9a91b41fe8405dc3e8eb590a17b8b39c3dd"
     )
 
 

@@ -49,6 +49,10 @@ def _without(key):
     [_without("hook")],
     [_entry(hook=None)],
     [_entry(refusedBy="permission", hook=None), _entry(refusedBy="sandbox")],
+    [_entry(route="git checkout --theirs f.txt")],
+    [_entry(route=None)],
+    [_entry(refusedBy="permission", hook=None, route=None), _entry(refusedBy="sandbox", route=None)],
+    [_entry(hook=None, route="gh pr view 5")],
 ])
 def test_refusals_fault_accepts_valid_lists(value):
     # axis: acceptance of valid refusals — see bite-proof record wo1_2011_stop_rule
@@ -76,10 +80,33 @@ def test_refusals_fault_accepts_valid_lists(value):
     ([_entry(hook="  ")], "refusals[0].hook"),
     ([_entry(hook=5)], "refusals[0].hook"),
     ([_entry(foo="bar")], "refusals[0] unknown key: foo"),
+    ([_entry(route="")], "refusals[0].route"),
+    ([_entry(route="  ")], "refusals[0].route"),
+    ([_entry(route=5)], "refusals[0].route"),
+    ([_entry(route=["git status"])], "refusals[0].route"),
+    ([_entry(refusedBy="permission", route="")], "refusals[0].route"),
+    ([_entry(refusedBy="permission", hook=None, route="git status")], "refusals[0].route needs refusedBy hook"),
+    ([_entry(), _entry(refusedBy="sandbox", route="git status")], "refusals[1].route needs refusedBy hook"),
 ])
 def test_refusals_fault_names_the_fault(value, reason):
     # axis: malformed-entry diagnostics — see bite-proof record wo1_2011_stop_rule
     assert CR.refusals_fault(value) == reason
+
+
+# the one exception to the stop rule, pinned once as a literal
+_EXCEPTION_SENTENCE = (
+    "The one exception: when the refusing guard's or hook's own refusal message names a route "
+    "(an exact command or tool to use instead), you may take exactly that route, once, and record "
+    "it as that entry's route; every other form, and every auto-mode classifier denial, stays a stop."
+)
+
+
+def test_stop_rule_ends_with_the_one_exception():
+    # axis: the stop rule carries its one exception, and the order text carries the stop rule — see bite-proof record wo_a_2054_route
+    assert CR.STOP_RULE.endswith(" " + _EXCEPTION_SENTENCE)
+    assert CR.STOP_RULE.count("exception") == 1
+    assert _EXCEPTION_SENTENCE in CR.ORDER_TEXT
+    assert CR.ORDER_TEXT.startswith(CR.STOP_RULE)
 
 
 def test_order_text_composition():
