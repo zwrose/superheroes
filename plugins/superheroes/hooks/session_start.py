@@ -15,45 +15,36 @@ the MEMORY.md head on all spawn paths (probe-verified #627 F1, Claude Code
 FIRST and UNCONDITIONALLY; it must NOT be gated behind a work-item lookup, or it
 would be suppressed on exactly the compacted-discovery path it exists for.
 
-When `CLAUDE_ENV_FILE` is set, appends `SUPERHEROES_HOST_MODEL` from the payload
-(best-effort, never raises). Always exits 0.
+When `CLAUDE_ENV_FILE` is set, appends three exports on every start (best-effort, never raises):
+`SUPERHEROES_HOST_MODEL` from the payload (empty when it names none), and the session transcript's
+path and its byte size at this start (`SUPERHEROES_SESSION_TRANSCRIPT`,
+`SUPERHEROES_SESSION_TRANSCRIPT_FROM`), from which seat composition reads the model when the start
+event named none (#2110). The hook never reads the transcript for a model itself. Always exits 0.
 """
 import argparse
 import json
 import os
-import re
 import shlex
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 
+import host_model  # noqa: E402
+
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SOURCES = {"startup", "resume", "clear", "compact"}
-_HOST_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\[\]-]{1,128}$")
 
 
-def _host_model(payload):
-    """Shape-checked host model from the SessionStart payload, or empty."""
-    model = payload.get("model")
-    if isinstance(model, str):
-        value = model.strip()
-    elif isinstance(model, dict):
-        mid = model.get("id")
-        value = mid.strip() if isinstance(mid, str) else ""
-    else:
-        value = ""
-    if not _HOST_MODEL_RE.match(value):
-        return ""
-    return value
-
-
-def _write_host_model_env(value):
+def _write_host_model_env(value, transcript, transcript_from):
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if not env_file:
         return
     try:
         with open(env_file, "a", encoding="utf-8") as fh:
-            fh.write("export SUPERHEROES_HOST_MODEL=%s\n" % shlex.quote(value))
+            for name, val in ((host_model.HOST_MODEL_ENV, value),
+                              (host_model.TRANSCRIPT_ENV, transcript),
+                              (host_model.TRANSCRIPT_FROM_ENV, transcript_from)):
+                fh.write("export %s=%s\n" % (name, shlex.quote(val)))
     except OSError as exc:
         sys.stderr.write(
             "superheroes session_start: could not write host model env (%s)\n"
@@ -88,8 +79,10 @@ def _append_host_model_section(boot, value):
     else:
         line = (
             "Host model: unknown — the session-start hook payload carried no readable model; "
-            "seat composition falls back to the claude host's family for the families it cannot "
-            "read and discloses it on the seat map as host-model-unknown."
+            "seat composition reads the model from this session's own transcript (turns since "
+            "this start) and discloses it on the seat map as host-model-unknown only when that "
+            "names none either, falling back to the claude host's family for the families it "
+            "cannot read."
         )
     return boot + "\n\n### Host model\n" + line
 
@@ -188,8 +181,9 @@ def main():
     cwd = payload.get("cwd") or os.getcwd()
     transcript_path = payload.get("transcript_path")
 
-    host_model = _host_model(payload)
-    _write_host_model_env(host_model)
+    model = host_model.from_payload(payload)
+    session_transcript, session_transcript_from = host_model.transcript_from_payload(payload)
+    _write_host_model_env(model, session_transcript, session_transcript_from)
 
     pass_result, pass_raised, scrubbed = None, None, True
     try:
@@ -202,7 +196,7 @@ def main():
 
     boot = _bootstrap(cwd, transcript_path, args.host, source=source,
                       session_id=payload.get("session_id"))   # always-on, gated by nothing
-    boot = _append_host_model_section(boot, host_model)
+    boot = _append_host_model_section(boot, model)
     boot = _append_reviewer_pass_section(boot, pass_result, pass_raised, scrubbed)
     if boot:
         sys.stdout.write(json.dumps({
