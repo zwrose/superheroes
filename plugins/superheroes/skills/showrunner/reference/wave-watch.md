@@ -501,10 +501,12 @@ reading `success: true`.
 4. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`. A message counts as
    delivered only when the text the relay sent matches `forward` exactly; the relay's own words about
    what it sent are never the receipt. `check` reads every send of that exact text, to the session's
-   name or to `<session name> [<ref>]`: any one with `success: true` reads `delivered`, and a failed
-   attempt does not end the check early. At the end of the wait it reads `relay-send-unconfirmed`
-   when an exact send still has no result, `relay-send-failed` when every exact send failed, and
-   `relay-silent` when there was none. Re-running `check` later re-reads the relay's record.
+   name or to `<session name> [<ref>]`: it reads `delivered` when some send of the exact text has
+   `success: true` and no send of this message carries altered text, while any altered send reads
+   `relay-text-mismatch`, whatever else succeeded. A failed attempt does not end the check early. At
+   the end of the wait it reads `relay-send-unconfirmed` when an exact send still has no result,
+   `relay-send-failed` when every exact send failed, and `relay-silent` when there was none.
+   Re-running `check` later re-reads the relay's record.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
 owner the `say` sentence, or the refusal and its `detail`. After `relay-silent` or
