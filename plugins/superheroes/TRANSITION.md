@@ -16,7 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
-- **After switching.** **Nothing is owed.** An advisor driving a merge train no longer re-syncs and re-tests a vetted PR after an unrelated merge: a PR is current with its base when GitHub reports no conflict and nothing merged since its last sync touched its files, and `main`'s post-merge run stays the union check. See [Merge train: what "current with its base" means](#merge-train-what-current-with-its-base-means).
+- **After switching.** **Nothing is owed.** An advisor driving a merge train reads the base branch's protection first. Where it requires pull requests to be up to date before merging, every PR is still brought current before its merge, with no admin bypass. Where it does not, a vetted PR is no longer re-synced and re-tested after an unrelated merge: it is current when GitHub reports no conflict and nothing merged since its last sync touched its files. `main`'s post-merge run stays the union check in both cases. See [Merge train: what "current with its base" means](#merge-train-what-current-with-its-base-means).
 - **After switching.** **Nothing is owed.** The certification loop's leftovers are gone: dead helpers in the review-loop libraries (`_write_interim_receipt`, `_pending_step`, `_row_matches_ruling_id`, six re-export aliases in `round_driver.py`, `load_records`, `blocking_findings_from_dimension_results`, and unused constants), with no caller anywhere; the keep-or-retire list's review-loop section stops calling it the certified review loop.
 - **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
 - **After switching.** **Re-run the claude conformance probe before the next wave's `preflight-entry`.** A claude probe result taken before the upgrade records no config dir and is refused as `probe-config-dir-unrecorded:claude`. See [Preflight: the claude probe runs under the launch's config dir](#preflight-the-claude-probe-runs-under-the-launchs-config-dir).
@@ -40,8 +40,9 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Merge train: what "current with its base" means
 
-- Showrunner duty 6's merge precondition "a branch current with its base" now says what current means: GitHub reports the PR mergeable with no conflict, and nothing merged into the base since the PR's last sync touched the PR's files. Otherwise the PR is brought current first.
-- `skills/showrunner/reference/merge-train.md` § A merge train's "green" says why that is enough: `main`'s post-merge run catches a union break between PRs whose files do not overlap, and a red `main` takes the disclosed fix that section already describes.
+- Showrunner duty 6's merge precondition "a branch current with its base" now follows the base branch's protection. Where the branch requires pull requests to be up to date before merging (a ruleset's `required_status_checks` with `strict_required_status_checks_policy`, or classic protection's `required_status_checks.strict`), the PR is brought current before every merge and the advisor never uses an admin bypass to skip that. Where it does not, the PR is current when GitHub reports no conflict and nothing merged into the base since its last sync touched its files; otherwise it is brought current first. A failed read counts as requiring up-to-date PRs.
+- `skills/showrunner/reference/merge-train.md` § A merge train's "green" carries the two `gh api` reads and says `main`'s post-merge run stays the union check in both cases; the no-re-sync saving applies only where the branch does not require up-to-date PRs.
+- The charter eval case `s7-merge-word-scope` now states that its `main` does not require up-to-date PRs; its grader is unchanged.
 
 ### Engine CLI calls: one stdin chokepoint
 

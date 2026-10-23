@@ -487,11 +487,16 @@ above).
    design); CI green on the recorded head, including the suite's receipt per
    `rubric/test-receipt-evidence.md` (run selection per
    `skills/showrunner/reference/vet-receipt.md` spine field 1); and a branch current with its base.
-   A branch is current with its base when GitHub reports it mergeable with no conflict and nothing
-   merged into the base since the branch's last sync touched the branch's files; otherwise bring it
-   current first, so a train never re-syncs a vetted PR after an unrelated merge
+   What "current" means follows the base branch's protection. Where the branch requires pull
+   requests to be up to date before merging, bring the PR current before every merge, and never use
+   an admin bypass to skip that. Where it does not, a PR is current when GitHub reports no conflict
+   and nothing merged into the base since its last sync touched its files; otherwise bring it
+   current first. The branch's rulesets (`required_status_checks` with
+   `strict_required_status_checks_policy`) or its classic branch protection
+   (`required_status_checks.strict`) tell the two apart, and a failed read counts as requiring
+   up-to-date PRs
    ([merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § A merge
-   train's "green" says why).
+   train's "green" has the reads and says why the second case is enough).
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
    as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
    within minutes, and the word and the act sit in one thread. There is no separate list of
