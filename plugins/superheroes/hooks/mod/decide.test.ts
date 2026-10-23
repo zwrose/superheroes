@@ -1,15 +1,18 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  DESKTOP_ENTRYPOINTS,
   HEADS_UP_TOKENS,
   MIN_TRIGGER_TOKENS,
   SNOOZE_STEP_TOKENS,
   decide,
   effectiveTrigger,
   isAttended,
+  isDesktopStarted,
   notesChanged,
   rearmAt,
   settingsFrom,
+  skipKey,
   snooze,
 } from './decide'
 import type { DecideInput, Settings } from './decide'
@@ -70,17 +73,65 @@ test('attended gate: an unattended session draws no band and fires nothing, in e
   expect(run({ isAttended: false, tokens: TRIGGER - 1 })).toEqual(headless)
 })
 
-test('isAttended: interactive, or the desktop app on the roster', () => {
-  expect(isAttended(true, [])).toBe(true)
-  expect(isAttended(true, null)).toBe(true)
-  expect(isAttended(false, ['desktop'])).toBe(true)
-  expect(isAttended(false, ['terminal', 'desktop'])).toBe(true)
-  expect(isAttended(false, [])).toBe(false)
-  expect(isAttended(false, null)).toBe(false)
-  expect(isAttended(false, ['mobile'])).toBe(false)
-  expect(isAttended(false, ['vscode'])).toBe(false)
-  expect(isAttended(false, ['terminal'])).toBe(false)
-  expect(isAttended(false, ['Desktop'])).toBe(false)
+test('isAttended: interactive, started by the desktop app, or the desktop app on the roster', () => {
+  expect(isAttended(true, false, [])).toBe(true)
+  expect(isAttended(true, false, null)).toBe(true)
+  expect(isAttended(false, false, ['desktop'])).toBe(true)
+  expect(isAttended(false, false, ['terminal', 'desktop'])).toBe(true)
+  expect(isAttended(false, false, [])).toBe(false)
+  expect(isAttended(false, false, null)).toBe(false)
+  expect(isAttended(false, false, ['mobile'])).toBe(false)
+  expect(isAttended(false, false, ['vscode'])).toBe(false)
+  expect(isAttended(false, false, ['terminal'])).toBe(false)
+  expect(isAttended(false, false, ['Desktop'])).toBe(false)
+})
+
+test('isAttended: a session the desktop app started is attended off screen', () => {
+  expect(isAttended(false, true, [])).toBe(true)
+  expect(isAttended(false, true, null)).toBe(true)
+  expect(isAttended(false, true, ['mobile'])).toBe(true)
+})
+
+test('DESKTOP_ENTRYPOINTS: the harness spellings, pinned', () => {
+  expect(DESKTOP_ENTRYPOINTS).toEqual(['claude-desktop', 'claude-desktop-3p'])
+})
+
+test('isDesktopStarted: the desktop entrypoint with no inherited child-session marker', () => {
+  expect(isDesktopStarted('claude-desktop', undefined)).toBe(true)
+  expect(isDesktopStarted('claude-desktop-3p', undefined)).toBe(true)
+  expect(isDesktopStarted('claude-desktop', '')).toBe(true)
+})
+
+test('isDesktopStarted: a launcher-spawned -p builder carries the child marker, whatever its value', () => {
+  expect(isDesktopStarted('claude-desktop', '1')).toBe(false)
+  expect(isDesktopStarted('claude-desktop', '0')).toBe(false)
+  expect(isDesktopStarted('claude-desktop-3p', '1')).toBe(false)
+})
+
+test('isDesktopStarted: any other host, or an unreadable entrypoint, is not desktop-started', () => {
+  expect(isDesktopStarted('cli', undefined)).toBe(false)
+  expect(isDesktopStarted('sdk-cli', undefined)).toBe(false)
+  expect(isDesktopStarted('remote', undefined)).toBe(false)
+  expect(isDesktopStarted('Claude-Desktop', undefined)).toBe(false)
+  expect(isDesktopStarted(undefined, undefined)).toBe(false)
+  expect(isDesktopStarted(null, undefined)).toBe(false)
+  expect(isDesktopStarted(1, undefined)).toBe(false)
+})
+
+test('skipKey: null when the mod ran, or the fill is below the heads-up line', () => {
+  expect(skipKey(run({}), TRIGGER, TRIGGER)).toBeNull()
+  expect(skipKey({ showBand: false, fire: false, reason: 'headless' }, TRIGGER - HEADS_UP_TOKENS - 1, TRIGGER)).toBeNull()
+  expect(skipKey({ showBand: false, fire: false, reason: 'headless' }, 0, TRIGGER)).toBeNull()
+})
+
+test('skipKey: the reason and the side of the trigger the fill is on', () => {
+  const headless = { showBand: false, fire: false, reason: 'headless' }
+
+  expect(skipKey(headless, TRIGGER - HEADS_UP_TOKENS, TRIGGER)).toBe('headless:near')
+  expect(skipKey(headless, TRIGGER - 1, TRIGGER)).toBe('headless:near')
+  expect(skipKey(headless, TRIGGER, TRIGGER)).toBe('headless:past')
+  expect(skipKey(headless, TRIGGER * 2, TRIGGER)).toBe('headless:past')
+  expect(skipKey({ ...headless, reason: 'snoozed' }, TRIGGER, TRIGGER)).toBe('snoozed:past')
 })
 
 test('running gate: a checkpoint in progress hides the band and holds the fire', () => {

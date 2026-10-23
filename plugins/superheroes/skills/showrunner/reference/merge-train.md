@@ -26,6 +26,20 @@ its change), and is still not a substitute: a tree that is green pre-merge can g
 the identical content, as the next rule's post-merge-only case shows. The train is green when **`main`'s own post-merge run** is green on the
 merged head — watched the way the vet watches any run, selected by **workflow name plus head sha**,
 never `--limit 1`.
+That post-merge run stays the union check whatever the base branch's protection says. Where the
+branch does not require pull requests to be up to date before merging, it is also what catches a
+union break between PRs whose files do not overlap, so a train does not re-sync and re-test a
+remaining PR after every unrelated merge: a PR whose files nothing merged since its last sync
+touched, with no conflict, is already current (duty 6). Where the branch does require it, GitHub
+refuses a PR that is behind, so every remaining PR is brought current before its merge, never
+skipped with an admin bypass, and that saving does not apply. The saving never covers a stack: a
+stack whose base moved is brought current bottom-up as `rubric/native-stacks.md` § How a stack
+stays current says, whatever the base branch requires.
+Read the requirement before the train's first merge, for the base branch (`main` here):
+`gh api --paginate repos/<owner>/<repo>/rules/branches/main --jq '.[] | select(.type=="required_status_checks") | .parameters.strict_required_status_checks_policy'`
+(rulesets, every page) and `gh api repos/<owner>/<repo>/branches/main/protection --jq '.required_status_checks.strict'`
+(classic protection; a 404 "Branch not protected" answers "none"). Either one reporting `true`
+means the branch requires it. Any other failure of either read counts as requiring it.
 
 ## Union fixes ride the last *open* PR, disclosed
 

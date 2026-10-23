@@ -41,8 +41,6 @@ REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 # Closed session modes — authoritative set for check_base and grounding_stage.
 SESSION_MODES = session_mode.MODES
 
-META_REASONS = frozenset({"unreadable", "undecodable", "unparseable", "not-an-object"})
-
 _PIN_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
 _PIN_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -202,17 +200,6 @@ def check_round_diff(path):
 
 _DIFF_GIT_HEADER = re.compile(r"^diff --git a/(?P<a>.*) b/(?P<b>.*)$")
 _PATH_SAMPLE_CAP = 8
-
-
-def _global_line_counts(file_stats):
-    added = deleted = 0
-    for val in file_stats.values():
-        if val is None:
-            continue
-        a, d = val
-        added += a
-        deleted += d
-    return added, deleted
 
 
 def _artifact_diff_stats(diff_text):

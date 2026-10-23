@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the tests a diff touched — the second half of this project's verify command (#1307).
 
-The four validators say nothing about the test suite, so a certified review loop's fix round
+The four validators say nothing about the test suite, so a review loop's fix round
 could leave tests red and still report the verify gate green (observed three times on PR #1295).
 This script closes that: every changed file in the diff is either matched to the test files that
 reference it, refused with a named reason, or named on stdout as referenced by nothing — no
