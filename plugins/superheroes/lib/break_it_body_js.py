@@ -6,7 +6,7 @@ Two texts give equal keys, statement for statement, only when they differ by for
 raises ValueError; a mis-scan may make two formattings unequal (fail closed) but never erases text,
 because comments are kept as tokens and every other character lands in a token.
 
-The front contract, shared with the core: EXTENSIONS, TITLE and parse(). Stdlib only; imports no other
+The front contract, shared with the core: EXTENSIONS, TITLE, JS_COLLECTION and parse(). Stdlib only; imports no other
 lib module.
 """
 import itertools
@@ -14,6 +14,9 @@ import re
 
 EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 TITLE = "\x00title"
+# This front's titles are it/test/describe strings that a vitest or jest configuration can filter by name, so a
+# caller gates a renamed title on the repository's vitest/vite/jest configuration (the JS front's own rename gate).
+JS_COLLECTION = True
 
 _BREAKS = "\n\r\u2028\u2029"
 _PUNCTS = (">>>= ... === !== **= <<= >>= >>> &&= ||= ??= => == != <= >= && || ?? ?. ++ -- += -= *= /= %= &= |= ^= "
@@ -51,6 +54,10 @@ _MEMBER_START = frozenset(("punct", c) for c in (";", "}", "*"))
 _MEMBER_MODIFIERS = frozenset(("get set async readonly public private protected override declare abstract accessor").split())
 _TITLE_CALLEES = ("it", "test", "describe")
 _FRAMEWORK_MODULES = frozenset(("vitest", "@jest/globals", "node:test", "bun:test"))
+_TYPE_OPERATORS = frozenset(("keyof readonly infer new unique extends is asserts typeof abstract in").split())
+_TYPE_ENDING = frozenset((") ] } > >> >>> ++ -- ! ; ?.").split())
+_TYPE_CONTINUERS = frozenset(("| & ? : => . , = ) ] } >").split())
+_NEVER_START = frozenset(("extends", "in", "instanceof", "else", "catch", "finally"))
 _STATEMENT_START = frozenset((_SEMI, _LBRACE, _RBRACE))
 
 _LINE_END = re.compile("[%s]" % _BREAKS)
@@ -125,6 +132,33 @@ def _skip_template(text, j, sub=False):
                 return j
 
 
+def _template_key(body):
+    """The template body with each `${ ... }` substitution replaced by its scanned tokens, so a formatter's whitespace
+    or quote change inside an expression reads equal while the literal text stays byte for byte."""
+    parts, last, i = [], 0, 0
+    try:
+        while i < len(body):
+            if body[i] == "\\":
+                i += 2
+            elif body.startswith("${", i):
+                end = _skip_template(body, i + 2, True)
+                toks = _Scanner(body[i + 2:end - 1]).run()
+                # a substitution is keyed by its tokens, not its raw text, so `${1+2}` and `${1 + 2}` read equal
+                parts += [body[last:i], "${" + "\x1f".join("%s\x1e%s" % tok for tok in toks) + "}"]
+                last = i = end
+            else:
+                i += 1
+    except ValueError:
+        # axis: a substitution that cannot be bounded or scanned (e.g. a regular expression holding a brace) keys the whole template by its raw text, byte-strict, instead of refusing the body
+        return body
+    return "".join(parts) + body[last:]
+
+
+class _Tok(tuple):
+    """A token (type, text) that remembers whether a line break came before it; equality and hashing are the tuple's."""
+    bol = False
+
+
 class _Scanner:
     """Tokenise one text, applying the emit-time normalisation (statement ends, commas, arrow parens)."""
 
@@ -151,7 +185,8 @@ class _Scanner:
             del self.out[k]
 
     def _emit(self, typ, txt):
-        tok, prev = (typ, txt), self._last_sig()
+        tok, prev = _Tok((typ, txt)), self._last_sig()
+        tok.bol = self.nl
         starts = ((typ == "id" and txt not in _NOT_START_IDS) or typ in ("num", "str")
                   or (typ == "punct" and txt in _START_PUNCT))
         if self.nl and prev is not None and prev != _SEMI:
@@ -210,9 +245,10 @@ class _Scanner:
                 self._emit("str", body)
             elif c == "`":
                 end = _skip_template(text, i + 1)
-                self._emit("tpl", text[i + 1:end - 1])
+                self._emit("tpl", _template_key(text[i + 1:end - 1]))
                 i = end
-            elif c == "/" and self._regex_allowed():
+            # a slash right after `<` closes a JSX tag (`</p>`), so it is a punctuator and never opens a regular expression
+            elif c == "/" and text[i - 1:i] != "<" and self._regex_allowed():
                 found = _REGEX.match(text, i)
                 if found is None:
                     raise ValueError("unterminated regular expression")
@@ -287,6 +323,17 @@ def _specifiers(toks, i, pairs):
     return end + 1
 
 
+def _type_declaration(sig):
+    """True when the import statement `sig` is a declaration-level `import type ...` (TypeScript erases it whole), as
+    opposed to one whose specifiers are each marked `type` inline."""
+    toks = sig[:-1] if sig[-1:] == [_SEMI] else sig
+    at = lambda k: toks[k] if k < len(toks) else ("", "")
+    if at(1) != _TYPE or len(toks) <= 2 or at(2)[0] == "str":
+        return False
+    after = at(2)
+    return after in (_LBRACE, _STAR) or (after[0] == "id" and not (after[1] == "from" and at(3)[0] == "str"))
+
+
 def _parse_import(sig):
     """Return (imports, binds) for an import statement, or raise ValueError for a form it does not read."""
     toks = sig[:-1] if sig[-1] == _SEMI else sig
@@ -301,11 +348,9 @@ def _parse_import(sig):
         if n != 2:
             _bad_import()
         return ((None, (toks[1][1], None)),), frozenset()
-    i, type_only, pairs = 1, False, []
-    if at(1) == _TYPE and n > 2:
-        after = at(2)
-        if after in (_LBRACE, _STAR) or (after[0] == "id" and not (after[1] == "from" and at(3)[0] == "str")):
-            type_only, i = True, 2
+    i, type_only, pairs = 1, _type_declaration(sig), []
+    if type_only:
+        i = 2
     if at(i)[0] == "id":
         pairs.append((toks[i][1], "default", False))
         i += 1
@@ -515,13 +560,51 @@ def _class_decl(rest):
     return _LPAREN not in heritage and all(tok[0] != "tpl" for tok in heritage) and _load_free(rest[brace + 1:-1])
 
 
+def _continues(prev):
+    """True when the token `prev` cannot end a type, so the next line still belongs to the same type."""
+    return (prev[0] == "punct" and prev[1] not in _TYPE_ENDING) or (prev[0] == "id" and prev[1] in _TYPE_OPERATORS)
+
+
+def _alias_contained(rest):
+    """True when the tokens of a `type` alias hold no template literal and no top-level line after the first begins
+    with anything but a continuation of the type (an operator after an operator, or `extends`, `in` and the like)."""
+    depth = 0
+    for k, tok in enumerate(rest):
+        if tok[0] == "tpl":
+            return False
+        if k > 1 and depth == 0 and getattr(tok, "bol", False) and not _continues(rest[k - 1]):
+            if not (tok[0] == "punct" and tok[1] in _TYPE_CONTINUERS) and not (tok[0] == "id" and tok[1] in _NEVER_START):
+                return False
+        if tok[0] == "punct":
+            depth += (tok[1] in _OPEN) - (tok[1] in _CLOSE_TO_OPEN)
+    return True
+
+
 def _type_decl(rest):
     if rest[:1] not in ([_TYPE], [_INTERFACE]) or not rest[1:2] or rest[1][0] != "id":
         return False
     if rest[0] == _TYPE:
-        return rest[2:3] in ([_EQUALS], [("punct", "<")])
+        # axis: a type alias holds no template literal, and no top-level line after its first starts something that is not a continuation of the type, because ASI inserts no separator before `(`, `[`, `{` or a template and such a line is a separate executable statement; over-refusing an exotic multi-line alias is accepted — see bite-proof record wo_b_2061_break_it_body_js
+        return rest[2:3] in ([_EQUALS], [("punct", "<")]) and _alias_contained(rest)
     brace = next((k for k in range(2, len(rest)) if rest[k] == _LBRACE), -1)
     return brace >= 0 and _match(rest, brace) == len(rest) - 1
+
+
+def _plain_params(toks):
+    """True when the parameters of the arrow or `function` expression `toks` are bare names: no default value, pattern,
+    rest element or type, which would evaluate (or be unreadable) when the framework calls the callback."""
+    i = 1 if toks[:1] == [_ASYNC] else 0
+    if toks[i:i + 1] == [_FUNCTION]:
+        j = i + 1 + (toks[i + 1:i + 2] == [_STAR])
+        j += bool(toks[j:j + 1]) and toks[j][0] == "id"
+    elif toks[i:i + 1] == [_LPAREN]:
+        j = i
+    else:
+        return True
+    if toks[j:j + 1] != [_LPAREN]:
+        return False
+    close = _match(toks, j)
+    return close >= 0 and all(tok[0] == "id" or tok == _COMMA for tok in toks[j + 1:close])
 
 
 def _registration(toks, frameworks):
@@ -545,7 +628,8 @@ def _registration(toks, frameworks):
     is_fn, body = _fn_body(args[1])
     if not is_fn or callee[0][1] != "describe":
         return is_fn
-    return body is not None and all(
+    # axis: a describe callback's parameter list runs at collection before its body, so a default or pattern in it is a hook — see bite-proof record wo_b_2061_break_it_body_js
+    return _plain_params(args[1]) and body is not None and all(
         _allowed_host(stmt, frameworks) for stmt in _split([tok for tok in body if tok[0] != "comment"]))
 
 
@@ -625,10 +709,23 @@ def _keyed(toks, frameworks):
 def _relative(sig, imports):
     """True when the statement imports a module by a `./` or `../` path: an import statement, or a `require(...)` or
     `import(...)` call, whose module string is relative. Such a statement resolves against its own directory."""
-    if any(target[0].startswith(("./", "../")) for _, target in imports):
+    if any(not _bare_module("str", target[0]) for _, target in imports):
         return True
-    return any(here in (("id", "require"), _IMPORT) and after == _LPAREN and mod[0] == "str"
-               and mod[1].startswith(("./", "../")) for here, after, mod in zip(sig, sig[1:], sig[2:]))
+    # axis: only a plain, escape-free bare package name is non-relative; a template (substitution or not) or a string spelled with a backslash escape is never decoded, so it counts as relative and the move is refused — see bite-proof record wo_b_2061_break_it_body_js
+    return any(here in (("id", "require"), _IMPORT) and after == _LPAREN
+               and mod[0] in ("str", "tpl") and not _bare_module(*mod)
+               for here, after, mod in zip(sig, sig[1:], sig[2:]))
+
+
+def _bare_module(typ, text):
+    """True only for a module spelling known to be a bare package name: no backslash, no `${`, no leading `./` or `../`."""
+    return "\\" not in text and not (typ == "tpl" and "${" in text) and not text.startswith(("./", "../"))
+
+
+def source_names(text):
+    """The identifiers that appear as names in `text`, outside comments, strings, templates and regular expressions,
+    read with the JS/TS scanner; raises ValueError for text it cannot read."""
+    return {tok[1] for tok in _Scanner(text).run() if tok[0] == "id"}
 
 
 def _parse(text):
@@ -643,7 +740,7 @@ def _parse(text):
     for toks, sig, is_import, imports, binds in stmts:
         key, titles = _keyed(toks, frameworks)
         uses = frozenset(tok[1] for prev, tok in zip([None] + sig, sig) if tok[0] == "id" and prev not in _MEMBER)
-        records.append({"kind": "import" if is_import else "stmt", "key": key, "titles": titles, "imports": imports,
+        records.append({"kind": "import" if is_import else "stmt", "type_only": is_import and _type_declaration(sig), "key": key, "titles": titles, "imports": imports,
                         "binds": binds, "uses": uses, "hook": not _allowed_host(sig, frameworks),
                         "relative": _relative(sig, imports)})
     return records

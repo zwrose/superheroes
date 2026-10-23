@@ -1173,3 +1173,122 @@ bringing up nodes...
 5 passed in 6.35s
 exit=0
 ```
+
+## L2-fix — the pytest rename rules apply only to Python files
+
+**Provenance:** claude / sonnet-5.5 (implementer, work order L2-fix, attempt 2, #2061 / PR #2069), maker family anthropic, on top of `ffe696cac`. Both guards were neutralized by one targeted Edit-tool edit, only the new tests were run by exact node id (never `-k`), the inverse edit was applied, `git diff --stat` over the file was read, and the same ids were run again. The production files had been staged with `git add` after the dev runs, so the diff stat is read against the unneutralized text for L2a (staged after its restore, so for L2a the receipt is the quoted line plus the green run) and for L2b. No `git checkout`, `git restore`, `git reset` or `git stash` was used. Each command was `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <node ids> -q`, redirected unfiltered with `echo "pytest exit: $?"` appended, to `/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-2053-b7af41d156396fa0/109398b2-b53a-4a76-90e5-2bf96c9a5df8/scratchpad/l2fix/` (`site1-red.txt`, `site1-green.txt`, `site2-red.txt`, `site2-green.txt`).
+
+Declared guarded-element set: **L2a**, **L2b**.
+
+| ID | Guarded element | Axis | Proving nodes | Red / green exit |
+|---|---|---|---|---|
+| L2a | `locate`'s `getattr(front, "PYTEST_COLLECTION", False) and` before the `test_` prefix rule | the `test_` prefix rule applies only to a front pytest collects | `test_break_it_body_js_e2e_2061.py::test_a_js_title_change_without_a_test_prefix_reads_found_and_is_not_pytest_collected`, `::test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept` | 1 / 0 |
+| L2b | `_body_search`'s `pytest_collected(record["path"]) and` before `_collection_overrides` | the pytest configuration gate applies only to a front pytest collects | `test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept` | 1 / 0 |
+
+### L2a — the `test_` prefix rule is Python-only
+
+- **axis:** a JS/TS title (an `it`/`test`/`describe` string) is not a pytest function name
+
+**neutralization** (`plugins/superheroes/lib/break_it_body.py`, `locate`):
+```diff
+-    if getattr(front, "PYTEST_COLLECTION", False) and any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):
++    if any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):
+```
+
+**command:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_js_title_change_without_a_test_prefix_reads_found_and_is_not_pytest_collected plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept -q`
+
+**raw red** (exit 1):
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_a_js_title_change_without_a_test_prefix_reads_found_and_is_not_pytest_collected _
+
+    def test_a_js_title_change_without_a_test_prefix_reads_found_and_is_not_pytest_collected():
+        found = break_it_body.locate(ORIG, OWN, [(HOST, _host())])
+>       assert found["status"] == "found" and found["reason"] is None and found["path"] == HOST
+E       AssertionError: assert ('unresolved' == 'found'
+E         
+E         - found
+E         + unresolved)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-b7af41d156396fa0-l2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:158: AssertionError
+_ test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept _
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-456/test_a_ts_rename_in_a_reposito0/repo')
+
+    def test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept(repo):
+        base, head = _stage(repo, {"pytest.ini": "[pytest]\naddopts = -k test_x\n", HOST: _host()})
+        calls = []
+        result = _check(repo, base, head, _record(), _stub(calls))
+>       assert _got(result) == ("kept", "body-match")
+E       AssertionError: assert ('unresolved'...ing-conflict') == ('kept', 'body-match')
+E         
+E         At index 0 diff: 'unresolved' != 'kept'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-b7af41d156396fa0-l2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:167: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_js_title_change_without_a_test_prefix_reads_found_and_is_not_pytest_collected
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept
+2 failed in 0.61s
+pytest exit: 1
+```
+
+**restore:** the inverse edit put `getattr(front, "PYTEST_COLLECTION", False) and ` back in front of `any(`.
+
+**restore receipt:** `grep -n PYTEST_COLLECTION plugins/superheroes/lib/break_it_body.py` found `255:    if getattr(front, "PYTEST_COLLECTION", False) and any(old != new and not new.startswith("test_") for old, new in zip(old_titles, new_titles)):`; `git diff --stat -- plugins/superheroes/lib/break_it_body.py` printed nothing, read after the restored file was staged.
+
+**raw green** (exit 0):
+```
+..                                                                       [100%]
+2 passed in 0.58s
+pytest exit: 0
+```
+
+### L2b — the pytest configuration gate is Python-only
+
+- **axis:** a `pytest.ini` that sets `addopts` or `python_functions` says nothing about a vitest or jest run
+
+**neutralization** (`plugins/superheroes/lib/break_it.py`, `_body_search`):
+```diff
+-        if found["titles"] and pytest_collected(record["path"]) and _collection_overrides(repo_root, head):
++        if found["titles"] and _collection_overrides(repo_root, head):
+```
+
+**command:** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept -q`
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept _
+
+repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-458/test_a_ts_rename_in_a_reposito0/repo')
+
+    def test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept(repo):
+        base, head = _stage(repo, {"pytest.ini": "[pytest]\naddopts = -k test_x\n", HOST: _host()})
+        calls = []
+        result = _check(repo, base, head, _record(), _stub(calls))
+>       assert _got(result) == ("kept", "body-match")
+E       AssertionError: assert ('unresolved'...ing-conflict') == ('kept', 'body-match')
+E         
+E         At index 0 diff: 'unresolved' != 'kept'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-b7af41d156396fa0-l2/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:167: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept
+1 failed in 0.63s
+pytest exit: 1
+```
+
+**restore:** the inverse edit put `pytest_collected(record["path"]) and ` back before `_collection_overrides`.
+
+**restore receipt:** `git diff --stat -- plugins/superheroes/lib/break_it.py` printed nothing (read against the staged unneutralized text).
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 0.24s
+pytest exit: 0
+```

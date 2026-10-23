@@ -41,9 +41,22 @@ def test_contract_constants():
     assert front.TITLE == "\x00title"
 
 
+@pytest.mark.parametrize("text, declaration", [
+    ('import type { A } from "m"', True),
+    ('import { type A } from "m"', False),
+    ('import type Def from "m"', True),
+    ('import type from "m"', False),
+    ('import { a } from "m"', False),
+    ('import "m"', False),
+    ("const a = 1", False),
+])
+def test_type_only_marks_only_a_declaration_level_import_type(text, declaration):
+    assert _only(text)["type_only"] is declaration
+
+
 def test_record_shape():
     rec = _only("const a = 1")
-    assert set(rec) == {"kind", "key", "titles", "imports", "binds", "uses", "hook", "relative"}
+    assert set(rec) == {"kind", "type_only", "key", "titles", "imports", "binds", "uses", "hook", "relative"}
     assert rec["kind"] == "stmt"
     assert isinstance(rec["key"], tuple) and isinstance(rec["titles"], tuple) and isinstance(rec["imports"], tuple)
     assert isinstance(rec["binds"], frozenset) and isinstance(rec["uses"], frozenset)
@@ -558,7 +571,10 @@ def test_slash_is_division_after_an_operand():
 
 def test_template_literal_nests_substitutions_strings_and_templates():
     toks = _tokens('x = `a ${ b + `c ${ d }` + "}" } e`')
-    assert [t for t in toks if t[0] == "tpl"] == [("tpl", 'a ${ b + `c ${ d }` + "}" } e')]
+    tpls = [t for t in toks if t[0] == "tpl"]
+    assert len(tpls) == 1 and tpls[0][1].startswith("a ${") and tpls[0][1].endswith("} e")
+    # a substitution is keyed by its tokens, so the same expression spaced differently reads equal
+    assert tpls == [t for t in _tokens('x = `a ${b+`c ${d}`+"}"} e`') if t[0] == "tpl"]
 
 
 def test_numbers_signs_and_leading_dot():
@@ -716,3 +732,61 @@ def test_an_own_name_framework_import_still_normalizes_the_title():
         _assert_same(own, own.replace('"a"', '"b"'))
     default = 'import test from "vitest";\ntest("a", f)'
     _assert_differ(default, default.replace('"a"', '"b"'))
+
+
+# --- review round 1 (#2053 L2) -----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    'test("regex", () => { expect("(").toMatch(/\\(/); });',
+    'test("comment", () => {\n  // f(\n  expect(1).toBe(1);\n});',
+])
+def test_valid_js_with_a_paren_in_a_regex_or_comment_locates_an_identical_candidate(text):
+    found = break_it_body.locate(text, "a.test.js", [("moved.test.js", text)])
+    assert (found["status"], found["path"]) == ("found", "moved.test.js"), found
+
+
+@pytest.mark.parametrize("params, hook", [
+    ("()", False),
+    ("(a, b)", False),
+    ("a", False),
+    ("({ unused = (globalThis.disabled = true) } = {})", True),
+    ("(a = globalThis.x())", True),
+    ("({ a })", True),
+    ("(...rest)", True),
+])
+def test_a_describe_callback_with_a_parameter_default_or_pattern_is_a_hook(params, hook):
+    arrow = 'describe("extra", %s => {});' % params
+    assert _only(arrow)["hook"] is hook
+    func = 'describe("extra", function %s {});' % (params if params.startswith("(") else "(%s)" % params)
+    assert _only(func)["hook"] is hook
+
+
+def test_a_template_literal_module_load_counts_as_relative():
+    assert _only("const subject = require(`./subject`);")["relative"] is True
+    assert _only("const subject = require(`../x/${name}`);")["relative"] is True
+    assert _only("const subject = require(`left-pad`);")["relative"] is False
+    moved = break_it_body.locate("const subject = require(`./subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });",
+                                 "old/a.test.js",
+                                 [("other/b.test.js", "const subject = require(`./subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });")])
+    assert moved["status"] == "unresolved", moved
+
+
+def test_an_escaped_module_spelling_is_never_decoded_and_counts_as_relative():
+    assert _only("const subject = require(`\\x2e/subject`);")["relative"] is True
+    assert _only('const subject = require("\\x2e/subject");')["relative"] is True
+    assert _only("const subject = await import(`\\x2e/subject`);")["relative"] is True
+    assert _only('import { a } from "\\x2e/subject"')["relative"] is True
+    text = "const subject = require(`\\x2e/subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });"
+    moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", text)])
+    assert moved["status"] == "unresolved", moved
+
+
+def test_template_with_a_regex_brace_substitution_keys_raw_and_still_reads():
+    text = 'const a = `x ${s.replace(/\\}/g, "")} y`;\ntest("a", () => { expect(a).toBe(1); });'
+    moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", text)])
+    assert moved["status"] != "unresolved", moved
+    _assert_same(text, text)
+    changed = text.replace(" y`", " z`")
+    _assert_differ(text, changed)
+    moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", changed)])
+    assert moved["status"] == "none", moved
