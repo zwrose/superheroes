@@ -107,9 +107,11 @@ Contract:
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
   with state handback, stopped or parked. A newer handover, or an answered newest comment,
   surfaces nothing. A park is superseded, and surfaces nothing, when the same lane has later
-  builder activity in the same read: a progress comment updated, or a builder note created,
-  strictly after the park was created (answered or not). A handback or stop is never superseded,
-  and a park at or after the latest activity still fires.
+  builder activity in the same read: a builder note created strictly after the park was created
+  (answered or not), or a progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS
+  after the park was created whose phase reads resumed (no word beginning park or stop, unless
+  a word begins resum). A handback or stop is never superseded, and a park at or after the
+  latest activity, or whose progress edit is inside the window or reads parked, still fires.
 - Cloud progress: a cloud builder keeps one progress comment on its issue, edited in place, that
   opens with cloud_builder.PROGRESS_HEADER and states how long its current step is expected to
   run. For a started cloud lane whose tick's comments read observed at least one such comment
@@ -162,6 +164,10 @@ _CLOUD_ACTIVITY_QUERY_HEAD = (
     "{ repository(owner: $owner, name: $name) { "
 )
 _CLOUD_ACTIVITY_QUERY_TAIL = "} }"
+
+# A builder edits its progress comment seconds after posting a park; only an edit later than this
+# many seconds after the park, whose phase reads resumed, shows the lane resumed.
+PARK_SUPERSESSION_GRACE_SECONDS = 300
 
 BUILDER_NOTES_ANSWERED_NAME = "builder-notes-answered.json"
 _NOTE_COMMENTS_MAX_PAGES = 10
@@ -1464,11 +1470,23 @@ def _cloud_note_times(comments, watched):
     return newest
 
 
+def _phase_reads_resumed(phase):
+    """Whether a progress phase reads as resumed: a non-empty string with no word starting park or stop, or one starting resum."""
+    if not isinstance(phase, str) or not phase:
+        return False
+    words = re.findall(r"[a-z]+", phase.lower())
+    return not any(word.startswith(("park", "stop")) for word in words) or any(
+        word.startswith("resum") for word in words
+    )
+
+
 def _cloud_terminals(comments, watched, answered):
     """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
 
-    A park the same lane's later progress edit or builder note supersedes surfaces nothing.
-    Never raises on a malformed element. Sorted by launch id.
+    A park the same lane's later builder note, or progress edit, supersedes surfaces nothing. A note
+    supersedes when created strictly after the park. A progress edit supersedes only when it is more
+    than PARK_SUPERSESSION_GRACE_SECONDS after the park and its phase reads resumed (no word beginning
+    park or stop, unless a word begins resum). Never raises on a malformed element. Sorted by launch id.
     """
     progress = _cloud_progress(comments, watched)
     note_times = _cloud_note_times(comments, watched)
@@ -1501,13 +1519,17 @@ def _cloud_terminals(comments, watched, answered):
         # bite-axis: ANSWERED — a comment the advisor recorded answered stops surfacing.
         if comment["id"] in answered:
             continue
-        # bite-axis: SUPERSEDED — a park is not terminal once the same lane has a progress edit or
-        # a builder note strictly later than it, and no older ending is read in its place; a
-        # handback or stop is never superseded, and a tie keeps the park.
+        # bite-axis: SUPERSEDED — a park is not terminal once the same lane has a builder note
+        # strictly later than it, or a progress edit more than PARK_SUPERSESSION_GRACE_SECONDS later
+        # whose phase reads resumed (a builder edits its progress seconds after a park, with a parked
+        # phase: not a resume); no older ending is read in its place; a handback or stop is never
+        # superseded, and a tie, or exactly the window, keeps the park.
         if kind == "park":
             parked_at = key[0]
             progress_at = progress[lid]["updatedEpoch"] if lid in progress else None
-            if progress_at is not None and progress_at > parked_at:
+            if (progress_at is not None
+                    and progress_at - parked_at > PARK_SUPERSESSION_GRACE_SECONDS
+                    and _phase_reads_resumed(progress[lid]["phase"])):
                 continue
             if lid in note_times and note_times[lid] > parked_at:
                 continue

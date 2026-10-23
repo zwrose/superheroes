@@ -162,8 +162,9 @@ Writes go one per call: one comment, one edit.
    posting the park, never after it while still parked.
 
 A cloud session stays listed while parked, and the advisor's message resumes it. On resume, edit the
-progress comment first, because the advisor's watch reads a progress edit after a park as the lane
-resumed. Then re-read the issue and carry on from the pushed head.
+progress comment first with a phase that says you resumed (for example `resumed: …`); the advisor's
+watch reads a progress edit as a resume only when its phase does not read parked or stopped and it
+lands more than five minutes after the park. Then re-read the issue and carry on from the pushed head.
 
 ## The progress comment
 
@@ -186,8 +187,9 @@ expected time is your own estimate for what is running now, from 1 to 240 minute
 **When to update it.** At each phase change: intake, brief, each order, verify, each review round,
 handback. Also before any step you expect to run past ten minutes (a full check, a review round, an
 integration run), stating that step's expected time. Edit it **before** you post a park, never after
-it while still parked: the advisor's watch reads a progress edit after a park as the lane resumed and
-stops reporting the park. On resume, edit it first.
+it while still parked. On resume, edit it first with a phase that says you resumed (for example
+`resumed: …`); the advisor's watch reads a progress edit as a resume only when its phase does not
+read parked or stopped and it lands more than five minutes after the park.
 
 **Lost work after a restart.** When you resume and find in-flight work you dispatched is gone (a
 container restart killed a subagent, a run dir is missing), say so in `Lost work:`. Post a builder
