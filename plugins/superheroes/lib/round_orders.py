@@ -489,7 +489,12 @@ def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
     host_seat = context.get("host_seat") is True
     if host_seat:
         ph["FIXER_STEP_5_BLOCK"] = (
-            "5. Report back per the Payload contract section below."
+            "5. Land last, every time: write your payload landing, per the Payload contract "
+            "section below, as the LAST thing you write, on every ending — after the step-4 "
+            "commit when you made one, and anyway (with no commit) when you stopped on "
+            "CHECK_FAILED, escalated, or had nothing to commit. Step 3's \"never commit broken "
+            "code\" still wins: the landing never licenses a commit. A committed fix with no "
+            "landing is read as an unlanded fix."
         )
         ph["FIXER_ESCALATION_BLOCK"] = (
             "Report it for owner escalation (see Payload contract) with the id and why."
@@ -498,7 +503,10 @@ def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
         ph["FIXER_STEP_5_BLOCK"] = (
             "5. Report back per the result contract the runner appends at dispatch — "
             "not a graded shape in this order. The orchestrator derives the `fixes` "
-            "record from git; you are not asked to emit it."
+            "record from git; you are not asked to emit it. Land last, every time: your "
+            "result on the runner's declared result channel is the last thing you deliver, "
+            "on every ending — after the step-4 commit when you made one, and anyway when "
+            "you stopped without one. Step 3's \"never commit broken code\" still wins."
         )
         ph["FIXER_ESCALATION_BLOCK"] = (
             "Report it for owner escalation via the runner's native write-result contract "

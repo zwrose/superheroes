@@ -15,6 +15,7 @@ export type CliVocabulary = {
   readonly mark: CliVerb<'sessionId'>
   readonly path: CliVerb<'sessionId'>
   readonly save: CliVerb<'sessionId'>
+  readonly skip: CliVerb<'sessionId'>
   readonly unmark: CliVerb<'sessionId' | 'since' | 'until'>
 }
 
@@ -60,6 +61,7 @@ export const parseVocabulary = (text: string): CliVocabulary => {
     mark: pick(verbs, 'mark', ['sessionId']),
     path: pick(verbs, 'path', ['sessionId']),
     save: pick(verbs, 'save', ['sessionId']),
+    skip: pick(verbs, 'skip', ['sessionId']),
     unmark: pick(verbs, 'unmark', ['sessionId', 'since', 'until']),
   }
 }
@@ -140,5 +142,16 @@ export const saveArgv = (
 ): string[] => [
   ...base(pluginRoot, vocabulary.save.verb),
   vocabulary.save.flags.sessionId,
+  sessionId,
+]
+
+// The skip record travels on stdin.
+export const skipArgv = (
+  vocabulary: CliVocabulary,
+  pluginRoot: string,
+  sessionId: string,
+): string[] => [
+  ...base(pluginRoot, vocabulary.skip.verb),
+  vocabulary.skip.flags.sessionId,
   sessionId,
 ]

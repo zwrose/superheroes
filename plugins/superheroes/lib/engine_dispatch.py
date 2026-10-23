@@ -42,6 +42,7 @@ if _LIB_DIR not in sys.path:
 
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
+import bite_proof_format  # noqa: E402  the record format an order that asks for one carries (#2082)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import cloud_pass  # noqa: E402  PASS_ENV, dropped at every public entry (stdlib-only module)
 import config_dir  # noqa: E402  claude config root resolution (#1273)
@@ -6636,10 +6637,16 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             )
         else:
             contract = engine_adapter.WRITE_REPORT_CONTRACT
+        bite_proof_block, bite_proof_reason = bite_proof_format.block_for(base)
+        # axis: an order naming a bite-proof is staged with the rubric's record format, or not at all — see bite-proof record wo_2082_format
+        if bite_proof_reason:
+            return False, bite_proof_reason
         order_part = base
         if order_part and not order_part.endswith("\n"):
             order_part = order_part + "\n"
         prefix = order_part + ("\n" if order_part else "")
+        if bite_proof_block:
+            prefix = prefix + bite_proof_block + "\n\n"
         content = (prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + command_refusals.ORDER_TEXT
                    + "\n\n" + contract)
         with open(dest_prompt, "w", encoding="utf-8") as dst:

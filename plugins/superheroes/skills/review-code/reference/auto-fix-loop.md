@@ -445,7 +445,18 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > returns `unreadable`. A timed-out **reviewer** then takes the existing re-run-on-the-host-model path;
 > a timed-out **fixer** commits no external write and the fix falls open to the host model. A hang becomes a
 > bounded cost, never a stuck loop. The orchestrator carries an engine fixer's reported `refusals` into the
-> `dispatch-fixer` submit, and never drops or rewrites them.
+> `dispatch-fixer` submit, and never drops or rewrites them. The fixer creates and edits files only with the
+> host's Write and Edit tools, never a shell command that writes a file. The fixer never runs a formatter,
+> autofix or anything else that rewrites a committed break-it test, and it reports a commit hook that
+> rewrites one. The fixer's result lists every refusal it met, and when the orchestrator passes the fixer
+> subagent's transcript (`--fixer-transcript`; on Claude Code the file `agent-<agentId>.jsonl` under the
+> config dir's `projects/*/*/subagents/`, found by the agent id the subagent dispatch returns) a refusal the
+> transcript shows and the result leaves out refuses the record as `fixer-refusals-unreported`, corrected
+> only by `correct-fixer-refusals` run from the session's own repo root; the reader is best effort over a
+> closed list of Claude Code refusal messages, and with no transcript the record says
+> `refusalCheck: unobserved`. The fixer writes its landing last on every ending, and a fixer that committed
+> with no landing reads `fixer-committed-unlanded` (its commits listed): re-dispatch the order so it lands,
+> because the driver does not rebuild which findings a commit fixed from git.
 >
 > **Settled dispatch contract.** The reconciliation between this skill's dispatch
 > behaviour and the builder's native-shape rule is **closed** — not an open migration:

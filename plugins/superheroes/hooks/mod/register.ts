@@ -2,8 +2,9 @@
 // directive plus its checkpoint notes, saves the checkpoint block a reply ends with
 // (layer 1), and runs the automatic checkpoint: at the trigger it runs
 // /superheroes:checkpoint, and once the notes file changed it compacts (layer 2;
-// the decisions are ./decide), only in an attended session: an interactive one, or one
-// with the desktop app on the surface roster. After its own compaction or a manual /compact it
+// the decisions are ./decide), only in an attended session: an interactive one, one the
+// desktop app started, or one with the desktop app on the surface roster; where it declines
+// near or past the trigger it records why (`<id>.skip`). After its own compaction or a manual /compact it
 // submits the resume prompt (./resume), so the session carries on (#1891). Every hook here fails open — on any error the event
 // goes on unchanged (`next(e)` once), no delivered-marker is written, and the
 // PreCompact command hook steers in its place.
@@ -18,11 +19,22 @@
 
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv, unmarkArgv } from './argv'
+import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv, skipArgv, unmarkArgv } from './argv'
 import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
-import { DESKTOP_SURFACE, decide, effectiveTrigger, isAttended, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
-import type { Settings } from './decide'
+import {
+  DESKTOP_SURFACE,
+  decide,
+  effectiveTrigger,
+  isAttended,
+  isDesktopStarted,
+  notesChanged,
+  rearmAt,
+  settingsFrom,
+  skipKey,
+  snooze,
+} from './decide'
+import type { Decision, Settings } from './decide'
 import { RESUME_PROMPT, resumesAfter } from './resume'
 
 const MANIFEST = '.claude-plugin/plugin.json'
@@ -39,11 +51,13 @@ const STALE_CHECKPOINT_MS = 30 * 60 * 1000
 
 const transcriptPath = { plugin: 'superheroes', key: 'transcriptPath' } as const
 const isInteractive = { plugin: 'superheroes', key: 'isInteractive' } as const
+const desktopStarted = { plugin: 'superheroes', key: 'isDesktopStarted' } as const
 const isTurnActive = { plugin: 'superheroes', key: 'isTurnActive' } as const
 const checkpoint = { plugin: 'superheroes', key: 'checkpoint' } as const
 const snoozeUntilTokens = { plugin: 'superheroes', key: 'snoozeUntilTokens' } as const
 const band = { plugin: 'superheroes', key: 'band' } as const
 const rearmAfterCompact = { plugin: 'superheroes', key: 'rearmAfterCompact' } as const
+const lastSkip = { plugin: 'superheroes', key: 'lastSkip' } as const
 
 // True while a checkpoint is being started: two measurements must not both start one.
 let isStarting = false
@@ -231,6 +245,49 @@ async function readSurfaces($: EngineInterface): Promise<readonly unknown[] | nu
   }
 }
 
+// Why the mod declined, for the owner to read beside the notes (`<id>.skip`, through the CLI): written
+// once per change of the decline's reason and of the side of the trigger the fill is on, from the
+// heads-up line up. `lastSkip` moves only once a write resolved, so a failed write is retried at
+// the next measure; a run or a fill below the heads-up line clears it. Never throws: the decision
+// and the band are already made.
+async function recordSkip(
+  $: EngineInterface,
+  decision: Decision,
+  tokens: number,
+  trigger: number,
+  attendance: { isInteractive: boolean; isDesktopStarted: boolean; surfaces: readonly unknown[] | null },
+): Promise<void> {
+  try {
+    const key = skipKey(decision, tokens, trigger)
+    const { value: last } = await $.state.get(lastSkip)
+
+    if (key === null) {
+      if (typeof last === 'string') {
+        await $.state.set(lastSkip, null)
+      }
+
+      return
+    }
+    if (key === last) {
+      return
+    }
+
+    const cli = await vocabulary($)
+    const record = {
+      at: new Date(await $.clock.now()).toISOString(),
+      reason: decision.reason,
+      tokens,
+      trigger,
+      ...attendance,
+    }
+
+    await directive($, skipArgv(cli, $.plugin.root, await $.session.id()), JSON.stringify(record))
+    await $.state.set(lastSkip, key)
+  } catch (error) {
+    note($, `skip record: ${String(error)}`)
+  }
+}
+
 // Reads the fill, decides, and draws the band from state; starts a checkpoint on `fire`.
 // A failed usage read changes nothing.
 async function evaluate($: EngineInterface, options: unknown): Promise<void> {
@@ -263,12 +320,17 @@ async function evaluate($: EngineInterface, options: unknown): Promise<void> {
   const isRunning = (await runningCheckpoint($)) !== null
 
   const snoozed = (await $.state.get(snoozeUntilTokens)).value
+  const attendance = {
+    isInteractive: (await $.state.get(isInteractive)).value === true,
+    isDesktopStarted: (await $.state.get(desktopStarted)).value === true,
+    surfaces: await readSurfaces($),
+  }
   const decision = decide({
     tokens: context.tokens,
     trigger,
     mode: settings.mode,
     isIdle: typeof (await $.state.get(isTurnActive)).value !== 'string',
-    isAttended: isAttended((await $.state.get(isInteractive)).value === true, await readSurfaces($)),
+    isAttended: isAttended(attendance.isInteractive, attendance.isDesktopStarted, attendance.surfaces),
     isRunning,
     snoozeUntilTokens: typeof snoozed === 'number' ? snoozed : null,
   })
@@ -277,6 +339,7 @@ async function evaluate($: EngineInterface, options: unknown): Promise<void> {
   if (decision.fire) {
     await startCheckpoint($)
   }
+  await recordSkip($, decision, context.tokens, trigger, attendance)
 }
 
 // The compaction input with the session's directive and notes as its instructions (the
@@ -544,6 +607,22 @@ export const register: Register = (on, options) => {
       await $.state.set(isInteractive, e.isInteractive)
     } catch (error) {
       note($, `session.start state: ${String(error)}`)
+    }
+
+    // read once: the entrypoint and the inherited child-session marker do not change in a session
+    try {
+      const entrypoint = await $.env.get('CLAUDE_CODE_ENTRYPOINT')
+      const childSession = await $.env.get('CLAUDE_CODE_CHILD_SESSION')
+
+      await $.state.set(desktopStarted, isDesktopStarted(entrypoint, childSession))
+    } catch (error) {
+      note($, `session.start desktop signal: ${String(error)}`)
+      try {
+        // unreadable reads not desktop-started (fail closed)
+        await $.state.set(desktopStarted, false)
+      } catch (cleanup) {
+        note($, `session.start desktop signal state: ${String(cleanup)}`)
+      }
     }
 
     try {
