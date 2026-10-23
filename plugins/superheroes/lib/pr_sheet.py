@@ -141,6 +141,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import canon  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import review_record  # noqa: E402
 import sheet_prose  # noqa: E402
@@ -208,12 +209,14 @@ def _commit(v):
 
 _ACCEPTING = re.compile(r"^ {0,3}(#{1,6})[ \t]+What we(?:'|’)re accepting[ \t]*#*[ \t]*$", re.IGNORECASE)
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]")
-_FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")  # a backtick fence's info string holds no backtick, so ```x``` opens none
+# A backtick fence's info string holds no backtick, so ```x``` opens none; group 1 is a list marker the fence may open behind
+# (a fence in a list item), group 2 the fence itself.
+_FENCE = re.compile(r"^ {0,3}((?:[-*+]|\d{1,9}[.)])[ \t]+)?(`{3,}(?=[^`]*$)|~{3,})")
 _ITEM = re.compile(r"^( {0,3})([-*+]|\d{1,9}[.)])([ \t]+)(.*)")
 _NO_ACCEPTANCE = ("none", "n/a", "na", "nothing")
 
 
-_WHOLE_COMMENT = re.compile(r"^\s*<!--.*-->\s*$")
+_WHOLE_COMMENT = re.compile(r"^\s*<!--(?:(?!-->).)*-->\s*$")  # one comment, through its first `-->`, and nothing after it
 
 
 def _outside_comments(lines):
@@ -224,11 +227,12 @@ def _outside_comments(lines):
     (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
     A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
     outside fences only."""
-    kept, fence, inside, level = [], None, False, None
+    kept, fence, listed, inside, level = [], None, False, False, None
     for n, line in enumerate(lines):
         if fence is not None:
             kept.append((line, True))
-            closing = re.match(r"^ {0,3}(" + re.escape(fence[0]) + "{" + str(len(fence)) + r",})[ \t]*$", line)
+            indent = " *" if listed else " {0,3}"  # a fence opened in a list item closes at the item's content column
+            closing = re.match("^" + indent + "(" + re.escape(fence[0]) + "{" + str(len(fence)) + r",})[ \t]*$", line)
             fence = None if closing else fence
             continue
         if inside:
@@ -242,7 +246,8 @@ def _outside_comments(lines):
             inside = True
             continue
         opening = _FENCE.match(line)
-        fence = opening.group(1) if opening else None
+        fence = opening.group(2) if opening else None
+        listed = bool(opening and opening.group(1))
         accepting = None if opening else _ACCEPTING.match(line)
         level = len(accepting.group(1)) if accepting else level
         kept.append((line, opening is not None))
@@ -686,7 +691,6 @@ def _check_bodies(bodies, allowed, problems):
     problems.extend(f"--pr-body names PR #{n}, which the sheet does not cover" for n in sorted(bodies, key=str) if n not in allowed)
 
 
-_CANON_ID = re.compile(r"\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*")  # the Canon entry id shape
 _TARGETS = ("item", "fold", "leftover", "canon")
 
 
@@ -729,7 +733,7 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
             elif targets[0] == "leftover" and not (isinstance(value["leftover"], str) and value["leftover"] in leftovers
                                                    and named.get(value["leftover"], 0) == 1):
                 problems.append(f'{shown} names leftover "{value["leftover"]}", which names no one left-for-owner finding in leftovers')
-            elif targets[0] == "canon" and not (isinstance(value["canon"], str) and _CANON_ID.fullmatch(value["canon"]) and value["canon"] in summary):
+            elif targets[0] == "canon" and not (canon.is_entry_id(value["canon"]) and value["canon"] in canon.cited_entry_ids(summary)):
                 problems.append(f'{shown} names canon "{value["canon"]}", which is not a Canon entry id (YYYY-MM-DD-xxxxxxxx-N) cited in the summary')
     problems.extend(f'accounting key "{k}" names no acceptance in the covered PR bodies' for k in accounting if k not in known)
 

@@ -2564,7 +2564,8 @@ def test_a_canon_entry_accounts_for_a_bullet_only_as_a_real_id_the_summary_cites
             advisor["accounting"][bullet] = {"canon": value}
             advisor["summary"] += cited
         return edit
-    for value, cited in (("", ""), (CANON_ID, ""), ("2026-10-22-abc-1", " Ruled in 2026-10-22-abc-1.")):
+    for value, cited in (("", ""), (CANON_ID, ""), ("2026-10-22-abc-1", " Ruled in 2026-10-22-abc-1."),
+                         (CANON_ID, f" Ruled in {CANON_ID}0.")):  # a longer id cited is not a citation of its prefix
         (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, canon(value, cited))
         assert problem.startswith(f'accounting "{bullet}" (PR #2075: "')
         assert problem.endswith(f'names canon "{value}", which is not a Canon entry id (YYYY-MM-DD-xxxxxxxx-N) cited in the summary')
@@ -2761,6 +2762,8 @@ READER_CASES = [
     pytest.param(ACCEPTING + "<!--\nhidden\n--> Visible disclosure.\n", ["--> Visible disclosure."], id="a-closing-line-with-text-after-the-marker-is-kept-whole"),
     pytest.param(ACCEPTING + "- One.\n<!--\nhidden\n-->\n- Two.\n\n## Next\n- not mine\n<!-- elsewhere -->\n", ["One.", "Two."], id="a-closed-block-between-bullets-is-dropped"),
     pytest.param(ACCEPTING + "- One.\n<!-- open\n- Two.\n## Next\n-->\n", ["One. <!-- open", "Two."], id="a-closing-marker-in-a-later-section-does-not-close-the-block"),
+    pytest.param(ACCEPTING + "<!-- begin --> Cold starts now take a minute. <!-- end -->\n", ["<!-- begin --> Cold starts now take a minute. <!-- end -->"], id="visible-text-between-two-comments-is-kept"),
+    pytest.param("## What's changing\n\n- ```python\n  print('example')\n  ```\n\n" + ACCEPTING + "- The cache is cleared on every upgrade.\n", ["The cache is cleared on every upgrade."], id="a-fence-opened-in-a-list-item-does-not-hide-the-section"),
 ]
 
 
