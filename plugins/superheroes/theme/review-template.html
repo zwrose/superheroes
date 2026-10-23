@@ -508,6 +508,16 @@
       }
     });
 
+    // Every Canon entry id the build says covers the acceptances is cited, as a whole id, in the summary: not preceded or followed by a
+    // letter or digit, so a longer id does not cite its prefix (lib/canon.py's _CITED_ID_RE).
+    const summary = (isObject(sheet.prSheet) && isObject(sheet.prSheet.whatChanged) && typeof sheet.prSheet.whatChanged.summary === "string") ? sheet.prSheet.whatChanged.summary : "";
+    const citedIds = new Set(Array.from(summary.matchAll(/(?<![0-9A-Za-z])\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*(?![0-9A-Za-z])/g), (found) => found[0]));
+    ((isObject(sheet.prSheet) && Array.isArray(sheet.prSheet.canonAccounted)) ? sheet.prSheet.canonAccounted : []).forEach((id) => {
+      if (!citedIds.has(id)) {
+        problems.push('prSheet.canonAccounted names "' + id + '", which the summary does not cite.');
+      }
+    });
+
     return problems;
   }
 </script>
@@ -1655,6 +1665,9 @@
     // Whether the build recorded that every covered PR body lists no acceptance (prSheet.nothingListed); the one question the
     // "nothing to accept" words are shown on, so the app bar and the accepting line cannot answer it differently.
     let nothingListed = false;
+    // The Canon entry ids the build recorded as covering every acceptance the covered PR bodies list (prSheet.canonAccounted); empty
+    // when it recorded none. With nothingListed it is the whole question of which "What you're accepting" words a sheet with no card shows.
+    let canonAccounted = [];
     let prWords = null;
     // The index's words (the "index" block of sheet-words.json) and rows, and the zoom words an opened picture's buttons take (from "pr"); null or empty on other kinds.
     let indexWords = null;
@@ -1799,7 +1812,7 @@
         countHost.textContent = indexCount();
       } else if (onePage) {
         countHost.textContent = total === 0
-          ? (nothingListed ? prWords.nothingToAcceptCount : prWords.acceptingUncheckedCount)
+          ? (nothingListed ? prWords.nothingToAcceptCount : canonAccounted.length > 0 ? prWords.acceptingCanonCount : prWords.acceptingUncheckedCount)
           : ready ? fill(prWords.acceptedCount, { accepted: savedAcceptances(), total: total }) : notLoaded;
       } else {
         countHost.textContent = total === 0
@@ -2041,7 +2054,7 @@
       "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
       "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
-      "acceptedCount", "nothingToAcceptCount", "acceptingUnchecked", "acceptingUncheckedCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
+      "acceptedCount", "nothingToAcceptCount", "acceptingUnchecked", "acceptingUncheckedCount", "acceptingCanon", "acceptingCanonCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
       "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
       "walkSchemaMissing", "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
@@ -2486,8 +2499,9 @@
       accepting.id = "pr-accepting";
       parts.push(accepting);
       if (!hasCards) {
-        const line = textElement("p", "", nothingListed ? prWords.nothingToAccept : prWords.acceptingUnchecked);
-        line.id = nothingListed ? "pr-nothing" : "pr-unchecked";
+        const canon = !nothingListed && canonAccounted.length > 0;
+        const line = textElement("p", "", nothingListed ? prWords.nothingToAccept : canon ? fill(prWords.acceptingCanon, { ids: canonAccounted.join(", ") }) : prWords.acceptingUnchecked);
+        line.id = nothingListed ? "pr-nothing" : canon ? "pr-canon" : "pr-unchecked";
         parts.push(line);
       }
       return parts;
@@ -2535,6 +2549,7 @@
       prNumber = revisedKind(sheetKind) ? sheet.prSheet.number : 0;
       carriedSheets = revisedKind(sheetKind) && sheet.prSheet.carriedForward !== undefined ? sheet.prSheet.carriedForward.sheets : [];
       nothingListed = revisedKind(sheetKind) && sheet.prSheet.nothingListed === true;
+      canonAccounted = revisedKind(sheetKind) && sheet.prSheet.canonAccounted !== undefined ? sheet.prSheet.canonAccounted : [];
       indexRows = sheetKind === "index" ? sheet.index.rows : [];
       viewerZoom.replaceChildren(...(onePage ? zoomButtons() : []));
       footerHost.replaceChildren(...(sheetKind === "index" ? [textElement("p", "sh-caption", indexWords.done)] : onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));

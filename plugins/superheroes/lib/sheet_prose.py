@@ -288,6 +288,11 @@ def _validate(schema, value, path, defs):
     return problems
 
 
+# A whole Canon entry id (YYYY-MM-DD-xxxxxxxx-N) in a text: lib/canon.py's _CITED_ID_RE, which this stdlib-only script cannot import;
+# not preceded or followed by a letter or digit, so a longer id never cites its prefix.
+_CITED_ID = re.compile(r"(?<![0-9A-Za-z])\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*(?![0-9A-Za-z])")
+
+
 def _duplicates(ids):
     return sorted({i for i in ids if ids.count(i) > 1})
 
@@ -315,8 +320,12 @@ def _check_cross_fields(sheet):
     decided_ids = [entry["id"] for entry in sheet.get("prSheet", {}).get("decidedForYou", [])]
     problems += ['Decided entry id "%s" is used more than once.' % i for i in _duplicates(decided_ids)]
     problems += ['Decided entry id "%s" is also a card id.' % i for i in sorted(set(decided_ids)) if i in card_ids]
+    summary = sheet.get("prSheet", {}).get("whatChanged", {}).get("summary", "")
+    cited = {found.group(0) for found in _CITED_ID.finditer(summary)}
+    problems += ['prSheet.canonAccounted names "%s", which the summary does not cite.' % i
+                 for i in sheet.get("prSheet", {}).get("canonAccounted", []) if i not in cited]
     rows = sheet.get("index", {}).get("rows", [])
-    return problems + ['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
+    return problems +['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
 
 
 def check_sheet(sheet):
@@ -557,7 +566,13 @@ def _pr_body(sheet):
         lines += _pr_walk(sheet)
     lines += ["**%s**" % PR["acceptingHeading"], ""]
     if not sheet["cards"]:
-        lines += [PR["nothingToAccept"] if prsheet.get("nothingListed") is True else PR["acceptingUnchecked"], ""]
+        if prsheet.get("nothingListed") is True:
+            accepting = PR["nothingToAccept"]
+        elif "canonAccounted" in prsheet:
+            accepting = _fill(PR["acceptingCanon"], ids=", ".join(prsheet["canonAccounted"]))
+        else:
+            accepting = PR["acceptingUnchecked"]
+        lines += [accepting, ""]
     for number, card in enumerate(sheet["cards"], 1):
         lines += _render_card(number, card, PR_ANSWERS) + [""]
     decided = prsheet.get("decidedForYou", [])

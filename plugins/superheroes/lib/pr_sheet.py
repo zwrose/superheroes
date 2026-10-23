@@ -21,9 +21,12 @@ says so for every one. Each acceptance has a bullet id, "<PR number>:<10 hex>" (
 acceptance's text and its place among identical ones, so a bullet added above the others leaves every other id as it was and
 the accounting already written stays right. The build refuses a sheet that leaves a listed acceptance out, counts one twice, or
 points at something that is not on the sheet, and each refusal names the bullet by id and the start of its text. A first build
-with no accounting therefore lists every bullet's id. prSheet.nothingListed is true only when every covered body was read and
-lists none; the page, the prose and the index row say "nothing to accept" only then, and say the sheet was not checked against
-the bodies otherwise (a sheet built through the API with no bodies, or an earlier one).
+with no accounting therefore lists every bullet's id. A zero-card sheet says one of three things about the bodies: prSheet.nothingListed
+is true only when every covered body was read and lists none, and the page, the prose and the index row say "nothing to accept" only
+then; prSheet.canonAccounted lists the Canon entry ids (sorted, distinct) when every covered body was read, they list at least one
+acceptance and every listed acceptance is accounted to a Canon ruling, and those surfaces say it was checked and all covered by
+Canon rulings; with neither field (a sheet built through the API with no bodies, or an earlier one) they say the sheet was not
+checked against the bodies. The two fields never come together.
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
@@ -748,10 +751,12 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
 
     previous is the exact bytes of the earlier sheet the input's carriedForward.fromSheet names, None when there is no carry
     (a carry given None is refused). bodies is None (the caller reads no PR body: no accounting check is made, the input's
-    accounting is accepted and ignored, and the sheet gets no nothingListed) or a dict of each covered PR's number to its body
-    text, whose keys must be exactly the covered PRs. With bodies, once they raise no problem of their own, the input's
-    accounting must account for every acceptance they list, exactly once, to something on the sheet (_check_accounting);
-    no listed acceptance becomes a card.
+    accounting is accepted and ignored, and the sheet gets neither nothingListed nor canonAccounted) or a dict of each covered
+    PR's number to its body text, whose keys must be exactly the covered PRs. With bodies, once they raise no problem of their
+    own, the input's accounting must account for every acceptance they list, exactly once, to something on the sheet
+    (_check_accounting); no listed acceptance becomes a card. The sheet then records one of three states about them: no
+    acceptance is listed (nothingListed), at least one is listed and every one is accounted to a Canon ruling (canonAccounted:
+    the ruling ids, sorted and distinct), or neither (some acceptance rests on an item, a fold or a leftover card).
     """
     problems = []
     if not isinstance(advisor, dict):
@@ -927,6 +932,11 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
         "craft": craft, "alreadyDecided": decided, **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
     if bodies is not None and not any(listed.values()):  # every covered body was read and none lists an acceptance
         sheet["nothingListed"] = True
+    elif bodies is not None:  # at least one is listed: Canon alone covers them all when every bullet is accounted to a Canon ruling
+        accounting = advisor.get("accounting", {})
+        rulings = [accounting[bullet].get("canon") for bullets in listed.values() for bullet, _ in bullets]
+        if all(isinstance(ruling, str) for ruling in rulings):
+            sheet["canonAccounted"] = sorted(set(rulings))
     if "walk" in advisor:
         sheet["walk"] = _walk(advisor["walk"], place)
     if advisor.get("previousCommit"):
@@ -1137,11 +1147,19 @@ def _check_index_input(adv, problems):
         problems.append("mergeOrder names a PR more than once")
 
 
-def _row_caption(row, words, nothing_listed=False):
-    """The line under an index row's name, the one home of the rule: what is accepted (or nothing to accept, only when the
-    row's sheet recorded that its PR bodies list none, else that it was not checked against them), what is walked
+def _accepting_state(sheet):
+    """What a PR or stack sheet recorded about its PR bodies: "nothing" (prSheet.nothingListed), "canon" (prSheet.canonAccounted) or "unchecked"."""
+    if sheet["prSheet"].get("nothingListed") is True:
+        return "nothing"
+    return "canon" if "canonAccounted" in sheet["prSheet"] else "unchecked"
+
+
+def _row_caption(row, words, accepting="unchecked"):
+    """The line under an index row's name, the one home of the rule: what is accepted (or, with no item, what the row's sheet
+    recorded about its PR bodies: accepting is "nothing" when they list none, "canon" when every acceptance they list is
+    covered by a Canon ruling, else "unchecked", that it was not checked against them), what is walked
     when the PR has a walk, then where the PR stands, with the merge place on a PR that needs the owner, joined with " · "."""
-    none = words["nothingToAccept"] if nothing_listed else words["acceptingUnchecked"]
+    none = {"nothing": words["nothingToAccept"], "canon": words["acceptingCanon"], "unchecked": words["acceptingUnchecked"]}[accepting]
     parts = [_fill(words["accepted"], accepted=row["accepted"], total=row["total"]) if row["total"] else none]
     if row["walkTotal"] > 0:
         parts.append(_fill(words["walked"], walked=row["walked"], total=row["walkTotal"]))
@@ -1179,7 +1197,7 @@ def _index_row(entry, base, order, words, problems):
     row = {"number": entry["number"], "kind": sheet["kind"], "title": sheet["title"], "link": entry["link"],
            **pr_state(sheet_bytes, store, words["pr"], words["prAnswers"]),
            "mergesAt": order.index(entry["number"]) + 1 if entry["number"] in order else None}
-    return {**row, "caption": _row_caption(row, words["index"], sheet["prSheet"].get("nothingListed") is True)}
+    return {**row, "caption": _row_caption(row, words["index"], _accepting_state(sheet))}
 
 
 def build_index(advisor, base, answers, words, place):

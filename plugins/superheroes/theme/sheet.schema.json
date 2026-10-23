@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Review sheet data file",
-  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole, or the index block of the index that lists every PR waiting on the owner. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids; stop ids are unique within the walk; a decided-for-you entry's id is unique among the entries and is not also a card id (they share the answers collection); row numbers are unique within the index.",
+  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole, or the index block of the index that lists every PR waiting on the owner. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids; stop ids are unique within the walk; a decided-for-you entry's id is unique among the entries and is not also a card id (they share the answers collection); row numbers are unique within the index; every id in prSheet.canonAccounted is cited, as a whole Canon entry id (not followed by a letter or digit, so a longer id does not cite its prefix), in prSheet.whatChanged.summary.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "kind", "title", "cards"],
@@ -238,6 +238,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["number", "commit", "whatChanged", "craft", "alreadyDecided", "history"],
+      "not": {"required": ["nothingListed", "canonAccounted"]},
       "allOf": [
         {
           "description": "A carried-forward verdict belongs to a sheet that replaced an earlier one.",
@@ -260,9 +261,16 @@
           "$ref": "#/$defs/commit"
         },
         "nothingListed": {
-          "description": "Present, and true, only when the build read every covered PR's body and none lists an acceptance under What we're accepting; the page's 'nothing to accept' words show only then.",
+          "description": "Present, and true, only when the build read every covered PR's body and none lists an acceptance under What we're accepting; the page's 'nothing to accept' words show only then. It never appears with canonAccounted, which needs at least one listed acceptance.",
           "type": "boolean",
           "enum": [true]
+        },
+        "canonAccounted": {
+          "description": "Present only when the build read every covered PR's body, they list at least one acceptance under What we're accepting, and every listed acceptance is accounted to a Canon ruling: the Canon entry ids, sorted and distinct, each cited in whatChanged.summary. The page's 'checked, all covered by Canon rulings' words show only then, on a sheet with no card.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}-[0-9a-z]{8}-[1-9]\\d*$"}
         },
         "carriedForward": {
           "description": "Present only on a sheet republished for a new head whose move is not material, so the earlier sheet's answers and Merge carry forward to it, and only together with previousCommit (the builder, lib/pr_sheet.py, enforces that the two come together, and the rule below says it too). sheets lists the SHA-256 digests of the earlier sheets whose verdict this sheet reads, newest first: the sheet it replaced, then each sheet that one had carried forward. The verdict is the document of the first revision in the chain (this sheet's own digest, then these) that has one.",

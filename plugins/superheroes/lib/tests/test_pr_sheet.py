@@ -1714,7 +1714,7 @@ CAPTION_CASES = [
 def test_an_index_rows_caption(row, caption):
     # Axis: the caption is the accepted part (or Nothing to accept), the walked part when the PR has a walk, then the state part
     # (with the merge place on needs-you, a whole-number place read as an int), joined with " · ".
-    assert pr_sheet._row_caption(row, INDEX_WORDS, nothing_listed=row["total"] == 0) == caption
+    assert pr_sheet._row_caption(row, INDEX_WORDS, accepting="nothing" if row["total"] == 0 else "unchecked") == caption
 
 
 @pytest.mark.parametrize("walk_total, said", [(0, ""), (3, " · 3 of 3 walked")])
@@ -1722,8 +1722,9 @@ def test_a_zero_card_rows_caption_says_nothing_only_when_its_sheet_recorded_it(w
     # Bites on: the caption saying "Nothing to accept" of a row whose sheet never recorded that the PR bodies list none.
     # Axis: with no card, the caption reads nothingToAccept with the flag and acceptingUnchecked without it, whatever the walk.
     row = _caption_row("needs-you", 0, 0, 3 if walk_total else 0, walk_total)
-    assert pr_sheet._row_caption(row, INDEX_WORDS, nothing_listed=True) == INDEX_WORDS["nothingToAccept"] + said
-    assert pr_sheet._row_caption(row, INDEX_WORDS, nothing_listed=False) == INDEX_WORDS["acceptingUnchecked"] + said
+    assert pr_sheet._row_caption(row, INDEX_WORDS, accepting="nothing") == INDEX_WORDS["nothingToAccept"] + said
+    assert pr_sheet._row_caption(row, INDEX_WORDS, accepting="unchecked") == INDEX_WORDS["acceptingUnchecked"] + said
+    assert pr_sheet._row_caption(row, INDEX_WORDS, accepting="canon") == INDEX_WORDS["acceptingCanon"] + said
     assert pr_sheet._row_caption(row, INDEX_WORDS) == INDEX_WORDS["acceptingUnchecked"] + said
     assert INDEX_WORDS["nothingToAccept"] != INDEX_WORDS["acceptingUnchecked"]
     assert pr_sheet._row_caption(dict(row, total=1), INDEX_WORDS) == "0 of 1 accepted" + said
@@ -1734,7 +1735,7 @@ def test_the_built_index_carries_each_rows_caption(tmp_path):
     done, out = run_index(tmp_path)
     assert done.returncode == 0, done.stdout
     rows = json.loads((out / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
-    assert all(r["caption"] == pr_sheet._row_caption(r, INDEX_WORDS, nothing_listed=True) and r["caption"] for r in rows)
+    assert all(r["caption"] == pr_sheet._row_caption(r, INDEX_WORDS, accepting="nothing") and r["caption"] for r in rows)
 
 
 def test_an_index_with_no_questions_and_no_prs_is_built(tmp_path):
@@ -2826,7 +2827,7 @@ def test_a_build_given_no_bodies_makes_no_accounting_check_and_has_no_nothing_li
     # Axis: E10: bodies=None is a sheet that was not checked against the bodies: no a- card and no nothingListed, on a sheet with no cards and on one with, and an accounting it is given is ignored, however malformed.
     for case in (SMALL, TWIN, BIG):
         sheet = built(case)
-        assert a_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"], case
+        assert a_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"] and "canonAccounted" not in sheet["prSheet"], case
     records, advisor = bundle(TWIN)
     advisor["accounting"] = ["not", "an", "object"]
     sheet = build(records, advisor)
@@ -2841,7 +2842,7 @@ def test_a_pr_whose_body_lists_nothing_is_built_with_nothing_listed_and_no_card(
     code, said = main_build(capsys, SMALL, out, {211: FIXTURES / body})
     assert code == 0, said
     sheet = json.loads(out.read_text(encoding="utf-8"))
-    assert sheet["cards"] == [] and sheet["prSheet"]["nothingListed"] is True
+    assert sheet["cards"] == [] and sheet["prSheet"]["nothingListed"] is True and "canonAccounted" not in sheet["prSheet"]
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
 
 
@@ -2875,6 +2876,96 @@ def test_the_built_index_row_of_a_zero_card_sheet_says_nothing_only_when_the_she
     assert done.returncode == 0, done.stdout
     (row,) = json.loads((tmp_path / "out" / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
     assert row["total"] == 0 and row["caption"].split(" · ")[0] == said and other not in row["caption"]
+
+
+CANON_ID_2 = "2026-10-22-abcdefgh-2"
+THREE_ACCEPTANCES = {211: ACCEPTING + "\n- **The receipt says Thank you.** Customers see the new words.\n"
+                          "- **The page title is unchanged.** Only the heading moved.\n"
+                          "- **The old words stay in the email.** Receipts sent by email keep them.\n"}
+
+
+def all_canon(bodies, ids, extra=None):
+    """An edit that accounts every acceptance the bodies list to a Canon ruling (the n-th to ids[n % len(ids)]) and has the summary cite each id; extra(advisor) then adds to the input."""
+    def edit(advisor):
+        bullets = [bullet for pr in sorted(bodies) for bullet, _ in pr_sheet.listed_bullets(pr, bodies[pr])]
+        advisor["accounting"] = {bullet: {"canon": ids[n % len(ids)]} for n, bullet in enumerate(bullets)}
+        advisor["summary"] += " Ruled in " + " and ".join(dict.fromkeys(ids)) + "."
+        if extra:
+            extra(advisor)
+    return edit
+
+
+def index_row_of(tmp_path, sheet):
+    """The row the built index gives a PR sheet that has no answers stored."""
+    number = sheet["prSheet"]["number"]
+    root = tmp_path / "in"
+    (root / "s").mkdir(parents=True)
+    (root / "s" / "sheet.json").write_bytes(sheet_bytes(sheet))
+    write_json(root / "s" / "store.json", {})
+    source = write_json(root / "index.json", {"schema": "index-input/1", "questions": [], "mergeOrder": [number], "prs": [
+        {"number": number, "link": f"https://sheets.example.test/pr-{number}", "sheet": "s/sheet.json", "store": "s/store.json"}]})
+    (tmp_path / "out").mkdir()
+    done = index_cli(source, tmp_path / "out" / "index.json")
+    assert done.returncode == 0, done.stdout
+    (row,) = json.loads((tmp_path / "out" / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
+    return row
+
+
+def test_a_sheet_whose_every_acceptance_is_a_canon_ruling_is_built_with_canon_accounted_and_says_so_on_every_surface(tmp_path):
+    # Bites on: the build leaving a Canon-only sheet to read "not checked" (or "nothing to accept"), the ids unsorted or repeated, or the prose or the index row not reading the field.
+    # Axis: E3: 3 acceptances over 2 ids (one repeated, written out of order) build with no card, canonAccounted the 2 ids sorted, no nothingListed;
+    # the one sheet then reads pr.acceptingCanon with the ids in the prose and index.acceptingCanon on the index row, never the nothing or unchecked words.
+    bodies = THREE_ACCEPTANCES
+    sheet = with_bodies(SMALL, bodies, all_canon(bodies, [CANON_ID_2, CANON_ID, CANON_ID_2]))
+    assert sheet["cards"] == [] and sheet["prSheet"]["canonAccounted"] == [CANON_ID, CANON_ID_2] and "nothingListed" not in sheet["prSheet"]
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+    prose = sheet_prose.render(sheet)
+    line = WORDS["acceptingCanon"].replace("{ids}", f"{CANON_ID}, {CANON_ID_2}")
+    assert f"**{WORDS['acceptingHeading']}**\n\n{line}\n" in prose
+    assert WORDS["nothingToAccept"] not in prose and WORDS["acceptingUnchecked"] not in prose
+    caption = index_row_of(tmp_path, sheet)["caption"]
+    assert caption.split(" · ")[0] == INDEX_WORDS["acceptingCanon"]
+    assert INDEX_WORDS["nothingToAccept"] not in caption and INDEX_WORDS["acceptingUnchecked"] not in caption
+
+
+def test_a_stack_whose_every_acceptance_over_two_prs_is_a_canon_ruling_records_one_sorted_distinct_list():
+    # Bites on: the stack's list being per PR, repeating an id two PRs share, or left unsorted.
+    # Axis: E10: the twin stack's 5 acceptances (3 on #241, 2 on #242) accounted to 2 ids written out of order give one list of the 2 ids, sorted; its 2 leftover cards stay.
+    bodies = read_bodies(BODY_TWIN)
+    sheet = with_bodies(TWIN, bodies, all_canon(bodies, [CANON_ID_2, CANON_ID, CANON_ID_2, CANON_ID, CANON_ID_2]))
+    assert sheet["prSheet"]["canonAccounted"] == [CANON_ID, CANON_ID_2] and "nothingListed" not in sheet["prSheet"]
+    assert len(sheet["cards"]) == 2 and a_cards(sheet) == []
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_a_canon_only_sheet_that_carries_another_card_records_canon_accounted_and_keeps_its_card(tmp_path):
+    # Bites on: canonAccounted being left off, or the surfaces taking over from the card, when a Canon-only sheet also has an advisor card.
+    # Axis: E9: every acceptance Canon plus one advisor item: the field is recorded, there is exactly one card, and the prose and index row read as a sheet with a card (no Canon line).
+    bodies = THREE_ACCEPTANCES
+    item = {"id": "heads-up", "kind": "Accept", "title": "A heads-up", "ifLeft": "Something to know.", "options": "none"}
+    sheet = with_bodies(SMALL, bodies, all_canon(bodies, [CANON_ID, CANON_ID, CANON_ID_2], lambda advisor: advisor.update(items=[item])))
+    assert sheet["prSheet"]["canonAccounted"] == [CANON_ID, CANON_ID_2] and len(sheet["cards"]) == 1
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+    assert "Checked against the PR body" not in sheet_prose.render(sheet)
+    assert index_row_of(tmp_path, sheet)["caption"].split(" · ")[0] == "0 of 1 accepted"
+
+
+def test_a_sheet_with_one_acceptance_not_accounted_to_canon_records_no_canon_accounted():
+    # Bites on: canonAccounted being set when only some acceptances are Canon rulings (the all-Canon condition loosened to any).
+    # Axis: E4: PR #2075 with one acceptance moved to Canon (the rest an item, a fold line or a leftover), and a small PR with two Canon and one item acceptance, record no canonAccounted; their cards are those of the build without it.
+    def one_canon(advisor):
+        advisor["accounting"][BULLETS_2075[6]] = {"canon": CANON_ID}
+        advisor["summary"] += f" Ruled in {CANON_ID}."
+    sheet = with_bodies(CASE_2075, BODIES_2075, one_canon)
+    assert "canonAccounted" not in sheet["prSheet"] and "nothingListed" not in sheet["prSheet"] and len(sheet["cards"]) == 5
+
+    def two_canon_one_item(advisor):
+        bullets = [bullet for bullet, _ in pr_sheet.listed_bullets(211, THREE_ACCEPTANCES[211])]
+        advisor["items"] = [{"id": "heads-up", "kind": "Accept", "title": "A heads-up", "ifLeft": "Something to know.", "options": "none"}]
+        advisor["accounting"] = {bullets[0]: {"canon": CANON_ID}, bullets[1]: {"canon": CANON_ID}, bullets[2]: {"item": "heads-up"}}
+        advisor["summary"] += f" Ruled in {CANON_ID}."
+    sheet = with_bodies(SMALL, THREE_ACCEPTANCES, two_canon_one_item)
+    assert "canonAccounted" not in sheet["prSheet"] and "nothingListed" not in sheet["prSheet"] and len(sheet["cards"]) == 1
 
 
 def accounted_twin():

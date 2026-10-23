@@ -445,6 +445,15 @@ def test_cross_field_rules_agree_between_page_and_prose():
     def a_prefixed_card(sheet):
         sheet["cards"][0]["id"] = "a-0123456789ab"
 
+    canon_id, other_id = "2026-10-22-abcdefgh-1", "2026-10-22-abcdefgh-2"
+
+    def canon_accounted(listed, cited, extra=None):
+        sheet = _pr_kind_sheet("pr")
+        sheet["prSheet"]["canonAccounted"] = listed
+        sheet["prSheet"]["whatChanged"]["summary"] = "Adds a sheet for one PR. " + cited
+        sheet["prSheet"].update(extra or {})
+        return sheet
+
     fixtures = [
         ("valid", _valid_sheet(), False),
         ("duplicate card id", mutated(lambda s: s["cards"][1].update(id="card-0")), True),
@@ -460,6 +469,15 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("nothingListed beside a card", listed_none(lambda s: None), False),
         ("a card whose id starts with a- with no nothingListed", mutated_stack(a_prefixed_card), False),
         *[(name, sheet, refused) for name, sheet, refused, _ in _decided_fixtures()],
+        ("canonAccounted cited in the summary", canon_accounted([canon_id, other_id], "Ruled in %s and %s." % (canon_id, other_id)), False),
+        ("canonAccounted cited, with a sentence's full stop after it", canon_accounted([canon_id], "Ruled in %s." % canon_id), False),
+        ("canonAccounted not cited in the summary", canon_accounted([canon_id, other_id], "Ruled in %s." % canon_id), True),
+        ("canonAccounted cited only as the prefix of a longer id", canon_accounted([canon_id], "Ruled in %s0." % canon_id), True),
+        ("canonAccounted cited only inside a longer word", canon_accounted([canon_id], "Ruled in x%s." % canon_id), True),
+        ("canonAccounted beside nothingListed", canon_accounted([canon_id], "Ruled in %s." % canon_id, {"nothingListed": True}), True),
+        ("canonAccounted empty", canon_accounted([], "Ruled in %s." % canon_id), True),
+        ("canonAccounted repeats an id", canon_accounted([canon_id, canon_id], "Ruled in %s." % canon_id), True),
+        ("canonAccounted holds a malformed id", canon_accounted(["2026-10-22-abc-1"], "Ruled in 2026-10-22-abc-1."), True),
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -1095,6 +1113,24 @@ def test_prose_of_a_zero_card_pr_sheet_says_nothing_only_when_it_recorded_that_t
     del sheet["prSheet"]["nothingListed"]
     unchecked = _prose_of(tmp_path, sheet)
     assert heading + PR_WORDS["acceptingUnchecked"] + "\n" in unchecked and PR_WORDS["nothingToAccept"] not in unchecked
+
+
+# Bites on: the prose of a zero-card pr or stack sheet ignoring prSheet.canonAccounted (reading "not checked"), dropping the ids, or showing the Canon line beside cards.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_of_a_zero_card_pr_sheet_with_canon_accounted_says_checked_and_names_the_ids(tmp_path, kind):
+    # Axis: the line under the accepting heading is acceptingCanon with the ids joined by ", " when prSheet.canonAccounted is present and nothingListed is not, never nothingToAccept or acceptingUnchecked; a sheet with a card prints no such line.
+    ids = ["2026-10-22-abcdefgh-1", "2026-10-22-abcdefgh-2"]
+    sheet = _sample(kind)
+    sheet["cards"] = []
+    sheet["prSheet"].pop("nothingListed", None)
+    sheet["prSheet"]["canonAccounted"] = ids
+    sheet["prSheet"]["whatChanged"]["summary"] += " Ruled in %s and %s." % tuple(ids)
+    out = _prose_of(tmp_path, sheet)
+    line = PR_WORDS["acceptingCanon"].replace("{ids}", ", ".join(ids))
+    assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], line) in out
+    assert PR_WORDS["nothingToAccept"] not in out and PR_WORDS["acceptingUnchecked"] not in out
+    carded = _prose_of(tmp_path, dict(sheet, cards=_sample(kind)["cards"]))
+    assert line not in carded
 
 
 def _decided(stack):
