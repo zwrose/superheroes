@@ -38,6 +38,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import bite_proof_format  # noqa: E402  the record format an order that asks for one carries (#2082)
 import cloud_pass  # noqa: E402  _is_cloud
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import core_md  # noqa: E402  read_sandbox_access
@@ -339,6 +340,11 @@ def _cmd_open(args):
             order = fh.read()
     except OSError:
         return _refusal("order-unreadable")
+    bite_proof_block, bite_proof_reason = bite_proof_format.block_for(
+        order.decode("utf-8", errors="ignore"))
+    # axis: an order naming a bite-proof reaches the subagent with the rubric's record format, or no run opens — see bite-proof record wo_2082_format
+    if bite_proof_reason:
+        return _refusal(bite_proof_reason)
 
     try:
         os.makedirs(run_dir, exist_ok=True)
@@ -368,6 +374,8 @@ def _cmd_open(args):
         try:
             with open(prompt_path, "wb") as fh:
                 fh.write(preamble.encode("utf-8") + order)
+                if bite_proof_block:
+                    fh.write(b"\n\n" + bite_proof_block.encode("utf-8") + b"\n")
         except OSError:
             return _refusal("prompt-write-failed")
         record = {
