@@ -61,7 +61,8 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    bottom to top through that span (`gh stack link <lower PR> <upper PR>` and further PR numbers when
    the span has more than two layers). A lane in a cloud session cannot link; the advisor links for
    it, at the handback that completes the span
-   (`skills/showrunner/reference/orchestration.md` § Cloud lanes).
+   (`skills/showrunner/reference/orchestration.md` § Cloud lanes); an advisor that is itself in a
+   cloud session links through REST ([How a stack comes to exist](#how-a-stack-comes-to-exist)).
    Once the stack exists, later layers carry the gated premise.
 5. **Unchanged.** The stack is still the unit of merge: one `gh stack merge`, only when every
    planned layer is vetted ([How a stack merges](#how-a-stack-merges)). The launcher's refusal of a
@@ -116,6 +117,13 @@ matters** — re-linking existing members skips them. Linking **pushes branch ar
 or updating those remote branches and opening pull requests for branches that have none), and it
 **neither rewrites history nor re-points an existing pull request's head**.
 
+**In a cloud session** GitHub refuses GraphQL, so `gh stack link` does not run. Create the stack over
+REST with the pull request numbers **bottom to top**: `gh api -X POST repos/{o}/{r}/stacks -F
+'pull_requests[]=<bottom>' -F 'pull_requests[]=<next>' ...`. Grow an existing stack with `gh api -X
+POST repos/{o}/{r}/stacks/{n}/add -F 'pull_requests[]=<new>' ...`, numbers **from the current top
+upward**. A 409 means another request is modifying the stack; a 422 means validation failed. Then read
+membership back with `lib/stack_check.py list` as for a local link.
+
 **A local tracked stack** uses `gh stack init`, `add`, and `submit`, with `checkout`, `modify`,
 `push`, `sync`, `rebase`, and `unstack` around them. The CLI tracks the branch chain locally and
 creates or updates the pull requests from it. A superheroes lane does **not** run this way.
@@ -125,7 +133,7 @@ position), and optionally `layersPlanned` (the stack's planned layer count). `st
 `layerPosition` are optional together — one without the other is refused at launch; `layersPlanned`
 requires both. For `layerPosition >= 2`, the launcher refuses a base that is not the current head of
 the member at `layerPosition - 1` (the **base-not-layer-head** gate), reading membership through the
-same GraphQL read this section's successor describes. The launcher can emit thirteen refusal tokens from
+same membership read [How membership is verified](#how-membership-is-verified) describes. The launcher can emit thirteen refusal tokens from
 premise validation and the layer and dependency gates — each token's meaning is in `lib/launcher.py`;
 the premise shape change is in `TRANSITION.md`:
 
@@ -173,9 +181,19 @@ waiting for the merge is a defect, not caution.
 
 ## How membership is verified
 
-The **only** honest read of membership is GitHub's own, by GraphQL. The membership query
+The **only** honest read of membership is GitHub's own, by GraphQL — or, where a cloud session's
+proxy refuses GraphQL, by GitHub's REST stacks API. The membership query
 lives in `lib/stack_check.py` (`QUERY`) — that module is the authoritative home; cite it
 rather than restating the query here (CONVENTIONS §11).
+
+`lib/stack_check.py list --pr <n> --repo <owner/name> [--stack <n>] [--transport auto|graphql|rest]`
+defaults to `auto`. `auto` reads by GraphQL and, only when the first GraphQL call is refused by the
+cloud proxy (a non-zero exit carrying `(HTTP 403)` and `use the REST API`), re-runs the whole read
+through REST: `GET /repos/{o}/{r}/pulls/{pr}` for the pull request's `stack` object and `GET
+/repos/{o}/{r}/stacks/{n}` for its `pull_requests`, bottom to top. The result, the refusal reasons
+(`not-linked`, `stack-unreadable`, `order-mismatch`) and the two-pass check keep their meaning on both
+transports, and a read is never mixed. Any other GraphQL failure refuses as before.
+`--transport rest` forces the REST read.
 
 `entries` is a connection and needs its sub-selection. An abbreviated `stack { number size entries }`
 does not run. A **null `stackEntry` means the pull request is in no stack**. That is the refusal a
@@ -188,15 +206,16 @@ request's number, state, draft status, head branch, head sha, and base branch. T
 queried pull request's own `position`, `headRefOid`, and the stack's `number`, `size`, and
 `baseRefName`, these fields are the whole membership claim, read from GitHub.
 
-Verify membership with **both** reads before any PR sheet is built: the GraphQL query above, and the
-shipped tool `lib/stack_check.py`, which runs it and applies the pagination and count rules. A lane
-working from a checkout that predates that module names the GraphQL read alone.
+Verify membership with **both** reads before any PR sheet is built: the GitHub read above (the GraphQL
+query, or the REST read in a cloud session), and the shipped tool `lib/stack_check.py`, which runs it
+and applies the pagination and count rules. A lane working from a checkout that predates that module
+names the GitHub read alone.
 
 **`gh stack view` is not verification.** It reads **local tracking state only**. Run in a worktree
 whose branch is simply not locally tracked, it answers that the current branch is not part of a
 stack whenever the branch is merely not **locally tracked** — including when that branch is a
 perfectly good member of a stack on GitHub. A green or a red `gh stack view` says nothing about the
-remote stack. When `gh stack view` disagrees with GraphQL, GraphQL wins.
+remote stack. When `gh stack view` disagrees with GitHub's read, GitHub's read wins.
 
 ## How a stack merges
 
@@ -237,6 +256,14 @@ to break the requirement is a layer whose branch no longer descends from the tip
 — a lower layer that moved after the layer above was last updated.
 
 **One command merges the stack; never one PR at a time.**
+
+**In a cloud session** `gh stack merge` does not run. Merge the top layer with `lib/stack_merge.py merge
+--repo <owner/name> --top <top PR> --sha <top head sha>`, taking the head from the membership re-read.
+The sha pin makes GitHub cancel the merge if the top head moved. Exit 0 means GitHub reported `status:
+merged`. Any other exit is not merged: `merge-enqueued` (added to a merge queue), `merge-failed` and
+`poll-timeout` (still pending) are not merged, and a queued stack is not atomic. Resume a `poll-timeout`
+with `lib/stack_merge.py poll --repo <o/r> --top <n> --uuid <u> --sha <sha>`, using the `uuid` the
+result carries.
 
 **A test never pins a layer's commit.** A squash merge leaves every layer's head unreachable from
 the trunk, so a test that reads a pinned layer commit (for example `git show <layer sha>:<path>`)
@@ -318,7 +345,8 @@ that pin already defines.
 
 **An unlinked base-branch chain** — pull requests based on each other that were never linked. It
 looks like a stack in the pull request list and is not one: no stack number, no entries, and no
-atomic merge. `gh stack view` will not catch it; the GraphQL read will.
+atomic merge. `gh stack view` will not catch it; the membership read of [How membership is
+verified](#how-membership-is-verified) will.
 
 **Serial merges** — merging a stack pull request by pull request. It is not how a native stack
 merges; it defeats the all-or-nothing guarantee and can leave the trunk in an intermediate state.
