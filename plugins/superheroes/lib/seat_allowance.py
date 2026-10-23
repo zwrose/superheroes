@@ -24,8 +24,10 @@ REVIEW_ALLOWANCE = (
 
 FIXER_ALLOWANCE = (
     "You run only the commands this order names (its scoped tests, validators, break-it "
-    "commands and the commit) and your edit tools, and none of the project's own scripts "
-    "beyond them; the full verify command stays the driver's."
+    "commands and the commit), the file reads and searches that inspect its inputs and the "
+    "sources it fixes, and the staging of its changes that the commit needs, plus your edit tools; you "
+    "run none of the project's own scripts beyond those; the full verify command stays the "
+    "driver's."
 )
 
 ALLOWED_ITEM_TYPES = frozenset({"agent_message", "reasoning", "todo_list", "error", "web_search"})

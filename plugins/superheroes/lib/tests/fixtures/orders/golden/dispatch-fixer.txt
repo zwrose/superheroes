@@ -87,7 +87,7 @@ Report it for owner escalation (see Payload contract) with the id and why.
 
 ## What you may run
 
-You run only the commands this order names (its scoped tests, validators, break-it commands and the commit) and your edit tools, and none of the project's own scripts beyond them; the full verify command stays the driver's.
+You run only the commands this order names (its scoped tests, validators, break-it commands and the commit), the file reads and searches that inspect its inputs and the sources it fixes, and the staging of its changes that the commit needs, plus your edit tools; you run none of the project's own scripts beyond those; the full verify command stays the driver's.
 
 ## Ratified residuals (owner-ratified, quoted data)
 
