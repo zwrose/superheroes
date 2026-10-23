@@ -3948,12 +3948,16 @@ def _allowance_scan_fields(opened, stdout_path, permitted_edit_paths=None):
 def _allowance_refusal(opened, ended):
     """The refusal for a codex review attempt whose journaled event record shows an action outside
     the allowance, or carries no clean scan; None otherwise. The one authority every review
-    success path asks first. An attempt that ended in a refusal (the engine never ran) keeps its
-    existing grading. Never raises."""
+    success path asks first. An attempt that ended in a refusal before launch (the engine never ran)
+    keeps its existing grading. Never raises."""
     if not _codex_review_run(opened):
         return None
     ended = ended if isinstance(ended, dict) else {}
-    if ended and (ended.get("refusal") or ended.get("guardRefusal")):
+    # A launched attempt that died before recording its end (attempt-died-unrecorded) may have run
+    # the engine, so it is not exempt: with no clean scan it falls through to the unreadable path.
+    if ended and (
+            (ended.get("refusal") and ended.get("refusal") != "attempt-died-unrecorded")
+            or ended.get("guardRefusal")):
         return None
     violations = ended.get("allowanceViolations")
     if not isinstance(violations, list):

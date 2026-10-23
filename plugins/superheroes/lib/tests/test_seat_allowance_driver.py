@@ -227,6 +227,9 @@ def test_helper_shape_and_missing_record_rule():
     # an attempt the engine never ran keeps its existing grading
     assert ED._allowance_refusal(opened, {"refusal": "spawn-failed: x"}) is None
     assert ED._allowance_refusal(opened, {"guardRefusal": True, "refusal": "g"}) is None
+    # a launched attempt that died unrecorded may have run the engine: terminal, not exempt
+    assert ED._allowance_refusal(
+        opened, {"refusal": "attempt-died-unrecorded"}) == unreadable
     named = ED._allowance_refusal(
         opened, {"allowanceScan": "ok", "allowanceViolations": ["a", "b"]})
     assert named["detail"] == "seat-ran-outside-allowance: a; b"
