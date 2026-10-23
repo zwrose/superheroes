@@ -8,6 +8,7 @@ Stdlib-only.
 """
 import os
 import re
+import stat
 import subprocess
 
 # Git global options consumed before the subcommand (value-taking forms accept =value).
@@ -27,6 +28,19 @@ _SHELL_PREFIXES = frozenset({
     "!", "then", "do", "else", "elif", "(", ";;",
 })
 
+# Sentences carried word for word by more than one template below; no braces, so each
+# template stays usable with str.format.
+_NEXT_STEP_COMMIT_OR_STASH = (
+    "Next step: commit the work (`git add <path>` then `git commit`) or run "
+    "`git stash push -u`, then re-run"
+)
+_DURING_A_MERGE = (
+    "During a merge: `git checkout --theirs <path>` or "
+    "`git checkout --ours <path>` takes one side of a conflicted path you have not "
+    "edited since the merge; a path you have edited is finished with the Edit tool and "
+    "then `git add <path>`."
+)
+
 _REFUSAL_TEMPLATE = (
     "superheroes worktree guard: this `git {action}` would discard {count} uncommitted "
     "change(s) in this worktree, and git keeps no copy of them. This is the checkout-revert "
@@ -34,14 +48,22 @@ _REFUSAL_TEMPLATE = (
     "uncommitted delivery at the same path. Recover the intent instead — commit the work "
     "first, `git stash -u` it (add `-a` to include ignored files; in a conflicted tree "
     "`git add` the unmerged paths first), or revert a probe edit with an inverse Edit "
-    "rather than a git discard."
+    "rather than a git discard. "
+    + _NEXT_STEP_COMMIT_OR_STASH
+    + " this command; revert a probe edit with the Edit tool's inverse edit. "
+    + _DURING_A_MERGE
 )
 
 _INDETERMINATE_TEMPLATE = (
     "superheroes worktree guard: could not determine whether this `git {action}` would "
     "destroy uncommitted work — it may target another worktree, or the repository could "
     "not be inspected — so it is refused (fail-closed). Commit or `git stash -u` your "
-    "work first, or revert a probe edit with an inverse Edit rather than a git discard."
+    "work first, or revert a probe edit with an inverse Edit rather than a git discard. "
+    + _NEXT_STEP_COMMIT_OR_STASH
+    + " it as a plain `git ...` command from inside the "
+    "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
+    "`GIT_DIR`/`GIT_WORK_TREE`). "
+    + _DURING_A_MERGE
 )
 
 _UNPARSED_TEMPLATE = (
@@ -52,16 +74,21 @@ _UNPARSED_TEMPLATE = (
     "message — that prose is the trigger: text naming a destructive git subcommand "
     "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
     "`worktree`) reads as a command wherever this guard loses track of the quoting "
-    "around it — a heredoc body, whose lines read as bare command text, or a quote of "
+    "around it — a heredoc body this guard cannot show is only text, or a quote of "
     "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
-    "`$(...)` substitution. Write the text to a file with a file-writing tool rather "
-    "than a shell heredoc, whose bare lines trip this same refusal, and pass the file: "
-    "`gh ... --body-file <path>`, `git commit -F <path>`. "
+    "`$(...)` substitution. "
+    "A heredoc with a quoted delimiter (`<<'EOF'`) that is the whole command and is fed to "
+    "`cat >`/`cat >>`/`tee` writing a file, to `gh issue|pr ... --body-file -`, or to "
+    "`git commit -F -`, or that is the whole `-m \"$(cat <<'EOF'` ... `)\"` / "
+    "`--body \"$(cat <<'EOF'` ... `)\"` argument, is read as text; any other heredoc is "
+    "read as command text. "
+    "Next step: write the text with the Write tool and pass the file "
+    "(`gh ... --body-file <path>`, `git commit -F <path>`), or re-issue an intended "
+    "discard as a plain `git ...` command this guard can parse. "
     "If a discard is intended, note that this refusal does not depend on what your tree "
-    "holds, so committing or stashing alone will not clear it: re-issue the command as "
-    "a plain `git ...` invocation this guard can parse. Keep the work you care about by "
-    "committing or `git stash -u` first, and revert a probe edit with an inverse Edit "
-    "rather than a git discard."
+    "holds, so committing or stashing alone will not clear it. Keep the work you care "
+    "about by committing or `git stash push -u` first, and revert a probe edit with an "
+    "inverse Edit rather than a git discard."
 )
 
 _GIT_TIMEOUT = 5
@@ -77,8 +104,84 @@ def _is_git_token(token):
     return base == "git" or base == "git.exe"
 
 
+_SAFE_CHARS = "A-Za-z0-9_@%+=:,./~"
+_WORD = rf"""(?:[{_SAFE_CHARS}-]+|'[^']*'|"[^"$`\\]*")"""
+_PATH = rf"[{_SAFE_CHARS}][{_SAFE_CHARS}-]*"
+_DELIMITER = "[A-Za-z_][A-Za-z0-9_]*"
+_HEREDOC_OPERATOR = re.compile(rf"""<<[ ]*(['"])({_DELIMITER})\1""")
+_MESSAGE_SUBSTITUTION = re.compile(rf"""[ \t]*"\$\(cat <<(')({_DELIMITER})'[ \t]*$""")
+_CAT_TO_FILE = re.compile(rf"[ \t]*cat[ \t]+>>?[ \t]*{_PATH}[ \t]*")
+_TEE_TO_FILE = re.compile(rf"[ \t]*tee(?:[ \t]+-a)?[ \t]+{_PATH}(?:[ \t]*>[ \t]*/dev/null)?[ \t]*")
+_WORD_LIST = re.compile(rf"[ \t]*(?:{_WORD}(?:[ \t]+{_WORD})*[ \t]*)?")
+
+
+def _words_take_text(words, message):
+    """True when the safe `words` are a `git commit` or `gh issue|pr` that reads the heredoc as text.
+
+    Without `message`: the stdin flag is present (`-F -`, `--file -`, `--body-file -`).
+    With it: the last word is the flag the `"$(cat <<'D'` substitution is the value of.
+    """
+    if words is None or len(words) < 2:
+        return False
+    gh = words[0] == "gh" and words[1] in ("issue", "pr")
+    if not gh and words[:2] != ["git", "commit"]:
+        return False
+    if message:
+        return words[-1] in (("--body", "-b") if gh else ("-m", "--message"))
+    stdin_flags = (("--body-file", "-"), ("-F", "-")) if gh else (("-F", "-"), ("--file", "-"))
+    return any(pair in stdin_flags for pair in zip(words, words[1:])) or (
+        ("--body-file=-" if gh else "--file=-") in words
+    )
+
+
+def _mask_data_heredoc(command):
+    """Blank the body lines of a command that is exactly one text-only heredoc shape.
+
+    The shapes (first line holds the one `<<'D'` or `<<"D"`; the first line equal to `D` ends the
+    body): `cat > f`, `cat >> f` or `tee [-a] f [> /dev/null]` writing a file; `gh issue|pr ...
+    --body-file -` or `git commit -F -`; and `-m "$(cat <<'D'` / `--body "$(cat <<'D'` closed by a
+    `)"` line. Nothing but blank lines may follow. Any other command is returned unchanged.
+    """
+    lines = command.split("\n")
+    first = lines[0]
+    if first.count("<<") != 1:
+        return command
+    message = _MESSAGE_SUBSTITUTION.search(first)
+    operator = message or _HEREDOC_OPERATOR.search(first)
+    if operator is None:
+        return command
+    before = first[:operator.start()]
+    if message:
+        taken = _words_take_text(_words(before), True)
+    else:
+        rest = before + " " + first[operator.end():]
+        taken = (
+            _CAT_TO_FILE.fullmatch(rest) or _TEE_TO_FILE.fullmatch(rest)
+            or _words_take_text(_words(rest), False)
+        )
+    end = next((k for k in range(1, len(lines)) if lines[k] == operator.group(2)), None)
+    if not taken or end is None:
+        return command
+    after = lines[end + 1:]
+    if message:
+        if not after or after[0].rstrip() != ')"':
+            return command
+        after = after[1:]
+    if any(line.strip() for line in after):
+        return command
+    return "\n".join([first] + [""] * (end - 1) + lines[end:])
+
+
+def _words(text):
+    """The words of `text` when every word is a safe word, else None."""
+    if not _WORD_LIST.fullmatch(text):
+        return None
+    return re.findall(_WORD, text)
+
+
 def _split_segments(command):
     """Split a command string into segments at unquoted boundaries."""
+    command = _mask_data_heredoc(command)
     segments = []
     current = []
     i = 0
@@ -848,6 +951,18 @@ def _run_git(cwd, *args):
     )
 
 
+def _run_git_bytes(cwd, *args):
+    """``_run_git`` without text decoding, for reading blob bytes."""
+    env = os.environ.copy()
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return subprocess.run(
+        ["git", "-C", cwd, *args],
+        capture_output=True,
+        timeout=_GIT_TIMEOUT,
+        env=env,
+    )
+
+
 def _clean_has_flag(command, flag):
     for parsed in _iter_git_segments(command):
         if parsed["subcommand"] == "clean":
@@ -920,6 +1035,413 @@ def _worktree_remove_target(command):
     return None
 
 
+_MERGE_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_MERGE_CHECKOUT_OPTS = frozenset({"--ours", "--theirs", "-q", "--quiet"})
+_MERGE_RESTORE_OPTS = frozenset({"--ours", "--theirs", "-W", "--worktree", "-q", "--quiet"})
+# Path-count ceiling for one merge-branch call (each path costs a git call); over it -> indeterminate.
+_MERGE_PATH_LIMIT = 200
+
+
+def _merge_side_form(action, command):
+    """Parse a merge-side checkout/restore this branch judges, or None when it does not apply.
+
+    Returns {"operands": [...], "source": bool}. Requires exactly `git checkout|restore ...` (no
+    git globals, no VAR= prefix). Options are an allowlist, so --staged, --patch and
+    --pathspec-from-file* never pass. With --ours/--theirs git takes no tree-ish, so without a
+    ``--`` every checkout operand is a path; a checkout naming a tree-ish before ``--`` does
+    not apply.
+    """
+    if action not in ("checkout-path", "restore") or not isinstance(command, str):
+        return None
+    subcommand = "checkout" if action == "checkout-path" else "restore"
+    parsed = list(_iter_git_segments(command))
+    if len(parsed) != 1 or parsed[0]["subcommand"] != subcommand:
+        return None
+    args = parsed[0]["args"]
+    tokens = _tokenize_segment(command)
+    if len(tokens) < 2 or not _is_git_token(tokens[0]) or tokens[1] != subcommand:
+        return None
+    if tokens[2:] != args:
+        return None
+    pre, has_sep, post = _args_before_separator(args)
+    allowed = _MERGE_CHECKOUT_OPTS if subcommand == "checkout" else _MERGE_RESTORE_OPTS
+    merge_side = False
+    source = False
+    operands = []
+    i = 0
+    while i < len(pre):
+        tok = pre[i]
+        if len(tok) > 1 and tok.startswith("-"):
+            if tok in ("--ours", "--theirs"):
+                merge_side = True
+            elif subcommand == "restore" and tok in ("-s", "--source"):
+                if i + 1 >= len(pre):
+                    return None
+                merge_side = source = True
+                i += 1
+            elif subcommand == "restore" and tok.startswith("--source="):
+                merge_side = source = True
+            elif tok not in allowed:
+                return None
+        else:
+            operands.append(tok)
+        i += 1
+    if not merge_side:
+        return None
+    if subcommand == "checkout":
+        if has_sep:
+            if operands:
+                return None
+            operands = list(post)
+    else:
+        operands = operands + list(post)
+    if not operands:
+        return None
+    return {"operands": operands, "source": source}
+
+
+def _merge_head_file(cwd):
+    """The MERGE_HEAD file path when a merge is in progress, else None. Raises when git fails."""
+    result = _run_git(cwd, "rev-parse", "--git-path", "MERGE_HEAD")
+    if result.returncode != 0:
+        raise OSError("git rev-parse --git-path MERGE_HEAD failed")
+    path = result.stdout.rstrip("\n")
+    if not path:
+        raise OSError("git rev-parse --git-path MERGE_HEAD printed nothing")
+    if not os.path.isabs(path):
+        path = os.path.join(cwd, path)
+    return path if os.path.exists(path) else None
+
+
+def _merge_state_valid(cwd, head_file):
+    """True when MERGE_HEAD resolves to a commit and the file holds exactly one commit line."""
+    verify = _run_git(cwd, "rev-parse", "-q", "--verify", "MERGE_HEAD^{commit}")
+    if verify.returncode != 0:
+        return False
+    with open(head_file) as f:
+        lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+    return len(lines) == 1 and _MERGE_OBJECT_ID_RE.match(lines[0]) is not None
+
+
+def _merge_commit_ids(cwd):
+    """(HEAD, MERGE_HEAD) as full commit ids, or None when either does not resolve."""
+    ids = []
+    for ref in ("HEAD", "MERGE_HEAD"):
+        result = _run_git(cwd, "rev-parse", "-q", "--verify", ref + "^{commit}")
+        commit = result.stdout.strip() if result.returncode == 0 else ""
+        if not _MERGE_OBJECT_ID_RE.match(commit):
+            return None
+        ids.append(commit)
+    return tuple(ids)
+
+
+def _merge_tree_id(cwd, ours, theirs):
+    """Tree id of the recomputed merge (exit 0 clean, 1 conflicted), or None.
+
+    The branches are passed as full commit ids so the conflict labels git writes are those ids,
+    never text a file could hold.
+    """
+    result = _run_git(cwd, "merge-tree", "--write-tree", ours, theirs)
+    if result.returncode not in (0, 1):
+        return None
+    first = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
+    return first if _MERGE_OBJECT_ID_RE.match(first) else None
+
+
+def _merge_index_entries(cwd, operands):
+    """{repo-relative path: {stage: index mode string}} for the operands; None when one matches no entry."""
+    entries = {}
+    for operand in operands:
+        result = _run_git(cwd, "ls-files", "--stage", "-z", "--full-name", "--", operand)
+        if result.returncode != 0:
+            raise OSError("git ls-files --stage failed")
+        found = [entry for entry in result.stdout.split("\0") if entry]
+        if not found:
+            return None
+        for entry in found:
+            meta, _, path = entry.partition("\t")
+            fields = meta.split()
+            entries.setdefault(path, {})[int(fields[2])] = fields[0]
+    return entries
+
+
+def _merge_source_operands_exact(cwd, operands):
+    """True when every operand is exactly one indexed file (no directory, glob or pathspec magic)."""
+    result = _run_git(cwd, "rev-parse", "--show-prefix")
+    if result.returncode != 0:
+        return False
+    prefix = result.stdout.rstrip("\n")
+    for operand in operands:
+        if operand.startswith(":") or any(ch in operand for ch in "*?[\\"):
+            return False
+        expected = os.path.normpath(prefix + operand).replace(os.sep, "/")
+        if expected == "." or expected == ".." or expected.startswith("../"):
+            return False
+        listed = _run_git(cwd, "ls-files", "--stage", "-z", "--full-name", "--", operand)
+        if listed.returncode != 0:
+            return False
+        paths = {e.partition("\t")[2] for e in listed.stdout.split("\0") if e}
+        if paths != {expected}:
+            return False
+    return True
+
+
+def _merge_content_matches(written, expected, ours, theirs, resolve):
+    """True when the worktree bytes equal the recomputed merge, up to conflict-marker labels.
+
+    ``expected`` was written with the full commit ids ``ours`` and ``theirs`` as its labels, so a
+    start or end marker line is recognised by that exact id, never by its look. Compared by
+    position: equal line counts, each generated marker line matched by a worktree line carrying
+    the same marker run and a label that ``resolve`` maps to the commit the recomputed line names
+    (open: ``ours``, close: ``theirs``), every other line byte for byte. The label is the whole
+    text after the run and one space: it is accepted when it resolves as a whole, or as
+    ``<name>:<suffix>`` when ``<name>`` resolves and ``<suffix>`` equals the recomputed line's own
+    ``:<suffix>`` byte for byte (only a rename conflict carries one). A label that is empty,
+    does not resolve or resolves elsewhere, or carries any other suffix, is a mismatch, so text
+    appended to a marker line is never taken for git's own label. One trailing carriage return is ignored on a marker line, but
+    the recomputed line and the worktree line must both carry it or both lack it. A ``|||||||``
+    base-marker line is not relaxed: git writes it identically in the real merge and in the
+    recomputed one (the label is an abbreviated base id), so it is compared like any other line.
+    An unexpected shape is a mismatch (fail closed).
+    """
+    written_lines = written.split(b"\n")
+    expected_lines = expected.split(b"\n")
+    if len(written_lines) != len(expected_lines):
+        return False
+    markers = _merge_generated_markers(expected_lines, ours.encode(), theirs.encode())
+    if markers is None:
+        return False
+    for index, (got, want) in enumerate(zip(written_lines, expected_lines)):
+        marker = markers.get(index)
+        if marker is None:
+            if got != want:
+                return False
+            continue
+        kind, run, suffix = marker
+        if got.endswith(b"\r") != want.endswith(b"\r"):
+            return False
+        got = got[:-1] if got.endswith(b"\r") else got
+        if not got.startswith(run + b" "):
+            return False
+        label = got[len(run) + 1:]
+        try:
+            label = label.decode("utf-8")
+            suffix = suffix.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        commit = ours if kind == "open" else theirs
+        if resolve(label) == commit:
+            continue
+        # ``<name>:<suffix>``: the suffix is git's own only when the recomputed line carries the
+        # same one (a rename conflict); a suffix is never discarded unchecked.
+        name, colon, tail = label.partition(":")
+        if not (colon and suffix and tail == suffix[1:] and resolve(name) == commit):
+            return False
+    return True
+
+
+def _merge_generated_markers(lines, ours, theirs):
+    """{line index: (kind, marker run, ``:<path>`` suffix or b"")} for the marker lines, or None.
+
+    A generated conflict opens with exactly ``<<<<<<< <ours>`` and closes with exactly
+    ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``, and by one carriage return
+    when the merged file uses CRLF). Only those two lines may differ in label; the ``|||||||``
+    base marker and the ``=======`` separator stay ordinary lines. An open that never closes,
+    or opens again before closing, is an unexpected shape (None).
+    """
+    open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"((?::[^\r]*)?)\r?$")
+    close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"((?::[^\r]*)?)\r?$")
+    markers = {}
+    index = 0
+    while index < len(lines):
+        opened = open_re.match(lines[index])
+        if opened is None:
+            index += 1
+            continue
+        markers[index] = ("open", opened.group(1), opened.group(2))
+        index += 1
+        while True:
+            if index >= len(lines):
+                return None
+            closed = close_re.match(lines[index])
+            if closed:
+                markers[index] = ("close", closed.group(1), closed.group(2))
+                break
+            if open_re.match(lines[index]):
+                return None
+            index += 1
+        index += 1
+    return markers
+
+
+def _merge_label_resolver(cwd):
+    """A function mapping a marker label to the commit id it names (or None), cached per call."""
+    cache = {}
+
+    def resolve(label):
+        if label in cache:
+            return cache[label]
+        commit = None
+        if label and not label.startswith("-"):
+            result = _run_git(cwd, "rev-parse", "--verify", "--quiet", label + "^{commit}")
+            out = result.stdout.strip() if result.returncode == 0 else ""
+            commit = out if _MERGE_OBJECT_ID_RE.match(out) else None
+        cache[label] = commit
+        return commit
+
+    return resolve
+
+
+def _merge_checkout_transforms(cwd, paths):
+    """True when git may rewrite a path's bytes between index and worktree, or that cannot be read.
+
+    ``text``, ``eol``, ``ident``, ``filter``, ``working-tree-encoding`` and the legacy ``crlf``
+    attributes, any ``core.eol``, and any ``core.autocrlf`` git does not parse as false (``true``,
+    ``yes``, ``1``, ``input``, ...), can make a clean ``git diff`` hide an edit.
+    """
+    autocrlf = _run_git(cwd, "config", "--type=bool", "--get", "core.autocrlf")
+    if autocrlf.returncode != 1 and (
+        autocrlf.returncode != 0 or autocrlf.stdout.strip() != "false"
+    ):
+        return True
+    eol = _run_git(cwd, "config", "--get", "core.eol")
+    if eol.returncode != 1:
+        return True
+    attrs = _run_git(
+        cwd, "check-attr", "-z", "text", "eol", "ident", "filter", "working-tree-encoding", "crlf",
+        "--", *paths,
+    )
+    if attrs.returncode != 0:
+        return True
+    fields = attrs.stdout.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) != len(paths) * 18:
+        return True
+    return any(value != "unspecified" for value in fields[2::3])
+
+
+def _merge_tree_mode(cwd, tree, path):
+    """Octal mode string of ``path`` in the merge tree, or None when unreadable."""
+    result = _run_git(cwd, "ls-tree", "-z", tree, "--", path)
+    if result.returncode != 0:
+        return None
+    meta, _, entry_path = result.stdout.rstrip("\0").partition("\t")
+    fields = meta.split()
+    return fields[0] if fields and entry_path == path else None
+
+
+def _merge_side_probe(cwd, action, command):
+    """Per-path probe for a merge-side checkout/restore during a merge in progress.
+
+    Returns None when this branch does not apply (the whole-tree probe decides), else
+    (state, count). Never raises: any error is ("indeterminate", 0).
+    Axis: each named path is judged by whether it holds anything the builder wrote (refusal);
+    every read this decision rests on that fails or cannot be established is a refusal.
+    """
+    try:
+        form = _merge_side_form(action, command)
+        if form is None:
+            return None
+        head_file = _merge_head_file(cwd)
+        if head_file is None:
+            return None
+        if form["source"] and not _merge_source_operands_exact(cwd, form["operands"]):
+            return None
+
+        if not _merge_state_valid(cwd, head_file):
+            return ("indeterminate", 0)
+        entries = _merge_index_entries(cwd, form["operands"])
+        if entries is None:
+            return ("indeterminate", 0)
+        if len(entries) > _MERGE_PATH_LIMIT:
+            return ("indeterminate", 0)
+        import store_core
+        top = store_core.repo_root(cwd)
+        if not isinstance(top, str) or not top or not os.path.isdir(top):
+            return ("indeterminate", 0)
+        # store_core strips all surrounding whitespace, so a root whose name ends in a space
+        # resolves to a sibling: the root must contain cwd and be a checkout root itself.
+        real_cwd = os.path.realpath(cwd)
+        if os.path.commonpath([top, real_cwd]) != top:
+            return ("indeterminate", 0)
+        dot_git = os.path.join(top, ".git")
+        if not (os.path.isdir(dot_git) or os.path.isfile(dot_git)):
+            return ("indeterminate", 0)
+        if _merge_checkout_transforms(top, list(entries)):
+            return ("indeterminate", 0)
+
+        tree = None
+        resolve = _merge_label_resolver(top)
+        risky = 0
+        for path, modes in entries.items():
+            if set(modes) == {0}:
+                listed = _run_git(top, "--literal-pathspecs", "ls-files", "-v", "-z", "--", path)
+                if listed.returncode != 0:
+                    return ("indeterminate", 0)
+                for entry in listed.stdout.split("\0"):
+                    if entry and (entry[0].islower() or entry[0] == "S"):
+                        return ("indeterminate", 0)
+                diff = _run_git(
+                    top, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+                    "--quiet", "--ignore-submodules=none", "--", path,
+                )
+                if diff.returncode == 1:
+                    risky += 1
+                    continue
+                if diff.returncode != 0:
+                    return ("indeterminate", 0)
+                # core.filemode=false hides a mode-only edit from git diff: compare the bit here.
+                index_mode = modes[0]
+                if index_mode not in ("100644", "100755"):
+                    return ("indeterminate", 0)
+                worktree_mode = os.lstat(os.path.join(top, path)).st_mode
+                if not stat.S_ISREG(worktree_mode):
+                    return ("indeterminate", 0)
+                if bool(worktree_mode & stat.S_IXUSR) != (index_mode == "100755"):
+                    risky += 1
+                continue
+
+            worktree_path = os.path.join(top, path)
+            if os.path.islink(worktree_path):
+                return ("indeterminate", 0)
+            if not os.path.lexists(worktree_path):
+                continue
+            if not os.path.isfile(worktree_path):
+                return ("indeterminate", 0)
+            if tree is None:
+                ids = _merge_commit_ids(top)
+                if ids is None:
+                    return ("indeterminate", 0)
+                ours, theirs = ids
+                tree = _merge_tree_id(top, ours, theirs)
+                if tree is None:
+                    return ("indeterminate", 0)
+            blob = _run_git_bytes(top, "cat-file", "blob", f"{tree}:{path}")
+            if blob.returncode != 0:
+                return ("indeterminate", 0)
+            with open(worktree_path, "rb") as f:
+                written = f.read()
+            if not _merge_content_matches(
+                written, blob.stdout, ours, theirs, resolve,
+            ):
+                risky += 1
+                continue
+            # Bytes alone miss a mode-only edit: the executable bit is the builder's too.
+            # core.filemode does not matter: a checkout rewrites the file's mode either way.
+            merged_mode = _merge_tree_mode(top, tree, path)
+            if merged_mode not in ("100644", "100755"):
+                # A symlink (120000) or gitlink (160000) resolution is a file-type choice.
+                return ("indeterminate", 0)
+            if bool(os.stat(worktree_path).st_mode & stat.S_IXUSR) != (merged_mode == "100755"):
+                risky += 1
+        if risky:
+            return ("at-risk", risky)
+        return ("clean", 0)
+    except Exception:
+        return ("indeterminate", 0)
+
+
 def at_risk(cwd, action, command):
     """Read-only worktree probe. Returns (state, count). Never raises."""
     if not isinstance(cwd, str) or not cwd:
@@ -941,6 +1463,10 @@ def at_risk(cwd, action, command):
         return ("indeterminate", 0)
     if git_dir is None:
         return ("not-a-repo", 0)
+
+    merge_state = _merge_side_probe(probe_cwd, action, command)
+    if merge_state is not None:
+        return merge_state
 
     try:
         checkout_path_treeish = (

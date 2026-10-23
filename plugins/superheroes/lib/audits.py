@@ -18,11 +18,6 @@ AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 UNAUTHENTICATED_NO_AUDITOR_RECORDED = "no-auditor-recorded"
 UNAUTHENTICATED_MANIFEST_ENTRY_MISSING = "manifest-entry-missing"
 UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH = "manifest-vendor-mismatch"
-UNAUTHENTICATED_CAUSES = (
-    UNAUTHENTICATED_NO_AUDITOR_RECORDED,
-    UNAUTHENTICATED_MANIFEST_ENTRY_MISSING,
-    UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH,
-)
 
 # The rulings whose fix counts as discharged for stall/continuation accounting. A
 # `discharged-but-new-issue` clears the ORIGINAL finding (a new candidate is emitted separately),

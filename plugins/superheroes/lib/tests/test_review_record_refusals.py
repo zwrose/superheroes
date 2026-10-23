@@ -210,6 +210,31 @@ def test_the_fence_is_longer_than_the_longest_of_several_backtick_runs():
     assert rr._inline_code("echo ``x`` `y` z") == "```echo ``x`` `y` z```"
 
 
+ROUTED = dict(REFUSAL, hook="worktree-guard", route="git checkout --theirs f.txt",
+              next="took the route the guard named")
+
+
+def test_the_refusals_line_shows_a_taken_route():
+    # axis: the refusals line lists a taken route beside its refusal — see bite-proof record wo_a_2054_route
+    line = rr._command_refusals_line([dict(ROUTED, round=3)], False)
+    assert ("round 3: `git push --force origin main` (hook: worktree-guard, took `git checkout --theirs f.txt`)"
+            " → took the route the guard named") in line
+
+
+@pytest.mark.parametrize("route", [None, ""])
+def test_the_refusals_line_shows_no_route_when_none_was_taken(route):
+    line = rr._command_refusals_line([dict(REFUSAL, round=1, route=route)], False)
+    assert ", took" not in line
+    assert line == rr._command_refusals_line([dict(REFUSAL, round=1)], False)
+
+
+def test_validate_accepts_a_taken_route_and_refuses_one_on_a_permission_refusal():
+    assert _validated([dict(ROUTED, round=1)])["commandRefusals"][0]["route"] == "git checkout --theirs f.txt"
+    with pytest.raises(rr.Refusal) as e:
+        _validated([dict(OTHER, round=1, route="git status")])
+    assert e.value.reason == "review-account-invalid" and e.value.detail.startswith("commandRefusals[0]")
+
+
 def test_the_compact_level_renders_the_count_form():
     refusals = [dict(REFUSAL, round=1), dict(OTHER, round=2)]
     assert rr._command_refusals_line(refusals, True) == f"Refusals met: 2 refused or denied commands {rr.LISTED}."

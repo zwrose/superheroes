@@ -550,7 +550,7 @@ _PAYLOAD_FIELD_BINDINGS = {
                 "required": list(command_refusals.ENTRY_REQUIRED),
                 "optional": list(command_refusals.ENTRY_OPTIONAL),
                 "types": {"command": "non-empty-string", "next": "non-empty-string",
-                          "refusedBy": "string", "hook": "any"},
+                          "refusedBy": "string", "hook": "any", "route": "any"},
                 "enums": {"refusedBy": list(command_refusals.REFUSED_BY)},
             },
         },

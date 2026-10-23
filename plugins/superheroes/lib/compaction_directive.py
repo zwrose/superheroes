@@ -173,6 +173,11 @@ def delivered_marker_path(session_id, env=None, cwd=None):
     return _session_file(session_id, ".delivered", env, cwd)
 
 
+def skip_record_path(session_id, env=None, cwd=None):
+    """The record the mod writes beside the notes when it declines an automatic checkpoint, or None."""
+    return _session_file(session_id, ".skip", env, cwd)
+
+
 def find_transcript(session_id, env=None, cwd=None):
     """The first existing ``<config dir>/projects/*/<session_id>.jsonl``, or None.
 
@@ -266,6 +271,16 @@ def save_notes(session_id, text, env=None, cwd=None):
     return path
 
 
+def save_skip_record(session_id, text, env=None, cwd=None):
+    """Atomically replace this session's skip record with ``text``; the record path, or ``None``
+    when there is no path. Raises on I/O failure."""
+    path = skip_record_path(session_id, env, cwd)
+    if path is None:
+        return None
+    _atomic_write(path, text)
+    return path
+
+
 def mark_delivered(session_id, env=None, now=None, cwd=None):
     """Atomically publish this session's delivery marker (a complete timestamp or no marker at
     all, so a failed write cannot leave an empty or partial marker for the PreCompact fallback to
@@ -350,16 +365,16 @@ def unmark_attempt(session_id, since_ms, until_ms, env=None, cwd=None):
 
 # ----------------------------------------------------------------- reaping
 def _stale(mtime, suffix, current):
-    """The reap rule on one file's mtime: notes past ``NOTES_MAX_AGE_DAYS``, markers outside the
-    delivery window."""
-    if suffix == ".md":
+    """The reap rule on one file's mtime: notes and skip records past ``NOTES_MAX_AGE_DAYS``,
+    markers outside the delivery window."""
+    if suffix in (".md", ".skip"):
         return current - mtime > NOTES_MAX_AGE_DAYS * 86400
     return abs(current - mtime) > DELIVERY_WINDOW_SECONDS
 
 
 def reap(session_id, env=None, cwd=None, now=None):
-    """Remove stale files from the checkpoint directory: ``<id>.md`` notes older than
-    ``NOTES_MAX_AGE_DAYS`` (by mtime) and ``<id>.delivered`` markers outside the delivery window.
+    """Remove stale files from the checkpoint directory: ``<id>.md`` notes and ``<id>.skip`` records
+    older than ``NOTES_MAX_AGE_DAYS`` (by mtime) and ``<id>.delivered`` markers outside the delivery window.
     Only regular files with a valid session-id name, never a symlink, never a subdirectory's
     content, never ``session_id``'s own files. The scan and every removal run under the
     checkpoint lock, which every writer takes to publish, so no save lands in between; where the
@@ -380,7 +395,7 @@ def reap(session_id, env=None, cwd=None, now=None):
             for entry in listing:
                 try:
                     stem, suffix = os.path.splitext(entry.name)
-                    if suffix not in (".md", ".delivered") or not _valid_session_id(stem) or stem == session_id:
+                    if suffix not in (".md", ".skip", ".delivered") or not _valid_session_id(stem) or stem == session_id:
                         continue
                     info = entry.stat(follow_symlinks=False)
                     if entry.is_symlink() or not stat.S_ISREG(info.st_mode):
@@ -429,6 +444,7 @@ _REQUIRED_ROLES = {
     "save": ("sessionId",),
     "mark": ("sessionId",),
     "unmark": ("sessionId", "since", "until"),
+    "skip": ("sessionId",),
     "mode": ("transcriptPath",),
     "instructions": ("sessionId",),
 }
@@ -464,6 +480,18 @@ def _verb_save(args):
     if not text.strip():
         return _refuse("empty-notes")
     path = save_notes(args.session_id, text, cwd=os.getcwd())
+    if path is None:
+        return _refuse("config-dir-unresolved")
+    return _emit({"ok": True, "path": path})
+
+
+def _verb_skip(args):
+    if not _valid_session_id(args.session_id):
+        return _refuse("session-id-invalid")
+    text = sys.stdin.read()
+    if not text.strip():
+        return _refuse("empty-record")
+    path = save_skip_record(args.session_id, text, cwd=os.getcwd())
     if path is None:
         return _refuse("config-dir-unresolved")
     return _emit({"ok": True, "path": path})
@@ -515,8 +543,8 @@ def main(argv=None):
     argv = _glue_user_instructions(list(sys.argv[1:] if argv is None else argv))
     args = _build_parser().parse_args(argv)     # argparse usage errors exit 2 by design
     try:
-        verb = {"path": _verb_path, "save": _verb_save, "mark": _verb_mark, "unmark": _verb_unmark,
-                "mode": _verb_mode, "instructions": _verb_instructions}
+        verb = {"path": _verb_path, "save": _verb_save, "skip": _verb_skip, "mark": _verb_mark,
+                "unmark": _verb_unmark, "mode": _verb_mode, "instructions": _verb_instructions}
         return verb[args.verb](args)
     except Exception:
         return _refuse("internal-error")
