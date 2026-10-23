@@ -269,6 +269,18 @@ def _blocks(rec):
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
 
+def _to_session(to, session):
+    """Whether a SendMessage `to` names `session`: the bare name, or the host's disambiguated form
+    `<session> [<ref>]` with exactly one space and a non-empty ref free of whitespace and brackets."""
+    if to == session:
+        return True
+    if not (isinstance(to, str) and to.startswith(session + " [") and to.endswith("]")):
+        return False
+    ref = to[len(session) + 2:-1]
+    # axis: only the bare name or the host's one-space `[ref]` form is this session — a bare ref, another name, a prefix or a loose bracket is not — see bite-proof record wo_2099_relay_check.md
+    return bool(ref) and not any(c.isspace() or c in "[]" for c in ref)
+
+
 def _sends(records, session, after):
     """[(sent text, tool_use id)] of SendMessage calls to `session` stamped at or after `after`,
     and {tool_use id: (success, message)} for the results that read as a JSON object. A call
@@ -295,7 +307,7 @@ def _sends(records, session, after):
                 when = _time(rec.get("timestamp"))
                 if (isinstance(b.get("id"), str) and b["id"] and isinstance(args, dict)
                         and isinstance(args.get("message"), str)
-                        and args.get("to") == session and when is not None and when >= after):
+                        and _to_session(args.get("to"), session) and when is not None and when >= after):
                     sends.append((args["message"], b["id"]))
     return sends, results
 
@@ -323,12 +335,15 @@ def _decide(msg, relay_id, final):
     exact = [results.get(i) for t, i in sends if t == msg["forward"]]
     if any(r and r[0] for r in exact):
         return "delivered", None
-    failed = [r for r in exact if r and not r[0]]
-    if failed:
-        return "relay-send-failed", {"result": failed[0][1]}
+    # axis: a failed attempt is provisional while the wait runs — a retry's success may still be recorded — see bite-proof record wo_2099_relay_check.md
     if not final:
         return None, None
-    return ("relay-send-unconfirmed" if exact else "relay-silent"), None
+    if any(r is None for r in exact):
+        return "relay-send-unconfirmed", None
+    failed = [r for r in exact if not r[0]]
+    if failed:
+        return "relay-send-failed", {"result": failed[0][1]}
+    return "relay-silent", None
 
 
 def _say(verdict, msg_id, wait, detail):

@@ -218,7 +218,7 @@ def test_exact_text_refused_by_the_session_is_send_failed(world):
                                      success=False))
     out, clock = _check(world, msg["msgId"])
     assert out["ok"] is False and out["reason"] == "relay-send-failed"
-    assert "No agent named" in out["say"] and clock.t == 0
+    assert "No agent named" in out["say"] and clock.t >= 60
 
 
 def test_exact_send_without_result_is_unconfirmed_at_the_end(world):
@@ -243,6 +243,80 @@ def test_result_arriving_during_the_wait_is_delivered(world):
     out = cr.check(world.repo, msg["msgId"], wait=30, interval=2, env=world.env,
                    clock=clock, sleep=sleep)
     assert out["delivered"] is True and clock.t == 2
+
+
+STAMP = "2026-10-12T10:00:00.000Z"
+
+
+def test_a_failed_attempt_then_a_recorded_retry_success_is_delivered(world):
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
+                  _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP))
+    out, clock = _check(world, msg["msgId"], wait=60)
+    assert out["ok"] is True and out["delivered"] is True and out["reason"] is None
+    assert clock.t == 0
+
+
+def test_a_failed_attempt_then_a_retry_success_arriving_during_the_wait_is_delivered(world):
+    msg = _composed(world)
+    failed = _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False)
+    _write_record(world, failed)
+    clock = Clock()
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        _write_record(world, failed, _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP))
+
+    out = cr.check(world.repo, msg["msgId"], wait=30, interval=2, env=world.env,
+                   clock=clock, sleep=sleep)
+    assert out["delivered"] is True and clock.t == 2
+
+
+def test_only_failed_attempts_are_send_failed_at_the_end_of_the_wait(world):
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
+                  _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP, success=False))
+    out, clock = _check(world, msg["msgId"], wait=10, interval=2)
+    assert out["ok"] is False and out["reason"] == "relay-send-failed"
+    assert "No agent named" in out["say"] and clock.t >= 10
+
+
+def test_a_failed_attempt_and_a_retry_without_a_result_is_unconfirmed(world):
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
+                  _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP, result=False))
+    out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+    assert out["reason"] == "relay-send-unconfirmed" and clock.t >= 6
+
+
+@pytest.mark.parametrize("to", [
+    "someone-else [3fa9c1]", "[3fa9c1]", "3fa9c1", SESSION + " []", SESSION + "  [x]",
+    SESSION + " [a b]", SESSION + " [x]y", SESSION + " [x[y]", SESSION + "x [3fa9c1]",
+    SESSION + " [3fa9c1] ", SESSION + "[3fa9c1]"])
+def test_a_send_to_a_loosely_bracketed_recipient_is_not_this_messages_send(world, to):
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", to, msg["forward"], STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+
+
+def test_a_bracketed_send_with_altered_text_is_a_mismatch(world):
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION + " [3fa9c1]", msg["forward"][:-1], STAMP))
+    out, clock = _check(world, msg["msgId"])
+    assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False and clock.t == 0
+
+
+def test_the_disambiguated_recipient_form_is_session_space_bracketed_ref(world):
+    # Literal pin of the host SendMessage tool's `to` form: `worker [3fa9c1]` (CONVENTIONS §11.3).
+    assert "%s [3fa9c1]" % SESSION == "builder-1748 [3fa9c1]"
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", "%s [3fa9c1]" % SESSION, msg["forward"], STAMP))
+    out, _ = _check(world, msg["msgId"])
+    assert out["delivered"] is True
 
 
 def test_send_to_another_session_is_ignored(world):
