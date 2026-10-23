@@ -32,10 +32,12 @@ union break between PRs whose files do not overlap, so a train does not re-sync 
 remaining PR after every unrelated merge: a PR whose files nothing merged since its last sync
 touched, with no conflict, is already current (duty 6). Where the branch does require it, GitHub
 refuses a PR that is behind, so every remaining PR is brought current before its merge, never
-skipped with an admin bypass, and that saving does not apply.
+skipped with an admin bypass, and that saving does not apply. The saving never covers a stack: a
+stack whose base moved is brought current bottom-up as `rubric/native-stacks.md` § How a stack
+stays current says, whatever the base branch requires.
 Read the requirement before the train's first merge, for the base branch (`main` here):
-`gh api repos/<owner>/<repo>/rules/branches/main --jq '.[] | select(.type=="required_status_checks") | .parameters.strict_required_status_checks_policy'`
-(rulesets) and `gh api repos/<owner>/<repo>/branches/main/protection --jq '.required_status_checks.strict'`
+`gh api --paginate repos/<owner>/<repo>/rules/branches/main --jq '.[] | select(.type=="required_status_checks") | .parameters.strict_required_status_checks_policy'`
+(rulesets, every page) and `gh api repos/<owner>/<repo>/branches/main/protection --jq '.required_status_checks.strict'`
 (classic protection; a 404 "Branch not protected" answers "none"). Either one reporting `true`
 means the branch requires it. Any other failure of either read counts as requiring it.
 

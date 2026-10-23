@@ -489,9 +489,9 @@ above).
    `skills/showrunner/reference/vet-receipt.md` spine field 1); and a branch current with its base.
    What "current" means follows the base branch's protection. Where the branch requires pull
    requests to be up to date before merging, bring the PR current before every merge, and never use
-   an admin bypass to skip that. Where it does not, a PR is current when GitHub reports no conflict
-   and nothing merged into the base since its last sync touched its files; otherwise bring it
-   current first. The branch's rulesets (`required_status_checks` with
+   an admin bypass to skip that. Where it does not, a PR that is not part of a stack is current
+   when GitHub reports no conflict and nothing merged into the base since its last sync touched its
+   files; otherwise bring it current first. The branch's rulesets (`required_status_checks` with
    `strict_required_status_checks_policy`) or its classic branch protection
    (`required_status_checks.strict`) tell the two apart, and a failed read counts as requiring
    up-to-date PRs
