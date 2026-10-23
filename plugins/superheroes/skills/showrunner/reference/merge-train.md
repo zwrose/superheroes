@@ -75,7 +75,8 @@ which lists the stack's pull requests, and the merge acts on exactly those pull 
 a **mutable container** — a layer can be linked onto it after the word is given — so a merge issued
 against a stack **number** can act on a pull request the owner never saw. Nothing in the tooling closes that gap; this rule does.
 
-1. **Membership is read from GitHub before any PR sheet is built** — the GraphQL read in
+1. **Membership is read from GitHub before any PR sheet is built** — GitHub's own membership read
+   (GraphQL, or REST in a cloud session through the same `lib/stack_check.py` invocation) in
    `rubric/native-stacks.md` § *How membership is verified*. That read is performed by
    `lib/stack_check.py` as `python3 -B <plugin-root>/lib/stack_check.py list --pr <a member pull
    request> --repo <owner/name>` — the entry point is **a member pull request** because GitHub's
