@@ -197,10 +197,6 @@ def present_blocking_from_dimension_results(results):
     return len(_current_blocking_findings(results))
 
 
-def blocking_findings_from_dimension_results(results):
-    return [dict(f) for f in _current_blocking_findings(results)]
-
-
 def compile_dimension_results(results):
     findings = []
     for name, result in (results or {}).items():

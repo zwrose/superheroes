@@ -356,11 +356,8 @@ _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 CARRIED_DISCLOSURE_CHANNELS = receipt_disclosures.CARRIED_DISCLOSURE_CHANNELS
-_str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
-_adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
-_order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 build_degraded_prose = receipt_disclosures.build_degraded_prose
 degraded = receipt_disclosures.degraded
 base_degraded = receipt_disclosures.base_degraded
@@ -403,8 +400,6 @@ _driver_author_family = author_family
 _same_family_seats = same_family_seats
 _same_family_degraded = same_family_degraded
 _seat_map_violated = seat_map_violated
-_seat_map_violation_breach_prose = seat_map_violation_breach_prose
-_seat_pin_excused_seats = seat_pin_excused_seats
 _seat_map_unjudgeable = seat_map_unjudgeable
 
 
@@ -1129,7 +1124,6 @@ def _auditor_vendor(config, fixer_vendor, runner_only=False, maker_families=froz
 _seat_map_receipts = seat_map_receipts.receipts
 _sm_latest_with_seats = seat_map_receipts.latest_with_seats
 _sm_any_seats = seat_map_receipts.any_seats
-_sm_same_family_seats = seat_map_receipts.same_family_seats
 _sm_unexcused_violations = seat_map_receipts.unexcused_violations
 _sm_pin_excused_records = seat_map_receipts.pin_excused_records
 _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
@@ -7180,15 +7174,6 @@ def _terminal_receipt_on_disk(session_dir):
     return _on_disk_receipt_class(session_dir) == "terminal"
 
 
-def _write_interim_receipt(session_dir, state, stop_reason):
-    """Write an interim receipt atomically. OSError PROPAGATES — same stance as `_write_receipt`."""
-    receipt = build_interim_receipt(state, session_dir, stop_reason)
-    path = os.path.join(session_dir, RECEIPT_INTERIM_FILE)
-    round_commit.atomic_write_bytes(
-        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    return receipt
-
-
 def _receipt_requires_round_verify_passes(receipt):
     """Whether round entries must carry verifyPasses (certified v3+, attested, interim only).
 
@@ -7802,10 +7787,6 @@ def run_loop(seams, config=None):
 # Layer 2 — the stepwise CLI (next / submit)
 # =============================================================================================
 
-def _pending_step(state):
-    return state.get("pending")
-
-
 def cmd_next(session_dir, config_overrides=None):
     """Emit the ONE next action. Idempotent: a second `next` before a `submit` returns the same
     pending step + hash. A v1 state file is refused with a fresh-start message.
@@ -8096,18 +8077,6 @@ def _refuse_journal_damaged(session_dir, cmd, **kwargs):
     return _refuse_cmd(session_dir, cmd, JOURNAL_DAMAGED_CAUSE,
                        detail=JOURNAL_DAMAGED_DETAIL, **kwargs)
 
-
-
-def _row_matches_ruling_id(row, ruling_id):
-    if not isinstance(row, dict) or not isinstance(ruling_id, str):
-        return False
-    if row.get("id") == ruling_id:
-        return True
-    fkey = row.get(session_contract.FINDING_KEY_FIELD)
-    if fkey == ruling_id:
-        return True
-    derived = _finding_key_of(row)
-    return derived == ruling_id if derived else False
 
 
 def _severity_for_finding_key(state, key, fallback=None):
