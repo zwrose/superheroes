@@ -1385,3 +1385,64 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_deadline_with_tim
  M plugins/superheroes/lib/tests/test_stack_check.py
  M plugins/superheroes/lib/tests/bite_proofs/wo_stackcheck_1340.md
 ```
+
+---
+
+## #2098 REST transport
+
+Per-guard bite proof for the REST transport and the whole-snapshot pass check added to `plugins/superheroes/lib/stack_check.py`. Each guard was neutralized by one targeted edit, its proving test run alone and shown red, restored by the inverse edit, and shown green again. IDs `R1`–`R17` continue this file without reusing the `E` IDs.
+
+**Provenance:** claude / per the dispatch seat.
+
+**Command** (referred to as *the R command* below; `-k` selects the proving test):
+
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2098 -m pytest plugins/superheroes/lib/tests/test_stack_check.py -q -p no:cacheprovider -k <proving test>
+```
+
+| ID | Guarded element (file:line) | Axis | Proving test | Verdict |
+|---|---|---|---|---|
+| R1 | stack_check.py:373 | transport is not one of auto, graphql, rest | `test_r_bad_transport_value_refuses` | proven |
+| R2 | stack_check.py:1196 | only a non-zero gh exit carrying both proxy-refusal markers falls back to REST | `test_r_auto_without_proxy_refusal_does_not_fall_back` | proven |
+| R3 | stack_check.py:952 | read budget exhausted before a REST GET | `test_r_deadline_exhausted_before_the_first_get_refuses`, `test_r_deadline_exhausted_before_the_stack_get_refuses` | proven |
+| R4 | stack_check.py:961 | REST run raises FileNotFoundError/OSError | `test_r_transport_failures_on_either_get_refuse` (`file-not-found`) | proven |
+| R5 | stack_check.py:965 | REST run raises subprocess.TimeoutExpired | `test_r_transport_failures_on_either_get_refuse` (`timeout`) | proven |
+| R6 | stack_check.py:970 | REST gh exits non-zero | `test_r_gh_exits_nonzero_with_valid_json_stdout_refuses` | proven |
+| R7 | stack_check.py:978 | REST stdout is not JSON | `test_r_transport_failures_on_either_get_refuse` (`non-json`) | proven |
+| R8 | stack_check.py:983 | REST parsed JSON is not an object | `test_r_transport_failures_on_either_get_refuse` (`array`, `null`) | proven |
+| R9 | stack_check.py:999 | a required REST pull-request field is missing or of the wrong type | `test_r_malformed_pull_request_fields_refuse` | proven |
+| R10 | stack_check.py:1011 | REST stack key is absent or null | `test_r_unstacked_pull_request_is_not_linked`, `test_r_null_stack_is_not_linked` | proven |
+| R11 | stack_check.py:1021 | REST stack is not an object, or number/position/size/base.ref wrong type | `test_r_malformed_stack_object_refuses` | proven |
+| R12 | stack_check.py:1098 | REST stack GET number, base.ref or pull_requests is missing or of the wrong type | `test_r_malformed_stack_response_refuses` | proven |
+| R13 | stack_check.py:1104 | REST stack GET reports a different stack number than the pull request | `test_r_stack_number_mismatch_is_order_mismatch` | proven |
+| R14 | stack_check.py:1110 | REST stack GET reports a different base than the pull request | `test_r_stack_base_mismatch_is_order_mismatch` | proven |
+| R15 | stack_check.py:1118 | a REST stack member or one of its fields is missing, unknown or wrong type | `test_r_malformed_member_refuses` | proven |
+| R16 | stack_check.py:1122 | the REST member count would exceed stack size | `test_r_more_members_than_size_refuses` | proven |
+| R17 | stack_check.py:616 | the stack snapshot (not only the members) changes between two complete enumeration passes | `test_r_graphql_second_pass_different_stack_number_is_order_mismatch`, `test_r_rest_second_pass_different_stack_number_is_order_mismatch` | proven |
+
+Every neutralization below replaced the guard's condition with `False` (`if False:  # bite-proof`, or `False and (...)` for the multi-line conditions), except R4, R5, R7 (the `except` body became `pass  # bite-proof`) and R2 (the return became `return True  # bite-proof`). The raw outputs are the pytest summary lines (traceback bodies elided); the full runs are in the dispatch return.
+
+| ID | raw red | raw green after restore | restored line |
+|---|---|---|---|
+| R1 | `1 failed, 222 deselected in 0.35s` | `1 passed, 222 deselected in 0.26s` | `    if transport not in TRANSPORTS:` |
+| R2 | `1 failed, 222 deselected in 0.36s` | `1 passed, 222 deselected in 0.30s` | `    return proc.returncode != 0 and all(marker in output for marker in GRAPHQL_REFUSED_MARKERS)` |
+| R3 | `2 failed, 221 deselected in 0.39s` | `2 passed, 221 deselected in 0.29s` | `    if deadline_at is not None and time.monotonic() >= deadline_at:` |
+| R4 | `2 failed, 221 deselected in 0.39s` | `2 passed, 221 deselected in 0.29s` | `        return None, _refusal(REASON_STACK_UNREADABLE, "gh api %s: %s" % (endpoint, exc),` |
+| R5 | `2 failed, 221 deselected in 0.39s` | `2 passed, 221 deselected in 0.40s` | `        return None, _refusal(REASON_STACK_UNREADABLE, "gh api %s timed out" % endpoint,` |
+| R6 | `2 failed, 221 deselected in 0.39s` | `2 passed, 221 deselected in 0.33s` | `    if proc.returncode != 0:` |
+| R7 | `2 failed, 221 deselected in 0.42s` | `2 passed, 221 deselected in 0.28s` | `        return None, _refusal(REASON_STACK_UNREADABLE,` / `"gh api %s returned output that is not JSON" % endpoint, ...` |
+| R8 | `4 failed, 219 deselected in 0.64s` | `4 passed, 219 deselected in 0.31s` | `    if not isinstance(payload, dict):` |
+| R9 | `7 failed, 216 deselected in 0.59s` | `7 passed, 216 deselected in 0.31s` | `    if (` / `        not _is_int(pr_number)` |
+| R10 | `2 failed, 221 deselected in 0.32s` | `2 passed, 221 deselected in 0.27s` | `    if stack is None:` |
+| R11 | `10 failed, 213 deselected in 0.89s` | `10 passed, 213 deselected in 0.41s` | `    if (` / `        not isinstance(stack, dict)` |
+| R12 | `6 failed, 217 deselected in 0.63s` | `6 passed, 217 deselected in 0.38s` | `    if not _is_int(number) or not isinstance(base_ref, str) or not isinstance(pull_requests, list):` |
+| R13 | `1 failed, 222 deselected in 0.27s` | `1 passed, 222 deselected in 0.29s` | `    if number != snapshot["stack_number"]:` |
+| R14 | `1 failed, 222 deselected in 0.35s` | `1 passed, 222 deselected in 0.25s` | `    if base_ref != snapshot["stack_baseRefName"]:` |
+| R15 | `11 failed, 212 deselected in 0.36s` (`--tb=line` re-run; the first red run's output was truncated by the harness) | `11 passed, 212 deselected in 0.39s` | `        if parse_err:` |
+| R16 | `1 failed, 222 deselected in 0.36s` | `1 passed, 222 deselected in 0.26s` | `        if len(members) + 1 > snapshot["stack_size"]:` |
+| R17 | `2 failed, 221 deselected in 0.37s` | `2 passed, 221 deselected in 0.28s` | `    if snapshot != prior_snapshot:` |
+
+**Disclosures:**
+- R11's first red run and R15's first red run were truncated mid-output by the harness; R11's summary line (`10 failed, 213 deselected in 0.89s`) survived, R15's did not, so R15's red above comes from a `--tb=line` re-run of the same single test against the same neutralization.
+- The "queried pull request is not present exactly once at its reported position" clause (E35) cannot fire on the REST path: REST positions are index + 1, so they are unique and 1..n by construction; a swapped list is caught by the entry-disagrees-with-top-level clause (E36) instead (`test_r_queried_pull_request_not_at_its_position_is_order_mismatch`).
+- R6: `test_r_transport_failures_on_either_get_refuse[exit-1]` alone does not discriminate (a neutralized exit-code check falls through to the not-JSON clause with the same reason), so R6 is proven by `test_r_gh_exits_nonzero_with_valid_json_stdout_refuses` (valid JSON on stdout beside a non-zero exit).

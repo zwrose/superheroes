@@ -75,7 +75,8 @@ which lists the stack's pull requests, and the merge acts on exactly those pull 
 a **mutable container** — a layer can be linked onto it after the word is given — so a merge issued
 against a stack **number** can act on a pull request the owner never saw. Nothing in the tooling closes that gap; this rule does.
 
-1. **Membership is read from GitHub before any PR sheet is built** — the GraphQL read in
+1. **Membership is read from GitHub before any PR sheet is built** — GitHub's own membership read
+   (GraphQL, or REST in a cloud session through the same `lib/stack_check.py` invocation) in
    `rubric/native-stacks.md` § *How membership is verified*. That read is performed by
    `lib/stack_check.py` as `python3 -B <plugin-root>/lib/stack_check.py list --pr <a member pull
    request> --repo <owner/name>` — the entry point is **a member pull request** because GitHub's
@@ -114,6 +115,13 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    layers if one member fails. Merge semantics, the bare-number ambiguity, per-pull-request
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
+   In a cloud session the equivalent is `python3 -B <plugin-root>/lib/stack_merge.py merge --repo
+   <owner/name> --top <top layer> --sha <its head from item 3's re-read>`. A non-zero exit is not
+   merged, and the train reports the result's `reason`. The default wait is 420 seconds in all,
+   the PUT included, so a `poll-timeout` result and its `uuid` print before the 600-second host
+   cap. `merge-enqueued` is read back later as a
+   queued merge: it is not merged, and a queued stack is not atomic, as `rubric/native-stacks.md`
+   says.
 
    **The PR sheets name whole stacks.** A stack merges when its **feature** is complete — every
    layer the issue's plan names, vetted — and never when a vetted prefix exists. **A vetted prefix is
