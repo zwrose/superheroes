@@ -19,7 +19,10 @@ import sys
 import time
 
 GH_TIMEOUT = 120
-DEFAULT_POLL_TIMEOUT = 600
+# One budget bounds a whole `merge` or `poll` invocation, the PUT included. 420 seconds
+# leaves the invocation well below the 600-second host command cap, so a poll-timeout
+# result (with its uuid) is always printed before the host kills the helper.
+DEFAULT_POLL_TIMEOUT = 420
 DEFAULT_POLL_INTERVAL = 5
 MAX_DETAIL = 500
 
@@ -324,8 +327,11 @@ def merge(*, repo, top, sha, poll_timeout=DEFAULT_POLL_TIMEOUT,
     if not shutil.which("gh"):
         return _result(repo, top, sha, reason=REASON_GH_UNAVAILABLE, detail="gh not on PATH")
 
+    # axis: the budget starts before the PUT, so the PUT and the polling share one deadline
+    start = monotonic()
     try:
-        proc = run(_put_argv(repo, top, sha), capture_output=True, text=True, timeout=timeout)
+        proc = run(_put_argv(repo, top, sha), capture_output=True, text=True,
+                   timeout=min(timeout, poll_timeout))
     except (OSError, subprocess.TimeoutExpired) as exc:
         # axis: run raises OSError or TimeoutExpired on the PUT
         return _result(repo, top, sha, reason=REASON_MERGE_REQUEST_REFUSED,
@@ -346,7 +352,7 @@ def merge(*, repo, top, sha, poll_timeout=DEFAULT_POLL_TIMEOUT,
     if settled is not None:
         return settled
 
-    return _poll_loop(repo, top, sha, read["uuid"], monotonic(), poll_timeout,
+    return _poll_loop(repo, top, sha, read["uuid"], start, poll_timeout,
                       poll_interval, timeout, run, sleep, monotonic, read["status"])
 
 

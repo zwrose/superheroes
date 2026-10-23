@@ -50,6 +50,8 @@ def _make_run(handlers):
     def _run(argv, **kwargs):
         calls.append(list(argv))
         kw_calls.append(dict(kwargs))
+        assert kwargs.get("capture_output") is True
+        assert kwargs.get("text") is True
         key = tuple(argv)
         if key not in queues:
             raise AssertionError("unexpected gh argv: %r" % (argv,))
@@ -150,6 +152,8 @@ def test_m1_put_argv_pins_top_pr_squash_and_sha():
     assert "merge_method=squash" in calls[0]
     assert "sha=" + SHA in calls[0]
     assert not any("merge_action" in arg for arg in calls[0])
+    assert run.kw_calls[0]["timeout"] == 30  # min(GH_TIMEOUT, the 30-second budget)
+    _result, _calls, run = _do_merge({tuple(PUT_ARGV): _merged()}, poll_timeout=500)
     assert run.kw_calls[0]["timeout"] == sm.GH_TIMEOUT
 
 
@@ -281,6 +285,28 @@ def test_m6_poll_call_timeout_is_capped_by_the_time_left():
     _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
     assert [kw["timeout"] for kw in run.kw_calls[1:]] == [7, 2]
     assert clock.now <= 12
+
+
+def test_m6_default_budget_ends_below_the_host_command_cap():
+    assert sm.DEFAULT_POLL_TIMEOUT == 420
+
+
+def test_m6_one_budget_bounds_the_put_and_the_polling():
+    clock = _Clock()
+    put = _pending()
+
+    def _run(argv, **kwargs):
+        if list(argv) == PUT_ARGV:
+            assert kwargs["timeout"] == 10
+            clock.now += 8
+            return put
+        return _pending()
+
+    result = sm.merge(repo=REPO, top=TOP, sha=SHA, poll_timeout=10, poll_interval=5,
+                      timeout=120, run=_run, sleep=clock.sleep, monotonic=clock.monotonic)
+    _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
+    assert result["uuid"] == UUID
+    assert clock.now <= 10
 
 
 def test_m6_interval_longer_than_the_budget_makes_no_poll_get():

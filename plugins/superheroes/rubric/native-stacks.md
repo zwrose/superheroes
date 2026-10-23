@@ -260,7 +260,8 @@ to break the requirement is a layer whose branch no longer descends from the tip
 **In a cloud session** `gh stack merge` does not run. Merge the top layer with
 `python3 -B <plugin root>/lib/stack_merge.py merge --repo <owner/name> --top <top PR> --sha <top head
 sha>`, taking the head from the membership re-read. The sha pin makes GitHub cancel the merge if the
-top head moved. Exit 0 means GitHub reported `status: merged`. Any other exit is not merged:
+top head moved. The default wait is 420 seconds in all, the PUT included, so a `poll-timeout`
+result with its `uuid` prints before the 600-second host cap. Exit 0 means GitHub reported `status: merged`. Any other exit is not merged:
 `merge-enqueued` (added to a merge queue), `merge-failed` and `poll-timeout` (still pending) are not
 merged, and a queued stack is not atomic. Resume a `poll-timeout` with
 `python3 -B <plugin root>/lib/stack_merge.py poll --repo <o/r> --top <n> --uuid <u> --sha <sha>`, using
