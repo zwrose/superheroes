@@ -649,6 +649,18 @@ def test_E10_the_audit_fold_records_nothing_unless_every_target_cleared(tmp_path
     assert "prBodyAudited" not in state["rounds"]["2"]
 
 
+@pytest.mark.parametrize("host_seat", [True, False], ids=["host-seat", "engine-seat"])
+def test_the_audit_order_names_the_staged_copy_and_the_original(tmp_path, host_seat):
+    # axis: the audit template's PR-body input line — see bite-proof record wo_pr_body_stage_2083
+    sd = _session(tmp_path)
+    state = _driver_state(tmp_path)
+    ph, paths = _placeholders(RP.P_AUDITS, sd, state, seat="t1", payload={"targets": [{"id": "t1"}]})
+    text = _render(RP.P_AUDITS, "t1", ph, paths, host_seat=host_seat)
+    p = PBS.paths(sd)
+    assert "- PR body: the staged copy %s, to be read against the original %s" % (p["staged"], p["original"]) in text
+    assert "lands in the staged copy, not in the head diff" in text
+
+
 # ---- end to end --------------------------------------------------------------------------------
 
 def test_a_pr_body_finding_is_fixed_audited_and_published_through_the_chokepoint(tmp_path):
