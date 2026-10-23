@@ -629,6 +629,8 @@ _KNOWN_REALISTIC_VALUES = {
         "TARGET_ID": "t1",
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
         "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
+        "PR_BODY_LINE": ("the staged copy %s/pr-body/staged.md, to be read against the original "
+                         "%s/pr-body/original.md" % (SESSION, SESSION)),
     },
     RD.P_SCOPED: {
         "HUNKS_PATH": SESSION + "/round-1/scoped-hunks.json",

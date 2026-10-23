@@ -116,6 +116,7 @@ def _fixer_placeholders():
         ),
         "ROUND": "2",
         "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
+        "PR_BODY_LINE": os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer", "_pr-body.md"),
     }
 
 
@@ -141,6 +142,10 @@ def _audits_placeholders(channel="file"):
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "TARGET_ID": "finding::auth.py::12",
         "CHANNEL": channel,
+        "PR_BODY_LINE": (
+            "the staged copy %s, to be read against the original %s"
+            % (os.path.join(_SESSION, "pr-body", "staged.md"),
+               os.path.join(_SESSION, "pr-body", "original.md"))),
     }
 
 

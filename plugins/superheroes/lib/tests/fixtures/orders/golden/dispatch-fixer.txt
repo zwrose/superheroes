@@ -11,6 +11,7 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Work in the current branch's working tree at /home/user/proj
 - Repo root: /home/user/proj
 - Verify budget: Scoped verify budget for this batch — target files: auth.py. Run the tests that reference those files (select by reading the test files' own text for the target path, never by test-file name) plus the project's static validators, at most once each. The project's full verify command is NOT yours to run inside this attempt — the orchestrator runs it once after the round's fixes land: pytest -q
+- PR body (staged copy): /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-fixer/_pr-body.md
 
 ## Owner-gate guidance
 
@@ -37,6 +38,12 @@ Guidance in this section overrides the original suggestion for the named finding
    edit or weaken the test to make it pass; if the test itself is wrong, escalate it (see
    Escalation).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
+   A finding about the PR body (it cites `SUPERHEROES_PR_BODY.md`, or its text is about the PR body)
+   is fixed only in the staged copy named in Input. That copy is outside the repository and is never
+   committed. Never write to GitHub: no `gh pr edit`, no `gh api` write, no `gh pr comment`,
+   `gh pr review` or `gh issue comment`, and no other comment or review. A finding that seems to
+   need a GitHub write goes to Escalation below instead. A GitHub write that was refused or denied is
+   reported under the refused-commands section below.
 3. Run the scoped verify budget above — the tests that reference your target files plus the
    project's static validators, at most once each; never the project's full verify command (the
    orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
