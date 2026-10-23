@@ -186,6 +186,19 @@ a long arm chain. Only the lane-keyed events in `_SUPPRESSIBLE_EVENTS` (`lib/wav
 suppressible; naming any other event is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
+**One answered note, by id.** `--ignore-event LAUNCHID:builder-note:COMMENTID` (COMMENTID a positive
+decimal integer) suppresses that one note, on that lane, for that invocation; every other note still
+fires, other ids on the same lane and every note on other lanes. `LAUNCHID:builder-note` with no id
+stays a refusal: suppressing the class would hide a later unanswered note. Recording a note answered
+before its delivery receipt is in hand would silence it for good. One id, for one invocation, shown on
+every result, does neither: every non-refusal result of `run`, `watch_arm` and `loop` given a note
+ignore carries `ignoredNotes`, the sorted comment ids you ignored, so a note that is still unanswered
+is never invisible. Without a note ignore the key is absent.
+
+Use it after you have answered a note and while its delivery gate is still open (a `check` still to
+run or re-run), so the loop can watch the rest of the batch. Drop it, so the note fires again, when
+the gate reads not delivered. Run `note-answered` once the gate reads delivered.
+
 **Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
 benign, re-arm with `--ignore-event <launchId>:<event>` so that exact pair stops waking you **while
 that lane's other events still do**. Within a single `loop` invocation, the first unsuppressed
@@ -405,6 +418,10 @@ created at or after that lane's attempt began, opens with one of the terminal he
 recorded it. Its `launches` entry carries `{"launchId", "state", "kind", "issue", "commentId", "url",
 "createdAt", "source": "comment", "cloudSessionName", "cloudSessionId", "configDir"}`, with `state`
 `handback`, `stopped` or `parked`; every cloud lane that ended since the last read rides `launches`.
+A **park** is superseded, and does not fire, when the same lane has later builder activity in the same
+read: its progress comment edited, or a builder note posted, after the park was posted (the note
+whether or not it is recorded answered). A **handback or stop is never superseded**, and a park at or
+after the lane's latest activity fires. A superseded park does not fall back to an older ending.
 It reads the same issue-comments request as the builder note, so it costs no extra request. When a
 local lane's `lane-terminal`, `lane-blocked` or `builder-exited` is already due, the cloud reads are
 skipped that tick, so a cloud ending in the same tick surfaces on the next arm.
@@ -413,9 +430,10 @@ What you do on each: on a **handback**, vet the PR. On a **stop**, repair it —
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
 unrepaired. On a **park**, answer it or route it; a parked lane is **never recovered**
 (`cloud_recover.py assess` answers `parked`). If you answer a park by message and the builder
-resumes, run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
---comment-id <the park comment's id>` so the watch stops reporting it and recovery no longer reads it
-as a park. A builder that ends with a free-form comment instead is seen only by the `lane-stale`
+resumes, the watch stops reporting the park by itself once the builder edits its progress comment or
+posts a note. Still run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
+--comment-id <the park comment's id>`, so recovery no longer reads it as a park
+(`cloud_recover.py assess` still reads the park). A builder that ends with a free-form comment instead is seen only by the `lane-stale`
 fallback.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
@@ -482,12 +500,18 @@ reading `success: true`.
 3. Send `relayMessage` verbatim by `SendMessage` to the relay's `name`.
 4. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`. A message counts as
    delivered only when the text the relay sent matches `forward` exactly; the relay's own words about
-   what it sent are never the receipt.
+   what it sent are never the receipt. `check` reads every send of that exact text, to the session's
+   name or to `<session name> [<ref>]`: any one with `success: true` reads `delivered`, and a failed
+   attempt does not end the check early. At the end of the wait it reads `relay-send-unconfirmed`
+   when an exact send still has no result, `relay-send-failed` when every exact send failed, and
+   `relay-silent` when there was none. Re-running `check` later re-reads the relay's record.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
-owner the `say` sentence, or the refusal and its `detail`. Retry once from `ensure` only when nothing can
-have reached the builder: an `ensure` refusal or `relay-send-failed`. After `relay-silent`,
-`relay-text-mismatch` or `relay-send-unconfirmed` the builder may hold text: never resend automatically.
+owner the `say` sentence, or the refusal and its `detail`. After `relay-silent` or
+`relay-send-unconfirmed`, re-run `check` with a longer `--wait` before concluding. Retry once from
+`ensure` only when nothing can have reached the builder: an `ensure` refusal or `relay-send-failed`.
+After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed` the builder may hold text:
+never resend automatically.
 A `relay-start-failed` naming an untrusted workspace means that account lacks the one-time setup step.
 
 **Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>

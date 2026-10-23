@@ -17,6 +17,7 @@ from test_wave_watch_builder_note import (  # noqa: F401
     _cloud_lane, _comment, _NoteGh, _arm, _note_answered, _BATCH, _NOTE_BODY, _raw,
 )
 from test_wave_watch_cloud import _FRESH, _QUIET, clock, repo  # noqa: F401
+from test_wave_watch_cloud_progress import _progress  # noqa: F401
 
 _CONFIG_DIR = "/home/advisor/.claude-two"
 
@@ -301,3 +302,136 @@ def test_direct_an_unreadable_read_returns_empty_lists_and_is_disclosed():
     )
     assert out == ([], [])
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in degraded
+
+
+# --- a superseded park is not terminal (#2099) ---------------------------------------------
+
+
+def _terminals(comments, answered=()):
+    return ww._cloud_terminals(comments, _lanes({"cloud-a": (101, 600)}), set(answered))
+
+
+def test_p1_a_park_then_a_progress_edit_later_is_not_lane_terminal(repo):
+    # axis: SUPERSEDED by progress — the recorded shape: a progress comment created before the park, edited after it
+    _cloud_lane(repo, "cloud-a", 101)
+    park = _comment(7, 101, _body("park"), age=300)
+    progress = _progress(8, 101, created_age=500, updated_age=100)
+    result = _arm(repo, _NoteGh([park, progress]))
+    assert result["event"] == ww.EVENT_TIMER
+    assert _terminals([park, progress]) == []
+
+
+def test_p2_a_progress_edit_then_a_later_park_is_lane_terminal_parked(repo):
+    # axis: SUPERSEDED by progress — a park created after the last progress edit still fires
+    _cloud_lane(repo, "cloud-a", 101)
+    progress = _progress(8, 101, created_age=500, updated_age=300)
+    park = _comment(7, 101, _body("park"), age=100)
+    launch = _only_launch(_arm(repo, _NoteGh([progress, park])))
+    assert (launch["state"], launch["commentId"]) == ("parked", 7)
+
+
+def test_p3_a_park_and_a_progress_edit_in_the_same_second_keeps_the_park():
+    # axis: STRICT — a tie keeps the park
+    park = _comment(7, 101, _body("park"), age=100)
+    progress = {**_progress(8, 101, created_age=500, updated_age=100), "updated_at": park["created_at"]}
+    for order in ([park, progress], [progress, park]):
+        [only] = _terminals(order)
+        assert (only["state"], only["commentId"]) == ("parked", 7)
+    later = {**progress, "updated_at": _progress(8, 101, created_age=500, updated_age=50)["updated_at"]}
+    assert _terminals([park, later]) == []
+
+
+def test_p3_a_park_and_a_builder_note_in_the_same_second_keeps_the_park():
+    # axis: STRICT — a tie keeps the park, for a note as for a progress edit
+    park = _comment(7, 101, _body("park"), age=100)
+    note = {**_comment(8, 101, age=100), "created_at": park["created_at"]}
+    for order in ([park, note], [note, park]):
+        [only] = _terminals(order)
+        assert (only["state"], only["commentId"]) == ("parked", 7)
+    assert _terminals([park, _comment(8, 101, age=50)]) == []
+
+
+def test_p4_a_park_then_a_builder_note_created_later_is_not_lane_terminal(repo):
+    # axis: SUPERSEDED by note — the note itself fires as builder-note
+    _cloud_lane(repo, "cloud-a", 101)
+    park = _comment(7, 101, _body("park"), age=300)
+    note = _comment(8, 101, age=100)
+    result = _arm(repo, _NoteGh([park, note]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [n["commentId"] for n in result["notes"]] == [8]
+    assert _terminals([park, note]) == []
+
+
+def test_p4_a_later_note_recorded_answered_still_supersedes_the_park():
+    park = _comment(7, 101, _body("park"), age=300)
+    note = _comment(8, 101, age=100)
+    assert _terminals([park, note], answered={8}) == []
+
+
+def test_p4_a_note_created_before_the_park_does_not_supersede_it():
+    note = _comment(8, 101, age=300)
+    park = _comment(7, 101, _body("park"), age=100)
+    assert [t["commentId"] for t in _terminals([note, park])] == [7]
+
+
+@pytest.mark.parametrize("kind, state", [("handback", "handback"), ("stop", "stopped")])
+def test_p5_a_handback_or_stop_is_never_superseded(kind, state):
+    # axis: PARK ONLY — the supersession applies to a park alone
+    ending = _comment(7, 101, _body(kind), age=300)
+    progress = _progress(8, 101, created_age=500, updated_age=100)
+    note = _comment(9, 101, age=50)
+    for later in ([progress], [note], [progress, note]):
+        [only] = _terminals([ending] + later)
+        assert (only["state"], only["commentId"]) == (state, 7)
+
+
+def test_p6_a_newer_park_after_the_superseding_progress_fires(repo):
+    _cloud_lane(repo, "cloud-a", 101)
+    first = _comment(5, 101, _body("park"), age=400)
+    progress = _progress(8, 101, created_age=500, updated_age=300)
+    second = _comment(6, 101, _body("park"), age=100)
+    launch = _only_launch(_arm(repo, _NoteGh([first, progress, second])))
+    assert (launch["state"], launch["commentId"]) == ("parked", 6)
+    assert _terminals([first, progress]) == []
+
+
+def test_p6_a_superseded_park_does_not_fall_back_to_an_older_ending():
+    older = _comment(4, 101, _body("stop"), age=500)
+    park = _comment(7, 101, _body("park"), age=300)
+    progress = _progress(8, 101, created_age=500, updated_age=100)
+    assert _terminals([older, park, progress]) == []
+
+
+def test_p7_progress_on_another_lanes_issue_does_not_supersede():
+    # axis: lane assignment — only the same lane's activity counts
+    lanes = _lanes({"cloud-a": (101, 600), "cloud-b": (202, 600)})
+    park = _comment(7, 101, _body("park"), age=300)
+    elsewhere = _progress(8, 202, created_age=500, updated_age=100)
+    unwatched = _progress(9, 999, created_age=500, updated_age=100)
+    other_note = _comment(10, 202, age=100)
+    out = ww._cloud_terminals([park, elsewhere, unwatched, other_note], lanes, set())
+    assert [(t["launchId"], t["commentId"]) for t in out] == [("cloud-a", 7)]
+
+
+def test_p7_progress_created_before_the_lanes_cutoff_does_not_supersede():
+    park = _comment(7, 101, _body("park"), age=300)
+    earlier_lane = _progress(8, 101, created_age=3000, updated_age=100)
+    earlier_note = _comment(9, 101, age=3000)
+    assert [t["commentId"] for t in _terminals([park, earlier_lane, earlier_note])] == [7]
+
+
+@pytest.mark.parametrize("updated", [None, "soon", ""])
+def test_p8_a_progress_comment_with_no_readable_updated_at_does_not_supersede(updated):
+    park = _comment(7, 101, _body("park"), age=300)
+    readable = _progress(8, 101, created_age=500, updated_age=100)
+    assert _terminals([park, readable]) == []
+    unreadable = {**readable, "updated_at": updated}
+    assert [t["commentId"] for t in _terminals([park, unreadable])] == [7]
+
+
+def test_p8_a_progress_comment_without_an_updated_at_key_does_not_supersede():
+    park = _comment(7, 101, _body("park"), age=300)
+    full = _progress(8, 101, created_age=500, updated_age=100)
+    assert _terminals([park, full]) == []
+    keyless = {k: v for k, v in full.items() if k != "updated_at"}
+    assert [t["commentId"] for t in _terminals([park, keyless])] == [7]
