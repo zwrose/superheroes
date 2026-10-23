@@ -406,14 +406,21 @@ def _decided_by(rep, outcome):
     return held if outcome is not None and isinstance(held, dict) else None
 
 
-def _decide(own, by_key, rulings):
-    """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding."""
+def _decide(own, by_key, rulings, exempt=None):
+    """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding.
+
+    `exempt` maps a finding key to the driver's `ruled-out-of-scope` break-it row: a fixed finding named there
+    was ruled out of scope and only cleared by the audit, so it reads as the ruling, never as fixed."""
     rep = sc.resolve_merged_into_entry(own, by_key)
     if not isinstance(rep, dict):
         return None, STILL_OPEN, None
     disp, seq, raised = rep.get("disposition"), rep.get(sc.DISPOSITION_SEQ_FIELD), own.get(sc.RAISED_SEQ_FIELD)
     if disp not in sc.DISPOSITIONS or not (_int(seq) and _int(raised) and seq > raised):  # a stale disposition decides nothing
         return None, STILL_OPEN, rep
+    held = (exempt or {}).get(sc.finding_identity_key(rep))
+    # axis: a fixed finding the driver ruled out of scope is the ruling in the record, never "fixed and audited" — see bite-proof record wo_a_2072_ruled_exempt
+    if disp == "fixed" and isinstance(held, dict):
+        return _RULING, f"ruled out of scope: {held.get('reason')} (ruled by {held.get('ruledBy')}, {held.get('ruledAt')})", rep
     if disp == "fixed":
         receipt = rep.get("dispositionReceipt")
         if isinstance(receipt, dict) and receipt.get("kind") == sc.FULL_PANEL_NOT_RERAISED:
@@ -478,11 +485,15 @@ def _findings_and_merges(state):
             for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
                 if isinstance(d, dict) and d.get("disposition") == "skip" and isinstance(d.get("id"), str):
                     rulings.setdefault(d["id"], {"ruling": "out-of-scope", "provenance": prov})
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    exempt = {r["findingKey"]: r for rec in rounds.values() if isinstance(rec, dict)
+              for r in (rec.get("breakItKept") if isinstance(rec.get("breakItKept"), list) else [])
+              if isinstance(r, dict) and r.get("outcome") == "ruled-out-of-scope" and isinstance(r.get("findingKey"), str)}
     out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
             continue
-        outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings)
+        outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings, exempt)
         if rep is not None and sc.finding_identity_key(rep) != key:
             merged[key] = sc.finding_identity_key(rep)
         if rep is not None and reason and sc.finding_identity_key(rep) != key:
@@ -576,6 +587,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                                     review_record._readers(readers)["engine_run"], raw_dir)
     reviewers += _grounding_reviewers(state, reviewers)
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
+    checked += _verify_via_checked(rounds)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
@@ -608,6 +620,19 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked}
+
+
+def _verify_via_checked(rounds):
+    """One `checked` line per round whose pass rested on a CI run in place of the local verify command."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        via = rounds[n].get("verifyVia") if isinstance(rounds[n], dict) else None
+        # axis: the review record names the verify used — see bite-proof record wo_b_2072_ci_verify
+        if isinstance(via, dict) and via.get("via") == "ci-exact-head":
+            out.append("Verify in round %s: CI workflow %s run %s on %s passed, in place of the local "
+                       "verify command (%s)" % (n, via.get("workflow"), via.get("runId"),
+                                                str(via.get("headSha"))[:7], via.get("reason")))
+    return out
 
 
 def _owner_rulings(entries, findings, merged):
