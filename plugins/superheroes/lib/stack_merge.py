@@ -234,10 +234,35 @@ def _read_body(text, pin, require_pending_fields):
     message = details.get("message")
     return {
         "status": status,
+        "pinned": expected is not None,
         "uuid": uuid if _valid_uuid(uuid) else None,
         "commit": commit if isinstance(commit, str) and _SHA40_RE.match(commit) else None,
         "message": message if isinstance(message, str) else None,
     }, None
+
+
+def _read_back_head(repo, top, pin, run, call_timeout):
+    """Return None when the pull request's head is the pin, else (reason, detail)."""
+    argv = ["gh", "api", "repos/%s/pulls/%d" % (repo, top)]
+    try:
+        proc = run(argv, capture_output=True, text=True, timeout=call_timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return (REASON_MERGE_RESPONSE_UNREADABLE,
+                "merged head read-back failed: %s" % (exc or type(exc).__name__))
+    if proc.returncode != 0:
+        return (REASON_MERGE_RESPONSE_UNREADABLE,
+                "merged head read-back exited %s: %s" % (
+                    proc.returncode, _proc_text(proc) or "gh api failed"))
+    body = _load_object(proc.stdout)
+    head = body.get("head") if body is not None else None
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    if not (isinstance(head_sha, str) and _SHA40_RE.match(head_sha)):
+        return (REASON_MERGE_RESPONSE_UNREADABLE,
+                "merged head read-back carries no readable head sha")
+    if head_sha.lower() != pin.lower():
+        return (REASON_HEAD_MISMATCH,
+                "the pull request merged at head %s but the pin is %s" % (head_sha, pin))
+    return None
 
 
 def _settle(repo, top, sha, read, known_uuid):
@@ -351,6 +376,14 @@ def merge(*, repo, top, sha, poll_timeout=DEFAULT_POLL_TIMEOUT,
     if problem is not None:
         reason, detail, status = problem
         return _result(repo, top, sha, status=status, reason=reason, detail=detail)
+
+    # axis: an immediate merged response that names no expected_head_sha is checked against
+    # the merged pull request's own head before it is accepted
+    if read["status"] == STATUS_MERGED and not read["pinned"]:
+        problem = _read_back_head(repo, top, sha, run, min(timeout, poll_timeout))
+        if problem is not None:
+            reason, detail = problem
+            return _result(repo, top, sha, status=read["status"], reason=reason, detail=detail)
 
     settled = _settle(repo, top, sha, read, None)
     if settled is not None:

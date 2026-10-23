@@ -32,6 +32,7 @@ PUT_ARGV = [
     "-f", "merge_method=squash", "-f", "sha=" + SHA,
 ]
 POLL_ARGV = ["gh", "api", "repos/owner/example/pulls/105/merge-async/" + UUID]
+HEAD_ARGV = ["gh", "api", "repos/owner/example/pulls/105"]
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +98,10 @@ def _merged(**extra):
     return _body("merged", **details)
 
 
+def _head(sha=SHA):
+    return _proc(json.dumps({"number": TOP, "head": {"sha": sha}}))
+
+
 def _recorded_404():
     with open(os.path.join(FIXTURES, "merge_async_get_unknown_uuid.stdout")) as fh:
         out = fh.read()
@@ -144,30 +149,58 @@ def _assert_merged(result):
 # M1 — the PUT request shape
 
 def test_m1_put_argv_pins_top_pr_squash_and_sha():
-    result, calls, run = _do_merge({tuple(PUT_ARGV): _merged()})
+    result, calls, run = _do_merge({tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): _head()})
     _assert_merged(result)
-    assert calls == [PUT_ARGV]
+    assert calls == [PUT_ARGV, HEAD_ARGV]
     assert calls[0][:4] == ["gh", "api", "-X", "PUT"]
     assert "repos/owner/example/pulls/105/merge-async" in calls[0]
     assert "merge_method=squash" in calls[0]
     assert "sha=" + SHA in calls[0]
     assert not any("merge_action" in arg for arg in calls[0])
     assert run.kw_calls[0]["timeout"] == 30  # min(GH_TIMEOUT, the 30-second budget)
-    _result, _calls, run = _do_merge({tuple(PUT_ARGV): _merged()}, poll_timeout=500)
+    _result, _calls, run = _do_merge(
+        {tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): _head()}, poll_timeout=500)
     assert run.kw_calls[0]["timeout"] == sm.GH_TIMEOUT
 
 
 # M2 — merged straight away
 
 def test_m2_put_merged_is_ok_with_merge_commit():
-    result, _calls, _run = _do_merge({tuple(PUT_ARGV): _merged()})
+    result, _calls, _run = _do_merge({tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): _head()})
     _assert_merged(result)
     assert result["mergeCommitSha"] == MERGE_SHA
     assert (result["repo"], result["top"], result["sha"]) == (REPO, TOP, SHA)
 
 
+def test_m2_immediate_merged_with_other_head_is_head_mismatch():
+    result, calls, _run = _do_merge(
+        {tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): _head(OTHER_SHA)})
+    _assert_refusal(result, "head-mismatch")
+    assert result["status"] == "merged"
+    assert calls == [PUT_ARGV, HEAD_ARGV]
+
+
+@pytest.mark.parametrize("readback", [
+    OSError("network down"),
+    subprocess.TimeoutExpired(["gh"], 5),
+    _proc("", returncode=1, stderr="gh: Not Found (HTTP 404)"),
+    _proc("not json"),
+    _proc(json.dumps({"head": {}})),
+    _proc(json.dumps({"head": {"sha": "not-a-sha"}})),
+])
+def test_m2_immediate_merged_with_unreadable_head_is_unreadable(readback):
+    result, _calls, _run = _do_merge({tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): readback})
+    _assert_refusal(result, "merge-response-unreadable")
+
+
+def test_m2_immediate_merged_naming_the_pin_skips_the_read_back():
+    result, calls, _run = _do_merge({tuple(PUT_ARGV): _merged(expected_head_sha=SHA)})
+    _assert_merged(result)
+    assert calls == [PUT_ARGV]
+
+
 def test_m2_main_merged_exits_zero(capsys):
-    run, _calls = _make_run({tuple(PUT_ARGV): _merged()})
+    run, _calls = _make_run({tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): _head()})
     clock = _Clock()
     code = sm.main(["merge", "--repo", REPO, "--top", str(TOP), "--sha", SHA],
                    run=run, sleep=clock.sleep, monotonic=clock.monotonic)
@@ -180,13 +213,15 @@ def test_m2_main_merged_exits_zero(capsys):
 
 
 def test_m2_merged_without_a_commit_sha_has_null_merge_commit():
-    result, _calls, _run = _do_merge({tuple(PUT_ARGV): _body("merged", message="merged")})
+    result, _calls, _run = _do_merge(
+        {tuple(PUT_ARGV): _body("merged", message="merged"), tuple(HEAD_ARGV): _head()})
     _assert_merged(result)
     assert result["mergeCommitSha"] is None
 
 
 def test_m2_merged_with_non_hex_commit_sha_has_null_merge_commit():
-    result, _calls, _run = _do_merge({tuple(PUT_ARGV): _body("merged", sha="not-a-sha")})
+    result, _calls, _run = _do_merge(
+        {tuple(PUT_ARGV): _body("merged", sha="not-a-sha"), tuple(HEAD_ARGV): _head()})
     _assert_merged(result)
     assert result["mergeCommitSha"] is None
 
