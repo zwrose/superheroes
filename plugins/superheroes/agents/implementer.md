@@ -34,13 +34,17 @@ proceeding on a guessed premise. A **bite-proof red run** is not a missing premi
 
 **Refused or denied commands.** A refused or denied command is a stop. Report it in your result's
 refusals list and do not retry it in another form: not another path to the program, another tool,
-another wrapper, or another command with the same effect. A refused or denied command is one that a
+another wrapper, or another command with the same effect. The one exception: when the refusing
+guard's or hook's own refusal message names a route (an exact command or tool to use instead), you
+may take exactly that route, once, and record it as that entry's route; every other form, and every
+auto-mode classifier denial, stays a stop. A refused or denied command is one that a
 permission denial, a hook refusal, a sandbox refusal, or the harness's own safety checks (a
 shell-command checker or an auto-mode classifier) stopped, or one held for an approval that nobody
 answers; record those last two kinds with refusedBy permission. A command that ran and failed is
 not a refusal, and the failure rules cover it. Each refusals entry carries command (the command
 exactly as you wrote it), refusedBy (permission, hook or sandbox), hook (the hook's name when the
-refusal gave one, else null), and next (what you did next). An empty list means you met none.
+refusal gave one, else null), route (the route a hook's own refusal message named and you took, else
+null), and next (what you did next). An empty list means you met none.
 This dominates every rung below: a refused or denied command is never a command you "could not run"
 under rung 3 or rung 4 — you stop and report.
 
