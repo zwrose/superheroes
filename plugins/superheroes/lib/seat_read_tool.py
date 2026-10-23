@@ -25,6 +25,9 @@ SEARCH_TEXT_CAP = 300
 # UTF-8 bytes, and one file line to READ_LINE_CHAR_CAP characters.
 RESPONSE_BYTE_BUDGET = 100000
 READ_LINE_CHAR_CAP = 2000
+# Bytes held back from a read_file page for its continuation footer, so the budget backstop never
+# cuts the "offset=N" instruction away.
+READ_FOOTER_RESERVE = 128
 
 _TOOLS = [
     {
@@ -126,7 +129,7 @@ def _read_file(root, args):
                         % (len(text) - READ_LINE_CHAR_CAP, number, start + READ_LINE_CHAR_CAP))
                 rendered = "%6d\t%s" % (number, text)
                 size = len(rendered.encode("utf-8", "replace")) + 1
-                if out and used + size > RESPONSE_BYTE_BUDGET:
+                if out and used + size > RESPONSE_BYTE_BUDGET - READ_FOOTER_RESERVE:
                     more = True
                     limit = number - offset
                     break

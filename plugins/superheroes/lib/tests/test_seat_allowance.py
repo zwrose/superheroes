@@ -299,6 +299,26 @@ def test_read_file_many_medium_lines_stop_early_and_page_through_every_line(serv
     assert len(seen) == 300
 
 
+def test_read_file_page_filling_the_byte_budget_keeps_its_continuation_marker(server):
+    srv, root = server
+    rows = ["%03d %s" % (i, "m" * 988) for i in range(1, 201)]  # 992 characters per line
+    (root / "full.txt").write_text("".join(row + "\n" for row in rows))
+    seen = []
+    offset = 1
+    while True:
+        text = _text(srv.call("read_file", {"path": "full.txt", "offset": offset, "limit": 2000}))
+        assert len(text.encode("utf-8")) <= 100000
+        assert "[response truncated]" not in text
+        page = text.split("\n")
+        note = re.fullmatch(r"\[more lines remain; call read_file again with offset=(\d+)\]",
+                            page[-1])
+        seen += page[:-1] if note else page
+        if note is None:
+            break
+        offset = int(note.group(1))
+    assert seen == ["%6d\t%s" % (i, row) for i, row in enumerate(rows, start=1)]
+
+
 def test_list_dir_and_search_responses_are_byte_budgeted(server):
     srv, root = server
     for i in range(300):
