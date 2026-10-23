@@ -288,10 +288,10 @@ def _publish(session_dir, pr, runner):
         if not audited:
             return done(OUTCOME_REFUSED, REASON_PUBLISHED_UNAUDITED)
         prior = _json(p["published"])
-        if isinstance(prior, dict) and prior.get("outcome") == OUTCOME_PUBLISHED \
-                and isinstance(prior.get("at"), str):
-            receipt["at"] = prior["at"]
-        return done(OUTCOME_PUBLISHED, REASON_ALREADY_PUBLISHED)
+        if isinstance(prior, dict) and prior.get("outcome") == OUTCOME_PUBLISHED:
+            if isinstance(prior.get("at"), str):
+                receipt["at"] = prior["at"]
+            return done(OUTCOME_PUBLISHED, REASON_ALREADY_PUBLISHED)
     if not audited:
         return done(OUTCOME_REFUSED, REASON_NOT_AUDITED)
     if not _same_body(live, original):

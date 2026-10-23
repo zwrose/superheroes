@@ -392,11 +392,11 @@ def test_E14_a_second_publish_after_success_edits_nothing_and_keeps_the_first_ti
     assert again["at"] == first["at"] and gh.edits() == []
 
 
-def test_E14_an_edit_that_landed_before_the_receipt_write_reads_as_already_published(tmp_path):
+def test_E14_a_live_body_matching_the_staged_text_without_a_recorded_copy_is_refused(tmp_path):
     sd = _staged_fixed(tmp_path)
-    gh = FakeGh(views=[FIXED])  # live already holds the audited text; no receipt exists yet
+    gh = FakeGh(views=[FIXED])  # live holds the audited text, but no receipt says the review copied it
     out = PBS.publish(sd, 7, runner=gh)
-    assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", "already-published")
+    assert (out["ok"], out["outcome"], out["reason"]) == (False, "refused", "pr-body-moved")
     assert gh.edits() == []
 
 
