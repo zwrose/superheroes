@@ -3,6 +3,7 @@
 - [Vetting — the mechanism behind duty 4](#vetting--the-mechanism-behind-duty-4)
 - [Order-quality accounting](#order-quality-accounting)
 - [Dispatch provenance against engine doctrine](#dispatch-provenance-against-engine-doctrine)
+- [Parallel vets — the vet-drafter](#parallel-vets--the-vet-drafter)
 - [Adversarial probes at vet](#adversarial-probes-at-vet)
 - [Grading the third-rework tripwire](#grading-the-third-rework-tripwire)
 - [The collector — pointer, ordinals, and age](#the-collector--pointer-ordinals-and-age)
@@ -59,6 +60,33 @@ under-statement surfaces as a rate rather than an anecdote.
 Vet dispatch provenance against engine doctrine (CONVENTIONS §7.5). A provenance row showing a
 non-first-party model dispatched through the cursor CLI, or a fable tier on an external engine, is
 a **defect to catch at vet** — not a builder judgment call to accept.
+
+## Parallel vets — the vet-drafter
+
+**When.** With **two or more** handed-back PRs or stacks waiting for a vet, dispatch one
+`vet-drafter` (`agents/vet-drafter.md`) per PR or per stack, in parallel; with one waiting, drafting
+it is your choice. A stack goes to one drafter, which drafts every layer's vet.
+
+**Ordinals.** Before dispatch, assign each vet its ordinal from § The collector — consecutive, one
+per PR, and one per layer bottom-up for a stack — and write the highest assigned ordinal to durable
+memory beside the collector pointer, so a lost draft never lets a later vet reuse its number. Post
+in ordinal order. A draft you discard keeps its ordinal: vet that PR yourself under the same number.
+
+**No model override.** Dispatch the drafter with no model parameter. Its definition says
+`model: inherit`, so it runs on your own model, and the draft carries the judgment you will sign.
+Vet serially on a host that cannot honour that: one forcing a single model on every subagent
+(`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` on Claude Code), or one whose host tool map says the drafter is
+not dispatched there (Codex).
+
+**The verdict stays yours.** Check each draft against the PR before you post it, as your own vet:
+re-read the diff and the decisive artifacts, re-run any probe the verdict turns on, and do the acts
+the drafter listed as yours (a collector append, a follow-up filed), correcting the text to match.
+Then post the receipt and write the slot through `vet_slot.py write`, as duty 4 says.
+
+**Check what the drafter left.** After each drafter returns, read the PR's comments and body for
+anything new since dispatch and run `git worktree list` and `git status` in your checkout. Its grant
+carries a shell, so the no-post rule is its obligation and this read is the detector; anything it
+posted or left behind is a finding you clear before you vet.
 
 ## Adversarial probes at vet
 

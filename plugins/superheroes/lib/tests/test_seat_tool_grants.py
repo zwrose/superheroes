@@ -57,6 +57,12 @@ EXECUTION_SEATS = {
     # declared shape; the orchestrator's before/after tree probe (`LEDGERS.md` §3) is
     # what actually detects a mutation.
     "check-runner",
+    # The advisor's vet drafter. It runs the vet's probes in its own detached worktree, so it
+    # holds `Bash`, and `Edit` because duty 4 makes a probe mutation a targeted edit through
+    # the host's edit action. Its no-post, no-PR-body, no-slot-write rule is an obligation, not
+    # something the grant enforces; the advisor's after-dispatch read of the PR and the worktree
+    # list is the detector (skills/showrunner/reference/vetting.md § Parallel vets).
+    "vet-drafter",
 }
 
 # The enumerated sites that point at the home rule. Deliberately a list, not a glob: each

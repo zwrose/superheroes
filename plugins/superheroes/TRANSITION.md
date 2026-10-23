@@ -40,6 +40,13 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** A desktop-started session's automatic checkpoint runs while the session is off screen, and the mod writes `<id>.skip` beside the notes. See [Automatic checkpoint: a desktop-started session counts as attended off screen](#automatic-checkpoint-a-desktop-started-session-counts-as-attended-off-screen).
 - **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
 - **After switching.** **Nothing is owed.** The showrunner charter's board duty now says a new issue files only on the owner's word. See [Showrunner: the board duty names the filing rule](#showrunner-the-board-duty-names-the-filing-rule).
+- **After switching.** **Nothing is owed.** An advisor with two or more PRs waiting can draft their vets in parallel with the new `vet-drafter` agent, which runs on the advisor's own model; the advisor still checks each draft, posts the receipt and writes the slot. See [Vetting: the vet-drafter drafts vets in parallel](#vetting-the-vet-drafter-drafts-vets-in-parallel).
+
+### Vetting: the vet-drafter drafts vets in parallel
+
+- New agent `agents/vet-drafter.md` (`superheroes:vet-drafter`), `model: inherit`, tools `Read, Grep, Glob, Edit, Write, Bash`. It writes `draft-receipt<ordinal>.md` and `draft-slot<ordinal>.md` to the draft directory the advisor names and posts nothing.
+- `skills/showrunner/reference/vetting.md` § Parallel vets says when to use it, how ordinals are assigned and recorded, that the dispatch carries no model override, and that the verdict, the posting and the slot write stay the advisor's. On Codex the advisor vets serially.
+- The agent file joins the cloud setup text's plugin inventory (`lib/cloud_setup_text.py` `_plugin_inventory` stamps each agent file), so a project with the plugin pin hook sees the cloud check report its setup text out of date once, as after any release that changes an agent file.
 
 ### Review fixer: Write/Edit only, every refusal reported, and the landing always written
 

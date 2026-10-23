@@ -82,7 +82,8 @@ still produced by The Architect.
   build-ready, micro), decomposes big asks into small mergeable issues, drafts the builder's
   launch prompt (command + issue pointer; durable build context lives in the issue), vets every
   PR from its artifacts against the
-  issue/spec and the build brief, owns board hygiene and release coordination, keeps
+  issue/spec and the build brief, drafting several vets in parallel with the
+  `vet-drafter` agent on its own model while keeping every verdict, owns board hygiene and release coordination, keeps
   durable memory. **Never builds.** Approval stays the owner's — the merge policy (what
   the owner's word covers and what executing inside it takes) is stated once, in
   `skills/showrunner/SKILL.md` duty 6. The seat moves between sessions by
