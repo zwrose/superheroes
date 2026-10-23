@@ -487,6 +487,11 @@ above).
    design); CI green on the recorded head, including the suite's receipt per
    `rubric/test-receipt-evidence.md` (run selection per
    `skills/showrunner/reference/vet-receipt.md` spine field 1); and a branch current with its base.
+   A branch is current with its base when GitHub reports it mergeable with no conflict and nothing
+   merged into the base since the branch's last sync touched the branch's files; otherwise bring it
+   current first, so a train never re-syncs a vetted PR after an unrelated merge
+   ([merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § A merge
+   train's "green" says why).
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
    as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
    within minutes, and the word and the act sit in one thread. There is no separate list of

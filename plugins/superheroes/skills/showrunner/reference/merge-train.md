@@ -26,6 +26,9 @@ its change), and is still not a substitute: a tree that is green pre-merge can g
 the identical content, as the next rule's post-merge-only case shows. The train is green when **`main`'s own post-merge run** is green on the
 merged head — watched the way the vet watches any run, selected by **workflow name plus head sha**,
 never `--limit 1`.
+That post-merge run is what catches a union break between PRs whose files do not overlap, so a train
+does not re-sync and re-test a remaining PR after every unrelated merge: a PR whose files nothing
+merged since its last sync touched, with no conflict, is already current (duty 6).
 
 ## Union fixes ride the last *open* PR, disclosed
 
