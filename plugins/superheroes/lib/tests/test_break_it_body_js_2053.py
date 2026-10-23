@@ -789,4 +789,4 @@ def test_template_with_a_regex_brace_substitution_keys_raw_and_still_reads():
     changed = text.replace(" y`", " z`")
     _assert_differ(text, changed)
     moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", changed)])
-    assert moved["status"] != "kept", moved
+    assert moved["status"] == "none", moved
