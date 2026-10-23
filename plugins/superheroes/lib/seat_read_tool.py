@@ -39,6 +39,11 @@ _TOOLS = [
                 "limit": {"type": "integer",
                           "description": "Lines to return (default %d, max %d)."
                                          % (READ_LIMIT_DEFAULT, READ_LIMIT_MAX)},
+                "column": {"type": "integer",
+                           "description": "Characters to skip at the start of the first line "
+                                          "returned, 0-based (default 0); a line longer than "
+                                          "%d characters is cut and the cut names the column to "
+                                          "continue from." % READ_LINE_CHAR_CAP},
             },
             "required": ["path"],
         },
@@ -96,6 +101,7 @@ def _read_file(root, args):
     target = _resolve(root, args.get("path"))
     offset = _int_arg(args, "offset", 1, 1, 2 ** 62)
     limit = _int_arg(args, "limit", READ_LIMIT_DEFAULT, 1, READ_LIMIT_MAX)
+    column = _int_arg(args, "column", 0, 0, 2 ** 62)
     if os.path.isdir(target):
         raise _ToolError("%s is a directory; use list_dir" % target)
     out = []
@@ -110,8 +116,14 @@ def _read_file(root, args):
                     more = True
                     break
                 text = line.rstrip("\r\n")
+                start = column if number == offset else 0
+                if start:
+                    text = text[start:]
                 if len(text) > READ_LINE_CHAR_CAP:
-                    text = text[:READ_LINE_CHAR_CAP] + "...[line truncated: %d characters]" % len(text)
+                    text = text[:READ_LINE_CHAR_CAP] + (
+                        "...[line truncated: %d more characters; call read_file again with "
+                        "offset=%d and column=%d]"
+                        % (len(text) - READ_LINE_CHAR_CAP, number, start + READ_LINE_CHAR_CAP))
                 rendered = "%6d\t%s" % (number, text)
                 size = len(rendered.encode("utf-8", "replace")) + 1
                 if out and used + size > RESPONSE_BYTE_BUDGET:

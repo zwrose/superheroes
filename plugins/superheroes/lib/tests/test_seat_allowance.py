@@ -270,6 +270,26 @@ def test_read_file_huge_line_keeps_the_record_scannable_and_paging_reaches_the_t
     assert "     2\ttail line" in both
 
 
+def test_read_file_column_pages_a_long_single_line_to_its_end(server):
+    srv, root = server
+    body = "".join("%05d|" % i for i in range(1, 1501))  # 9000 characters, one line
+    (root / "one.json").write_text(body + "\n")
+    got = ""
+    column = 0
+    for _ in range(20):
+        text = _text(srv.call("read_file", {"path": "one.json", "offset": 1, "column": column}))
+        assert len(text.encode("utf-8")) < 200000
+        chunk = text.split("\t", 1)[1]
+        note = re.search(r"\.\.\.\[line truncated: \d+ more characters; call read_file again "
+                         r"with offset=1 and column=(\d+)\]$", chunk)
+        if note is None:
+            got += chunk
+            break
+        got += chunk[:note.start()]
+        column = int(note.group(1))
+    assert got == body
+
+
 def test_read_file_many_medium_lines_stop_early_and_page_through_every_line(server, tmp_path):
     srv, root = server
     (root / "mid.txt").write_text("".join("%d %s\n" % (i, "m" * 1500) for i in range(1, 301)))
