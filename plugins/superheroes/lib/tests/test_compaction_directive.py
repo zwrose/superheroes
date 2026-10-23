@@ -510,6 +510,34 @@ def test_cli_save_refuses_invalid_session_id(tmp_path):
     assert (code, out) == (1, {"ok": False, "reason": "session-id-invalid"})
 
 
+def test_cli_skip_writes_the_record_atomically_and_answers_its_path(tmp_path):
+    env = _env(tmp_path)
+    record = json.dumps({"reason": "headless", "tokens": 970000})
+    code, out = _run_stdin(tmp_path, record, "skip", "--session-id", SID)
+    assert code == 0 and out == {"ok": True, "path": cd.skip_record_path(SID, env)}
+    assert out["path"].endswith(SID + ".skip")
+    with open(out["path"], encoding="utf-8") as fh:
+        assert fh.read() == record
+    assert not [n for n in os.listdir(os.path.dirname(out["path"])) if n.endswith(".tmp")]
+    # a later record replaces the earlier one whole
+    assert _run_stdin(tmp_path, '{"reason": "below-trigger"}', "skip", "--session-id", SID)[0] == 0
+    with open(out["path"], encoding="utf-8") as fh:
+        assert fh.read() == '{"reason": "below-trigger"}'
+
+
+def test_cli_skip_refusals(tmp_path):
+    code, out = _run_stdin(tmp_path, "{}", "skip", "--session-id", "../x")
+    assert (code, out) == (1, {"ok": False, "reason": "session-id-invalid"})
+    code, out = _run_stdin(tmp_path, "  \n", "skip", "--session-id", SID)
+    assert (code, out) == (1, {"ok": False, "reason": "empty-record"})
+    assert not os.path.exists(cd.skip_record_path(SID, _env(tmp_path)))
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": "relative/home"}
+    r = subprocess.run([sys.executable, "-B", _SCRIPT, "skip", "--session-id", SID], env=env, input="{}",
+                       capture_output=True, text=True, timeout=20, cwd=str(tmp_path))
+    assert r.returncode == 1
+    assert json.loads(r.stdout) == {"ok": False, "reason": "config-dir-unresolved"}
+
+
 def test_save_notes_failure_leaves_the_previous_notes_and_no_temp_file(tmp_path, monkeypatch):
     env = _env(tmp_path)
     cd.save_notes(SID, "old notes\n", env)
@@ -687,6 +715,16 @@ def test_reap_removes_old_notes_and_keeps_newer_ones(tmp_path):
     assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
     assert not os.path.exists(_ckpt(tmp_path, "old-one.md"))
     assert os.path.exists(_ckpt(tmp_path, "new-one.md"))
+
+
+def test_reap_removes_an_old_skip_record_and_keeps_a_newer_one_and_the_current_sessions(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.skip"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "new-one.skip"), mtime=FRESH_NOTES)
+    _touch(_ckpt(tmp_path, SID + ".skip"), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert not os.path.exists(_ckpt(tmp_path, "old-one.skip"))
+    assert os.path.exists(_ckpt(tmp_path, "new-one.skip"))
+    assert os.path.exists(_ckpt(tmp_path, SID + ".skip"))
 
 
 def test_reap_removes_markers_past_the_delivery_window_and_keeps_newer_ones(tmp_path):

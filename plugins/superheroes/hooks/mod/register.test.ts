@@ -935,7 +935,7 @@ test('the desktop app attaching late carries the checkpoint through the save and
   await complete($, block('the notes'))
 
   expect(r.notes).toBe('fresh notes')
-  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.argv.flatMap((argv, i) => (argv[3] === 'save' ? [r.stdins[i]] : []))).toEqual(['the notes'])
   expect(r.toasts).toEqual(['Checkpoint notes saved'])
 
   await r.clock.advance(1000)
@@ -1719,7 +1719,7 @@ test('Now through the save and the compaction: the reply block is saved, then th
   await complete($, block('the notes'))
 
   expect(r.notes).toBe('fresh notes')
-  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.argv.flatMap((argv, i) => (argv[3] === 'save' ? [r.stdins[i]] : []))).toEqual(['the notes'])
   expect(r.toasts).toEqual(['Checkpoint notes saved'])
   expect(r.seen).toHaveLength(0)
 
