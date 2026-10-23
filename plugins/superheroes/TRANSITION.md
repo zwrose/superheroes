@@ -39,6 +39,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** Every worktree guard refusal text now ends with the exact command or tool to use next. See [Worktree guard: every refusal names its next step](#worktree-guard-every-refusal-names-its-next-step).
 - **After switching.** **Nothing is owed.** A desktop-started session's automatic checkpoint runs while the session is off screen, and the mod writes `<id>.skip` beside the notes. See [Automatic checkpoint: a desktop-started session counts as attended off screen](#automatic-checkpoint-a-desktop-started-session-counts-as-attended-off-screen).
 - **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
+- **After switching.** **Nothing is owed.** The showrunner charter's board duty now says a new issue files only on the owner's word. See [Showrunner: the board duty names the filing rule](#showrunner-the-board-duty-names-the-filing-rule).
 
 ### Review fixer: Write/Edit only, every refusal reported, and the landing always written
 
@@ -171,6 +172,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 - Before the fold, the driver fetches the run (`gh api repos/{owner}/{repo}/actions/runs/<runId>` in the repository root) and refuses the submit with `ci-verify-run-unreadable` (the head or repository root is unresolved, the fetch failed, or a field is missing), `ci-verify-sha-mismatch` (the run's `head_sha` differs from the claimed `headSha` or from the head the fold verifies, or its `id` differs from `runId`), `ci-verify-workflow-mismatch` (its `name` differs from `workflow` or from the declared `ciWorkflow`) or `ci-verify-conclusion-mismatch` (it is not `completed`, its conclusion differs from the claimed one, or it is not `success`), checked in that order. The refusal is not terminal and the pending step is kept, so a corrected resubmit folds.
 - The check sits at the one submit chokepoint, so hand `submit`, the bare-payload `advance` and the durable-seat `advance` all get it. The durable-seat assembly carries `via`, `ci` and `reason`.
 - A passing verify fold records the round key `verifyVia`: `{"via": "local", "command"}` for a local run, or the CI evidence with its `reason`. The receipt's disclosures carry a `verify-via-ci (round N): …` line for a CI round, and the review record adds a "Verify in round N: CI workflow … run … on … passed, in place of the local verify command (…)" line to what it checked.
+
+### Showrunner: the board duty names the filing rule
+
+- Duty 2 of the showrunner charter (`skills/showrunner/SKILL.md`, "Board hygiene — file and wire") gains one sentence: a new issue files only on the owner's word, at every tier, with the layer sub-issues of a stack the one exception, and the advisor reads `skills/showrunner/reference/owner-decisions.md` § The tiers and the filing rule before filing one. The rule itself is unchanged and still lives in that section; a resumed advisor seat now meets it in the charter it reads.
+- No command, result key or file shape changes.
 
 ## 0.46.0
 
