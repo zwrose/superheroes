@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """A review finding about the PR body is fixed in a staged copy inside the review session, audited
-there, and copied onto the PR only by `publish` — the one chokepoint that writes a PR body. It
-publishes only bytes an audit discharged and never overwrites a live body that moved. Fixers never
-write to GitHub.
+there, and copied onto the PR only by `publish`, the one chokepoint that writes a PR body. It
+publishes only bytes an audit discharged and never overwrites a live body that moved.
 
 Session layout (all under ``<session>/pr-body/``):
   original.md     the body as ``<session>/pr.json`` held it; written once, never overwritten
@@ -14,7 +13,7 @@ The fixer works on a copy in its round's landing directory (``fixer_copy_path``)
 grant. The ``_`` prefix of the copy's name is ``record_paths.RESERVED_PREFIX``, which the landing sweep
 skips, so the copy is never read as a stray seat file.
 
-Stdlib plus ``record_paths``; every public function returns a value instead of raising."""
+Stdlib plus the record layer; every public function returns a value instead of raising."""
 import argparse
 import datetime
 import hashlib
@@ -24,6 +23,8 @@ import subprocess
 import sys
 
 import record_paths
+import round_commit
+import round_records
 
 CITATION = "SUPERHEROES_PR_BODY.md"  # the file name a finding cites for the PR body
 PUBLISH_SCHEMA = "pr-body-publish/1"
@@ -70,27 +71,16 @@ _REFUSAL_PHRASES = {
 }
 
 
-def _sha256_bytes(data):
-    return hashlib.sha256(data).hexdigest()
+def _sha(data):
+    return hashlib.sha256(data.encode("utf-8") if isinstance(data, str) else data).hexdigest()
 
 
 def paths(session_dir):
-    """Absolute paths of the session's PR-body files."""
     root = os.path.abspath(os.path.join(session_dir, PR_BODY_DIR))
     return {"dir": root,
             "original": os.path.join(root, ORIGINAL_FILE),
             "staged": os.path.join(root, STAGED_FILE),
             "published": os.path.join(root, PUBLISHED_FILE)}
-
-
-def _atomic_write(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 def _read_bytes(path):
@@ -103,27 +93,18 @@ def _read_bytes(path):
 
 def _read_text(path):
     data = _read_bytes(path)
-    if data is None:
-        return None
     try:
-        return data.decode("utf-8")
+        return None if data is None else data.decode("utf-8")
     except UnicodeDecodeError:
         return None
 
 
-def _read_json_file(path):
-    data = _read_bytes(path)
-    if data is None:
-        return None
-    try:
-        return json.loads(data.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return None
+def _json(path):
+    return round_records.read_json(path)[0]
 
 
 def _same_body(a, b):
-    """Body equality: exact, except one trailing newline either side is not a difference (GitHub may
-    strip it from the stored body)."""
+    """Equal, except that one trailing newline either side is no difference (GitHub may strip it)."""
     def trim(text):
         return text[:-1] if text.endswith("\n") else text
     return trim(a) == trim(b)
@@ -134,16 +115,14 @@ def _now():
 
 
 def _fail(reason, **fields):
-    out = {"ok": False, "reason": reason}
-    out.update(fields)
-    return out
+    return {"ok": False, "reason": reason, **fields}
 
 
 # ---- stage -----------------------------------------------------------------------------------
 
 def stage(session_dir):
-    """Create ``original.md`` and ``staged.md`` from ``pr.json``'s body, once. Idempotent: an existing
-    file is never overwritten. ``{"ok": True, "staged": False, "reason": "no-pr"}`` in branch mode."""
+    """Create ``original.md`` and ``staged.md`` from ``pr.json``'s body, once; an existing file is
+    never overwritten. ``{"ok": True, "staged": False, "reason": "no-pr"}`` in branch mode."""
     try:
         return _stage(session_dir)
     except Exception as exc:  # noqa: BLE001 — public functions never raise
@@ -154,14 +133,10 @@ def _stage(session_dir):
     pr_path = os.path.join(session_dir, "pr.json")
     if not os.path.lexists(pr_path):
         return {"ok": True, "staged": False, "reason": REASON_NO_PR}
-    raw = _read_bytes(pr_path)
-    if raw is None:
+    pr, err = round_records.read_json(pr_path)
+    if err == "missing":
         return _fail(REASON_PR_JSON_UNREADABLE, staged=False)
-    try:
-        pr = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return _fail(REASON_PR_JSON_UNPARSEABLE, staged=False)
-    if not isinstance(pr, dict):
+    if err or not isinstance(pr, dict):
         return _fail(REASON_PR_JSON_UNPARSEABLE, staged=False)
     body = pr.get("body")
     if not isinstance(body, str):
@@ -172,31 +147,27 @@ def _stage(session_dir):
         return _fail(REASON_PR_BODY_NOT_TEXT, staged=False)
     p = paths(session_dir)
     if not os.path.lexists(p["original"]):
-        _atomic_write(p["original"], body_bytes)
-    if not os.path.lexists(p["staged"]):
-        original = _read_bytes(p["original"])
-        if original is None:
-            return _fail(REASON_NOT_STAGED, staged=False)
-        _atomic_write(p["staged"], original)
-    staged = _read_bytes(p["staged"])
+        round_commit.atomic_write_bytes(p["original"], body_bytes)
     original = _read_bytes(p["original"])
+    if original is not None and not os.path.lexists(p["staged"]):
+        round_commit.atomic_write_bytes(p["staged"], original)
+    staged = _read_bytes(p["staged"])
     if staged is None or original is None:
         return _fail(REASON_NOT_STAGED, staged=False)
     return {"ok": True, "staged": True, "reason": None,
             "originalPath": p["original"], "stagedPath": p["staged"],
-            "originalSha256": _sha256_bytes(original), "stagedSha256": _sha256_bytes(staged)}
+            "originalSha256": _sha(original), "stagedSha256": _sha(staged)}
 
 
 # ---- the fixer's copy ------------------------------------------------------------------------
 
 def fixer_copy_path(session_dir, rnd):
-    """The round's fixer copy, inside the landing directory a restricted claude fixer is granted."""
     return os.path.join(record_paths.landing_dir(session_dir, rnd, FIXER_PHASE), FIXER_COPY_NAME)
 
 
 def seed_fixer_copy(session_dir, rnd):
     """Copy ``staged.md`` to the round's fixer copy when that copy is absent (several fix-batch
-    attempts in one round share it). Returns the sha256 of ``staged.md`` — the round's "before" — or
+    attempts in one round share it). Returns the sha256 of ``staged.md`` (the round's "before"), or
     None when nothing is staged."""
     try:
         staged = _read_bytes(paths(session_dir)["staged"])
@@ -204,16 +175,15 @@ def seed_fixer_copy(session_dir, rnd):
             return None
         copy = fixer_copy_path(session_dir, rnd)
         if not os.path.lexists(copy):
-            _atomic_write(copy, staged)
-        return _sha256_bytes(staged)
+            round_commit.atomic_write_bytes(copy, staged)
+        return _sha(staged)
     except Exception:  # noqa: BLE001
         return None
 
 
 def collect_fixer_copy(session_dir, rnd):
-    """Atomically replace ``staged.md`` with the round's fixer copy when that copy exists. Returns the
-    new sha256 — the round's "after" — or None, changing nothing, when there is no copy (or no staged
-    copy to replace)."""
+    """Atomically replace ``staged.md`` with the round's fixer copy when it exists. Returns the new
+    sha256 (the round's "after"), or None, changing nothing, when there is no copy or no staged one."""
     try:
         p = paths(session_dir)
         if not os.path.lexists(p["staged"]):
@@ -221,8 +191,8 @@ def collect_fixer_copy(session_dir, rnd):
         data = _read_bytes(fixer_copy_path(session_dir, rnd))
         if data is None:
             return None
-        _atomic_write(p["staged"], data)
-        return _sha256_bytes(data)
+        round_commit.atomic_write_bytes(p["staged"], data)
+        return _sha(data)
     except Exception:  # noqa: BLE001
         return None
 
@@ -257,13 +227,13 @@ def _read_live(runner, pr):
 
 
 def _converged(session_dir):
-    receipt = _read_json_file(os.path.join(session_dir, "round-receipt.json"))
+    receipt = _json(os.path.join(session_dir, "round-receipt.json"))
     return isinstance(receipt, dict) and receipt.get("verdict") == "converged"
 
 
 def _audited_sha(session_dir):
     """The ``prBodyAudited`` sha of the highest-numbered round that recorded one, or None."""
-    state = _read_json_file(os.path.join(session_dir, "loop-state.json"))
+    state = _json(os.path.join(session_dir, "loop-state.json"))
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return None
@@ -292,56 +262,45 @@ def _publish(session_dir, pr, runner):
     p = paths(session_dir)
     receipt = {"schema": PUBLISH_SCHEMA, "pr": pr}
 
-    def done(outcome, reason, ok=True, **fields):
-        receipt.update(fields)
-        receipt.update(ok=ok, outcome=outcome, reason=reason)
+    def done(outcome, reason):
+        receipt.update(ok=outcome != OUTCOME_REFUSED, outcome=outcome, reason=reason)
         receipt.setdefault("at", _now())
-        _atomic_write(p["published"],
-                      (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode("utf-8"))
+        round_records.atomic_write_json(p["published"], receipt)
         return receipt
-
-    def refuse(reason):
-        return done(OUTCOME_REFUSED, reason, ok=False)
 
     pr_text = str(pr) if not isinstance(pr, bool) else ""
     if not pr_text.isdigit() or int(pr_text) < 1:
-        return refuse(REASON_PR_INVALID)
+        return done(OUTCOME_REFUSED, REASON_PR_INVALID)
     if not _converged(session_dir):
-        return refuse(REASON_NOT_CONVERGED)
-    staged = _read_text(p["staged"])
-    original = _read_text(p["original"])
+        return done(OUTCOME_REFUSED, REASON_NOT_CONVERGED)
+    staged, original = _read_text(p["staged"]), _read_text(p["original"])
     if staged is None or original is None:
-        return refuse(REASON_NOT_STAGED)
-    staged_sha = _sha256_bytes(staged.encode("utf-8"))
-    receipt["originalSha256"] = _sha256_bytes(original.encode("utf-8"))
-    receipt["stagedSha256"] = staged_sha
+        return done(OUTCOME_REFUSED, REASON_NOT_STAGED)
+    receipt.update(originalSha256=_sha(original), stagedSha256=_sha(staged))
     live = _read_live(runner, pr_text)
     if live is None:
-        return refuse(REASON_LIVE_UNREADABLE)
-    receipt["liveSha256"] = _sha256_bytes(live.encode("utf-8"))
-    audited = staged_sha == _audited_sha(session_dir)
-    if _same_body(live, staged) and not _same_body(staged, original):
+        return done(OUTCOME_REFUSED, REASON_LIVE_UNREADABLE)
+    receipt["liveSha256"] = _sha(live)
+    if _same_body(staged, original):
+        return done(OUTCOME_UNCHANGED, None if _same_body(live, original) else REASON_LIVE_MOVED)
+    audited = receipt["stagedSha256"] == _audited_sha(session_dir)
+    if _same_body(live, staged):
         if not audited:
-            return refuse(REASON_PUBLISHED_UNAUDITED)
-        prior = _read_json_file(p["published"])
+            return done(OUTCOME_REFUSED, REASON_PUBLISHED_UNAUDITED)
+        prior = _json(p["published"])
         if isinstance(prior, dict) and prior.get("outcome") == OUTCOME_PUBLISHED \
                 and isinstance(prior.get("at"), str):
             receipt["at"] = prior["at"]
         return done(OUTCOME_PUBLISHED, REASON_ALREADY_PUBLISHED)
-    if _same_body(staged, original):
-        if _same_body(live, original):
-            return done(OUTCOME_UNCHANGED, None)
-        return done(OUTCOME_UNCHANGED, REASON_LIVE_MOVED)
     if not audited:
-        return refuse(REASON_NOT_AUDITED)
+        return done(OUTCOME_REFUSED, REASON_NOT_AUDITED)
     if not _same_body(live, original):
-        return refuse(REASON_MOVED)
-    code, _out = _run(runner, ["gh", "pr", "edit", pr_text, "--body-file", p["staged"]])
-    if code != 0:
-        return refuse(REASON_PUBLISH_FAILED)
+        return done(OUTCOME_REFUSED, REASON_MOVED)
+    if _run(runner, ["gh", "pr", "edit", pr_text, "--body-file", p["staged"]])[0] != 0:
+        return done(OUTCOME_REFUSED, REASON_PUBLISH_FAILED)
     after = _read_live(runner, pr_text)
     if after is None or not _same_body(after, staged):
-        return refuse(REASON_PUBLISH_UNVERIFIED)
+        return done(OUTCOME_REFUSED, REASON_PUBLISH_UNVERIFIED)
     return done(OUTCOME_PUBLISHED, None)
 
 
@@ -350,7 +309,7 @@ def _publish(session_dir, pr, runner):
 def record_line(session_dir):
     """One plain-English sentence about the publish receipt for the review account, or None."""
     try:
-        receipt = _read_json_file(paths(session_dir)["published"])
+        receipt = _json(paths(session_dir)["published"])
         if not isinstance(receipt, dict):
             return None
         outcome, reason = receipt.get("outcome"), receipt.get("reason")
