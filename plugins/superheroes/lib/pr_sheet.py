@@ -211,10 +211,12 @@ def _outside_comments(lines):
     """(line, fenced) for each line of a body that is not inside an HTML comment, tracking code fences as it goes.
 
     Only two shapes are dropped: a line that is wholly a comment, and a block that opens on a line starting with `<!--`
-    and holding no `-->`, through the first later line holding `-->` (never closed, it runs to the end). Any other `<!--`
-    is plain text and stays, so a comment beside text is kept with it. Comments are read outside fences only."""
-    kept, fence, inside = [], None, False
-    for line in lines:
+    and holding no `-->`, through the first later line holding `-->`, and only when such a line exists in the same section
+    (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
+    A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
+    outside fences only."""
+    kept, fence, inside, level = [], None, False, None
+    for n, line in enumerate(lines):
         if fence is not None:
             kept.append((line, True))
             closing = re.match(r"^ {0,3}(" + re.escape(fence[0]) + "{" + str(len(fence)) + r",})[ \t]*$", line)
@@ -222,16 +224,31 @@ def _outside_comments(lines):
             continue
         if inside:
             inside = "-->" not in line
+            if not inside and line.split("-->", 1)[1].strip():
+                kept.append((line, False))
             continue
         if _WHOLE_COMMENT.match(line):
             continue
-        if line.lstrip(" ").startswith("<!--") and "-->" not in line:
+        if line.lstrip(" ").startswith("<!--") and "-->" not in line and _closes(lines[n + 1:], level):
             inside = True
             continue
         opening = _FENCE.match(line)
         fence = opening.group(1) if opening else None
+        accepting = None if opening else _ACCEPTING.match(line)
+        level = len(accepting.group(1)) if accepting else level
         kept.append((line, opening is not None))
     return kept
+
+
+def _closes(rest, level):
+    """Whether a `-->` comes in the lines after an opener before its section ends (no bound before the heading is seen)."""
+    for line in rest:
+        if "-->" in line:
+            return True
+        heading = _HEADING.match(line)
+        if level is not None and heading and len(heading.group(1)) <= level:
+            return False
+    return False
 
 
 def accepting_listed(body):

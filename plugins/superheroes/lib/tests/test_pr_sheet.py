@@ -2552,6 +2552,10 @@ READER_CASES = [
     pytest.param(ACCEPTING + "- Keep `<!--` literally.\n- A second acceptance.\n", ["Keep `<!--` literally.", "A second acceptance."], id="an-inline-code-comment-marker-keeps-the-acceptance-and-the-rest"),
     pytest.param(ACCEPTING + "- Keep ``a `<!--` b`` here.\n- Next.\n", ["Keep ``a `<!--` b`` here.", "Next."], id="a-double-backtick-span-hides-the-marker"),
     pytest.param(ACCEPTING + "- text `unclosed <!-- note -->\n- Next.\n", ["text `unclosed <!-- note -->", "Next."], id="an-unclosed-backtick-beside-a-trailing-comment-keeps-the-text"),
+    pytest.param(ACCEPTING + "- Keep `the literal\n  <!-- in the parser.\n- A second acceptance.\n", ["Keep `the literal <!-- in the parser.", "A second acceptance."], id="an-opener-with-no-closing-marker-is-plain-text"),
+    pytest.param(ACCEPTING + "<!--\nhidden\n--> Visible disclosure.\n", ["--> Visible disclosure."], id="a-closing-line-with-text-after-the-marker-is-kept-whole"),
+    pytest.param(ACCEPTING + "- One.\n<!--\nhidden\n-->\n- Two.\n\n## Next\n- not mine\n<!-- elsewhere -->\n", ["One.", "Two."], id="a-closed-block-between-bullets-is-dropped"),
+    pytest.param(ACCEPTING + "- One.\n<!-- open\n- Two.\n## Next\n-->\n", ["One. <!-- open", "Two."], id="a-closing-marker-in-a-later-section-does-not-close-the-block"),
 ]
 
 
