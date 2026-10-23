@@ -1360,8 +1360,6 @@ def _worktree_remove_target(command):
 
 
 _MERGE_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_MERGE_BASE_MARKER_RE = re.compile(rb"^(\|{7,})(?: .*)?$")
-_MERGE_SEPARATOR_RE = re.compile(rb"^={7,}$")
 _MERGE_CHECKOUT_OPTS = frozenset({"--ours", "--theirs", "-q", "--quiet"})
 _MERGE_RESTORE_OPTS = frozenset({"--ours", "--theirs", "-W", "--worktree", "-q", "--quiet"})
 # Path-count ceiling for one merge-branch call (each path costs a git call); over it -> indeterminate.
@@ -1373,7 +1371,9 @@ def _merge_side_form(action, command):
 
     Returns {"operands": [...], "source": bool}. Requires exactly `git checkout|restore ...` (no
     git globals, no VAR= prefix). Options are an allowlist, so --staged, --patch and
-    --pathspec-from-file* never pass; a checkout carrying a tree-ish operand does not apply.
+    --pathspec-from-file* never pass. With --ours/--theirs git takes no tree-ish, so without a
+    ``--`` every checkout operand is a path; a checkout naming a tree-ish before ``--`` does
+    not apply.
     """
     if action not in ("checkout-path", "restore") or not isinstance(command, str):
         return None
@@ -1413,9 +1413,10 @@ def _merge_side_form(action, command):
     if not merge_side:
         return None
     if subcommand == "checkout":
-        if _checkout_path_has_treeish_operand(args):
-            return None
-        operands = list(post) if has_sep else operands
+        if has_sep:
+            if operands:
+                return None
+            operands = list(post)
     else:
         operands = operands + list(post)
     if not operands:
@@ -1509,67 +1510,71 @@ def _merge_source_operands_exact(cwd, operands):
     return True
 
 
-def _merge_has_base_markers(cwd):
-    """True when ``merge.conflictStyle`` writes a base marker, False when it never does, None when unreadable.
-
-    Only ``diff3`` and ``zdiff3`` write one; an absent value or ``merge`` writes none. Any other
-    value, or a config read that fails, cannot be established (None).
-    """
-    result = _run_git(cwd, "config", "--get", "merge.conflictStyle")
-    if result.returncode == 1 and not result.stdout.strip():
-        return False
-    if result.returncode != 0:
-        return None
-    style = result.stdout.rstrip("\n")
-    if style == "merge":
-        return False
-    if style in ("diff3", "zdiff3"):
-        return True
-    return None
-
-
-def _merge_content_matches(written, expected, ours, theirs, base_markers):
+def _merge_content_matches(written, expected, ours, theirs, resolve):
     """True when the worktree bytes equal the recomputed merge, up to conflict-marker labels.
 
     ``expected`` was written with the full commit ids ``ours`` and ``theirs`` as its labels, so a
     start or end marker line is recognised by that exact id, never by its look. Compared by
     position: equal line counts, each generated marker line matched by a worktree line carrying
-    the same marker run (any label), every other line byte for byte. ``base_markers`` says
-    whether the conflict style writes a base marker at all. An unexpected shape is a mismatch
-    (fail closed).
+    the same marker run and a label that ``resolve`` maps to the commit the recomputed line names
+    (open: ``ours``, close: ``theirs``), every other line byte for byte. The label is the whole
+    text after the run and one space: it is accepted when it resolves as a whole, or as
+    ``<name>:<suffix>`` when ``<name>`` resolves and ``<suffix>`` equals the recomputed line's own
+    ``:<suffix>`` byte for byte (only a rename conflict carries one). A label that is empty,
+    does not resolve or resolves elsewhere, or carries any other suffix, is a mismatch, so text
+    appended to a marker line is never taken for git's own label. One trailing carriage return is ignored on a marker line, but
+    the recomputed line and the worktree line must both carry it or both lack it. A ``|||||||``
+    base-marker line is not relaxed: git writes it identically in the real merge and in the
+    recomputed one (the label is an abbreviated base id), so it is compared like any other line.
+    An unexpected shape is a mismatch (fail closed).
     """
     written_lines = written.split(b"\n")
     expected_lines = expected.split(b"\n")
     if len(written_lines) != len(expected_lines):
         return False
-    markers = _merge_generated_markers(
-        expected_lines, ours.encode(), theirs.encode(), base_markers,
-    )
+    markers = _merge_generated_markers(expected_lines, ours.encode(), theirs.encode())
     if markers is None:
         return False
     for index, (got, want) in enumerate(zip(written_lines, expected_lines)):
-        run = markers.get(index)
-        if run is None:
+        marker = markers.get(index)
+        if marker is None:
             if got != want:
                 return False
-        elif not got.startswith(run) or got[len(run):len(run) + 1] not in (b"", b" "):
+            continue
+        kind, run, suffix = marker
+        if got.endswith(b"\r") != want.endswith(b"\r"):
+            return False
+        got = got[:-1] if got.endswith(b"\r") else got
+        if not got.startswith(run + b" "):
+            return False
+        label = got[len(run) + 1:]
+        try:
+            label = label.decode("utf-8")
+            suffix = suffix.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        commit = ours if kind == "open" else theirs
+        if resolve(label) == commit:
+            continue
+        # ``<name>:<suffix>``: the suffix is git's own only when the recomputed line carries the
+        # same one (a rename conflict); a suffix is never discarded unchecked.
+        name, colon, tail = label.partition(":")
+        if not (colon and suffix and tail == suffix[1:] and resolve(name) == commit):
             return False
     return True
 
 
-def _merge_generated_markers(lines, ours, theirs, base_markers):
-    """{line index: marker run} for the generated marker lines of ``lines``, or None.
+def _merge_generated_markers(lines, ours, theirs):
+    """{line index: (kind, marker run, ``:<path>`` suffix or b"")} for the marker lines, or None.
 
     A generated conflict opens with exactly ``<<<<<<< <ours>`` and closes with exactly
-    ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``). When ``base_markers`` is
-    set (diff3/zdiff3), the first ``|||||||`` line after the open and before the first
-    ``=======`` is generated too (any label); every other ``|||||||`` line, and every one when
-    the style writes no base marker, is ordinary content. The ``=======`` separator carries no
-    label and stays an ordinary line. An open that never closes, or opens again before
-    closing, is an unexpected shape (None).
+    ``>>>>>>> <theirs>`` (either optionally followed by ``:<path>``, and by one carriage return
+    when the merged file uses CRLF). Only those two lines may differ in label; the ``|||||||``
+    base marker and the ``=======`` separator stay ordinary lines. An open that never closes,
+    or opens again before closing, is an unexpected shape (None).
     """
-    open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"(?::.*)?$")
-    close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"(?::.*)?$")
+    open_re = re.compile(rb"^(<{7,}) " + re.escape(ours) + rb"((?::[^\r]*)?)\r?$")
+    close_re = re.compile(rb"^(>{7,}) " + re.escape(theirs) + rb"((?::[^\r]*)?)\r?$")
     markers = {}
     index = 0
     while index < len(lines):
@@ -1577,28 +1582,67 @@ def _merge_generated_markers(lines, ours, theirs, base_markers):
         if opened is None:
             index += 1
             continue
-        markers[index] = opened.group(1)
-        base_open = base_markers
+        markers[index] = ("open", opened.group(1), opened.group(2))
         index += 1
         while True:
             if index >= len(lines):
                 return None
             closed = close_re.match(lines[index])
             if closed:
-                markers[index] = closed.group(1)
+                markers[index] = ("close", closed.group(1), closed.group(2))
                 break
             if open_re.match(lines[index]):
                 return None
-            if _MERGE_SEPARATOR_RE.match(lines[index]):
-                base_open = False
-            elif base_open:
-                base = _MERGE_BASE_MARKER_RE.match(lines[index])
-                if base:
-                    markers[index] = base.group(1)
-                    base_open = False
             index += 1
         index += 1
     return markers
+
+
+def _merge_label_resolver(cwd):
+    """A function mapping a marker label to the commit id it names (or None), cached per call."""
+    cache = {}
+
+    def resolve(label):
+        if label in cache:
+            return cache[label]
+        commit = None
+        if label and not label.startswith("-"):
+            result = _run_git(cwd, "rev-parse", "--verify", "--quiet", label + "^{commit}")
+            out = result.stdout.strip() if result.returncode == 0 else ""
+            commit = out if _MERGE_OBJECT_ID_RE.match(out) else None
+        cache[label] = commit
+        return commit
+
+    return resolve
+
+
+def _merge_checkout_transforms(cwd, paths):
+    """True when git may rewrite a path's bytes between index and worktree, or that cannot be read.
+
+    ``text``, ``eol``, ``ident``, ``filter``, ``working-tree-encoding`` and the legacy ``crlf``
+    attributes, any ``core.eol``, and any ``core.autocrlf`` git does not parse as false (``true``,
+    ``yes``, ``1``, ``input``, ...), can make a clean ``git diff`` hide an edit.
+    """
+    autocrlf = _run_git(cwd, "config", "--type=bool", "--get", "core.autocrlf")
+    if autocrlf.returncode != 1 and (
+        autocrlf.returncode != 0 or autocrlf.stdout.strip() != "false"
+    ):
+        return True
+    eol = _run_git(cwd, "config", "--get", "core.eol")
+    if eol.returncode != 1:
+        return True
+    attrs = _run_git(
+        cwd, "check-attr", "-z", "text", "eol", "ident", "filter", "working-tree-encoding", "crlf",
+        "--", *paths,
+    )
+    if attrs.returncode != 0:
+        return True
+    fields = attrs.stdout.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) != len(paths) * 18:
+        return True
+    return any(value != "unspecified" for value in fields[2::3])
 
 
 def _merge_tree_mode(cwd, tree, path):
@@ -1636,13 +1680,23 @@ def _merge_side_probe(cwd, action, command):
             return ("indeterminate", 0)
         if len(entries) > _MERGE_PATH_LIMIT:
             return ("indeterminate", 0)
-        top = _run_git(cwd, "rev-parse", "--show-toplevel")
-        if top.returncode != 0:
+        import store_core
+        top = store_core.repo_root(cwd)
+        if not isinstance(top, str) or not top or not os.path.isdir(top):
             return ("indeterminate", 0)
-        top = top.stdout.rstrip("\n")
+        # store_core strips all surrounding whitespace, so a root whose name ends in a space
+        # resolves to a sibling: the root must contain cwd and be a checkout root itself.
+        real_cwd = os.path.realpath(cwd)
+        if os.path.commonpath([top, real_cwd]) != top:
+            return ("indeterminate", 0)
+        dot_git = os.path.join(top, ".git")
+        if not (os.path.isdir(dot_git) or os.path.isfile(dot_git)):
+            return ("indeterminate", 0)
+        if _merge_checkout_transforms(top, list(entries)):
+            return ("indeterminate", 0)
 
         tree = None
-        base_markers = None
+        resolve = _merge_label_resolver(top)
         risky = 0
         for path, modes in entries.items():
             if set(modes) == {0}:
@@ -1653,8 +1707,8 @@ def _merge_side_probe(cwd, action, command):
                     if entry and (entry[0].islower() or entry[0] == "S"):
                         return ("indeterminate", 0)
                 diff = _run_git(
-                    top, "--literal-pathspecs", "diff", "--quiet",
-                    "--ignore-submodules=none", "--", path,
+                    top, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+                    "--quiet", "--ignore-submodules=none", "--", path,
                 )
                 if diff.returncode == 1:
                     risky += 1
@@ -1692,17 +1746,16 @@ def _merge_side_probe(cwd, action, command):
                 return ("indeterminate", 0)
             with open(worktree_path, "rb") as f:
                 written = f.read()
-            if base_markers is None:
-                base_markers = _merge_has_base_markers(top)
-                if base_markers is None:
-                    return ("indeterminate", 0)
-            if not _merge_content_matches(written, blob.stdout, ours, theirs, base_markers):
+            if not _merge_content_matches(
+                written, blob.stdout, ours, theirs, resolve,
+            ):
                 risky += 1
                 continue
             # Bytes alone miss a mode-only edit: the executable bit is the builder's too.
             # core.filemode does not matter: a checkout rewrites the file's mode either way.
             merged_mode = _merge_tree_mode(top, tree, path)
-            if merged_mode is None:
+            if merged_mode not in ("100644", "100755"):
+                # A symlink (120000) or gitlink (160000) resolution is a file-type choice.
                 return ("indeterminate", 0)
             if bool(os.stat(worktree_path).st_mode & stat.S_IXUSR) != (merged_mode == "100755"):
                 risky += 1

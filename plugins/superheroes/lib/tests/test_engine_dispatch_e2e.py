@@ -213,6 +213,9 @@ if _death_marker:
     signal.signal(signal.SIGTERM, _mark_death)
     signal.signal(signal.SIGINT, _mark_death)
     atexit.register(_mark_death)
+    # ready only once the handlers exist, so a signal from here on leaves the marker
+    with open(_death_marker + ".ready", "w", encoding="utf-8"):
+        pass
 
 if _argv_file:
     with open(_argv_file, "w", encoding="utf-8") as fh:
@@ -826,6 +829,12 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
         time.monotonic() + 15,
         lambda: _engine_pgid(run_dir) is not None and ED._process_group_alive(_engine_pgid(run_dir)),
         "engine never became alive for abandon test",
+    )
+    # a live group is not a ready engine: abandon must not signal before the handler exists — #1112
+    _wait_until(
+        time.monotonic() + 30,
+        lambda: os.path.isfile(death_marker + ".ready"),
+        "engine never installed its death handler for abandon test",
     )
     pgid = _engine_pgid(run_dir)
     assert os.path.exists(_lease_path(wt))
