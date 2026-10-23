@@ -103,11 +103,19 @@ def test_read_only_hand_dispatch_prints_the_rule_from_its_one_home(phase):
 
 
 def test_rules_and_order_blocks_list_no_programs():
-    texts = {"REVIEW_SEAT_RULE": RO.REVIEW_SEAT_RULE, "FIXER_SEAT_RULE": RO.FIXER_SEAT_RULE}
+    import engine_dispatch as ED
+    texts = {"REVIEW_SEAT_RULE": RO.REVIEW_SEAT_RULE, "FIXER_SEAT_RULE": RO.FIXER_SEAT_RULE,
+             "ANTIHIJACK_PREAMBLE": ED.ANTIHIJACK_PREAMBLE}
     for phase in RO.ORDER_PHASES:
         texts["order:%s" % phase] = _rule_block(_render(phase))
     faults = {name: _denylist_faults(text) for name, text in texts.items()}
     assert not {name: found for name, found in faults.items() if found}
+
+
+def test_dispatch_preamble_carries_the_review_rule_from_its_one_home():
+    import engine_dispatch as ED
+    assert ED.ANTIHIJACK_PREAMBLE.count(RO.REVIEW_SEAT_RULE) == 1
+    assert "read-only commands there" not in ED.ANTIHIJACK_PREAMBLE
 
 
 def test_denylist_guard_bites_on_a_denylist_sentence():
