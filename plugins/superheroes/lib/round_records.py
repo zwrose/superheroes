@@ -83,12 +83,6 @@ AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
 AUDIT_PROVENANCE_MIXED = "mixed-evidence"
 AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
 AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST = "dispatch-manifest"
-AUDIT_PROVENANCE_SOURCES = (
-    AUDIT_PROVENANCE_RUNNER_RECORD,
-    AUDIT_PROVENANCE_HAND_LANDED,
-    AUDIT_PROVENANCE_MIXED,
-    AUDIT_PROVENANCE_COLLECTION_MANIFEST,
-)
 # Phases whose discharge depends on who executed the seat (runner record, not orchestrator manifest).
 PROVENANCE_RUNNER_RECORD_PHASES = (round_phases.P_AUDITS,)
 SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
@@ -123,11 +117,6 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "model": lambda value: value is None or (isinstance(value, str) and value),
     session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD: session_contract.run_kind_value_ok,
 }
-# A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
-# payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
-SEAT_MISSING_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", "vendor",
-                       "model", "dispatchRef", "orderSha256", "manifestSha256", "recordedAt",
-                       "reason", "evidence")
 MISSING_REASONS = ("forfeit", "timeout", "refusal", "killed", "malformed-output")
 
 SIDECAR_FIELDS = ("schema", "repoId", "branch", "headSha", "baseRef", "baseSha", "diffSha256",
@@ -151,10 +140,6 @@ _PANEL_PHASE_DIRNAME = round_phases.P_PANEL
 # Compare-and-swap token for a stored `seat-missing/1` envelope. It is NOT a payload hash (those
 # are 64-char hex); a caller cannot satisfy `cas-mismatch` by guessing a real seat-result hash.
 MISSING_CAS_TOKEN = SEAT_MISSING_SCHEMA
-
-# Directory fsync is a no-op (or unsupported) on some exotic/remote filesystems; only these
-# errnos are swallowed. Anything else propagates — a durability failure must not go quiet.
-_FSYNC_DIR_TOLERATED = (errno.EINVAL, errno.ENOTSUP, errno.EPERM)
 
 storage_key = record_paths.storage_key
 store_path = record_paths.store_path
