@@ -726,18 +726,23 @@ def test_n2_the_only_note_ignored_raises_no_builder_note_and_the_timer_carries_i
 
 
 def test_n2_without_a_note_ignore_the_key_is_absent(repo):
+    # axis: valid inputs return a non-refusal result — and that result carries no ignoredNotes without a note ignore
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 101, "chatter")])
     pair = (("cloud-a", ww.EVENT_LANE_STALE),)
     for ignore in ((), pair):
-        assert "ignoredNotes" not in ww.run(repo, _BATCH, gh_run=gh, ignore_events=ignore)
+        ran = ww.run(repo, _BATCH, gh_run=gh, ignore_events=ignore)
         armed = ww.watch_arm(
             repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh, ignore_events=ignore,
         )
-        assert "ignoredNotes" not in armed
+        for result in (ran, armed):
+            assert result["ok"] is True
+            assert result["event"] == ww.EVENT_TIMER
+            assert "ignoredNotes" not in result
 
 
 def test_n2_ignored_notes_is_the_sorted_deduplicated_list_of_int_ids(repo):
+    # axis: IGNORED NOTES shape — an int-sorted, deduplicated id list — an unsorted, repeated or non-int list makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     ignore = (_ignore("cloud-a", 9), _ignore("cloud-a", 7), _ignore("cloud-b", 9))
     result = ww.run(repo, _BATCH, gh_run=_NoteGh(), ignore_events=ignore)
@@ -778,6 +783,7 @@ def test_n4_a_malformed_note_ignore_is_refused_from_the_cli(repo, capsys, raw):
 
 
 def test_n4_the_cli_parses_the_note_form_splitting_from_the_right():
+    # axis: CLI note form — splits from the right, so a launch id with a colon survives — a left split makes it fail
     assert ww._parse_ignore_event_cli("cloud-a:builder-note:7") == ("cloud-a", "builder-note", 7)
     assert ww._parse_ignore_event_cli("a:b:builder-note:12") == ("a:b", "builder-note", 12)
     assert ww._parse_ignore_event_cli("cloud-a:lane-terminal") == ("cloud-a", "lane-terminal")
@@ -786,6 +792,7 @@ def test_n4_the_cli_parses_the_note_form_splitting_from_the_right():
 
 
 def test_n4_the_cli_hands_the_note_triple_to_run(repo, monkeypatch):
+    # axis: CLI to run — the parsed note triple reaches run as ignore_events — a CLI that drops or reshapes it makes it fail
     seen = {}
 
     def fake_run(repo_root, batch_id, **kwargs):
@@ -827,6 +834,7 @@ def test_n4_a_malformed_note_ignore_is_refused_from_the_api(repo, bad):
 
 
 def test_n4_a_list_triple_is_accepted_like_a_tuple(repo):
+    # axis: NOTE IGNORE form — a list triple is accepted like a tuple — a validator that refuses a list makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     result = ww.run(repo, _BATCH, gh_run=_NoteGh([_comment(7, 101)]), ignore_events=(["cloud-a", "builder-note", 7],))
     assert result["event"] == ww.EVENT_TIMER
@@ -845,6 +853,7 @@ def test_n5_a_note_ignore_never_suppresses_lane_terminal(repo):
 
 
 def test_n5_a_note_ignore_never_suppresses_lane_stale(repo):
+    # axis: NOTE IGNORE scope — a note ignore never suppresses lane-stale — an ignore that also drops the stale lane makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     gh = _QuietGh([_comment(7, 101)])
     result = ww.run(repo, _BATCH, gh_run=gh, ignore_events=(_ignore("cloud-a", 7),))
@@ -854,6 +863,7 @@ def test_n5_a_note_ignore_never_suppresses_lane_stale(repo):
 
 
 def test_n5_a_note_ignore_leaves_a_class_pair_for_another_event_working(repo):
+    # axis: NOTE IGNORE beside a class pair — a lane-stale class pair still suppresses beside a note ignore — a note ignore that displaces the pair makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     gh = _QuietGh([_comment(7, 101)])
     ignore = (_ignore("cloud-a", 7), ("cloud-a", ww.EVENT_LANE_STALE))
@@ -877,6 +887,7 @@ def test_n6_the_loop_keeps_arming_past_the_ignored_note_and_its_result_carries_i
 
 
 def test_n6_the_loop_exits_on_a_note_that_is_not_ignored_and_still_names_the_ignored_one(repo):
+    # axis: the loop exits on a non-ignored note — a loop that keeps arming past every note makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 101, age=120), _comment(8, 101, age=60)])
     result = ww.loop(
@@ -890,6 +901,7 @@ def test_n6_the_loop_exits_on_a_note_that_is_not_ignored_and_still_names_the_ign
 
 
 def test_n6_without_a_note_ignore_the_loop_result_has_no_ignored_notes(repo):
+    # axis: loop result shape — no ignoredNotes key without a note ignore — a loop that always adds the key makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     result = ww.loop(
         repo, _BATCH, max_seconds=1, interval_seconds=1, max_total_seconds=2,

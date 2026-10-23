@@ -249,6 +249,7 @@ STAMP = "2026-10-12T10:00:00.000Z"
 
 
 def test_a_failed_attempt_then_a_recorded_retry_success_is_delivered(world):
+    # axis: retry success — a failed send followed by a recorded successful retry is delivered — a failure that sticks makes it fail
     msg = _composed(world)
     _write_record(world,
                   _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
@@ -259,6 +260,7 @@ def test_a_failed_attempt_then_a_recorded_retry_success_is_delivered(world):
 
 
 def test_a_failed_attempt_then_a_retry_success_arriving_during_the_wait_is_delivered(world):
+    # axis: retry success during the wait — a retry success that lands mid-wait is delivered — a failure that ends the wait early makes it fail
     msg = _composed(world)
     failed = _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False)
     _write_record(world, failed)
@@ -274,6 +276,7 @@ def test_a_failed_attempt_then_a_retry_success_arriving_during_the_wait_is_deliv
 
 
 def test_only_failed_attempts_are_send_failed_at_the_end_of_the_wait(world):
+    # axis: failure only at the end of the wait — send-failed is reported after the full wait, not before — a failure reported early makes it fail
     msg = _composed(world)
     _write_record(world,
                   _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
@@ -284,6 +287,7 @@ def test_only_failed_attempts_are_send_failed_at_the_end_of_the_wait(world):
 
 
 def test_a_failed_attempt_and_a_retry_without_a_result_is_unconfirmed(world):
+    # axis: unconfirmed over failed — a retry with no result outranks an earlier failure at the end of the wait — a failed verdict makes it fail
     msg = _composed(world)
     _write_record(world,
                   _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
@@ -297,6 +301,7 @@ def test_a_failed_attempt_and_a_retry_without_a_result_is_unconfirmed(world):
     SESSION + " [a b]", SESSION + " [x]y", SESSION + " [x[y]", SESSION + "x [3fa9c1]",
     SESSION + " [3fa9c1] ", SESSION + "[3fa9c1]"])
 def test_a_send_to_a_loosely_bracketed_recipient_is_not_this_messages_send(world, to):
+    # axis: strict recipient form — only `<session> [<ref>]` is this session's send — a loose bracket match makes it fail
     msg = _composed(world)
     _write_record(world, _send_lines("toolu_1", to, msg["forward"], STAMP))
     out, _ = _check(world, msg["msgId"], wait=4, interval=2)
@@ -304,6 +309,7 @@ def test_a_send_to_a_loosely_bracketed_recipient_is_not_this_messages_send(world
 
 
 def test_a_bracketed_send_with_altered_text_is_a_mismatch(world):
+    # axis: text check — altered text to a bracketed recipient is a mismatch — a text check skipped for the bracketed form makes it fail
     msg = _composed(world)
     _write_record(world, _send_lines("toolu_1", SESSION + " [3fa9c1]", msg["forward"][:-1], STAMP))
     out, clock = _check(world, msg["msgId"])
@@ -311,6 +317,7 @@ def test_a_bracketed_send_with_altered_text_is_a_mismatch(world):
 
 
 def test_the_disambiguated_recipient_form_is_session_space_bracketed_ref(world):
+    # axis: literal pin — the host SendMessage `to` form is `<session> [<ref>]` — a changed form makes it fail
     # Literal pin of the host SendMessage tool's `to` form: `worker [3fa9c1]` (CONVENTIONS §11.3).
     assert "%s [3fa9c1]" % SESSION == "builder-1748 [3fa9c1]"
     msg = _composed(world)

@@ -363,12 +363,14 @@ def test_p4_a_park_then_a_builder_note_created_later_is_not_lane_terminal(repo):
 
 
 def test_p4_a_later_note_recorded_answered_still_supersedes_the_park():
+    # axis: SUPERSEDED by note — a later note recorded answered still supersedes — an answered filter applied to superseders makes it fail
     park = _comment(7, 101, _body("park"), age=300)
     note = _comment(8, 101, age=100)
     assert _terminals([park, note], answered={8}) == []
 
 
 def test_p4_a_note_created_before_the_park_does_not_supersede_it():
+    # axis: SUPERSEDED by note — a note before the park does not supersede it — a supersession that ignores order makes it fail
     note = _comment(8, 101, age=300)
     park = _comment(7, 101, _body("park"), age=100)
     assert [t["commentId"] for t in _terminals([note, park])] == [7]
@@ -386,6 +388,7 @@ def test_p5_a_handback_or_stop_is_never_superseded(kind, state):
 
 
 def test_p6_a_newer_park_after_the_superseding_progress_fires(repo):
+    # axis: SUPERSEDED by progress — a newer park after the superseding progress still fires — a supersession that silences the lane for good makes it fail
     _cloud_lane(repo, "cloud-a", 101)
     first = _comment(5, 101, _body("park"), age=400)
     progress = _progress(8, 101, created_age=500, updated_age=300)
@@ -396,6 +399,7 @@ def test_p6_a_newer_park_after_the_superseding_progress_fires(repo):
 
 
 def test_p6_a_superseded_park_does_not_fall_back_to_an_older_ending():
+    # axis: NO FALLBACK — a superseded park does not fall back to an older ending — a fallback to the older stop makes it fail
     older = _comment(4, 101, _body("stop"), age=500)
     park = _comment(7, 101, _body("park"), age=300)
     progress = _progress(8, 101, created_age=500, updated_age=100)
@@ -414,6 +418,7 @@ def test_p7_progress_on_another_lanes_issue_does_not_supersede():
 
 
 def test_p7_progress_created_before_the_lanes_cutoff_does_not_supersede():
+    # axis: lane cutoff — progress created before the lane's cutoff does not supersede — a missing cutoff check makes it fail
     park = _comment(7, 101, _body("park"), age=300)
     earlier_lane = _progress(8, 101, created_age=3000, updated_age=100)
     earlier_note = _comment(9, 101, age=3000)
@@ -422,6 +427,7 @@ def test_p7_progress_created_before_the_lanes_cutoff_does_not_supersede():
 
 @pytest.mark.parametrize("updated", [None, "soon", ""])
 def test_p8_a_progress_comment_with_no_readable_updated_at_does_not_supersede(updated):
+    # axis: unreadable updated_at — a progress comment whose updated_at is None, junk or empty does not supersede — treating it as a time makes it fail
     park = _comment(7, 101, _body("park"), age=300)
     readable = _progress(8, 101, created_age=500, updated_age=100)
     assert _terminals([park, readable]) == []
@@ -430,6 +436,7 @@ def test_p8_a_progress_comment_with_no_readable_updated_at_does_not_supersede(up
 
 
 def test_p8_a_progress_comment_without_an_updated_at_key_does_not_supersede():
+    # axis: missing updated_at key — a progress comment with no updated_at key does not supersede — a KeyError or a default time makes it fail
     park = _comment(7, 101, _body("park"), age=300)
     full = _progress(8, 101, created_age=500, updated_age=100)
     assert _terminals([park, full]) == []
