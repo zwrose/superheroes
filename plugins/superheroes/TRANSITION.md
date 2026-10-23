@@ -28,7 +28,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Implementer orders: the bite-proof record format rides inline
 
-- `dispatch-write` and the native engine's `open` insert a `## Bite-proof record format` block into the staged prompt when the authored order (every verbatim implementer-template copy masked) names a bite-proof. The block is cut at dispatch time from `rubric/bite-proof.md`: the record's shape and the three disclosures owed when a proof cannot be produced. An order that names none is staged as before.
+- `dispatch-write` and the native engine's `open` insert a `## Bite-proof record format` block into the staged prompt when the authored order (every verbatim implementer-template copy masked) names a bite-proof. The block is cut at dispatch time from the plugin's bite-proof rubric: the record's shape and the three disclosures owed when a proof cannot be produced. An order that names none is staged as before.
 - New refusal: when an order names a bite-proof and the rubric cannot be read or its format markers are not found exactly once, `dispatch-write` returns terminal `unrunnable` with detail `bite-proof-format-unreadable`, and native `open` refuses with reason `bite-proof-format-unreadable`. Nothing is dispatched.
 
 ### Engine CLI calls: one stdin chokepoint
