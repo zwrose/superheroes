@@ -57,9 +57,14 @@ def js_collected(path):
 
 
 def _type_names(rec):
-    """The local names ``rec`` binds by a TypeScript type-only import (its own specifier, or the whole statement,
-    is marked ``type``): TypeScript erases them, so they bind no runtime value."""
-    return {local for local, target in rec["imports"] if local is not None and len(target) == 3 and target[2] == "type"}
+    """The names ``rec`` carries by a TypeScript type-only import (its own specifier, or the whole statement, is marked
+    ``type``): the local name and, for ``A as B``, the imported source name ``A`` too. TypeScript erases them, so they
+    bind and use no runtime value."""
+    names = set()
+    for local, target in rec["imports"]:
+        if local is not None and len(target) == 3 and target[2] == "type":
+            names.update((local, target[1]))
+    return names
 
 
 def _result(status, reason=None, path=None, titles=None):

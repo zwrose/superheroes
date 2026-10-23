@@ -1096,6 +1096,19 @@ def _carries_option_token(command):
     return bool(refusal) or any(tok.startswith("-") for tok in argv)
 
 
+_PACKAGE_MANAGERS = frozenset(("npm", "pnpm", "yarn", "bun"))
+
+
+def _runs_package_script(command):
+    """True when the plain argv command ``command`` goes through a package manager other than its direct-runner form
+    (``pnpm exec vitest``): ``pnpm test``, ``npm run test`` and ``pnpm vitest run`` can resolve to a package script
+    that carries a name filter. An unparseable command fails closed."""
+    argv, _, refusal = parse_command(command)
+    if refusal:
+        return True
+    return os.path.basename(argv[0]) in _PACKAGE_MANAGERS and argv[1:2] != ["exec"]
+
+
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
@@ -1142,6 +1155,9 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
             return res(KEPT_UNRESOLVED, "binding-conflict")
         # axis: a renamed JS/TS test's run command may carry no option token at all (nothing starting with `-`, after the leading VAR=value pairs), because --config, -c, --root, --dir, --project or --workspace can select a configuration the root listing above never reads, which could filter the new title out; an unrenamed moved test is unaffected — see bite-proof record wo_b_2061_break_it_body_js
         if found["titles"] and js_collected(record["path"]) and _carries_option_token(record["command"]):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+        # a moved or retitled JS/TS test run through a package manager's script shorthand (`pnpm test`, `npm run test`, `yarn test`, `pnpm vitest run`) is refused, because the package script can carry a name filter that skips the test while another test passes; only the direct-runner form (`npx vitest`, `pnpm exec vitest`) counts (owner ruling 109(d))
+        if js_collected(record["path"]) and _runs_package_script(record["command"]):
             return res(KEPT_UNRESOLVED, "binding-conflict")
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")

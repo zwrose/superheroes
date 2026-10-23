@@ -132,6 +132,24 @@ def _skip_template(text, j, sub=False):
                 return j
 
 
+def _template_key(body):
+    """The template body with each `${ ... }` substitution replaced by its scanned tokens, so a formatter's whitespace
+    or quote change inside an expression reads equal while the literal text stays byte for byte."""
+    parts, last, i = [], 0, 0
+    while i < len(body):
+        if body[i] == "\\":
+            i += 2
+        elif body.startswith("${", i):
+            end = _skip_template(body, i + 2, True)
+            toks = _Scanner(body[i + 2:end - 1]).run()
+            # a substitution is keyed by its tokens, not its raw text, so `${1+2}` and `${1 + 2}` read equal
+            parts += [body[last:i], "${" + "\x1f".join("%s\x1e%s" % tok for tok in toks) + "}"]
+            last = i = end
+        else:
+            i += 1
+    return "".join(parts) + body[last:]
+
+
 class _Tok(tuple):
     """A token (type, text) that remembers whether a line break came before it; equality and hashing are the tuple's."""
     bol = False
@@ -223,9 +241,10 @@ class _Scanner:
                 self._emit("str", body)
             elif c == "`":
                 end = _skip_template(text, i + 1)
-                self._emit("tpl", text[i + 1:end - 1])
+                self._emit("tpl", _template_key(text[i + 1:end - 1]))
                 i = end
-            elif c == "/" and self._regex_allowed():
+            # a slash right after `<` closes a JSX tag (`</p>`), so it is a punctuator and never opens a regular expression
+            elif c == "/" and text[i - 1:i] != "<" and self._regex_allowed():
                 found = _REGEX.match(text, i)
                 if found is None:
                     raise ValueError("unterminated regular expression")

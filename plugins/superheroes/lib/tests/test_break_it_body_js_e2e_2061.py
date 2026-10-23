@@ -477,9 +477,48 @@ def test_a_ts_rename_whose_command_carries_an_option_reads_unresolved(repo, comm
 def test_a_ts_rename_whose_command_carries_only_env_pairs_and_runner_words_is_kept(repo):
     base, head = _stage(repo, {HOST: _host()})
     calls = []
-    record = _record(command="CI=1 pnpm vitest run %s" % OWN)
+    record = _record(command="CI=1 pnpm exec vitest run %s" % OWN)
     assert _got(_check(repo, base, head, record, _stub(calls))) == ("kept", "body-match")
-    assert [c["run"] for c in calls] == ["CI=1 pnpm vitest run %s" % HOST]
+    assert [c["run"] for c in calls] == ["CI=1 pnpm exec vitest run %s" % HOST]
+
+
+@pytest.mark.parametrize("command", [
+    "pnpm vitest run %s" % OWN,
+    "pnpm test %s" % OWN,
+    "npm run test %s" % OWN,
+    "yarn test %s" % OWN,
+], ids=["pnpm-vitest", "pnpm-test", "npm-run-test", "yarn-test"])
+def test_a_ts_rename_whose_command_goes_through_a_package_script_reads_unresolved(repo, command):
+    base, head = _stage(repo, {HOST: _host()})
+    calls = []
+    assert _got(_check(repo, base, head, _record(command=command), _stub(calls))) == ("unresolved", "binding-conflict")
+    assert calls == []
+
+
+@pytest.mark.parametrize("import_line", [
+    'import type { Model as ModelType } from "types";\n',
+    'import { type Model as ModelType } from "types";\n',
+], ids=["declaration-type", "inline-type"])
+def test_a_type_only_aliased_import_does_not_make_its_source_name_a_runtime_use(import_line):
+    content, host = _with_model(import_line)
+    assert _located(host, content) == ("found", None)
+
+
+def test_a_whitespace_change_inside_a_template_substitution_keeps_the_same_key():
+    old = break_it_body_js.parse("const a = `x ${1+2} y ${f( b )}`;\n")
+    new = break_it_body_js.parse("const a = `x ${1 + 2} y ${f(b)}`;\n")
+    assert [r["key"] for r in old] == [r["key"] for r in new]
+
+
+def test_a_change_to_the_literal_text_of_a_template_changes_the_key():
+    old = break_it_body_js.parse("const a = `x ${1+2} y`;\n")
+    new = break_it_body_js.parse("const a = `x ${1+2}  y`;\n")
+    assert [r["key"] for r in old] != [r["key"] for r in new]
+
+
+def test_a_jsx_closing_tag_reads_without_a_regular_expression_error():
+    records = break_it_body_js.parse("render(<p>Hello</p>);\n")
+    assert len(records) == 1
 
 
 def test_an_unrenamed_moved_ts_test_with_an_option_is_not_refused_by_the_option_rule(repo):

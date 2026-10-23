@@ -571,7 +571,10 @@ def test_slash_is_division_after_an_operand():
 
 def test_template_literal_nests_substitutions_strings_and_templates():
     toks = _tokens('x = `a ${ b + `c ${ d }` + "}" } e`')
-    assert [t for t in toks if t[0] == "tpl"] == [("tpl", 'a ${ b + `c ${ d }` + "}" } e')]
+    tpls = [t for t in toks if t[0] == "tpl"]
+    assert len(tpls) == 1 and tpls[0][1].startswith("a ${") and tpls[0][1].endswith("} e")
+    # a substitution is keyed by its tokens, so the same expression spaced differently reads equal
+    assert tpls == [t for t in _tokens('x = `a ${b+`c ${d}`+"}"} e`') if t[0] == "tpl"]
 
 
 def test_numbers_signs_and_leading_dot():
