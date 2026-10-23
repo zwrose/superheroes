@@ -117,7 +117,7 @@ def _expected_order(sheet):
         expected.append("pr-changed")
     if "walk" in prs:
         expected.append("pr-walk")
-    expected += ["pr-accepting"] + (["card"] * len(sheet["cards"]) or ["pr-nothing"])
+    expected += ["pr-accepting"] + (["card"] * len(sheet["cards"]) or ["pr-nothing" if prs.get("nothingListed") is True else "pr-unchecked"])
     for key, part_id in (("craft", "pr-craft"), ("alreadyDecided", "pr-decided"), ("history", "pr-review")):
         if prs[key]:
             expected.append(part_id)
@@ -142,10 +142,15 @@ def _carried_from(earlier, *older, head="111111111111111111111111111111111111111
     return _with(earlier, mutate)
 
 
-def _emptied(sheet):
+def _emptied(sheet, listed=True):
+    """The sheet with no cards, no walk and no folded entries; listed is whether it records that the PR bodies list no acceptance."""
     def mutate(clone):
         clone["cards"] = []
         clone["prSheet"].pop("walk", None)
+        if listed:
+            clone["prSheet"]["nothingListed"] = True
+        else:
+            clone["prSheet"].pop("nothingListed", None)
         for key in ("craft", "alreadyDecided", "history"):
             clone["prSheet"][key] = []
     return _with(sheet, mutate)
@@ -628,8 +633,8 @@ def test_every_new_word_comes_from_the_words_file():
         "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark", "caughtHeading", "roundsLine", "ciLine",
         "laneLine", "describesCommit", "changedHeading", "changed", "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading",
         "craftHeading", "decidedHeading", "reviewHeading", "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel",
-        "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "historyCap",
-        "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro", "decidedGround",
+        "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "acceptingUnchecked", "acceptingUncheckedCount",
+        "historyCap", "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro", "decidedGround",
     ]
     words = copy.deepcopy(WORDS)
     for key in new_keys:
@@ -650,6 +655,7 @@ def test_every_new_word_comes_from_the_words_file():
       return t.everyText();
     """)
     collect(_emptied(PR_SAMPLE))
+    collect(_emptied(PR_SAMPLE, listed=False))
     collect(PR_SAMPLE)
     collect(_carried_from(PR_SAMPLE))
     collect(_with_decided(PR_SAMPLE, DECIDED_1, DECIDED_2), DECIDED_JS + """

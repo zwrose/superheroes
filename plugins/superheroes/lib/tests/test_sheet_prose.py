@@ -1062,6 +1062,7 @@ def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_pa
     for kind in ("pr", "stack"):
         sheet = _sample(kind)
         sheet["cards"] = []
+        sheet["prSheet"]["nothingListed"] = True
         out = _prose_of(tmp_path, sheet)
         assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], PR_WORDS["nothingToAccept"]) in out, kind
         assert not re.search(r"^1\. ", out[out.index("**%s**" % PR_WORDS["acceptingHeading"]):], re.M), kind
@@ -1232,7 +1233,8 @@ def _walk_sheet(tmp_path):
     """The data file the builder makes from the full walk fixture, with its pictures copied beside it."""
     out = tmp_path / "sheet.json"
     built = subprocess.run([sys.executable, "-B", str(PLUGIN / "lib" / "pr_sheet.py"), "build", "--record", str(FIXTURES / "record-big.json"),
-                            "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)], capture_output=True, text=True)
+                            "--pr-body", "214=" + str(FIXTURES / "body-none.md"), "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)],
+                           capture_output=True, text=True)
     assert built.returncode == 0, built.stdout
     return json.loads(out.read_text(encoding="utf-8"))
 

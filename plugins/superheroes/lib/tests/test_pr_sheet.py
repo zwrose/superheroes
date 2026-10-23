@@ -702,8 +702,8 @@ def test_samples_are_the_builders_output(tmp_path, sample, case):
     done = cli([FIXTURES / r for r in case[0]], FIXTURES / case[1], out)
     assert done.returncode == 0, done.stderr
     shipped = (THEME / sample).read_bytes()
+    assert shipped == out.read_bytes()
     sheet = json.loads(shipped)
-    assert json.loads(out.read_bytes()) == with_nothing_listed(sheet)
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
 
 
@@ -1725,7 +1725,7 @@ def test_the_built_index_carries_each_rows_caption(tmp_path):
     done, out = run_index(tmp_path)
     assert done.returncode == 0, done.stdout
     rows = json.loads((out / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
-    assert all(r["caption"] == pr_sheet._row_caption(r, INDEX_WORDS) and r["caption"] for r in rows)
+    assert all(r["caption"] == pr_sheet._row_caption(r, INDEX_WORDS, nothing_listed=True) and r["caption"] for r in rows)
 
 
 def test_an_index_with_no_questions_and_no_prs_is_built(tmp_path):
