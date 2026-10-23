@@ -209,11 +209,13 @@ A PR sheet (`kind` is `pr`) puts one PR's review to the owner before the merge. 
 `prAnswers` blocks of `sheet-words.json`.
 
 The advisor never writes the data file by hand. It builds it from the PR's review record, one
-`--record` for each PR of a stack, and its own input:
+`--record` for each PR of a stack, one `--pr-body` for each PR it covers, and its own input:
 
 ```
-python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--record <file> ...] --input <file> --out sheet.json
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--record <file> ...] --pr-body <number>=<file> [--pr-body ...] --input <file> --out sheet.json
 ```
+
+Each `--pr-body` file holds one covered PR's body, read with `gh api repos/<o>/<r>/pulls/<n> --jq .body`.
 
 The shape of the advisor's input is defined in the docstring of `lib/pr_sheet.py`, and nowhere else.
 Publishing is as § Publishing a sheet says.
@@ -250,8 +252,10 @@ reviewer's run covers it. It adds one line counting the findings left for the ow
 one line each. It says "the review record is incomplete" only for the record's other gaps. On a stack,
 each line names its PR.
 
-A part with nothing in it is left out, except the items, which then say that the review left nothing
-for the owner. The app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
+A part with nothing in it is left out, except the items. With no card, they say that the review left
+nothing for the owner only when the build recorded that every covered PR body lists no acceptance
+(`prSheet.nothingListed`), and say otherwise that the sheet was not checked against the PR body. The
+app bar says the same for its count. The app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
 block of `sheet-words.json`, the home of the words.
 
 ### The items
@@ -266,6 +270,10 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
 - An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
   with the entry id.
+- Each acceptance a covered PR body lists under `## What we're accepting` becomes its own Accept card,
+  built from the body (the PR body is the one source of truth), one for every acceptance listed, with
+  no card for a body that lists none. The advisor never copies one into `items`: `items` carries only
+  what the body does not.
 - An item is only for a call that passes Test 2 (showrunner duty 5 in `skills/showrunner/SKILL.md`),
   and it names its ground as `skills/showrunner/reference/owner-decisions.md` § The filter says.
 - An acceptance no Canon ruling covers that carries its own consequence for the owner to weigh is

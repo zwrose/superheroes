@@ -2,7 +2,7 @@
 """Builds a PR sheet's data file from the PR's review record and the advisor's input.
 
 CLI:
-  pr_sheet.py build --record FILE [--record FILE ...] --input FILE --out FILE
+  pr_sheet.py build --record FILE [--record FILE ...] --pr-body N=FILE [--pr-body N=FILE ...] --input FILE --out FILE
   pr_sheet.py index --input FILE [--answers FILE] --out FILE
 
 On success it writes the data file to --out and each walk picture it could copy to pictures/ beside it, prints
@@ -10,7 +10,18 @@ On success it writes the data file to --out and each walk picture it could copy 
 On a refusal it writes nothing, prints {"ok": false, "problems": [...]} (one line each) and exits 1; an
 unreadable or non-JSON file, the words file included, is a refusal problem that names the file. `index` prints
 {"ok": true, "out": ..., "cards": N, "pictures": [...], "rows": N} on success and refuses the same way; if
-writing fails it removes the pictures that run created. --record is for `build` only, --answers for `index` only.
+writing fails it removes the pictures that run created. --record and --pr-body are for `build` only, --answers for `index` only.
+
+--pr-body N=FILE names the body of covered PR N (gh api repos/<owner>/<repo>/pulls/N --jq .body, read as UTF-8), and `build`
+needs one for every covered PR (number on a pr sheet, every prs[].number on a stack), no more and no fewer; a missing, extra or
+repeated one, a value that is not <PR number>=<file>, and a file that cannot be read are refusal problems. Each acceptance a body
+lists under its "What we're accepting" heading (accepting_listed) becomes one Accept card, built from the body, after the
+leftover cards and before the items: the PR body is the one source of truth, so an acceptance in a body is never copied into
+"items", which carries only what the body does not. The cards are left out of the pointer scan below, since a body's wording
+is not the advisor's. prSheet.nothingListed is true only when every covered body was read and lists none; the page, the prose
+and the index row say "nothing to accept" only then, and say the sheet was not checked against the bodies otherwise (a sheet
+built through the API with no bodies, or an earlier one). A card id comes from the PR, the acceptance's text and its place among
+identical ones, so an unchanged section rebuilds the same ids and the saved answers keep matching.
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
@@ -184,6 +195,82 @@ def _num(v):
 
 def _commit(v):
     return isinstance(v, str) and _COMMIT.search(v) is not None
+
+
+_ACCEPTING = re.compile(r"^ {0,3}(#{1,6})[ \t]+What we(?:'|’)re accepting[ \t]*#*[ \t]*$", re.IGNORECASE)
+_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]")
+_FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")  # a backtick fence's info string holds no backtick, so ```x``` opens none
+_ITEM = re.compile(r"^ ?(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)")
+_NO_ACCEPTANCE = ("none", "n/a", "na", "nothing")
+
+
+def _outside_comments(lines):
+    """(line, fenced) for each line of a body that is not inside an HTML comment, tracking code fences as it goes.
+
+    A comment is cut out of its line; a line left empty by the cut is dropped, and text beside a comment stays. A comment
+    that is never closed runs to the end. Comments are read outside fences only, so a fenced line is kept as it stands."""
+    kept, fence, inside = [], None, False
+    for line in lines:
+        if fence is not None:
+            kept.append((line, True))
+            closing = re.match(r"^ {0,3}(" + re.escape(fence[0]) + "{" + str(len(fence)) + r",})[ \t]*$", line)
+            fence = None if closing else fence
+            continue
+        text, rest, cut = "", line, inside
+        while True:
+            if inside:
+                end = rest.find("-->")
+                if end < 0:
+                    break
+                rest, inside = rest[end + 3:], False
+            start = rest.find("<!--")
+            if start < 0:
+                text += rest
+                break
+            text, rest, inside, cut = text + rest[:start], rest[start + 4:], True, True
+        if cut and not text.strip():
+            continue
+        opening = _FENCE.match(text)
+        fence = opening.group(1) if opening else None
+        kept.append((text, opening is not None))
+    return kept
+
+
+def accepting_listed(body):
+    """The acceptances a PR body lists under its What we're accepting heading, in order; [] for no such heading, no
+    acceptance, or anything that is not a string. An item is a top-level list item with its nested lines, or a paragraph;
+    one that reads None, N/A, NA or Nothing is no acceptance. A line that is none of these is an acceptance, never dropped."""
+    if not isinstance(body, str):
+        return []
+    lines = _outside_comments(body.splitlines())
+    start = next((n for n, (line, fenced) in enumerate(lines) if not fenced and _ACCEPTING.match(line)), None)
+    if start is None:
+        return []
+    level = len(_ACCEPTING.match(lines[start][0]).group(1))
+    section = []
+    for line, fenced in lines[start + 1:]:
+        heading = None if fenced else _HEADING.match(line)
+        if heading and len(heading.group(1)) <= level:
+            break
+        section.append(line)
+    items, open_item, is_list, blank = [], None, False, False
+    for line in section:
+        if not line.strip():
+            blank = True
+            continue
+        started = _ITEM.match(line)
+        indented = line.startswith(("  ", "\t"))
+        if started:
+            open_item, is_list = [started.group(1)], True
+            items.append(open_item)
+        elif open_item is not None and not (blank and (not is_list or not indented)):
+            open_item.append(line)
+        else:
+            open_item, is_list = [line], False
+            items.append(open_item)
+        blank = False
+    texts = (" ".join(part for part in (line.strip() for line in item) if part) for item in items)
+    return [t for t in texts if t and (t[:-1] if t.endswith(".") else t).strip().lower() not in _NO_ACCEPTANCE]
 
 
 def _fill(text, /, **slots):
@@ -543,16 +630,33 @@ def _walk(walk, place):
     return {**head, "picturesFrom": walk["picturesFrom"], "stops": keyed}
 
 
-def build(records, advisor, words, place=None, previous=None):
+def _check_bodies(bodies, allowed, problems):
+    """Collects the problems of the PR bodies given: one for each covered PR with none, each key that names a PR the sheet does not cover."""
+    if not isinstance(bodies, dict):
+        problems.append("the PR bodies must be an object of PR number to body text")
+        return
+    for n in allowed:
+        if n not in bodies:
+            problems.append(f"PR #{n} has no body: give --pr-body {n}=<file> with the PR's body (gh api repos/<owner>/<repo>/pulls/{n} --jq .body), "
+                            "so the sheet's Accept cards cover its What we're accepting")
+        elif not isinstance(bodies[n], str):
+            problems.append(f"PR #{n}'s body must be text")
+    problems.extend(f"--pr-body names PR #{n}, which the sheet does not cover" for n in sorted(bodies, key=str) if n not in allowed)
+
+
+def build(records, advisor, words, place=None, previous=None, bodies=None):
     """Returns the sheet's data file as a dict, or raises Refusal with every problem found.
 
     previous is the exact bytes of the earlier sheet the input's carriedForward.fromSheet names, None when there is no carry
-    (a carry given None is refused).
+    (a carry given None is refused). bodies is None (the caller reads no PR body: the sheet gets no body cards and no nothingListed)
+    or a dict of each covered PR's number to its body text, whose keys must be exactly the covered PRs.
     """
     problems = []
     if not isinstance(advisor, dict):
         raise Refusal(["the advisor's input must be an object"])
     allowed = _check_input(advisor, words, problems)
+    if bodies is not None and allowed is not None:
+        _check_bodies(bodies, allowed, problems)
     earlier = None
     if "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems) and allowed is not None \
             and _num(advisor.get("number")):  # a stack without a number is refused above, and the earlier sheet cannot be compared to it
@@ -628,6 +732,16 @@ def build(records, advisor, words, place=None, previous=None):
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
+    listed = {pr: accepting_listed(bodies[pr]) for pr in allowed} if bodies is not None else {}
+    for pr, acceptances in listed.items():
+        seen = {}
+        for t in acceptances:
+            k = seen[t] = seen.get(t, -1) + 1
+            bold = re.match(r"\*\*(.+?)\*\*", t)
+            cards.append(_card("a-", pr, [k, t], words["bodyAcceptKind"] + (f" · #{pr}" if stack else ""),
+                               bold.group(1).strip() if bold and bold.group(1).strip() else t,
+                               [_section(_fill(words["bodyAcceptFrom"], pr=pr), "quote", t)], _options("none", words, False), None))
+            places.append(None)  # a body's wording is not the advisor's, so the pointer scan below skips these cards
     for it in advisor.get("items", []):
         block = "bullets" if isinstance(it["ifLeft"], list) else "paragraph"
         cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], block, it["ifLeft"])],
@@ -652,7 +766,7 @@ def build(records, advisor, words, place=None, previous=None):
         places.append("closesSpec")
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
-                for where, card in zip(places, cards) if not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
+                for where, card in zip(places, cards) if where is not None and not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
     if pointing:
         raise Refusal(pointing)
     if len({c["id"] for c in [*cards, *decided_for_you]}) != len(cards) + len(decided_for_you):
@@ -713,6 +827,8 @@ def build(records, advisor, words, place=None, previous=None):
             "ci": {"state": top["ci"]["state"], "commit": top["ci"].get("sha")},
             "lane": top["lane"].get("value"), "laneReason": top["lane"].get("reason")},
         "craft": craft, "alreadyDecided": decided, **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
+    if bodies is not None and not any(listed.values()):  # every covered body was read and none lists an acceptance
+        sheet["nothingListed"] = True
     if "walk" in advisor:
         sheet["walk"] = _walk(advisor["walk"], place)
     if advisor.get("previousCommit"):
@@ -923,10 +1039,12 @@ def _check_index_input(adv, problems):
         problems.append("mergeOrder names a PR more than once")
 
 
-def _row_caption(row, words):
-    """The line under an index row's name, the one home of the rule: what is accepted (or nothing to accept), what is walked
+def _row_caption(row, words, nothing_listed=False):
+    """The line under an index row's name, the one home of the rule: what is accepted (or nothing to accept, only when the
+    row's sheet recorded that its PR bodies list none, else that it was not checked against them), what is walked
     when the PR has a walk, then where the PR stands, with the merge place on a PR that needs the owner, joined with " · "."""
-    parts = [_fill(words["accepted"], accepted=row["accepted"], total=row["total"]) if row["total"] else words["nothingToAccept"]]
+    none = words["nothingToAccept"] if nothing_listed else words["acceptingUnchecked"]
+    parts = [_fill(words["accepted"], accepted=row["accepted"], total=row["total"]) if row["total"] else none]
     if row["walkTotal"] > 0:
         parts.append(_fill(words["walked"], walked=row["walked"], total=row["walkTotal"]))
     if row["state"] == "being-fixed":
@@ -963,7 +1081,7 @@ def _index_row(entry, base, order, words, problems):
     row = {"number": entry["number"], "kind": sheet["kind"], "title": sheet["title"], "link": entry["link"],
            **pr_state(sheet_bytes, store, words["pr"], words["prAnswers"]),
            "mergesAt": order.index(entry["number"]) + 1 if entry["number"] in order else None}
-    return {**row, "caption": _row_caption(row, words["index"])}
+    return {**row, "caption": _row_caption(row, words["index"], sheet["prSheet"].get("nothingListed") is True)}
 
 
 def build_index(advisor, base, answers, words, place):
@@ -1051,10 +1169,33 @@ def _write_pictures(folder, staged, created):
             _write_replacing(str(folder / src), data)
 
 
+def _read_bodies(values, problems):
+    """The --pr-body values as a dict of PR number to the body file's text; what is wrong with a value is a problem, never a parser error."""
+    bodies, named, repeated = {}, set(), set()
+    for value in values or []:
+        number, equals, file = value.partition("=")
+        if not (equals and re.fullmatch(r"[0-9]+", number) and int(number) >= 1):
+            problems.append(f"--pr-body '{value}' must be <PR number>=<file>")
+            continue
+        n = int(number)
+        if n in named:
+            if n not in repeated:
+                problems.append(f"--pr-body names PR #{n} more than once")
+            repeated.add(n)
+            continue
+        named.add(n)
+        try:
+            bodies[n] = pathlib.Path(file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as err:
+            problems.append(f"{file} could not be read as PR #{n}'s body: {err}")
+    return bodies
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Build a PR sheet's data file, or the index's.")
     parser.add_argument("command", choices=["build", "index"])
     parser.add_argument("--record", action="append")
+    parser.add_argument("--pr-body", action="append")
     parser.add_argument("--answers")
     parser.add_argument("--input", required=True)
     parser.add_argument("--out", required=True)
@@ -1065,7 +1206,10 @@ def main(argv=None):
         parser.error("--answers is only for index")
     if args.command == "index" and args.record:
         parser.error("--record is only for build")
+    if args.command == "index" and args.pr_body:
+        parser.error("--pr-body is only for build")
     try:
+        bodies = _read_bodies(args.pr_body, problems) if args.command == "build" else None
         paths = [*args.record, args.input, WORDS_PATH] if args.command == "build" else [args.input, WORDS_PATH, *([args.answers] if args.answers else [])]
         words_at = len(args.record) + 1 if args.command == "build" else 1
         loaded = [_load_words(args.command, problems) if n == words_at else _load(p, problems) for n, p in enumerate(paths)]
@@ -1073,7 +1217,7 @@ def main(argv=None):
             raise Refusal(problems)
         staged, created, folder, base = {}, [], pathlib.Path(args.out).parent, pathlib.Path(args.input).parent
         if args.command == "build":
-            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged), _earlier_sheet(loaded[-2], base)), {}
+            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged), _earlier_sheet(loaded[-2], base), bodies), {}
         else:
             sheet = build_index(loaded[0], base, loaded[2] if args.answers else {}, loaded[1], _stager(base, staged))
             extra = {"rows": len(sheet["index"]["rows"])}

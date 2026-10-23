@@ -1,4 +1,5 @@
 """Guards for the PR sheet builder: its facts, where each finding lands, card ids, refusals, the CLI and the samples."""
+import contextlib
 import copy
 import hashlib
 import json
@@ -58,15 +59,30 @@ def problems_of(records, advisor, previous=None):
     return caught.value.problems
 
 
+def with_nothing_listed(sheet):
+    """The sheet as the command builds it from bodies that list no acceptance: the API's output plus the build's record of that."""
+    return {**sheet, "prSheet": {**sheet["prSheet"], "nothingListed": True}}
+
+
 def leftover_cards(sheet):
     return [c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]
 
 
-def cli(records, advisor, out):
+def body_args(records, body="body-none.md"):
+    """--pr-body for the PR of each record file, every one naming the body fixture (by default one whose accepting section is None)."""
+    args = []
+    for r in records:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            args += ["--pr-body", f"{json.loads(Path(r).read_text(encoding='utf-8'))['pr']}={FIXTURES / body}"]
+    return args
+
+
+def cli(records, advisor, out, extra=None):
+    """A build through the command; extra replaces the default --pr-body arguments, which name body-none.md for every record."""
     args = [sys.executable, "-B", str(LIB / "pr_sheet.py"), "build", "--input", str(advisor), "--out", str(out)]
     for r in records:
         args += ["--record", str(r)]
-    return subprocess.run(args, capture_output=True, text=True, timeout=60)
+    return subprocess.run(args + (body_args(records) if extra is None else extra), capture_output=True, text=True, timeout=60)
 
 
 @pytest.mark.parametrize("case", [BIG, SMALL, STACK, CLOSES, COLLECTOR], ids=["big", "small", "stack", "closes", "collector"])
@@ -645,7 +661,7 @@ def test_cli_writes_the_sheet_and_prints_the_receipt(tmp_path):
     done = cli([FIXTURES / "record-big.json"], FIXTURES / "input-big.json", out)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout) == {"ok": True, "out": str(out), "cards": 3, "pictures": []}
-    assert json.loads(out.read_text(encoding="utf-8")) == built(BIG)
+    assert json.loads(out.read_text(encoding="utf-8")) == with_nothing_listed(built(BIG))
 
 
 def test_a_failed_write_leaves_the_earlier_sheet_intact(tmp_path, monkeypatch):
@@ -686,8 +702,8 @@ def test_samples_are_the_builders_output(tmp_path, sample, case):
     done = cli([FIXTURES / r for r in case[0]], FIXTURES / case[1], out)
     assert done.returncode == 0, done.stderr
     shipped = (THEME / sample).read_bytes()
-    assert shipped == out.read_bytes()
     sheet = json.loads(shipped)
+    assert json.loads(out.read_bytes()) == with_nothing_listed(sheet)
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
 
 
@@ -1208,7 +1224,8 @@ def test_a_words_file_that_cannot_be_used_is_a_refusal_that_names_it(tmp_path, m
     monkeypatch.setattr(pr_sheet, "WORDS_PATH", str(words))
     out = tmp_path / "out" / "sheet.json"
     out.parent.mkdir()
-    args = ["build", "--record", str(FIXTURES / "record-small.json"), "--input", str(FIXTURES / "input-small.json")] if command == "build" \
+    args = ["build", "--record", str(FIXTURES / "record-small.json"), "--input", str(FIXTURES / "input-small.json"),
+            *body_args([FIXTURES / "record-small.json"])] if command == "build" \
         else ["index", "--input", str(FIXTURES / "index-input.json")]
     code = pr_sheet.main([*args, "--out", str(out)])
     result = json.loads(capsys.readouterr().out)
@@ -1245,7 +1262,8 @@ def test_a_broken_words_file_does_not_stop_the_builder_at_import(tmp_path):
     out = tmp_path / "out" / "sheet.json"
     out.parent.mkdir()
     done = subprocess.run([sys.executable, "-B", str(plugin / "lib" / "pr_sheet.py"), "build", "--record", str(FIXTURES / "record-small.json"),
-                           "--input", str(FIXTURES / "input-small.json"), "--out", str(out)], capture_output=True, text=True, timeout=60)
+                           "--input", str(FIXTURES / "input-small.json"), "--out", str(out), *body_args([FIXTURES / "record-small.json"])],
+                          capture_output=True, text=True, timeout=60)
     assert done.returncode == 1 and "Traceback" not in done.stderr, done.stderr
     result = json.loads(done.stdout)
     assert result["ok"] is False and len(result["problems"]) == 1 and "sheet-words.json could not be read as JSON" in result["problems"][0]
@@ -1268,7 +1286,8 @@ def test_a_failed_write_removes_the_pictures_this_run_created(tmp_path, monkeypa
         return real(src, dst)
 
     monkeypatch.setattr(pr_sheet.os, "replace", replace)
-    code = pr_sheet.main(["build", "--record", str(FIXTURES / "record-big.json"), "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)])
+    code = pr_sheet.main(["build", "--record", str(FIXTURES / "record-big.json"), "--input", str(FIXTURES / "input-walk.json"), "--out", str(out),
+                          *body_args([FIXTURES / "record-big.json"])])
     result = json.loads(capsys.readouterr().out)
     assert code == 1 and result == {"ok": False, "problems": ["disk full"]}
     assert not out.exists() and list(tmp_path.glob("**/*.tmp")) == []
@@ -1686,7 +1705,19 @@ CAPTION_CASES = [
 def test_an_index_rows_caption(row, caption):
     # Axis: the caption is the accepted part (or Nothing to accept), the walked part when the PR has a walk, then the state part
     # (with the merge place on needs-you, a whole-number place read as an int), joined with " · ".
-    assert pr_sheet._row_caption(row, INDEX_WORDS) == caption
+    assert pr_sheet._row_caption(row, INDEX_WORDS, nothing_listed=row["total"] == 0) == caption
+
+
+@pytest.mark.parametrize("walk_total, said", [(0, ""), (3, " · 3 of 3 walked")])
+def test_a_zero_card_rows_caption_says_nothing_only_when_its_sheet_recorded_it(walk_total, said):
+    # Bites on: the caption saying "Nothing to accept" of a row whose sheet never recorded that the PR bodies list none.
+    # Axis: with no card, the caption reads nothingToAccept with the flag and acceptingUnchecked without it, whatever the walk.
+    row = _caption_row("needs-you", 0, 0, 3 if walk_total else 0, walk_total)
+    assert pr_sheet._row_caption(row, INDEX_WORDS, nothing_listed=True) == INDEX_WORDS["nothingToAccept"] + said
+    assert pr_sheet._row_caption(row, INDEX_WORDS, nothing_listed=False) == INDEX_WORDS["acceptingUnchecked"] + said
+    assert pr_sheet._row_caption(row, INDEX_WORDS) == INDEX_WORDS["acceptingUnchecked"] + said
+    assert INDEX_WORDS["nothingToAccept"] != INDEX_WORDS["acceptingUnchecked"]
+    assert pr_sheet._row_caption(dict(row, total=1), INDEX_WORDS) == "0 of 1 accepted" + said
 
 
 def test_the_built_index_carries_each_rows_caption(tmp_path):
@@ -1864,7 +1895,8 @@ def test_index_takes_no_record_and_build_takes_no_answers(tmp_path):
     source, out = index_world(tmp_path)
     done = index_cli(source, out / "index.json", extra=("--record", str(FIXTURES / "record-big.json")))
     assert done.returncode == 2 and "--record is only for build" in done.stderr and list(out.iterdir()) == []
-    base = [sys.executable, "-B", str(LIB / "pr_sheet.py"), "build", "--input", str(FIXTURES / "input-big.json"), "--out", str(out / "sheet.json")]
+    base = [sys.executable, "-B", str(LIB / "pr_sheet.py"), "build", "--input", str(FIXTURES / "input-big.json"), "--out", str(out / "sheet.json"),
+            *body_args([FIXTURES / "record-big.json"])]
     done = subprocess.run([*base, "--record", str(FIXTURES / "record-big.json"), "--answers", str(source)], capture_output=True, text=True)
     assert done.returncode == 2 and "--answers is only for index" in done.stderr
     done = subprocess.run(base, capture_output=True, text=True)
