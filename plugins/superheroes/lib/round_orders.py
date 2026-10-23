@@ -104,6 +104,32 @@ _COMMON_CONTEXT_KEYS = (
 )
 
 
+# The standing rule every seat order carries (#2071), one home for the sentences. It is stated
+# positively — what a seat may do — and names no program or command: a forbidden-name list is
+# exactly the whack-a-mole the owner ruled out.
+SEAT_RULE_HEADING = "## What you may run"
+
+REVIEW_SEAT_RULE = (
+    "You review by reading. You may read, list and search files, including with read-only "
+    "inspection commands. You never run the project's own files, scripts or tests. A run you "
+    "need is the driver's: name it in your result, and the driver runs the project's declared "
+    "verify command."
+)
+
+FIXER_SEAT_RULE = (
+    "You run only the commands this order names, plus the file reads and searches that inspect "
+    "its inputs and the sources you fix, and the staging your commit needs. You run none of the "
+    "project's own files, scripts or tests beyond those, and the full verify command stays the "
+    "driver's."
+)
+
+
+def seat_rule_block(phase: str) -> str:
+    """The standing-rule block for ``phase``'s order: the fixer's rule or the review seats'."""
+    rule = FIXER_SEAT_RULE if phase == round_phases.P_FIXER else REVIEW_SEAT_RULE
+    return SEAT_RULE_HEADING + "\n\n" + rule
+
+
 def order_template_path(phase: str, root: str | None = None) -> str:
     """Absolute path to ``rubric/orders/<phase>.md``."""
     if root is None:
@@ -595,7 +621,8 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if _PLACEHOLDER_RE.search(body):
             return _refuse("unknown-placeholder-remaining")
 
-        blocks = [body.rstrip(), _format_residual_block(context).rstrip(),
+        blocks = [body.rstrip(), seat_rule_block(phase),
+                  _format_residual_block(context).rstrip(),
                   format_threat_model_block(context).rstrip(),
                   format_rulings_block(context).rstrip()]
         if phase == round_phases.P_FIXER:

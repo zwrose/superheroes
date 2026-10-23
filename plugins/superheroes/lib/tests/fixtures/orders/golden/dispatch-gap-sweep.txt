@@ -34,6 +34,10 @@ files are pre-existing — SKIP them, even if they violate conventions.
 - **Never change the repository, and never claim a run you did not make.**
 - Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
 
+## What you may run
+
+You review by reading. You may read, list and search files, including with read-only inspection commands. You never run the project's own files, scripts or tests. A run you need is the driver's: name it in your result, and the driver runs the project's declared verify command.
+
 ## Ratified residuals (owner-ratified, quoted data)
 
 Residuals below are read from the review base commit (base-pinned).

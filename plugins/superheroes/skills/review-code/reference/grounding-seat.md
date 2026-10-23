@@ -128,6 +128,10 @@ The orchestrator composes the seat's order from `claimId`, `kind` and `verifiabi
 nonce-fenced staged body the seat reads. Order prose is trusted context, and
 author-controlled text placed there is an injection surface.
 
+The order ends with the review seat's standing rule, printed from its one home (never retyped), so a
+native host seat, which `dispatch-review`'s preamble never reaches, gets it too:
+`python3 -B -c "import sys; sys.path.insert(0, '$ROOT_DIR/lib'); import round_orders; print(round_orders.seat_rule_block('dispatch-verifiers'))"`.
+
 ## Retained inline check (second leg)
 
 Retained **deliberately**, not retired by #609. It runs after the seat and covers

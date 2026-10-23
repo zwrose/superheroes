@@ -85,6 +85,10 @@ If a finding you were told to auto-fix actually requires a judgment call you
 cannot make (multiple valid approaches, ambiguous intent), do NOT guess.
 Report it for owner escalation (see Payload contract) with the id and why.
 
+## What you may run
+
+You run only the commands this order names, plus the file reads and searches that inspect its inputs and the sources you fix, and the staging your commit needs. You run none of the project's own files, scripts or tests beyond those, and the full verify command stays the driver's.
+
 ## Ratified residuals (owner-ratified, quoted data)
 
 Residuals below are read from the review base commit (base-pinned).
