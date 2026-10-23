@@ -16,6 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **Nothing is owed.** An advisor driving a merge train reads the base branch's protection first. Where it requires pull requests to be up to date before merging, every PR is still brought current before its merge, with no admin bypass. Where it does not, a vetted PR outside a stack is no longer re-synced and re-tested after an unrelated merge: it is current when GitHub reports no conflict and nothing merged since its last sync touched its files. `main`'s post-merge run stays the union check in both cases. See [Merge train: what "current with its base" means](#merge-train-what-current-with-its-base-means).
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed.** An implementer order that names a bite-proof now carries the record format inline, and an order that names one while the plugin's bite-proof rubric cannot be read is refused at open. See [Implementer orders: the bite-proof record format rides inline](#implementer-orders-the-bite-proof-record-format-rides-inline).
@@ -45,6 +46,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 - Every recorded or accepted fixer row journals a new field, `refusalCheck`: `checked` when a transcript was read and showed nothing unreported, `unobserved` when none was passed.
 - No existing key or flag changes. A consumer owes nothing, except that an orchestrator that wants the cross-check passes `--fixer-transcript`.
 
+### Merge train: what "current with its base" means
+
+- Showrunner duty 6's merge precondition "a branch current with its base" now follows the base branch's protection. Where the branch requires pull requests to be up to date before merging (a ruleset's `required_status_checks` with `strict_required_status_checks_policy`, or classic protection's `required_status_checks.strict`), the PR is brought current before every merge and the advisor never uses an admin bypass to skip that. Where it does not, a PR outside a stack is current when GitHub reports no conflict and nothing merged into the base since its last sync touched its files; otherwise it is brought current first. A failed read counts as requiring up-to-date PRs.
+- `skills/showrunner/reference/merge-train.md` § A merge train's "green" carries the two `gh api` reads (the rulesets read with `--paginate`) and says `main`'s post-merge run stays the union check in both cases; the no-re-sync saving applies only where the branch does not require up-to-date PRs and never covers a stack, which stays current as `rubric/native-stacks.md` § How a stack stays current says.
+- The charter eval case `s7-merge-word-scope` now states that its `main` does not require up-to-date PRs; its grader is unchanged.
 ### Implementer orders: the bite-proof record format rides inline
 
 - `dispatch-write` and the native engine's `open` insert a `## Bite-proof record format` block into the staged prompt when the authored order (every verbatim implementer-template copy masked) names a bite-proof. The block is cut at dispatch time from the plugin's bite-proof rubric: the record's shape and the three disclosures owed when a proof cannot be produced. An order that names none is staged as before.
