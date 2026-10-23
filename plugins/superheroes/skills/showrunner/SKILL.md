@@ -131,6 +131,8 @@ above).
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` when you file, mark build-ready, repair an anchor stop, or grade an issue's slots and standing rows at vet.**
 
+   **A new issue files only on the owner's word, at every tier; the layer sub-issues of a stack are the one exception; read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` § The tiers and the filing rule before you file one.**
+
    **Record the anchor at filing.** An issue routed build-ready carries a **filled Anchor slot
    naming one of the three anchor kinds** — `spec-section`, `receipt`, or `ruling` — recorded **at
    filing time**, never added afterwards. The anchor is the owner-approved decision the issue is
