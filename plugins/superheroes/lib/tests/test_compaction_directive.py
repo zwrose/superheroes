@@ -554,6 +554,25 @@ def test_save_notes_failure_leaves_the_previous_notes_and_no_temp_file(tmp_path,
         assert fh.read() == "old notes\n"
 
 
+# bite-proof axis: an interrupted skip-record publish keeps the previous record and leaves no temp file
+def test_save_skip_record_failure_leaves_the_previous_record_and_no_temp_file(tmp_path, monkeypatch):
+    env = _env(tmp_path)
+    path = cd.skip_record_path(SID, env)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("old record")
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cd.os, "replace", boom)
+    with pytest.raises(OSError):
+        cd.save_skip_record(SID, "new record", env)
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "old record"
+    assert not [n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")]
+
+
 def test_cli_mark_publishes_a_complete_marker_atomically(tmp_path):
     env = _env(tmp_path)
     code, out, _ = _run(tmp_path, "mark", "--session-id", SID)
