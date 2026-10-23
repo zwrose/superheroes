@@ -8541,13 +8541,15 @@ def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
     if not isinstance(run, dict) or any(k not in run for k in ("id", "name", "head_sha", "status", "conclusion")):
         return "ci-verify-run-unreadable", err or "the fetched run lacks id, name, head_sha, status or conclusion"
     # axis: the run is the claimed run on the claimed and the verified head — see bite-proof record wo_b_2072_ci_verify
-    if run["head_sha"] != ci["headSha"]:
+    # the claim's hex shape was already accepted upstream; GitHub reports lowercase, so a correct claim in uppercase is folded to lowercase before comparing
+    if run["head_sha"] != ci["headSha"].lower():
         return "ci-verify-sha-mismatch", "run %s ran on %s, not the claimed %s" % (run["id"], run["head_sha"], ci["headSha"])
     if run["head_sha"] != verified_head:
         return "ci-verify-sha-mismatch", "run %s ran on %s, not the verified head %s" % (run["id"], run["head_sha"], verified_head)
     if str(run["id"]) != str(ci["runId"]):
         return "ci-verify-sha-mismatch", "fetched run id %s is not the claimed runId %s" % (run["id"], ci["runId"])
     # axis: the run is the claimed workflow — see bite-proof record wo_b_2072_ci_verify
+    # construction bound (E9c): the `or run["name"] != declared` clause cannot reject on its own — the earlier `ci["workflow"] == declared` check already guarantees `ci["workflow"] == declared`, so it is subsumed by `run["name"] != ci["workflow"]`; see bite-proof record wo_b_2072_ci_verify (E9c)
     if run["name"] != ci["workflow"] or run["name"] != declared:
         return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r or the declared %r" % (run["id"], run["name"], ci["workflow"], declared)
     # axis: only a completed run that concluded `success`, as claimed, stands in — see bite-proof record wo_b_2072_ci_verify

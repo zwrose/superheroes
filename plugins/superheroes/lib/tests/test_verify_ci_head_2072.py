@@ -385,6 +385,17 @@ def test_edge8_claimed_head_differs_from_the_fetched_head(tmp_path, adapters, fe
     _refused(w, _payload(ci=_ci(headSha=OTHER_SHA)), "ci-verify-sha-mismatch")
 
 
+def test_edge8_an_uppercase_claim_of_the_verified_head_is_accepted(tmp_path, adapters, fetch):
+    w = _hand(tmp_path, fetch, adapters)
+    out = w.submit(_payload(ci=_ci(headSha=w.head.upper())))
+    assert out["ok"] is True, out
+
+
+def test_edge8_an_uppercase_claim_of_a_different_commit_is_still_refused(tmp_path, adapters, fetch):
+    w = _hand(tmp_path, fetch, adapters)
+    _refused(w, _payload(ci=_ci(headSha=OTHER_SHA.upper())), "ci-verify-sha-mismatch")
+
+
 def test_edge8_fetched_id_differs_from_the_claimed_run_id(tmp_path, adapters, fetch):
     w = _hand(tmp_path, fetch, adapters)
     fetch.result = (_run(head=w.head, id=int(RUN_ID) + 1), None)
