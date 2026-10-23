@@ -28,6 +28,19 @@ _SHELL_PREFIXES = frozenset({
     "!", "then", "do", "else", "elif", "(", ";;",
 })
 
+# Sentences carried word for word by more than one template below; no braces, so each
+# template stays usable with str.format.
+_NEXT_STEP_COMMIT_OR_STASH = (
+    "Next step: commit the work (`git add <path>` then `git commit`) or run "
+    "`git stash push -u`, then re-run"
+)
+_DURING_A_MERGE = (
+    "During a merge: `git checkout --theirs <path>` or "
+    "`git checkout --ours <path>` takes one side of a conflicted path you have not "
+    "edited since the merge; a path you have edited is finished with the Edit tool and "
+    "then `git add <path>`."
+)
+
 _REFUSAL_TEMPLATE = (
     "superheroes worktree guard: this `git {action}` would discard {count} uncommitted "
     "change(s) in this worktree, and git keeps no copy of them. This is the checkout-revert "
@@ -35,14 +48,22 @@ _REFUSAL_TEMPLATE = (
     "uncommitted delivery at the same path. Recover the intent instead — commit the work "
     "first, `git stash -u` it (add `-a` to include ignored files; in a conflicted tree "
     "`git add` the unmerged paths first), or revert a probe edit with an inverse Edit "
-    "rather than a git discard."
+    "rather than a git discard. "
+    + _NEXT_STEP_COMMIT_OR_STASH
+    + " this command; revert a probe edit with the Edit tool's inverse edit. "
+    + _DURING_A_MERGE
 )
 
 _INDETERMINATE_TEMPLATE = (
     "superheroes worktree guard: could not determine whether this `git {action}` would "
     "destroy uncommitted work — it may target another worktree, or the repository could "
     "not be inspected — so it is refused (fail-closed). Commit or `git stash -u` your "
-    "work first, or revert a probe edit with an inverse Edit rather than a git discard."
+    "work first, or revert a probe edit with an inverse Edit rather than a git discard. "
+    + _NEXT_STEP_COMMIT_OR_STASH
+    + " it as a plain `git ...` command from inside the "
+    "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
+    "`GIT_DIR`/`GIT_WORK_TREE`). "
+    + _DURING_A_MERGE
 )
 
 _UNPARSED_TEMPLATE = (
@@ -53,16 +74,21 @@ _UNPARSED_TEMPLATE = (
     "message — that prose is the trigger: text naming a destructive git subcommand "
     "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
     "`worktree`) reads as a command wherever this guard loses track of the quoting "
-    "around it — a heredoc body, whose lines read as bare command text, or a quote of "
+    "around it — a heredoc body this guard cannot show is only text, or a quote of "
     "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
-    "`$(...)` substitution. Write the text to a file with a file-writing tool rather "
-    "than a shell heredoc, whose bare lines trip this same refusal, and pass the file: "
-    "`gh ... --body-file <path>`, `git commit -F <path>`. "
+    "`$(...)` substitution. "
+    "A heredoc with a quoted delimiter (`<<'EOF'`) that is the whole command and is fed to "
+    "`cat >`/`cat >>`/`tee` writing a file, to `gh issue|pr ... --body-file -`, or to "
+    "`git commit -F -`, or that is the whole `-m \"$(cat <<'EOF'` ... `)\"` / "
+    "`--body \"$(cat <<'EOF'` ... `)\"` argument, is read as text; any other heredoc is "
+    "read as command text. "
+    "Next step: write the text with the Write tool and pass the file "
+    "(`gh ... --body-file <path>`, `git commit -F <path>`), or re-issue an intended "
+    "discard as a plain `git ...` command this guard can parse. "
     "If a discard is intended, note that this refusal does not depend on what your tree "
-    "holds, so committing or stashing alone will not clear it: re-issue the command as "
-    "a plain `git ...` invocation this guard can parse. Keep the work you care about by "
-    "committing or `git stash -u` first, and revert a probe edit with an inverse Edit "
-    "rather than a git discard."
+    "holds, so committing or stashing alone will not clear it. Keep the work you care "
+    "about by committing or `git stash push -u` first, and revert a probe edit with an "
+    "inverse Edit rather than a git discard."
 )
 
 _GIT_TIMEOUT = 5
@@ -78,8 +104,84 @@ def _is_git_token(token):
     return base == "git" or base == "git.exe"
 
 
+_SAFE_CHARS = "A-Za-z0-9_@%+=:,./~"
+_WORD = rf"""(?:[{_SAFE_CHARS}-]+|'[^']*'|"[^"$`\\]*")"""
+_PATH = rf"[{_SAFE_CHARS}][{_SAFE_CHARS}-]*"
+_DELIMITER = "[A-Za-z_][A-Za-z0-9_]*"
+_HEREDOC_OPERATOR = re.compile(rf"""<<[ ]*(['"])({_DELIMITER})\1""")
+_MESSAGE_SUBSTITUTION = re.compile(rf"""[ \t]*"\$\(cat <<(')({_DELIMITER})'[ \t]*$""")
+_CAT_TO_FILE = re.compile(rf"[ \t]*cat[ \t]+>>?[ \t]*{_PATH}[ \t]*")
+_TEE_TO_FILE = re.compile(rf"[ \t]*tee(?:[ \t]+-a)?[ \t]+{_PATH}(?:[ \t]*>[ \t]*/dev/null)?[ \t]*")
+_WORD_LIST = re.compile(rf"[ \t]*(?:{_WORD}(?:[ \t]+{_WORD})*[ \t]*)?")
+
+
+def _words_take_text(words, message):
+    """True when the safe `words` are a `git commit` or `gh issue|pr` that reads the heredoc as text.
+
+    Without `message`: the stdin flag is present (`-F -`, `--file -`, `--body-file -`).
+    With it: the last word is the flag the `"$(cat <<'D'` substitution is the value of.
+    """
+    if words is None or len(words) < 2:
+        return False
+    gh = words[0] == "gh" and words[1] in ("issue", "pr")
+    if not gh and words[:2] != ["git", "commit"]:
+        return False
+    if message:
+        return words[-1] in (("--body", "-b") if gh else ("-m", "--message"))
+    stdin_flags = (("--body-file", "-"), ("-F", "-")) if gh else (("-F", "-"), ("--file", "-"))
+    return any(pair in stdin_flags for pair in zip(words, words[1:])) or (
+        ("--body-file=-" if gh else "--file=-") in words
+    )
+
+
+def _mask_data_heredoc(command):
+    """Blank the body lines of a command that is exactly one text-only heredoc shape.
+
+    The shapes (first line holds the one `<<'D'` or `<<"D"`; the first line equal to `D` ends the
+    body): `cat > f`, `cat >> f` or `tee [-a] f [> /dev/null]` writing a file; `gh issue|pr ...
+    --body-file -` or `git commit -F -`; and `-m "$(cat <<'D'` / `--body "$(cat <<'D'` closed by a
+    `)"` line. Nothing but blank lines may follow. Any other command is returned unchanged.
+    """
+    lines = command.split("\n")
+    first = lines[0]
+    if first.count("<<") != 1:
+        return command
+    message = _MESSAGE_SUBSTITUTION.search(first)
+    operator = message or _HEREDOC_OPERATOR.search(first)
+    if operator is None:
+        return command
+    before = first[:operator.start()]
+    if message:
+        taken = _words_take_text(_words(before), True)
+    else:
+        rest = before + " " + first[operator.end():]
+        taken = (
+            _CAT_TO_FILE.fullmatch(rest) or _TEE_TO_FILE.fullmatch(rest)
+            or _words_take_text(_words(rest), False)
+        )
+    end = next((k for k in range(1, len(lines)) if lines[k] == operator.group(2)), None)
+    if not taken or end is None:
+        return command
+    after = lines[end + 1:]
+    if message:
+        if not after or after[0].rstrip() != ')"':
+            return command
+        after = after[1:]
+    if any(line.strip() for line in after):
+        return command
+    return "\n".join([first] + [""] * (end - 1) + lines[end:])
+
+
+def _words(text):
+    """The words of `text` when every word is a safe word, else None."""
+    if not _WORD_LIST.fullmatch(text):
+        return None
+    return re.findall(_WORD, text)
+
+
 def _split_segments(command):
     """Split a command string into segments at unquoted boundaries."""
+    command = _mask_data_heredoc(command)
     segments = []
     current = []
     i = 0
