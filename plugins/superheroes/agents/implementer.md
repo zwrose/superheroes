@@ -140,8 +140,8 @@ overrunning or silently truncating.
   the orchestrator reads the rest off disk. Where the proof cannot
   honestly be produced, the return carries one of the three disclosure shapes instead of silence —
   **`Unprovable as placed`**, **`Unreachable through this entry point`**, or **`Unrunnable here`**
-  (`rubric/bite-proof.md` is the plugin's own reference; the orchestrator supplies it if you need
-  it) — never a claim that a proof was run.
+  (an order that names a bite-proof carries the record format and these three shapes inline, cut
+  from the plugin's `rubric/bite-proof.md`) — never a claim that a proof was run.
   **Do not paste the diff into your return** — the orchestrator reads the diff off disk, and a pasted
   diff is itself the long payload that forfeits the dispatch. That return is short **because the
   commands are narrow — not because you trimmed their output.** Brevity governs **what you send back**;

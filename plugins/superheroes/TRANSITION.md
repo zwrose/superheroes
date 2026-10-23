@@ -16,6 +16,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 ### Before you upgrade
 
+- **After switching.** **Nothing is owed.** An implementer order that names a bite-proof now carries the record format inline, and an order that names one while the plugin's bite-proof rubric cannot be read is refused at open. See [Implementer orders: the bite-proof record format rides inline](#implementer-orders-the-bite-proof-record-format-rides-inline).
 - **After switching.** **Nothing is owed.** An engine call in plugin code that left stdin open now fails CI, and a caller that passes an inherited `stdin=` or `input=None` to the helper gets a `ValueError`. See [Engine CLI calls: one stdin chokepoint](#engine-cli-calls-one-stdin-chokepoint).
 - **After switching.** **Re-run the claude conformance probe before the next wave's `preflight-entry`.** A claude probe result taken before the upgrade records no config dir and is refused as `probe-config-dir-unrecorded:claude`. See [Preflight: the claude probe runs under the launch's config dir](#preflight-the-claude-probe-runs-under-the-launchs-config-dir).
 - **After switching.** **Nothing is owed.** A caller that reads a `dispatch-write` write forfeit now also finds `dirtiedPaths` on the "forfeited twice" result, and both write-forfeit disclosures say whether the timeout cut the engine off and whether work landed. See [Dispatch: both write forfeits name what landed](#dispatch-both-write-forfeits-name-what-landed).
@@ -24,6 +25,11 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 - **After switching.** **Advisors who build PR or stack sheets put each acceptance the owner would weigh up as its own Accept item, and give the "What you're accepting" fold's `ifLeft` as a list of routine notes; nothing is owed for existing sheets, and a string `ifLeft` builds exactly as before.** See [PR sheet: the fold keeps only routine notes, as a list](#pr-sheet-the-fold-keeps-only-routine-notes-as-a-list).
 - **After switching.** **A project whose calibration names a Python launcher and whose repository root has a lockfile or requirements file writes and pastes new setup text once** (the cloud check reports the setup text out of date, because the stamp gains the fill step). Nothing is owed for any other project. See [Cloud setup: the setup text fills the launcher's dependency caches](#cloud-setup-the-setup-text-fills-the-launchers-dependency-caches).
 - **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
+
+### Implementer orders: the bite-proof record format rides inline
+
+- `dispatch-write` and the native engine's `open` insert a `## Bite-proof record format` block into the staged prompt when the authored order (every verbatim implementer-template copy masked) names a bite-proof. The block is cut at dispatch time from `rubric/bite-proof.md`: the record's shape and the three disclosures owed when a proof cannot be produced. An order that names none is staged as before.
+- New refusal: when an order names a bite-proof and the rubric cannot be read or its format markers are not found exactly once, `dispatch-write` returns terminal `unrunnable` with detail `bite-proof-format-unreadable`, and native `open` refuses with reason `bite-proof-format-unreadable`. Nothing is dispatched.
 
 ### Engine CLI calls: one stdin chokepoint
 
