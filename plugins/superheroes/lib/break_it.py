@@ -479,6 +479,7 @@ def _record(head, block, outcome, reason=None, exit_code=None, output="", interp
     output = readout.scrub(output)[0] if output else ""
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
+            "content": block.get("content"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
             "interpreter": shlex.join(interpreter) if isinstance(interpreter, list) else interpreter}
 
@@ -951,6 +952,236 @@ def _coerce_line(value):
     return coerce_line(value)
 
 
+_SELECT_SHORT = ("-k", "-t", "-g")
+_SELECT_LONG = ("--testNamePattern", "--grep", "--filter", "--match", "--test-name-pattern", "--test-skip-pattern")
+
+
+def _names_path(tok, path):
+    """True when the argv token ``tok`` is ``path`` (or ``path::...``) in any equivalent repo-relative spelling."""
+    head = tok.partition("::")[0]
+    return bool(head) and not head.startswith("-") and posixpath.normpath(head) == posixpath.normpath(path)
+
+
+def _selects_tests(tok, titles, old_path):
+    """True when the argv token ``tok`` filters which tests run: by a flag, a ``::`` selector or an old title. The
+    token naming ``old_path`` is judged by its ``::`` selector alone, so a path that contains a title is no filter."""
+    if _names_path(tok, old_path):
+        # axis: the path token is judged by the `::` rule alone, so a test file named after its own test still renames — see bite-proof record wo_a_2053_break_it_body
+        return "::" in tok
+    return (tok in _SELECT_SHORT or tok in _SELECT_LONG
+            or any(tok.startswith(flag + "=") for flag in _SELECT_LONG)
+            or any(tok.startswith(flag) and not tok.startswith("--") for flag in _SELECT_SHORT)
+            or "::" in tok or any(old in tok for old, _ in titles))
+
+
+def _carries_options(name):
+    """True when the environment variable ``name`` carries runner options (``PYTEST_ADDOPTS``, ``*_ADDOPTS``,
+    ``*_OPTIONS``); every other variable is plain data."""
+    return name == "PYTEST_ADDOPTS" or name.endswith("_ADDOPTS") or name.endswith("_OPTIONS")
+
+
+def _env_selects(value, titles, old_path):
+    """True when an option-carrying environment value, read as a command line, carries a test selector (or cannot be read)."""
+    try:
+        parts = shlex.split(value)
+    except ValueError:
+        return True
+    return any(_selects_tests(part, titles, old_path) for part in parts)
+
+
+def _rewrite_command(command, old_path, new_path, titles):
+    """``(command, None)`` to run for the test found at ``new_path``, or ``(None, reason)`` when the command cannot
+    be pointed at it: ``command-unmapped`` (not a plain command, or no token names ``old_path``) or
+    ``command-selects-tests`` (a renamed test whose command filters by name)."""
+    argv, env, refusal = parse_command(command)
+    if refusal:
+        return None, "command-unmapped"
+    # axis: a renamed test's command that filters by flag, selector or old title is refused, because the filter would select nothing in the moved copy — see bite-proof record wo_a_2053_break_it_body
+    if titles and any(_selects_tests(tok, titles, old_path) for tok in argv):
+        return None, "command-selects-tests"
+    # axis: a selector the environment carries (PYTEST_ADDOPTS=-k ...) filters like one in argv, so it is refused the same way — see bite-proof record wo_a_2053_break_it_body
+    if titles and any(_env_selects(value, titles, old_path) for name, value in env.items() if _carries_options(name)):
+        return None, "command-selects-tests"
+    # axis: a test found at its own path runs the command exactly as the loop ran it — see bite-proof record wo_a_2053_break_it_body
+    if new_path == old_path:
+        return command, None
+    moved, replaced = [], False
+    for tok in argv:
+        if tok == old_path or tok.startswith(old_path + "::"):
+            tok, replaced = new_path, True
+        moved.append(tok)
+    if not replaced:
+        return None, "command-unmapped"
+    return " ".join([shlex.quote("%s=%s" % pair) for pair in env.items()] + [shlex.join(moved)]), None
+
+
+_COLLECTION_SETTINGS = ("python_functions", "python_classes", "python_files", "addopts")
+
+
+def _collection_overrides(repo_root, head):
+    """True when the repository at ``head`` may declare a pytest collection override: a root pytest.ini,
+    pyproject.toml ([tool.pytest.ini_options]), setup.cfg ([tool:pytest]) or tox.ini ([pytest]) that sets
+    python_functions, python_classes, python_files or addopts (any value: addopts can carry a ``-k`` selector that
+    deselects the new name, and it is not parsed), or one that cannot be read or parsed (fail closed)."""
+    import configparser
+    sections = (("pytest.ini", "pytest"), ("setup.cfg", "tool:pytest"), ("tox.ini", "pytest"), ("pyproject.toml", None))
+    for name, section in sections:
+        tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
+        if tree.returncode != 0:
+            return True
+        meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
+        if not meta:
+            continue
+        if len(meta) != 3 or meta[1] != "blob":
+            return True
+        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            return True
+        try:
+            text = blob.stdout.decode("utf-8")
+            if section is None:
+                import tomllib
+                table = tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options", {})
+                if not isinstance(table, dict) or any(key in table for key in _COLLECTION_SETTINGS):
+                    return True
+            else:
+                parser = configparser.ConfigParser(interpolation=None, strict=False)
+                parser.read_string(text)
+                if parser.has_section(section) and any(parser.has_option(section, key) for key in _COLLECTION_SETTINGS):
+                    return True
+        except Exception:
+            return True
+    return False
+
+
+_JS_CONFIG_STEMS = ("vitest.config.", "vitest.workspace.", "vite.config.", "jest.config.")
+
+
+def _js_collection_overrides(repo_root, head):
+    """True when the repository at ``head`` may filter JS/TS tests by name through configuration: a root
+    vitest.config.*, vitest.workspace.*, vite.config.* or jest.config.* (any content: none of them is parsed), or a
+    root package.json that cannot be read or parsed as a JSON object or that carries a top-level ``jest`` or
+    ``vitest`` key (fail closed)."""
+    import json
+    tree = _git(repo_root, "ls-tree", "-z", head)
+    if tree.returncode != 0:
+        return True
+    for entry in tree.stdout.decode("utf-8", errors="replace").split("\0"):
+        if not entry:
+            continue
+        meta, _, name = entry.partition("\t")
+        if name.lower().startswith(_JS_CONFIG_STEMS):
+            return True
+        if name != "package.json":
+            continue
+        meta = meta.split()
+        if len(meta) != 3 or meta[1] != "blob":
+            return True
+        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            return True
+        try:
+            manifest = json.loads(blob.stdout.decode("utf-8"))
+        except Exception:
+            return True
+        if not isinstance(manifest, dict) or "jest" in manifest or "vitest" in manifest:
+            return True
+    return False
+
+
+def _carries_option_token(command):
+    """True when the plain argv command ``command`` carries any option token (one starting with ``-``) after its
+    leading ``NAME=value`` entries, or cannot be parsed as a plain command (fail closed)."""
+    argv, _, refusal = parse_command(command)
+    return bool(refusal) or any(tok.startswith("-") for tok in argv)
+
+
+_DIRECT_RUNNERS = frozenset(("vitest", "jest"))
+_RUNNER_LAUNCHERS = frozenset(("npx", "bunx"))
+_EXEC_LAUNCHERS = frozenset(("pnpm", "yarn"))
+
+
+def _calls_runner_directly(command):
+    """True only when the plain argv command ``command`` calls vitest or jest directly: its first program token (after
+    the leading VAR=value entries) is ``vitest`` or ``jest``, or is ``npx``, ``bunx``, ``pnpm exec`` or ``yarn exec``
+    immediately followed by one of them. Every package-manager script form (``pnpm test``, ``npm run test``,
+    ``pnpm vitest``) and every other program is not direct; package.json is never read. An unparseable command is not
+    direct (fail closed)."""
+    argv, _, refusal = parse_command(command)
+    if refusal or not argv:
+        return False
+    if argv[0] in _DIRECT_RUNNERS:
+        return True
+    if argv[0] in _RUNNER_LAUNCHERS:
+        return argv[1:2] != [] and argv[1] in _DIRECT_RUNNERS
+    if argv[0] in _EXEC_LAUNCHERS:
+        return argv[1:2] == ["exec"] and argv[2:3] != [] and argv[2] in _DIRECT_RUNNERS
+    return False
+
+
+def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
+    """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
+    found, unchanged up to formatting and its title, once among the files the final diff carries."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
+    from break_it_body import js_collected, locate, pytest_collected, supported_suffixes
+    suffixes = supported_suffixes()
+    if posixpath.splitext(record["path"].lower())[1] not in suffixes:
+        return today
+    try:
+        diff = _git(repo_root, "diff", "--name-only", "-z", base + "..." + head)
+        if diff.returncode != 0:
+            return res(KEPT_UNRESOLVED, "diff-failed")
+        candidates = []
+        for name in diff.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+            if not name or posixpath.splitext(name.lower())[1] not in suffixes or _path_unsafe(name):
+                continue
+            tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
+            if tree.returncode != 0:
+                return res(KEPT_UNRESOLVED, "ls-tree-failed")
+            meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
+            if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
+                continue
+            blob = _git(repo_root, "cat-file", "blob", meta[2])
+            if blob.returncode != 0:
+                return res(KEPT_UNRESOLVED, "cat-file-failed")
+            try:
+                text = blob.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                text = None
+            candidates.append((name, text))
+    except (OSError, subprocess.TimeoutExpired):
+        return res(KEPT_UNRESOLVED, "git-failed")
+    found = locate(record["content"], record["path"], candidates)
+    if found["status"] in ("unsupported", "none"):
+        return today
+    if found["status"] != "found":
+        return res(KEPT_UNRESOLVED, found["reason"])
+    # axis: a renamed pytest test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes; pytest configuration says nothing about a vitest or jest run, so only a test read by a pytest-collected front is gated — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js
+    try:
+        if found["titles"] and pytest_collected(record["path"]) and _collection_overrides(repo_root, head):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+        # axis: a renamed JS/TS test is accepted only when the repository at the reviewed head has no root vitest/vite/jest config file and no package.json jest or vitest key (an unreadable package.json fails closed), because a configured testNamePattern could skip the new title while another test passes; the gate is the JS front's own (``JS_COLLECTION``) — see bite-proof record wo_b_2061_break_it_body_js
+        if found["titles"] and js_collected(record["path"]) and _js_collection_overrides(repo_root, head):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+        # axis: a renamed JS/TS test's run command may carry no option token at all (nothing starting with `-`, after the leading VAR=value pairs), because --config, -c, --root, --dir, --project or --workspace can select a configuration the root listing above never reads, which could filter the new title out; an unrenamed moved test is unaffected — see bite-proof record wo_b_2061_break_it_body_js
+        if found["titles"] and js_collected(record["path"]) and _carries_option_token(record["command"]):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+        # axis: a moved or retitled JS/TS test is accepted only when its command calls vitest or jest directly (`vitest`, `jest`, or `npx`/`bunx`/`pnpm exec`/`yarn exec` then one of them), because a package script (`pnpm test`, `npm test`, `node --test`) can carry a name filter that skips the test while another test passes and package.json is never read; a test found at its own path runs its original command unchanged (owner ruling 109 d (a)) — see bite-proof record wo_b_2061_break_it_body_js
+        if (found["titles"] or found["path"] != record["path"]) and js_collected(record["path"]) and not _calls_runner_directly(record["command"]):
+            return res(KEPT_UNRESOLVED, "binding-conflict")
+    except (OSError, subprocess.TimeoutExpired):
+        return res(KEPT_UNRESOLVED, "git-failed")
+    command, refusal = _rewrite_command(record["command"], record["path"], found["path"], found["titles"])
+    if refusal:
+        return res(KEPT_UNRESOLVED, refusal)
+    run = _safe_run(runner, repo_root, head,
+                    {"path": found["path"], "run": command, "content": "", "sha256": record["sha256"]},
+                    interpreter, write=False)
+    if run["outcome"] == OUTCOME_PASSED:
+        return res(KEPT, "body-match", run)
+    return res(KEPT_FAILING, run.get("reason"), run)
+
+
 def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET):
     """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
     Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
@@ -959,6 +1190,12 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
 
     def res(outcome, reason=None, run=None):
         return {"path": path, "outcome": outcome, "reason": reason, "run": run}
+
+    def searched(today):
+        # axis: a record without content never searches, so it keeps the byte-exact check — see bite-proof record wo_a_2053_break_it_body
+        if not isinstance(record.get("content"), str):
+            return today
+        return _body_search(repo_root, base, head, record, today, res, runner, interpreter)
 
     for value in (repo_root, base, head, path, record.get("command"), record.get("sha256")):
         if not isinstance(value, str) or not value:
@@ -971,7 +1208,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
             return res(KEPT_UNRESOLVED, "ls-tree-failed")
         entry = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0]
         if not entry:
-            return res(KEPT_MISSING, "not-in-head")
+            return searched(res(KEPT_MISSING, "not-in-head"))
         meta = entry.partition("\t")[0].split()
         if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
             return res(KEPT_NOT_REGULAR, "not-a-regular-file")
@@ -980,7 +1217,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
             return res(KEPT_UNRESOLVED, "diff-failed")
         # axis: a file the final diff does not carry is missing, even when head holds a file at that path — see bite-proof record wo_a_1800_break-it
         if not diff.stdout.strip():
-            return res(KEPT_MISSING, "not-in-diff")
+            return searched(res(KEPT_MISSING, "not-in-diff"))
         blob = _git(repo_root, "cat-file", "blob", meta[2])
         if blob.returncode != 0:
             return res(KEPT_UNRESOLVED, "cat-file-failed")
@@ -988,7 +1225,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
         return res(KEPT_UNRESOLVED, "git-failed")
     # axis: the committed bytes must hash to the sha256 the loop ran, else the test was changed — see bite-proof record wo_a_1800_break-it
     if hashlib.sha256(blob.stdout).hexdigest() != record["sha256"]:
-        return res(KEPT_CHANGED, "sha256-differs")
+        return searched(res(KEPT_CHANGED, "sha256-differs"))
     run = _safe_run(runner, repo_root, head,
                     {"path": path, "run": record["command"], "content": "",
                      "sha256": record["sha256"]}, interpreter, write=False)

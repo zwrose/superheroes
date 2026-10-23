@@ -3318,6 +3318,7 @@ _ALL_CHANNELS = {
     "breakItRuns": [{"role": "test-role", "path": "tests/test_x.py", "outcome": "failed",
                      "findingKey": "k"}],
     "breakItKept": [{"findingKey": "k", "path": "tests/test_x.py", "outcome": "kept"}],
+    "verifyVia": {"via": "local", "command": "make test"},
 }
 
 
@@ -3785,6 +3786,7 @@ def test_panel_round_channels_are_all_accounted_for():
     terminal_gate = set(RD.TERMINAL_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
+    verify_fold = set(RD.VERIFY_FOLD_DISCLOSURE_CHANNELS)
     restorable = set(RD.CARRIED_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
@@ -3805,11 +3807,14 @@ def test_panel_round_channels_are_all_accounted_for():
     assert judgment_fold <= restorable, (
         "judgment-fold disclosure channels must be restorable: %s"
         % sorted(judgment_fold - restorable))
+    assert verify_fold <= restorable, (
+        "verify-fold disclosure channels must be restorable: %s"
+        % sorted(verify_fold - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
     all_recorded = (recorded | fold_provenance | judgment_fold | submit_disclosure | order_emission
-                    | terminal_gate | verifier_recorded | verifier_appended | verifier_fold)
+                    | terminal_gate | verifier_recorded | verifier_appended | verifier_fold | verify_fold)
     assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"

@@ -71,6 +71,50 @@ _VERIFY_RUNNER_ENVELOPE_HINTS = {
 }
 
 
+_VERIFY_VIA = ("local", "ci-exact-head")
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def _ci_verify_shape_fault(artifact):
+    """None unless `via`/`ci`/`reason` are malformed; a `ci-exact-head` claim carries a passing result,
+    a CI run identity and the reason the local verify command could not run. No evidence rides a local verify."""
+    via = artifact.get("via")
+    if "via" not in artifact:
+        extra = [k for k in ("ci", "reason") if k in artifact]
+        return ("ci-verify-shape: `%s` present without `via: \"ci-exact-head\"` — no evidence rides a "
+                "local verify" % "`/`".join(extra)) if extra else None
+    # axis: the ci-exact-head shape is refused before any fetch — see bite-proof record wo_b_2072_ci_verify
+    if not isinstance(via, str) or via not in _VERIFY_VIA:
+        return "ci-verify-shape: `via` is %r, not one of: %s" % (via, ", ".join(_VERIFY_VIA))
+    if via == "local":
+        extra = [k for k in ("ci", "reason") if k in artifact]
+        return ("ci-verify-shape: `%s` present on a local verify — no evidence rides a local verify"
+                % "`/`".join(extra)) if extra else None
+    if artifact.get("result") != "pass":
+        return "ci-verify-shape: a ci-exact-head verify stands in only for a pass (got result %r)" % (
+            artifact.get("result"),)
+    ci = artifact.get("ci")
+    if not isinstance(ci, dict):
+        return "ci-verify-shape: `ci` is %s, not an object" % type(ci).__name__
+    for field in ("workflow", "conclusion"):
+        value = ci.get(field)
+        if not (isinstance(value, str) and value.strip()):
+            return "ci-verify-shape: `ci.%s` is %r, not a non-empty string" % (field, value)
+    run_id = ci.get("runId")
+    if isinstance(run_id, bool) or not (
+            (isinstance(run_id, int) and run_id > 0)
+            or (isinstance(run_id, str) and run_id.isascii() and run_id.isdigit() and int(run_id) > 0)):
+        return "ci-verify-shape: `ci.runId` is %r, not a positive integer or digit string" % (run_id,)
+    head = ci.get("headSha")
+    if not (isinstance(head, str) and len(head) in (40, 64) and all(c in _HEX for c in head)):
+        return "ci-verify-shape: `ci.headSha` is %r, not a 40- or 64-hex commit sha" % (head,)
+    reason = artifact.get("reason")
+    if not (isinstance(reason, str) and reason.strip()):
+        return "ci-verify-shape: `reason` is %r, not a non-empty string naming why the local verify cannot run" % (
+            reason,)
+    return None
+
+
 def verify_result_fault(artifact):
     """None when a verify artifact carries a RECOGNIZED `result` token; otherwise a reason string."""
     if not isinstance(artifact, dict):
@@ -81,7 +125,7 @@ def verify_result_fault(artifact):
         artifact = {}
     result = artifact.get("result")
     if isinstance(result, str) and result in _VERIFY_RESULTS:
-        return None
+        return _ci_verify_shape_fault(artifact)
     parts = [
         "verify artifact carries no usable `result` (got %r)" % (result,),
         "expected {\"result\": \"<one of: %s>\"}" % ", ".join(sorted(_VERIFY_RESULTS)),

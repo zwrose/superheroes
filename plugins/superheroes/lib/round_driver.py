@@ -85,6 +85,7 @@ import review_gate_policy  # noqa: E402
 import risk_areas  # noqa: E402
 import review_round_policy  # noqa: E402
 import review_seats  # noqa: E402
+import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
@@ -529,6 +530,11 @@ JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 # `build_receipt` share the same home.
 TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
 
+# Per-round disclosure channel `_fold_verify` records on a verify fold that reaches a `pass` (not
+# `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and
+# `build_receipt` share the same home.
+VERIFY_FOLD_DISCLOSURE_CHANNELS = ("verifyVia",)
+
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
 # census fails. None of these is restorable on resume — `compileDrops` and `unverified` carry
@@ -874,6 +880,8 @@ def _diff_scope_ok(finding, valid):
     when no diff was supplied (scope check skipped)."""
     if valid is None:
         return True
+    if finding.get("file") == pr_body_stage.CITATION:
+        return True  # the PR body is never in the git diff; the fixer fixes it in the staged copy
     file_lines = valid.get(finding.get("file"))
     if not file_lines:
         return False
@@ -5216,6 +5224,13 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     _record_round(state, "fixReportedKeys", reported_keys)
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
+        pr_body_after = pr_body_stage.collect_fixer_copy(session_dir, state["round"])
+        if pr_body_after:
+            prior_pr_body = (state["rounds"].get(str(state["round"])) or {}).get("prBodyFix")
+            _record_round(state, "prBodyFix",
+                          {"before": prior_pr_body.get("before")
+                           if isinstance(prior_pr_body, dict) else None,
+                           "after": pr_body_after})
         if fold_head_err:
             _record_round(state, "fixFoldHeadRefused", fold_head_err)
         else:
@@ -5530,6 +5545,17 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
+def _verify_via_row(config, artifact):
+    """Which verify a pass rests on: the local command, or a CI run on the exact head."""
+    if artifact.get("via") == "ci-exact-head":
+        ci = artifact["ci"]
+        return {"via": "ci-exact-head", "workflow": ci["workflow"], "runId": str(ci["runId"]),
+                "headSha": ci["headSha"], "conclusion": ci["conclusion"], "reason": artifact["reason"]}
+    command = artifact.get("command")
+    return {"via": "local", "command": command if isinstance(command, str) and command
+            else config.get("verifyCommand")}
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -5580,6 +5606,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "verify result %r is not pass/skip — fail closed, certification withheld" % (result,))
         state["step"] = P_TERMINAL
         return
+    if result == "pass":
+        # axis: the receipt and review record name which verify stood behind the pass — see bite-proof record wo_b_2072_ci_verify
+        _record_round(state, "verifyVia", _verify_via_row(config, artifact))
     then = state.pop("_verifyThen", None)
     if then == VERIFY_THEN_POST_AUDITS:
         _after_audits(state, config)
@@ -6268,6 +6297,18 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
     _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
     _record_round(state, "audits", outcome["audits"])
+    # The staged PR body is audited only when every target of the round folded to an authenticated
+    # clearing ruling: `discharged` holds exactly those (a clearing ruling the manifest could not
+    # authenticate folds to not-discharged), and `notDischarged` holds every other target.
+    # The fix folds in round N and its audits in round N+1 (`_enter_post_fix` advances the round).
+    fix_round = state["rounds"].get(str(state["round"] - 1))
+    pr_body_fix = fix_round.get("prBodyFix") if isinstance(fix_round, dict) else None
+    audit_ids = {t.get("id") for t in targets if isinstance(t, dict)}
+    if (isinstance(pr_body_fix, dict) and isinstance(pr_body_fix.get("after"), str)
+            and pr_body_fix["after"] and audit_ids
+            and not outcome.get("notDischarged")
+            and audit_ids <= set(outcome.get("discharged") or [])):
+        _record_round(state, "prBodyAudited", pr_body_fix["after"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
@@ -6882,10 +6923,37 @@ def _fold_stall(state, config, artifact):
 
 # ---- terminal certification -----------------------------------------------------------------
 
+def _break_it_ruled_exempt(state, key):
+    """The ``rule``-verb out-of-scope ruling row that exempts a break-it finding's test from the kept
+    check, or None. Exempt only when the finding's effective decision is that attributed ruling AND
+    some round's recorded audit cleared the finding; either leg alone leaves the check owed."""
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    # merge-aware: a newer guidance/fix ruling given to a finding merged into this one binds it, as it does the fixer
+    live = _row_decision(state, _live_ruling_by_key(state), ledger_by_key, key)
+    # axis: only an out-of-scope ruling from the rule verb exempts — a fixed finding with no ruling still owes the kept check — see bite-proof record wo_a_2072_ruled_exempt
+    if not (isinstance(live, dict) and live.get("ruling") == "out-of-scope"
+            and live.get("source") == "rule"):
+        return None
+    prov = live.get("provenance")
+    # axis: an unattributed ruling exempts nothing — ruledBy and ruledAt must both be non-empty strings — see bite-proof record wo_a_2072_ruled_exempt
+    if not (isinstance(prov, dict)
+            and all(isinstance(prov.get(f), str) and prov[f].strip() for f in ("ruledBy", "ruledAt"))):
+        return None
+    rounds = state.get("rounds")
+    for rec in (rounds.values() if isinstance(rounds, dict) else ()):
+        entries = rec.get("audits") if isinstance(rec, dict) else None
+        for audit in (entries if isinstance(entries, list) else ()):
+            # axis: a ruling with no clearing audit exempts nothing — the test must still be kept — see bite-proof record wo_a_2072_ruled_exempt
+            if isinstance(audit, dict) and audit.get("id") == key and audit.get("ruling") in audits._CLEARS:
+                return live
+    return None
+
+
 def _break_it_kept_step(state, config):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
-    parked (certification withheld). A finding with any other disposition owes no check."""
+    parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
+    check; a finding with any other disposition besides fixed or out-of-scope owes none either."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             # axis: a failed or not-run break-it run that compile dropped never reaches verification, so it withholds certification
@@ -6919,9 +6987,17 @@ def _break_it_kept_step(state, config):
             rows.append(row)
             failed.append(row)
             continue
-        if disposition != "fixed":
+        # axis: an out-of-scope disposition owes the kept check like a fixed one unless the exemption holds, never a bare not-required — see bite-proof record wo_a_2072_ruled_exempt
+        if disposition not in ("fixed", "out-of-scope"):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
                          "reason": disposition})
+            continue
+        # axis: the exemption is consulted before the kept check; without it a ruled-out-of-scope test parks — see bite-proof record wo_a_2072_ruled_exempt
+        ruled = _break_it_ruled_exempt(state, key)
+        if ruled is not None:
+            rows.append({"findingKey": key, "path": run.get("path"), "outcome": "ruled-out-of-scope",
+                         "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
+                         "ruledAt": ruled["provenance"]["ruledAt"]})
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
                                   interpreter=break_it.resolve_interpreter(config))
@@ -6932,11 +7008,13 @@ def _break_it_kept_step(state, config):
         if got.get("outcome") != break_it.KEPT:
             failed.append(row)
     _record_round(state, "breakItKept", rows)
+    unchecked = sum(1 for r in rows if r["outcome"] == "not-required")
+    ruled_out = sum(1 for r in rows if r["outcome"] == "ruled-out-of-scope")
     _decision(state, "break-it-kept",
-              "%d checked: %d kept, %d not kept, %d not required"
-              % (len(rows) - sum(1 for r in rows if r["outcome"] == "not-required"),
+              "%d checked: %d kept, %d not kept, %d not required, %d ruled out of scope"
+              % (len(rows) - unchecked - ruled_out,
                  sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
-                 sum(1 for r in rows if r["outcome"] == "not-required")))
+                 unchecked, ruled_out))
     if failed:
         why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
         _park_cannot_certify(
@@ -8413,6 +8491,73 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     return response
 
 
+def _fetch_ci_run(repo_root, run_id):
+    """Fetch one GitHub Actions run through `gh`. Returns (run dict, None) or (None, reason)."""
+    argv = ["gh", "api", "repos/{owner}/{repo}/actions/runs/%s" % run_id]
+    try:
+        done = subprocess.run(argv, cwd=repo_root, capture_output=True, timeout=60,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, "gh api failed: %s" % exc
+    if done.returncode != 0:
+        return None, "gh api exited %s: %s" % (done.returncode,
+                                               done.stdout[-200:] + done.stderr[-200:])
+    try:
+        run = json.loads(done.stdout)
+    except ValueError:
+        return None, "gh api returned non-JSON"
+    return (run, None) if isinstance(run, dict) else (None, "gh api returned a non-object")
+
+
+def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
+    """(token, detail) when a `ci-exact-head` verify artifact is not backed by the fetched run on the
+    verified head; None when it is, and None for a local verify (which never fetches)."""
+    if artifact.get("via") != "ci-exact-head":
+        return None
+    ci = artifact["ci"]
+    verified_head, head_err = resolution
+    repo_root = _resolve_repo_root(session_dir, state)
+    # axis: an unresolved head or root is refused, never compared against None — see bite-proof record wo_b_2072_ci_verify
+    if head_err or not verified_head or not repo_root:
+        return "ci-verify-run-unreadable", head_err or "verified head or repo root unresolvable"
+    # axis: the substitute must be the project's declared CI workflow, never a workflow the submitter names — see bite-proof record wo_b_2072_ci_verify
+    import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
+    declared_kind, declared = review_record._ci_workflow(repo_root)
+    if declared_kind != "declared" or not declared:
+        return "ci-verify-workflow-unconfigured", "the project declares no readable ciWorkflow (%s)" % declared_kind
+    if ci["workflow"] != declared:
+        return "ci-verify-workflow-mismatch", "claimed workflow %r is not the project's declared %r" % (ci["workflow"], declared)
+    try:
+        run, err = _fetch_ci_run(repo_root, ci["runId"])
+    except Exception as exc:  # noqa: BLE001 — the seam is a foreign call; any failure is unreadable
+        run, err = None, "%s: %s" % (type(exc).__name__, exc)
+    # axis: a run that cannot be read is refused, never compared — see bite-proof record wo_b_2072_ci_verify
+    if not isinstance(run, dict) or any(k not in run for k in ("id", "name", "head_sha", "status", "conclusion")):
+        return "ci-verify-run-unreadable", err or "the fetched run lacks id, name, head_sha, status or conclusion"
+    # axis: the run is the claimed run on the claimed and the verified head — see bite-proof record wo_b_2072_ci_verify
+    # the claim's hex shape was already accepted upstream; GitHub reports lowercase, so a correct claim in uppercase is folded to lowercase before comparing
+    if run["head_sha"] != ci["headSha"].lower():
+        return "ci-verify-sha-mismatch", "run %s ran on %s, not the claimed %s" % (run["id"], run["head_sha"], ci["headSha"])
+    if run["head_sha"] != verified_head:
+        return "ci-verify-sha-mismatch", "run %s ran on %s, not the verified head %s" % (run["id"], run["head_sha"], verified_head)
+    if str(run["id"]) != str(ci["runId"]):
+        return "ci-verify-sha-mismatch", "fetched run id %s is not the claimed runId %s" % (run["id"], ci["runId"])
+    # axis: the run is the claimed workflow — see bite-proof record wo_b_2072_ci_verify
+    # construction bound (E9c): the `or run["name"] != declared` clause cannot reject on its own — the earlier `ci["workflow"] == declared` check already guarantees `ci["workflow"] == declared`, so it is subsumed by `run["name"] != ci["workflow"]`; see bite-proof record wo_b_2072_ci_verify (E9c)
+    # what would make it provable: moving this comparison ahead of (or removing) the `ci["workflow"] != declared` refusal above, so a run name could differ from `declared` while equal to the claim
+    # its separate protection is UNVERIFIED: no test can show this clause rejecting an input the first clause does not
+    if run["name"] != ci["workflow"] or run["name"] != declared:
+        return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r or the declared %r" % (run["id"], run["name"], ci["workflow"], declared)
+    # axis: only a completed run that concluded `success`, as claimed, stands in — see bite-proof record wo_b_2072_ci_verify
+    if run["status"] != "completed":
+        return "ci-verify-conclusion-mismatch", "run %s is %r, not completed" % (run["id"], run["status"])
+    if run["conclusion"] != ci["conclusion"]:
+        return "ci-verify-conclusion-mismatch", "run %s concluded %r, not the claimed %r" % (run["id"], run["conclusion"], ci["conclusion"])
+    if run["conclusion"] != "success":
+        return "ci-verify-conclusion-mismatch", "run %s concluded %r, not success" % (run["id"], run["conclusion"])
+    return None
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
                _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None,
                fixer_transcript=None):
@@ -8477,6 +8622,12 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = _verified_head_at_fold(session_dir, state)
                 except OSError as exc:
                     resolution = (None, "verified head: %s" % exc)
+                # axis: the run check is called at the one submit chokepoint — see bite-proof record wo_b_2072_ci_verify
+                refusal = _ci_verify_run_refusal(session_dir, state, artifact, resolution)
+                if refusal:
+                    _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": round_no,
+                                                  "attempt": attempt, "outcome": refusal[0]})
+                    return {"ok": False, "reason": refusal[0], "detail": refusal[1]}
             else:
                 resolution = None
             if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):
@@ -10228,6 +10379,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "FIX_BATCH_SHA256",
     "FIXER_STEP_5_BLOCK",
     "FIXER_ESCALATION_BLOCK",
+    "PR_BODY_LINE",
 })
 
 
@@ -10512,6 +10664,37 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
     }
 
 
+def _pr_body_line(phase, session_dir, rnd, state, meta, cfg, materialize_shared_inputs):
+    """The ``PR_BODY_LINE`` value of a fixer or audit order: where the staged PR body is, or why
+    there is none. Mode resolves exactly as the panel arm does. A render-only call (no mutation)
+    only names paths."""
+    def no_staged(reason):
+        return ("no staged PR body (%s); a finding about a PR body is escalated, never fixed "
+                "anywhere else" % reason)
+
+    mode_resolved = session_mode.resolve(meta, cfg)
+    if mode_resolved["mode"] == session_mode.MODE_BRANCH:
+        return no_staged("branch mode")
+    paths = pr_body_stage.paths(session_dir)
+    if materialize_shared_inputs:
+        staged = pr_body_stage.stage(session_dir)
+        if not staged.get("ok") or not staged.get("staged"):
+            return no_staged(staged.get("reason") or "not staged")
+    if phase == P_AUDITS:
+        return ("the staged copy %s, to be read against the original %s"
+                % (paths["staged"], paths["original"]))
+    copy_path = pr_body_stage.fixer_copy_path(session_dir, rnd)
+    if materialize_shared_inputs:
+        before = pr_body_stage.seed_fixer_copy(session_dir, rnd)
+        if before is None:
+            return no_staged(pr_body_stage.REASON_NOT_STAGED)
+        if isinstance(state, dict) and ("rounds" in state or "round" in state):
+            existing = (state["rounds"].get(str(rnd)) or {}).get("prBodyFix")
+            if not (isinstance(existing, dict) and existing.get("before")):
+                _record_round(state, "prBodyFix", {"before": before, "after": None})
+    return copy_path
+
+
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
                         session_dir, rnd, paths, channel, roster=None,
                         materialize_shared_inputs=True):
@@ -10633,6 +10816,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "TARGET_ID": seat_key,
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
+            "PR_BODY_LINE": _pr_body_line(phase, session_dir, rnd, state, meta, cfg,
+                                          materialize_shared_inputs),
         }
     elif phase == P_SCOPED:
         hunks = payload.get("hunks")
@@ -10695,6 +10880,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFY_BUDGET": _fixer_verify_budget(fix_batch, cfg),
             "ROUND": str(rnd),
             "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),
+            "PR_BODY_LINE": _pr_body_line(phase, session_dir, rnd, state, meta, cfg,
+                                          materialize_shared_inputs),
         }
     return ph
 

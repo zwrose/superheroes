@@ -6,6 +6,7 @@ new issues.
 - Audit target: {{TARGET_SUMMARY_PATH}} — the finding identity, file, line, severity, and the
   fixer's head diff hunk(s) covering this target.
 - Head diff (read cited hunks here): {{HEAD_DIFF_PATH}}
+- PR body: {{PR_BODY_LINE}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
 - Severity rubric (the only tiers; calibration): {{RUBRIC_PATH}}
 - Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
@@ -18,6 +19,7 @@ the diff, the repo, and the target record.
 ## Your task
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
 finding and whether any new issues were introduced. Cite quoted support for every conclusion.
+A fix to a finding about the PR body lands in the staged copy, not in the head diff; judge it by reading the staged copy against the original named in Input.
 Each new issue you report is a finding in the base rubric's findings shape, `consequence` and `consequenceKind` included; a new issue with no stated consequence is not taken into the review.
 Compare the fix (`fixHunks` in the audit target; `fixerDelta` is the whole attempt's own diff, reviewed head to fixed head, over every file the attempt changed, each file under its `diff --git` line, hunk headers and context kept; `batchFindings` are the attempt's other findings, each with its file, line, title, body, suggestion and owner decision; a line the PR diff carried shows after the diff mark, so `-+x` is a PR addition the fix removed and `++x` one it made. A target's `priorAudit` is the last audit of the finding: when it refused, say why, check whether that cause still stands in the fix. A target's `ownerRuling` is the owner's decision on the finding, its guidance and whether it allows a change the finding does not name (`allowsChange`): a fix that makes such a change is cleared only when an owner decision allows it, and you report it either way) with what the finding names: its title, body,
 suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does

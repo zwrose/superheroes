@@ -37,6 +37,10 @@ def bool_value(value):
     return isinstance(value, bool)
 
 
+def verify_via_shape(value):
+    return isinstance(value, dict) and isinstance(value.get("via"), str)
+
+
 def adapter_provenance_shape(value):
     if not isinstance(value, dict):
         return False
@@ -93,6 +97,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
     "breakItKept": dict_list,
+    "verifyVia": verify_via_shape,
 }
 
 
@@ -664,6 +669,14 @@ def build_degraded_prose(state, form, journal=None):
                 "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
                 "key while the fold recorded none for them — row-carried text is never rendered "
                 "as owner guidance" % (rkey, len(ggc)))
+        vvia = declared.get("verifyVia")
+        # axis: the receipt discloses a CI stand-in for the local verify — see bite-proof record wo_b_2072_ci_verify
+        if vvia and vvia.get("via") == "ci-exact-head":
+            degraded_out.append(
+                "verify-via-ci (round %s): CI workflow %s run %s on %s (%s) stood in for the local "
+                "verify command: %s" % (rkey, vvia.get("workflow"), vvia.get("runId"),
+                                        str(vvia.get("headSha"))[:7], vvia.get("conclusion"),
+                                        vvia.get("reason")))
         bir = declared.get("breakItRuns")
         if bir:
             not_run = [r for r in bir if r.get("outcome") == "not-run"]
@@ -691,7 +704,8 @@ def build_degraded_prose(state, form, journal=None):
                 "proven cell — findings were not grouped (nothing dropped)" % rkey)
         bik = declared.get("breakItKept")
         if bik:
-            not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]
+            # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt
+            not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required", "ruled-out-of-scope")]
             if not_kept:
                 degraded_out.append(
                     "break-it-test-not-kept (round %s): %d fixed break-it test(s) not held in the "

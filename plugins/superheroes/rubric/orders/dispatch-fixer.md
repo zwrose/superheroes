@@ -11,6 +11,7 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Work in the current branch's working tree at {{CWD}}
 - Repo root: {{REPO_ROOT}}
 - Verify budget: {{VERIFY_BUDGET}}
+- PR body (staged copy): {{PR_BODY_LINE}}
 
 ## Owner-gate guidance
 
@@ -42,6 +43,12 @@ Guidance in this section overrides the original suggestion for the named finding
    committed break-it test file — and if a commit hook rewrites it, report that (it is not a
    pass); keep the break-it test at the path its block names.
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
+   A finding about the PR body (it cites `SUPERHEROES_PR_BODY.md`, or its text is about the PR body)
+   is fixed only in the staged copy named in Input. That copy is outside the repository and is never
+   committed. Never write to GitHub: no `gh pr edit`, no `gh api` write, no `gh pr comment`,
+   `gh pr review` or `gh issue comment`, and no other comment or review. A finding that seems to
+   need a GitHub write goes to Escalation below instead. A GitHub write that was refused or denied is
+   reported under the refused-commands section below.
 3. Run the scoped verify budget above — the tests that reference your target files plus the
    project's static validators, at most once each; never the project's full verify command (the
    orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
