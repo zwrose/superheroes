@@ -442,7 +442,7 @@ def test_cross_field_rules_agree_between_page_and_prose():
         mutate(sheet)
         return sheet
 
-    def body_card(sheet):
+    def a_prefixed_card(sheet):
         sheet["cards"][0]["id"] = "a-0123456789ab"
 
     fixtures = [
@@ -455,10 +455,10 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
         ("valid stack with a walk", _pr_kind_sheet("stack"), False),
         ("two walk stops share an id", mutated_stack(lambda s: s["prSheet"]["walk"]["stops"][1].update(id="schema")), True),
-        ("nothingListed beside a card built from a body", listed_none(body_card), True),
+        ("nothingListed beside a card whose id starts with a-", listed_none(a_prefixed_card), False),
         ("nothingListed with no card", listed_none(lambda s: s.update(cards=[])), False),
-        ("nothingListed beside a card not built from a body", listed_none(lambda s: None), False),
-        ("a body card with no nothingListed", mutated_stack(body_card), False),
+        ("nothingListed beside a card", listed_none(lambda s: None), False),
+        ("a card whose id starts with a- with no nothingListed", mutated_stack(a_prefixed_card), False),
         *[(name, sheet, refused) for name, sheet, refused, _ in _decided_fixtures()],
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
@@ -1095,18 +1095,6 @@ def test_prose_of_a_zero_card_pr_sheet_says_nothing_only_when_it_recorded_that_t
     del sheet["prSheet"]["nothingListed"]
     unchecked = _prose_of(tmp_path, sheet)
     assert heading + PR_WORDS["acceptingUnchecked"] + "\n" in unchecked and PR_WORDS["nothingToAccept"] not in unchecked
-
-
-# Bites on: the renderer's check letting a sheet that records "nothing listed" carry a card built from a PR body's acceptance, or refusing it in other words than the page's.
-@pytest.mark.parametrize("kind", ["pr", "stack"])
-def test_prose_refuses_nothing_listed_beside_a_body_card_in_the_pages_words(kind):
-    # Axis: the rule names the card and says it was built from a PR body's acceptance; a sheet with the same card and no nothingListed is not refused.
-    module = _load_prose_module()
-    sheet = _pr_kind_sheet(kind)
-    sheet["cards"][0]["id"] = "a-0123456789ab"
-    assert module.check_sheet(sheet) == []
-    sheet["prSheet"]["nothingListed"] = True
-    assert module.check_sheet(sheet) == ['prSheet.nothingListed is true, but card "a-0123456789ab" was built from a PR body\'s acceptance.']
 
 
 def _decided(stack):

@@ -83,7 +83,7 @@ The advisor's input is one JSON object; any key not listed is refused.
                  {"canon": "<entry id>"} (a Canon entry id, YYYY-MM-DD-xxxxxxxx-N, that the summary cites; the acceptance then
                  gets no item). Every listed acceptance needs an entry and each key must name a listed one. A fold line that no
                  acceptance names is allowed.
-  walk          Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
+  walk           Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
                  http(s); stops is at least 1 of {id, title, pr, group, kind, steps?, expect, optional?, notWalked?,
                  pictures?}: id as above and unique, pr equal to number on a pr or one of prs on a stack, kind
                  "try" (steps, at least 1) or "look" (no steps), optional a boolean, pictures a list of
@@ -680,7 +680,7 @@ def _check_bodies(bodies, allowed, problems):
     for n in allowed:
         if n not in bodies:
             problems.append(f"PR #{n} has no body: give --pr-body {n}=<file> with the PR's body (gh api repos/<owner>/<repo>/pulls/{n} --jq .body), "
-                            "so the sheet's Accept cards cover its What we're accepting")
+                            "so the build can check that the input accounts for its What we're accepting")
         elif not isinstance(bodies[n], str):
             problems.append(f"PR #{n}'s body must be text")
     problems.extend(f"--pr-body names PR #{n}, which the sheet does not cover" for n in sorted(bodies, key=str) if n not in allowed)

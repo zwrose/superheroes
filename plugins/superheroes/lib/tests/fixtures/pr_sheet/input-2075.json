@@ -1,0 +1,59 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "pr",
+  "number": 2075,
+  "title": "Review seats run no programs",
+  "summary": "A review seat can no longer run a program on your machine: codex seats get a closed tool set and every seat order says what the seat may run.",
+  "leftovers": {
+    "caps/test-too-small": {
+      "why": "Whether a few test lines are worth a follow-up is a call about how much risk you carry, and only you can make it.",
+      "context": "The test for the list and search size caps uses too little data to ever hit a cap, so it would still pass if those caps were removed.",
+      "options": "none"
+    }
+  },
+  "items": [
+    {
+      "id": "codex-config",
+      "kind": "Accept",
+      "title": "Codex review seats no longer see your codex config",
+      "ifLeft": "A review that relied on a custom codex MCP server, plugin, hook or model-provider setting loses it.",
+      "options": "none"
+    },
+    {
+      "id": "cursor-commands",
+      "kind": "Accept",
+      "title": "Cursor review seats can still run commands; they are caught afterwards",
+      "ifLeft": "A cursor seat that runs a command forfeits its review, but the command will already have run inside cursor's sandbox.",
+      "options": "none"
+    },
+    {
+      "id": "no-retry",
+      "kind": "Accept",
+      "title": "A codex or cursor review attempt that dies mid-run forfeits for good",
+      "ifLeft": "You may see a few more reviewer fallbacks to the host model when a seat crashes; each one is disclosed.",
+      "options": "none"
+    },
+    {
+      "id": "accepting",
+      "kind": "Accept",
+      "title": "What you're accepting",
+      "ifLeft": [
+        "A seat whose record has a line over 1 MiB, or runs past 64 MiB, forfeits and the fallback is disclosed.",
+        "A line past 2,000 characters takes several reads; the seat gets the first 2,000 characters and a note to read on.",
+        "The PR is larger than estimated, and the advisor ruled to continue as one PR, for your veto.",
+        "This leg's fixer broke one order rule once; the content was reviewed and audited like any other fix."
+      ],
+      "options": "none"
+    }
+  ],
+  "accounting": {
+    "2075:e725c161cb": {"leftover": "caps/test-too-small"},
+    "2075:d4116034f6": {"item": "codex-config"},
+    "2075:039619e0cd": {"item": "cursor-commands"},
+    "2075:781d5940fd": {"item": "no-retry"},
+    "2075:a9207b7140": {"fold": "accepting", "line": 1},
+    "2075:593195c0da": {"fold": "accepting", "line": 2},
+    "2075:3e79a107c3": {"fold": "accepting", "line": 3},
+    "2075:05d371b079": {"fold": "accepting", "line": 4}
+  }
+}

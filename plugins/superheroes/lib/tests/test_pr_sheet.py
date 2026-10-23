@@ -2414,14 +2414,18 @@ def test_a_collector_input_that_breaks_a_rule_is_refused(edit, expected):
     assert any(expected in p for p in problems_of(records, advisor))
 
 
-# --- the PR body's What we're accepting: one Accept card per listed acceptance ---
+# --- the PR body's What we're accepting: the advisor's input accounts for every listed acceptance, and none becomes a card on its own ---
 
 VET_SLOT = Path(__file__).resolve().parent / "fixtures" / "vet_slot"
 BODY_TWIN = {241: FIXTURES / "body-twin-241.md", 242: FIXTURES / "body-twin-242.md"}
 NONE_BODY = FIXTURES / "body-none.md"
+BODY_2075 = FIXTURES / "body-2075.md"
+CASE_2075 = (["record-2075.json"], "input-2075.json")
+BODIES_2075 = {2075: BODY_2075.read_text(encoding="utf-8")}
+BULLETS_2075 = [bullet for bullet, _ in pr_sheet.listed_bullets(2075, BODIES_2075[2075])]
 ACCEPTING = "## What we're accepting\n"
-TWIN_QUESTIONS = ["The parser keeps its old name.", "The cache is cleared on upgrade.", "The error text changed.",
-                  "The report step reads files twice.", "A plain bullet with no bold lead: the report's title line now names the file."]
+CANON_ID = "2026-10-22-abcdefgh-1"
+NOT_ONE_OF = "must be an object with exactly one of item, fold with line, leftover or canon"
 
 
 def run_main(capsys, *argv):
@@ -2440,34 +2444,226 @@ def main_build(capsys, case, out, bodies, advisor=None):
     return run_main(capsys, *argv)
 
 
-def with_bodies(case, bodies):
+def read_bodies(files):
+    """PR number to body text for a dict of PR number to body file."""
+    return {number: Path(file).read_text(encoding="utf-8") for number, file in files.items()}
+
+
+def with_bodies(case, bodies, edit=None):
+    """The case's build given bodies (PR number to body text); edit(advisor), when given, changes the input first."""
     records, advisor = bundle(case)
+    if edit:
+        edit(advisor)
     return pr_sheet.build(records, advisor, WORDS, bodies=bodies)
 
 
-def body_cards(sheet):
-    return [c for c in sheet["cards"] if c["id"].startswith("a-")]
+def refused_with_bodies(case, bodies, edit=None):
+    """The problems of a with_bodies build, which must be refused."""
+    with pytest.raises(pr_sheet.Refusal) as caught:
+        with_bodies(case, bodies, edit)
+    return caught.value.problems
 
 
-def test_a_stacks_bodies_give_one_accept_card_per_listed_acceptance_after_the_leftovers(tmp_path, capsys):
-    # Bites on: the body cards left out, put before the leftover cards, given the wrong PR, or given options; nothingListed set on a sheet whose bodies list acceptances.
-    # Axis: the two-PR stack's bodies list 3 and 2 acceptances, and the sheet has exactly those 5 body cards, in body order, after its 2 leftover cards, and no nothingListed.
+def a_cards(sheet):
+    """The cards whose id starts with the retired body-card prefix; a sheet has none."""
+    return [c for c in sheet["cards"] if c["id"][:2] == "a-"]
+
+
+def card_ids(sheet):
+    return [c["id"] for c in sheet["cards"]]
+
+
+def written_input(tmp_path, case, edit, name="input.json"):
+    """The case's input file with edit(advisor) applied, written in tmp_path; returns its path."""
+    advisor = load(case[1])
+    edit(advisor)
+    return write_json(tmp_path / name, advisor)
+
+
+def fold_all(bodies):
+    """An edit that gives the input one fold item and accounts for every acceptance the bodies list as a line of it."""
+    def edit(advisor):
+        bullets = [bullet for pr in sorted(bodies) for bullet, _ in pr_sheet.listed_bullets(pr, bodies[pr])]
+        if bullets:
+            advisor["items"] = [{"id": "everything", "kind": "Accept", "title": "What you're accepting",
+                                 "ifLeft": [f"Line {n}." for n in range(1, len(bullets) + 1)], "options": "none"}]
+        advisor["accounting"] = {bullet: {"fold": "everything", "line": n} for n, bullet in enumerate(bullets, 1)}
+    return edit
+
+
+def set_accounting(bullet, value):
+    """An edit that gives one bullet of the 2075 input's accounting this value."""
+    return lambda advisor: advisor["accounting"].__setitem__(bullet, value)
+
+
+def test_pr_2075s_real_body_is_accounted_for_and_makes_only_the_advisors_cards(tmp_path, capsys):
+    # Bites on: a listed acceptance becoming a card of its own, a leftover, item or fold line that the accounting names being refused, or nothingListed set on a sheet whose body lists acceptances.
+    # Axis: PR #2075's 8 acceptances, accounted to 1 leftover card, 3 own items and 4 lines of 1 fold item, give exactly 5 cards (1 f-, 4 i-), no a- card, no nothingListed.
+    assert list(load("input-2075.json")["accounting"]) == BULLETS_2075 and len(BULLETS_2075) == 8
     out = tmp_path / "sheet.json"
-    code, said = main_build(capsys, TWIN, out, BODY_TWIN)
-    assert code == 0 and said["cards"] == 7, said
+    code, said = main_build(capsys, CASE_2075, out, {2075: BODY_2075})
+    assert code == 0 and said["cards"] == 5, said
     sheet = json.loads(out.read_text(encoding="utf-8"))
-    cards = sheet["cards"]
-    assert [c["id"][:2] for c in cards] == ["f-"] * 2 + ["a-"] * 5
-    listed = cards[2:]
-    assert [c["callKind"] for c in listed] == ["Accept · #241"] * 3 + ["Accept · #242"] * 2
-    assert [c["question"] for c in listed] == TWIN_QUESTIONS
-    assert all(c["options"] == [] and "recommendation" not in c for c in listed)
-    assert [s["title"] for c in listed for s in c["context"]] == ["Listed in PR #241's What we're accepting"] * 3 + ["Listed in PR #242's What we're accepting"] * 2
-    assert all(len(c["context"]) == 1 and list(c["context"][0]["blocks"][0]) == ["quote"] for c in listed)
-    assert listed[1]["context"][0]["blocks"][0]["quote"].startswith("**The cache is cleared on upgrade.** Cached parses")
-    assert "1. The on-disk cache is deleted at start." in listed[1]["context"][0]["blocks"][0]["quote"]
+    assert [c["id"][:2] for c in sheet["cards"]] == ["f-"] + ["i-"] * 4 and a_cards(sheet) == []
     assert "nothingListed" not in sheet["prSheet"]
+    assert len(sheet["cards"][4]["context"][0]["blocks"][0]["bullets"]) == 4
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_a_bullet_left_out_of_the_accounting_is_refused_naming_it_and_nothing_is_written(tmp_path, capsys):
+    # Bites on: an acceptance a body lists being left off the sheet without a word, or the refusal not naming which one.
+    # Axis: G1: with bullet 5's entry removed there is exactly one problem, it holds that bullet's id and the start of its text, and no file is written.
+    left_out = BULLETS_2075[5]
+    source = written_input(tmp_path, CASE_2075, lambda advisor: advisor["accounting"].pop(left_out))
+    out = tmp_path / "sheet.json"
+    code, said = main_build(capsys, CASE_2075, out, {2075: BODY_2075}, advisor=source)
+    assert code == 1 and said["ok"] is False and not out.exists()
+    (problem,) = said["problems"]
+    assert left_out in problem and "A line past 2,000 characters" in problem
+    assert problem.startswith(f"PR #2075's acceptance {left_out} (\"")
+    assert problem.endswith(f'is not accounted for: give accounting "{left_out}" one of item, fold with line, leftover, or canon')
+
+
+def test_a_bullet_whose_value_names_two_targets_is_refused_as_accounted_for_more_than_once():
+    # Bites on: a bullet with two targets being counted for the first, or refused in other words than the more-than-once text.
+    # Axis: G2: a value with both fold and canon is one problem, in the more-than-once words, naming the bullet and the start of its text.
+    twice = set_accounting(BULLETS_2075[5], {"fold": "accepting", "line": 2, "canon": CANON_ID})
+    (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, twice)
+    assert problem.startswith(f'accounting "{BULLETS_2075[5]}" (PR #2075: "') and "A line past 2,000 characters" in problem
+    assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover or canon")
+
+
+def test_an_input_that_repeats_an_accounting_key_is_refused_through_main(tmp_path, capsys):
+    # Bites on: a key written twice in the input silently keeping the later one, so the bullet is counted for what the first entry said.
+    # Axis: G8 and E8: the input file with bullet 5's key written twice is refused with the repeated-key problem and nothing is written.
+    line = f'    "{BULLETS_2075[5]}": {{"fold": "accepting", "line": 2}},\n'
+    text = (FIXTURES / "input-2075.json").read_text(encoding="utf-8")
+    assert text.count(line) == 1
+    repeated = tmp_path / "input.json"
+    repeated.write_text(text.replace(line, line + line), encoding="utf-8")
+    out = tmp_path / "sheet.json"
+    code, said = main_build(capsys, CASE_2075, out, {2075: BODY_2075}, advisor=repeated)
+    assert code == 1 and said["problems"] == [f'the input repeats key "{BULLETS_2075[5]}"'] and not out.exists()
+
+
+def test_two_targets_of_any_kind_are_refused_as_more_than_once():
+    # Bites on: only the fold-and-canon pair being counted, so another pair of targets slips through as though it named one.
+    # Axis: E3: item with leftover, and item with fold, are each refused with the more-than-once text.
+    for value in ({"item": "no-retry", "leftover": "caps/test-too-small"}, {"item": "no-retry", "fold": "accepting", "line": 1}):
+        (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, set_accounting(BULLETS_2075[3], value))
+        assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover or canon"), value
+
+
+def test_a_canon_entry_accounts_for_a_bullet_only_as_a_real_id_the_summary_cites():
+    # Bites on: a canon target accepted with no id, a made-up id, a malformed one, or one the summary does not cite; or a canon bullet still needing an item.
+    # Axis: G6: "" and an id absent from the summary and a malformed id that is cited are each one problem; with a well-formed id the summary cites the sheet builds the same 5 cards, its fold keeping 4 lines though no bullet names line 3.
+    bullet = BULLETS_2075[6]
+
+    def canon(value, cited=""):
+        def edit(advisor):
+            advisor["accounting"][bullet] = {"canon": value}
+            advisor["summary"] += cited
+        return edit
+    for value, cited in (("", ""), (CANON_ID, ""), ("2026-10-22-abc-1", " Ruled in 2026-10-22-abc-1.")):
+        (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, canon(value, cited))
+        assert problem.startswith(f'accounting "{bullet}" (PR #2075: "')
+        assert problem.endswith(f'names canon "{value}", which is not a Canon entry id (YYYY-MM-DD-xxxxxxxx-N) cited in the summary')
+    sheet = with_bodies(CASE_2075, BODIES_2075, canon(CANON_ID, f" Ruled in {CANON_ID}."))
+    assert card_ids(sheet) == card_ids(with_bodies(CASE_2075, BODIES_2075)) and len(sheet["cards"]) == 5
+    assert len(sheet["cards"][4]["context"][0]["blocks"][0]["bullets"]) == 4
+
+
+MISSING_TARGETS = [
+    pytest.param(1, {"item": "no-such-item"}, 'names item "no-such-item", which is not in items', id="item-not-in-items"),
+    pytest.param(4, {"fold": "no-such-item", "line": 1}, 'names fold "no-such-item" line 1, which is not a line of that item\'s ifLeft list', id="fold-item-not-in-items"),
+    pytest.param(4, {"fold": "codex-config", "line": 1}, 'names fold "codex-config" line 1, which is not a line of that item\'s ifLeft list', id="fold-names-a-string-ifleft"),
+    pytest.param(4, {"fold": "accepting", "line": 5}, 'names fold "accepting" line 5, which is not a line of that item\'s ifLeft list', id="fold-line-past-the-end"),
+    pytest.param(4, {"fold": "accepting", "line": 0}, 'names fold "accepting" line 0, which is not a line of that item\'s ifLeft list', id="fold-line-zero"),
+    pytest.param(4, {"fold": "accepting", "line": -1}, 'names fold "accepting" line -1, which is not a line of that item\'s ifLeft list', id="fold-line-negative"),
+    pytest.param(4, {"fold": "accepting", "line": True}, 'names fold "accepting" line True, which is not a line of that item\'s ifLeft list', id="fold-line-a-bool"),
+    pytest.param(4, {"fold": "accepting", "line": 1.0}, 'names fold "accepting" line 1.0, which is not a line of that item\'s ifLeft list', id="fold-line-a-float"),
+    pytest.param(0, {"leftover": "no-such-key"}, 'names leftover "no-such-key", which names no one left-for-owner finding in leftovers', id="leftover-key-not-in-leftovers"),
+    pytest.param(1, {}, NOT_ONE_OF, id="no-target-at-all"),
+    pytest.param(4, {"line": 1}, NOT_ONE_OF, id="line-without-fold"),
+    pytest.param(4, {"fold": "accepting"}, NOT_ONE_OF, id="fold-without-line"),
+    pytest.param(1, {"item": "codex-config", "line": 1}, NOT_ONE_OF, id="line-beside-item"),
+    pytest.param(1, {"item": "codex-config", "why": "x"}, NOT_ONE_OF, id="unknown-key-beside-item"),
+    pytest.param(1, "codex-config", NOT_ONE_OF, id="value-not-an-object"),
+]
+
+
+@pytest.mark.parametrize("index, value, tail", MISSING_TARGETS)
+def test_an_accounting_entry_that_points_at_nothing_on_the_sheet_is_refused(index, value, tail):
+    # Bites on: an entry naming an item, fold line, leftover or canon that the sheet does not have being accepted, or an entry of the wrong shape being read as one target.
+    # Axis: G3, G4, G5 and E2, E4, E5: each is exactly one problem, naming the bullet and its text and ending with the cause.
+    (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, set_accounting(BULLETS_2075[index], value))
+    assert problem.startswith(f'accounting "{BULLETS_2075[index]}" (PR #2075: "') and problem.endswith(tail)
+
+
+def test_an_accounting_key_naming_no_listed_acceptance_is_refused():
+    # Bites on: an accounting entry for a bullet no body lists (a typo, or a bullet whose text was edited) being ignored.
+    # Axis: G7: one problem, which names the key.
+    stray = "2075:ffffffffff"
+    assert stray not in BULLETS_2075
+    assert refused_with_bodies(CASE_2075, BODIES_2075, set_accounting(stray, {"item": "no-retry"})) == [
+        f'accounting key "{stray}" names no acceptance in the covered PR bodies']
+
+
+@pytest.mark.parametrize("value", [[], "no-retry", 5, None, True])
+def test_an_accounting_that_is_not_an_object_is_refused(value):
+    # Bites on: a list, a string or null accounting being read as no accounting, or crashing the build.
+    # Axis: E1: the build is refused with the not-an-object problem first, and every listed acceptance is then reported as not accounted for.
+    problems = refused_with_bodies(CASE_2075, BODIES_2075, lambda advisor: advisor.update(accounting=value))
+    assert problems[0] == "accounting must be an object of bullet id to where that acceptance is accounted for"
+    assert len(problems) == 1 + len(BULLETS_2075) and all("is not accounted for" in p for p in problems[1:])
+
+
+def test_a_leftover_key_shared_by_two_findings_accounts_for_nothing():
+    # Bites on: a leftover target that names several findings being accepted as the card it restates.
+    # Axis: E7: with two left-for-owner findings under one findingKey, the accounting's leftover target is refused as naming no one finding.
+    records, advisor = bundle(CASE_2075)
+    records[0]["findings"].append({**records[0]["findings"][0], "id": "F2"})
+    with pytest.raises(pr_sheet.Refusal) as caught:
+        pr_sheet.build(records, advisor, WORDS, bodies=BODIES_2075)
+    assert any(p.startswith(f'accounting "{BULLETS_2075[0]}"') and p.endswith(
+        'names leftover "caps/test-too-small", which names no one left-for-owner finding in leftovers') for p in caught.value.problems)
+
+
+def test_a_bullet_inserted_above_the_others_costs_one_entry_and_moves_no_card_id(tmp_path, capsys):
+    # Bites on: a bullet's id depending on its place in the body, so an insertion above re-keys the accounting already written and moves cards.
+    # Axis: FU1: the 8 original bullets keep their ids; the unchanged input is refused with one problem naming the new bullet; with its one entry added the sheet builds with the same card ids.
+    lead = ACCEPTING + "\n"
+    assert BODIES_2075[2075].count(lead) == 1
+    grown = tmp_path / "body-grown.md"
+    grown.write_text(BODIES_2075[2075].replace(lead, lead + "- **A new acceptance.** Added by the author above the others.\n"), encoding="utf-8")
+    before, after = pr_sheet.listed_bullets(2075, BODIES_2075[2075]), pr_sheet.listed_bullets(2075, grown.read_text(encoding="utf-8"))
+    assert [i for i, _ in before] == BULLETS_2075 and len(after) == 9 and after[1:] == before
+    new = after[0][0]
+    out = tmp_path / "base.json"
+    code, said = main_build(capsys, CASE_2075, out, {2075: BODY_2075})
+    assert code == 0, said
+    base_ids = card_ids(json.loads(out.read_text(encoding="utf-8")))
+    out = tmp_path / "sheet.json"
+    code, said = main_build(capsys, CASE_2075, out, {2075: grown})
+    assert code == 1 and not out.exists()
+    (problem,) = said["problems"]
+    assert new in problem and "A new acceptance." in problem and "is not accounted for" in problem
+    source = written_input(tmp_path, CASE_2075, set_accounting(new, {"leftover": "caps/test-too-small"}))
+    code, said = main_build(capsys, CASE_2075, out, {2075: grown}, advisor=source)
+    assert code == 0 and said["cards"] == 5, said
+    assert card_ids(json.loads(out.read_text(encoding="utf-8"))) == base_ids
+
+
+def test_a_stacks_bodies_are_refused_without_accounting_and_build_with_no_card_of_their_own():
+    # Bites on: a stack's listed acceptances being built with no accounting, or turned into cards of their own, or the refusal missing a PR's acceptances.
+    # Axis: the two-PR stack's bodies list 3 and 2 acceptances: with no accounting there is one not-accounted-for problem for each; folded into one item the sheet has no a- card and no nothingListed.
+    bodies = read_bodies(BODY_TWIN)
+    problems = refused_with_bodies(TWIN, bodies)
+    assert [p.split(" acceptance ")[0] for p in problems] == ["PR #241's"] * 3 + ["PR #242's"] * 2
+    assert all("is not accounted for: give accounting " in p for p in problems)
+    sheet = with_bodies(TWIN, bodies, fold_all(bodies))
+    assert [c["id"][:2] for c in sheet["cards"]] == ["f-"] * 2 + ["i-"] and a_cards(sheet) == []
+    assert len(sheet["cards"][2]["context"][0]["blocks"][0]["bullets"]) == 5 and "nothingListed" not in sheet["prSheet"]
 
 
 def test_a_stack_built_with_a_covered_prs_body_missing_is_refused_naming_that_pr(tmp_path, capsys):
@@ -2491,13 +2687,14 @@ def test_a_stack_built_with_a_covered_prs_body_missing_is_refused_naming_that_pr
 ])
 def test_a_stack_says_nothing_listed_only_when_every_covered_body_lists_none(tmp_path, capsys, first, second, said):
     # Bites on: nothingListed set while one covered PR lists acceptances (the invariant: no sheet says nothing to accept while a PR it covers lists some).
-    # Axis: the flag is true exactly when no covered body lists an acceptance, and then there is no body card.
+    # Axis: the flag is true exactly when no covered body lists an acceptance, and then the sheet has only its 2 leftover cards; the fold item that accounts for what is listed makes the third.
     out = tmp_path / "sheet.json"
-    code, result = main_build(capsys, TWIN, out, {241: first, 242: second})
+    source = written_input(tmp_path, TWIN, fold_all(read_bodies({241: first, 242: second})))
+    code, result = main_build(capsys, TWIN, out, {241: first, 242: second}, advisor=source)
     assert code == 0, result
     sheet = json.loads(out.read_text(encoding="utf-8"))
     assert sheet["prSheet"].get("nothingListed") is (True if said else None)
-    assert (len(body_cards(sheet)) == 0) is said
+    assert (len(sheet["cards"]) == 2) is said and a_cards(sheet) == []
 
 
 @pytest.mark.parametrize("path, count", [
@@ -2566,35 +2763,57 @@ def test_the_reader_fails_closed_on_the_edges_of_a_body(body, expected):
     assert pr_sheet.accepting_listed(body) == expected
 
 
-def test_two_identical_bullets_give_two_cards_with_different_ids_that_rebuild_the_same():
-    # Bites on: two identical acceptances sharing one card id (a refusal at build) or being merged into one card, or an id that moves on a rebuild.
-    # Axis: E6: the place among identical bullets is part of the card's identity, so each keeps its own stable id.
+def test_two_identical_bullets_have_different_ids_and_each_needs_its_own_entry():
+    # Bites on: two identical acceptances sharing one bullet id, so one accounting entry covers both, or an id that moves on a rebuild.
+    # Axis: E6: the place among identical bullets is part of the bullet's identity: one entry leaves exactly the second one unaccounted for, and both entries build the same sheet twice.
     body = ACCEPTING + "\n- Same words.\n- Same words.\n"
-    sheet = with_bodies(SMALL, {211: body})
-    cards = body_cards(sheet)
-    assert len(cards) == 2 and cards[0]["id"] != cards[1]["id"] and cards[0]["question"] == cards[1]["question"] == "Same words."
-    assert [c["id"] for c in body_cards(with_bodies(SMALL, {211: body}))] == [c["id"] for c in cards]
+    first, second = (bullet for bullet, _ in pr_sheet.listed_bullets(211, body))
+    assert first != second and [bullet for bullet, _ in pr_sheet.listed_bullets(211, body)] == [first, second]
+
+    def fold(*entries):
+        def edit(advisor):
+            advisor["items"] = [{"id": "same", "kind": "Accept", "title": "Same words", "ifLeft": ["One.", "Two."], "options": "none"}]
+            advisor["accounting"] = {bullet: {"fold": "same", "line": n} for n, bullet in entries}
+        return edit
+    (problem,) = refused_with_bodies(SMALL, {211: body}, fold((1, first)))
+    assert second in problem and first not in problem and "is not accounted for" in problem
+    sheet = with_bodies(SMALL, {211: body}, fold((1, first), (2, second)))
+    assert card_ids(sheet) == card_ids(with_bodies(SMALL, {211: body}, fold((1, first), (2, second)))) and a_cards(sheet) == []
     assert "nothingListed" not in sheet["prSheet"]
 
 
-def test_a_build_given_no_bodies_has_no_body_card_and_no_nothing_listed():
-    # Bites on: the API building body cards or recording nothingListed from bodies it was never given.
-    # Axis: E10: bodies=None is a sheet that was not checked against the bodies: no a- card and no nothingListed, on a sheet with no cards and on one with.
+def test_a_build_given_no_bodies_makes_no_accounting_check_and_has_no_nothing_listed():
+    # Bites on: the API checking an accounting, or recording nothingListed, from bodies it was never given.
+    # Axis: E10: bodies=None is a sheet that was not checked against the bodies: no a- card and no nothingListed, on a sheet with no cards and on one with, and an accounting it is given is ignored, however malformed.
     for case in (SMALL, TWIN, BIG):
         sheet = built(case)
-        assert body_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"], case
+        assert a_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"], case
+    records, advisor = bundle(TWIN)
+    advisor["accounting"] = ["not", "an", "object"]
+    sheet = build(records, advisor)
+    assert sheet == built(TWIN)
 
 
 @pytest.mark.parametrize("body", ["body-none.md", "body-absent.md"])
-def test_a_pr_whose_body_lists_nothing_is_built_with_nothing_listed_and_no_body_card(tmp_path, capsys, body):
+def test_a_pr_whose_body_lists_nothing_is_built_with_nothing_listed_and_no_card(tmp_path, capsys, body):
     # Bites on: a body with no acceptance (None, or no heading at all) leaving nothingListed off, or inventing a card.
     # Axis: E1 and E3 through the command: the sheet records that the body was read and lists none.
     out = tmp_path / "sheet.json"
     code, said = main_build(capsys, SMALL, out, {211: FIXTURES / body})
     assert code == 0, said
     sheet = json.loads(out.read_text(encoding="utf-8"))
-    assert body_cards(sheet) == [] and sheet["prSheet"]["nothingListed"] is True
+    assert sheet["cards"] == [] and sheet["prSheet"]["nothingListed"] is True
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_an_empty_accounting_beside_bodies_that_list_nothing_builds_and_a_stray_key_does_not():
+    # Bites on: an empty accounting being refused when nothing is listed, or a key that names no acceptance being let through because no body lists one.
+    # Axis: E9: bodies that list nothing with accounting {} build with nothingListed; the same with one key are refused for that key.
+    nothing = {211: NONE_BODY.read_text(encoding="utf-8")}
+    sheet = with_bodies(SMALL, nothing, lambda advisor: advisor.update(accounting={}))
+    assert sheet["prSheet"]["nothingListed"] is True and sheet["cards"] == []
+    assert refused_with_bodies(SMALL, nothing, lambda advisor: advisor.update(accounting={"211:0123456789": {"item": "x"}})) == [
+        'accounting key "211:0123456789" names no acceptance in the covered PR bodies']
 
 
 @pytest.mark.parametrize("recorded, said, other", [
@@ -2619,13 +2838,20 @@ def test_the_built_index_row_of_a_zero_card_sheet_says_nothing_only_when_the_she
     assert row["total"] == 0 and row["caption"].split(" · ")[0] == said and other not in row["caption"]
 
 
+def accounted_twin():
+    """The twin stack's input with its 5 listed acceptances folded into one item."""
+    advisor = load("input-twin.json")
+    fold_all(read_bodies(BODY_TWIN))(advisor)
+    return advisor
+
+
 def twin_world(tmp_path, capsys):
     """The twin stack's first sheet at tmp_path/earlier/sheet.json, and the store of an owner who accepted every card and gave a Merge on it.
 
     Returns the sheet's bytes, the store and the card ids. Every card here has no options, so Accept is the answer to each."""
     (tmp_path / "earlier").mkdir()
     first = tmp_path / "earlier" / "sheet.json"
-    code, said = main_build(capsys, TWIN, first, BODY_TWIN)
+    code, said = main_build(capsys, TWIN, first, BODY_TWIN, advisor=write_json(tmp_path / "first.json", accounted_twin()))
     assert code == 0, said
     raw = first.read_bytes()
     ids = [c["id"] for c in json.loads(raw)["cards"]]
@@ -2635,38 +2861,37 @@ def twin_world(tmp_path, capsys):
 
 
 def carried_twin(tmp_path, capsys, bodies, name):
-    """The twin stack's sheet carried forward from twin_world's, built from `bodies`; returns its bytes."""
-    source = tmp_path / "in.json"
-    source.write_text(json.dumps(carry_input(load("input-twin.json"), {"241": "1" * 40, "242": "2" * 40})), encoding="utf-8")
-    code, said = main_build(capsys, TWIN, tmp_path / name, bodies, advisor=source)
-    assert code == 0, said
-    return (tmp_path / name).read_bytes()
+    """The twin stack carried forward from twin_world's sheet, its accounting unchanged, built from `bodies`; returns main's exit code and result."""
+    source = write_json(tmp_path / "in.json", carry_input(accounted_twin(), {"241": "1" * 40, "242": "2" * 40}))
+    return main_build(capsys, TWIN, tmp_path / name, bodies, advisor=source)
 
 
-def test_a_carry_over_unchanged_bodies_keeps_every_id_and_the_merge_and_an_edited_bullet_costs_one_answer(tmp_path, capsys):
-    # Bites on: a body card's id moving across a carry (the saved answers and the Merge are lost), or one edited bullet moving more than its own card.
-    # Axis: ids are the PR, the bullet's text and its place among identical ones, nothing else: the carry keeps 7 of 7 answers and the Merge, and an edit to one bullet's text leaves 6 of 7 and the owner to look.
+def test_a_carry_over_unchanged_bodies_and_accounting_keeps_every_id_and_the_merge_and_an_edited_bullet_must_be_accounted_again(tmp_path, capsys):
+    # Bites on: a card's id moving across a carry (the saved answers and the Merge are lost), or a bullet edited after the accounting was written being built as though it were still accounted for.
+    # Axis: ids are the PR, the input's own item and the card's words, nothing about the bodies: the carry keeps 3 of 3 answers and the Merge; an edit to one bullet's text re-keys it, so its old entry names no acceptance and the new text is unaccounted for.
     raw, store, ids = twin_world(tmp_path, capsys)
-    assert len(ids) == 7 and len(set(ids)) == 7
+    assert len(ids) == 3 and len(set(ids)) == 3 and [i[:2] for i in ids] == ["f-", "f-", "i-"]
     before = pr_sheet.pr_state(raw, store)
-    assert (before["state"], before["accepted"], before["total"]) == ("ready", 7, 7)
-    carried = carried_twin(tmp_path, capsys, BODY_TWIN, "carried.json")
+    assert (before["state"], before["accepted"], before["total"]) == ("ready", 3, 3)
+    code, said = carried_twin(tmp_path, capsys, BODY_TWIN, "carried.json")
+    assert code == 0, said
+    carried = (tmp_path / "carried.json").read_bytes()
     sheet = json.loads(carried)
     assert sheet["prSheet"]["carriedForward"]["sheets"] == [hashlib.sha256(raw).hexdigest()] and sheet["prSheet"]["commit"] == "2" * 40
-    assert [c["id"] for c in sheet["cards"]] == ids
+    assert [c["id"] for c in sheet["cards"]] == ids and a_cards(sheet) == []
     after = pr_sheet.pr_state(carried, store)
-    assert (after["state"], after["accepted"], after["total"]) == ("ready", 7, 7)
+    assert (after["state"], after["accepted"], after["total"]) == ("ready", 3, 3)
     edited = tmp_path / "body-242-edited.md"
     text = BODY_TWIN[242].read_text(encoding="utf-8")
     edited.write_text(text.replace("a large file takes about twice as long", "a large file takes about three times as long"), encoding="utf-8")
     assert edited.read_text(encoding="utf-8") != text
-    again = carried_twin(tmp_path, capsys, {241: BODY_TWIN[241], 242: edited}, "edited.json")
-    cards = json.loads(again)["cards"]
-    moved = [n for n, card in enumerate(cards) if card["id"] != ids[n]]
-    assert len(cards) == 7 and len(moved) == 1
-    assert cards[moved[0]]["id"].startswith("a-") and cards[moved[0]]["callKind"] == "Accept · #242" and cards[moved[0]]["question"] == TWIN_QUESTIONS[3]
-    state = pr_sheet.pr_state(again, store)
-    assert (state["state"], state["accepted"], state["total"]) == ("needs-you", 6, 7)
+    code, said = carried_twin(tmp_path, capsys, {241: BODY_TWIN[241], 242: edited}, "edited.json")
+    assert code == 1 and not (tmp_path / "edited.json").exists()
+    old = {bullet for bullet, _ in pr_sheet.listed_bullets(242, text)} - {bullet for bullet, _ in pr_sheet.listed_bullets(242, edited.read_text(encoding="utf-8"))}
+    (gone,) = old
+    assert len(said["problems"]) == 2
+    assert said["problems"][0].startswith("PR #242's acceptance 242:") and "is not accounted for" in said["problems"][0]
+    assert said["problems"][1] == f'accounting key "{gone}" names no acceptance in the covered PR bodies'
 
 
 def refused_small(capsys, tmp_path, *values):
@@ -2729,14 +2954,3 @@ def test_pr_body_on_the_index_command_is_a_parser_error(tmp_path, capsys):
     assert caught.value.code == 2
     assert "--pr-body is only for build" in capsys.readouterr().err
 
-
-def test_the_pointer_scan_leaves_a_bodys_acceptance_alone():
-    # Bites on: the pointer scan refusing a sheet because a PR body's own wording says "decision item 12", which is not the advisor's wording and is not the advisor's to change.
-    # Axis: an option-less Accept card built from a body is never scanned, while the same words on an option-less item are still refused (so the scan is live here).
-    body = ACCEPTING + "\n- **Check decision item 12 first.** The owner settled it in the list.\n"
-    sheet = with_bodies(SMALL, {211: body})
-    (card,) = body_cards(sheet)
-    assert "decision item 12" in card["question"] and card["options"] == []
-    records, advisor = bundle(SMALL)
-    advisor["items"] = [{"id": "check", "kind": "Wording to confirm", "title": "Check decision item 12 first.", "ifLeft": "Nothing moves.", "options": "none"}]
-    assert any("sends the owner to a list item" in p for p in problems_of(records, advisor))
