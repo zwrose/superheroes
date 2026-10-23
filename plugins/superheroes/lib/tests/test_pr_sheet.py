@@ -2764,6 +2764,10 @@ READER_CASES = [
     pytest.param(ACCEPTING + "- One.\n<!-- open\n- Two.\n## Next\n-->\n", ["One. <!-- open", "Two."], id="a-closing-marker-in-a-later-section-does-not-close-the-block"),
     pytest.param(ACCEPTING + "<!-- begin --> Cold starts now take a minute. <!-- end -->\n", ["<!-- begin --> Cold starts now take a minute. <!-- end -->"], id="visible-text-between-two-comments-is-kept"),
     pytest.param("## What's changing\n\n- ```python\n  print('example')\n  ```\n\n" + ACCEPTING + "- The cache is cleared on every upgrade.\n", ["The cache is cleared on every upgrade."], id="a-fence-opened-in-a-list-item-does-not-hide-the-section"),
+    pytest.param("- ```python\n\tpass\n\t```\n\n" + ACCEPTING + "- Cold starts now take a minute.\n", ["Cold starts now take a minute."], id="a-tab-indented-closing-fence-in-a-list-item-closes-it"),
+    pytest.param("10. ```python\n\tpass\n\t```\n\n" + ACCEPTING + "- Cold starts now take a minute.\n", ["Cold starts now take a minute."], id="a-tab-indented-closing-fence-in-an-ordered-item-closes-it"),
+    pytest.param("- ```python\n  print(1)\n\n" + ACCEPTING + "\n- Cold starts now take a minute.\n", ["Cold starts now take a minute."], id="an-unclosed-list-fence-ends-with-its-list-item"),
+    pytest.param("- ```python\n  print(1)\n\n  ## What we're accepting\n- Hidden.\n", [], id="a-heading-inside-the-list-item-stays-fenced"),
 ]
 
 
@@ -2791,6 +2795,19 @@ def test_two_identical_bullets_have_different_ids_and_each_needs_its_own_entry()
     sheet = with_bodies(SMALL, {211: body}, fold((1, first), (2, second)))
     assert card_ids(sheet) == card_ids(with_bodies(SMALL, {211: body}, fold((1, first), (2, second)))) and a_cards(sheet) == []
     assert "nothingListed" not in sheet["prSheet"]
+
+
+def test_a_fold_naming_an_item_with_no_ifleft_is_refused_not_a_key_error():
+    # Bites on: the accounting check reading ifLeft with a subscript, so a fold onto an item missing it raises KeyError past the Refusal.
+    # Axis: E6: a malformed item is a refusal naming the missing field, never a traceback.
+    body = ACCEPTING + "\n- Routine note.\n"
+    ((bullet, _),) = pr_sheet.listed_bullets(211, body)
+
+    def edit(advisor):
+        advisor["items"] = [{"id": "fold", "kind": "Accept", "title": "Notes", "options": "none"}]
+        advisor["accounting"] = {bullet: {"fold": "fold", "line": 1}}
+    problems = refused_with_bodies(SMALL, {211: body}, edit)
+    assert any("ifLeft" in p for p in problems)
 
 
 def test_a_build_given_no_bodies_makes_no_accounting_check_and_has_no_nothing_listed():

@@ -227,14 +227,19 @@ def _outside_comments(lines):
     (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
     A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
     outside fences only."""
-    kept, fence, listed, inside, level = [], None, False, False, None
+    kept, fence, column, inside, level = [], None, 0, False, None
     for n, line in enumerate(lines):
         if fence is not None:
-            kept.append((line, True))
-            indent = " *" if listed else " {0,3}"  # a fence opened in a list item closes at the item's content column
-            closing = re.match("^" + indent + "(" + re.escape(fence[0]) + "{" + str(len(fence)) + r",})[ \t]*$", line)
-            fence = None if closing else fence
-            continue
+            spaced = line.expandtabs(4)  # a tab reaches the next multiple of four columns
+            lead = len(spaced) - len(spaced.lstrip(" "))
+            if column and line.strip() and lead < column:
+                fence = None  # a fence opened in a list item ends where the item does: this line is outside it
+            else:
+                kept.append((line, True))
+                # the closing fence sits 0-3 columns past the container's content column (column 0 outside a list)
+                closing = lead - column <= 3 and re.match(" *" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$", spaced)
+                fence = None if closing else fence
+                continue
         if inside:
             inside = "-->" not in line
             if not inside and line.split("-->", 1)[1].strip():
@@ -247,7 +252,7 @@ def _outside_comments(lines):
             continue
         opening = _FENCE.match(line)
         fence = opening.group(2) if opening else None
-        listed = bool(opening and opening.group(1))
+        column = len(line[:opening.start(2)].expandtabs(4)) if opening and opening.group(1) else 0
         accepting = None if opening else _ACCEPTING.match(line)
         level = len(accepting.group(1)) if accepting else level
         kept.append((line, opening is not None))
@@ -727,7 +732,7 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
                 problems.append(f'{shown} names item "{value["item"]}", which is not in items')
             elif targets[0] == "fold":
                 folded = items.get(value["fold"]) if isinstance(value["fold"], str) else None
-                notes = folded["ifLeft"] if folded is not None else None
+                notes = folded.get("ifLeft") if folded is not None else None
                 if not (isinstance(notes, list) and _num(value["line"]) and value["line"] <= len(notes)):
                     problems.append(f'{shown} names fold "{value["fold"]}" line {value["line"]}, which is not a line of that item\'s ifLeft list')
             elif targets[0] == "leftover" and not (isinstance(value["leftover"], str) and value["leftover"] in leftovers
