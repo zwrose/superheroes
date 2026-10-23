@@ -2412,3 +2412,315 @@ def test_a_collector_input_that_breaks_a_rule_is_refused(edit, expected):
     records, advisor = bundle(COLLECTOR)
     edit(advisor)
     assert any(expected in p for p in problems_of(records, advisor))
+
+
+# --- the PR body's What we're accepting: one Accept card per listed acceptance ---
+
+VET_SLOT = Path(__file__).resolve().parent / "fixtures" / "vet_slot"
+BODY_TWIN = {241: FIXTURES / "body-twin-241.md", 242: FIXTURES / "body-twin-242.md"}
+NONE_BODY = FIXTURES / "body-none.md"
+ACCEPTING = "## What we're accepting\n"
+TWIN_QUESTIONS = ["The parser keeps its old name.", "The cache is cleared on upgrade.", "The error text changed.",
+                  "The report step reads files twice.", "A plain bullet with no bold lead: the report's title line now names the file."]
+
+
+def run_main(capsys, *argv):
+    """The command through main; returns its exit code and the one JSON line it printed."""
+    code = pr_sheet.main([str(arg) for arg in argv])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def main_build(capsys, case, out, bodies, advisor=None):
+    """A build of case through main with a --pr-body N=FILE for each of bodies; advisor is the input file when it is not the case's own."""
+    argv = ["build", "--input", advisor or FIXTURES / case[1], "--out", out]
+    for record in case[0]:
+        argv += ["--record", FIXTURES / record]
+    for number, file in bodies.items():
+        argv += ["--pr-body", f"{number}={file}"]
+    return run_main(capsys, *argv)
+
+
+def with_bodies(case, bodies):
+    records, advisor = bundle(case)
+    return pr_sheet.build(records, advisor, WORDS, bodies=bodies)
+
+
+def body_cards(sheet):
+    return [c for c in sheet["cards"] if c["id"].startswith("a-")]
+
+
+def test_a_stacks_bodies_give_one_accept_card_per_listed_acceptance_after_the_leftovers(tmp_path, capsys):
+    # Bites on: the body cards left out, put before the leftover cards, given the wrong PR, or given options; nothingListed set on a sheet whose bodies list acceptances.
+    # Axis: the two-PR stack's bodies list 3 and 2 acceptances, and the sheet has exactly those 5 body cards, in body order, after its 2 leftover cards, and no nothingListed.
+    out = tmp_path / "sheet.json"
+    code, said = main_build(capsys, TWIN, out, BODY_TWIN)
+    assert code == 0 and said["cards"] == 7, said
+    sheet = json.loads(out.read_text(encoding="utf-8"))
+    cards = sheet["cards"]
+    assert [c["id"][:2] for c in cards] == ["f-"] * 2 + ["a-"] * 5
+    listed = cards[2:]
+    assert [c["callKind"] for c in listed] == ["Accept · #241"] * 3 + ["Accept · #242"] * 2
+    assert [c["question"] for c in listed] == TWIN_QUESTIONS
+    assert all(c["options"] == [] and "recommendation" not in c for c in listed)
+    assert [s["title"] for c in listed for s in c["context"]] == ["Listed in PR #241's What we're accepting"] * 3 + ["Listed in PR #242's What we're accepting"] * 2
+    assert all(len(c["context"]) == 1 and list(c["context"][0]["blocks"][0]) == ["quote"] for c in listed)
+    assert listed[1]["context"][0]["blocks"][0]["quote"].startswith("**The cache is cleared on upgrade.** Cached parses")
+    assert "1. The on-disk cache is deleted at start." in listed[1]["context"][0]["blocks"][0]["quote"]
+    assert "nothingListed" not in sheet["prSheet"]
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_a_stack_built_with_a_covered_prs_body_missing_is_refused_naming_that_pr(tmp_path, capsys):
+    # Bites on: a covered PR with no --pr-body being built as though it listed nothing, or the problem not naming the PR.
+    # Axis: E7: with no --pr-body one problem names #241 and one names #242; with only #241's body one names #242 alone; nothing is written.
+    out = tmp_path / "sheet.json"
+    code, said = main_build(capsys, TWIN, out, {})
+    assert code == 1 and said["ok"] is False and not out.exists()
+    assert len(said["problems"]) == 2
+    assert said["problems"][0].startswith("PR #241 has no body: give --pr-body 241=<file>")
+    assert said["problems"][1].startswith("PR #242 has no body: give --pr-body 242=<file>")
+    code, said = main_build(capsys, TWIN, out, {241: BODY_TWIN[241]})
+    assert code == 1 and not out.exists()
+    assert len(said["problems"]) == 1 and said["problems"][0].startswith("PR #242 has no body: give --pr-body 242=<file>")
+
+
+@pytest.mark.parametrize("first, second, said", [
+    pytest.param(BODY_TWIN[241], NONE_BODY, False, id="first-lists-some"),
+    pytest.param(NONE_BODY, BODY_TWIN[242], False, id="second-lists-some"),
+    pytest.param(NONE_BODY, NONE_BODY, True, id="both-list-none"),
+])
+def test_a_stack_says_nothing_listed_only_when_every_covered_body_lists_none(tmp_path, capsys, first, second, said):
+    # Bites on: nothingListed set while one covered PR lists acceptances (the invariant: no sheet says nothing to accept while a PR it covers lists some).
+    # Axis: the flag is true exactly when no covered body lists an acceptance, and then there is no body card.
+    out = tmp_path / "sheet.json"
+    code, result = main_build(capsys, TWIN, out, {241: first, 242: second})
+    assert code == 0, result
+    sheet = json.loads(out.read_text(encoding="utf-8"))
+    assert sheet["prSheet"].get("nothingListed") is (True if said else None)
+    assert (len(body_cards(sheet)) == 0) is said
+
+
+@pytest.mark.parametrize("path, count", [
+    pytest.param(BODY_TWIN[241], 3, id="twin-241"),
+    pytest.param(BODY_TWIN[242], 2, id="twin-242"),
+    pytest.param(VET_SLOT / "pr1442_body.md", 5, id="pr1442"),
+    pytest.param(VET_SLOT / "pr1437_body_legacy.md", 8, id="pr1437-legacy"),
+    pytest.param(NONE_BODY, 0, id="none"),
+    pytest.param(FIXTURES / "body-absent.md", 0, id="absent"),
+])
+def test_the_reader_counts_the_acceptances_of_a_body_file(path, count):
+    # Bites on: the reader missing, inventing or dropping an acceptance in a real body (counts measured with awk over the section's top-level bullets).
+    # Axis: E1 (no heading) and E3 (None) read as none; the twin, the live and the legacy bodies read as their bullet counts.
+    assert len(pr_sheet.accepting_listed(path.read_text(encoding="utf-8"))) == count
+
+
+@pytest.mark.parametrize("body", ["", None, 5, ["- an acceptance"], b"## What we're accepting\n- bytes\n"])
+def test_the_reader_gives_nothing_for_an_empty_or_non_text_body(body):
+    # Axis: E1: an empty string, None or anything that is not a string lists no acceptance.
+    assert pr_sheet.accepting_listed(body) == []
+
+
+READER_CASES = [
+    pytest.param("```\n## What we're accepting\n- fenced\n```\n", [], id="E4-heading-in-a-fence-is-not-the-section"),
+    pytest.param("~~~\n## What we're accepting\n- fenced\n~~~\n\n## What we're accepting\n- real\n", ["real"], id="E4-the-real-heading-after-a-fence"),
+    pytest.param(ACCEPTING + "- first\n  ```\n  ## Not a heading\n  ```\n- second\n", ["first ``` ## Not a heading ```", "second"], id="E4-heading-in-a-fence-in-the-section"),
+    pytest.param(ACCEPTING + "- one\n# Top\n- two\n", ["one"], id="a-heading-outside-a-fence-ends-it"),
+    pytest.param("## Something else\n- not mine\n", [], id="E1-other-headings-only"),
+    pytest.param(ACCEPTING + "\n## Next\n- not mine\n", [], id="E2-empty-section"),
+    pytest.param(ACCEPTING, [], id="E2-heading-and-nothing-after"),
+    pytest.param(ACCEPTING + "<!-- fill this in -->\n\n## Next\n", [], id="E2-only-a-comment"),
+    pytest.param(ACCEPTING + "- None.\n", [], id="E3-none-bullet-with-a-dot"),
+    pytest.param(ACCEPTING + "- None.\n- A real one.\n", ["A real one."], id="E3-none-bullet-dropped-beside-a-real-one"),
+    pytest.param(ACCEPTING + "- N/A\n", [], id="E3-n-a-bullet"),
+    pytest.param(ACCEPTING + "- n/a.\n", [], id="E3-lowercase-n-a-bullet-with-a-dot"),
+    pytest.param(ACCEPTING + "- NA\n", [], id="E3-na-bullet"),
+    pytest.param(ACCEPTING + "- Nothing\n", [], id="E3-nothing-bullet"),
+    pytest.param(ACCEPTING + "None\n", [], id="E3-none-paragraph"),
+    pytest.param(ACCEPTING + "N/A.\n", [], id="E3-n-a-paragraph-with-a-dot"),
+    pytest.param(ACCEPTING + "The schema is wider now.\n", ["The schema is wider now."], id="E5-an-unrecognised-paragraph-counts"),
+    pytest.param(ACCEPTING + "- text <!-- note -->\n", ["text"], id="a-comment-beside-text-is-cut"),
+    pytest.param(ACCEPTING + "- Same words.\n- Same words.\n", ["Same words.", "Same words."], id="E6-identical-bullets-are-two"),
+]
+
+
+@pytest.mark.parametrize("body, expected", READER_CASES)
+def test_the_reader_fails_closed_on_the_edges_of_a_body(body, expected):
+    # Bites on: a fenced heading read as the section, a fenced heading ending it, None or N/A kept, an unrecognised line dropped, a comment's text kept, or a repeated bullet merged.
+    # Axis: E1, E2, E3, E4, E5 and E6: an unrecognised line is an acceptance (never dropped), and only the listed none-words are not.
+    assert pr_sheet.accepting_listed(body) == expected
+
+
+def test_two_identical_bullets_give_two_cards_with_different_ids_that_rebuild_the_same():
+    # Bites on: two identical acceptances sharing one card id (a refusal at build) or being merged into one card, or an id that moves on a rebuild.
+    # Axis: E6: the place among identical bullets is part of the card's identity, so each keeps its own stable id.
+    body = ACCEPTING + "\n- Same words.\n- Same words.\n"
+    sheet = with_bodies(SMALL, {211: body})
+    cards = body_cards(sheet)
+    assert len(cards) == 2 and cards[0]["id"] != cards[1]["id"] and cards[0]["question"] == cards[1]["question"] == "Same words."
+    assert [c["id"] for c in body_cards(with_bodies(SMALL, {211: body}))] == [c["id"] for c in cards]
+    assert "nothingListed" not in sheet["prSheet"]
+
+
+def test_a_build_given_no_bodies_has_no_body_card_and_no_nothing_listed():
+    # Bites on: the API building body cards or recording nothingListed from bodies it was never given.
+    # Axis: E10: bodies=None is a sheet that was not checked against the bodies: no a- card and no nothingListed, on a sheet with no cards and on one with.
+    for case in (SMALL, TWIN, BIG):
+        sheet = built(case)
+        assert body_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"], case
+
+
+@pytest.mark.parametrize("body", ["body-none.md", "body-absent.md"])
+def test_a_pr_whose_body_lists_nothing_is_built_with_nothing_listed_and_no_body_card(tmp_path, capsys, body):
+    # Bites on: a body with no acceptance (None, or no heading at all) leaving nothingListed off, or inventing a card.
+    # Axis: E1 and E3 through the command: the sheet records that the body was read and lists none.
+    out = tmp_path / "sheet.json"
+    code, said = main_build(capsys, SMALL, out, {211: FIXTURES / body})
+    assert code == 0, said
+    sheet = json.loads(out.read_text(encoding="utf-8"))
+    assert body_cards(sheet) == [] and sheet["prSheet"]["nothingListed"] is True
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("recorded, said, other", [
+    pytest.param(True, INDEX_WORDS["nothingToAccept"], INDEX_WORDS["acceptingUnchecked"], id="recorded"),
+    pytest.param(False, INDEX_WORDS["acceptingUnchecked"], INDEX_WORDS["nothingToAccept"], id="not-recorded"),
+])
+def test_the_built_index_row_of_a_zero_card_sheet_says_nothing_only_when_the_sheet_recorded_it(tmp_path, recorded, said, other):
+    # Bites on: the index row's caption saying "Nothing to accept" of a sheet that never recorded that its PR bodies list none.
+    # Axis: through the built index, a zero-card sheet's first caption part is index.nothingToAccept with nothingListed and index.acceptingUnchecked without it.
+    sheet = built(SMALL)
+    assert sheet["cards"] == [] and "nothingListed" not in sheet["prSheet"]
+    root = tmp_path / "in"
+    (root / "s").mkdir(parents=True)
+    (root / "s" / "sheet.json").write_bytes(sheet_bytes(with_nothing_listed(sheet) if recorded else sheet))
+    write_json(root / "s" / "store.json", {})
+    source = write_json(root / "index.json", {"schema": "index-input/1", "questions": [], "mergeOrder": [211], "prs": [
+        {"number": 211, "link": "https://sheets.example.test/pr-211", "sheet": "s/sheet.json", "store": "s/store.json"}]})
+    (tmp_path / "out").mkdir()
+    done = index_cli(source, tmp_path / "out" / "index.json")
+    assert done.returncode == 0, done.stdout
+    (row,) = json.loads((tmp_path / "out" / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
+    assert row["total"] == 0 and row["caption"].split(" · ")[0] == said and other not in row["caption"]
+
+
+def twin_world(tmp_path, capsys):
+    """The twin stack's first sheet at tmp_path/earlier/sheet.json, and the store of an owner who accepted every card and gave a Merge on it.
+
+    Returns the sheet's bytes, the store and the card ids. Every card here has no options, so Accept is the answer to each."""
+    (tmp_path / "earlier").mkdir()
+    first = tmp_path / "earlier" / "sheet.json"
+    code, said = main_build(capsys, TWIN, first, BODY_TWIN)
+    assert code == 0, said
+    raw = first.read_bytes()
+    ids = [c["id"] for c in json.loads(raw)["cards"]]
+    digest = hashlib.sha256(raw).hexdigest()
+    store = store_of({i: card_doc("accept") for i in ids}, verdict=merge_doc([f"answers/{i}@{REV_A}" for i in ids], digest), digest=digest)
+    return raw, store, ids
+
+
+def carried_twin(tmp_path, capsys, bodies, name):
+    """The twin stack's sheet carried forward from twin_world's, built from `bodies`; returns its bytes."""
+    source = tmp_path / "in.json"
+    source.write_text(json.dumps(carry_input(load("input-twin.json"), {"241": "1" * 40, "242": "2" * 40})), encoding="utf-8")
+    code, said = main_build(capsys, TWIN, tmp_path / name, bodies, advisor=source)
+    assert code == 0, said
+    return (tmp_path / name).read_bytes()
+
+
+def test_a_carry_over_unchanged_bodies_keeps_every_id_and_the_merge_and_an_edited_bullet_costs_one_answer(tmp_path, capsys):
+    # Bites on: a body card's id moving across a carry (the saved answers and the Merge are lost), or one edited bullet moving more than its own card.
+    # Axis: ids are the PR, the bullet's text and its place among identical ones, nothing else: the carry keeps 7 of 7 answers and the Merge, and an edit to one bullet's text leaves 6 of 7 and the owner to look.
+    raw, store, ids = twin_world(tmp_path, capsys)
+    assert len(ids) == 7 and len(set(ids)) == 7
+    before = pr_sheet.pr_state(raw, store)
+    assert (before["state"], before["accepted"], before["total"]) == ("ready", 7, 7)
+    carried = carried_twin(tmp_path, capsys, BODY_TWIN, "carried.json")
+    sheet = json.loads(carried)
+    assert sheet["prSheet"]["carriedForward"]["sheets"] == [hashlib.sha256(raw).hexdigest()] and sheet["prSheet"]["commit"] == "2" * 40
+    assert [c["id"] for c in sheet["cards"]] == ids
+    after = pr_sheet.pr_state(carried, store)
+    assert (after["state"], after["accepted"], after["total"]) == ("ready", 7, 7)
+    edited = tmp_path / "body-242-edited.md"
+    text = BODY_TWIN[242].read_text(encoding="utf-8")
+    edited.write_text(text.replace("a large file takes about twice as long", "a large file takes about three times as long"), encoding="utf-8")
+    assert edited.read_text(encoding="utf-8") != text
+    again = carried_twin(tmp_path, capsys, {241: BODY_TWIN[241], 242: edited}, "edited.json")
+    cards = json.loads(again)["cards"]
+    moved = [n for n, card in enumerate(cards) if card["id"] != ids[n]]
+    assert len(cards) == 7 and len(moved) == 1
+    assert cards[moved[0]]["id"].startswith("a-") and cards[moved[0]]["callKind"] == "Accept · #242" and cards[moved[0]]["question"] == TWIN_QUESTIONS[3]
+    state = pr_sheet.pr_state(again, store)
+    assert (state["state"], state["accepted"], state["total"]) == ("needs-you", 6, 7)
+
+
+def refused_small(capsys, tmp_path, *values):
+    """The small PR's build through main with these --pr-body values, which must be refused with nothing written; returns the problems."""
+    out = tmp_path / "sheet.json"
+    argv = ["build", "--record", FIXTURES / "record-small.json", "--input", FIXTURES / "input-small.json", "--out", out]
+    for value in values:
+        argv += ["--pr-body", value]
+    code, said = run_main(capsys, *argv)
+    assert code == 1 and said["ok"] is False and not out.exists()
+    return said["problems"]
+
+
+@pytest.mark.parametrize("value", ["x", "0=f", "abc=f", "211"])
+def test_a_pr_body_value_that_is_not_a_number_and_a_file_is_refused(tmp_path, capsys, value):
+    # Bites on: a malformed --pr-body crashing, being skipped, or raising a parser error instead of a refusal problem.
+    # Axis: E8: the problem is exactly the one line, the command exits 1 and nothing is written.
+    assert refused_small(capsys, tmp_path, value) == [f"--pr-body '{value}' must be <PR number>=<file>"]
+
+
+def test_a_repeated_pr_body_is_refused_once_however_often_it_repeats(tmp_path, capsys):
+    # Bites on: a repeated --pr-body silently taking the first or last, or the refusal repeated for every repeat.
+    # Axis: E8: one problem naming the PR.
+    body = f"211={NONE_BODY}"
+    assert refused_small(capsys, tmp_path, body, body) == ["--pr-body names PR #211 more than once"]
+    assert refused_small(capsys, tmp_path, body, body, body) == ["--pr-body names PR #211 more than once"]
+
+
+def test_a_pr_body_naming_a_pr_the_sheet_does_not_cover_is_refused(tmp_path, capsys):
+    # Bites on: a body for a PR outside the sheet being ignored.
+    # Axis: E8: the extra --pr-body is one problem that names the PR, on a pr sheet and on a stack.
+    assert refused_small(capsys, tmp_path, f"211={NONE_BODY}", f"999={NONE_BODY}") == ["--pr-body names PR #999, which the sheet does not cover"]
+    out = tmp_path / "stack.json"
+    code, said = main_build(capsys, TWIN, out, {**BODY_TWIN, 243: NONE_BODY})
+    assert code == 1 and said["problems"] == ["--pr-body names PR #243, which the sheet does not cover"] and not out.exists()
+
+
+def test_a_pr_body_file_that_cannot_be_read_is_refused_naming_the_file(tmp_path, capsys):
+    # Bites on: an unreadable body crashing, or being read as an empty body that lists nothing.
+    # Axis: E9: one problem that names the file and the PR; nothing is written.
+    missing = tmp_path / "missing.md"
+    (problem,) = refused_small(capsys, tmp_path, f"211={missing}")
+    assert problem.startswith(f"{missing} could not be read as PR #211's body: ")
+
+
+def test_a_pr_body_file_that_is_not_utf_8_is_refused_naming_the_file(tmp_path, capsys):
+    # Bites on: a body that is not UTF-8 being decoded with replacement characters, so a sheet is built from a body that was not read.
+    # Axis: E9: one problem that names the file and the PR; nothing is written.
+    binary = tmp_path / "binary.md"
+    binary.write_bytes(ACCEPTING.encode("utf-8") + b"- caf\xe9 \xff\xfe\n")
+    (problem,) = refused_small(capsys, tmp_path, f"211={binary}")
+    assert problem.startswith(f"{binary} could not be read as PR #211's body: 'utf-8' codec can't decode byte")
+
+
+def test_pr_body_on_the_index_command_is_a_parser_error(tmp_path, capsys):
+    # Bites on: `index` taking --pr-body and ignoring it.
+    # Axis: E8: the parser refuses it before anything is read, exit status 2 and the words on stderr.
+    with pytest.raises(SystemExit) as caught:
+        pr_sheet.main(["index", "--input", str(tmp_path / "in.json"), "--out", str(tmp_path / "out.json"), "--pr-body", f"211={NONE_BODY}"])
+    assert caught.value.code == 2
+    assert "--pr-body is only for build" in capsys.readouterr().err
+
+
+def test_the_pointer_scan_leaves_a_bodys_acceptance_alone():
+    # Bites on: the pointer scan refusing a sheet because a PR body's own wording says "decision item 12", which is not the advisor's wording and is not the advisor's to change.
+    # Axis: an option-less Accept card built from a body is never scanned, while the same words on an option-less item are still refused (so the scan is live here).
+    body = ACCEPTING + "\n- **Check decision item 12 first.** The owner settled it in the list.\n"
+    sheet = with_bodies(SMALL, {211: body})
+    (card,) = body_cards(sheet)
+    assert "decision item 12" in card["question"] and card["options"] == []
+    records, advisor = bundle(SMALL)
+    advisor["items"] = [{"id": "check", "kind": "Wording to confirm", "title": "Check decision item 12 first.", "ifLeft": "Nothing moves.", "options": "none"}]
+    assert any("sends the owner to a list item" in p for p in problems_of(records, advisor))

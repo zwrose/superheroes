@@ -568,6 +568,24 @@ def test_no_cards_reads_the_nothing_to_accept_words_and_still_draws_the_verdict(
     assert PW["nothingToAccept"] not in with_cards["result"]
 
 
+# Bites on: a zero-card pr or stack sheet saying "nothing to accept" (in the accepting part or in the app bar's count) when it did not record that its PR bodies list none, or the recorded one saying it was not checked.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_a_zero_card_sheet_says_nothing_only_when_it_recorded_that_the_bodies_list_none(kind):
+    # Axis: the accepting part and the count are answered by prSheet.nothingListed alone: pr-nothing and nothingToAcceptCount with it, pr-unchecked and acceptingUncheckedCount without it.
+    scenario = """
+      return { order: order(), count: t.count(), accepting: elements["sheet-cards"].children.map((node) => node.textContent) };
+    """
+    listed = _page(_emptied(SAMPLES[kind]), scenario)["result"]
+    assert "pr-nothing" in listed["order"] and "pr-unchecked" not in listed["order"]
+    assert listed["count"] == PW["nothingToAcceptCount"]
+    assert PW["nothingToAccept"] in listed["accepting"] and PW["acceptingUnchecked"] not in listed["accepting"]
+    unchecked = _page(_emptied(SAMPLES[kind], listed=False), scenario)["result"]
+    assert "pr-unchecked" in unchecked["order"] and "pr-nothing" not in unchecked["order"]
+    assert unchecked["count"] == PW["acceptingUncheckedCount"] != PW["nothingToAcceptCount"]
+    assert PW["acceptingUnchecked"] in unchecked["accepting"] and PW["nothingToAccept"] not in unchecked["accepting"]
+    assert unchecked["order"][-1] == "sheet-verdict"
+
+
 # Bites on: a folded part drawn open, a wrong count or order or cue, a part that does not open on a tap, an entry not read "title — detail", a stack PR list line not "#number title · first 7", or an empty list's toggle kept.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
 def test_folded_parts_open_on_a_tap(kind):
