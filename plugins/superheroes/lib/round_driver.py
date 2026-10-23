@@ -61,6 +61,7 @@ import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
 import command_refusals  # noqa: E402
+import observed_refusals  # noqa: E402
 import mode_registry  # noqa: E402
 import decision_kinds  # noqa: E402
 import delta_surface  # noqa: E402
@@ -357,11 +358,8 @@ _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 CARRIED_DISCLOSURE_CHANNELS = receipt_disclosures.CARRIED_DISCLOSURE_CHANNELS
-_str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
-_adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
-_order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 build_degraded_prose = receipt_disclosures.build_degraded_prose
 degraded = receipt_disclosures.degraded
 base_degraded = receipt_disclosures.base_degraded
@@ -404,8 +402,6 @@ _driver_author_family = author_family
 _same_family_seats = same_family_seats
 _same_family_degraded = same_family_degraded
 _seat_map_violated = seat_map_violated
-_seat_map_violation_breach_prose = seat_map_violation_breach_prose
-_seat_pin_excused_seats = seat_pin_excused_seats
 _seat_map_unjudgeable = seat_map_unjudgeable
 
 
@@ -533,6 +529,11 @@ JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 # `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and
 # `build_receipt` share the same home.
 TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
+
+# Per-round disclosure channel `_fold_verify` records on a verify fold that reaches a `pass` (not
+# `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and
+# `build_receipt` share the same home.
+VERIFY_FOLD_DISCLOSURE_CHANNELS = ("verifyVia",)
 
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
@@ -1132,7 +1133,6 @@ def _auditor_vendor(config, fixer_vendor, runner_only=False, maker_families=froz
 _seat_map_receipts = seat_map_receipts.receipts
 _sm_latest_with_seats = seat_map_receipts.latest_with_seats
 _sm_any_seats = seat_map_receipts.any_seats
-_sm_same_family_seats = seat_map_receipts.same_family_seats
 _sm_unexcused_violations = seat_map_receipts.unexcused_violations
 _sm_pin_excused_records = seat_map_receipts.pin_excused_records
 _emit_receipt_seat_map = seat_map_receipts.emit_receipt_seat_map
@@ -5545,6 +5545,17 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
+def _verify_via_row(config, artifact):
+    """Which verify a pass rests on: the local command, or a CI run on the exact head."""
+    if artifact.get("via") == "ci-exact-head":
+        ci = artifact["ci"]
+        return {"via": "ci-exact-head", "workflow": ci["workflow"], "runId": str(ci["runId"]),
+                "headSha": ci["headSha"], "conclusion": ci["conclusion"], "reason": artifact["reason"]}
+    command = artifact.get("command")
+    return {"via": "local", "command": command if isinstance(command, str) and command
+            else config.get("verifyCommand")}
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -5595,6 +5606,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "verify result %r is not pass/skip — fail closed, certification withheld" % (result,))
         state["step"] = P_TERMINAL
         return
+    if result == "pass":
+        # axis: the receipt and review record name which verify stood behind the pass — see bite-proof record wo_b_2072_ci_verify
+        _record_round(state, "verifyVia", _verify_via_row(config, artifact))
     then = state.pop("_verifyThen", None)
     if then == VERIFY_THEN_POST_AUDITS:
         _after_audits(state, config)
@@ -6909,10 +6923,37 @@ def _fold_stall(state, config, artifact):
 
 # ---- terminal certification -----------------------------------------------------------------
 
+def _break_it_ruled_exempt(state, key):
+    """The ``rule``-verb out-of-scope ruling row that exempts a break-it finding's test from the kept
+    check, or None. Exempt only when the finding's effective decision is that attributed ruling AND
+    some round's recorded audit cleared the finding; either leg alone leaves the check owed."""
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    # merge-aware: a newer guidance/fix ruling given to a finding merged into this one binds it, as it does the fixer
+    live = _row_decision(state, _live_ruling_by_key(state), ledger_by_key, key)
+    # axis: only an out-of-scope ruling from the rule verb exempts — a fixed finding with no ruling still owes the kept check — see bite-proof record wo_a_2072_ruled_exempt
+    if not (isinstance(live, dict) and live.get("ruling") == "out-of-scope"
+            and live.get("source") == "rule"):
+        return None
+    prov = live.get("provenance")
+    # axis: an unattributed ruling exempts nothing — ruledBy and ruledAt must both be non-empty strings — see bite-proof record wo_a_2072_ruled_exempt
+    if not (isinstance(prov, dict)
+            and all(isinstance(prov.get(f), str) and prov[f].strip() for f in ("ruledBy", "ruledAt"))):
+        return None
+    rounds = state.get("rounds")
+    for rec in (rounds.values() if isinstance(rounds, dict) else ()):
+        entries = rec.get("audits") if isinstance(rec, dict) else None
+        for audit in (entries if isinstance(entries, list) else ()):
+            # axis: a ruling with no clearing audit exempts nothing — the test must still be kept — see bite-proof record wo_a_2072_ruled_exempt
+            if isinstance(audit, dict) and audit.get("id") == key and audit.get("ruling") in audits._CLEARS:
+                return live
+    return None
+
+
 def _break_it_kept_step(state, config):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
-    parked (certification withheld). A finding with any other disposition owes no check."""
+    parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
+    check; a finding with any other disposition besides fixed or out-of-scope owes none either."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             # axis: a failed or not-run break-it run that compile dropped never reaches verification, so it withholds certification
@@ -6946,9 +6987,17 @@ def _break_it_kept_step(state, config):
             rows.append(row)
             failed.append(row)
             continue
-        if disposition != "fixed":
+        # axis: an out-of-scope disposition owes the kept check like a fixed one unless the exemption holds, never a bare not-required — see bite-proof record wo_a_2072_ruled_exempt
+        if disposition not in ("fixed", "out-of-scope"):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
                          "reason": disposition})
+            continue
+        # axis: the exemption is consulted before the kept check; without it a ruled-out-of-scope test parks — see bite-proof record wo_a_2072_ruled_exempt
+        ruled = _break_it_ruled_exempt(state, key)
+        if ruled is not None:
+            rows.append({"findingKey": key, "path": run.get("path"), "outcome": "ruled-out-of-scope",
+                         "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
+                         "ruledAt": ruled["provenance"]["ruledAt"]})
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
                                   interpreter=break_it.resolve_interpreter(config))
@@ -6959,11 +7008,13 @@ def _break_it_kept_step(state, config):
         if got.get("outcome") != break_it.KEPT:
             failed.append(row)
     _record_round(state, "breakItKept", rows)
+    unchecked = sum(1 for r in rows if r["outcome"] == "not-required")
+    ruled_out = sum(1 for r in rows if r["outcome"] == "ruled-out-of-scope")
     _decision(state, "break-it-kept",
-              "%d checked: %d kept, %d not kept, %d not required"
-              % (len(rows) - sum(1 for r in rows if r["outcome"] == "not-required"),
+              "%d checked: %d kept, %d not kept, %d not required, %d ruled out of scope"
+              % (len(rows) - unchecked - ruled_out,
                  sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
-                 sum(1 for r in rows if r["outcome"] == "not-required")))
+                 unchecked, ruled_out))
     if failed:
         why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
         _park_cannot_certify(
@@ -7200,15 +7251,6 @@ def _receipt_write_refusal(session_dir, *, terminal_reason, untrusted_reason):
 def _terminal_receipt_on_disk(session_dir):
     """True when a certified or attested receipt sits at the terminal path (not an interim)."""
     return _on_disk_receipt_class(session_dir) == "terminal"
-
-
-def _write_interim_receipt(session_dir, state, stop_reason):
-    """Write an interim receipt atomically. OSError PROPAGATES — same stance as `_write_receipt`."""
-    receipt = build_interim_receipt(state, session_dir, stop_reason)
-    path = os.path.join(session_dir, RECEIPT_INTERIM_FILE)
-    round_commit.atomic_write_bytes(
-        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    return receipt
 
 
 def _receipt_requires_round_verify_passes(receipt):
@@ -7824,10 +7866,6 @@ def run_loop(seams, config=None):
 # Layer 2 — the stepwise CLI (next / submit)
 # =============================================================================================
 
-def _pending_step(state):
-    return state.get("pending")
-
-
 def cmd_next(session_dir, config_overrides=None):
     """Emit the ONE next action. Idempotent: a second `next` before a `submit` returns the same
     pending step + hash. A v1 state file is refused with a fresh-start message.
@@ -8118,18 +8156,6 @@ def _refuse_journal_damaged(session_dir, cmd, **kwargs):
     return _refuse_cmd(session_dir, cmd, JOURNAL_DAMAGED_CAUSE,
                        detail=JOURNAL_DAMAGED_DETAIL, **kwargs)
 
-
-
-def _row_matches_ruling_id(row, ruling_id):
-    if not isinstance(row, dict) or not isinstance(ruling_id, str):
-        return False
-    if row.get("id") == ruling_id:
-        return True
-    fkey = row.get(session_contract.FINDING_KEY_FIELD)
-    if fkey == ruling_id:
-        return True
-    derived = _finding_key_of(row)
-    return derived == ruling_id if derived else False
 
 
 def _severity_for_finding_key(state, key, fallback=None):
@@ -8465,8 +8491,76 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     return response
 
 
+def _fetch_ci_run(repo_root, run_id):
+    """Fetch one GitHub Actions run through `gh`. Returns (run dict, None) or (None, reason)."""
+    argv = ["gh", "api", "repos/{owner}/{repo}/actions/runs/%s" % run_id]
+    try:
+        done = subprocess.run(argv, cwd=repo_root, capture_output=True, timeout=60,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, "gh api failed: %s" % exc
+    if done.returncode != 0:
+        return None, "gh api exited %s: %s" % (done.returncode,
+                                               done.stdout[-200:] + done.stderr[-200:])
+    try:
+        run = json.loads(done.stdout)
+    except ValueError:
+        return None, "gh api returned non-JSON"
+    return (run, None) if isinstance(run, dict) else (None, "gh api returned a non-object")
+
+
+def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
+    """(token, detail) when a `ci-exact-head` verify artifact is not backed by the fetched run on the
+    verified head; None when it is, and None for a local verify (which never fetches)."""
+    if artifact.get("via") != "ci-exact-head":
+        return None
+    ci = artifact["ci"]
+    verified_head, head_err = resolution
+    repo_root = _resolve_repo_root(session_dir, state)
+    # axis: an unresolved head or root is refused, never compared against None — see bite-proof record wo_b_2072_ci_verify
+    if head_err or not verified_head or not repo_root:
+        return "ci-verify-run-unreadable", head_err or "verified head or repo root unresolvable"
+    # axis: the substitute must be the project's declared CI workflow, never a workflow the submitter names — see bite-proof record wo_b_2072_ci_verify
+    import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
+    declared_kind, declared = review_record._ci_workflow(repo_root)
+    if declared_kind != "declared" or not declared:
+        return "ci-verify-workflow-unconfigured", "the project declares no readable ciWorkflow (%s)" % declared_kind
+    if ci["workflow"] != declared:
+        return "ci-verify-workflow-mismatch", "claimed workflow %r is not the project's declared %r" % (ci["workflow"], declared)
+    try:
+        run, err = _fetch_ci_run(repo_root, ci["runId"])
+    except Exception as exc:  # noqa: BLE001 — the seam is a foreign call; any failure is unreadable
+        run, err = None, "%s: %s" % (type(exc).__name__, exc)
+    # axis: a run that cannot be read is refused, never compared — see bite-proof record wo_b_2072_ci_verify
+    if not isinstance(run, dict) or any(k not in run for k in ("id", "name", "head_sha", "status", "conclusion")):
+        return "ci-verify-run-unreadable", err or "the fetched run lacks id, name, head_sha, status or conclusion"
+    # axis: the run is the claimed run on the claimed and the verified head — see bite-proof record wo_b_2072_ci_verify
+    # the claim's hex shape was already accepted upstream; GitHub reports lowercase, so a correct claim in uppercase is folded to lowercase before comparing
+    if run["head_sha"] != ci["headSha"].lower():
+        return "ci-verify-sha-mismatch", "run %s ran on %s, not the claimed %s" % (run["id"], run["head_sha"], ci["headSha"])
+    if run["head_sha"] != verified_head:
+        return "ci-verify-sha-mismatch", "run %s ran on %s, not the verified head %s" % (run["id"], run["head_sha"], verified_head)
+    if str(run["id"]) != str(ci["runId"]):
+        return "ci-verify-sha-mismatch", "fetched run id %s is not the claimed runId %s" % (run["id"], ci["runId"])
+    # axis: the run is the claimed workflow — see bite-proof record wo_b_2072_ci_verify
+    # construction bound (E9c): the `or run["name"] != declared` clause cannot reject on its own — the earlier `ci["workflow"] == declared` check already guarantees `ci["workflow"] == declared`, so it is subsumed by `run["name"] != ci["workflow"]`; see bite-proof record wo_b_2072_ci_verify (E9c)
+    # what would make it provable: moving this comparison ahead of (or removing) the `ci["workflow"] != declared` refusal above, so a run name could differ from `declared` while equal to the claim
+    # its separate protection is UNVERIFIED: no test can show this clause rejecting an input the first clause does not
+    if run["name"] != ci["workflow"] or run["name"] != declared:
+        return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r or the declared %r" % (run["id"], run["name"], ci["workflow"], declared)
+    # axis: only a completed run that concluded `success`, as claimed, stands in — see bite-proof record wo_b_2072_ci_verify
+    if run["status"] != "completed":
+        return "ci-verify-conclusion-mismatch", "run %s is %r, not completed" % (run["id"], run["status"])
+    if run["conclusion"] != ci["conclusion"]:
+        return "ci-verify-conclusion-mismatch", "run %s concluded %r, not the claimed %r" % (run["id"], run["conclusion"], ci["conclusion"])
+    if run["conclusion"] != "success":
+        return "ci-verify-conclusion-mismatch", "run %s concluded %r, not success" % (run["id"], run["conclusion"])
+    return None
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-               _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
+               _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None,
+               fixer_transcript=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
     advance. Stale/mismatched → rejected {ok: false} (exit 0). An exact duplicate of an
     already-accepted submit → idempotent {ok: true, duplicate: true}.
@@ -8516,7 +8610,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             if refusal is not None:
                 return refusal
             prep = _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact,
-                                       _via_advance=_via_advance)
+                                       _via_advance=_via_advance,
+                                       fixer_transcript=fixer_transcript)
             if not prep.get("_fold_ready"):
                 return prep
             state = prep["state"]
@@ -8527,6 +8622,12 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = _verified_head_at_fold(session_dir, state)
                 except OSError as exc:
                     resolution = (None, "verified head: %s" % exc)
+                # axis: the run check is called at the one submit chokepoint — see bite-proof record wo_b_2072_ci_verify
+                refusal = _ci_verify_run_refusal(session_dir, state, artifact, resolution)
+                if refusal:
+                    _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": round_no,
+                                                  "attempt": attempt, "outcome": refusal[0]})
+                    return {"ok": False, "reason": refusal[0], "detail": refusal[1]}
             else:
                 resolution = None
             if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):
@@ -8564,8 +8665,11 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 rr_path = records_payload["path"]
                 rr_bytes = review_memory.records_bytes(records_payload["records"])
                 round_records_sidecar = (rr_path, rr_bytes)
+            check_fields = ({"refusalCheck": prep["refusal_check"]}
+                            if prep.get("refusal_check") else {})
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
-                                                      phase=phase, round=round_no, attempt=attempt)
+                                                      phase=phase, round=round_no, attempt=attempt,
+                                                      **check_fields)
             orphan_journal = None
             orphan_seats = prep.get("orphan_seats_found")
             if isinstance(orphan_seats, list) and orphan_seats:
@@ -8755,7 +8859,8 @@ def stall_follow_up_fault(artifact):
     return None
 
 
-def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
+def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
+                        fixer_transcript=None):
     ok, loaded = load_state(session_dir)
     if not ok:
         fault_reason, fault, _detail = _state_load_fault(session_dir)
@@ -8971,6 +9076,21 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "fixer-refusals-malformed"})
             return {"ok": False, "reason": "`refusals` — " + fault}
+    refusal_check = None
+    if phase == P_FIXER and not _via_advance:
+        # No landing exists on a hand submit, so there is nothing for `correct-fixer-refusals` to
+        # correct: the advisor lists the refusals in the artifact and resubmits.
+        refusal_check, check_refusal = _fixer_refusal_check(
+            session_dir, artifact, fixer_transcript, correctable=False)
+        if check_refusal is not None:
+            reason = check_refusal.pop("reason")
+            if reason == FIXER_REFUSALS_UNREPORTED:
+                check_refusal["detail"] = ("list these refusals in the artifact's `refusals` and "
+                                           "resubmit")
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": reason})
+            return {"ok": False, "reason": reason, **check_refusal}
     if phase == P_STALL:
         choice = artifact.get("choice") if isinstance(artifact, dict) else None
         if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:
@@ -9083,7 +9203,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
         state["_submitUsed"] = True
     return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash,
-            "orphan_seats_found": orphan_seats_found}
+            "orphan_seats_found": orphan_seats_found, "refusal_check": refusal_check}
 
 
 def _write_receipt(session_dir, state):
@@ -11203,6 +11323,17 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     return anchor
 
 
+FIXER_COMMITTED_UNLANDED = "fixer-committed-unlanded"
+FIXER_COMMITS_LISTED = 20
+FIXER_REFUSALS_UNREPORTED = "fixer-refusals-unreported"
+FIXER_TRANSCRIPT_UNREADABLE = "fixer-transcript-unreadable"
+FIXER_REFUSALS_CORRECTED_OUTCOME = "fixer-refusals-corrected"
+FIXER_REFUSALS_FILE_PLACEHOLDER = "<refusals.json>"
+FIXER_TRANSCRIPT_HELP = ("path to the fixer subagent's transcript (JSONL); a refusal it shows "
+                         "that the fixer's payload `refusals` leaves out refuses the ingest")
+REFUSAL_CHECK_CHECKED = "checked"
+REFUSAL_CHECK_UNOBSERVED = "unobserved"
+
 # --- the durable per-seat records ---------------------------------------------------------------
 
 def _slot_label(seat_key, occurrence):
@@ -11215,16 +11346,44 @@ def _slot_label(seat_key, occurrence):
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
 
 
-def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt):
+def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt,
+                                fixer_transcript=None):
     """Shell-ready per-slot supersede command — matches round-driver.md invocation spelling.
 
     Round and phase are not separately addressable on this CLI; ``--attempt`` is the fence
     that binds the command to the slot it was produced for."""
     driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
-    return ("python3 -B %s record-result --session-dir %s --seat %s "
-            "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
-            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
-               occurrence, attempt, shlex.quote(cas_token)))
+    cmd = ("python3 -B %s record-result --session-dir %s --seat %s "
+           "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
+           % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
+              occurrence, attempt, shlex.quote(cas_token)))
+    if fixer_transcript:
+        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
+    return cmd
+
+
+def _record_result_cmd(session_dir, seat_key, occurrence, attempt, fixer_transcript=None):
+    """Shell-ready first-ingest `record-result` for one slot (no stored record to supersede yet)."""
+    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
+    cmd = ("python3 -B %s record-result --session-dir %s --seat %s --occurrence %d --attempt %d"
+           % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
+              occurrence, attempt))
+    if fixer_transcript:
+        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
+    return cmd
+
+
+def _correct_fixer_refusals_cmd(session_dir, attempt, fixer_transcript=None):
+    """Shell-ready `correct-fixer-refusals` for this session. The refusals file is the advisor's to
+    write (a JSON list of the fixer's refusal entries), so it stays a named placeholder."""
+    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
+    cmd = ("python3 -B %s correct-fixer-refusals --session-dir %s --refusals-file %s"
+           % (shlex.quote(driver_path), shlex.quote(session_dir), FIXER_REFUSALS_FILE_PLACEHOLDER))
+    if isinstance(attempt, int) and not isinstance(attempt, bool):
+        cmd += " --attempt %d" % attempt
+    if fixer_transcript:
+        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
+    return cmd
 
 
 def _store_file_exists(spath):
@@ -11403,6 +11562,91 @@ def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt, occurre
     return payload, payload.get("headDiffPath")
 
 
+def _fixer_unlanded_commits(state, session_dir, rnd, attempt):
+    """The SHAs (oldest first, at most FIXER_COMMITS_LISTED) of commits the session's repo holds
+    after the fixer order's emission head, or None when that cannot be told.
+
+    None covers every case where git gave no answer — no emission head recorded, no repo root, git
+    unavailable or declining — and an empty list is git answering "no commits since". The caller
+    treats both as "no evidence of a commit" and keeps its existing refusal, so a git failure can
+    never turn into a pass."""
+    emission_head = _anchor_cited_head(state, session_dir, rnd, P_FIXER, attempt)
+    if not isinstance(emission_head, str) or not emission_head:
+        return None
+    repo_root = _resolve_repo_root(session_dir, state)
+    if not repo_root:
+        return None
+    result = store_core.run_git_result(repo_root, "rev-list", "--reverse",
+                                       "%s..HEAD" % emission_head)
+    if result.status != store_core.GIT_OK or result.out is None:
+        return None
+    return [sha for sha in result.out.splitlines() if sha.strip()][:FIXER_COMMITS_LISTED]
+
+
+def _fixer_slot_unlanded_refusal(session_dir, state, cmd, phase, rnd, attempt, seat_key,
+                                 occurrence=0):
+    """The `fixer-committed-unlanded` refusal for a fixer slot that has neither a landing nor a
+    stored record while the repo holds commits past the order's emission head; else None.
+
+    THE chokepoint of invariant A: every path that would read the slot as missing calls this. The
+    driver does not recover the fix from git — which findings a commit addresses is the fixer's
+    claim, not something git records — so it names the advisor's action instead."""
+    if phase != P_FIXER:
+        return None
+    try:
+        skey = round_records.storage_key(seat_key, occurrence)
+        spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+        lpath = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+        bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+    except ValueError:
+        return None
+    if any(os.path.lexists(path) for path in (spath, lpath, bare_path)):
+        return None
+    commits = _fixer_unlanded_commits(state, session_dir, rnd, attempt)
+    if not commits:
+        return None
+    return _refuse_cmd(
+        session_dir, cmd, FIXER_COMMITTED_UNLANDED, phase=phase, rnd=rnd, attempt=attempt,
+        seat=_slot_label(seat_key, occurrence), commits=commits,
+        detail=("the fixer committed but wrote no landing; its commit stays; re-dispatch the same "
+                "fixer order so it writes only its landing (or record the fix by hand-submit), "
+                "then record-result — the driver does not recover the fix from git, because which "
+                "findings a commit addresses is the fixer's claim, not something git records."))
+
+
+def _fixer_refusal_check(session_dir, payload, transcript_path, attempt=None, correctable=True):
+    """(refusalCheck value, refusal fields or None) for a fixer payload against a transcript.
+
+    THE chokepoint of invariant B. No transcript means nobody looked: `unobserved`, never a pass
+    that reads like "looked, found none". A transcript fault refuses and never degrades to
+    `unobserved`. A refusal the transcript shows and the payload's `refusals` leaves out refuses
+    `fixer-refusals-unreported` carrying the list and (when a landing exists to correct) the exact
+    `correct-fixer-refusals` command. The refusal fields hold `reason` plus the extras."""
+    if transcript_path is None:
+        return REFUSAL_CHECK_UNOBSERVED, None
+    observed, fault = observed_refusals.read_transcript(transcript_path)
+    if fault:
+        return None, {"reason": FIXER_TRANSCRIPT_UNREADABLE, "detail": fault}
+    reported = payload.get("refusals") if isinstance(payload, dict) else None
+    missing = observed_refusals.unreported(observed, reported or [])
+    if missing:
+        fields = {"reason": FIXER_REFUSALS_UNREPORTED, "unreported": missing}
+        if correctable:
+            fields["correction"] = _correct_fixer_refusals_cmd(session_dir, attempt,
+                                                               transcript_path)
+        return None, fields
+    return REFUSAL_CHECK_CHECKED, None
+
+
+def _fixer_envelope_refusal_check(session_dir, envelope, transcript_path, attempt):
+    """`_fixer_refusal_check` over a normalized landing envelope. Only a seat-result envelope
+    carries a fixer payload to check; any other schema is `unobserved` (nothing claimed)."""
+    if (not isinstance(envelope, dict)
+            or envelope.get("schema") not in round_records.SEAT_RESULT_SCHEMAS):
+        return REFUSAL_CHECK_UNOBSERVED, None
+    return _fixer_refusal_check(session_dir, envelope.get("payload"), transcript_path, attempt)
+
+
 def _read_head_diff(path):
     """(content, reason). A non-absolute or unreadable `headDiffPath` is `head-diff-unreadable` —
     refused at RECORD time, not degraded at fold time. `_resolve_head_diff` would otherwise
@@ -11547,7 +11791,7 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
                       sweep=False, occurrence=0, expect_round=None, expect_phase=None,
-                      evidence_run_dir=None):
+                      evidence_run_dir=None, fixer_transcript=None):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
@@ -11573,7 +11817,8 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                                              sweep=sweep, occurrence=occurrence,
                                              expect_round=expect_round,
                                              expect_phase=expect_phase,
-                                             evidence_run_dir=evidence_run_dir)
+                                             evidence_run_dir=evidence_run_dir,
+                                             fixer_transcript=fixer_transcript)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
@@ -11703,7 +11948,8 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
 
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
                               expect_sha256=None, sweep=False, occurrence=0,
-                              expect_round=None, expect_phase=None, evidence_run_dir=None):
+                              expect_round=None, expect_phase=None, evidence_run_dir=None,
+                              fixer_transcript=None):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -11803,7 +12049,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            detail=detail, recovery=recovery)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
-                             anchor, expect_round=expect_round, expect_phase=expect_phase)
+                             anchor, expect_round=expect_round, expect_phase=expect_phase,
+                             fixer_transcript=fixer_transcript)
 
     seat_schema = _seat_result_schema(state)
     if seat_schema is None:
@@ -11813,12 +12060,18 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     # Validate BEFORE storing: a refusal must leave nothing behind.
     landing_replace_path = None
     assembled = None
+    refusal_fields = {}
     cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr, landing_replace_path = _read_landing_envelope(
             session_dir, rnd, phase, seat, cur_attempt, occurrence)
         if _lerr is not None:
+            if _lerr == "landing-missing":
+                unlanded = _fixer_slot_unlanded_refusal(session_dir, state, "record-result", phase,
+                                                        rnd, cur_attempt, seat, occurrence)
+                if unlanded is not None:
+                    return unlanded
             return _refuse_cmd(session_dir, "record-result", _lerr, phase=phase, rnd=rnd,
                                attempt=cur_attempt, seat=_slot_label(seat, occurrence))
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
@@ -11845,6 +12098,13 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                 if why is not None:
                     return _refuse_cmd(session_dir, "record-result", why, phase=phase, rnd=rnd,
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
+            refusal_check, check_refusal = _fixer_envelope_refusal_check(
+                session_dir, preflight_envelope, fixer_transcript, cur_attempt)
+            if check_refusal is not None:
+                return _refuse_cmd(session_dir, "record-result", check_refusal.pop("reason"),
+                                   phase=phase, rnd=rnd, attempt=cur_attempt,
+                                   seat=_slot_label(seat, occurrence), **check_refusal)
+            refusal_fields = {"refusalCheck": refusal_check}
     else:
         head_content = None
     # axis: a record-result over a damaged journal is refused before it stores a seat record
@@ -11879,6 +12139,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         **round_records.recorded_row_fields(envelope, row_cited_head, cited_head_source),
         **_journal_transport_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
+        **refusal_fields,
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
@@ -11906,7 +12167,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
 
 
 def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
-                  expect_round=None, expect_phase=None):
+                  expect_round=None, expect_phase=None, fixer_transcript=None):
     """Ingest every unclaimed landing for the pending phase. Idempotent by construction (a seat
     already stored comes back `already-stored`); ANY refusal in the sweep refuses the whole call,
     with the refusing seat's own reason — a landing nobody could ingest is never skipped in
@@ -11941,6 +12202,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     # axis: a sweep over a damaged journal is refused before it ingests any landing
     if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
         return _refuse_journal_damaged(session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
+    refusal_checks = {}
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -11954,6 +12216,21 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             bare_path = None
         has_landing = os.path.exists(lpath) or (
             bare_path is not None and os.path.exists(bare_path))
+        if not has_landing and not os.path.exists(spath):
+            unlanded = _fixer_slot_unlanded_refusal(session_dir, state, cmd, phase, rnd, attempt,
+                                                    seat_key, occurrence)
+            if unlanded is not None:
+                return unlanded
+        if phase == P_FIXER and os.path.exists(spath) and fixer_transcript is not None:
+            # A slot recorded earlier without a transcript is still cross-checked when this call
+            # supplies one: an omitted refusal the transcript shows is never folded as clean.
+            stored_env, _serr = round_records.read_json(spath)
+            _stored_check, stored_refusal = _fixer_envelope_refusal_check(
+                session_dir, stored_env, fixer_transcript, attempt)
+            if stored_refusal is not None:
+                return _refuse_cmd(session_dir, cmd, stored_refusal.pop("reason"), phase=phase,
+                                   rnd=rnd, attempt=attempt, seat=_slot_label(seat_key, occurrence),
+                                   **stored_refusal)
         if not has_landing or os.path.exists(spath):
             continue
         envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
@@ -11962,6 +12239,14 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
                                attempt=attempt, seat=seat_key, detail=fault)
+        if phase == P_FIXER:
+            refusal_check, check_refusal = _fixer_envelope_refusal_check(
+                session_dir, envelope, fixer_transcript, attempt)
+            if check_refusal is not None:
+                return _refuse_cmd(session_dir, cmd, check_refusal.pop("reason"), phase=phase,
+                                   rnd=rnd, attempt=attempt, seat=_slot_label(seat_key, occurrence),
+                                   **check_refusal)
+            refusal_checks[(seat_key, occurrence)] = refusal_check
     seat_schema = _seat_result_schema(state)
     if seat_schema is None:
         return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
@@ -12020,6 +12305,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 journal_entry = _journal_entry_for_commit(
                     session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                     seat=seat, occurrence=occurrence,
+                    refusalCheck=refusal_checks.get((seat, occurrence),
+                                                    REFUSAL_CHECK_UNOBSERVED),
                     **_journal_transport_fields(stored),
                     **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
@@ -12053,6 +12340,9 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             revision_fields = round_records.recorded_row_fields(
                 stored_envelope, cited_head, cited_head_source)
             revision_fields.update(_journal_transport_fields(stored_envelope))
+            if phase == P_FIXER:
+                revision_fields["refusalCheck"] = refusal_checks.get((seat, occurrence),
+                                                                     REFUSAL_CHECK_UNOBSERVED)
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -12143,10 +12433,14 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
                                   "that does not exist" % (seat, slots, occurrence))
+    unlanded = _fixer_slot_unlanded_refusal(session_dir, state, "record-missing", phase, rnd,
+                                            cur_attempt, seat, occurrence)
+    if unlanded is not None:
+        return unlanded
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
     cfg = state.get("config") or {}
     repo_root = cfg.get("repoRoot") or os.getcwd()
-    pending = ((state.get("pending") or {}).get("payload")
+    pending =((state.get("pending") or {}).get("payload")
                if isinstance(state.get("pending"), dict) else {})
     row = _seat_transport_row(state, phase, seat, occurrence, cfg, pending, repo_root)
     envelope = {
@@ -12202,9 +12496,150 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
             "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}
 
 
+def cmd_correct_fixer_refusals(session_dir, refusals_file, fixer_transcript=None, attempt=None,
+                               occurrence=0):
+    """The sanctioned correction for a landed fixer payload whose `refusals` leaves out a refusal:
+    replace ONLY that field in the landing, journal it, and name the command that resumes.
+
+    Writes nothing on any refusal. Run from the session's own repo — a correction from another
+    worktree could be about a different session's fix, so the caller's repo root must equal the
+    session's RECORDED one (no cwd fallback, which would make the guard pass trivially)."""
+    cmd = "correct-fixer-refusals"
+    try:
+        with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, cmd)
+            if upgrade is not None:
+                return upgrade
+            refusal = _commit_recover_or_refuse(session_dir, cmd)
+            if refusal is not None:
+                return refusal
+            return _cmd_correct_fixer_refusals_locked(session_dir, refusals_file, fixer_transcript,
+                                                      attempt, occurrence)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, cmd, held)
+
+
+def _cmd_correct_fixer_refusals_locked(session_dir, refusals_file, fixer_transcript, attempt,
+                                       occurrence):
+    cmd = "correct-fixer-refusals"
+    state, refusal = _load_driver_state(session_dir, cmd)
+    if refusal is not None:
+        return refusal
+    phase, rnd, cur_attempt, refusal = _pending_of(session_dir, state, cmd)
+    if refusal is not None:
+        return refusal
+    if phase != P_FIXER:
+        return _refuse_cmd(session_dir, cmd, "correction-not-fixer-phase", phase=phase, rnd=rnd,
+                           attempt=cur_attempt)
+    if attempt is not None and attempt != cur_attempt:
+        return _refuse_cmd(session_dir, cmd, "attempt-not-pending", phase=phase, rnd=rnd,
+                           attempt=attempt, pendingAttempt=cur_attempt)
+    recorded_root = _session_meta(session_dir).get("repoRoot")
+    if not isinstance(recorded_root, str) or not recorded_root:
+        return _refuse_cmd(session_dir, cmd, "correction-session-repo-unknown", phase=phase,
+                           rnd=rnd, attempt=cur_attempt)
+    try:
+        caller_root = store_core.repo_root(os.getcwd())
+    except store_core.RepoRootUnavailable:
+        caller_root = None
+    caller_root = os.path.realpath(caller_root) if caller_root else None
+    session_root = os.path.realpath(recorded_root)
+    if caller_root != session_root:
+        return _refuse_cmd(session_dir, cmd, "correction-outside-session-repo", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, callerRepoRoot=caller_root,
+                           sessionRepoRoot=session_root,
+                           detail="run this from the session's own repo (%s), not %s"
+                                  % (session_root, caller_root))
+    try:
+        with open(refusals_file, encoding="utf-8") as fh:
+            new_refusals = json.load(fh)
+        fault = command_refusals.refusals_fault(new_refusals)
+    except (OSError, ValueError) as exc:
+        fault = "refusals file unreadable: %s" % exc
+    if fault:
+        return _refuse_cmd(session_dir, cmd, "correction-refusals-invalid", phase=phase, rnd=rnd,
+                           attempt=cur_attempt, detail=fault)
+    _check, check_refusal = _fixer_refusal_check(session_dir, {"refusals": new_refusals},
+                                                 fixer_transcript, cur_attempt, correctable=False)
+    if check_refusal is not None:
+        return _refuse_cmd(session_dir, cmd, check_refusal.pop("reason"), phase=phase, rnd=rnd,
+                           attempt=cur_attempt, **check_refusal)
+    roster, refusal = _roster_of(session_dir, state, cmd, phase, rnd, cur_attempt)
+    if refusal is not None:
+        return refusal
+    seat = roster[0]
+    envelope, lerr, replace_path = _read_landing_envelope(session_dir, rnd, phase, seat,
+                                                          cur_attempt, occurrence)
+    if lerr is not None:
+        return _refuse_cmd(session_dir, cmd, lerr, phase=phase, rnd=rnd, attempt=cur_attempt,
+                           seat=_slot_label(seat, occurrence))
+    skey = round_records.storage_key(seat, occurrence)
+    if replace_path is None:
+        target = round_records.bare_payload_path(session_dir, rnd, phase, skey, cur_attempt)
+        payload = round_records.read_json(target)[0]
+        final = None
+    else:
+        target = replace_path
+        final = round_records.read_json(target)[0]
+        payload = final.get("payload") if isinstance(final, dict) else None
+    if not isinstance(payload, dict) or (
+            final is not None and final.get("schema") not in round_records.SEAT_RESULT_SCHEMAS):
+        return _refuse_cmd(session_dir, cmd, "correction-landing-not-payload", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
+    if final is not None:
+        # A correction must not legitimize unrelated damage: the landing's own declared hashes
+        # are checked BEFORE they are recomputed over the corrected payload.
+        declared_payload_sha = round_records.payload_sha256(payload)
+        if declared_payload_sha != final.get("payloadSha256"):
+            return _refuse_cmd(session_dir, cmd, "landing-torn", phase=phase, rnd=rnd,
+                               attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                               computed=declared_payload_sha, declared=final.get("payloadSha256"),
+                               landingPath=target)
+        if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
+            computed_env_sha = round_records.envelope_sha256(
+                payload, final.get("executionEvidence"))
+            if computed_env_sha != final.get("envelopeSha256"):
+                return _refuse_cmd(session_dir, cmd, "envelope-torn", phase=phase, rnd=rnd,
+                                   attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                                   computed=computed_env_sha, declared=final.get("envelopeSha256"),
+                                   landingPath=target)
+    new_payload = dict(payload, refusals=new_refusals)
+    if final is None:
+        new_bytes = round_records.canonical(new_payload).encode("utf-8")
+    else:
+        final = dict(final, payload=new_payload,
+                     payloadSha256=round_records.payload_sha256(new_payload))
+        if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
+            final["envelopeSha256"] = round_records.envelope_sha256(
+                new_payload, final.get("executionEvidence"))
+        new_bytes = round_records.canonical(final).encode("utf-8")
+    entry = _journal_entry_for_commit(
+        session_dir, cmd, FIXER_REFUSALS_CORRECTED_OUTCOME, phase=phase, round=rnd,
+        attempt=cur_attempt, seat=seat, occurrence=occurrence,
+        beforeSha256=round_records.payload_sha256(payload),
+        afterSha256=round_records.payload_sha256(new_payload))
+    try:
+        c = round_commit.begin(session_dir, "fixer-refusals-correct")
+        c.add_replace_file(target, new_bytes)
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, cmd, exc, phase=phase, rnd=rnd,
+                                        attempt=cur_attempt)
+    spath = round_records.store_path(session_dir, rnd, phase, skey, cur_attempt)
+    token = round_records.envelope_cas_token(round_records.read_json(spath)[0])
+    if token:
+        nxt = _record_result_recovery_cmd(session_dir, seat, occurrence, token, cur_attempt,
+                                          fixer_transcript)
+    else:
+        nxt = _record_result_cmd(session_dir, seat, occurrence, cur_attempt, fixer_transcript)
+    return {"ok": True, "landingPath": target, "next": nxt}
+
+
 # --- advance -------------------------------------------------------------------------------------
 
-def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=None):
+def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=None,
+                fixer_transcript=None):
     """Fold the pending phase off its DURABLE records and emit the next action.
 
     The order is the contract: lock → recover → reconcile → sweep → completeness → assemble → fold
@@ -12232,7 +12667,8 @@ def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=Non
             if refusal is not None:
                 return refusal
             return _advance_locked(session_dir, state, git=git, broke=broke,
-                                   owner_artifact_path=owner_artifact_path)
+                                   owner_artifact_path=owner_artifact_path,
+                                   fixer_transcript=fixer_transcript)
     except round_records.SessionLockHeld as held:
         return _refuse_cmd(session_dir, "advance", "advance-locked",
                            holder={"pid": held.pid, "createdAt": held.created_at})
@@ -12828,7 +13264,8 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     return response
 
 
-def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_path=None):
+def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_path=None,
+                    fixer_transcript=None):
     config = state.get("config") or {}
     if state.get("terminal"):
         if owner_artifact_path is not None:
@@ -12904,7 +13341,8 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         # phase that is otherwise complete.
         if slot is None or entry.get("attempt") != attempt:
             continue
-        out = cmd_record_result(session_dir, slot[0], attempt=attempt, occurrence=slot[1])
+        out = cmd_record_result(session_dir, slot[0], attempt=attempt, occurrence=slot[1],
+                                fixer_transcript=fixer_transcript)
         if not out.get("ok"):
             return out
     for entry in rec.get("reappend") or []:
@@ -12951,7 +13389,8 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                   "carries" % ", ".join(seats))
 
     # 2. sweep-ingest whatever landed without a `record-result`.
-    swept = _sweep_record(session_dir, state, "advance", phase, rnd, attempt, roster, anchor)
+    swept = _sweep_record(session_dir, state, "advance", phase, rnd, attempt, roster, anchor,
+                          fixer_transcript=fixer_transcript)
     if not swept.get("ok"):
         return swept
 
@@ -13568,6 +14007,8 @@ def build_parser():
     cli_contract.add_argument(ps, "--state-hash", contract="free-text", default=None)
     cli_contract.add_argument(ps, "--artifact", contract="free-text", required=True,
                               help="path to the artifact JSON")
+    cli_contract.add_argument(ps, "--fixer-transcript", contract="free-text", default=None,
+                              help=FIXER_TRANSCRIPT_HELP)
 
     pr = sub.add_parser("record-result")
     cli_contract.add_argument(pr, "--session-dir", contract="existing-directory", required=True)
@@ -13589,6 +14030,8 @@ def build_parser():
                               dest="evidence_run_dir",
                               help="runner run directory whose journal supplies execution evidence "
                                    "for a dispatch-observed landing under state schema v5")
+    cli_contract.add_argument(pr, "--fixer-transcript", contract="free-text", default=None,
+                              help=FIXER_TRANSCRIPT_HELP)
 
     pm = sub.add_parser("record-missing")
     cli_contract.add_argument(pm, "--session-dir", contract="existing-directory", required=True)
@@ -13611,6 +14054,17 @@ def build_parser():
     cli_contract.add_argument(pa, "--owner-artifact", contract="free-text", default=None,
                             dest="owner_artifact",
                             help="path to an owner-gate resolution artifact (JSON object) …")
+    cli_contract.add_argument(pa, "--fixer-transcript", contract="free-text", default=None,
+                              help=FIXER_TRANSCRIPT_HELP)
+
+    pcf = sub.add_parser("correct-fixer-refusals")
+    cli_contract.add_argument(pcf, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pcf, "--refusals-file", contract="free-text", required=True,
+                              help="path to a JSON list: the fixer's complete refusal entries")
+    cli_contract.add_argument(pcf, "--fixer-transcript", contract="free-text", default=None,
+                              help=FIXER_TRANSCRIPT_HELP)
+    cli_contract.add_argument(pcf, "--attempt", contract="integer", default=None, type=int)
+    cli_contract.add_argument(pcf, "--occurrence", contract="integer", default=0, type=int)
 
     pt = sub.add_parser("attest")
     cli_contract.add_argument(pt, "--session-dir", contract="existing-directory", required=True)
@@ -13837,14 +14291,20 @@ def _dispatch(args):
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
                                 sweep=args.sweep, occurrence=args.occurrence,
                                 expect_round=args.round, expect_phase=args.phase,
-                                evidence_run_dir=args.evidence_run_dir)
+                                evidence_run_dir=args.evidence_run_dir,
+                                fixer_transcript=args.fixer_transcript)
     elif args.cmd == "record-missing":
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
                                  evidence_path=args.evidence, occurrence=args.occurrence,
                                  expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "advance":
         out = cmd_advance(args.session_dir, break_lock=args.break_lock,
-                          owner_artifact_path=args.owner_artifact)
+                          owner_artifact_path=args.owner_artifact,
+                          fixer_transcript=args.fixer_transcript)
+    elif args.cmd == "correct-fixer-refusals":
+        out = cmd_correct_fixer_refusals(args.session_dir, args.refusals_file,
+                                         fixer_transcript=args.fixer_transcript,
+                                         attempt=args.attempt, occurrence=args.occurrence)
     elif args.cmd == "attest":
         out = cmd_attest(args.session_dir, args.failure, args.note)
     elif args.cmd == "checkpoint":
@@ -13861,7 +14321,8 @@ def _dispatch(args):
             out = {"ok": False, "reason": "unreadable artifact: %s" % exc}
             sys.stdout.write(json.dumps(out) + "\n")
             return 0
-        out = cmd_submit(args.session_dir, args.phase, args.attempt, args.state_hash, artifact)
+        out = cmd_submit(args.session_dir, args.phase, args.attempt, args.state_hash, artifact,
+                         fixer_transcript=args.fixer_transcript)
     sys.stdout.write(json.dumps(out) + "\n")
     # A terminal receipt integrity fault fails LOUD: nonzero exit, the same fail-loud family as
     # journal-fault-unrecordable (a masked-by-replay receipt fault must never look like a clean exit).

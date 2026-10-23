@@ -153,8 +153,9 @@ def test_t3_run_one_failing_test_is_failed_with_output(repo):
     assert record["exitCode"] == 1
     assert record["reason"] is None
     assert "boom-marker" in record["output"]
-    assert set(record) == {"schema", "role", "path", "command", "head", "sha256", "outcome",
+    assert set(record) == {"schema", "role", "path", "command", "head", "sha256", "content", "outcome",
                            "reason", "exitCode", "output", "interpreter"}
+    assert record["content"] == block["content"]
     assert record["schema"] == break_it.SCHEMA and record["role"] == break_it.ROLE
 
 

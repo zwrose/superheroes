@@ -550,7 +550,7 @@ _PAYLOAD_FIELD_BINDINGS = {
                 "required": list(command_refusals.ENTRY_REQUIRED),
                 "optional": list(command_refusals.ENTRY_OPTIONAL),
                 "types": {"command": "non-empty-string", "next": "non-empty-string",
-                          "refusedBy": "string", "hook": "any"},
+                          "refusedBy": "string", "hook": "any", "route": "any"},
                 "enums": {"refusedBy": list(command_refusals.REFUSED_BY)},
             },
         },
@@ -562,7 +562,7 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_VERIFY: {
         "required": ["result"],
-        "optional": ["command", "exit", "outputSha256"],
+        "optional": ["command", "exit", "outputSha256", "via", "ci", "reason"],
         "conditional": {},
         "enums": {"result": list(round_phases._VERIFY_RESULTS)},
         "types": {
@@ -570,6 +570,9 @@ _PAYLOAD_FIELD_BINDINGS = {
             "command": "string",
             "exit": "integer",
             "outputSha256": "string",
+            "via": "string",
+            "ci": "object",
+            "reason": "string",
         },
         "elements": {},
         "predicates": [{

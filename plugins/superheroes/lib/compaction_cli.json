@@ -2,6 +2,7 @@
   "verbs": {
     "path": {"sessionId": "--session-id"},
     "save": {"sessionId": "--session-id"},
+    "skip": {"sessionId": "--session-id"},
     "mark": {"sessionId": "--session-id"},
     "unmark": {"sessionId": "--session-id", "since": "--since", "until": "--until"},
     "mode": {"transcriptPath": "--transcript"},

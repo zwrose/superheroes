@@ -194,7 +194,7 @@ Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` b
 
 ### 3. Dispatch Specialists in Parallel
 
-On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits** each roster seat's complete order before you dispatch anything: one markdown file per slot, an envelope stub carrying the full known header for the session's seat-result schema (`seat-result/1` at state v2–v4; `seat-result/2` at state v5, including `provenance: dispatch-observed`), and a manifest hashed into the session anchor. **Dispatch the emitted order text** — do not hand-compose prompts from templates. Per-seat engine/channel mechanics (stdout vs file, `dispatch-review` runner, canary probes) live in `reference/auto-fix-loop.md`; the prompt bodies live in `rubric/orders/<phase>.md` and are rendered into the session by the driver.
+On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits** each roster seat's complete order before you dispatch anything: one markdown file per slot, an envelope stub carrying the full known header for the session's seat-result schema (`seat-result/1` at state v2–v4; `seat-result/2` at state v5, including `provenance: dispatch-observed`), and a manifest hashed into the session anchor. **Dispatch the emitted order text** — do not hand-compose prompts from templates. Per-seat engine/channel mechanics (stdout vs file, `dispatch-review` runner) live in `reference/auto-fix-loop.md`; the prompt bodies live in `rubric/orders/<phase>.md` and are rendered into the session by the driver.
 
 **Where the files are (round `<N>`, phase `<phase>`, attempt `<K>`, storage key `<skey>` — the filename-safe key the manifest uses, not the bare reviewer name):**
 

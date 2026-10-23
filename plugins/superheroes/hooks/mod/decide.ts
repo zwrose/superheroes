@@ -75,9 +75,26 @@ export const effectiveTrigger = (
 // `session.start` reports it not interactive): its presence on the roster is attendance.
 export const DESKTOP_SURFACE = 'desktop'
 
-// bite-proof axis: a non-interactive session counts as attended only with 'desktop' on the roster
-export const isAttended = (isInteractive: boolean, surfaces: readonly unknown[] | null): boolean =>
-  isInteractive === true || (Array.isArray(surfaces) && surfaces.includes(DESKTOP_SURFACE))
+// The harness's spellings of the entrypoint a session the desktop app starts carries (the second
+// is the desktop app under a third-party provider), fixed outside the repository: the
+// CONVENTIONS §11.3 exception, pinned by a literal test.
+export const DESKTOP_ENTRYPOINTS: readonly string[] = ['claude-desktop', 'claude-desktop-3p']
+
+// bite-proof axis: a launcher-spawned `-p` builder (it inherits the entrypoint, and carries the child marker) and any other host stay unattended
+export const isDesktopStarted = (entrypoint: unknown, childSession: unknown): boolean =>
+  typeof entrypoint === 'string' &&
+  DESKTOP_ENTRYPOINTS.includes(entrypoint) &&
+  (childSession === undefined || childSession === '')
+
+// bite-proof axis: a non-interactive session counts as attended when the desktop app started it, or with 'desktop' on the roster
+export const isAttended = (
+  isInteractive: boolean,
+  isDesktopStarted: boolean,
+  surfaces: readonly unknown[] | null,
+): boolean =>
+  isInteractive === true ||
+  isDesktopStarted === true ||
+  (Array.isArray(surfaces) && surfaces.includes(DESKTOP_SURFACE))
 
 export type DecideInput = {
   tokens: number
@@ -129,6 +146,13 @@ export const decide = (input: DecideInput): Decision => {
 
   return band(true, 'fire')
 }
+
+// The key of a skip record: the decline's reason and which side of the trigger the fill is on.
+// Null when the mod ran, or the fill is below the heads-up line (nothing to record).
+export const skipKey = (decision: Decision, tokens: number, trigger: number): string | null =>
+  decision.fire || tokens < trigger - HEADS_UP_TOKENS
+    ? null
+    : `${decision.reason}:${tokens >= trigger ? 'past' : 'near'}`
 
 export const snooze = (tokens: number): number => tokens + SNOOZE_STEP_TOKENS
 
