@@ -195,8 +195,8 @@ the id means a session may exist that was never confirmed. The lane stays live. 
 session listing for a session of the recorded name; when there is none, record the lane's outcome as
 `died`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes: an older build reads the lane as a local one and reports `builder-exited` for a session still working.
 
-**A cloud-built stack layer.** A cloud builder cannot link its stack, because `gh stack link` and
-the membership read use GraphQL, so its build record lists the link as owed. At its handback, before
+**A cloud-built stack layer.** A cloud builder does not link its stack; its build record lists
+the link as owed. At its handback, before
 the vet, link it from this machine with pull request numbers only when every planned layer from the
 bottom through it has a pull request and that span holds at least two, since a stack needs two
 (`rubric/native-stacks.md` § Each layer is a sub-issue, item 4). Otherwise the link stays owed (the
@@ -204,7 +204,8 @@ bottom layer handing back alone, or a lower planned layer with none yet): record
 receipt, and make it at the handback of the lane that completes a span of two or more, linking the
 whole span. Until then, run no membership check on it.
 To link: `gh stack link <each member's pull request, bottom to top> <its pull request>`, which names
-every member and then the new layer (for a first pair, the lower and then the upper pull request).
+every member and then the new layer (for a first pair, the lower and then the upper pull request). An advisor in a cloud session links with
+the REST create and add calls (`rubric/native-stacks.md` § How a stack comes to exist) instead.
 Then run `python3 -B <plugin root>/lib/stack_check.py list --pr <its pull request> --repo <owner/name>`
 and confirm every member, in order, with the layer at its planned position. Record that position in
 the vet receipt; it stands in for the `stackEntry` quote the builder could not make. A link that
