@@ -380,7 +380,14 @@ def merge(*, repo, top, sha, poll_timeout=DEFAULT_POLL_TIMEOUT,
     # axis: an immediate merged response that names no expected_head_sha is checked against
     # the merged pull request's own head before it is accepted
     if read["status"] == STATUS_MERGED and not read["pinned"]:
-        problem = _read_back_head(repo, top, sha, run, min(timeout, poll_timeout))
+        # axis: the read-back shares the one invocation budget — only the time left, and none
+        # left means it is not attempted and the merge is never reported unverified
+        left = start + poll_timeout - monotonic()
+        if left <= 0:
+            problem = (REASON_MERGE_RESPONSE_UNREADABLE,
+                       "the invocation budget ran out before the merged head could be read back")
+        else:
+            problem = _read_back_head(repo, top, sha, run, min(timeout, left))
         if problem is not None:
             reason, detail = problem
             return _result(repo, top, sha, status=read["status"], reason=reason, detail=detail)

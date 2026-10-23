@@ -199,6 +199,43 @@ def test_m2_immediate_merged_naming_the_pin_skips_the_read_back():
     assert calls == [PUT_ARGV]
 
 
+def test_m2_read_back_gets_only_the_time_left_in_the_one_budget():
+    clock = _Clock()
+    seen = []
+
+    def _run(argv, **kwargs):
+        if list(argv) == PUT_ARGV:
+            clock.now += 8
+            return _merged()
+        assert list(argv) == HEAD_ARGV
+        seen.append(kwargs["timeout"])
+        return _head()
+
+    result = sm.merge(repo=REPO, top=TOP, sha=SHA, poll_timeout=10, poll_interval=5,
+                      timeout=120, run=_run, sleep=clock.sleep, monotonic=clock.monotonic)
+    _assert_merged(result)
+    assert seen == [2]
+
+
+def test_m2_put_that_uses_up_the_budget_refuses_without_a_read_back():
+    clock = _Clock()
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(list(argv))
+        if list(argv) == PUT_ARGV:
+            clock.now += 10
+            return _merged()
+        raise AssertionError("no read-back may start with no time left")
+
+    result = sm.merge(repo=REPO, top=TOP, sha=SHA, poll_timeout=10, poll_interval=5,
+                      timeout=120, run=_run, sleep=clock.sleep, monotonic=clock.monotonic)
+    _assert_refusal(result, "merge-response-unreadable")
+    assert result["status"] == "merged"
+    assert "budget" in result["detail"]
+    assert calls == [PUT_ARGV]
+
+
 def test_m2_main_merged_exits_zero(capsys):
     run, _calls = _make_run({tuple(PUT_ARGV): _merged(), tuple(HEAD_ARGV): _head()})
     clock = _Clock()
