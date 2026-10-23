@@ -269,8 +269,12 @@ def _poll_loop(repo, top, sha, uuid, start, poll_timeout, poll_interval, timeout
     end = start + poll_timeout
     last_error = None
     status = last_status
-    while monotonic() < end:
-        sleep(min(poll_interval, end - monotonic()))
+    while True:
+        left = end - monotonic()
+        # axis: the poll budget ended before the sleep — no sleep and no GET with no time left
+        if left <= 0:
+            break
+        sleep(min(poll_interval, left))
         # axis: the poll budget ended during the sleep — no GET starts at or after its end
         if monotonic() >= end:
             break

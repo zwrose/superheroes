@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_merge.py`: each `# axis:` clause is neutralized in source by a targeted edit, the proving test(s) must go red alone (`-k`), the clause is restored by the inverse edit, and the whole file goes green again.
 
-**Register:** 29 guards — one per `# axis:` line in the file; the single place that decides `merged` is S1. Line numbers are those of the restored file.
+**Register:** 30 guards — one per `# axis:` line in the file; the single place that decides `merged` is S1. Line numbers are those of the restored file.
 
 **Provenance:** claude (Claude Sonnet 5.5), re-dispatch attempt 2.
 
@@ -50,6 +50,7 @@ Two tests were added to the test file during this proof because the first red ru
 | P4 | stack_merge.py:293 | an unreadable poll body is remembered, polling continues | `test_m12_unreadable_poll_body_*` | proven |
 | P5 | stack_merge.py:304 | pending when the poll budget ran out is not merged | `test_m6_*`, `test_m15_no_non_merged_outcome_reads_as_ok_or_merged` | proven |
 | P6 | stack_merge.py:272 | the poll budget ended during the sleep: no GET starts at or after its end | `test_m6_interval_longer_than_the_budget_makes_no_poll_get` | proven |
+| P7 | stack_merge.py:274 | the poll budget ended before the sleep: no sleep and no GET with no time left | `test_m6_deadline_crossed_before_the_sleep_makes_no_sleep_and_no_get` | proven |
 | G1 | stack_merge.py:322 | gh is not on PATH (merge) | `test_m13_gh_not_on_path_is_gh_unavailable` | proven |
 | G2 | stack_merge.py:329 | run raises OSError or TimeoutExpired on the PUT | `test_m13_put_run_raising_is_merge_request_refused` | proven |
 | G3 | stack_merge.py:333 | the PUT exits non-zero: refused, an existing request is never adopted or polled | `test_m7_*`, `test_m8_*` | proven |
@@ -800,6 +801,46 @@ FAILED plugins/superheroes/lib/tests/test_stack_merge.py::test_m6_interval_longe
 ........................................................................ [ 55%]
 .........................................................                [100%]
 129 passed in 0.63s
+```
+
+---
+
+## P7 — the poll budget ended before the sleep (WO-E, #2103 review fix)
+
+The row's line number is that of the restored file after the WO-E `_poll_loop` change; the P6 stop moved to line 278 by the same change, and the other rows keep the numbers they were recorded with. The proving test scripts `monotonic` as `0` (the poll start) then `11` (past the 10-second budget) and uses a `sleep` that raises `ValueError` on a negative argument, as `time.sleep` does.
+
+**neutralization:** `if left <= 0:` (the pre-sleep stop in `_poll_loop`) → `if False:  # bite-proof`
+
+**red** (`-k test_m6_deadline_crossed_before_the_sleep_makes_no_sleep_and_no_get`, run with `--tb=short`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_m6_deadline_crossed_before_the_sleep_makes_no_sleep_and_no_get ______
+/home/user/wt-2103/plugins/superheroes/lib/tests/test_stack_merge.py:336: in test_m6_deadline_crossed_before_the_sleep_makes_no_sleep_and_no_get
+    result = sm.poll(repo=REPO, top=TOP, uuid=UUID, sha=SHA, poll_timeout=10, poll_interval=5,
+/home/user/wt-2103/plugins/superheroes/lib/stack_merge.py:380: in poll
+    return _poll_loop(repo, top, sha, uuid, monotonic(), poll_timeout, poll_interval,
+/home/user/wt-2103/plugins/superheroes/lib/stack_merge.py:277: in _poll_loop
+    sleep(min(poll_interval, left))
+/home/user/wt-2103/plugins/superheroes/lib/tests/test_stack_merge.py:333: in _sleep
+    raise ValueError("sleep length must be non-negative")
+E   ValueError: sleep length must be non-negative
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_stack_merge.py::test_m6_deadline_crossed_before_the_sleep_makes_no_sleep_and_no_get
+1 failed, 131 deselected in 0.21s
+```
+
+**restored lines:**
+```python
+        # axis: the poll budget ended before the sleep — no sleep and no GET with no time left
+        if left <= 0:
+            break
+```
+**green** (whole file):
+```
+........................................................................ [ 54%]
+............................................................             [100%]
+132 passed in 0.61s
 ```
 
 ---

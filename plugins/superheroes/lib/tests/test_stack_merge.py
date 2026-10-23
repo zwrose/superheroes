@@ -320,6 +320,27 @@ def test_m6_interval_longer_than_the_budget_makes_no_poll_get():
     assert clock.now <= 1
 
 
+def test_m6_deadline_crossed_before_the_sleep_makes_no_sleep_and_no_get():
+    run, calls = _make_run({tuple(POLL_ARGV): _pending()})
+    readings = iter([0, 11])
+    sleeps = []
+
+    def _monotonic():
+        return next(readings, 11)
+
+    def _sleep(seconds):
+        if seconds < 0:
+            raise ValueError("sleep length must be non-negative")
+        sleeps.append(seconds)
+
+    result = sm.poll(repo=REPO, top=TOP, uuid=UUID, sha=SHA, poll_timeout=10, poll_interval=5,
+                     run=run, sleep=_sleep, monotonic=_monotonic)
+    _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
+    assert result["uuid"] == UUID
+    assert sleeps == []
+    assert calls == []
+
+
 def test_m6_main_poll_timeout_exits_one(capsys):
     run, _calls = _make_run({tuple(PUT_ARGV): _pending(), tuple(POLL_ARGV): _pending()})
     clock = _Clock()
