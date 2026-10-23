@@ -4020,3 +4020,51 @@ def test_claude_mode_literal_census_pins_write_path_mismatch_gate_reachability()
         "a new dispatchable claude mode makes the write-path run-dir-claude-mode-mismatch "
         "gate reachable; the gate now needs a real test"
     )
+
+
+def _open_write_with_order(tmp_path, order):
+    """#2082: open a codex write run on ``order``; return (ok, detail, staged prompt or None)."""
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    run_dir = str(tmp_path / "run-2082")
+    os.makedirs(run_dir, exist_ok=True)
+    ok, detail = ED._open_write_run(
+        run_dir, engine="codex", argv=["codex"], cwd=wt_real,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_prompt(tmp_path, order), order_id="order-2082", base_sha="abc",
+        worktree_baseline=ED._worktree_baseline(wt_real),
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+    )
+    staged = os.path.join(run_dir, "prompt.txt")
+    if not os.path.exists(staged):
+        return ok, detail, None
+    with open(staged, encoding="utf-8") as fh:
+        return ok, detail, fh.read()
+
+
+def test_write_run_stages_the_bite_proof_format_after_an_order_that_asks(tmp_path):
+    # axis: insertion — an order naming a bite-proof is staged with the format, before the runner's rules
+    order = "# Order\nAdd a guard and return its bite-proof record.\n"
+    ok, detail, staged = _open_write_with_order(tmp_path, order)
+    assert ok, detail
+    head = order + "\n## Bite-proof record format (from the plugin's rubric/bite-proof.md)\n\n"
+    assert staged.startswith(head)
+    assert "- **restore receipt** — mechanical evidence" in staged
+    assert "**Unrunnable here.**" in staged
+    assert staged.index("**Unrunnable here.**") < staged.index(ED.WRITE_DISPATCH_PROCESS_RULE)
+
+
+def test_write_run_stages_no_format_for_an_order_that_does_not_ask(tmp_path):
+    # axis: insertion — an order naming no bite-proof is staged exactly as before
+    order = "# Order\nChange a.txt.\n"
+    ok, detail, staged = _open_write_with_order(tmp_path, order)
+    assert ok, detail
+    assert "Bite-proof record format" not in staged
+    assert staged.startswith(order + "\n" + ED.WRITE_DISPATCH_PROCESS_RULE)
+
+
+def test_write_run_refuses_an_order_that_asks_when_the_rubric_is_unreadable(tmp_path, monkeypatch):
+    # axis: refusal — an order that asks never stages without the format
+    monkeypatch.setattr(ED.bite_proof_format, "RUBRIC_PATH", str(tmp_path / "absent.md"))
+    ok, detail, staged = _open_write_with_order(tmp_path, "Return a bite-proof record.\n")
+    assert (ok, detail, staged) == (False, "bite-proof-format-unreadable", None)
