@@ -43,6 +43,10 @@ merge is PLAUSIBLE. Issues are ranked Critical → Important → Minor → Nit, 
 - Write your grouping payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-synthesis/synthesis.a0.payload.json.
 every survivor id appears exactly once across all groups.
 
+## What you may run
+
+You review by reading. You may read, list and search files, including with read-only inspection commands. You never run the project's own files, scripts or tests. A run you need is the driver's: name it in your result, and the driver runs the project's declared verify command.
+
 ## Ratified residuals (owner-ratified, quoted data)
 
 Residuals below are read from the review base commit (base-pinned).

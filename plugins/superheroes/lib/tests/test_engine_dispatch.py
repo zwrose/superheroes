@@ -1136,6 +1136,34 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     assert _FINDINGS_EXAMPLE_STABLE_MARKER not in text
 
 
+@pytest.mark.parametrize("mode", ["review", "brief-check"])
+@pytest.mark.parametrize("with_pr_body", [False, True])
+def test_hand_written_prompt_reaches_engine_with_review_seat_rule(tmp_path, mode, with_pr_body):
+    # #2071: a seat whose prompt round_orders never rendered (light-lane reviewer, brief check,
+    # grounding seat via --pr-body-path) still gets the rule, through the preamble it is fed.
+    import round_orders as RO
+    repo_root = _repo(tmp_path)
+    kwargs = {}
+    if with_pr_body:
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        body = session_dir / "pr-body.md"
+        body.write_text("PR body.\n", encoding="utf-8")
+        kwargs.update(pr_body_path=str(body), session_dir=str(session_dir))
+    base_body = "A hand-written order with no rule block.\n"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    seat = _brief_check_codex_seat() if mode == "brief-check" else _codex_seat()
+    res = ED.dispatch_review(
+        seat=seat, prompt_path=_valid_prompt(tmp_path, base_body), repo_root=repo_root,
+        run_engine=fake, build_view=_fake_build_view(tmp_path), mode=mode, **kwargs,
+    )
+    assert fake.calls, res
+    text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    assert RO.REVIEW_SEAT_RULE in text
+    assert text.find(RO.REVIEW_SEAT_RULE) < text.find(base_body)
+    assert "run read-only commands" not in text
+
+
 def test_findings_example_stable_marker_pinned_to_rendered_block():
     """The marker literal must appear in the rendered example block, nonce or not.
 

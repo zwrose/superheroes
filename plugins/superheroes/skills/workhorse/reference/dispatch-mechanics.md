@@ -598,7 +598,8 @@ check always applies, and the mechanics for *how* it is dispatched. The sanction
 `dispatch-review --mode brief-check` — not a hand-rolled `codex exec`, which is permitted **only when
 the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path). The
 sanctioned call is `engine_dispatch.py dispatch-review`, and a hand-rolled engine call must redirect
-stdin from a file or `/dev/null`.
+stdin from a file or `/dev/null`. A hand-rolled call's prompt file starts with the runner's preamble,
+which carries the review seat rule, written as `auto-fix-loop.md` ("A hand-rolled review dispatch feeds the runner's preamble first") says.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
