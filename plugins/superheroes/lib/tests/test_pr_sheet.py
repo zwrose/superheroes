@@ -2540,6 +2540,13 @@ READER_CASES = [
     pytest.param(ACCEPTING + "The schema is wider now.\n", ["The schema is wider now."], id="E5-an-unrecognised-paragraph-counts"),
     pytest.param(ACCEPTING + "- text <!-- note -->\n", ["text"], id="a-comment-beside-text-is-cut"),
     pytest.param(ACCEPTING + "- Same words.\n- Same words.\n", ["Same words.", "Same words."], id="E6-identical-bullets-are-two"),
+    pytest.param(ACCEPTING + "  - First.\n  - Second.\n", ["First.", "Second."], id="two-space-top-level-bullets-stay-separate"),
+    pytest.param(ACCEPTING + "   - First.\n   - Second.\n", ["First.", "Second."], id="three-space-top-level-bullets-stay-separate"),
+    pytest.param(ACCEPTING + "  - First.\n      - nested\n  - Second.\n", ["First. - nested", "Second."], id="deeper-lines-join-their-indented-parent"),
+    pytest.param(ACCEPTING + "- First.\n  - nested\n- Second.\n", ["First. - nested", "Second."], id="deeper-lines-join-their-flush-parent"),
+    pytest.param(ACCEPTING + "- Keep `<!--` literally.\n- A second acceptance.\n", ["Keep `<!--` literally.", "A second acceptance."], id="an-inline-code-comment-marker-keeps-the-acceptance-and-the-rest"),
+    pytest.param(ACCEPTING + "- Keep ``a `<!--` b`` here.\n- Next.\n", ["Keep ``a `<!--` b`` here.", "Next."], id="a-double-backtick-span-hides-the-marker"),
+    pytest.param(ACCEPTING + "- text `unclosed <!-- note -->\n- Next.\n", ["text `unclosed", "Next."], id="an-unclosed-backtick-does-not-hide-a-real-comment"),
 ]
 
 

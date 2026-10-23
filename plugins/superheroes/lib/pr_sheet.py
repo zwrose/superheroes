@@ -200,8 +200,21 @@ def _commit(v):
 _ACCEPTING = re.compile(r"^ {0,3}(#{1,6})[ \t]+What we(?:'|’)re accepting[ \t]*#*[ \t]*$", re.IGNORECASE)
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]")
 _FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")  # a backtick fence's info string holds no backtick, so ```x``` opens none
-_ITEM = re.compile(r"^ ?(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)")
+_ITEM = re.compile(r"^( {0,3})(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)")
 _NO_ACCEPTANCE = ("none", "n/a", "na", "nothing")
+
+
+def _comment_start(text):
+    """Index of the first `<!--` in a line that is not inside an inline code span, -1 for none.
+
+    A span opens at a backtick run and closes at the next run of the same length; a run with no match is plain text."""
+    pos = 0
+    while True:
+        comment, tick = text.find("<!--", pos), re.compile(r"`+").search(text, pos)
+        if comment < 0 or tick is None or comment < tick.start():
+            return comment
+        close = next((m for m in re.finditer(r"`+", text[tick.end():]) if len(m.group()) == len(tick.group())), None)
+        pos = tick.end() if close is None else tick.end() + close.end()
 
 
 def _outside_comments(lines):
@@ -223,7 +236,7 @@ def _outside_comments(lines):
                 if end < 0:
                     break
                 rest, inside = rest[end + 3:], False
-            start = rest.find("<!--")
+            start = _comment_start(rest)
             if start < 0:
                 text += rest
                 break
@@ -253,15 +266,19 @@ def accepting_listed(body):
         if heading and len(heading.group(1)) <= level:
             break
         section.append(line)
-    items, open_item, is_list, blank = [], None, False, False
+    items, open_item, is_list, blank, base = [], None, False, False, None
     for line in section:
         if not line.strip():
             blank = True
             continue
         started = _ITEM.match(line)
+        if started and base is None:
+            base = len(started.group(1))  # the top level's own indent; deeper items nest in their parent
+        if started and len(started.group(1)) > max(base, 1):
+            started = None
         indented = line.startswith(("  ", "\t"))
         if started:
-            open_item, is_list = [started.group(1)], True
+            open_item, is_list = [started.group(2)], True
             items.append(open_item)
         elif open_item is not None and not (blank and (not is_list or not indented)):
             open_item.append(line)
