@@ -282,3 +282,87 @@ the `_decide` docstring paragraph, the `body` and `dropped` lines with the one `
 `if dropped:` return after `if not final:`, and the `headerDropped` branch at the top of `_say`'s failure
 wording. No neutralization line remained. The scoped suite (`test_cloud_relay.py` and
 `test_c8c_relay_doctrine.py`) on that head: `103 passed in 3.92s` (87 passed before the change).
+
+## G1 header-dropped outranks failed and unconfirmed exact sends
+
+Work order WO-G (review finding test-001 on PR #2101). Base: `3c4b0333`. Command prefix (worktree root):
+`scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc-wo-g -m pytest <exact node ids> -q -p no:cacheprovider`.
+The neutralization was a targeted Edit, undone by the inverse Edit. No `git checkout`, `restore`, `reset` or
+`stash` was used. Nothing in the captures was redacted; each is under 32 KiB. The detector was not edited
+between red and green.
+
+- **Guarded element:** `cloud_relay.py` `_decide`, the `if dropped:` block placed before the unconfirmed and
+  failed checks. Detector: `test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result`
+  (cases `failed` and `no-result`). Axis: at the end of the wait a header-dropped send outranks an exact send
+  that failed or has no result, so the verdict is `relay-text-mismatch` with `headerDropped` True and never
+  `relay-send-failed` or `relay-send-unconfirmed`. The record holds both sends, with distinct tool ids.
+  The earlier test of a header-dropped send alone could not reach this: its `exact` is empty.
+- **Neutralization:** moved the three-line `if dropped:` block (the `return "relay-text-mismatch", {... "headerDropped": True}`)
+  from directly after `if not final: return None, None` to directly before `return "relay-silent", None`.
+- **Raw red** (both node ids):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result[failed] _
+
+world = namespace(repo='/tmp/claude-0/pytest-of-root/pytest-25/test_a_header_dropped_send_out0/repo', config='/tmp/claude-0/py...test_a_header_dropped_send_out0/.claude-two/projects/-some-dir/5534cbe0-5d2a-4783-8980-09c4bafd22ad.jsonl', state=None)
+success = False, result = True
+
+    @pytest.mark.parametrize("success, result", [(False, True), (True, False)], ids=["failed", "no-result"])
+    def test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result(world, success, result):
+        # axis: header-dropped outranks a competing exact send that failed or has no result at the end of the wait — the altered send is the verdict — a failed or unconfirmed verdict ahead of it makes it fail
+        msg = _composed(world)
+        _write_record(world,
+                      _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP),
+                      _send_lines("toolu_2", SESSION, msg["forward"], STAMP, success=success, result=result))
+        out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+>       assert out["reason"] == "relay-text-mismatch"
+E       AssertionError: assert 'relay-send-failed' == 'relay-text-mismatch'
+E         
+E         - relay-text-mismatch
+E         + relay-send-failed
+
+/home/user/wt-2099-g/plugins/superheroes/lib/tests/test_cloud_relay.py:596: AssertionError
+_ test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result[no-result] _
+
+world = namespace(repo='/tmp/claude-0/pytest-of-root/pytest-25/test_a_header_dropped_send_out1/repo', config='/tmp/claude-0/py...test_a_header_dropped_send_out1/.claude-two/projects/-some-dir/5534cbe0-5d2a-4783-8980-09c4bafd22ad.jsonl', state=None)
+success = True, result = False
+
+    @pytest.mark.parametrize("success, result", [(False, True), (True, False)], ids=["failed", "no-result"])
+    def test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result(world, success, result):
+        # axis: header-dropped outranks a competing exact send that failed or has no result at the end of the wait — the altered send is the verdict — a failed or unconfirmed verdict ahead of it makes it fail
+        msg = _composed(world)
+        _write_record(world,
+                      _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP),
+                      _send_lines("toolu_2", SESSION, msg["forward"], STAMP, success=success, result=result))
+        out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+>       assert out["reason"] == "relay-text-mismatch"
+E       AssertionError: assert 'relay-send-unconfirmed' == 'relay-text-mismatch'
+E         
+E         - relay-text-mismatch
+E         + relay-send-unconfirmed
+
+/home/user/wt-2099-g/plugins/superheroes/lib/tests/test_cloud_relay.py:596: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result[failed]
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result[no-result]
+2 failed in 0.35s
+```
+
+  The red is on the axis: with the block moved down, the failed exact send reads `relay-send-failed` and the
+  no-result exact send reads `relay-send-unconfirmed`, where the invariant says `relay-text-mismatch`.
+- **Restore:** inverse Edit, the three-line `if dropped:` block moved back to directly after `if not final: return None, None`.
+- **Restore receipt:** restored lines (cloud_relay.py:349-353): `    if not final:` / `        return None, None` /
+  `    if dropped:` / `        return "relay-text-mismatch", {"firstDifference": _first_difference(msg["forward"], dropped[0][0]),` /
+  `                                       "headerDropped": True}`. Then, directly before `return "relay-silent", None`:
+  `    failed = [r for r in exact if not r[0]]` / `    if failed:` / `        return "relay-send-failed", {"result": failed[0][1]}`.
+  `git diff plugins/superheroes/lib/cloud_relay.py` after the restore printed nothing (empty output).
+- **Raw green** (same two node ids):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+..                                                                       [100%]
+2 passed in 1.82s
+```

@@ -576,13 +576,27 @@ def test_an_altered_send_with_the_header_still_wins_at_once_over_a_header_droppe
 @pytest.mark.parametrize("success, result", [(False, True), (True, False), (True, True)],
                          ids=["failed", "no-result", "success"])
 def test_a_header_dropped_send_is_a_mismatch_whatever_its_result_says(world, success, result):
-    # axis: header-dropped outranks the unconfirmed, failed and silent verdicts at the end of the wait — it was sent, altered — a result-based verdict makes it fail
+    # axis: header-dropped reads mismatch whatever its own result says — it was sent, altered — a verdict read from the send's own result makes it fail
     msg = _composed(world)
     _write_record(world, _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP,
                                      success=success, result=result))
     out, clock = _check(world, msg["msgId"], wait=6, interval=2)
     assert out["reason"] == "relay-text-mismatch" and out["headerDropped"] is True
     assert out["delivered"] is False and out["ok"] is False and clock.t >= 6
+
+
+@pytest.mark.parametrize("success, result", [(False, True), (True, False)], ids=["failed", "no-result"])
+def test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result(world, success, result):
+    # axis: header-dropped outranks a competing exact send that failed or has no result at the end of the wait — the altered send is the verdict — a failed or unconfirmed verdict ahead of it makes it fail
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP),
+                  _send_lines("toolu_2", SESSION, msg["forward"], STAMP, success=success, result=result))
+    out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+    assert out["reason"] == "relay-text-mismatch"
+    assert out["headerDropped"] is True
+    assert out["delivered"] is False
+    assert clock.t >= 6
 
 
 def test_a_header_dropped_send_stamped_before_sent_after_is_not_this_messages(world):
