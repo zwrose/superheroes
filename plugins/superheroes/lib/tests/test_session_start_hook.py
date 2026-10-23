@@ -268,7 +268,9 @@ def test_host_model_absent_writes_empty_env_and_unknown_context(tmp_path, monkey
     ctx = _context_from_stdout(capsys)
     assert "### Host model" in ctx
     assert "Host model: unknown" in ctx
-    assert "seat composition falls back to the claude host's family" in ctx
+    # #2110: the disclosure now names the transcript read first, then the family fallback.
+    assert "seat composition reads the model from this session's own transcript" in ctx
+    assert "falling back to the claude host's family" in ctx
 
 
 def test_host_model_stale_reset_clears_via_env_file(tmp_path, monkeypatch, capsys):
