@@ -33,15 +33,24 @@ def _subsequence_count(argv, tokens):
 # --------------------------------------------------------------- codex_review_args
 
 
-def test_codex_review_args_exact_shape_with_cwd():
-    args = SA.codex_review_args("/work/wt")
+def _toml(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _args_value(tool_args):
+    return "[" + ",".join(_toml(a) for a in tool_args) + "]"
+
+
+@pytest.mark.parametrize("cwd", ["/work/wt", "/tmp/caf\u00e9/wt"])
+def test_codex_review_args_exact_shape_with_cwd(cwd):
+    args = SA.codex_review_args(cwd)
     assert args[:5] == ["--ignore-user-config", "--disable", "shell_tool",
                         "--disable", "unified_exec"]
     assert args[5] == "-c"
-    assert args[6] == "mcp_servers.superheroes_read.command=" + json.dumps(sys.executable)
+    assert args[6] == "mcp_servers.superheroes_read.command=" + _toml(sys.executable)
     assert args[7] == "-c"
-    assert args[8] == "mcp_servers.superheroes_read.args=" + json.dumps(
-        ["-I", "-B", _TOOL, "--root", "/work/wt"], separators=(",", ":"))
+    assert args[8] == "mcp_servers.superheroes_read.args=" + _args_value(
+        ["-I", "-B", _TOOL, "--root", cwd])
     assert args[9:] == ["-c", 'mcp_servers.superheroes_read.default_tools_approval_mode="approve"']
     assert os.path.isabs(_TOOL) and os.path.isfile(_TOOL)
 
@@ -50,8 +59,7 @@ def test_codex_review_args_exact_shape_with_cwd():
 def test_codex_review_args_without_usable_cwd_has_no_root_pair(cwd):
     args = SA.codex_review_args(cwd)
     assert "--root" not in "".join(args)
-    assert args[8] == "mcp_servers.superheroes_read.args=" + json.dumps(
-        ["-I", "-B", _TOOL], separators=(",", ":"))
+    assert args[8] == "mcp_servers.superheroes_read.args=" + _args_value(["-I", "-B", _TOOL])
 
 
 def test_codex_review_args_quotes_paths_as_valid_toml_strings():
@@ -590,6 +598,22 @@ def test_scan_stream_unreadable_file_is_not_ok(tmp_path):
     assert SA.scan_stream(None) == ([], False)
 
 
+def test_scan_stream_overlong_line_is_not_ok_and_keeps_earlier_violations(tmp_path, monkeypatch):
+    monkeypatch.setattr(SA, "_MAX_LINE_BYTES", 300)
+    path = tmp_path / "long.jsonl"
+    first = json.dumps(_item("command_execution", command="./a.sh")) + "\n"
+    path.write_bytes((first + '{"type": "x", "pad": "' + "y" * 500 + '"}\n').encode())
+    violations, ok = SA.scan_stream(str(path))
+    assert ok is False and violations == ["command_execution: ./a.sh"]
+
+
+def test_scan_stream_total_over_budget_is_not_ok(tmp_path, monkeypatch):
+    monkeypatch.setattr(SA, "_MAX_SCAN_BYTES", 100)
+    path = tmp_path / "big.jsonl"
+    _write_lines(path, [{"type": "turn.completed"}] * 20)
+    assert SA.scan_stream(str(path))[1] is False
+
+
 class _FailingHandle:
     """A binary file object whose iteration yields one line and then raises `error`."""
 
@@ -603,8 +627,10 @@ class _FailingHandle:
     def __exit__(self, *exc_info):
         return False
 
-    def __iter__(self):
-        yield self._first_line
+    def readline(self, size=-1):
+        if self._first_line is not None:
+            line, self._first_line = self._first_line, None
+            return line
         raise self._error
 
 

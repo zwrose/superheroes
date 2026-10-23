@@ -37,6 +37,10 @@ CURSOR_ALLOWED_TOOL_CALLS = frozenset({
 _JUDGED_EVENTS =("item.started", "item.completed")
 _DESCRIPTION_CAP = 200
 _COMMAND_CAP = 120
+# The scan reads a stream the engine wrote without a size bound: one line over _MAX_LINE_BYTES, or
+# a stream over _MAX_SCAN_BYTES in all, ends the scan as unreadable (ok False), not as a decode.
+_MAX_LINE_BYTES = 1 << 20
+_MAX_SCAN_BYTES = 64 << 20
 
 _READ_TOOL_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "seat_read_tool.py")
@@ -160,7 +164,8 @@ def scan_stream(path, limit=20, permitted_edit_paths=None):
     """(violations, ok) for the codex JSONL stream file at `path`. Reads the whole file one line
     at a time (binary), skips unparseable lines, dedupes violations and caps them at `limit`.
     ok is True only when the whole file was read to EOF: it is False when the file cannot be
-    opened and when a read fails part-way (the violations seen so far are kept). Never raises."""
+    opened, when a read fails part-way, when a line exceeds _MAX_LINE_BYTES and when the stream
+    exceeds _MAX_SCAN_BYTES (the violations seen so far are kept). Never raises."""
     violations = []
     seen = set()
     pending_starts = set()
@@ -178,7 +183,14 @@ def scan_stream(path, limit=20, permitted_edit_paths=None):
         return [], False
     try:
         with handle:
-            for raw in handle:
+            scanned = 0
+            while True:
+                raw = handle.readline(_MAX_LINE_BYTES + 1)
+                if not raw:
+                    break
+                scanned += len(raw)
+                if len(raw) > _MAX_LINE_BYTES or scanned > _MAX_SCAN_BYTES:
+                    return violations, False
                 try:
                     obj = json.loads(raw)
                 except (ValueError, RecursionError):

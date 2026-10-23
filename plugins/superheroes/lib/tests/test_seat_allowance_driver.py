@@ -349,3 +349,23 @@ def test_scan_fields_are_journaled_on_the_injected_attempt_end(tmp_path):
     assert len(ended) == 1
     assert ended[0]["allowanceScan"] == "ok"
     assert any(_COMMAND in v for v in ended[0]["allowanceViolations"])
+
+
+def test_review_terminal_forfeit_disclosure_tells_unreadable_from_violation():
+    unreadable = ED._review_terminal_forfeit(
+        "codex", "forfeited", 1, detail="seat-ran-outside-allowance: record unreadable",
+        allowance_violations=[])
+    assert unreadable["forfeited"] is True and unreadable["terminal"] is True
+    assert unreadable["allowanceViolations"] == []
+    assert "could not be read" in unreadable["disclosure"]
+    assert ED.ALLOWANCE_RECORD_UNREADABLE in unreadable["disclosure"]
+    assert "ran outside the review allowance" not in unreadable["disclosure"]
+    assert "fall open to a reviewer on the host model" in unreadable["disclosure"]
+
+    violation = ED._review_terminal_forfeit(
+        "codex", "forfeited", 1, detail="seat-ran-outside-allowance: command_execution: ls",
+        allowance_violations=["command_execution: ls"])
+    assert violation["disclosure"] == (
+        "codex reviewer ran outside the review allowance (seat-ran-outside-allowance); its result "
+        "is refused and not retried; fall open to a reviewer on the host model and disclose the "
+        "degraded vendor mix")

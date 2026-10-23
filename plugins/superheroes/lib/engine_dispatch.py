@@ -5411,9 +5411,14 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
             "detail": detail,
             "allowanceViolations": list(allowance_violations),
             "disclosure": (
-                "%s reviewer ran outside the review allowance (%s); its result is refused and "
-                "not retried; fall open to a reviewer on the host model and disclose the "
-                "degraded vendor mix" % (engine, ALLOWANCE_VIOLATION_DETAIL)
+                ("%s reviewer ran outside the review allowance (%s); its result is refused and "
+                 "not retried; fall open to a reviewer on the host model and disclose the "
+                 "degraded vendor mix" % (engine, ALLOWANCE_VIOLATION_DETAIL))
+                if allowance_violations else
+                ("%s reviewer's event record could not be read, so the review allowance could "
+                 "not be checked (%s); its result is refused and not retried; fall open to a "
+                 "reviewer on the host model and disclose the degraded vendor mix"
+                 % (engine, ALLOWANCE_RECORD_UNREADABLE))
             ),
             "engagement": engagement,
         }
