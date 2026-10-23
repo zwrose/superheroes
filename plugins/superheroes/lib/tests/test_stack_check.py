@@ -2439,3 +2439,259 @@ def test_r_cli_bogus_transport_is_bad_argument(capsys):
     _assert_refusal(json.loads(out), sc.REASON_BAD_ARGUMENT)
     assert rc == 1
     assert "usage:" not in out.lower()
+
+
+# --- #2108: vet-state and repo-slug REST fallback ---------------------------------------
+#
+# The refusal is the one recorded from `gh pr view` / `gh repo view` in a cloud session
+# (no parentheses around HTTP 403); the REST answers are the recorded `gh api` files. The
+# GraphQL side of each equality is the unchanged GraphQL path fed the same fixture's values.
+
+PULL_2111_DRAFT = _fixture_json("pulls_2111_open_draft.json")
+PULL_2093_OPEN = _fixture_json("pulls_2093_open.json")
+PULL_2075_CLOSED = _fixture_json("pulls_2075_closed_unmerged.json")
+REPO_SUPERHEROES = _fixture_json("repos_superheroes.json")
+FALLBACK_PREFIX = "graphql refused; rest: "
+
+
+def _view_refused():
+    return SimpleNamespace(
+        returncode=1, stdout="", stderr=_fixture_text("gh_view_refused.stderr"))
+
+
+def _vet_view_argv(pr):
+    return tuple(sc._pr_vet_state_argv(pr, RREPO))
+
+
+def _slug_rest_argv():
+    return tuple(sc._rest_repo_argv())
+
+
+def _vet_fallback(pull, pr=None, view=None, rest=None, **kwargs):
+    pr = pull["number"] if pr is None else pr
+    run, calls = _make_run({
+        _vet_view_argv(pr): _view_refused() if view is None else view,
+        _pull_argv(pr): _rest_resp(pull if rest is None else rest),
+    })
+    state, refusal = sc.read_pr_vet_state(pr, RREPO, run=run, **kwargs)
+    return state, refusal, calls, run
+
+
+def _slug_fallback(repo_payload=None, view=None, rest=None, **kwargs):
+    run, calls = _make_run({
+        _repo_slug_argv(): _view_refused() if view is None else view,
+        _slug_rest_argv(): _rest_resp(REPO_SUPERHEROES if repo_payload is None else repo_payload)
+        if rest is None else rest,
+    })
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run, **kwargs)
+    return slug, refusal, calls, run
+
+
+def _assert_fallback_refusal(refusal):
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert refusal["detail"].startswith(FALLBACK_PREFIX)
+
+
+@pytest.mark.parametrize(
+    "pull,graphql_state",
+    [
+        (PULL_2077, "MERGED"),
+        (PULL_2111_DRAFT, "OPEN"),
+        (PULL_2093_OPEN, "OPEN"),
+        (PULL_2075_CLOSED, "CLOSED"),
+    ],
+    ids=["merged", "open-draft", "open", "closed-unmerged"],
+)
+def test_v_vet_state_rest_fallback_equals_graphql_read(pull, graphql_state):
+    pr = pull["number"]
+    graphql_run, _graphql_calls = _make_run({
+        _vet_view_argv(pr): _pr_vet_ok(
+            head_ref_oid=pull["head"]["sha"],
+            state=graphql_state,
+            is_draft=pull["draft"],
+            body=pull["body"] or "",
+        ),
+    })
+    expected = sc.read_pr_vet_state(pr, RREPO, run=graphql_run)
+    assert expected[1] is None
+    assert expected[0]["state"] == graphql_state
+
+    state, refusal, calls, _run = _vet_fallback(pull)
+    assert refusal is None
+    assert (state, refusal) == expected
+    assert calls == [list(_vet_view_argv(pr)), list(_pull_argv(pr))]
+
+
+def test_v_vet_state_rest_null_body_is_the_empty_string():
+    state, refusal, _calls, _run = _vet_fallback(_with(PULL_2093_OPEN, ("body",), None))
+    assert refusal is None
+    assert state["body"] == ""
+
+
+def test_v_vet_state_fallback_passes_env_to_both_calls():
+    env = {"GH_TOKEN": "x"}
+    _state, _refusal, _calls, run = _vet_fallback(PULL_2093_OPEN, env=env)
+    assert [kw["env"] for kw in run.kw_calls] == [env, env]
+
+
+def test_v_repo_slug_rest_fallback_equals_graphql_read():
+    graphql_run, _graphql_calls = _make_run(
+        {_repo_slug_argv(): _repo_slug_ok(REPO_SUPERHEROES["full_name"])})
+    expected = sc.resolve_repo_slug(REPO_ROOT, run=graphql_run)
+    assert expected == ("zwrose/superheroes", None)
+
+    slug, refusal, calls, run = _slug_fallback()
+    assert (slug, refusal) == expected
+    assert calls == [list(_repo_slug_argv()), ["gh", "api", "repos/{owner}/{repo}"]]
+    assert run.kw_calls[1]["cwd"] == REPO_ROOT
+    assert run.kw_calls[0]["cwd"] == REPO_ROOT
+
+
+def test_v_repo_slug_fallback_passes_env_to_both_calls():
+    env = {"GH_TOKEN": "x"}
+    _slug, _refusal, _calls, run = _slug_fallback(env=env)
+    assert [kw["env"] for kw in run.kw_calls] == [env, env]
+
+
+# Each factory takes the otherwise-valid success payload and returns a failed REST answer.
+_REST_FAILURES = [
+    lambda valid: SimpleNamespace(
+        returncode=1, stdout=json.dumps(valid), stderr="gh: Bad Gateway (HTTP 502)"),
+    lambda valid: subprocess.TimeoutExpired(cmd="gh", timeout=120),
+    lambda valid: SimpleNamespace(returncode=0, stdout="not json", stderr=""),
+    lambda valid: SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+]
+_REST_FAILURE_IDS = ["exit-1-with-json-stdout", "timeout", "non-json", "json-array"]
+
+
+@pytest.mark.parametrize("failure", _REST_FAILURES, ids=_REST_FAILURE_IDS)
+def test_v_vet_state_rest_failure_after_refusal_refuses(failure):
+    state, refusal, calls, _run = _vet_fallback(
+        PULL_2093_OPEN, rest=failure(PULL_2093_OPEN))
+    assert state is None
+    _assert_fallback_refusal(refusal)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", _REST_FAILURES, ids=_REST_FAILURE_IDS)
+def test_v_repo_slug_rest_failure_after_refusal_refuses(failure):
+    slug, refusal, calls, _run = _slug_fallback(rest=failure(REPO_SUPERHEROES))
+    assert slug is None
+    _assert_fallback_refusal(refusal)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "pull,path,value",
+    [
+        (PULL_2093_OPEN, ("state",), _DELETE),
+        (PULL_2093_OPEN, ("state",), "all"),
+        (PULL_2093_OPEN, ("state",), "OPEN"),
+        (PULL_2077, ("merged",), _DELETE),
+        (PULL_2077, ("merged",), "true"),
+        (PULL_2077, ("merged_at",), _DELETE),
+        (PULL_2077, ("merged_at",), 5),
+        (PULL_2077, ("merged_at",), ""),
+        (PULL_2077, ("merged_at",), None),
+        (PULL_2075_CLOSED, ("merged_at",), "2026-10-23T19:39:34Z"),
+        (_with(_with(PULL_2093_OPEN, ("merged",), True), ("merged_at",), "2026-10-23T19:39:34Z"),
+         ("state",), "open"),
+        (PULL_2093_OPEN, ("draft",), _DELETE),
+        (PULL_2093_OPEN, ("draft",), "no"),
+        (PULL_2093_OPEN, ("head",), "abc"),
+        (PULL_2093_OPEN, ("head",), None),
+        (PULL_2093_OPEN, ("head", "sha"), _DELETE),
+        (PULL_2093_OPEN, ("head", "sha"), "abc123"),
+        (PULL_2093_OPEN, ("head", "sha"), "A" * 40),
+        (PULL_2093_OPEN, ("body",), _DELETE),
+        (PULL_2093_OPEN, ("body",), 7),
+    ],
+    ids=[
+        "state-missing", "state-unknown", "state-uppercase",
+        "merged-missing", "merged-not-bool",
+        "merged-at-missing", "merged-at-int", "merged-at-empty",
+        "merged-without-merged-at", "unmerged-with-merged-at",
+        "open-but-merged",
+        "draft-missing", "draft-not-bool",
+        "head-not-object", "head-null", "head-sha-missing", "head-sha-short", "head-sha-uppercase",
+        "body-missing", "body-not-string",
+    ],
+)
+def test_v_vet_state_malformed_rest_fields_refuse(pull, path, value):
+    state, refusal, calls, _run = _vet_fallback(pull, rest=_with(pull, path, value))
+    assert state is None
+    _assert_fallback_refusal(refusal)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_DELETE, "", 7, "no-slash", None],
+    ids=["missing", "empty", "not-a-string", "no-slash", "null"],
+)
+def test_v_repo_slug_malformed_full_name_refuses(value):
+    slug, refusal, calls, _run = _slug_fallback(_with(REPO_SUPERHEROES, ("full_name",), value))
+    assert slug is None
+    _assert_fallback_refusal(refusal)
+    assert "full_name" in refusal["detail"]
+    assert len(calls) == 2
+
+
+_NOT_THE_REFUSAL = [
+    SimpleNamespace(returncode=1, stdout="", stderr="gh: Something went wrong (HTTP 502)"),
+    SimpleNamespace(returncode=1, stdout="", stderr="gh: x HTTP 403"),
+    SimpleNamespace(returncode=1, stdout="", stderr="use the REST API"),
+    SimpleNamespace(returncode=0, stdout="HTTP 403 use the REST API", stderr=""),
+]
+_NOT_THE_REFUSAL_IDS = ["http-502", "only-403", "only-rest-hint", "exit-zero-with-markers"]
+
+
+@pytest.mark.parametrize("view", _NOT_THE_REFUSAL, ids=_NOT_THE_REFUSAL_IDS)
+def test_v_vet_state_without_the_refusal_makes_one_call_and_refuses(view):
+    state, refusal, calls, _run = _vet_fallback(PULL_2093_OPEN, view=view)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert not refusal["detail"].startswith(FALLBACK_PREFIX)
+    assert calls == [list(_vet_view_argv(PULL_2093_OPEN["number"]))]
+
+
+@pytest.mark.parametrize("view", _NOT_THE_REFUSAL, ids=_NOT_THE_REFUSAL_IDS)
+def test_v_repo_slug_without_the_refusal_makes_one_call_and_refuses(view):
+    slug, refusal, calls, _run = _slug_fallback(view=view)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert not refusal["detail"].startswith(FALLBACK_PREFIX)
+    assert calls == [list(_repo_slug_argv())]
+
+
+@pytest.mark.parametrize(
+    "refusal_proc",
+    [
+        SimpleNamespace(
+            returncode=1,
+            stdout=_fixture_text("graphql_refused.stdout"),
+            stderr=_fixture_text("graphql_refused.stderr")),
+        SimpleNamespace(
+            returncode=1, stdout="", stderr=_fixture_text("gh_view_refused.stderr")),
+    ],
+    ids=["gh-api-graphql", "gh-view"],
+)
+def test_v_both_recorded_refusals_satisfy_the_predicate(refusal_proc):
+    assert sc._is_graphql_proxy_refusal_proc(refusal_proc) is True
+    assert sc._is_graphql_proxy_refusal([refusal_proc]) is True
+
+
+def test_v_vet_state_deadline_exhausted_before_the_rest_get_refuses(monkeypatch):
+    _fake_monotonic(monkeypatch, [0, 1, 2, 100])
+    state, refusal, calls, _run = _vet_fallback(PULL_2093_OPEN, deadline=100.0)
+    assert state is None
+    _assert_fallback_refusal(refusal)
+    assert calls == [list(_vet_view_argv(PULL_2093_OPEN["number"]))]
+
+
+def test_v_repo_slug_deadline_exhausted_before_the_rest_get_refuses(monkeypatch):
+    _fake_monotonic(monkeypatch, [0, 1, 2, 100])
+    slug, refusal, calls, _run = _slug_fallback(deadline=100.0)
+    assert slug is None
+    _assert_fallback_refusal(refusal)
+    assert calls == [list(_repo_slug_argv())]
