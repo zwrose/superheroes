@@ -270,10 +270,6 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
 - An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
   with the entry id.
-- Each acceptance a covered PR body lists under `## What we're accepting` becomes its own Accept card,
-  built from the body (the PR body is the one source of truth), one for every acceptance listed, with
-  no card for a body that lists none. The advisor never copies one into `items`: `items` carries only
-  what the body does not.
 - An item is only for a call that passes Test 2 (showrunner duty 5 in `skills/showrunner/SKILL.md`),
   and it names its ground as `skills/showrunner/reference/owner-decisions.md` § The filter says.
 - An acceptance no Canon ruling covers that carries its own consequence for the owner to weigh is
@@ -286,6 +282,13 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   one short line per note, and the page shows it as a bulleted list, never one paragraph (the list
   shape is in `lib/pr_sheet.py`'s docstring). Neither the fold nor these Accept items are calls, so
   the item bar above does not apply to them.
+- Every acceptance a covered PR body lists is accounted for exactly once in the input's `accounting`,
+  keyed by the bullet id the build names. An acceptance is accounted for as its own Accept item
+  (`item`), as one line of the fold (`fold` with `line`), as the leftover card it restates
+  (`leftover`), or as the Canon entry the summary cites (`canon`). No body bullet becomes a card on
+  its own. The build refuses a sheet that leaves one out, counts one twice, or points at an item,
+  fold line, leftover or Canon id that is not there, and each refusal names the bullet. A first build
+  with no `accounting` lists every bullet's id.
 - A collector item that concerns this PR is its own card, from the input's `collectorItems`. It is never
   folded into the "What you're accepting" item and never only mentioned there by number. The builder
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435

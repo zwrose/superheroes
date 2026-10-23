@@ -14,14 +14,16 @@ writing fails it removes the pictures that run created. --record and --pr-body a
 
 --pr-body N=FILE names the body of covered PR N (gh api repos/<owner>/<repo>/pulls/N --jq .body, read as UTF-8), and `build`
 needs one for every covered PR (number on a pr sheet, every prs[].number on a stack), no more and no fewer; a missing, extra or
-repeated one, a value that is not <PR number>=<file>, and a file that cannot be read are refusal problems. Each acceptance a body
-lists under its "What we're accepting" heading (accepting_listed) becomes one Accept card, built from the body, after the
-leftover cards and before the items: the PR body is the one source of truth, so an acceptance in a body is never copied into
-"items", which carries only what the body does not. The cards are left out of the pointer scan below, since a body's wording
-is not the advisor's. prSheet.nothingListed is true only when every covered body was read and lists none; the page, the prose
-and the index row say "nothing to accept" only then, and say the sheet was not checked against the bodies otherwise (a sheet
-built through the API with no bodies, or an earlier one). A card id comes from the PR, the acceptance's text and its place among
-identical ones, so an unchanged section rebuilds the same ids and the saved answers keep matching.
+repeated one, a value that is not <PR number>=<file>, and a file that cannot be read are refusal problems. No acceptance a body
+lists under its "What we're accepting" heading (accepting_listed) becomes a card on its own: the advisor decides which are
+Accept items, which fold into one item and which a leftover card or a Canon ruling already carries, and the input's "accounting"
+says so for every one. Each acceptance has a bullet id, "<PR number>:<10 hex>" (listed_bullets), made from the PR, the
+acceptance's text and its place among identical ones, so a bullet added above the others leaves every other id as it was and
+the accounting already written stays right. The build refuses a sheet that leaves a listed acceptance out, counts one twice, or
+points at something that is not on the sheet, and each refusal names the bullet by id and the start of its text. A first build
+with no accounting therefore lists every bullet's id. prSheet.nothingListed is true only when every covered body was read and
+lists none; the page, the prose and the index row say "nothing to accept" only then, and say the sheet was not checked against
+the bodies otherwise (a sheet built through the API with no bodies, or an earlier one).
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
@@ -74,7 +76,14 @@ The advisor's input is one JSON object; any key not listed is refused.
                  one option card after the items, showing its collector number, Why it's yours, What happened, If left, the
                  lettered options and the recommendation naming its letter.
   closesSpec     Optional. Null, or {"spec": ..., "receipt": ...}.
-  walk           Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
+  accounting     Optional, and read only when --pr-body gives the bodies. An object of bullet id (listed_bullets) to where that
+                 acceptance is accounted for, with exactly one of these: {"item": "<id>"} (an entry of items, its own Accept
+                 item); {"fold": "<id>", "line": n} (line n, from 1, of that item's ifLeft list; n an integer); {"leftover":
+                 "<key>"} (the leftover card it restates: a key of leftovers that names exactly one left-for-owner finding);
+                 {"canon": "<entry id>"} (a Canon entry id, YYYY-MM-DD-xxxxxxxx-N, that the summary cites; the acceptance then
+                 gets no item). Every listed acceptance needs an entry and each key must name a listed one. A fold line that no
+                 acceptance names is allowed.
+  walk          Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
                  http(s); stops is at least 1 of {id, title, pr, group, kind, steps?, expect, optional?, notWalked?,
                  pictures?}: id as above and unique, pr equal to number on a pr or one of prs on a stack, kind
                  "try" (steps, at least 1) or "look" (no steps), optional a boolean, pictures a list of
@@ -293,6 +302,18 @@ def accepting_listed(body):
     return [t for t in texts if t and (t[:-1] if t.endswith(".") else t).strip().lower() not in _NO_ACCEPTANCE]
 
 
+def listed_bullets(pr, body):
+    """(bullet id, text) for each acceptance a PR body lists, in body order.
+
+    The id is made from the PR, the text and its place among bullets with identical text, so a bullet inserted above others leaves every other id unchanged."""
+    seen, bullets = {}, []
+    for text in accepting_listed(body):
+        ordinal = seen[text] = seen.get(text, -1) + 1
+        digest = hashlib.sha256(json.dumps([pr, ordinal, text], ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+        bullets.append((f"{pr}:{digest[:10]}", text))
+    return bullets
+
+
 def _fill(text, /, **slots):
     return re.sub(r"\{(\w+)\}", lambda m: str(slots.get(m.group(1), m.group(0))), text)
 
@@ -431,7 +452,8 @@ def _check_list(name, entries, required, optional, problems):
 
 def _check_input(adv, words, problems):
     """Collects the input's problems; returns the PR numbers the sheet covers, or None when unknown."""
-    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "collectorItems", "closesSpec", "walk")
+    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "collectorItems", "closesSpec",
+                "accounting", "walk")
     _keys("the advisor's input", adv, ("schema", "kind", "number", "title", "summary"), optional, problems)
     kind, number, prs = adv.get("kind"), adv.get("number"), adv.get("prs")
     if adv.get("schema") != "pr-sheet-input/1":
@@ -664,19 +686,73 @@ def _check_bodies(bodies, allowed, problems):
     problems.extend(f"--pr-body names PR #{n}, which the sheet does not cover" for n in sorted(bodies, key=str) if n not in allowed)
 
 
+_CANON_ID = re.compile(r"\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*")  # the Canon entry id shape
+_TARGETS = ("item", "fold", "leftover", "canon")
+
+
+def _excerpt(text):
+    """The first 80 characters of an acceptance, with … when it is cut."""
+    return text if len(text) <= 80 else text[:80] + "…"
+
+
+def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
+    """Collects the problems of the input's accounting against the acceptances the bodies list (listed: PR number to
+    listed_bullets): each bullet needs exactly one target that exists on the sheet, and each key must name a bullet."""
+    if not isinstance(accounting, dict):
+        problems.append("accounting must be an object of bullet id to where that acceptance is accounted for")
+        accounting = {}
+    given_items = advisor.get("items")
+    items = {it["id"]: it for it in (given_items if isinstance(given_items, list) else []) if isinstance(it, dict) and isinstance(it.get("id"), str)}
+    summary = advisor["summary"] if isinstance(advisor.get("summary"), str) else ""
+    known = set()
+    for pr, bullets in listed.items():
+        for bullet, text in bullets:
+            known.add(bullet)
+            shown = f'accounting "{bullet}" (PR #{pr}: "{_excerpt(text)}")'
+            if bullet not in accounting:
+                problems.append(f"PR #{pr}'s acceptance {bullet} (\"{_excerpt(text)}\") is not accounted for: "
+                                f'give accounting "{bullet}" one of item, fold with line, leftover, or canon')
+                continue
+            value = accounting[bullet]
+            targets = [t for t in _TARGETS if isinstance(value, dict) and t in value]
+            if len(targets) > 1:
+                problems.append(f"{shown} is accounted for more than once: give exactly one of item, fold, leftover or canon")
+            elif not (len(targets) == 1 and set(value) == {*targets, *(["line"] if targets[0] == "fold" else [])}):
+                problems.append(f"{shown} must be an object with exactly one of item, fold with line, leftover or canon")
+            elif targets[0] == "item" and not (isinstance(value["item"], str) and value["item"] in items):
+                problems.append(f'{shown} names item "{value["item"]}", which is not in items')
+            elif targets[0] == "fold":
+                folded = items.get(value["fold"]) if isinstance(value["fold"], str) else None
+                notes = folded["ifLeft"] if folded is not None else None
+                if not (isinstance(notes, list) and _num(value["line"]) and value["line"] <= len(notes)):
+                    problems.append(f'{shown} names fold "{value["fold"]}" line {value["line"]}, which is not a line of that item\'s ifLeft list')
+            elif targets[0] == "leftover" and not (isinstance(value["leftover"], str) and value["leftover"] in leftovers
+                                                   and named.get(value["leftover"], 0) == 1):
+                problems.append(f'{shown} names leftover "{value["leftover"]}", which names no one left-for-owner finding in leftovers')
+            elif targets[0] == "canon" and not (isinstance(value["canon"], str) and _CANON_ID.fullmatch(value["canon"]) and value["canon"] in summary):
+                problems.append(f'{shown} names canon "{value["canon"]}", which is not a Canon entry id (YYYY-MM-DD-xxxxxxxx-N) cited in the summary')
+    problems.extend(f'accounting key "{k}" names no acceptance in the covered PR bodies' for k in accounting if k not in known)
+
+
 def build(records, advisor, words, place=None, previous=None, bodies=None):
     """Returns the sheet's data file as a dict, or raises Refusal with every problem found.
 
     previous is the exact bytes of the earlier sheet the input's carriedForward.fromSheet names, None when there is no carry
-    (a carry given None is refused). bodies is None (the caller reads no PR body: the sheet gets no body cards and no nothingListed)
-    or a dict of each covered PR's number to its body text, whose keys must be exactly the covered PRs.
+    (a carry given None is refused). bodies is None (the caller reads no PR body: no accounting check is made, the input's
+    accounting is accepted and ignored, and the sheet gets no nothingListed) or a dict of each covered PR's number to its body
+    text, whose keys must be exactly the covered PRs. With bodies, once they raise no problem of their own, the input's
+    accounting must account for every acceptance they list, exactly once, to something on the sheet (_check_accounting);
+    no listed acceptance becomes a card.
     """
     problems = []
     if not isinstance(advisor, dict):
         raise Refusal(["the advisor's input must be an object"])
     allowed = _check_input(advisor, words, problems)
+    bodies_sound = False
     if bodies is not None and allowed is not None:
+        found = len(problems)
         _check_bodies(bodies, allowed, problems)
+        bodies_sound = len(problems) == found
     earlier = None
     if "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems) and allowed is not None \
             and _num(advisor.get("number")):  # a stack without a number is refused above, and the earlier sheet cannot be compared to it
@@ -726,6 +802,9 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
         problems.extend(f"{name} key {k!r} names no left-for-owner finding" for k in given if k not in named)
         problems.extend(f"{name} key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
                         for k in given if named.get(k, 0) > 1)
+    listed = {pr: listed_bullets(pr, bodies[pr]) for pr in allowed} if bodies_sound else {}
+    if bodies_sound:
+        _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems)
     if problems:
         raise Refusal(problems)
     stack = kind == "stack"
@@ -752,16 +831,6 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
-    listed = {pr: accepting_listed(bodies[pr]) for pr in allowed} if bodies is not None else {}
-    for pr, acceptances in listed.items():
-        seen = {}
-        for t in acceptances:
-            k = seen[t] = seen.get(t, -1) + 1
-            bold = re.match(r"\*\*(.+?)\*\*", t)
-            cards.append(_card("a-", pr, [k, t], words["bodyAcceptKind"] + (f" · #{pr}" if stack else ""),
-                               bold.group(1).strip() if bold and bold.group(1).strip() else t,
-                               [_section(_fill(words["bodyAcceptFrom"], pr=pr), "quote", t)], _options("none", words, False), None))
-            places.append(None)  # a body's wording is not the advisor's, so the pointer scan below skips these cards
     for it in advisor.get("items", []):
         block = "bullets" if isinstance(it["ifLeft"], list) else "paragraph"
         cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], block, it["ifLeft"])],
@@ -1142,11 +1211,22 @@ def build_index(advisor, base, answers, words, place):
     return sheet
 
 
-def _load(path, problems):
+def _load(path, problems, repeats=False):
+    """The JSON in a file; None after naming what is wrong. With repeats, a key an object writes twice is a problem too,
+    since the later one would silently replace the earlier."""
+    again = []
+
+    def pairs(found):
+        keys = [k for k, _ in found]
+        again.extend(k for k in dict.fromkeys(keys) if keys.count(k) > 1)
+        return dict(found)
     try:
-        return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        value = json.loads(pathlib.Path(path).read_text(encoding="utf-8"), object_pairs_hook=pairs if repeats else None)
     except (OSError, ValueError) as err:
         problems.append(f"{path} could not be read as JSON: {err}")
+        return None
+    problems.extend(f'the input repeats key "{k}"' for k in dict.fromkeys(again))
+    return value
 
 
 def _write_replacing(out, text):
@@ -1232,7 +1312,8 @@ def main(argv=None):
         bodies = _read_bodies(args.pr_body, problems) if args.command == "build" else None
         paths = [*args.record, args.input, WORDS_PATH] if args.command == "build" else [args.input, WORDS_PATH, *([args.answers] if args.answers else [])]
         words_at = len(args.record) + 1 if args.command == "build" else 1
-        loaded = [_load_words(args.command, problems) if n == words_at else _load(p, problems) for n, p in enumerate(paths)]
+        input_at = words_at - 1  # the --input file sits just before the words file in paths
+        loaded = [_load_words(args.command, problems) if n == words_at else _load(p, problems, repeats=n == input_at) for n, p in enumerate(paths)]
         if problems:
             raise Refusal(problems)
         staged, created, folder, base = {}, [], pathlib.Path(args.out).parent, pathlib.Path(args.input).parent

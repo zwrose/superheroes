@@ -43,8 +43,6 @@
     "collectorOption": "{letter}. {label}",
     "collectorRecommendation": "{letter} — {text}",
     "nothingToAccept": "Nothing. The review left nothing for you.",
-    "bodyAcceptKind": "Accept",
-    "bodyAcceptFrom": "Listed in PR #{pr}'s What we're accepting",
     "acceptingUnchecked": "This sheet was not checked against the PR body's What we're accepting. Read that section on the PR before you merge.",
     "acceptingUncheckedCount": "Not checked against the PR body",
     "historyRounds": "{rounds} rounds ran.",

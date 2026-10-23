@@ -508,16 +508,6 @@
       }
     });
 
-    // A sheet that records nothingListed read every covered PR body and found no acceptance, so it has no card built from a body ("a-").
-    if (isObject(sheet.prSheet) && sheet.prSheet.nothingListed === true) {
-      const reportedBody = new Set();
-      (Array.isArray(sheet.cards) ? sheet.cards : []).forEach((card) => {
-        if (!isObject(card) || typeof card.id !== "string" || !card.id.startsWith("a-") || reportedBody.has(card.id)) return;
-        reportedBody.add(card.id);
-        problems.push('prSheet.nothingListed is true, but card "' + card.id + '" was built from a PR body\'s acceptance.');
-      });
-    }
-
     return problems;
   }
 </script>
