@@ -1096,17 +1096,27 @@ def _carries_option_token(command):
     return bool(refusal) or any(tok.startswith("-") for tok in argv)
 
 
-_PACKAGE_MANAGERS = frozenset(("npm", "pnpm", "yarn", "bun"))
+_DIRECT_RUNNERS = frozenset(("vitest", "jest"))
+_RUNNER_LAUNCHERS = frozenset(("npx", "bunx"))
+_EXEC_LAUNCHERS = frozenset(("pnpm", "yarn"))
 
 
-def _runs_package_script(command):
-    """True when the plain argv command ``command`` goes through a package manager other than its direct-runner form
-    (``pnpm exec vitest``): ``pnpm test``, ``npm run test`` and ``pnpm vitest run`` can resolve to a package script
-    that carries a name filter. An unparseable command fails closed."""
+def _calls_runner_directly(command):
+    """True only when the plain argv command ``command`` calls vitest or jest directly: its first program token (after
+    the leading VAR=value entries) is ``vitest`` or ``jest``, or is ``npx``, ``bunx``, ``pnpm exec`` or ``yarn exec``
+    immediately followed by one of them. Every package-manager script form (``pnpm test``, ``npm run test``,
+    ``pnpm vitest``) and every other program is not direct; package.json is never read. An unparseable command is not
+    direct (fail closed)."""
     argv, _, refusal = parse_command(command)
-    if refusal:
+    if refusal or not argv:
+        return False
+    if argv[0] in _DIRECT_RUNNERS:
         return True
-    return os.path.basename(argv[0]) in _PACKAGE_MANAGERS and argv[1:2] != ["exec"]
+    if argv[0] in _RUNNER_LAUNCHERS:
+        return argv[1:2] != [] and argv[1] in _DIRECT_RUNNERS
+    if argv[0] in _EXEC_LAUNCHERS:
+        return argv[1:2] == ["exec"] and argv[2:3] != [] and argv[2] in _DIRECT_RUNNERS
+    return False
 
 
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
@@ -1156,8 +1166,8 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
         # axis: a renamed JS/TS test's run command may carry no option token at all (nothing starting with `-`, after the leading VAR=value pairs), because --config, -c, --root, --dir, --project or --workspace can select a configuration the root listing above never reads, which could filter the new title out; an unrenamed moved test is unaffected — see bite-proof record wo_b_2061_break_it_body_js
         if found["titles"] and js_collected(record["path"]) and _carries_option_token(record["command"]):
             return res(KEPT_UNRESOLVED, "binding-conflict")
-        # a moved or retitled JS/TS test run through a package manager's script shorthand (`pnpm test`, `npm run test`, `yarn test`, `pnpm vitest run`) is refused, because the package script can carry a name filter that skips the test while another test passes; only the direct-runner form (`npx vitest`, `pnpm exec vitest`) counts (owner ruling 109(d))
-        if js_collected(record["path"]) and _runs_package_script(record["command"]):
+        # axis: a moved or retitled JS/TS test is accepted only when its command calls vitest or jest directly (`vitest`, `jest`, or `npx`/`bunx`/`pnpm exec`/`yarn exec` then one of them), because a package script (`pnpm test`, `npm test`, `node --test`) can carry a name filter that skips the test while another test passes and package.json is never read; a test found at its own path runs its original command unchanged (owner ruling 109 d (a)) — see bite-proof record wo_b_2061_break_it_body_js
+        if (found["titles"] or found["path"] != record["path"]) and js_collected(record["path"]) and not _calls_runner_directly(record["command"]):
             return res(KEPT_UNRESOLVED, "binding-conflict")
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")

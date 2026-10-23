@@ -482,17 +482,46 @@ def test_a_ts_rename_whose_command_carries_only_env_pairs_and_runner_words_is_ke
     assert [c["run"] for c in calls] == ["CI=1 pnpm exec vitest run %s" % HOST]
 
 
-@pytest.mark.parametrize("command", [
-    "pnpm vitest run %s" % OWN,
-    "pnpm test %s" % OWN,
-    "npm run test %s" % OWN,
-    "yarn test %s" % OWN,
-], ids=["pnpm-vitest", "pnpm-test", "npm-run-test", "yarn-test"])
-def test_a_ts_rename_whose_command_goes_through_a_package_script_reads_unresolved(repo, command):
-    base, head = _stage(repo, {HOST: _host()})
+MOVED = "web/eats-moved.test.ts"
+RETITLED = FORMATTED.replace('"weekly eats"', '"weekly eats renamed"')
+_SHAPES = {
+    "move-same-title": lambda: {MOVED: FORMATTED},
+    "retitle-same-path": lambda: {OWN: RETITLED},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+@pytest.mark.parametrize("runner", [
+    "pnpm vitest run", "pnpm test", "npm run test", "yarn test", "npm test", "yarn vitest run", "bun test",
+    "node --test", "pnpm run vitest", "pnpm exec echo", "npx cowsay", "pnpm exec",
+], ids=lambda r: r.replace(" ", "-"))
+def test_a_moved_or_retitled_ts_test_whose_command_is_not_a_direct_runner_reads_unresolved(repo, runner, shape):
+    base, head = _stage(repo, _SHAPES[shape]())
     calls = []
-    assert _got(_check(repo, base, head, _record(command=command), _stub(calls))) == ("unresolved", "binding-conflict")
+    record = _record(command="%s %s" % (runner, OWN))
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("unresolved", "binding-conflict")
     assert calls == []
+
+
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+@pytest.mark.parametrize("runner", [
+    "vitest run", "jest", "npx vitest run", "bunx vitest run", "pnpm exec vitest run", "yarn exec jest",
+    "CI=1 pnpm exec vitest run",
+], ids=lambda r: r.replace(" ", "-"))
+def test_a_moved_or_retitled_ts_test_whose_command_calls_the_runner_directly_is_kept(repo, runner, shape):
+    base, head = _stage(repo, _SHAPES[shape]())
+    calls = []
+    record = _record(command="%s %s" % (runner, OWN))
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("kept", "body-match")
+    assert len(calls) == 1
+
+
+def test_a_ts_test_at_its_own_path_keeps_a_package_script_command_unchanged(repo):
+    base, head = _stage(repo, {OWN: FORMATTED})
+    calls = []
+    record = _record(command="pnpm test %s" % OWN)
+    assert _got(_check(repo, base, head, record, _stub(calls))) == ("kept", "body-match")
+    assert [c["run"] for c in calls] == ["pnpm test %s" % OWN]
 
 
 @pytest.mark.parametrize("import_line", [
@@ -514,6 +543,19 @@ def test_a_change_to_the_literal_text_of_a_template_changes_the_key():
     old = break_it_body_js.parse("const a = `x ${1+2} y`;\n")
     new = break_it_body_js.parse("const a = `x ${1+2}  y`;\n")
     assert [r["key"] for r in old] != [r["key"] for r in new]
+
+
+def test_a_change_to_a_template_substitution_expression_changes_the_key():
+    old = break_it_body_js.parse("const a = `x ${1+2} y`;\n")
+    new = break_it_body_js.parse("const a = `x ${1+3} y`;\n")
+    assert [r["key"] for r in old] != [r["key"] for r in new]
+
+
+def test_a_jsx_test_with_a_closing_tag_keeps_its_key_when_unchanged_and_changes_it_when_the_assertion_changes():
+    same = "render(<p>Hello</p>);\nexpect(screen.getByText('Hello')).toBeTruthy();\n"
+    other = "render(<p>Hello</p>);\nexpect(screen.getByText('Bye')).toBeTruthy();\n"
+    keys = lambda text: [r["key"] for r in break_it_body_js.parse(text)]
+    assert keys(same) == keys(same) and keys(same) != keys(other)
 
 
 def test_a_jsx_closing_tag_reads_without_a_regular_expression_error():
