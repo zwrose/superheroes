@@ -6539,6 +6539,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         else:
             contract = engine_adapter.WRITE_REPORT_CONTRACT
         bite_proof_block, bite_proof_reason = bite_proof_format.block_for(base)
+        # axis: an order naming a bite-proof is staged with the rubric's record format, or not at all — see bite-proof record wo_2082_format
         if bite_proof_reason:
             return False, bite_proof_reason
         order_part = base

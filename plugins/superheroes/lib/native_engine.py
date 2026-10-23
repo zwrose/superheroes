@@ -342,6 +342,7 @@ def _cmd_open(args):
         return _refusal("order-unreadable")
     bite_proof_block, bite_proof_reason = bite_proof_format.block_for(
         order.decode("utf-8", errors="ignore"))
+    # axis: an order naming a bite-proof reaches the subagent with the rubric's record format, or no run opens — see bite-proof record wo_2082_format
     if bite_proof_reason:
         return _refusal(bite_proof_reason)
 
