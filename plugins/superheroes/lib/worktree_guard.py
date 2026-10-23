@@ -75,18 +75,13 @@ _UNPARSED_TEMPLATE = (
     "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
     "`worktree`) reads as a command wherever this guard loses track of the quoting "
     "around it — a heredoc body this guard cannot show is only text, or a quote of "
-    "the same kind as the one enclosing it nested inside a `$(...)` substitution. "
-    "A heredoc fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` with a "
-    "quoted delimiter (`<<'EOF'`) is read as text; a heredoc fed to anything else, or "
-    "left unterminated, is read as command text. Heredoc masking is also off for the "
-    "whole command when any non-blank line comes before the line holding the heredoc "
-    "operator (a `trap`, say) or that line starts with a variable assignment, and when any "
-    "non-blank line follows the heredoc (a later command could run what it wrote) or a shell "
-    "keyword such as `if`, `for`, `while`, `do` or `case` sits outside the body, so "
-    "there the text route is the Write tool and `--body-file`/`-F`. "
-    "A `$(...)` or backtick substitution in a git global option before a discard-named "
-    "verb (a `-c` value, say) is refused here too: put such a value in a variable on an "
-    "earlier command, or run the command without the substitution. "
+    "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
+    "`$(...)` substitution. "
+    "A heredoc with a quoted delimiter (`<<'EOF'`) that is the whole command and is fed to "
+    "`cat >`/`cat >>`/`tee` writing a file, to `gh issue|pr ... --body-file -`, or to "
+    "`git commit -F -`, or that is the whole `-m \"$(cat <<'EOF'` ... `)\"` / "
+    "`--body \"$(cat <<'EOF'` ... `)\"` argument, is read as text; any other heredoc is "
+    "read as command text. "
     "Next step: write the text with the Write tool and pass the file "
     "(`gh ... --body-file <path>`, `git commit -F <path>`), or re-issue an intended "
     "discard as a plain `git ...` command this guard can parse. "
@@ -109,316 +104,84 @@ def _is_git_token(token):
     return base == "git" or base == "git.exe"
 
 
-_HEREDOC_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
-_ASSIGNMENT_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_PIECE_SKIP_WORDS = frozenset({"!", "{", "then", "do", "else", "elif", "time"})
-_GH_DATA_SUBCOMMANDS = frozenset({"issue", "pr", "release", "api"})
-_HEREDOC_DELIMITER_END = " \t;|&()<>"
-_COMMENT_PRECEDERS = " \t;|&()`"
-_COMPOUND_KEYWORD = re.compile(
-    r"(?<![\w-])(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function)(?![\w-])"
-)
-_DATA_SUBSTITUTION = re.compile(r"(\"?)\$\(cat <<'[A-Za-z_][A-Za-z0-9_.-]*'\s*$")
+_SAFE_CHARS = "A-Za-z0-9_@%+=:,./~"
+_WORD = rf"""(?:[{_SAFE_CHARS}-]+|'[^']*'|"[^"$`\\]*")"""
+_PATH = rf"[{_SAFE_CHARS}][{_SAFE_CHARS}-]*"
+_DELIMITER = "[A-Za-z_][A-Za-z0-9_]*"
+_HEREDOC_OPERATOR = re.compile(rf"""<<[ ]*(['"])({_DELIMITER})\1""")
+_MESSAGE_SUBSTITUTION = re.compile(rf"""[ \t]*"\$\(cat <<(')({_DELIMITER})'[ \t]*$""")
+_CAT_TO_FILE = re.compile(rf"[ \t]*cat[ \t]+>>?[ \t]*{_PATH}[ \t]*")
+_TEE_TO_FILE = re.compile(rf"[ \t]*tee(?:[ \t]+-a)?[ \t]+{_PATH}(?:[ \t]*>[ \t]*/dev/null)?[ \t]*")
+_WORD_LIST = re.compile(rf"[ \t]*(?:{_WORD}(?:[ \t]+{_WORD})*[ \t]*)?")
 
 
-def _piece_is_data_consumer(piece):
-    """True when the piece's command word is a program that reads stdin as data, never runs it.
+def _words_take_text(words, message):
+    """True when the safe `words` are a `git commit` or `gh issue|pr` that reads the heredoc as text.
 
-    A piece that opens with a variable assignment is never a data consumer.
+    Without `message`: the stdin flag is present (`-F -`, `--file -`, `--body-file -`).
+    With it: the last word is the flag the `"$(cat <<'D'` substitution is the value of.
     """
-    words = piece.split()
-    k = 0
-    while k < len(words) and words[k] in _PIECE_SKIP_WORDS:
-        k += 1
-    if k >= len(words) or _ASSIGNMENT_WORD.match(words[k]):
-        # An assignment prefix never matches a shape: a quoted value can hold spaces and a word
-        # that looks like the command, so splitting on whitespace cannot find the real one.
+    if words is None or len(words) < 2:
         return False
-    base = os.path.basename(words[k])
-    following = words[k + 1] if k + 1 < len(words) else None
-    if base in ("cat", "tee"):
-        return True
-    if base == "gh":
-        return following in _GH_DATA_SUBCOMMANDS
-    if base == "git":
-        return following == "commit"
-    return False
+    gh = words[0] == "gh" and words[1] in ("issue", "pr")
+    if not gh and words[:2] != ["git", "commit"]:
+        return False
+    if message:
+        return words[-1] in (("--body", "-b") if gh else ("-m", "--message"))
+    stdin_flags = (("--body-file", "-"), ("-F", "-")) if gh else (("-F", "-"), ("--file", "-"))
+    return any(pair in stdin_flags for pair in zip(words, words[1:])) or (
+        ("--body-file=-" if gh else "--file=-") in words
+    )
 
 
-def _read_heredoc_delimiter(line, q):
-    """Read a heredoc delimiter word at line[q:]. Returns (word, quoted, end) or None."""
-    n = len(line)
-    if q >= n:
-        return None
-    ch = line[q]
-    if ch in "'\"":
-        r = line.find(ch, q + 1)
-        if r < 0 or not _HEREDOC_WORD.fullmatch(line[q + 1:r]):
-            return None
-        word, quoted, end = line[q + 1:r], True, r + 1
-    else:
-        quoted = ch == "\\"
-        m = _HEREDOC_WORD.match(line, q + 1 if quoted else q)
-        if not m:
-            return None
-        word, end = m.group(), m.end()
-    if end < n and line[end] not in _HEREDOC_DELIMITER_END:
-        return None
-    return word, quoted, end
+def _mask_data_heredoc(command):
+    """Blank the body lines of a command that is exactly one text-only heredoc shape.
 
-
-def _scan_operator_line(line, stack):
-    """Read one command line the way bash reads quoting, for the heredoc pre-pass.
-
-    `stack` carries open `$(` contexts across lines: each frame is
-    [mode, paren_depth, is_substitution, command_position], mode one of u/d/s (unquoted,
-    double-quoted, single-quoted). Returns (ops, pieces, stop, bad, pipe):
-
-    ops     — heredoc operators outside quotes, as (dash, delimiter, quoted)
-    pieces  — the command-word candidates: the line split at `;` `|` `||` `&` `&&` `(` `)`,
-              a backtick, `$(` `<(` `>(` (a `&` inside `>&` `<&` `&>` is a redirection)
-    stop    — the line cannot be read reliably (open quote, backslash continuation, `$'`,
-              `((`, an unreadable delimiter): the pre-pass masks nothing from here on
-    bad     — a command substitution sits where a command word goes, so its output is run
-    pipe    — the line ends in a pipe, so the heredoc consumer's output feeds a later line
+    The shapes (first line holds the one `<<'D'` or `<<"D"`; the first line equal to `D` ends the
+    body): `cat > f`, `cat >> f` or `tee [-a] f [> /dev/null]` writing a file; `gh issue|pr ...
+    --body-file -` or `git commit -F -`; and `-m "$(cat <<'D'` / `--body "$(cat <<'D'` closed by a
+    `)"` line. Nothing but blank lines may follow. Any other command is returned unchanged.
     """
-    ops = []
-    pieces = []
-    cur = []
-    state = {"stop": False, "bad": False, "pipe": False}
-    n = len(line)
-    p = 0
-
-    def put(text):
-        cur.append(text)
-        if text.strip():
-            state["pipe"] = False
-
-    def flush():
-        text = "".join(cur)
-        cur.clear()
-        if text.strip():
-            pieces.append(text)
-
-    def open_substitution():
-        command_position = not "".join(cur).strip()
-        if command_position:
-            state["bad"] = True
-        flush()
-        stack.append(["u", 0, True, command_position])
-
-    while p < n:
-        frame = stack[-1]
-        mode = frame[0]
-        c = line[p]
-        if mode == "s":
-            put(c)
-            if c == "'":
-                frame[0] = "u"
-            p += 1
-            continue
-        if mode == "d":
-            if c == "\\" and p + 1 < n and line[p + 1] in '"\\$`':
-                put(line[p:p + 2])
-                p += 2
-                continue
-            if c == "$" and line.startswith("$(", p):
-                if line.startswith("$((", p):
-                    state["stop"] = True
-                    break
-                open_substitution()
-                p += 2
-                continue
-            put(c)
-            if c == '"':
-                frame[0] = "u"
-            p += 1
-            continue
-        if c == "\\":
-            if p + 1 >= n:
-                state["stop"] = True
-                break
-            put(line[p:p + 2])
-            p += 2
-            continue
-        if c == "'" or c == '"':
-            frame[0] = "s" if c == "'" else "d"
-            put(c)
-            p += 1
-            continue
-        if c == "$":
-            if line.startswith("$'", p) or line.startswith("$((", p):
-                state["stop"] = True
-                break
-            if line.startswith("$(", p):
-                open_substitution()
-                p += 2
-                continue
-            put(c)
-            p += 1
-            continue
-        if c == "#" and (p == 0 or line[p - 1] in _COMMENT_PRECEDERS):
-            break
-        if c == "(":
-            if line.startswith("((", p):
-                state["stop"] = True
-                break
-            frame[1] += 1
-            flush()
-            p += 1
-            continue
-        if c == ")":
-            if frame[1] > 0:
-                frame[1] -= 1
-            elif frame[2]:
-                stack.pop()
-            flush()
-            p += 1
-            continue
-        if c == "`" or c == ";":
-            flush()
-            state["pipe"] = False
-            p += 1
-            continue
-        if c == "|":
-            flush()
-            if line.startswith("||", p):
-                state["pipe"] = False
-                p += 2
-            else:
-                state["pipe"] = True
-                p += 1
-            continue
-        if c == "&":
-            if line.startswith("&&", p):
-                flush()
-                state["pipe"] = False
-                p += 2
-                continue
-            if (p > 0 and line[p - 1] in "<>") or line.startswith("&>", p):
-                put(c)
-                p += 1
-                continue
-            flush()
-            if not (p > 0 and line[p - 1] == "|"):
-                state["pipe"] = False
-            p += 1
-            continue
-        if c == "<" or c == ">":
-            if line.startswith("<<<", p):
-                put("<<<")
-                p += 3
-                continue
-            if line.startswith("<(", p) or line.startswith(">(", p):
-                open_substitution()
-                p += 2
-                continue
-            if line.startswith("<<", p):
-                q = p + 2
-                dash = q < n and line[q] == "-"
-                if dash:
-                    q += 1
-                while q < n and line[q] in " \t":
-                    q += 1
-                delimiter = _read_heredoc_delimiter(line, q)
-                if delimiter is None:
-                    state["stop"] = True
-                    break
-                word, quoted, end = delimiter
-                if any(f[3] for f in stack):
-                    state["bad"] = True
-                ops.append((dash, word, quoted))
-                put(line[p:end])
-                p = end
-                continue
-        put(c)
-        p += 1
-    flush()
-    if stack[-1][0] != "u":
-        state["stop"] = True
-    return ops, pieces, state["stop"], state["bad"], state["pipe"]
-
-
-def _mask_heredoc_bodies(command):
-    """Blank the body lines of heredocs that provably feed data to a program that does not run it.
-
-    A body is blanked only when all hold (fail closed, no deeper parsing; otherwise it is scanned as
-    always): the operator sits outside quotes; the body is terminated; every command word on the
-    operator line is a data consumer (`cat`, `tee`, `gh issue|pr|release|api`, `git commit`); the
-    operator line has no backtick, `{` or `(` and does not hand the consumer's output on (a trailing
-    pipe) — except one `"$(cat <<'DELIM'` that follows consumers only, whose terminator is followed
-    by a lone `)"` or `)` that ends the command; no non-blank line comes before the operator line
-    (a `trap`, a function, a pipe or a continuation there can run what the heredoc writes); no
-    command word on the operator line follows a variable assignment (a quoted value can hide the
-    real command word); the operator line carries exactly one heredoc operator; and an unquoted delimiter's body has no `$(`, backtick or
-    trailing backslash (bash folds backslash-newline before it matches the terminator). Anything
-    the scan cannot read, and any body that cannot be masked, stops masking for the rest of the
-    command, never to resume after it. Terminator lines are kept.
-
-    Two whole-command conditions hold too; when either fails, nothing is masked. The masked
-    heredoc is the last thing in the command: after its terminator there is no non-blank line but
-    the one `)"` or `)` closer of the commit-message form, and nothing follows that closer, so a
-    file the heredoc writes is not run by a later command in the same call. And no shell
-    compound-command keyword (`if`, `for`, `while`, `do`, `case`, ...) appears as a whole word on
-    any line outside a masked body, since the output of such a compound can feed an interpreter.
-    """
-    if "\n" not in command:
-        return command
     lines = command.split("\n")
-    stack = [["u", 0, False, False]]
-    i = 0
-    while i < len(lines):
-        ops, pieces, stop, bad, pipe = _scan_operator_line(lines[i], stack)
-        if stop:
-            break
-        substitution = _DATA_SUBSTITUTION.search(lines[i])
-        plain_part = lines[i][:substitution.start()] if substitution else lines[i]
-        if len(ops) > 1:
-            break
-        preceded = any(ln.strip() for ln in lines[:i])
-        consumed = bool(ops) and not preceded and not bad and not pipe and bool(pieces) and all(
-            _piece_is_data_consumer(piece) for piece in pieces
-        ) and not any(mark in plain_part for mark in ("`", "{", "("))
-        following = i + 1
-        for dash, word, quoted in ops:
-            end = None
-            for k in range(following, len(lines)):
-                candidate = lines[k].lstrip("\t") if dash else lines[k]
-                if candidate == word:
-                    end = k
-                    break
-            if end is None:
-                return "\n".join(lines)
-            body = lines[following:end]
-            maskable = consumed and (
-                quoted or not any("$(" in ln or "`" in ln or ln.endswith("\\") for ln in body)
-            )
-            if maskable:
-                after = lines[end + 1:]
-                if substitution:
-                    closer = ')"' if substitution.group(1) else ")"
-                    maskable = bool(after) and after[0].rstrip() == closer and not any(
-                        ln.strip() for ln in after[1:]
-                    )
-                else:
-                    maskable = not any(ln.strip() for ln in after)
-            if not maskable:
-                break
-            for k in range(following, end):
-                lines[k] = ""
-            following = end + 1
-        else:
-            i = following
-            continue
-        break
-    if any(_COMPOUND_KEYWORD.search(ln) for ln in lines):
+    first = lines[0]
+    if first.count("<<") != 1:
         return command
-    return "\n".join(lines)
+    message = _MESSAGE_SUBSTITUTION.search(first)
+    operator = message or _HEREDOC_OPERATOR.search(first)
+    if operator is None:
+        return command
+    before = first[:operator.start()]
+    if message:
+        taken = _words_take_text(_words(before), True)
+    else:
+        rest = before + " " + first[operator.end():]
+        taken = (
+            _CAT_TO_FILE.fullmatch(rest) or _TEE_TO_FILE.fullmatch(rest)
+            or _words_take_text(_words(rest), False)
+        )
+    end = next((k for k in range(1, len(lines)) if lines[k] == operator.group(2)), None)
+    if not taken or end is None:
+        return command
+    after = lines[end + 1:]
+    if message:
+        if not after or after[0].rstrip() != ')"':
+            return command
+        after = after[1:]
+    if any(line.strip() for line in after):
+        return command
+    return "\n".join([first] + [""] * (end - 1) + lines[end:])
+
+
+def _words(text):
+    """The words of `text` when every word is a safe word, else None."""
+    if not _WORD_LIST.fullmatch(text):
+        return None
+    return re.findall(_WORD, text)
 
 
 def _split_segments(command):
     """Split a command string into segments at unquoted boundaries."""
-    command = _mask_heredoc_bodies(command)
+    command = _mask_data_heredoc(command)
     segments = []
     current = []
     i = 0
@@ -441,18 +204,10 @@ def _split_segments(command):
             i += 1
             continue
         if in_double:
-            if ch == "\\" and i + 1 < n and command[i + 1] in '"\\$`':
-                current.append(command[i:i + 2])
-                i += 2
-                continue
             current.append(ch)
             if ch == '"':
                 in_double = False
             i += 1
-            continue
-        if ch == "\\" and i + 1 < n and command[i + 1] != "\n":
-            current.append(command[i:i + 2])
-            i += 2
             continue
         if ch == "'":
             in_single = True
@@ -535,18 +290,10 @@ def _tokenize_segment(segment):
             i += 1
             continue
         if in_double:
-            if ch == "\\" and i + 1 < n and segment[i + 1] in '"\\$`':
-                current.append(segment[i:i + 2])
-                i += 2
-                continue
             current.append(ch)
             if ch == '"':
                 in_double = False
             i += 1
-            continue
-        if ch == "\\" and i + 1 < n:
-            current.append(segment[i:i + 2])
-            i += 2
             continue
         if ch in " \t":
             flush()
@@ -1013,11 +760,7 @@ def segment_accounting(command, cwd=None):
         tokens = _strip_shell_prefixes(tokens[start:])
         parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
-        if _double_quoted_substitution_mention(segment):
-            # Checked before the parsed-git branch: whatever the outer command parses as (a
-            # branch-creating checkout included), the substitution inside it still runs.
-            records.append({"segment": segment, "kind": "unaccounted", "action": None})
-        elif parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
+        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
             action = _segment_destructive_action(parsed, cwd)
             if action is not None:
                 records.append({
@@ -1051,69 +794,10 @@ def destructive_discard_action(command):
     return actions[0] if actions else None
 
 
-_DESTRUCTIVE_WORD = re.compile(
-    r"(?<![\w-])(?:" + "|".join(sorted(_DESTRUCTIVE_SUBCOMMANDS, key=len, reverse=True)) + r")(?![\w-])"
-)
-_GIT_THEN_DESTRUCTIVE_WORD = re.compile(
-    r"(?<![\w-])git(?![\w-])[\s\S]*?" + _DESTRUCTIVE_WORD.pattern
-)
-
-
-def _double_quoted_substitution_mention(text):
-    """True when a double-quoted span holds `$(` or a backtick and the text from that span on has a destructive word.
-
-    Bash runs a `$(...)` or backtick substitution inside double quotes, and no quote or boundary
-    parsing of its body is trusted: the test is blunt. Once a double-quoted span holds a
-    substitution, quotes nested in its body can end the span early as far as this scan can tell,
-    so the span is read as running from its opening quote to the end of the segment, and it
-    counts when a whole-word `git` there is followed later by a destructive subcommand word
-    (a raw-text regex, no parsing). The text before the span, the outer command's own verb
-    included, does not count, so `git checkout -b "feature/$(date +%s)"` is not a mention; nor is
-    prose such as `fix: restore state ($(date))` or a path ending in `/worktree`, with no `git`
-    in the span. Double-quoted prose with neither `$(` nor a backtick is not caught here.
-    """
-    if not isinstance(text, str):
-        return False
-    i = 0
-    n = len(text)
-    in_single = False
-    in_double = False
-    span_start = 0
-    while i < n:
-        ch = text[i]
-        if in_single:
-            in_single = ch != "'"
-        elif in_double:
-            if ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
-                i += 2
-                continue
-            if ch == "`" or text.startswith("$(", i):
-                return bool(_GIT_THEN_DESTRUCTIVE_WORD.search(text[span_start:]))
-            in_double = ch != '"'
-        elif ch == "\\":
-            i += 2 if i + 1 < n and text[i + 1] in "'\"\\" else 1
-            continue
-        elif ch == "'":
-            in_single = True
-        elif ch == '"':
-            in_double = True
-            span_start = i
-        i += 1
-    return False
-
-
 def _segment_mentions_destructive_git(text):
-    """Crude per-segment scan for destructive git subcommand mentions.
-
-    A double-quoted span holding `$(` or a backtick makes the segment a mention whenever the raw
-    text from that span on holds any destructive subcommand word (see
-    `_double_quoted_substitution_mention`).
-    Double-quoted prose with neither stays allowed.
-    """
+    """Crude per-segment scan for destructive git subcommand mentions."""
     if not isinstance(text, str):
         return False
-    if _double_quoted_substitution_mention(text):
-        return True
     i = 0
     n = len(text)
     in_single = False
@@ -1126,17 +810,9 @@ def _segment_mentions_destructive_git(text):
             i += 1
             continue
         if in_double:
-            if ch == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
-                i += 2
-                continue
             if ch == '"':
                 in_double = False
             i += 1
-            continue
-        if ch == "\\":
-            # An escaped quote or backslash is literal text; any other escaped character is left
-            # in view so `\git` still reads as a git word.
-            i += 2 if i + 1 < n and text[i + 1] in "'\"\\" else 1
             continue
         if ch == "'":
             in_single = True

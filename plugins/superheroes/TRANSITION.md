@@ -28,7 +28,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** Two dead pieces of the plugin are gone: `identifiers.py`'s retired content hash and `model_registry.escalate()`'s step to another vendor at the top of a ladder. See [Retired: the identifiers content hash and the cross-vendor escalation step](#retired-the-identifiers-content-hash-and-the-cross-vendor-escalation-step).
 - **After switching.** **Nothing is owed, except that a consumer that reads refusals entries with a closed key set must accept `route`.** An implementer may take the one route a hook's own refusal message names, and the entry then carries it. See [Refusals: a hook-named route](#refusals-a-hook-named-route).
 - **After switching.** **Nothing is owed.** The worktree guard no longer refuses a `git checkout --ours|--theirs` or `git restore` of paths the merge left unedited because of the merge's staged changes elsewhere. See [Worktree guard: a merge in progress](#worktree-guard-a-merge-in-progress).
-- **After switching.** **Nothing is owed.** A heredoc body fed to `cat`, `tee`, `gh` or `git commit` is no longer scanned for commands. See [Worktree guard: text that only names a command](#worktree-guard-text-that-only-names-a-command).
+- **After switching.** **Nothing is owed.** A heredoc body in a few exact command shapes is no longer scanned for commands. See [Worktree guard: text that only names a command](#worktree-guard-text-that-only-names-a-command).
 - **After switching.** **Nothing is owed.** Every worktree guard refusal text now ends with the exact command or tool to use next. See [Worktree guard: every refusal names its next step](#worktree-guard-every-refusal-names-its-next-step).
 
 ### Engine CLI calls: one stdin chokepoint
@@ -88,7 +88,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 ### Worktree guard: text that only names a command
 
-- A heredoc body fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` is read as text, not as commands, and the guard reads backslash-escaped quotes as bash does. A heredoc fed to a shell or any other program is still scanned.
+- A heredoc body is read as text, not as commands, only when the heredoc is the whole command, its delimiter is quoted (`<<'EOF'`), and it is fed to `cat >`, `cat >>` or `tee` writing a file, to `gh issue|pr ... --body-file -`, or to `git commit -F -`; the same holds for the whole `git commit -m "$(cat <<'EOF'` ... `)"` and `gh issue|pr ... --body "$(cat <<'EOF'` ... `)"` message argument. Any other heredoc, and anything that runs in a shell or an interpreter, is read as commands, so a body line that names a discard is refused.
 
 ### Worktree guard: every refusal names its next step
 

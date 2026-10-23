@@ -619,18 +619,13 @@ def test_unparsed_message_verbatim():
         "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
         "`worktree`) reads as a command wherever this guard loses track of the quoting "
         "around it — a heredoc body this guard cannot show is only text, or a quote of "
-        "the same kind as the one enclosing it nested inside a `$(...)` substitution. "
-        "A heredoc fed to `cat`, `tee`, `gh issue|pr|release|api` or `git commit` with a "
-        "quoted delimiter (`<<'EOF'`) is read as text; a heredoc fed to anything else, or "
-        "left unterminated, is read as command text. Heredoc masking is also off for the "
-        "whole command when any non-blank line comes before the line holding the heredoc "
-        "operator (a `trap`, say) or that line starts with a variable assignment, and when any "
-        "non-blank line follows the heredoc (a later command could run what it wrote) or a shell "
-        "keyword such as `if`, `for`, `while`, `do` or `case` sits outside the body, so "
-        "there the text route is the Write tool and `--body-file`/`-F`. "
-        "A `$(...)` or backtick substitution in a git global option before a discard-named "
-        "verb (a `-c` value, say) is refused here too: put such a value in a variable on an "
-        "earlier command, or run the command without the substitution. "
+        "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
+        "`$(...)` substitution. "
+        "A heredoc with a quoted delimiter (`<<'EOF'`) that is the whole command and is fed to "
+        "`cat >`/`cat >>`/`tee` writing a file, to `gh issue|pr ... --body-file -`, or to "
+        "`git commit -F -`, or that is the whole `-m \"$(cat <<'EOF'` ... `)\"` / "
+        "`--body \"$(cat <<'EOF'` ... `)\"` argument, is read as text; any other heredoc is "
+        "read as command text. "
         "Next step: write the text with the Write tool and pass the file "
         "(`gh ... --body-file <path>`, `git commit -F <path>`), or re-issue an intended "
         "discard as a plain `git ...` command this guard can parse. "
@@ -651,18 +646,16 @@ def test_unparsed_message_names_the_prose_case_and_the_file_remedy():
 
 
 # The shape that still puts prose outside the guard's quote tracking, so the text reads as a
-# command. (The backslash-escaped quote and the heredoc body that used to sit here are read as
-# text now — see _PROSE_NOW_ALLOWED and test_worktree_guard_text.py, #2054.)
+# command. (The heredoc body that used to sit here is read as text when it is an allowlisted
+# whole-command shape — see _PROSE_NOW_ALLOWED and test_worktree_guard_text.py, #2054.)
 _PROSE_ONLY_MENTIONS = (
     # same-delimiter quotes nested inside a command substitution: legal shell, but the scanner
     # toggles its outer quote state on the inner quotes and the prose reads as bare text
     'gh pr comment 1 --body "$(echo "never git reset --hard")"',
 )
 
-# Prose shapes #2054 moved out of the refused list: bash reads the escaped quote as part of the
-# string, and the heredoc body is data fed to `cat`, so neither is a command.
+# The prose shape #2054 moved out of the refused list: the heredoc body is data fed to `cat >`.
 _PROSE_NOW_ALLOWED = (
-    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt\\""',
     "cat > /tmp/note.md <<'EOF'\n"
     "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
     "EOF",
@@ -701,7 +694,7 @@ def test_classify_prose_only_mention_denies_with_the_prose_hint(tmp_path, monkey
 
 
 def test_classify_prose_the_guard_now_reads_as_text_is_allowed(tmp_path, monkeypatch):
-    """The escaped-quote comment body and the `cat` heredoc body are data, not commands (#2054)."""
+    """The `cat >` heredoc body is data, not commands (#2054)."""
     _calibrated(monkeypatch)
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "f.txt", "committed\n")
