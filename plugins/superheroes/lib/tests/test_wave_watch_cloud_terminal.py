@@ -7,6 +7,7 @@ a gh failure that returns a well-formed but wrong comment list, and the loop's r
 a lane-terminal (covered with the other lane events).
 """
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -307,18 +308,18 @@ def test_direct_an_unreadable_read_returns_empty_lists_and_is_disclosed():
 # --- a superseded park is not terminal (#2099) ---------------------------------------------
 
 
-def _terminals(comments, answered=()):
-    return ww._cloud_terminals(comments, _lanes({"cloud-a": (101, 600)}), set(answered))
+def _terminals(comments, answered=(), lane_age=600):
+    return ww._cloud_terminals(comments, _lanes({"cloud-a": (101, lane_age)}), set(answered))
 
 
 def test_p1_a_park_then_a_progress_edit_later_is_not_lane_terminal(repo):
     # axis: SUPERSEDED by progress — the recorded shape: a progress comment created before the park, edited after it
     _cloud_lane(repo, "cloud-a", 101)
-    park = _comment(7, 101, _body("park"), age=300)
-    progress = _progress(8, 101, created_age=500, updated_age=100)
+    park = _comment(7, 101, _body("park"), age=1000)
+    progress = _progress(8, 101, created_age=1200, updated_age=100)
     result = _arm(repo, _NoteGh([park, progress]))
     assert result["event"] == ww.EVENT_TIMER
-    assert _terminals([park, progress]) == []
+    assert _terminals([park, progress], lane_age=3000) == []
 
 
 def test_p2_a_progress_edit_then_a_later_park_is_lane_terminal_parked(repo):
@@ -332,13 +333,13 @@ def test_p2_a_progress_edit_then_a_later_park_is_lane_terminal_parked(repo):
 
 def test_p3_a_park_and_a_progress_edit_in_the_same_second_keeps_the_park():
     # axis: STRICT — a tie keeps the park
-    park = _comment(7, 101, _body("park"), age=100)
-    progress = {**_progress(8, 101, created_age=500, updated_age=100), "updated_at": park["created_at"]}
+    park = _comment(7, 101, _body("park"), age=1000)
+    progress = {**_progress(8, 101, created_age=1200, updated_age=100), "updated_at": park["created_at"]}
     for order in ([park, progress], [progress, park]):
-        [only] = _terminals(order)
+        [only] = _terminals(order, lane_age=3000)
         assert (only["state"], only["commentId"]) == ("parked", 7)
-    later = {**progress, "updated_at": _progress(8, 101, created_age=500, updated_age=50)["updated_at"]}
-    assert _terminals([park, later]) == []
+    later = {**progress, "updated_at": _progress(8, 101, created_age=1200, updated_age=50)["updated_at"]}
+    assert _terminals([park, later], lane_age=3000) == []
 
 
 def test_p3_a_park_and_a_builder_note_in_the_same_second_keeps_the_park():
@@ -379,39 +380,39 @@ def test_p4_a_note_created_before_the_park_does_not_supersede_it():
 @pytest.mark.parametrize("kind, state", [("handback", "handback"), ("stop", "stopped")])
 def test_p5_a_handback_or_stop_is_never_superseded(kind, state):
     # axis: PARK ONLY — the supersession applies to a park alone
-    ending = _comment(7, 101, _body(kind), age=300)
-    progress = _progress(8, 101, created_age=500, updated_age=100)
+    ending = _comment(7, 101, _body(kind), age=1000)
+    progress = _progress(8, 101, created_age=1200, updated_age=100)
     note = _comment(9, 101, age=50)
     for later in ([progress], [note], [progress, note]):
-        [only] = _terminals([ending] + later)
+        [only] = _terminals([ending] + later, lane_age=3000)
         assert (only["state"], only["commentId"]) == (state, 7)
 
 
 def test_p6_a_newer_park_after_the_superseding_progress_fires(repo):
     # axis: SUPERSEDED by progress — a newer park after the superseding progress still fires — a supersession that silences the lane for good makes it fail
     _cloud_lane(repo, "cloud-a", 101)
-    first = _comment(5, 101, _body("park"), age=400)
-    progress = _progress(8, 101, created_age=500, updated_age=300)
+    first = _comment(5, 101, _body("park"), age=1000)
+    progress = _progress(8, 101, created_age=1200, updated_age=300)
     second = _comment(6, 101, _body("park"), age=100)
     launch = _only_launch(_arm(repo, _NoteGh([first, progress, second])))
     assert (launch["state"], launch["commentId"]) == ("parked", 6)
-    assert _terminals([first, progress]) == []
+    assert _terminals([first, progress], lane_age=3000) == []
 
 
 def test_p6_a_superseded_park_does_not_fall_back_to_an_older_ending():
     # axis: NO FALLBACK — a superseded park does not fall back to an older ending — a fallback to the older stop makes it fail
-    older = _comment(4, 101, _body("stop"), age=500)
-    park = _comment(7, 101, _body("park"), age=300)
-    progress = _progress(8, 101, created_age=500, updated_age=100)
-    assert _terminals([older, park, progress]) == []
+    older = _comment(4, 101, _body("stop"), age=1200)
+    park = _comment(7, 101, _body("park"), age=1000)
+    progress = _progress(8, 101, created_age=1300, updated_age=100)
+    assert _terminals([older, park, progress], lane_age=3000) == []
 
 
 def test_p7_progress_on_another_lanes_issue_does_not_supersede():
     # axis: lane assignment — only the same lane's activity counts
-    lanes = _lanes({"cloud-a": (101, 600), "cloud-b": (202, 600)})
-    park = _comment(7, 101, _body("park"), age=300)
-    elsewhere = _progress(8, 202, created_age=500, updated_age=100)
-    unwatched = _progress(9, 999, created_age=500, updated_age=100)
+    lanes = _lanes({"cloud-a": (101, 3000), "cloud-b": (202, 3000)})
+    park = _comment(7, 101, _body("park"), age=1000)
+    elsewhere = _progress(8, 202, created_age=1200, updated_age=100)
+    unwatched = _progress(9, 999, created_age=1200, updated_age=100)
     other_note = _comment(10, 202, age=100)
     out = ww._cloud_terminals([park, elsewhere, unwatched, other_note], lanes, set())
     assert [(t["launchId"], t["commentId"]) for t in out] == [("cloud-a", 7)]
@@ -419,26 +420,152 @@ def test_p7_progress_on_another_lanes_issue_does_not_supersede():
 
 def test_p7_progress_created_before_the_lanes_cutoff_does_not_supersede():
     # axis: lane cutoff — progress created before the lane's cutoff does not supersede — a missing cutoff check makes it fail
-    park = _comment(7, 101, _body("park"), age=300)
+    park = _comment(7, 101, _body("park"), age=1000)
     earlier_lane = _progress(8, 101, created_age=3000, updated_age=100)
     earlier_note = _comment(9, 101, age=3000)
-    assert [t["commentId"] for t in _terminals([park, earlier_lane, earlier_note])] == [7]
+    assert [t["commentId"] for t in _terminals([park, earlier_lane, earlier_note], lane_age=2000)] == [7]
 
 
 @pytest.mark.parametrize("updated", [None, "soon", ""])
 def test_p8_a_progress_comment_with_no_readable_updated_at_does_not_supersede(updated):
     # axis: unreadable updated_at — a progress comment whose updated_at is None, junk or empty does not supersede — treating it as a time makes it fail
-    park = _comment(7, 101, _body("park"), age=300)
-    readable = _progress(8, 101, created_age=500, updated_age=100)
-    assert _terminals([park, readable]) == []
+    park = _comment(7, 101, _body("park"), age=1000)
+    readable = _progress(8, 101, created_age=1200, updated_age=100)
+    assert _terminals([park, readable], lane_age=3000) == []
     unreadable = {**readable, "updated_at": updated}
-    assert [t["commentId"] for t in _terminals([park, unreadable])] == [7]
+    assert [t["commentId"] for t in _terminals([park, unreadable], lane_age=3000)] == [7]
 
 
 def test_p8_a_progress_comment_without_an_updated_at_key_does_not_supersede():
     # axis: missing updated_at key — a progress comment with no updated_at key does not supersede — a KeyError or a default time makes it fail
-    park = _comment(7, 101, _body("park"), age=300)
-    full = _progress(8, 101, created_age=500, updated_age=100)
-    assert _terminals([park, full]) == []
+    park = _comment(7, 101, _body("park"), age=1000)
+    full = _progress(8, 101, created_age=1200, updated_age=100)
+    assert _terminals([park, full], lane_age=3000) == []
     keyless = {k: v for k, v in full.items() if k != "updated_at"}
-    assert [t["commentId"] for t in _terminals([park, keyless])] == [7]
+    assert [t["commentId"] for t in _terminals([park, keyless], lane_age=3000)] == [7]
+
+
+# --- a progress edit supersedes a park only when it shows the lane resumed (#2099, vet 622) ----
+
+
+_WIDE = 30000
+
+
+def _stamp(epoch):
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _park_then_progress(
+    gap, *, phase="gate", expected="Expected: 60 minutes", created_before=600, body=None, park_age=12000,
+):
+    """A park and the lane's progress comment, created `created_before` s before it and last edited `gap` s after it."""
+    park = _comment(7, 101, _body("park"), age=park_age)
+    park_at = ww._parse_activity_time(park["created_at"])
+    progress = _progress(8, 101, created_age=0, updated_age=0, body=body, phase=phase, expected=expected)
+    progress["created_at"] = _stamp(park_at - created_before)
+    progress["updated_at"] = _stamp(park_at + gap)
+    return park, progress
+
+
+def _only_park(comments):
+    [only] = _terminals(comments, lane_age=_WIDE)
+    assert (only["state"], only["commentId"]) == ("parked", 7)
+
+
+_RECORDED_PARKS = [
+    pytest.param(5, "parked on a second owner gate", "Expected: 240 minutes", 600, id="weekly-eats-1996"),
+    pytest.param(
+        3, "stopped on the advisor's order (see the park comment below)", "Expected: 60 minutes", 1490,
+        id="superheroes-2071",
+    ),
+    pytest.param(
+        8, "parked at Step B (add_repo refused, [Permission Grant]); see the park comment",
+        "Expected: 60 minutes", 80, id="superheroes-1948",
+    ),
+]
+
+
+@pytest.mark.parametrize("gap, phase, expected, created_before", _RECORDED_PARKS)
+def test_p9_the_recorded_park_then_a_seconds_later_parked_progress_edit_stays_terminal(
+    gap, phase, expected, created_before,
+):
+    # axis: grace window + phase — the recorded live shapes: a park then a progress edit seconds later with a parked or stopped phase is still a park
+    park, progress = _park_then_progress(gap, phase=phase, expected=expected, created_before=created_before)
+    _only_park([park, progress])
+    _only_park([progress, park])
+
+
+def test_p9_a_recorded_park_shape_is_lane_terminal_through_the_arm(repo):
+    # axis: grace window + phase — the recorded shape drives the arm to lane-terminal with the park
+    _cloud_lane(repo, "cloud-a", 101)
+    park, progress = _park_then_progress(
+        5, phase="parked on a second owner gate", expected="Expected: 240 minutes", park_age=1000,
+    )
+    launch = _only_launch(_arm(repo, _NoteGh([park, progress])))
+    assert (launch["state"], launch["commentId"]) == ("parked", 7)
+
+
+def test_p10_a_progress_edit_301_seconds_after_the_park_with_a_building_phase_supersedes_it():
+    # axis: SUPERSEDED by progress — a resumed phase past the window supersedes the park
+    park, progress = _park_then_progress(301, phase="building WO-2 after the advisor's answer")
+    assert _terminals([park, progress], lane_age=_WIDE) == []
+
+
+def test_p10_the_real_resume_two_hours_forty_three_minutes_later_supersedes_the_park():
+    # axis: resum exception — the #3293 shape: a phase that names the park but says it resumed supersedes it
+    park, progress = _park_then_progress(9780, phase="resumed after the park; building")
+    assert _terminals([park, progress], lane_age=_WIDE) == []
+
+
+@pytest.mark.parametrize("gap, superseded", [(5, False), (299, False), (300, False), (301, True)])
+def test_p11_a_resumed_progress_edit_supersedes_only_when_strictly_more_than_300_seconds_after(gap, superseded):
+    # axis: STRICT window — exactly PARK_SUPERSESSION_GRACE_SECONDS keeps the park, one second more supersedes it
+    assert ww.PARK_SUPERSESSION_GRACE_SECONDS == 300
+    park, progress = _park_then_progress(gap, phase="building WO-2")
+    if superseded:
+        assert _terminals([park, progress], lane_age=_WIDE) == []
+    else:
+        _only_park([park, progress])
+
+
+@pytest.mark.parametrize("phase", [
+    pytest.param("parked on a second owner gate", id="parked-on-a-gate"),
+    pytest.param("still parked awaiting review", id="still-parked"),
+    pytest.param("Still stopped for owner", id="still-stopped-capitalised"),
+    pytest.param("stopped", id="stopped"),
+    pytest.param("PARKED", id="PARKED"),
+    pytest.param("parking-lot review", id="parking-lot"),
+])
+def test_p12_a_parked_or_stopped_phase_past_the_window_keeps_the_park(phase):
+    # axis: phase veto — an edit long after the park whose phase reads parked or stopped (any case, any word) is not a resume
+    park, progress = _park_then_progress(3600, phase=phase)
+    _only_park([park, progress])
+
+
+def test_p12_a_progress_edit_past_the_window_with_no_phase_or_an_empty_phase_keeps_the_park():
+    # axis: phase veto — a missing or empty Phase line never supersedes
+    no_phase_body = "\n".join([cb.PROGRESS_HEADER, "", "Now running: the suite", "Expected: 60 minutes"])
+    park, missing = _park_then_progress(3600, body=no_phase_body)
+    assert ww._cloud_progress([missing], _lanes({"cloud-a": (101, _WIDE)}))["cloud-a"]["phase"] is None
+    _only_park([park, missing])
+    park, empty = _park_then_progress(3600, phase="")
+    assert ww._cloud_progress([empty], _lanes({"cloud-a": (101, _WIDE)}))["cloud-a"]["phase"] is None
+    _only_park([park, empty])
+
+
+@pytest.mark.parametrize("phase, reads_resumed", [
+    ("building WO-2", True), ("gate", True), ("Resumed: building", True), ("parked, then resumed", True),
+    ("parked", False), ("PARKED", False), ("Stopped for owner", False), ("parking-lot review", False),
+    ("", False), (None, False), (5, False), (["resumed"], False),
+])
+def test_p12_the_phase_helper_reads_resumed_only_for_a_nonempty_string(phase, reads_resumed):
+    # axis: phase helper — None, empty and non-string never read resumed; park/stop words veto unless a resum word is present
+    assert ww._phase_reads_resumed(phase) is reads_resumed
+
+
+def test_p13_a_builder_note_five_seconds_after_the_park_still_supersedes_it():
+    # axis: SUPERSEDED by note — the note rule is unchanged: created strictly after the park, no window, no phase
+    park, progress = _park_then_progress(3, phase="parked on a second owner gate", park_age=1000)
+    note = _comment(8, 101, age=995)
+    assert _terminals([park, note], lane_age=_WIDE) == []
+    assert _terminals([park, progress, note], lane_age=_WIDE) == []
