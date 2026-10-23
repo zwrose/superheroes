@@ -485,6 +485,41 @@ def test_cross_field_rules_agree_between_page_and_prose():
         assert bool(page_problems) == bool(prose_problems) == refused, "%s: page %s, prose %s" % (name, page_problems, prose_problems)
 
 
+# Bites on: the both-fields refusal losing its own description in the schema (the page then prints the long description of prSheet, which says nothing about the rule).
+def test_the_page_names_the_rule_when_a_sheet_carries_both_nothing_listed_and_canon_accounted():
+    from test_review_template import _run_check_sheet
+
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    rules = [part["description"] for part in schema["$defs"]["prSheet"]["allOf"]
+             if part.get("not") == {"required": ["nothingListed", "canonAccounted"]}]
+    assert len(rules) == 1
+    canon_id = "2026-10-22-abcdefgh-1"
+    sheet = _pr_kind_sheet("pr")
+    sheet["prSheet"]["whatChanged"]["summary"] = "Adds a sheet for one PR. Ruled in %s." % canon_id
+    sheet["prSheet"].update(nothingListed=True, canonAccounted=[canon_id])
+    assert _run_check_sheet([sheet]) == [rules]
+    assert _load_prose_module().check_sheet(sheet) != []
+
+
+# Bites on: sheet_prose's copy of the cited-id pattern, or the schema's canonAccounted id pattern, drifting from lib/canon.py (the page's own copy is guarded by the parity fixtures above).
+def test_the_copied_canon_id_patterns_agree_with_canon():
+    import canon
+
+    ident = "2026-10-22-abcdefgh-1"
+    texts = [ident, ident + "0", ident + "a", ident + "-2", "x" + ident, "Ruled in 2026-10-22-abcdefgh-10 and 2026-10-22-abcdefgh-1.",
+             ident + " and 2026-10-23-ijklmnop-2", "2026-10-22-abc-1", ""]
+    cited = _load_prose_module()._CITED_ID
+    for text in texts:
+        assert {m.group(0) for m in cited.finditer(text)} == canon.cited_entry_ids(text), repr(text)
+
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    pattern = re.compile(schema["$defs"]["prSheet"]["properties"]["canonAccounted"]["items"]["pattern"])
+    candidates = texts + ["2026-10-22-abcdefgh-3", "2026-10-22-abcdefgh-0", "2026-10-22-ABCDEFGH-1", "2026-10-22-abcdefg-1"]
+    accepted = {c for c in candidates if canon.is_entry_id(c)}
+    assert accepted and accepted != set(candidates)
+    assert {c for c in candidates if pattern.fullmatch(c)} == accepted
+
+
 SCHEMA_FILE = PLUGIN / "theme" / "sheet.schema.json"
 
 

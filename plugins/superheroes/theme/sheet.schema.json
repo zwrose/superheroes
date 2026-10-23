@@ -238,12 +238,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["number", "commit", "whatChanged", "craft", "alreadyDecided", "history"],
-      "not": {"required": ["nothingListed", "canonAccounted"]},
       "allOf": [
         {
           "description": "A carried-forward verdict belongs to a sheet that replaced an earlier one.",
           "if": {"required": ["carriedForward"]},
           "then": {"required": ["previousCommit"]}
+        },
+        {
+          "description": "nothingListed and canonAccounted never come together: a sheet records either that the PR bodies list no acceptance or the Canon rulings that cover the ones they list.",
+          "not": {"required": ["nothingListed", "canonAccounted"]}
         }
       ],
       "properties": {

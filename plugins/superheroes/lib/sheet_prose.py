@@ -325,7 +325,7 @@ def _check_cross_fields(sheet):
     problems += ['prSheet.canonAccounted names "%s", which the summary does not cite.' % i
                  for i in sheet.get("prSheet", {}).get("canonAccounted", []) if i not in cited]
     rows = sheet.get("index", {}).get("rows", [])
-    return problems +['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
+    return problems + ['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
 
 
 def check_sheet(sheet):
