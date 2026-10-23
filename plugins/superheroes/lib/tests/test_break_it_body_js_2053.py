@@ -779,3 +779,14 @@ def test_an_escaped_module_spelling_is_never_decoded_and_counts_as_relative():
     text = "const subject = require(`\\x2e/subject`);\ntest(\"a\", () => { expect(subject).toBe(1); });"
     moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", text)])
     assert moved["status"] == "unresolved", moved
+
+
+def test_template_with_a_regex_brace_substitution_keys_raw_and_still_reads():
+    text = 'const a = `x ${s.replace(/\\}/g, "")} y`;\ntest("a", () => { expect(a).toBe(1); });'
+    moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", text)])
+    assert moved["status"] != "unresolved", moved
+    _assert_same(text, text)
+    changed = text.replace(" y`", " z`")
+    _assert_differ(text, changed)
+    moved = break_it_body.locate(text, "old/a.test.js", [("other/b.test.js", changed)])
+    assert moved["status"] != "kept", moved

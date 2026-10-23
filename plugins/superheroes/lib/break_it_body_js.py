@@ -136,17 +136,21 @@ def _template_key(body):
     """The template body with each `${ ... }` substitution replaced by its scanned tokens, so a formatter's whitespace
     or quote change inside an expression reads equal while the literal text stays byte for byte."""
     parts, last, i = [], 0, 0
-    while i < len(body):
-        if body[i] == "\\":
-            i += 2
-        elif body.startswith("${", i):
-            end = _skip_template(body, i + 2, True)
-            toks = _Scanner(body[i + 2:end - 1]).run()
-            # a substitution is keyed by its tokens, not its raw text, so `${1+2}` and `${1 + 2}` read equal
-            parts += [body[last:i], "${" + "\x1f".join("%s\x1e%s" % tok for tok in toks) + "}"]
-            last = i = end
-        else:
-            i += 1
+    try:
+        while i < len(body):
+            if body[i] == "\\":
+                i += 2
+            elif body.startswith("${", i):
+                end = _skip_template(body, i + 2, True)
+                toks = _Scanner(body[i + 2:end - 1]).run()
+                # a substitution is keyed by its tokens, not its raw text, so `${1+2}` and `${1 + 2}` read equal
+                parts += [body[last:i], "${" + "\x1f".join("%s\x1e%s" % tok for tok in toks) + "}"]
+                last = i = end
+            else:
+                i += 1
+    except ValueError:
+        # axis: a substitution that cannot be bounded or scanned (e.g. a regular expression holding a brace) keys the whole template by its raw text, byte-strict, instead of refusing the body
+        return body
     return "".join(parts) + body[last:]
 
 
