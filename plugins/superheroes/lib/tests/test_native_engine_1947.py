@@ -1533,3 +1533,43 @@ def test_hostile_global_git_config_never_reaches_the_collection(tmp_path, monkey
         with open(os.path.join(r.B, rel), "rb") as fh:
             assert fh.read() == text.encode("utf-8")
         assert _git(r.B, "show", ":" + rel) == text
+
+
+def test_open_records_the_bite_proof_format_after_an_order_that_asks(tmp_path, monkeypatch, capsys):
+    # axis: insertion (#2082) — an order naming a bite-proof reaches the subagent with the format
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _write(r.order, "# Order\nAdd a guard and return its bite-proof record.\n")
+    code, _ = _open(capsys, r)
+    assert code == 0
+    with open(os.path.join(r.run, "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    assert prompt.endswith("**who owns the outstanding receipt**.\n")
+    tail = prompt.split("The order follows, verbatim.\n\n---\n\n", 1)[1]
+    assert tail.startswith("# Order\nAdd a guard and return its bite-proof record.\n\n\n"
+                           "## Bite-proof record format (from the plugin's rubric/bite-proof.md)\n")
+    assert "- **raw red** — output with the detector unedited;" in tail
+
+
+def test_open_records_no_bite_proof_format_for_an_order_that_does_not_ask(tmp_path, monkeypatch, capsys):
+    # axis: insertion (#2082) — an order naming no bite-proof reaches the subagent verbatim, alone
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _ = _open(capsys, r)
+    assert code == 0
+    with open(os.path.join(r.run, "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    assert prompt.endswith("The order follows, verbatim.\n\n---\n\n# Order\nChange a.txt.\n")
+
+
+def test_open_refuses_an_order_that_asks_when_the_rubric_is_unreadable(tmp_path, monkeypatch, capsys):
+    # axis: refusal (#2082) — no run opens without the format an order asked for
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _write(r.order, "Return a bite-proof record.\n")
+    monkeypatch.setattr(NE.bite_proof_format, "RUBRIC_PATH", str(tmp_path / "absent.md"))
+    code, out = _open(capsys, r)
+    assert code == 1
+    assert out == {"ok": False, "terminal": True, "reason": "bite-proof-format-unreadable"}
+    assert _records(r) == []
+    assert not os.path.exists(os.path.join(r.run, "agent-prompt.md"))

@@ -55,6 +55,7 @@ const VOCABULARY = JSON.stringify({
     mark: { sessionId: '--t-session' },
     unmark: { sessionId: '--t-session', since: '--t-since', until: '--t-until' },
     save: { sessionId: '--t-session' },
+    skip: { sessionId: '--t-session' },
   },
 })
 
@@ -127,6 +128,11 @@ function rig(
     isIdBroken?: boolean
     sessionId?: string
     isEnvBroken?: boolean
+    // what `$.env.get` answers for the harness's entrypoint and its inherited child-session marker
+    // (undefined: unset), and whether it is denied
+    entrypoint?: string
+    childSession?: string
+    isEnvGetBroken?: boolean
     isStateBroken?: boolean
     brokenKey?: string
     vocabulary?: string | null
@@ -226,6 +232,20 @@ function rig(
     r.envs.push([e.name, e.value])
 
     return { value: undefined }
+  })
+  on('env.get', (_$, e) => {
+    if (options.isEnvGetBroken) {
+      return { deny: 'env unreadable' }
+    }
+
+    return {
+      value:
+        e.name === 'CLAUDE_CODE_ENTRYPOINT'
+          ? options.entrypoint
+          : e.name === 'CLAUDE_CODE_CHILD_SESSION'
+            ? options.childSession
+            : undefined,
+    }
   })
   on('state.set', (_$, e, next) => {
     if (options.isStateBroken || (e.key === options.brokenKey && e.value === null)) {
@@ -717,6 +737,18 @@ const COMMAND_FAILED = 'Auto-checkpoint failed'
 const PAST = 520000
 const NEAR = 470000
 const FAR_BELOW = 100000
+const TRIGGER = 500000
+
+const SKIP = '/notes/sess-1.skip'
+const skipAnswer = ok({ path: SKIP })
+const answerSkip = (argv: readonly string[]): Cli => (argv[3] === 'skip' ? skipAnswer : saveAnswer)
+
+// The records the mod handed the `skip` verb, in order (a failed call's too): the JSON on its stdin.
+const skipRecords = (r: Rig): Record<string, unknown>[] =>
+  r.argv.flatMap((argv, i) => (argv[3] === 'skip' ? [JSON.parse(r.stdins[i] ?? 'null')] : []))
+
+// Every write of the `lastSkip` state key, in order.
+const lastSkips = (r: Rig) => r.sets.filter(([key]) => key === 'lastSkip').map(([, value]) => value)
 
 const start = ($: Engine, isInteractive = true) => {
   engine = $
@@ -903,7 +935,7 @@ test('the desktop app attaching late carries the checkpoint through the save and
   await complete($, block('the notes'))
 
   expect(r.notes).toBe('fresh notes')
-  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.argv.flatMap((argv, i) => (argv[3] === 'save' ? [r.stdins[i]] : []))).toEqual(['the notes'])
   expect(r.toasts).toEqual(['Checkpoint notes saved'])
 
   await r.clock.advance(1000)
@@ -923,6 +955,234 @@ test('a mobile attach to a non-interactive session runs nothing', async ($, on) 
   await r.clock.settle()
 
   expect(r.commands).toEqual([])
+})
+
+// A session the desktop app started (its entrypoint, no inherited child-session marker) is
+// attended off screen: the roster is not consulted.
+for (const entrypoint of ['claude-desktop', 'claude-desktop-3p']) {
+  test(`a session the desktop app started (${entrypoint}) runs the automatic checkpoint with an empty roster`, async ($, on) => {
+    const r = rig(on, answerSkip, { entrypoint })
+
+    await start($, false)
+    r.surfaces = []
+    await measure($, r, PAST)
+    await r.clock.settle()
+
+    expect(r.commands).toEqual([COMMAND])
+    expect(skipRecords(r)).toEqual([])
+  })
+}
+
+for (const [name, options, surfaces] of [
+  ['a launcher-spawned -p builder (inherited desktop entrypoint, child marker)', { entrypoint: 'claude-desktop', childSession: '1' }, []],
+  ['a child marker of any value', { entrypoint: 'claude-desktop', childSession: '0' }, []],
+  ['a cloud session (another entrypoint)', { entrypoint: 'remote' }, []],
+  ['a terminal entrypoint', { entrypoint: 'cli' }, []],
+  ['no entrypoint at all', {}, []],
+  ['a phone-only roster, not desktop-started', {}, ['mobile']],
+] as [string, Options, string[]][]) {
+  test(`${name}: nothing runs automatically and no band is drawn`, async ($, on) => {
+    const r = rig(on, answerSkip, options)
+
+    await start($, false)
+    r.surfaces = surfaces
+    await measure($, r, PAST)
+    await r.clock.settle()
+
+    expect(r.commands).toEqual([])
+    expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+    expect(r.sets.filter(([key]) => key === 'isDesktopStarted')).toEqual([['isDesktopStarted', false]])
+  })
+}
+
+test('a failing env.get leaves the session unattended, session.start still completes, and nothing runs', async ($, on) => {
+  // the entrypoint would read desktop-started if the read could be made
+  const r = rig(on, answerSkip, { entrypoint: 'claude-desktop', isEnvGetBroken: true })
+
+  const res = await start($, false)
+
+  expect(res).toEqual({ cwd: '/w' })
+  expect(r.envs).toEqual([['SUPERHEROES_COMPACT_MOD', SESSION]])
+
+  r.surfaces = []
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+  expect(r.sets.filter(([key]) => key === 'isDesktopStarted')).toEqual([['isDesktopStarted', false]])
+})
+
+test('a failing env.get and a failing state write still let session.start complete', async ($, on) => {
+  rig(on, answerSkip, { isEnvGetBroken: true, isStateBroken: true })
+
+  expect(await start($, false)).toEqual({ cwd: '/w' })
+})
+
+// ---- the skip record (#2081) ----------------------------------------------------------
+
+test('an unattended session past the trigger records why, once, through the skip verb', async ($, on) => {
+  const r = rig(on, answerSkip)
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  const skips = r.argv.filter(argv => argv[3] === 'skip')
+
+  expect(r.commands).toEqual([])
+  expect(skips).toHaveLength(1)
+  expect(flag(nth(skips, 0), '--t-session')).toBe(SESSION)
+  expect(skipRecords(r)).toEqual([
+    {
+      at: new Date(r.clock.now()).toISOString(),
+      reason: 'headless',
+      tokens: PAST,
+      trigger: TRIGGER,
+      surfaces: [],
+      isInteractive: false,
+      isDesktopStarted: false,
+    },
+  ])
+
+  // the same reason on the same side of the trigger writes nothing more
+  await measure($, r, PAST + 1000)
+  await measure($, r, PAST + 2000)
+  await r.clock.settle()
+
+  expect(skipRecords(r)).toHaveLength(1)
+  expect(lastSkips(r)).toEqual(['headless:past'])
+})
+
+test('the skip record carries the roster as read, or null when it cannot be read', async ($, on) => {
+  const r = rig(on, answerSkip)
+
+  await start($, false)
+  r.surfaces = ['mobile']
+  await measure($, r, PAST)
+  r.surfaces = null
+  await measure($, r, NEAR)
+  await measure($, r, PAST)
+
+  expect(skipRecords(r).map(record => record.surfaces)).toEqual([['mobile'], null, null])
+})
+
+test('crossing the trigger with the same reason records again: near, then past', async ($, on) => {
+  const r = rig(on, answerSkip)
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, NEAR)
+  await measure($, r, NEAR + 1000)
+  await measure($, r, PAST)
+  await measure($, r, PAST + 1000)
+
+  expect(skipRecords(r).map(record => [record.reason, record.tokens])).toEqual([
+    ['headless', NEAR],
+    ['headless', PAST],
+  ])
+  expect(lastSkips(r)).toEqual(['headless:near', 'headless:past'])
+})
+
+test('an attended session that declines near the trigger records the gate that decided', async ($, on) => {
+  const r = rig(on, answerSkip)
+
+  await start($)
+  await measure($, r, NEAR)
+
+  expect(skipRecords(r)).toMatchObject([{ reason: 'below-trigger', tokens: NEAR, isInteractive: true }])
+  expect(lastSkips(r)).toEqual(['below-trigger:near'])
+})
+
+test('a run clears the record: the next skip at the same key writes again', async ($, on) => {
+  const r = rig(on, answerSkip)
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  expect(skipRecords(r)).toHaveLength(1)
+
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+  expect(skipRecords(r)).toHaveLength(1)
+  expect(lastSkips(r)).toEqual(['headless:past', null])
+
+  r.surfaces = []
+  await measure($, r, PAST)
+
+  expect(skipRecords(r)).toHaveLength(2)
+  expect(lastSkips(r)).toEqual(['headless:past', null, 'headless:past'])
+})
+
+test('a fill below the heads-up line writes nothing and clears the record', async ($, on) => {
+  const r = rig(on, answerSkip)
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, FAR_BELOW)
+
+  expect(skipRecords(r)).toEqual([])
+  expect(lastSkips(r)).toEqual([])
+
+  await measure($, r, PAST)
+  await measure($, r, FAR_BELOW)
+
+  expect(skipRecords(r)).toHaveLength(1)
+  expect(lastSkips(r)).toEqual(['headless:past', null])
+
+  await measure($, r, PAST)
+
+  expect(skipRecords(r)).toHaveLength(2)
+})
+
+for (const [name, answer] of [
+  ['answers not ok', { exitCode: 1, stdout: '{"ok": false, "reason": "config-dir-unresolved"}' }],
+  ['cannot run', null],
+] as [string, Cli][]) {
+  test(`a skip call that ${name} neither throws nor stops the band, and the next measure retries`, async ($, on) => {
+    let skipAnswers: Cli = answer
+    const r = rig(on, argv => (argv[3] === 'skip' ? skipAnswers : saveAnswer))
+
+    // interactive, with a turn running past the trigger: the decision is a busy band, not a run
+    await start($)
+    await $.turn.start({ text: 'work', turnId: 't1' })
+
+    const res = await measure($, r, PAST)
+
+    expect(res).toEqual({ changed: ['context'] })
+    expect(bandWrites(r)).toEqual([['band', true]])
+    expect(skipRecords(r)).toHaveLength(1)
+    expect(lastSkips(r)).toEqual([])
+
+    await measure($, r, PAST + 1000)
+
+    expect(skipRecords(r)).toHaveLength(2)
+    expect(lastSkips(r)).toEqual([])
+
+    skipAnswers = skipAnswer
+    await measure($, r, PAST + 2000)
+    await measure($, r, PAST + 3000)
+
+    expect(skipRecords(r)).toHaveLength(3)
+    expect(lastSkips(r)).toEqual(['busy:past'])
+    expect(r.commands).toEqual([])
+  })
+}
+
+test('a skip write that fails does not stop the run of a later fire', async ($, on) => {
+  const r = rig(on, argv => (argv[3] === 'skip' ? { exitCode: 1, stdout: '' } : saveAnswer))
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
 })
 
 test('a turn in progress holds the automatic run until the turn completes', async ($, on) => {
@@ -1459,7 +1719,7 @@ test('Now through the save and the compaction: the reply block is saved, then th
   await complete($, block('the notes'))
 
   expect(r.notes).toBe('fresh notes')
-  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.argv.flatMap((argv, i) => (argv[3] === 'save' ? [r.stdins[i]] : []))).toEqual(['the notes'])
   expect(r.toasts).toEqual(['Checkpoint notes saved'])
   expect(r.seen).toHaveLength(0)
 

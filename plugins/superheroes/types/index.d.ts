@@ -2,9 +2,13 @@ declare module 'claude-code' {
   interface PluginState {
     superheroes: {
       transcriptPath: string | null
-      // from session.start: false for `claude -p` and the SDK; attendance also counts the desktop
-      // app on the surface roster (`isAttended` in ../hooks/mod/decide), and only an attended session runs anything automatically
+      // from session.start: false for `claude -p` and the SDK; attendance also counts a session the
+      // desktop app started (`isDesktopStarted`) and the desktop app on the surface roster
+      // (`isAttended` in ../hooks/mod/decide), and only an attended session runs anything automatically
       isInteractive: boolean
+      // from session.start: the desktop app started this session (its entrypoint, and no inherited
+      // child-session marker); false when either variable could not be read
+      isDesktopStarted: boolean
       // the running turn's id, from turn.start to the main loop's turn.complete (null: idle)
       isTurnActive: string | null
       // set while an automatic or Now checkpoint runs (and through the compaction it ends in,
@@ -24,6 +28,8 @@ declare module 'claude-code' {
       rearmAfterCompact: boolean
       // the last decision's showBand: the band draws from this
       band: boolean
+      // the `skipKey` of the last skip record written; null after a run or below the heads-up line
+      lastSkip: string | null
     }
   }
 }

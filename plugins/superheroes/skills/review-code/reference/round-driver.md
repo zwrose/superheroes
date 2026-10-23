@@ -193,6 +193,14 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
   --session-dir "$SESSION_DIR"
 ```
 
+**Fixer refusal cross-check.** `record-result`, `advance` and `submit` take `--fixer-transcript <path>`, the
+fixer subagent's transcript. A refusal it shows that the fixer payload's `refusals` leaves out refuses
+`fixer-refusals-unreported`; with no transcript each recorded fixer row journals `refusalCheck: unobserved`,
+and with one `refusalCheck: checked`. `correct-fixer-refusals --session-dir … --refusals-file <json list>
+[--fixer-transcript <path>] [--attempt N] [--occurrence N]` rewrites only the landed payload's `refusals`,
+journals `fixer-refusals-corrected`, and returns `next`, the exact `record-result` (or `--supersede
+--expect-sha256`) command to resume.
+
 The driver creates `$SESSION_DIR/round-N/landing/<phase>/` before it hands back any seat-dispatch or `run-verify` step, so a seat or a hand-run command never writes into a missing folder.
 
 **Dispatch manifest before `advance`.** On the durable-record path at state v5, `$SESSION_DIR/round-<N>/landing/<phase>/_dispatch.a<K>.json` is **not** a provenance source — `advance` reads it only to disclose `dispatchManifestIgnored`; provenance is the runner record on each stored envelope (`executionEvidence.source`). A finished session of an earlier state version (2–4) never takes `record-result`/`advance` (`legacy-session-use-next-submit`); an unfinished one is refused before any command reads it (`session-from-earlier-version`, see Transition below). **Orchestrator-fulfilled phases** (`run-verify`) emit no manifest.
@@ -276,6 +284,10 @@ token names the seam, not the direction.
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
 | `round-phase-not-pending` | `record-result` / `record-missing` with `--round` and/or `--phase` that do not match the pending slot | re-read `next` and echo the current `round` and `phase` onto the durable-record command |
+| `fixer-committed-unlanded` | `record-result` (incl. `--sweep`), `advance` or `record-missing` for a fixer slot with no landing while HEAD has commits past the order's emission head; carries `commits` | re-dispatch the fixer order so it lands; the driver does not rebuild which findings a commit fixed from git |
+| `fixer-refusals-unreported` | `--fixer-transcript` shows a refusal the fixer payload's `refusals` leaves out; carries `unreported` and, off the hand path, `correction` | run the `correction` command (`correct-fixer-refusals`) from the session's repo root, then the `next` it returns |
+| `fixer-transcript-unreadable` | `--fixer-transcript` path missing or not a readable transcript | pass the right `agent-<agentId>.jsonl`, or omit the flag (the record then says `refusalCheck: unobserved`) |
+| `correction-outside-session-repo` | `correct-fixer-refusals` run from a repo root other than the session's recorded one | rerun it from the session's own repo root |
 
 **Owner-artifact refusal causes** — see the `OWNER_ARTIFACT_*_REFUSAL` constants in `lib/round_driver.py`.
 

@@ -9,7 +9,10 @@ surface keeps a hand copy of the sentence. `refusals_fault` is the one check of 
 STOP_RULE = (
     "A refused or denied command is a stop. Report it in your result's refusals list and do not "
     "retry it in another form: not another path to the program, another tool, another wrapper, "
-    "or another command with the same effect."
+    "or another command with the same effect. The one exception: when the refusing guard's or "
+    "hook's own refusal message names a route (an exact command or tool to use instead), you may "
+    "take exactly that route, once, and record it as that entry's route; every other form, and "
+    "every auto-mode classifier denial, stays a stop."
 )
 
 REFUSAL_MEANING = (
@@ -22,12 +25,13 @@ REFUSAL_MEANING = (
 
 REFUSED_BY = ("permission", "hook", "sandbox")
 ENTRY_REQUIRED = ("command", "refusedBy", "next")
-ENTRY_OPTIONAL = ("hook",)
+ENTRY_OPTIONAL = ("hook", "route")
 
 ENTRY_SHAPE = (
     "Each refusals entry carries command (the command exactly as you wrote it), refusedBy "
     "(permission, hook or sandbox), hook (the hook's name when the refusal gave one, else null), "
-    "and next (what you did next). An empty list means you met none."
+    "route (the route a hook's own refusal message named and you took, else null), and next "
+    "(what you did next). An empty list means you met none."
 )
 
 ORDER_TEXT = STOP_RULE + " " + REFUSAL_MEANING + " " + ENTRY_SHAPE
@@ -61,6 +65,11 @@ def refusals_fault(value):
                 return where + ".refusedBy"
             if "hook" in entry and entry["hook"] is not None and _blank(entry["hook"]):
                 return where + ".hook"
+            if "route" in entry and entry["route"] is not None:
+                if _blank(entry["route"]):
+                    return where + ".route"
+                if by != "hook":
+                    return where + ".route needs refusedBy hook"
         return None
     except Exception as exc:  # noqa: BLE001 — a validator must never raise
         return "refusals-check-error:%s" % type(exc).__name__
