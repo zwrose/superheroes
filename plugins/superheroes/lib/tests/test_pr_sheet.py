@@ -2629,6 +2629,14 @@ def test_a_leftover_key_shared_by_two_findings_accounts_for_nothing():
         'names leftover "caps/test-too-small", which names no one left-for-owner finding in leftovers') for p in caught.value.problems)
 
 
+def test_a_leftover_key_the_input_regrades_to_a_craft_determination_accounts_for_nothing():
+    # Bites on: a leftover target being accepted because its key names one left-for-owner finding, though that finding is decided for the owner and has no card on the sheet.
+    # Axis: E1: with the key moved from leftovers to craftDeterminations, the leftover target is refused as naming no one finding in leftovers, with one problem naming the bullet.
+    problems = refused_with_bodies(CASE_2075, BODIES_2075, lambda advisor: regrade(advisor, "caps/test-too-small"))
+    (problem,) = [p for p in problems if BULLETS_2075[0] in p]
+    assert problem.endswith('which names no one left-for-owner finding in leftovers')
+
+
 def test_a_bullet_inserted_above_the_others_costs_one_entry_and_moves_no_card_id(tmp_path, capsys):
     # Bites on: a bullet's id depending on its place in the body, so an insertion above re-keys the accounting already written and moves cards.
     # Axis: FU1: the 8 original bullets keep their ids; the unchanged input is refused with one problem naming the new bullet; with its one entry added the sheet builds with the same card ids.
