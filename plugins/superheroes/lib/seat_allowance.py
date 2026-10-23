@@ -83,21 +83,28 @@ def _real(path):
         return None
 
 
-def _edit_target_permitted(args, permitted_edit_paths):
+def _edit_target_permitted(args, permitted_edit_paths, seat_cwd=None):
     """True only when the edit call's `path` argument is a string that resolves to one of the
-    permitted result-file paths. No permitted paths, or no verifiable target, is not permitted."""
+    permitted result-file paths. A relative target resolves against `seat_cwd` (the seat's own
+    working directory, which is not the scanner's); with no seat_cwd a relative target has no
+    verifiable meaning and is not permitted. No permitted paths, or no verifiable target, is not
+    permitted."""
     if not permitted_edit_paths or not isinstance(args, dict):
         return False
     target = args.get("path")
     if not isinstance(target, str) or not target:
         return False
+    if not os.path.isabs(target):
+        if not isinstance(seat_cwd, str) or not os.path.isabs(seat_cwd):
+            return False
+        target = os.path.join(seat_cwd, target)
     real = _real(target)
     if real is None:
         return False
     return any(isinstance(p, str) and p and _real(p) == real for p in permitted_edit_paths)
 
 
-def outside_allowance(obj, permitted_edit_paths=None):
+def outside_allowance(obj, permitted_edit_paths=None, seat_cwd=None):
     """None when the parsed codex JSONL event `obj` is inside the allowance, else a short
     description (<= 200 chars) of what is outside it. Only item.started / item.completed events
     are judged; any other object is not a judged event and yields None. A cursor stream-json
@@ -105,7 +112,7 @@ def outside_allowance(obj, permitted_edit_paths=None):
     `CURSOR_ALLOWED_TOOL_CALLS`; every other call (a shell or mode call, an unknown key, a
     dict that is not one-key, a non-dict) is outside it. An `editToolCall` is inside only when its
     target path is one of `permitted_edit_paths` (the attempt's own result file and its handoff
-    alias); an edit of any other path, or one with no verifiable target, is outside."""
+    alias; a relative target resolves against `seat_cwd`); an edit of any other path, or one with no verifiable target, is outside."""
     if isinstance(obj, dict) and obj.get("type") == "tool_call":
         call = obj.get("tool_call")
         if isinstance(call, dict) and len(call) == 1:
@@ -115,7 +122,7 @@ def outside_allowance(obj, permitted_edit_paths=None):
             if key in CURSOR_ALLOWED_TOOL_CALLS:
                 if key != "editToolCall":
                     return None
-                if _edit_target_permitted(args, permitted_edit_paths):
+                if _edit_target_permitted(args, permitted_edit_paths, seat_cwd):
                     return None
                 target = args.get("path") if isinstance(args, dict) else None
                 return _cap("%s: %s" % (key, _cap(target, _COMMAND_CAP)), _DESCRIPTION_CAP) \
@@ -160,7 +167,7 @@ def _is_payloadless_start(obj):
     return obj.get("subtype") == "started" and obj.get("tool_call") is None
 
 
-def scan_stream(path, limit=20, permitted_edit_paths=None):
+def scan_stream(path, limit=20, permitted_edit_paths=None, seat_cwd=None):
     """(violations, ok) for the codex JSONL stream file at `path`. Reads the whole file one line
     at a time (binary), skips unparseable lines, dedupes violations and caps them at `limit`.
     ok is True only when the whole file was read to EOF: it is False when the file cannot be
@@ -204,7 +211,7 @@ def scan_stream(path, limit=20, permitted_edit_paths=None):
                         continue
                     pending_starts.discard(call_id)
                 try:
-                    found = outside_allowance(obj, permitted_edit_paths)
+                    found = outside_allowance(obj, permitted_edit_paths, seat_cwd)
                 except Exception:
                     continue
                 _record(found)

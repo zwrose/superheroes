@@ -107,7 +107,7 @@ def test_clean_record_is_admitted(tmp_path):
 
 
 def test_unreadable_scan_is_refused_as_record_unreadable(tmp_path, monkeypatch):
-    monkeypatch.setattr(ED.seat_allowance, "scan_stream", lambda path, limit=20, permitted_edit_paths=None: ([], False))
+    monkeypatch.setattr(ED.seat_allowance, "scan_stream", lambda path, limit=20, permitted_edit_paths=None, seat_cwd=None:([], False))
     res, fake = _dispatch(tmp_path, _stream(_message_line()))
     _assert_refused_once(res, fake)
     assert res["detail"] == "seat-ran-outside-allowance: record unreadable"

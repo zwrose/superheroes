@@ -3939,7 +3939,8 @@ def _allowance_scan_fields(opened, stdout_path, permitted_edit_paths=None):
     if not _codex_review_run(opened):
         return {}
     violations, ok = seat_allowance.scan_stream(
-        stdout_path, permitted_edit_paths=permitted_edit_paths)
+        stdout_path, permitted_edit_paths=permitted_edit_paths,
+        seat_cwd=opened.get("cwd"))
     return {
         "allowanceViolations": list(violations),
         "allowanceScan": "ok" if ok else "unreadable",

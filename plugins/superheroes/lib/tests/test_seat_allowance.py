@@ -250,6 +250,53 @@ def test_read_file_limit_is_capped_at_2000(server):
     assert "offset=2001" in text
 
 
+def _completion_record(text):
+    return {"type": "item.completed", "item": {
+        "type": "mcp_tool_call", "server": SA.READ_SERVER_NAME, "tool": "read_file",
+        "result": {"content": [{"type": "text", "text": text}]}}}
+
+
+def test_read_file_huge_line_keeps_the_record_scannable_and_paging_reaches_the_tail(
+        server, tmp_path):
+    srv, root = server
+    (root / "huge.txt").write_text("x" * 2000000 + "\ntail line\n")
+    first = _text(srv.call("read_file", {"path": "huge.txt", "limit": 1}))
+    assert len(first.encode("utf-8")) < 200000
+    assert "line truncated" in first
+    path = tmp_path / "stream.jsonl"
+    _write_lines(path, [_completion_record(first)])
+    assert SA.scan_stream(str(path)) == ([], True)
+    both = _text(srv.call("read_file", {"path": "huge.txt"}))
+    assert "     2\ttail line" in both
+
+
+def test_read_file_many_medium_lines_stop_early_and_page_through_every_line(server, tmp_path):
+    srv, root = server
+    (root / "mid.txt").write_text("".join("%d %s\n" % (i, "m" * 1500) for i in range(1, 301)))
+    seen = []
+    offset = 1
+    while True:
+        text = _text(srv.call("read_file", {"path": "mid.txt", "offset": offset, "limit": 2000}))
+        assert len(text.encode("utf-8")) < 200000
+        page = text.split("\n")
+        note = page[-1] if page[-1].startswith("[more lines remain") else None
+        seen += [ln for ln in page if not ln.startswith("[more lines remain")]
+        if note is None:
+            break
+        offset = int(re.search(r"offset=(\d+)", note).group(1))
+    assert len(seen) == 300
+
+
+def test_list_dir_and_search_responses_are_byte_budgeted(server):
+    srv, root = server
+    for i in range(300):
+        (root / (("n%03d" % i) + "e" * 200)).write_text("hit " + "z" * 250 + "\n")
+    listing = _text(srv.call("list_dir", {"path": "."}))
+    assert len(listing.encode("utf-8")) < 200000
+    found = _text(srv.call("search", {"pattern": "hit", "max_results": 1000}))
+    assert len(found.encode("utf-8")) < 200000
+
+
 def test_read_file_absolute_path_outside_root_is_readable(server, tmp_path):
     srv, _root = server
     outside = tmp_path / "outside.txt"
@@ -509,6 +556,23 @@ def test_outside_allowance_cursor_edit_is_inside_only_for_the_result_file(tmp_pa
         _cursor_call({"editToolCall": {"args": {}}}), permitted) == "editToolCall"
     assert SA.outside_allowance(
         _cursor_call({"editToolCall": {}}), permitted) == "editToolCall"
+
+
+def test_outside_allowance_cursor_relative_edit_resolves_against_the_seat_cwd(tmp_path):
+    run_dir = tmp_path / "run"
+    view = tmp_path / "view"
+    run_dir.mkdir()
+    view.mkdir()
+    result = str(run_dir / "native-result-1.json")
+    rel_to_view = os.path.relpath(result, str(view))
+    call = _cursor_call({"editToolCall": {"args": {"path": rel_to_view}}})
+    assert SA.outside_allowance(call, [result], str(view)) is None
+    # the same name relative to the seat's cwd is a different file than the permitted one
+    same_name = _cursor_call({"editToolCall": {"args": {"path": "native-result-1.json"}}})
+    assert SA.outside_allowance(same_name, [result], str(view)) is not None
+    assert SA.outside_allowance(same_name, [result], str(run_dir)) is None
+    # without a seat cwd a relative target is unverifiable, hence outside
+    assert SA.outside_allowance(same_name, [result]) is not None
 
 
 def test_cursor_allowed_tool_calls_are_exactly_the_read_list_search_and_result_edit_set():

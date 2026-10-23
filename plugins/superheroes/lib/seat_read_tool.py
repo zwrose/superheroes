@@ -20,6 +20,11 @@ SEARCH_DEFAULT = 200
 SEARCH_MAX = 1000
 SEARCH_FILE_MAX_BYTES = 2 * 1024 * 1024
 SEARCH_TEXT_CAP = 300
+# A response must stay far under the 1 MiB record line the allowance scan accepts, even after JSON
+# escaping (up to 6x for a control character): the text of one reply is held to RESPONSE_BYTE_BUDGET
+# UTF-8 bytes, and one file line to READ_LINE_CHAR_CAP characters.
+RESPONSE_BYTE_BUDGET = 100000
+READ_LINE_CHAR_CAP = 2000
 
 _TOOLS = [
     {
@@ -94,6 +99,7 @@ def _read_file(root, args):
     if os.path.isdir(target):
         raise _ToolError("%s is a directory; use list_dir" % target)
     out = []
+    used = 0
     more = False
     try:
         with open(target, "r", encoding="utf-8", errors="replace") as handle:
@@ -103,7 +109,17 @@ def _read_file(root, args):
                 if len(out) >= limit:
                     more = True
                     break
-                out.append("%6d\t%s" % (number, line.rstrip("\r\n")))
+                text = line.rstrip("\r\n")
+                if len(text) > READ_LINE_CHAR_CAP:
+                    text = text[:READ_LINE_CHAR_CAP] + "...[line truncated: %d characters]" % len(text)
+                rendered = "%6d\t%s" % (number, text)
+                size = len(rendered.encode("utf-8", "replace")) + 1
+                if out and used + size > RESPONSE_BYTE_BUDGET:
+                    more = True
+                    limit = number - offset
+                    break
+                used += size
+                out.append(rendered)
     except OSError as exc:
         raise _ToolError("cannot read %s: %s" % (target, exc.strerror or exc))
     text = "\n".join(out)
@@ -121,10 +137,17 @@ def _list_dir(root, args):
     except OSError as exc:
         raise _ToolError("cannot list %s: %s" % (target, exc.strerror or exc))
     lines = []
+    used = 0
+    shown = 0
     for name in names[:LIST_CAP]:
-        lines.append(name + "/" if os.path.isdir(os.path.join(target, name)) else name)
-    if len(names) > LIST_CAP:
-        lines.append("[%d more entries not shown]" % (len(names) - LIST_CAP))
+        entry = name + "/" if os.path.isdir(os.path.join(target, name)) else name
+        used += len(entry.encode("utf-8", "replace")) + 1
+        if used > RESPONSE_BYTE_BUDGET:
+            break
+        lines.append(entry)
+        shown += 1
+    if len(names) > shown:
+        lines.append("[%d more entries not shown]" % (len(names) - shown))
     return "\n".join(lines) if lines else "[no entries]"
 
 
@@ -151,6 +174,7 @@ def _search(root, args):
         raise _ToolError("no such path: %s" % target)
     cap = _int_arg(args, "max_results", SEARCH_DEFAULT, 1, SEARCH_MAX)
     results = []
+    used = 0
     for file_path in _search_files(target):
         try:
             if os.path.islink(file_path) or os.path.getsize(file_path) > SEARCH_FILE_MAX_BYTES:
@@ -161,7 +185,11 @@ def _search(root, args):
                         text = line.rstrip("\r\n")
                         if len(text) > SEARCH_TEXT_CAP:
                             text = text[:SEARCH_TEXT_CAP]
-                        results.append("%s:%d: %s" % (file_path, number, text))
+                        entry = "%s:%d: %s" % (file_path, number, text)
+                        used += len(entry.encode("utf-8", "replace")) + 1
+                        if used > RESPONSE_BYTE_BUDGET:
+                            return "\n".join(results) + "\n[response size budget reached]"
+                        results.append(entry)
                         if len(results) >= cap:
                             return "\n".join(results) + "\n[result cap %d reached]" % cap
         except (OSError, UnicodeDecodeError):
@@ -192,7 +220,17 @@ def _call_tool(root, params):
         return _tool_result("tool failed: %s" % exc, True)
 
 
+def _bounded(text):
+    """`text` held to RESPONSE_BYTE_BUDGET UTF-8 bytes (a backstop; the tools budget themselves)."""
+    text = str(text)
+    raw = text.encode("utf-8", "replace")
+    if len(raw) <= RESPONSE_BYTE_BUDGET:
+        return text
+    return raw[:RESPONSE_BYTE_BUDGET].decode("utf-8", "ignore") + "\n[response truncated]"
+
+
 def _tool_result(text, is_error):
+    text = _bounded(text)
     result = {"content": [{"type": "text", "text": text}]}
     if is_error:
         result["isError"] = True
