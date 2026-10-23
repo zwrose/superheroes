@@ -13,6 +13,7 @@ if _LIB not in sys.path:
 
 import break_it  # noqa: E402
 import receipt_disclosures  # noqa: E402
+import session_contract  # noqa: E402
 import review_record_session as RRS  # noqa: E402
 import round_driver as RD  # noqa: E402
 import test_break_it_loop as TL  # noqa: E402  (its `World` drives `RD._fold`)
@@ -159,6 +160,17 @@ def test_edge4_a_later_ruling_that_superseded_the_skip_owes_the_check(world, spy
     _rule(world, key)
     _rule(world, key, ruling=later)
     _audit(world, key)
+    _owes_the_check(world, spy)
+
+
+@pytest.mark.parametrize("later", ["guidance", "fix"])
+def test_edge4c_a_newer_ruling_on_a_merged_member_supersedes_the_skip(world, spy, later):
+    key = _shape(world)
+    _rule(world, key)
+    world.state["findings"].append({"findingKey": "member", session_contract.MERGED_INTO_FIELD: key})
+    _rule(world, "member", ruling=later)
+    _audit(world, key)
+    assert RD._row_decision(world.state, RD._live_ruling_by_key(world.state), {}, key)["ruling"] == later
     _owes_the_check(world, spy)
 
 

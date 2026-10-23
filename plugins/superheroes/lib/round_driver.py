@@ -6910,7 +6910,9 @@ def _break_it_ruled_exempt(state, key):
     """The ``rule``-verb out-of-scope ruling row that exempts a break-it finding's test from the kept
     check, or None. Exempt only when the finding's effective decision is that attributed ruling AND
     some round's recorded audit cleared the finding; either leg alone leaves the check owed."""
-    live = _live_ruling_by_key(state).get(key)
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    # merge-aware: a newer guidance/fix ruling given to a finding merged into this one binds it, as it does the fixer
+    live = _row_decision(state, _live_ruling_by_key(state), ledger_by_key, key)
     # axis: only an out-of-scope ruling from the rule verb exempts — a fixed finding with no ruling still owes the kept check — see bite-proof record wo_a_2072_ruled_exempt
     if not (isinstance(live, dict) and live.get("ruling") == "out-of-scope"
             and live.get("source") == "rule"):
@@ -8550,6 +8552,8 @@ def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
         return "ci-verify-sha-mismatch", "fetched run id %s is not the claimed runId %s" % (run["id"], ci["runId"])
     # axis: the run is the claimed workflow — see bite-proof record wo_b_2072_ci_verify
     # construction bound (E9c): the `or run["name"] != declared` clause cannot reject on its own — the earlier `ci["workflow"] == declared` check already guarantees `ci["workflow"] == declared`, so it is subsumed by `run["name"] != ci["workflow"]`; see bite-proof record wo_b_2072_ci_verify (E9c)
+    # what would make it provable: moving this comparison ahead of (or removing) the `ci["workflow"] != declared` refusal above, so a run name could differ from `declared` while equal to the claim
+    # its separate protection is UNVERIFIED: no test can show this clause rejecting an input the first clause does not
     if run["name"] != ci["workflow"] or run["name"] != declared:
         return "ci-verify-workflow-mismatch", "run %s is workflow %r, not the claimed %r or the declared %r" % (run["id"], run["name"], ci["workflow"], declared)
     # axis: only a completed run that concluded `success`, as claimed, stands in — see bite-proof record wo_b_2072_ci_verify
