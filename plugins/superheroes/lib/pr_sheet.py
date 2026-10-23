@@ -200,28 +200,19 @@ def _commit(v):
 _ACCEPTING = re.compile(r"^ {0,3}(#{1,6})[ \t]+What we(?:'|’)re accepting[ \t]*#*[ \t]*$", re.IGNORECASE)
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]")
 _FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")  # a backtick fence's info string holds no backtick, so ```x``` opens none
-_ITEM = re.compile(r"^( {0,3})(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)")
+_ITEM = re.compile(r"^( {0,3})([-*+]|\d{1,9}[.)])([ \t]+)(.*)")
 _NO_ACCEPTANCE = ("none", "n/a", "na", "nothing")
 
 
-def _comment_start(text):
-    """Index of the first `<!--` in a line that is not inside an inline code span, -1 for none.
-
-    A span opens at a backtick run and closes at the next run of the same length; a run with no match is plain text."""
-    pos = 0
-    while True:
-        comment, tick = text.find("<!--", pos), re.compile(r"`+").search(text, pos)
-        if comment < 0 or tick is None or comment < tick.start():
-            return comment
-        close = next((m for m in re.finditer(r"`+", text[tick.end():]) if len(m.group()) == len(tick.group())), None)
-        pos = tick.end() if close is None else tick.end() + close.end()
+_WHOLE_COMMENT = re.compile(r"^\s*<!--.*-->\s*$")
 
 
 def _outside_comments(lines):
     """(line, fenced) for each line of a body that is not inside an HTML comment, tracking code fences as it goes.
 
-    A comment is cut out of its line; a line left empty by the cut is dropped, and text beside a comment stays. A comment
-    that is never closed runs to the end. Comments are read outside fences only, so a fenced line is kept as it stands."""
+    Only two shapes are dropped: a line that is wholly a comment, and a block that opens on a line starting with `<!--`
+    and holding no `-->`, through the first later line holding `-->` (never closed, it runs to the end). Any other `<!--`
+    is plain text and stays, so a comment beside text is kept with it. Comments are read outside fences only."""
     kept, fence, inside = [], None, False
     for line in lines:
         if fence is not None:
@@ -229,23 +220,17 @@ def _outside_comments(lines):
             closing = re.match(r"^ {0,3}(" + re.escape(fence[0]) + "{" + str(len(fence)) + r",})[ \t]*$", line)
             fence = None if closing else fence
             continue
-        text, rest, cut = "", line, inside
-        while True:
-            if inside:
-                end = rest.find("-->")
-                if end < 0:
-                    break
-                rest, inside = rest[end + 3:], False
-            start = _comment_start(rest)
-            if start < 0:
-                text += rest
-                break
-            text, rest, inside, cut = text + rest[:start], rest[start + 4:], True, True
-        if cut and not text.strip():
+        if inside:
+            inside = "-->" not in line
             continue
-        opening = _FENCE.match(text)
+        if _WHOLE_COMMENT.match(line):
+            continue
+        if line.lstrip(" ").startswith("<!--") and "-->" not in line:
+            inside = True
+            continue
+        opening = _FENCE.match(line)
         fence = opening.group(1) if opening else None
-        kept.append((text, opening is not None))
+        kept.append((line, opening is not None))
     return kept
 
 
@@ -266,19 +251,20 @@ def accepting_listed(body):
         if heading and len(heading.group(1)) <= level:
             break
         section.append(line)
-    items, open_item, is_list, blank, base = [], None, False, False, None
+    items, open_item, is_list, blank, column = [], None, False, False, 0
     for line in section:
         if not line.strip():
             blank = True
             continue
         started = _ITEM.match(line)
-        if started and base is None:
-            base = len(started.group(1))  # the top level's own indent; deeper items nest in their parent
-        if started and len(started.group(1)) > max(base, 1):
-            started = None
+        if started and is_list and len(started.group(1)) >= column:
+            started = None  # indented to the open item's content column: it nests in that item
         indented = line.startswith(("  ", "\t"))
         if started:
-            open_item, is_list = [started.group(2)], True
+            gap = len(started.group(3))
+            # CommonMark: the content column is indent + marker + the spaces after it (one when five or more).
+            column = len(started.group(1)) + len(started.group(2)) + (gap if gap <= 4 else 1)
+            open_item, is_list = [started.group(4)], True
             items.append(open_item)
         elif open_item is not None and not (blank and (not is_list or not indented)):
             open_item.append(line)

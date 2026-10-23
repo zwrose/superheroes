@@ -2538,7 +2538,12 @@ READER_CASES = [
     pytest.param(ACCEPTING + "None\n", [], id="E3-none-paragraph"),
     pytest.param(ACCEPTING + "N/A.\n", [], id="E3-n-a-paragraph-with-a-dot"),
     pytest.param(ACCEPTING + "The schema is wider now.\n", ["The schema is wider now."], id="E5-an-unrecognised-paragraph-counts"),
-    pytest.param(ACCEPTING + "- text <!-- note -->\n", ["text"], id="a-comment-beside-text-is-cut"),
+    pytest.param(ACCEPTING + "- text <!-- note -->\n", ["text <!-- note -->"], id="a-comment-beside-text-is-kept"),
+    pytest.param(ACCEPTING + "  - First.\n   - Second.\n", ["First.", "Second."], id="two-then-three-space-bullets-stay-separate"),
+    pytest.param(ACCEPTING + "  - First.\n- Second.\n  - nested\n", ["First.", "Second. - nested"], id="a-flush-bullet-after-an-indented-one-is-new"),
+    pytest.param(ACCEPTING + "- A `code <!-- span\n- B` end.\n- Next.\n", ["A `code <!-- span", "B` end.", "Next."], id="a-code-span-crossing-a-comment-marker-keeps-both-acceptances"),
+    pytest.param(ACCEPTING + "- esc \\` x <!-- y\n- Next.\n", ["esc \\` x <!-- y", "Next."], id="an-escaped-backtick-before-a-marker-keeps-the-bullet"),
+    pytest.param(ACCEPTING + "- One.\n<!-- gone -->\n- Two.\n<!-- multi\nline\n-->\n- Three.\n", ["One.", "Two.", "Three."], id="whole-line-and-block-comments-between-bullets-are-dropped"),
     pytest.param(ACCEPTING + "- Same words.\n- Same words.\n", ["Same words.", "Same words."], id="E6-identical-bullets-are-two"),
     pytest.param(ACCEPTING + "  - First.\n  - Second.\n", ["First.", "Second."], id="two-space-top-level-bullets-stay-separate"),
     pytest.param(ACCEPTING + "   - First.\n   - Second.\n", ["First.", "Second."], id="three-space-top-level-bullets-stay-separate"),
@@ -2546,7 +2551,7 @@ READER_CASES = [
     pytest.param(ACCEPTING + "- First.\n  - nested\n- Second.\n", ["First. - nested", "Second."], id="deeper-lines-join-their-flush-parent"),
     pytest.param(ACCEPTING + "- Keep `<!--` literally.\n- A second acceptance.\n", ["Keep `<!--` literally.", "A second acceptance."], id="an-inline-code-comment-marker-keeps-the-acceptance-and-the-rest"),
     pytest.param(ACCEPTING + "- Keep ``a `<!--` b`` here.\n- Next.\n", ["Keep ``a `<!--` b`` here.", "Next."], id="a-double-backtick-span-hides-the-marker"),
-    pytest.param(ACCEPTING + "- text `unclosed <!-- note -->\n- Next.\n", ["text `unclosed", "Next."], id="an-unclosed-backtick-does-not-hide-a-real-comment"),
+    pytest.param(ACCEPTING + "- text `unclosed <!-- note -->\n- Next.\n", ["text `unclosed <!-- note -->", "Next."], id="an-unclosed-backtick-beside-a-trailing-comment-keeps-the-text"),
 ]
 
 
