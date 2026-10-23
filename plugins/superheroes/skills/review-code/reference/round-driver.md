@@ -1119,6 +1119,17 @@ changes only if that commit sealed and then rolls forward with the state; recove
 sidecar replay by `targetKind` and refuses rather than falling back. The library
 `run_loop` path calls `_persist_round_records` after every fold.
 
+## PR-body findings
+
+A finding about the PR body cites `SUPERHEROES_PR_BODY.md` (`pr_body_stage.CITATION`, the name `sanitized_view` gives the body); compile keeps it in scope though the git diff never holds it. It is fixed only in a staged copy, never on the live PR, and fixers never write to GitHub.
+
+- Layout under `<session>/pr-body/`: `original.md` (the body as `pr.json` held it, written once), `staged.md` (the working copy, created from it once) and `published.json` (the publish receipt, written for every outcome).
+- The fixer order's `PR_BODY_LINE` names a copy in the round's own landing dir, `landing/dispatch-fixer/_pr-body.md`: `dispatch-write --landing-dir` already grants a restricted claude fixer that directory, and `pr-body/` has no such grant (the `_` prefix keeps the landing sweep from reading it as a seat file). The fixer fold copies it back over `staged.md` and records the round's `prBodyFix` `{before, after}`; an engine fixer without the landing grant reports the refused write instead. Branch mode, or a session with no `pr.json`, gets a line saying no staged body exists and that such a finding is escalated.
+- The audit fold records `prBodyAudited` (the `after` sha) in the audit round only when every audit target of that round folded to an authenticated clearing ruling. The fix folds in round N and its audits in round N+1, so the fold reads `prBodyFix` from the round before.
+- `pr_body_stage.py publish --session-dir D --pr N` is the one chokepoint that writes a PR body; the review-code skill runs it after a `converged` terminal. It copies `staged.md` with `gh pr edit --body-file` only when the staged sha256 equals the highest audited round's and the live body still equals `original.md`; it reads the live body back after the edit.
+- Outcomes: `published` (also `already-published` on a re-run), `unchanged` (`live-moved` when the live body changed outside the review), or a refusal: `review-not-converged`, `pr-body-not-staged`, `pr-body-live-unreadable`, `pr-body-published-unaudited`, `pr-body-not-audited`, `pr-body-moved`, `pr-body-publish-failed`, `pr-body-publish-unverified`.
+- The review record's `checked` list gains one plain sentence from `record_line`; a single trailing newline difference is not a body difference.
+
 ## Invariants
 
 Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.py`):

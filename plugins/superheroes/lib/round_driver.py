@@ -85,6 +85,7 @@ import review_gate_policy  # noqa: E402
 import risk_areas  # noqa: E402
 import review_round_policy  # noqa: E402
 import review_seats  # noqa: E402
+import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
@@ -879,6 +880,8 @@ def _diff_scope_ok(finding, valid):
     when no diff was supplied (scope check skipped)."""
     if valid is None:
         return True
+    if finding.get("file") == pr_body_stage.CITATION:
+        return True  # the PR body is never in the git diff; the fixer fixes it in the staged copy
     file_lines = valid.get(finding.get("file"))
     if not file_lines:
         return False
@@ -5221,6 +5224,13 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     _record_round(state, "fixReportedKeys", reported_keys)
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
+        pr_body_after = pr_body_stage.collect_fixer_copy(session_dir, state["round"])
+        if pr_body_after:
+            prior_pr_body = (state["rounds"].get(str(state["round"])) or {}).get("prBodyFix")
+            _record_round(state, "prBodyFix",
+                          {"before": prior_pr_body.get("before")
+                           if isinstance(prior_pr_body, dict) else None,
+                           "after": pr_body_after})
         if fold_head_err:
             _record_round(state, "fixFoldHeadRefused", fold_head_err)
         else:
@@ -6287,6 +6297,18 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
     _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
     _record_round(state, "audits", outcome["audits"])
+    # The staged PR body is audited only when every target of the round folded to an authenticated
+    # clearing ruling: `discharged` holds exactly those (a clearing ruling the manifest could not
+    # authenticate folds to not-discharged), and `notDischarged` holds every other target.
+    # The fix folds in round N and its audits in round N+1 (`_enter_post_fix` advances the round).
+    fix_round = state["rounds"].get(str(state["round"] - 1))
+    pr_body_fix = fix_round.get("prBodyFix") if isinstance(fix_round, dict) else None
+    audit_ids = {t.get("id") for t in targets if isinstance(t, dict)}
+    if (isinstance(pr_body_fix, dict) and isinstance(pr_body_fix.get("after"), str)
+            and pr_body_fix["after"] and audit_ids
+            and not outcome.get("notDischarged")
+            and audit_ids <= set(outcome.get("discharged") or [])):
+        _record_round(state, "prBodyAudited", pr_body_fix["after"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
@@ -10357,6 +10379,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "FIX_BATCH_SHA256",
     "FIXER_STEP_5_BLOCK",
     "FIXER_ESCALATION_BLOCK",
+    "PR_BODY_LINE",
 })
 
 
@@ -10641,6 +10664,37 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
     }
 
 
+def _pr_body_line(phase, session_dir, rnd, state, meta, cfg, materialize_shared_inputs):
+    """The ``PR_BODY_LINE`` value of a fixer or audit order: where the staged PR body is, or why
+    there is none. Mode resolves exactly as the panel arm does. A render-only call (no mutation)
+    only names paths."""
+    def no_staged(reason):
+        return ("no staged PR body (%s); a finding about a PR body is escalated, never fixed "
+                "anywhere else" % reason)
+
+    mode_resolved = session_mode.resolve(meta, cfg)
+    if mode_resolved["mode"] == session_mode.MODE_BRANCH:
+        return no_staged("branch mode")
+    paths = pr_body_stage.paths(session_dir)
+    if materialize_shared_inputs:
+        staged = pr_body_stage.stage(session_dir)
+        if not staged.get("ok") or not staged.get("staged"):
+            return no_staged(staged.get("reason") or "not staged")
+    if phase == P_AUDITS:
+        return ("the staged copy %s, to be read against the original %s"
+                % (paths["staged"], paths["original"]))
+    copy_path = pr_body_stage.fixer_copy_path(session_dir, rnd)
+    if materialize_shared_inputs:
+        before = pr_body_stage.seed_fixer_copy(session_dir, rnd)
+        if before is None:
+            return no_staged(pr_body_stage.REASON_NOT_STAGED)
+        if isinstance(state, dict) and ("rounds" in state or "round" in state):
+            existing = (state["rounds"].get(str(rnd)) or {}).get("prBodyFix")
+            if not (isinstance(existing, dict) and existing.get("before")):
+                _record_round(state, "prBodyFix", {"before": before, "after": None})
+    return copy_path
+
+
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
                         session_dir, rnd, paths, channel, roster=None,
                         materialize_shared_inputs=True):
@@ -10762,6 +10816,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "TARGET_ID": seat_key,
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
+            "PR_BODY_LINE": _pr_body_line(phase, session_dir, rnd, state, meta, cfg,
+                                          materialize_shared_inputs),
         }
     elif phase == P_SCOPED:
         hunks = payload.get("hunks")
@@ -10824,6 +10880,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFY_BUDGET": _fixer_verify_budget(fix_batch, cfg),
             "ROUND": str(rnd),
             "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),
+            "PR_BODY_LINE": _pr_body_line(phase, session_dir, rnd, state, meta, cfg,
+                                          materialize_shared_inputs),
         }
     return ph
 

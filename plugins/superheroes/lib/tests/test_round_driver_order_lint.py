@@ -71,6 +71,7 @@ def _fixer_placeholders():
         ),
         "ROUND": "2",
         "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
+        "PR_BODY_LINE": os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer", "_pr-body.md"),
     }
 
 

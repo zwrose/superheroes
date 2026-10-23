@@ -28,6 +28,7 @@ import audits as audits_mod  # noqa: E402
 import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
+import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
 import review_findings_schema  # noqa: E402
@@ -587,6 +588,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                                     review_record._readers(readers)["engine_run"], raw_dir)
     reviewers += _grounding_reviewers(state, reviewers)
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
+    pr_body_line = pr_body_stage.record_line(session_dir)
+    if pr_body_line is not None:
+        checked.append(pr_body_line)
     checked += _verify_via_checked(rounds)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
