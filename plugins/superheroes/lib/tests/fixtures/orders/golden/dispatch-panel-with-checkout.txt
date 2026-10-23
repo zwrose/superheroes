@@ -76,6 +76,10 @@ rubric's "Triage rubric"). Set `dimension` to "Code" on every entry. Severity ca
 from the base rubric apply (at most 5 code-quality-only Nits reported per review round across all seats; real-consequence Nits are uncapped).
 Deliver per the base rubric's panel output-format section. Write your payload artifact to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
 
+## What you may run
+
+You review by reading. You may read, list and search files, including with read-only inspection commands. You never run the project's own files, scripts or tests. A run you need is the driver's: name it in your result, and the driver runs the project's declared verify command.
+
 ## Ratified residuals (owner-ratified, quoted data)
 
 Residuals below are read from the review base commit (base-pinned).
