@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_merge.py`: each `# axis:` clause is neutralized in source by a targeted edit, the proving test(s) must go red alone (`-k`), the clause is restored by the inverse edit, and the whole file goes green again.
 
-**Register:** 28 guards — one per `# axis:` line in the file; the single place that decides `merged` is S1. Line numbers are those of the restored file.
+**Register:** 29 guards — one per `# axis:` line in the file; the single place that decides `merged` is S1. Line numbers are those of the restored file.
 
 **Provenance:** claude (Claude Sonnet 5.5), re-dispatch attempt 2.
 
@@ -49,6 +49,7 @@ Two tests were added to the test file during this proof because the first red ru
 | P3 | stack_merge.py:289 | a poll body naming a different head ends the loop | `test_m10_poll_with_other_expected_head_ends_the_loop_as_head_mismatch` | proven |
 | P4 | stack_merge.py:293 | an unreadable poll body is remembered, polling continues | `test_m12_unreadable_poll_body_*` | proven |
 | P5 | stack_merge.py:304 | pending when the poll budget ran out is not merged | `test_m6_*`, `test_m15_no_non_merged_outcome_reads_as_ok_or_merged` | proven |
+| P6 | stack_merge.py:272 | the poll budget ended during the sleep: no GET starts at or after its end | `test_m6_interval_longer_than_the_budget_makes_no_poll_get` | proven |
 | G1 | stack_merge.py:322 | gh is not on PATH (merge) | `test_m13_gh_not_on_path_is_gh_unavailable` | proven |
 | G2 | stack_merge.py:329 | run raises OSError or TimeoutExpired on the PUT | `test_m13_put_run_raising_is_merge_request_refused` | proven |
 | G3 | stack_merge.py:333 | the PUT exits non-zero: refused, an existing request is never adopted or polled | `test_m7_*`, `test_m8_*` | proven |
@@ -762,6 +763,43 @@ FAILED plugins/superheroes/lib/tests/test_stack_merge.py::test_m15_no_non_merged
 ........................................................................ [ 56%]
 ........................................................                 [100%]
 128 passed in 0.56s
+```
+
+---
+
+## P6 — the poll budget ended during the sleep (WO-D, #2103 review fix)
+
+The row's line number is that of the restored file after the WO-D `_poll_loop` change; the other rows keep the numbers they were recorded with.
+
+**neutralization:** `if monotonic() >= end:` (the post-sleep stop in `_poll_loop`) → `if False:  # bite-proof`
+
+**red** (`-k test_m6_interval_longer_than_the_budget_makes_no_poll_get`, run with `--tb=short`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_m6_interval_longer_than_the_budget_makes_no_poll_get ___________
+/home/user/wt-2103/plugins/superheroes/lib/tests/test_stack_merge.py:293: in test_m6_interval_longer_than_the_budget_makes_no_poll_get
+    assert calls == []
+E   AssertionError: assert [['gh', 'api'...c2d3e4f5a6b']] == []
+E     
+E     Left contains one more item: ['gh', 'api', 'repos/owner/example/pulls/105/merge-async/3f2b8c1e-5a6d-4e7f-9a0b-1c2d3e4f5a6b']
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_stack_merge.py::test_m6_interval_longer_than_the_budget_makes_no_poll_get
+1 failed, 128 deselected in 0.27s
+```
+
+**restored lines:**
+```python
+        # axis: the poll budget ended during the sleep — no GET starts at or after its end
+        if monotonic() >= end:
+            break
+```
+**green** (whole file):
+```
+........................................................................ [ 55%]
+.........................................................                [100%]
+129 passed in 0.63s
 ```
 
 ---

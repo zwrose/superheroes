@@ -257,13 +257,14 @@ to break the requirement is a layer whose branch no longer descends from the tip
 
 **One command merges the stack; never one PR at a time.**
 
-**In a cloud session** `gh stack merge` does not run. Merge the top layer with `lib/stack_merge.py merge
---repo <owner/name> --top <top PR> --sha <top head sha>`, taking the head from the membership re-read.
-The sha pin makes GitHub cancel the merge if the top head moved. Exit 0 means GitHub reported `status:
-merged`. Any other exit is not merged: `merge-enqueued` (added to a merge queue), `merge-failed` and
-`poll-timeout` (still pending) are not merged, and a queued stack is not atomic. Resume a `poll-timeout`
-with `lib/stack_merge.py poll --repo <o/r> --top <n> --uuid <u> --sha <sha>`, using the `uuid` the
-result carries.
+**In a cloud session** `gh stack merge` does not run. Merge the top layer with
+`python3 -B <plugin root>/lib/stack_merge.py merge --repo <owner/name> --top <top PR> --sha <top head
+sha>`, taking the head from the membership re-read. The sha pin makes GitHub cancel the merge if the
+top head moved. Exit 0 means GitHub reported `status: merged`. Any other exit is not merged:
+`merge-enqueued` (added to a merge queue), `merge-failed` and `poll-timeout` (still pending) are not
+merged, and a queued stack is not atomic. Resume a `poll-timeout` with
+`python3 -B <plugin root>/lib/stack_merge.py poll --repo <o/r> --top <n> --uuid <u> --sha <sha>`, using
+the `uuid` the result carries.
 
 **A test never pins a layer's commit.** A squash merge leaves every layer's head unreachable from
 the trunk, so a test that reads a pinned layer commit (for example `git show <layer sha>:<path>`)

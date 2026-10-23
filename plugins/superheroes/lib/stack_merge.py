@@ -21,7 +21,6 @@ import time
 GH_TIMEOUT = 120
 DEFAULT_POLL_TIMEOUT = 600
 DEFAULT_POLL_INTERVAL = 5
-MIN_CALL_TIMEOUT = 1
 MAX_DETAIL = 500
 
 REASON_BAD_ARGUMENT = "bad-argument"
@@ -268,9 +267,11 @@ def _poll_loop(repo, top, sha, uuid, start, poll_timeout, poll_interval, timeout
     last_error = None
     status = last_status
     while monotonic() < end:
-        sleep(poll_interval)
-        left = end - monotonic()
-        call_timeout = min(timeout, max(left, MIN_CALL_TIMEOUT))
+        sleep(min(poll_interval, end - monotonic()))
+        # axis: the poll budget ended during the sleep — no GET starts at or after its end
+        if monotonic() >= end:
+            break
+        call_timeout = min(timeout, end - monotonic())
         try:
             proc = run(_poll_argv(repo, top, uuid), capture_output=True, text=True,
                        timeout=call_timeout)

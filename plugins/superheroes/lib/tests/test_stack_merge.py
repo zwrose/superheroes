@@ -270,16 +270,28 @@ def test_m6_pending_until_budget_ends_is_poll_timeout():
     _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
     assert result["status"] == "pending"
     assert result["uuid"] == UUID
-    assert calls.count(POLL_ARGV) == 4
+    assert calls.count(POLL_ARGV) == 3
 
 
 def test_m6_poll_call_timeout_is_capped_by_the_time_left():
-    result, _calls, run = _do_merge({
-        tuple(PUT_ARGV): _pending(),
-        tuple(POLL_ARGV): _pending(),
-    }, poll_timeout=12, poll_interval=5)
+    run, _calls = _make_run({tuple(PUT_ARGV): _pending(), tuple(POLL_ARGV): _pending()})
+    clock = _Clock()
+    result = sm.merge(repo=REPO, top=TOP, sha=SHA, poll_timeout=12, poll_interval=5,
+                      run=run, sleep=clock.sleep, monotonic=clock.monotonic)
     _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
-    assert [kw["timeout"] for kw in run.kw_calls[1:]] == [7, 2, 1]
+    assert [kw["timeout"] for kw in run.kw_calls[1:]] == [7, 2]
+    assert clock.now <= 12
+
+
+def test_m6_interval_longer_than_the_budget_makes_no_poll_get():
+    run, calls = _make_run({tuple(POLL_ARGV): _pending()})
+    clock = _Clock()
+    result = sm.poll(repo=REPO, top=TOP, uuid=UUID, sha=SHA, poll_timeout=1, poll_interval=600,
+                     run=run, sleep=clock.sleep, monotonic=clock.monotonic)
+    _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
+    assert result["uuid"] == UUID
+    assert calls == []
+    assert clock.now <= 1
 
 
 def test_m6_main_poll_timeout_exits_one(capsys):
@@ -439,7 +451,7 @@ def test_m12_recorded_404_every_poll_is_poll_timeout_with_the_404_text():
     assert result["uuid"] == UUID
     assert "HTTP 404" in result["detail"]
     assert "Not Found" in result["detail"]
-    assert calls.count(POLL_ARGV) == 4
+    assert calls.count(POLL_ARGV) == 3
 
 
 def test_m12_poll_get_exiting_nonzero_with_a_merged_body_is_never_merged():
@@ -450,7 +462,7 @@ def test_m12_poll_get_exiting_nonzero_with_a_merged_body_is_never_merged():
     }, poll_timeout=10, poll_interval=5)
     _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
     assert "HTTP 502" in result["detail"]
-    assert calls.count(POLL_ARGV) == 2
+    assert calls.count(POLL_ARGV) == 1
 
 
 def test_m12_poll_call_that_raises_then_merged_is_ok():
@@ -492,7 +504,7 @@ def test_m12_a_pending_read_clears_the_remembered_poll_error():
     result, _calls, _run = _do_merge({
         tuple(PUT_ARGV): _pending(),
         tuple(POLL_ARGV): [_recorded_404(), _pending()],
-    }, poll_timeout=10, poll_interval=5)
+    }, poll_timeout=15, poll_interval=5)
     _assert_refusal(result, sm.REASON_POLL_TIMEOUT)
     assert "404" not in result["detail"]
 

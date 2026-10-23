@@ -115,10 +115,11 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    layers if one member fails. Merge semantics, the bare-number ambiguity, per-pull-request
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
-   In a cloud session the equivalent is `lib/stack_merge.py merge --repo <owner/name> --top <top layer>
-   --sha <its head from item 3's re-read>`. A non-zero exit is not merged, and the train reports the
-   result's `reason`. `merge-enqueued` is read back later as a queued merge: it is not merged, and a
-   queued stack is not atomic, as `rubric/native-stacks.md` says.
+   In a cloud session the equivalent is `python3 -B <plugin-root>/lib/stack_merge.py merge --repo
+   <owner/name> --top <top layer> --sha <its head from item 3's re-read>`. A non-zero exit is not
+   merged, and the train reports the result's `reason`. `merge-enqueued` is read back later as a
+   queued merge: it is not merged, and a queued stack is not atomic, as `rubric/native-stacks.md`
+   says.
 
    **The PR sheets name whole stacks.** A stack merges when its **feature** is complete — every
    layer the issue's plan names, vetted — and never when a vetted prefix exists. **A vetted prefix is
