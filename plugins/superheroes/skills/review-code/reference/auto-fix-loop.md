@@ -402,8 +402,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `skills/workhorse/reference/dispatch-entry.md`.
 >
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
-> seat **may and should** read files and run read-only commands inside the sanitized view to ground
-> its findings. Inlining the diff in the seat prompt remains available and is still reasonable for a
+> seat reviews by reading inside the sanitized view and never runs the project's own files, scripts
+> or tests; every seat order carries that rule from the renderer (`round_orders.py`). Inlining the diff in the seat prompt remains available and is still reasonable for a
 > small diff, but it is no longer the only way a seat gets the change.
 >
 > **Host grants (subcommand granularity).** The owner may adopt these grant strings at subcommand
