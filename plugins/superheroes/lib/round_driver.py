@@ -10552,7 +10552,8 @@ def _pr_body_line(phase, session_dir, rnd, state, meta, cfg, materialize_shared_
         return ("no staged PR body (%s); a finding about a PR body is escalated, never fixed "
                 "anywhere else" % reason)
 
-    if session_mode.resolve(meta, cfg)["mode"] == session_mode.MODE_BRANCH:
+    mode_resolved = session_mode.resolve(meta, cfg)
+    if mode_resolved["mode"] == session_mode.MODE_BRANCH:
         return no_staged("branch mode")
     paths = pr_body_stage.paths(session_dir)
     if materialize_shared_inputs:
