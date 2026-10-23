@@ -69,6 +69,9 @@ attempt must never be globbed and honored.
    **On the read-only path**, the orchestrator still dispatches verifiers manually; use the same
    shipped template at `rubric/orders/dispatch-verifiers.md` only as reference for what the emitted
    order contains — or dispatch the driver-emitted file when you have run `next` through the driver.
+   A hand-composed order ends with the seat's standing rule, printed from its one home (never
+   retyped):
+   `python3 -B -c "import sys; sys.path.insert(0, '$ROOT_DIR/lib'); import round_orders; print(round_orders.seat_rule_block('dispatch-verifiers'))"`.
 
    **Delivery channel — file vs stdout.** The emitted order's `## Output` / channel block names
    which path this seat uses:
@@ -147,7 +150,8 @@ The synthesis seat sits outside every maker family on a proven synthesis cell; w
 **On the auto-fix loop**, dispatch the driver-emitted order at
 `$SESSION_DIR/round-<N>/orders/dispatch-synthesis/<skey>.a<K>.md` (template body:
 `rubric/orders/dispatch-synthesis.md`). **On the read-only path**, the orchestrator dispatches
-manually against that same shipped template.
+manually against that same shipped template, ending the order with the seat's standing rule printed
+the same way, with `'dispatch-synthesis'` as the phase.
 
 Then finalize:
 

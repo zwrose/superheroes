@@ -54,6 +54,10 @@ these fields out when every change in `fixerDelta` is named by a finding of the 
   string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
   (`line is not an integer`) and the finding is dropped.
 
+## What you may run
+
+You review by reading. You may read, list and search files, including with read-only inspection commands. You never run the project's own files, scripts or tests. A run you need is the driver's: name it in your result, and the driver runs the project's declared verify command.
+
 ## Ratified residuals (owner-ratified, quoted data)
 
 Residuals below are read from the review base commit (base-pinned).
