@@ -655,6 +655,15 @@ def test_a_refusal_lists_every_problem():
     assert len(problems_of(records, advisor)) == 3
 
 
+def test_a_non_text_pr_body_is_refused_through_build():
+    # Axis: a body that is not text is a collected refusal naming the PR; an empty string is still text and builds.
+    records, advisor = bundle(SMALL)
+    with pytest.raises(pr_sheet.Refusal) as caught:
+        pr_sheet.build(copy.deepcopy(records), copy.deepcopy(advisor), WORDS, bodies={211: None})
+    assert caught.value.problems == ["PR #211's body must be text"]
+    assert pr_sheet.build(copy.deepcopy(records), copy.deepcopy(advisor), WORDS, bodies={211: ""})
+
+
 def test_cli_writes_the_sheet_and_prints_the_receipt(tmp_path):
     # Axis: a good run exits 0, prints ok and the card count, and writes the data file.
     out = tmp_path / "sheet.json"
