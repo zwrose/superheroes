@@ -508,6 +508,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    (exit 124 = timed out.) Watch the process's **CPU-time column, not elapsed** — an engine CLI can
 >    sit at ~0% CPU for minutes and still be live.
 >
+> **A hand-rolled review dispatch feeds the runner's preamble first.** The runner puts
+> `engine_dispatch.ANTIHIJACK_PREAMBLE`, which carries the review seat rule (#2071), ahead of every
+> engine review prompt. A hand-rolled review or brief-check call writes it to the top of its prompt
+> file from that one home, then appends the order:
+> `python3 -B -c "import sys; sys.path.insert(0, sys.argv[1] + '/lib'); import engine_dispatch; sys.stdout.write(engine_dispatch.ANTIHIJACK_PREAMBLE)" "$ROOT_DIR"`.
+>
 > **Dispatch-runner scope boundary.** The supervised runner supervises **both**
 > `dispatch-review` and `dispatch-write`; each is a **distinct subcommand** with its **own** host
 > grant string, so write autonomy is revocable on its own. The host

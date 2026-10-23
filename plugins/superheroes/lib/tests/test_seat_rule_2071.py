@@ -112,6 +112,26 @@ def test_rules_and_order_blocks_list_no_programs():
     assert not {name: found for name, found in faults.items() if found}
 
 
+def test_hand_rolled_review_dispatch_prints_the_runners_preamble():
+    # The hand-rolled engine fallback (review-code and the brief check) bypasses the runner, so
+    # its documented command must print the runner's own preamble, rule included.
+    import engine_dispatch as ED
+    ref = os.path.join(_LIB_DIR, "..", "skills", "review-code", "reference")
+    with open(os.path.join(ref, "auto-fix-loop.md"), encoding="utf-8") as fh:
+        doc = fh.read()
+    commands = re.findall(r'`(python3 -B -c "[^`]*ANTIHIJACK_PREAMBLE[^`]*")`', doc)
+    assert len(commands) == 1
+    command = commands[0].replace("$ROOT_DIR", os.path.dirname(_LIB_DIR))
+    out = subprocess.run(["bash", "-c", command.replace("python3", sys.executable, 1)],
+                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout == ED.ANTIHIJACK_PREAMBLE
+    mechanics = os.path.join(_LIB_DIR, "..", "skills", "workhorse", "reference",
+                             "dispatch-mechanics.md")
+    with open(mechanics, encoding="utf-8") as fh:
+        assert "A hand-rolled review dispatch feeds the runner's preamble first" in fh.read()
+
+
 def test_dispatch_preamble_carries_the_review_rule_from_its_one_home():
     import engine_dispatch as ED
     assert ED.ANTIHIJACK_PREAMBLE.count(RO.REVIEW_SEAT_RULE) == 1
