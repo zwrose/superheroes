@@ -2777,6 +2777,8 @@ READER_CASES = [
     pytest.param("10. ```python\n\tpass\n\t```\n\n" + ACCEPTING + "- Cold starts now take a minute.\n", ["Cold starts now take a minute."], id="a-tab-indented-closing-fence-in-an-ordered-item-closes-it"),
     pytest.param("- ```python\n  print(1)\n\n" + ACCEPTING + "\n- Cold starts now take a minute.\n", ["Cold starts now take a minute."], id="an-unclosed-list-fence-ends-with-its-list-item"),
     pytest.param("- ```python\n  print(1)\n\n  ## What we're accepting\n- Hidden.\n", [], id="a-heading-inside-the-list-item-stays-fenced"),
+    pytest.param("- ```python\n  print(1)\n      ```\n  ## What we're accepting\n- Hidden.\n", [], id="a-list-fence-closer-four-columns-past-the-content-column-does-not-close"),
+    pytest.param("- ```python\n  print(1)\n     ```\n  ## What we're accepting\n- Listed.\n", ["Listed."], id="a-list-fence-closer-three-columns-past-the-content-column-closes"),
 ]
 
 
