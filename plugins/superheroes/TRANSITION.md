@@ -22,6 +22,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
 - **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
 - **After switching.** **Nothing is owed.** Every implementer order now tells the implementer to create and edit files only with the host's Write and Edit tools, so fewer orders stop on a refused shell write. See [Implementer orders: the file-write rule rides every order](#implementer-orders-the-file-write-rule-rides-every-order).
+- **After switching.** **Nothing is owed.** A review's staleness check no longer reports a verify command that opens with a shell keyword (`if [ -x … ]; then …`) as "no longer resolves: if"; it checks the first word that names a program, and reports a command it cannot read as not checked rather than stale. See [Review: the verify-command check skips shell keywords](#review-the-verify-command-check-skips-shell-keywords).
 
 ### Showrunner: a PR with no review run gets no merge sheet
 
@@ -46,6 +47,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 - The native implementer preamble (`lib/native_engine.py`) carries it as its rule 4; the refused-command rule, the result and the deadline rules move to 5, 6 and 7.
 - The fixer order template (`rubric/orders/dispatch-fixer.md`) fills the same sentence from the constant through the `{{FILE_WRITE_RULE}}` placeholder; its rendered text is unchanged apart from line wrapping.
 - No key, flag, or refusal reason changes.
+
+### Review: the verify-command check skips shell keywords
+
+- `lib/repo_doctor.py` check 5 resolves the verify command's first word in command position that names a program. It skips shell keywords (`if`, `then`, `!`, `{`, …), builtins with their arguments (`[`, `[[ … ]]`, `test`, `cd`, …), `VAR=value` prefixes and redirections; after `command`, `exec` or `time` and their options it checks the program they run (`command -v` only queries, so it is skipped). A quoted operator such as `";"` is an argument, not a command separator. A program word with a `/` resolves as an executable file under the project root, not the caller's directory.
+- When no word can be read as a program (a `case` construct, a program word only the shell can read such as `$PY` or `"python3"`, an unclosed quote), the result's new `unchecked` list says so and the message carries it as a note. It is never drift, so it adds nothing to `signal_hash` and asks for no re-run of review-init. While a note stands, `nudge_acked` reads false so the note is shown, and drift the owner already acknowledged is left out of the message.
+- A command whose real program is absent still reports "verify command no longer resolves: <program>". The check fails safe: when the command quotes or escapes a word or carries a comment, or an assignment (`export PATH=…` included) or `cd`, `pushd`, `popd`, `source` or `.` comes before the program, an unresolved program reads as not checked ("… does not resolve here, but …"), never as stale.
 
 ## 0.46.0
 
