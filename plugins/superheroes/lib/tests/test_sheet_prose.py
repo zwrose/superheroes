@@ -436,6 +436,24 @@ def test_cross_field_rules_agree_between_page_and_prose():
         mutate(sheet)
         return sheet
 
+    def listed_none(mutate):
+        sheet = _pr_kind_sheet("pr")
+        sheet["prSheet"]["nothingListed"] = True
+        mutate(sheet)
+        return sheet
+
+    def a_prefixed_card(sheet):
+        sheet["cards"][0]["id"] = "a-0123456789ab"
+
+    canon_id, other_id = "2026-10-22-abcdefgh-1", "2026-10-22-abcdefgh-2"
+
+    def canon_accounted(listed, cited, extra=None):
+        sheet = _pr_kind_sheet("pr")
+        sheet["prSheet"]["canonAccounted"] = listed
+        sheet["prSheet"]["whatChanged"]["summary"] = "Adds a sheet for one PR. " + cited
+        sheet["prSheet"].update(extra or {})
+        return sheet
+
     fixtures = [
         ("valid", _valid_sheet(), False),
         ("duplicate card id", mutated(lambda s: s["cards"][1].update(id="card-0")), True),
@@ -446,12 +464,42 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
         ("valid stack with a walk", _pr_kind_sheet("stack"), False),
         ("two walk stops share an id", mutated_stack(lambda s: s["prSheet"]["walk"]["stops"][1].update(id="schema")), True),
+        ("nothingListed beside a card whose id starts with a-", listed_none(a_prefixed_card), False),
+        ("nothingListed with no card", listed_none(lambda s: s.update(cards=[])), False),
+        ("nothingListed beside a card", listed_none(lambda s: None), False),
+        ("a card whose id starts with a- with no nothingListed", mutated_stack(a_prefixed_card), False),
         *[(name, sheet, refused) for name, sheet, refused, _ in _decided_fixtures()],
+        ("canonAccounted cited in the summary", canon_accounted([canon_id, other_id], "Ruled in %s and %s." % (canon_id, other_id)), False),
+        ("canonAccounted cited, with a sentence's full stop after it", canon_accounted([canon_id], "Ruled in %s." % canon_id), False),
+        ("canonAccounted not cited in the summary", canon_accounted([canon_id, other_id], "Ruled in %s." % canon_id), True),
+        ("canonAccounted id that is the prefix of a longer id in the summary (a plain substring; the build refuses it)", canon_accounted([canon_id], "Ruled in %s0." % canon_id), False),
+        ("canonAccounted id inside a longer word in the summary (a plain substring; the build refuses it)", canon_accounted([canon_id], "Ruled in x%s." % canon_id), False),
+        ("canonAccounted beside nothingListed", canon_accounted([canon_id], "Ruled in %s." % canon_id, {"nothingListed": True}), True),
+        ("canonAccounted empty", canon_accounted([], "Ruled in %s." % canon_id), True),
+        ("canonAccounted repeats an id", canon_accounted([canon_id, canon_id], "Ruled in %s." % canon_id), True),
+        ("canonAccounted holds a malformed id the summary contains (the build refuses it)", canon_accounted(["2026-10-22-abc-1"], "Ruled in 2026-10-22-abc-1."), False),
+        ("canonAccounted holds an empty id", canon_accounted([""], "Ruled in %s." % canon_id), True),
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
         prose_problems = module.check_sheet(sheet)
         assert bool(page_problems) == bool(prose_problems) == refused, "%s: page %s, prose %s" % (name, page_problems, prose_problems)
+
+
+# Bites on: the both-fields refusal losing its own description in the schema (the page then prints the long description of prSheet, which says nothing about the rule).
+def test_the_page_names_the_rule_when_a_sheet_carries_both_nothing_listed_and_canon_accounted():
+    from test_review_template import _run_check_sheet
+
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    rules = [part["description"] for part in schema["$defs"]["prSheet"]["allOf"]
+             if part.get("not") == {"required": ["nothingListed", "canonAccounted"]}]
+    assert len(rules) == 1
+    canon_id = "2026-10-22-abcdefgh-1"
+    sheet = _pr_kind_sheet("pr")
+    sheet["prSheet"]["whatChanged"]["summary"] = "Adds a sheet for one PR. Ruled in %s." % canon_id
+    sheet["prSheet"].update(nothingListed=True, canonAccounted=[canon_id])
+    assert _run_check_sheet([sheet]) == [rules]
+    assert _load_prose_module().check_sheet(sheet) != []
 
 
 SCHEMA_FILE = PLUGIN / "theme" / "sheet.schema.json"
@@ -1062,10 +1110,44 @@ def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_pa
     for kind in ("pr", "stack"):
         sheet = _sample(kind)
         sheet["cards"] = []
+        sheet["prSheet"]["nothingListed"] = True
         out = _prose_of(tmp_path, sheet)
         assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], PR_WORDS["nothingToAccept"]) in out, kind
         assert not re.search(r"^1\. ", out[out.index("**%s**" % PR_WORDS["acceptingHeading"]):], re.M), kind
         assert out.index(PR_WORDS["nothingToAccept"]) < out.index("**%s**" % PR_WORDS["verdictHeading"]) < out.index("Answer Merge"), kind
+
+
+# Bites on: the prose of a zero-card pr or stack sheet saying "nothing to accept" when the sheet did not record that its PR bodies list none, or saying it was not checked when it did.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_of_a_zero_card_pr_sheet_says_nothing_only_when_it_recorded_that_the_bodies_list_none(tmp_path, kind):
+    # Axis: the line under the accepting heading is nothingToAccept with prSheet.nothingListed and acceptingUnchecked without it, never both.
+    sheet = _sample(kind)
+    sheet["cards"] = []
+    heading = "**%s**\n\n" % PR_WORDS["acceptingHeading"]
+    sheet["prSheet"]["nothingListed"] = True
+    listed = _prose_of(tmp_path, sheet)
+    assert heading + PR_WORDS["nothingToAccept"] + "\n" in listed and PR_WORDS["acceptingUnchecked"] not in listed
+    del sheet["prSheet"]["nothingListed"]
+    unchecked = _prose_of(tmp_path, sheet)
+    assert heading + PR_WORDS["acceptingUnchecked"] + "\n" in unchecked and PR_WORDS["nothingToAccept"] not in unchecked
+
+
+# Bites on: the prose of a zero-card pr or stack sheet ignoring prSheet.canonAccounted (reading "not checked"), dropping the ids, or showing the Canon line beside cards.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_of_a_zero_card_pr_sheet_with_canon_accounted_says_checked_and_names_the_ids(tmp_path, kind):
+    # Axis: the line under the accepting heading is acceptingCanon with the ids joined by ", " when prSheet.canonAccounted is present and nothingListed is not, never nothingToAccept or acceptingUnchecked; a sheet with a card prints no such line.
+    ids = ["2026-10-22-abcdefgh-1", "2026-10-22-abcdefgh-2"]
+    sheet = _sample(kind)
+    sheet["cards"] = []
+    sheet["prSheet"].pop("nothingListed", None)
+    sheet["prSheet"]["canonAccounted"] = ids
+    sheet["prSheet"]["whatChanged"]["summary"] += " Ruled in %s and %s." % tuple(ids)
+    out = _prose_of(tmp_path, sheet)
+    line = PR_WORDS["acceptingCanon"].replace("{ids}", ", ".join(ids))
+    assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], line) in out
+    assert PR_WORDS["nothingToAccept"] not in out and PR_WORDS["acceptingUnchecked"] not in out
+    carded = _prose_of(tmp_path, dict(sheet, cards=_sample(kind)["cards"]))
+    assert line not in carded
 
 
 def _decided(stack):
@@ -1232,7 +1314,8 @@ def _walk_sheet(tmp_path):
     """The data file the builder makes from the full walk fixture, with its pictures copied beside it."""
     out = tmp_path / "sheet.json"
     built = subprocess.run([sys.executable, "-B", str(PLUGIN / "lib" / "pr_sheet.py"), "build", "--record", str(FIXTURES / "record-big.json"),
-                            "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)], capture_output=True, text=True)
+                            "--pr-body", "214=" + str(FIXTURES / "body-none.md"), "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)],
+                           capture_output=True, text=True)
     assert built.returncode == 0, built.stdout
     return json.loads(out.read_text(encoding="utf-8"))
 

@@ -57,6 +57,7 @@
       "#7: 1 rounds ran.",
       "#7: Checks were green, run on 3333333ccccccc3333333ccccccc3333333ccccc."
     ],
+    "nothingListed": true,
     "walk": {
       "open": {
         "label": "Open the test shop"

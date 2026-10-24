@@ -49,7 +49,20 @@ GO_TARGETS = ("it", "this", "that", "them", "pr", "full", "light", "micro")
 GO_FILLER = ("now", "today", "tonight", "please", "in", "on", "the", "cloud", "local", "locally",
              "ahead")
 _GO_REF_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
-_ID_RE = re.compile(r"^- \*\*(\d{4}-\d{2}-\d{2})-([0-9a-z]{8})-([1-9]\d*)\*\*")
+_ID_BODY = r"(\d{4}-\d{2}-\d{2})-([0-9a-z]{8})-([1-9]\d*)"  # date, session, sequence: the one grammar of an entry id
+_ID_RE = re.compile(r"^- \*\*" + _ID_BODY + r"\*\*")
+_BARE_ID_RE = re.compile(_ID_BODY)
+_CITED_ID_RE = re.compile(r"(?<![0-9A-Za-z])" + _ID_BODY + r"(?![0-9A-Za-z])")
+
+
+def is_entry_id(value):
+    """Whether value is exactly one Canon entry id (YYYY-MM-DD-xxxxxxxx-N)."""
+    return isinstance(value, str) and _BARE_ID_RE.fullmatch(value) is not None
+
+
+def cited_entry_ids(text):
+    """The set of complete Canon entry ids cited in text (a longer id never yields its prefix)."""
+    return {m.group(0) for m in _CITED_ID_RE.finditer(text)} if isinstance(text, str) else set()
 _DISPOSITION_RE = re.compile(r"^\s*(?:@?\d+(?:-\d+)?\s*[-–:=]\s*)?\(?[a-h]\)?\s*(?:[-–:,]|$)",
                              re.I)
 _BOOKKEEPING_RE = re.compile(
