@@ -435,7 +435,10 @@ moment until its next ending. The fix order is a `vet not-ready` amendment, or a
 lane's session (`compose --fix-order`) once its `check` read delivered or a may-hold-text verdict; the relay opens the window at the
 message's own compose time (`sentAfter`), never at the check, so a re-check moves nothing. A
 `reoutcome` amendment, or a vet `ready` or `parked-blocker`, closes it; the newest opener must be later
-than the newest closer. The window runs from the fix order to the lane's first ending (handback, stop
+than the newest closer. When the fix order is also sent by message, record the vet `not-ready`
+before the message goes out: the window opens at the newest fix order, so a builder note or handback
+posted between a send and a later `not-ready` is not surfaced.
+The window runs from the fix order to the lane's first ending (handback, stop
 or park, a superseded park not counting): endings and notes from before the fix order are not
 re-reported, the closing ending fires `lane-terminal`, and nothing about the lane surfaces after it.
 A refused or never-started lane, and a local lane, are never re-opened. A not-ready lane whose fix

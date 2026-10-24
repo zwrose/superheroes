@@ -456,7 +456,10 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   launches: send the vet's NOT-READY findings as the fix order by message to the lane's
   `cloudSessionName` (`SendMessage` on the same account, the relay (`ensure`, `compose --fix-order`,
   `SendMessage`, `check`) on another), as `skills/showrunner/reference/wave-watch.md` § Answering a
-  builder note sends an answer. The builder fixes, pushes and hands back as usual. Launch a new fix
+  builder note sends an answer. Record the vet `not-ready` first (§ Amending a lane's record), then
+  send: the wave watch opens the lane's window at the newest fix order, so a builder note or handback
+  posted between the send and a later `not-ready` is not surfaced.
+  The builder fixes, pushes and hands back as usual. Launch a new fix
   leg (a premise with `adoptsBranch`/`adoptsHead`) only when that session is archived, gone from the
   listing (shown by a complete listing, as below), its status bucket reads failed,
   or `cloud_recover.py assess` recorded it `stopped` on a handover. A lane whose builder refused at
