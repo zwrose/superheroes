@@ -522,6 +522,7 @@ FIXER_NO_HEAD_DIFF_RULE = (
 
 def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
+    ph["FILE_WRITE_RULE"] = command_refusals.FILE_WRITE_RULE
     host_seat = context.get("host_seat") is True
     if host_seat:
         ph["FIXER_STEP_5_BLOCK"] = (

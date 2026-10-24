@@ -19,10 +19,38 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed.** A harmless build deviation stays in the PR body's build record and no longer gets its own merge-sheet card; a costly one keeps its card until its fix lands, and doubt sorts costly. See [Build deviations: only costly ones are accepted on the merge sheet](#build-deviations-only-costly-ones-are-accepted-on-the-merge-sheet).
+- **After switching.** **Advisors stop hand-building review records to get a merge sheet for a PR that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet).
+- **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
+- **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
+- **After switching.** **Nothing is owed.** Every implementer order now tells the implementer to create and edit files only with the host's Write and Edit tools, so fewer orders stop on a refused shell write. See [Implementer orders: the file-write rule rides every order](#implementer-orders-the-file-write-rule-rides-every-order).
 
 ### Build deviations: only costly ones are accepted on the merge sheet
 
 A deviation is costly when a promised check did not run, or work bypassed its owner engine, whatever caused it; otherwise it is harmless. The grounding seat not running sorts harmless by name, and the prompt-file pointer, the cloud fixer route, an unreadable host model, a classifier stop and cloud platform limits sort harmless only when the costly test does not apply. Cloud platform limits are the cloud session's own channel limits (no session messages, no comment deletion, no GraphQL reads), never a build check that could not run there. Doubt sorts costly. Every deviation, either class, keeps a bullet under `### Disclosed degradations` in the build record, opening with `[costly]` or `[harmless]`; a bullet with no label reads costly. Only a costly one gets a consequence line under `## What we're accepting`. The merge sheet's `lib/pr_sheet.py` reads acceptances only from that section, and stops at the first `<!-- superheroes:build-record -->` marker line at column 0 after that heading, so a harmless deviation listed only in the build record needs no accounting entry and no card. The omission floor's third row, in CONVENTIONS `§10.7` and its three copy-holders, now reads "every **costly disclosed degradation**".
+
+### Showrunner: a PR with no review run gets no merge sheet
+
+- Duty 6 of the showrunner charter (`skills/showrunner/SKILL.md`, the merge policy's one home) gains one rule: a PR that had no review run, typically a dependency bump the advisor vets directly in place of a review-crew run where the project allows that, gets no merge sheet, and the advisor never hand-builds a review record to make one. The advisor posts its vet receipt and owner half on the PR and tells the owner the PR is theirs to merge with their own click; it executes no merge for such a PR on a chat word. `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics (batch 3) and `theme/review-template.md` (beside `pr_sheet.py build`'s `--record` requirement) point to it.
+- Review discipline is unchanged: whether a project's dependency PRs may skip review-crew stays that project's owner's call, and a review record the driver mandate owes for a disclosed skip is still written.
+- No command, result key or file shape changes.
+
+### Relay: the advisor sends exactly the text it was shown
+
+- `skills/showrunner/reference/wave-watch.md` § "Another account", steps 2 and 3: the answer text never carries a shell-evaluated value the advisor has not seen expanded (a `$(date -u …)` time inside a heredoc is run first and written in as text); the advisor prints the whole composed `relayMessage`, never a truncated view such as `head` or the message id alone, and sends exactly that text; a change after compose means writing a new answer file and composing a new message, never editing the composed one. Step 4 adds that `check` sees only the relay's send against the stored text, so a mismatch does not say which step changed it.
+- `cloud_relay.py check`'s `say` for `relay-text-mismatch` names only what it compares: "The relay's send of message `<id>` differs from the stored text (first difference at character `<n>`); this check sees only that send, so it cannot tell which step changed the text; it was not delivered." With `headerDropped: true` it reads "The relay's send of message `<id>` is the stored text with its header line dropped; it was not delivered." Verdicts, result keys and `firstDifference` are unchanged.
+
+### Cloud builds: credential-like text is redacted, and the review record says so
+
+- A cloud session replaces credential-like text (API keys, tokens, private keys) before a file is written or a comment posted, so a test fixture holding a whole key failed before it tested anything. The instruction to build such a value at runtime from pieces, and to describe such text in a finding rather than quote it, now lives in the dispatch preamble every engine review dispatch is fed (`CREDENTIAL_TEXT_RULE` in `lib/engine_dispatch.py`), `rubric/review-base.md`, `agents/test-role.md`, `agents/implementer.md` and `skills/workhorse/reference/cloud.md`. It is a request in the prompt text, best effort; nothing enforces it.
+- The review record carries `transitDamage.redactedFields` (the path of each recorded field whose text holds `[REDACTED`) and a `Transit damage:` summary line. An earlier record carrying only redacted fields is listed under `earlierRecordsNotChecked` with the reason `redacted text`. A record with no redacted field is unchanged.
+
+### Implementer orders: the file-write rule rides every order
+
+- The review fixer's file-write rule has one home now, `command_refusals.FILE_WRITE_RULE` in `lib/command_refusals.py`. It tells the seat to write files only through the host's own Write and Edit tools, never a shell command that writes a file.
+- `dispatch-write` appends it to every staged write prompt, after the refused-command rule (`command_refusals.ORDER_TEXT`) and before the result contract, on every engine.
+- The native implementer preamble (`lib/native_engine.py`) carries it as its rule 4; the refused-command rule, the result and the deadline rules move to 5, 6 and 7.
+- The fixer order template (`rubric/orders/dispatch-fixer.md`) fills the same sentence from the constant through the `{{FILE_WRITE_RULE}}` placeholder; its rendered text is unchanged apart from line wrapping.
+- No key, flag, or refusal reason changes.
 
 ## 0.46.0
 
