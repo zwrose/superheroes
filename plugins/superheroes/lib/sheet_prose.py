@@ -288,16 +288,17 @@ def _validate(schema, value, path, defs):
     return problems
 
 
-# A whole Canon entry id (YYYY-MM-DD-xxxxxxxx-N) in a text: lib/canon.py's _CITED_ID_RE, which this stdlib-only script cannot import;
-# not preceded or followed by a letter or digit, so a longer id never cites its prefix.
-_CITED_ID = re.compile(r"(?<![0-9A-Za-z])\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*(?![0-9A-Za-z])")
+def _cited_id_pattern(schema):
+    """The pattern of a whole Canon entry id in a text, derived from the schema's $defs.canonEntryId (the one home of the grammar):
+    not preceded or followed by a letter or digit, so a longer id never cites its prefix."""
+    return re.compile(r"(?<![0-9A-Za-z])" + schema["$defs"]["canonEntryId"]["pattern"][1:-1] + r"(?![0-9A-Za-z])")
 
 
 def _duplicates(ids):
     return sorted({i for i in ids if ids.count(i) > 1})
 
 
-def _check_cross_fields(sheet):
+def _check_cross_fields(sheet, schema):
     """The rules the schema cannot express, over a sheet that already fits it.
 
     Their one home is the top-level "description" of theme/sheet.schema.json; the page's checkSheet
@@ -321,7 +322,7 @@ def _check_cross_fields(sheet):
     problems += ['Decided entry id "%s" is used more than once.' % i for i in _duplicates(decided_ids)]
     problems += ['Decided entry id "%s" is also a card id.' % i for i in sorted(set(decided_ids)) if i in card_ids]
     summary = sheet.get("prSheet", {}).get("whatChanged", {}).get("summary", "")
-    cited = {found.group(0) for found in _CITED_ID.finditer(summary)}
+    cited = {found.group(0) for found in _cited_id_pattern(schema).finditer(summary)}
     problems += ['prSheet.canonAccounted names "%s", which the summary does not cite.' % i
                  for i in sheet.get("prSheet", {}).get("canonAccounted", []) if i not in cited]
     rows = sheet.get("index", {}).get("rows", [])
@@ -336,7 +337,7 @@ def check_sheet(sheet):
     if problems:
         return problems
     problems = _validate(schema, sheet, "", schema.get("$defs", {}))
-    return [p[0].upper() + p[1:] for p in problems] or _check_cross_fields(sheet)
+    return [p[0].upper() + p[1:] for p in problems] or _check_cross_fields(sheet, schema)
 
 
 @functools.lru_cache(maxsize=None)

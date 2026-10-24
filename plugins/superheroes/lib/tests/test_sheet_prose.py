@@ -508,12 +508,12 @@ def test_the_copied_canon_id_patterns_agree_with_canon():
     ident = "2026-10-22-abcdefgh-1"
     texts = [ident, ident + "0", ident + "a", ident + "-2", "x" + ident, "Ruled in 2026-10-22-abcdefgh-10 and 2026-10-22-abcdefgh-1.",
              ident + " and 2026-10-23-ijklmnop-2", "2026-10-22-abc-1", ""]
-    cited = _load_prose_module()._CITED_ID
+    cited = _load_prose_module()._cited_id_pattern(json.loads(SCHEMA_FILE.read_text(encoding="utf-8")))
     for text in texts:
         assert {m.group(0) for m in cited.finditer(text)} == canon.cited_entry_ids(text), repr(text)
 
     schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
-    pattern = re.compile(schema["$defs"]["prSheet"]["properties"]["canonAccounted"]["items"]["pattern"])
+    pattern = re.compile(schema["$defs"]["canonEntryId"]["pattern"])
     candidates = texts + ["2026-10-22-abcdefgh-3", "2026-10-22-abcdefgh-0", "2026-10-22-ABCDEFGH-1", "2026-10-22-abcdefg-1"]
     accepted = {c for c in candidates if canon.is_entry_id(c)}
     assert accepted and accepted != set(candidates)

@@ -49,7 +49,9 @@ GO_TARGETS = ("it", "this", "that", "them", "pr", "full", "light", "micro")
 GO_FILLER = ("now", "today", "tonight", "please", "in", "on", "the", "cloud", "local", "locally",
              "ahead")
 _GO_REF_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
-_ID_BODY = r"(\d{4}-\d{2}-\d{2})-([0-9a-z]{8})-([1-9]\d*)"  # date, session, sequence: the one grammar of an entry id
+# The one grammar of an entry id (date, session, sequence) lives in theme/sheet.schema.json's $defs.canonEntryId, read here.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "theme", "sheet.schema.json"), encoding="utf-8") as _schema:
+    _ID_BODY = json.load(_schema)["$defs"]["canonEntryId"]["pattern"][1:-1]
 _ID_RE = re.compile(r"^- \*\*" + _ID_BODY + r"\*\*")
 _BARE_ID_RE = re.compile(_ID_BODY)
 _CITED_ID_RE = re.compile(r"(?<![0-9A-Za-z])" + _ID_BODY + r"(?![0-9A-Za-z])")

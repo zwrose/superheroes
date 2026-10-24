@@ -230,7 +230,7 @@ def _outside_comments(lines):
     (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
     A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
     outside fences only."""
-    kept, fence, column, inside, level = [], None, 0, False, None
+    kept, fence, column, inside, level, item_column = [], None, 0, False, None, 0
     for n, line in enumerate(lines):
         if fence is not None:
             spaced = line.expandtabs(4)  # a tab reaches the next multiple of four columns
@@ -255,7 +255,20 @@ def _outside_comments(lines):
             continue
         opening = _FENCE.match(line)
         fence = opening.group(2) if opening else None
-        column = len(line[:opening.start(2)].expandtabs(4)) if opening and opening.group(1) else 0
+        spaced = line.expandtabs(4)
+        lead = len(spaced) - len(spaced.lstrip(" "))
+        if opening and opening.group(1):
+            column = len(line[:opening.start(2)].expandtabs(4))
+        else:
+            # a fence on a continuation line sits in the enclosing list item's content: measure its closer from that column
+            column = item_column if opening and lead >= item_column else 0
+        if not opening and line.strip():
+            item = _ITEM.match(line)
+            if item:
+                gap = len(item.group(3))
+                item_column = len(item.group(1)) + len(item.group(2)) + (gap if gap <= 4 else 1)
+            elif lead < item_column:
+                item_column = 0  # a non-blank line left of the item's content ends the item
         accepting = None if opening else _ACCEPTING.match(line)
         level = len(accepting.group(1)) if accepting else level
         kept.append((line, opening is not None))

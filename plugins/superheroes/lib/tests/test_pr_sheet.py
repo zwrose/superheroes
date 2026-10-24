@@ -3084,3 +3084,9 @@ def test_pr_body_on_the_index_command_is_a_parser_error(tmp_path, capsys):
     assert caught.value.code == 2
     assert "--pr-body is only for build" in capsys.readouterr().err
 
+
+
+# Bites on: a fence opened on a list item's continuation line being measured from column 0, so its valid indented closer leaves it open.
+def test_a_continuation_line_fence_closes_at_the_list_items_content_column():
+    body = "Intro\n\n1. Example:\n   ```\n    code\n    ```\n\n## What we're accepting\n\n- A breaking change\n"
+    assert pr_sheet.accepting_listed(body) == ["A breaking change"]
