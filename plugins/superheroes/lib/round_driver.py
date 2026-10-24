@@ -12908,20 +12908,17 @@ def _run_verify_claim_pid(claim_path):
 
 def _run_verify_record_group(claim_path, token, pgid):
     """Record the verify child's process group in this run's claim, so a retry after a driver that
-    died without cleanup can reap the orphaned group before it reclaims the slot. Best effort."""
+    died without cleanup can reap the orphaned group before it reclaims the slot. Returns whether
+    the group was durably recorded."""
     obj, err = round_records.read_json(claim_path)
     if err is not None or not isinstance(obj, dict) or obj.get("token") != token:
-        return
+        return False
     obj["pgid"] = pgid
-    tmp_path = claim_path + ".tmp"
     try:
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.write(round_records.canonical(obj))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, claim_path)
+        round_commit.atomic_write_bytes(claim_path, round_records.canonical(obj).encode("utf-8"))
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _run_verify_reap_group(claim_path):
@@ -13071,10 +13068,17 @@ def _run_in_process_group(argv, *, timeout=None, **kwargs):
 
 def _run_in_process_group_supervised(argv, timeout, kwargs):
     on_spawn = kwargs.pop("on_spawn", None)
-    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True, **kwargs) as proc:
+    spawn = argv
+    if on_spawn is not None:  # start gate: the child blocks on one line from stdin until its group is recorded
+        spawn = ["/bin/sh", "-c", 'read -r _ || exit 125; exec "$@" </dev/null', "run-verify-gate", *argv]
+    stdin = subprocess.PIPE if on_spawn is not None else subprocess.DEVNULL
+    with subprocess.Popen(spawn, stdin=stdin, start_new_session=True, **kwargs) as proc:
         try:
             if on_spawn is not None:
                 on_spawn(proc.pid)
+                proc.stdin.write(b"go\n")
+                proc.stdin.close()
+                proc.stdin = None  # communicate() would flush the closed pipe
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
@@ -13102,7 +13106,10 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     exit_code = None
     extra = {}
     if run is _run_in_process_group:  # the child is a session leader: its pid is its group id
-        extra["on_spawn"] = lambda pgid: _run_verify_record_group(claim["claimPath"], claim["token"], pgid)
+        def record(pgid):
+            if not _run_verify_record_group(claim["claimPath"], claim["token"], pgid):
+                raise OSError("verify process group could not be recorded in the claim")
+        extra["on_spawn"] = record
     try:
         done = run([claim["bash"], "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, **extra)

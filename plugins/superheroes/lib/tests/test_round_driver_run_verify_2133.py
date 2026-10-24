@@ -704,6 +704,54 @@ def test_the_spawned_verify_group_is_recorded_in_the_claim(tmp_path):
     assert RR.read_json(claim_path)[0]["pgid"] == 4242
 
 
+def test_the_command_waits_for_the_group_to_be_recorded(tmp_path):
+    marker = tmp_path / "ran"
+
+    def on_spawn(pgid):
+        time.sleep(0.5)
+        assert not marker.exists(), "the command ran before its group was recorded"
+
+    done = RD._run_in_process_group(["bash", "-c", "touch %s" % marker], timeout=10,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    on_spawn=on_spawn)
+    assert done.returncode == 0, done.stdout
+    assert marker.exists()
+
+
+@pytest.mark.proc_containment
+def test_a_closed_gate_never_runs_the_command(tmp_path):
+    marker = tmp_path / "ran"
+    spawned = []
+
+    def on_spawn(pgid):
+        spawned.append(pgid)
+        raise OSError("not recorded")
+
+    try:
+        with pytest.raises(OSError, match="not recorded"):
+            RD._run_in_process_group(["bash", "-c", "touch %s" % marker], timeout=10,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     on_spawn=on_spawn)
+        time.sleep(2)
+        assert not marker.exists(), "the command ran though its group was never recorded"
+        assert _pid_gone(spawned[0]), "the gated group %d outlived the refusal" % spawned[0]
+    finally:
+        for pid in spawned:
+            _kill_if_alive(pid)
+
+
+def test_a_claim_that_cannot_record_the_group_refuses_spawn_failed(tmp_path, adapters, monkeypatch):
+    marker = tmp_path / "ran"
+    d = _at_verify(tmp_path, command="touch %s" % marker)
+    monkeypatch.setattr(RD, "_run_verify_record_group", lambda claim_path, token, pgid: False)
+    out = RD.cmd_run_verify(d)
+    assert out["ok"] is False and out["reason"] == "run-verify-spawn-failed", out
+    assert "could not be recorded" in out["detail"], out
+    time.sleep(1)
+    assert not marker.exists(), "the verify command ran though its group was never recorded"
+    _nothing_landed(d)
+
+
 class _Clock(object):
     def __init__(self):
         self.t = 0.0
