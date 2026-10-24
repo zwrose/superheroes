@@ -287,7 +287,31 @@ def _verify_payload_via_verb(session_dir):
     """The verify payload as production lands it (#2133): the driver runs the session's bound verify
     command — the `run` seam stands in for the process — and writes the landing and its journal row
     itself; a hand-written `run-verify` landing is refused at `advance`. The bare landing is taken
-    off disk so the seat record is the one landing, and the driver's payload rides it unchanged."""
+    off disk so the seat record is the one landing, and the driver's payload rides it unchanged.
+
+    Idempotent for a slot the verb already filled: a caller that asks twice (the record-submit
+    fence's census records the slot, then builds the hand-submit artifact) gets the driver's payload
+    from the landing or the durable store record, and the verb is not run a second time."""
+    slot = round_driver._run_verify_slot(_state(session_dir))
+    if slot is not None:
+        rnd, attempt = slot
+        skey = round_records.storage_key("verify")
+        landing = round_records.bare_payload_path(session_dir, rnd, round_driver.P_VERIFY, skey,
+                                                  attempt)
+        record = round_records.store_path(session_dir, rnd, round_driver.P_VERIFY, skey, attempt)
+        if os.path.exists(landing):
+            filled, err = round_records.read_json(landing)
+            assert err is None, err
+            return filled
+        if os.path.exists(record):
+            # the durable record is the seat-result envelope; the driver's payload rides inside it
+            stored, err = round_records.read_json(record)
+            assert err is None, err
+            if isinstance(stored, dict) and isinstance(stored.get("payload"), dict):
+                return stored["payload"]
+            # a seat-missing wedge (the census's refuse-fold shape) holds the slot with no driver
+            # payload and the verb refuses it; the hand submit it builds is not driver-checked
+            return {"result": "pass", "command": "none", "exit": 0}
     out = round_driver.cmd_run_verify(
         session_dir,
         run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=b"verify output\n"))

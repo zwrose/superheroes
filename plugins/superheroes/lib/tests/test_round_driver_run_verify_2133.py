@@ -15,8 +15,10 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -550,6 +552,86 @@ def test_e8_a_timeout_lands_timeout_with_no_exit_code(tmp_path, adapters, partia
     assert RP.verify_result_fault(payload) is None
     folded = TA._advance(d, tmp_path)
     assert folded["ok"] is True and folded.get("terminal") == "halted", folded
+
+
+def _pid_gone(pid, within=5.0):
+    """True once `pid` no longer exists, polled for up to `within` seconds. A zombie awaiting a reaper
+    that never comes (a container whose pid 1 does not wait) is dead for this purpose."""
+    deadline = time.monotonic() + within
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        try:
+            with open("/proc/%d/stat" % pid, encoding="utf-8") as fh:
+                if fh.read().rpartition(")")[2].split()[0] in ("Z", "X"):
+                    return True
+        except (OSError, IndexError):
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _kill_if_alive(pid):
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+_GROUP_KWARGS = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+
+def test_a_timeout_kills_the_whole_process_group():
+    pid = None
+    try:
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            RD._run_in_process_group(["bash", "-c", "sleep 30 & echo $!; wait"], timeout=1,
+                                     **_GROUP_KWARGS)
+        elapsed = time.monotonic() - started
+        pid = int(caught.value.output.split()[0])
+        assert _pid_gone(pid), "the background child %d outlived the timeout" % pid
+        # a kill that spared the group would leave the child holding the output pipe, and the call
+        # would only return when that child's `sleep 30` ended on its own
+        assert elapsed < 15, "the call took %.1fs; the group was not killed at the timeout" % elapsed
+    finally:
+        _kill_if_alive(pid)
+
+
+def test_an_interrupted_wait_kills_the_whole_process_group(tmp_path, monkeypatch):
+    pid_file = tmp_path / "child.pid"
+    real_communicate = subprocess.Popen.communicate
+    calls = []
+    pid = None
+
+    def communicate(self, *args, **kwargs):
+        calls.append(self)
+        if len(calls) > 1:
+            return real_communicate(self, *args, **kwargs)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            text = pid_file.read_text() if pid_file.exists() else ""
+            if text.endswith("\n") and text.strip().isdigit():
+                raise RuntimeError("boom")
+            time.sleep(0.02)
+        raise AssertionError("the command never wrote its background pid")
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", communicate)
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            RD._run_in_process_group(["bash", "-c", "sleep 30 & echo $! > %s; wait" % pid_file],
+                                     **_GROUP_KWARGS)
+        pid = int(pid_file.read_text())
+        assert _pid_gone(pid), "the background child %d outlived the interrupted wait" % pid
+    finally:
+        if pid is None and pid_file.exists() and pid_file.read_text().strip().isdigit():
+            pid = int(pid_file.read_text())
+        _kill_if_alive(pid)
 
 
 class _Clock(object):
