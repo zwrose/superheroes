@@ -1511,6 +1511,18 @@ def _withheld_line(lst, level):
     return lead + ", ".join(lst) + "."
 
 
+def _transit_line(damage, level):
+    """The summary line for a record whose fields hold redacted text; None when `transitDamage` names none. Level 0
+    names the paths; the compact levels give their count, and the record's JSON keeps the list."""
+    fields = damage.get("redactedFields") if isinstance(damage, dict) else None
+    if not (isinstance(fields, list) and fields):
+        return None
+    count = _plural(len(fields), "recorded field", "recorded fields")
+    if level >= 1:
+        return f"Transit damage: redacted text in {count} {LISTED}, so that text is lost."
+    return f"Transit damage: redacted text in {count}, so that text is lost: " + ", ".join(str(f) for f in fields) + "."
+
+
 def _summary(r, level):
     """The summary text. Level 0 lists everything; level 1 turns each unbounded list (what is left, who ran,
     which findings wait, which were not taken) into a count; level 2 also turns the per-seat reviewer bullets
@@ -1550,6 +1562,7 @@ def _summary(r, level):
     rounds_line = _rounds_line(r.get("rounds"))
     refused = r.get("refused") or []
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
+    transit_line = _transit_line(r.get("transitDamage"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     lines = [
@@ -1559,6 +1572,8 @@ def _summary(r, level):
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
         floor_line,
         withheld_line,
+        # axis: the transit-damage line is present whenever a recorded field holds redacted text — see bite-proof record wo1_2121_redacted
+        *([transit_line] if transit_line else []),
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
@@ -1574,12 +1589,50 @@ def _summary(r, level):
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.
     # The wider lines carry the driver's own reason text, and the withheld line carries literal path data,
-    # like the floor line. The refusals line carries the agent's literal command and next-step text.
+    # like the floor line. The refusals line carries the agent's literal command and next-step text. The transit
+    # line carries the recorded fields' literal paths (record keys), so it is left out too.
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     _assert_no_bug_free_claim(
         "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l not in wider_lines))
+                  and l is not transit_line and l not in wider_lines))
     return "\n".join(lines)
+
+
+def _redacted_paths(value):
+    """The path of every string value or dict key holding `[REDACTED`, in document order (dict insertion order, list
+    order), collected without recursion: dict keys joined with '.', list indexes as `[i]`, a matching key reporting
+    the path that ends in it. The record's own top-level `transitDamage` is skipped. No path repeats."""
+    out, seen, stack = [], set(), [("", value, True, False)]
+    while stack:
+        path, v, top, hit = stack.pop()
+        if hit or (isinstance(v, str) and "[REDACTED" in v):
+            if path not in seen:
+                seen.add(path)
+                out.append(path)
+        elif isinstance(v, list):
+            stack.extend(reversed([(f"{path}[{i}]", item, False, False) for i, item in enumerate(v)]))
+        elif isinstance(v, dict):
+            kids = []
+            for k, item in v.items():
+                if top and k == "transitDamage":
+                    continue
+                kpath = f"{path}.{k}" if path else str(k)
+                # a matching key is recorded before its value's paths: its marker entry sits ahead of the value
+                if isinstance(k, str) and "[REDACTED" in k:
+                    kids.append((kpath, None, False, True))
+                kids.append((kpath, item, False, False))
+            stack.extend(reversed(kids))
+    return out
+
+
+def _flag_redactions(r):
+    """The record with `transitDamage.redactedFields` listing every recorded field whose text holds `[REDACTED`
+    (merged into an existing `transitDamage` dict), or the record itself when no field does."""
+    paths = _redacted_paths(r)
+    if not paths:
+        return r
+    existing = r.get("transitDamage")
+    return dict(r, transitDamage={**(existing if isinstance(existing, dict) else {}), "redactedFields": paths})
 
 
 def _record_json(r):
@@ -1624,6 +1677,8 @@ def render_plan(record):
     r = _scrubbed(record)
 
     def single(r):
+        # axis: the redacted-field flag is computed on the record as posted, after each shed step — see bite-proof record wo1_2121_redacted
+        r = _flag_redactions(r)
         return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
                 f"{_record_json(r)}\n```\n</details>")
 
@@ -1649,6 +1704,7 @@ def render_plan(record):
     if len(body) <= MAX_BODY_CHARS:
         return _Plan([], lambda part_ids=None: body)
     # Still over the cap after every step: the JSON text goes to part comments, never cut and never refused.
+    r = _flag_redactions(r)  # the parts text and the head's summary carry the flag too
     text = _record_json(r)
     parts = _part_bodies(text)
     digest, chars = hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text)
@@ -1761,7 +1817,10 @@ def _resolve_parts(index, by_id):
     # and hash say only that something changed, so the reader names it for the vet instead of hiding the record
     hash_matches = hashlib.sha256(text.encode("utf-8")).hexdigest() == digest
     if len(text) != chars or not hash_matches:
-        rec = dict(rec, transitDamage={"recordedChars": chars, "foundChars": len(text), "hashMatches": hash_matches})
+        # merged into a `transitDamage` the writer already put there (its redacted fields), never replacing it
+        damage = rec.get("transitDamage")
+        rec = dict(rec, transitDamage={**(damage if isinstance(damage, dict) else {}), "recordedChars": chars,
+                                       "foundChars": len(text), "hashMatches": hash_matches})
     return rec
 
 
@@ -1882,11 +1941,18 @@ def write(account_path, repo_root, readers=None):
             parsed = _parse_body(c["body"], by_id)
             # a record whose findings list is malformed is as unreadable as one that does not parse
             usable = parsed if parsed is not None and _findings_listed(parsed) else None
-            # axis: every earlier record code could not check (unreadable, or changed in transit) is listed on each
-            # new record, so a later write never hides it from the vet, who reads only the latest record
-            if usable is None or usable.get("transitDamage"):
-                not_checked.append({"id": c["id"], "url": c.get("url"),
-                                    "why": "unreadable" if usable is None else "changed in transit"})
+            # axis: every earlier record code could not check (unreadable, changed in transit, or holding redacted
+            # text) is listed on each new record, so a later write never hides it from the vet, who reads only the
+            # latest record — see bite-proof record wo1_2121_redacted
+            damage = usable.get("transitDamage") if usable is not None else None
+            if usable is None or damage:
+                if usable is None:
+                    why = "unreadable"
+                elif isinstance(damage, dict) and list(damage) == ["redactedFields"]:
+                    why = "redacted text"
+                else:
+                    why = "changed in transit"
+                not_checked.append({"id": c["id"], "url": c.get("url"), "why": why})
             if c is latest:
                 # axis: an unreadable earlier record never blocks a new one; it is listed instead
                 prior = usable
