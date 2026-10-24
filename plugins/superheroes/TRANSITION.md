@@ -27,6 +27,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** A native implementer's isolated worktree now gets a link to the build worktree's installed dependency folders (`node_modules`), so `npx --no-install <bin>` and `npm run <script>` work there; `enroll` reports it under a new `dependencies` key and `close` removes the link before collecting. See [Native implementer: enroll links the installed dependencies](#native-implementer-enroll-links-the-installed-dependencies).
 - **After switching.** **Nothing is owed.** `open` prints one more field in its `agent` object, `launchPrompt`, and the native implementer and the native fixer are dispatched with it. See [Native dispatch: open prints a launch prompt](#native-dispatch-open-prints-a-launch-prompt).
 - **After switching.** **Nothing is owed.** In a cloud session on Linux whose calibration turns on `localSockets`, the review's host-seat fixer runs as a native fixer subagent in the build worktree. See [Review fixer: the cloud localSockets route](#review-fixer-the-cloud-localsockets-route).
+- **After switching.** **Nothing is owed.** A review's staleness check no longer reports a verify command that opens with a shell keyword (`if [ -x … ]; then …`) as "no longer resolves: if"; it checks the first word that names a program, and reports a command it cannot read as not checked rather than stale. See [Review: the verify-command check skips shell keywords](#review-the-verify-command-check-skips-shell-keywords).
 
 ### Showrunner: a PR with no review run gets no merge sheet
 
@@ -85,6 +86,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - In a cloud session on Linux whose calibration turns on `localSockets`, the claude write channel refuses `engine-config:sandbox-access-unsupported-platform`, so the review's host-seat fixer runs as a native fixer subagent in the build worktree (no worktree isolation), dispatched with the pointer prompt, writing its own payload landing and its own commit as the fixer order says. It is never a native implementer order.
 - No key, flag or refusal reason changed; the reason above is the existing one the channel already gave.
+
+### Review: the verify-command check skips shell keywords
+
+- `lib/repo_doctor.py` check 5 resolves the verify command's first word in command position that names a program. It skips shell keywords (`if`, `then`, `!`, `{`, …), builtins with their arguments (`[`, `[[ … ]]`, `test`, `cd`, …), `VAR=value` prefixes and redirections; after `command`, `exec` or `time` and their options it checks the program they run (`command -v` only queries, so it is skipped). A quoted operator such as `";"` is an argument, not a command separator. A program word with a `/` resolves as an executable file under the project root, not the caller's directory.
+- When no word can be read as a program (a `case` construct, a program word only the shell can read such as `$PY` or `"python3"`, an unclosed quote), the result's new `unchecked` list says so and the message carries it as a note. It is never drift, so it adds nothing to `signal_hash` and asks for no re-run of review-init. While a note stands, `nudge_acked` reads false so the note is shown, and drift the owner already acknowledged is left out of the message.
+- A command whose real program is absent still reports "verify command no longer resolves: <program>". The check fails safe: when the command quotes or escapes a word or carries a comment, or an assignment (`export PATH=…` included) or `cd`, `pushd`, `popd`, `source` or `.` comes before the program, an unresolved program reads as not checked ("… does not resolve here, but …"), never as stale.
 
 ## 0.46.0
 
