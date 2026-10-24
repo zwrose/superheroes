@@ -181,6 +181,12 @@ def _words(text):
 
 def _split_segments(command):
     """Split a command string into segments at unquoted boundaries."""
+    return [segment for segment, _ in _split_segments_with_ends(command)]
+
+
+def _split_segments_with_ends(command):
+    """Split into (segment, end) pairs; end is the unquoted boundary character that flushed the
+    segment (`;`, newline, `(`, `)`, backtick, `|`, `&`), or "" at the end of the text."""
     command = _mask_data_heredoc(command)
     segments = []
     current = []
@@ -189,10 +195,10 @@ def _split_segments(command):
     in_single = False
     in_double = False
 
-    def flush():
+    def flush(end=""):
         seg = "".join(current).strip()
         if seg:
-            segments.append(seg)
+            segments.append((seg, end))
         current.clear()
 
     while i < n:
@@ -223,39 +229,39 @@ def _split_segments(command):
             i += 2
             continue
         if ch == ";":
-            flush()
+            flush(";")
             i += 1
             continue
         if ch == "\n":
-            flush()
+            flush("\n")
             i += 1
             continue
         if ch == "(":
-            flush()
+            flush("(")
             i += 1
             continue
         if ch == ")":
-            flush()
+            flush(")")
             i += 1
             continue
         if ch == "`":
-            flush()
+            flush("`")
             i += 1
             continue
         if ch == "|":
             if i + 1 < n and command[i + 1] == "|":
-                flush()
+                flush("|")
                 i += 2
                 continue
-            flush()
+            flush("|")
             i += 1
             continue
         if ch == "&":
             if i + 1 < n and command[i + 1] == "&":
-                flush()
+                flush("&")
                 i += 2
                 continue
-            flush()
+            flush("&")
             i += 1
             continue
         current.append(ch)
@@ -264,8 +270,9 @@ def _split_segments(command):
     return segments
 
 
-def _tokenize_segment(segment):
-    """Tokenize one segment, respecting quotes; strip surrounding quotes from tokens."""
+def _tokenize_segment(segment, keep_quotes=False):
+    """Tokenize one segment, respecting quotes; strip surrounding quotes from tokens unless
+    keep_quotes, which returns each token raw."""
     tokens = []
     current = []
     i = 0
@@ -276,7 +283,7 @@ def _tokenize_segment(segment):
     def flush():
         if current:
             tok = "".join(current)
-            if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"":
+            if not keep_quotes and len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"":
                 tok = tok[1:-1]
             tokens.append(tok)
             current.clear()
