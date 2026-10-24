@@ -1109,8 +1109,10 @@ def _segment_has_unresolvable_target(tokens):
     if "GIT_DIR" in keys or "GIT_WORK_TREE" in keys:
         return True
     while tokens and tokens[0] in _EXECUTION_BUILTINS:
-        tokens = tokens[1:]
+        builtin, tokens = tokens[0], tokens[1:]
         while tokens and tokens[0].startswith("-"):
+            if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
+                return False
             tokens = tokens[1:]
     if tokens and tokens[0] in ("cd", "pushd"):
         return True
@@ -1148,7 +1150,7 @@ def target_is_resolvable(command, _depth=0):
                 and end not in ("`", "(")
                 and not target_is_resolvable(shape[1], _depth + 1)):
             return False
-        tokens = _tokenize_segment(segment)
+        tokens = _drop_redirections(_tokenize_segment(segment), _tokenize_segment(segment, keep_quotes=True))
         if _segment_has_unresolvable_target(tokens):
             return False
     return True

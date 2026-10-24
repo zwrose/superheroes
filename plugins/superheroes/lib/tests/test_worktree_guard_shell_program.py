@@ -340,6 +340,7 @@ def test_wrapper_operands_and_outer_substitutions_cannot_hide_a_discard(command,
     "bash -c 'echo hi'",
     "eval 'echo hi' 2>/dev/null",
     "2>\"/tmp/error log\" bash -c 'echo hi'",
+    "command -v cd && git status",
 ])
 def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
@@ -348,6 +349,9 @@ def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo)
 @pytest.mark.parametrize("command, message", [
     ("eval 'command cd /other;' git reset --hard", wg.indeterminate_message("reset-hard")),
     ("bash -c 'builtin cd /x && git reset --hard'", wg.indeterminate_message("reset-hard")),
+    ("bash -c 'command 2>/dev/null cd /other && git reset --hard'", wg.indeterminate_message("reset-hard")),
+    ("command 2>/dev/null cd /other && git reset --hard", wg.indeterminate_message("reset-hard")),
+    ("bash -c 'command -p cd /x && git reset --hard'", wg.indeterminate_message("reset-hard")),
     ("eval 'git reset --hard' 2>/dev/null", _RESET),
 ])
 def test_wrapped_directory_change_and_redirected_eval_are_still_refused(command, message, dirty_repo):
