@@ -36,8 +36,8 @@ TRANSPORTS = (TRANSPORT_AUTO, TRANSPORT_GRAPHQL, TRANSPORT_REST)
 GRAPHQL_REFUSED_MARKERS = ("HTTP 403", "use the REST API")
 
 # The closing keywords a PR body's first line uses to name the issue it closes; its one home, read by review_record.
-CLOSES_RE = re.compile(r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w):?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)",
-                       re.IGNORECASE)
+CLOSING_KEYWORD = r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w)"
+CLOSES_RE = re.compile(CLOSING_KEYWORD + r":?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)", re.IGNORECASE)
 
 # Every read of the open-PR list asks for at most this many rows, on either transport (`gh pr list --limit`).
 OPEN_PRS_LIMIT = 1000

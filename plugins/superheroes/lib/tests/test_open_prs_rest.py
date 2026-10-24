@@ -19,6 +19,7 @@ import gh_pages  # noqa: E402
 import launcher as L  # noqa: E402
 import review_record  # noqa: E402
 import stack_check as sc  # noqa: E402
+import wave_watch  # noqa: E402
 
 _FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 _PAGE_RE = re.compile(r"^repos/\{owner\}/\{repo\}/pulls\?state=open&sort=created&direction=desc&per_page=100&page=(\d+)$")
@@ -456,6 +457,10 @@ def test_e10_a_non_list_page_before_the_limit_is_reached_fails_the_whole_read():
 
 def test_the_closing_keyword_regex_has_one_home():
     assert review_record._CLOSES_RE is sc.CLOSES_RE
-    assert sc.CLOSES_RE.pattern == (
-        r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w):?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)")
+    assert sc.CLOSES_RE.pattern.startswith(sc.CLOSING_KEYWORD)
+    assert wave_watch._CLOSING_REF_RE.pattern.startswith(sc.CLOSING_KEYWORD)
+    for body in ("Fixes #17", "closed: o/r#3", "RESOLVE #9"):
+        assert sc.CLOSES_RE.search(body)
+        assert wave_watch._CLOSING_REF_RE.search(body)
+    assert not sc.CLOSES_RE.search("prefix #17")
     assert sc.CLOSES_RE.flags & __import__("re").IGNORECASE

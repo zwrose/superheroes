@@ -1139,7 +1139,7 @@ _MANUAL_LINK_EVENTS = ("connected", "disconnected")
 # reference being #n, owner/repo#n or an issue URL. (Not the shared first-line CLOSES_RE, which
 # lets \s+ cross paragraphs and cannot read a URL.)
 _CLOSING_REF_RE = re.compile(
-    r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w)[ \t]*:?[ \t]+"
+    sc.CLOSING_KEYWORD + r"[ \t]*:?[ \t]+"
     r"(?:(?P<slug>[^/\s#]+/[^/\s#]+)#(?P<n>\d+)(?!\w)|#(?P<bare>\d+)(?!\w)"
     r"|https?://(?:www\.)?github\.com/(?P<uslug>[^/\s#]+/[^/\s#]+)/issues/(?P<un>\d+)(?![\w/]))",
     re.IGNORECASE)
