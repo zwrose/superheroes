@@ -12,13 +12,25 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
+
+### Cloud builds: credential-like text is redacted, and the review record says so
+
+- A cloud session replaces credential-like text (API keys, tokens, private keys) before a file is written or a comment posted, so a test fixture holding a whole key failed before it tested anything. The instruction to build such a value at runtime from pieces, and to describe such text in a finding rather than quote it, now lives in the dispatch preamble every engine review dispatch is fed (`CREDENTIAL_TEXT_RULE` in `lib/engine_dispatch.py`), `rubric/review-base.md`, `agents/test-role.md`, `agents/implementer.md` and `skills/workhorse/reference/cloud.md`. It is a request in the prompt text, best effort; nothing enforces it.
+- The review record carries `transitDamage.redactedFields` (the path of each recorded field whose text holds `[REDACTED`) and a `Transit damage:` summary line. An earlier record carrying only redacted fields is listed under `earlierRecordsNotChecked` with the reason `redacted text`. A record with no redacted field is unchanged.
+
 ## 0.46.0
 
 ### Before you upgrade
 
 Check these in a consuming project when it adopts 0.46.0. Each step names the note it comes from.
 
-- **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
 - **After switching.** **Nothing is owed.** An advisor driving a merge train reads the base branch's protection first. Where it requires pull requests to be up to date before merging, every PR is still brought current before its merge, with no admin bypass. Where it does not, a vetted PR outside a stack is no longer re-synced and re-tested after an unrelated merge: it is current when GitHub reports no conflict and nothing merged since its last sync touched its files. `main`'s post-merge run stays the union check in both cases. See [Merge train: what "current with its base" means](#merge-train-what-current-with-its-base-means).
 - **After switching.** **Nothing is owed.** An implementer order that names a bite-proof now carries the record format inline, and an order that names one while the plugin's bite-proof rubric cannot be read is refused at open. See [Implementer orders: the bite-proof record format rides inline](#implementer-orders-the-bite-proof-record-format-rides-inline).
 - **After switching.** **Nothing is owed.** The certification loop's leftovers are gone: dead helpers in the review-loop libraries (`_write_interim_receipt`, `_pending_step`, `_row_matches_ruling_id`, six re-export aliases in `round_driver.py`, `load_records`, `blocking_findings_from_dimension_results`, and unused constants), with no caller anywhere; the keep-or-retire list's review-loop section stops calling it the certified review loop.
@@ -57,11 +69,6 @@ Check these in a consuming project when it adopts 0.46.0. Each step names the no
 - **After switching.** **Nothing is owed, and there is no setting to change.** A JavaScript project's break-it tests run when the reviewed checkout has `node_modules` installed; a build worktree with no `npm install` records them not-run. See [Break-it tests: a JavaScript test reaches the installed dependencies](#break-it-tests-a-javascript-test-reaches-the-installed-dependencies).
 - **After switching.** **Nothing is owed.** A builder that continues or retries an order can pass the order's original base, and items an earlier attempt already committed then count as delivered instead of forfeiting `items-undelivered`. See [Dispatch: a continuation counts an earlier attempt's delivered items](#dispatch-a-continuation-counts-an-earlier-attempts-delivered-items).
 - **After switching.** **Nothing is owed.** A review panel keeps its Claude seats when a session's start event omits the model: compose reads the model from the session's own transcript instead of reading it as unknown. See [Review panel: the host model falls back to the session transcript](#review-panel-the-host-model-falls-back-to-the-session-transcript).
-
-### Cloud builds: credential-like text is redacted, and the review record says so
-
-- A cloud session replaces credential-like text (API keys, tokens, private keys) before a file is written or a comment posted, so a test fixture holding a whole key failed before it tested anything. The instruction to build such a value at runtime from pieces, and to describe such text in a finding rather than quote it, now lives in the dispatch preamble every engine review dispatch is fed (`CREDENTIAL_TEXT_RULE` in `lib/engine_dispatch.py`), `rubric/review-base.md`, `agents/test-role.md`, `agents/implementer.md` and `skills/workhorse/reference/cloud.md`. It is a request in the prompt text, best effort; nothing enforces it.
-- The review record carries `transitDamage.redactedFields` (the path of each recorded field whose text holds `[REDACTED`) and a `Transit damage:` summary line. An earlier record carrying only redacted fields is listed under `earlierRecordsNotChecked` with the reason `redacted text`. A record with no redacted field is unchanged.
 
 ### Review: a finding an audit raised is audited under its own key
 
