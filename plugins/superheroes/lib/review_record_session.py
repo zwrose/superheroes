@@ -8,7 +8,10 @@ it to review_record.write. A fact the session's files cannot establish takes the
 record on the "not reviewed" side: an undecided outcome, a reviewer not run, or a refusal.
 
 CLI:
-  review_record_session.py write --session-dir DIR --extras FILE --repo-root DIR
+  review_record_session.py write --session-dir DIR --extras FILE --repo-root DIR [--abandoned REASON]
+
+--abandoned writes the record of a session the orchestrator closed before the loop ended: it reads
+not-reviewed, and says so.
 """
 from __future__ import annotations
 
@@ -44,10 +47,15 @@ EXTRAS_SCHEMA = "review-session-extras/1"
 UNREADABLE = "review-session-unreadable"
 NOT_TERMINAL = "review-session-not-terminal"
 UNSUPPORTED = "review-session-unsupported"
+NOT_ABANDONABLE = "review-session-not-abandonable"
+ABANDON_REASON_MISSING = "review-session-abandon-reason-missing"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
 HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw outputs were not stored"
+ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
+UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded appear only in the raw findings files"
+NO_SEAT_RESULT = "the session recorded no seat result or seat status"
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
@@ -270,7 +278,7 @@ def _status_reviewers(state, setup=None, rows=()):
     status = _panel_rounds_with_status(state)
     # axis: a hand-submit session with no seat status in any round holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
     if not any(status.values()):
-        raise Refusal(UNSUPPORTED, "the session recorded no seat result or seat status")
+        raise Refusal(UNSUPPORTED, NO_SEAT_RESULT)
     out, ran_in = [], {}
     for rnd, seats in status.items():
         for seat, value in seats.items():
@@ -561,20 +569,24 @@ def _command_refusals(rounds):
     return out
 
 
-def account_from_session(session_dir, extras, readers=None, raw_dir=None):
+def account_from_session(session_dir, extras, readers=None, raw_dir=None, abandoned=None):
     _check_extras(extras)
+    if abandoned is not None and not (isinstance(abandoned, str) and abandoned.strip()):
+        raise Refusal(ABANDON_REASON_MISSING, "--abandoned needs a reason")
     if not os.path.isdir(session_dir):
         raise Refusal(UNREADABLE, "session dir")
     state = _read_json(os.path.join(session_dir, sc.STATE_FILE), sc.STATE_FILE)
     if not isinstance(state, dict):
         raise Refusal(UNREADABLE, sc.STATE_FILE)
-    if not state.get("terminal"):
+    if abandoned is not None and state.get("terminal"):
+        raise Refusal(NOT_ABANDONABLE, "the review loop ended; write its record without --abandoned")
+    if abandoned is None and not state.get("terminal"):
         raise Refusal(NOT_TERMINAL, "the review loop has not ended")
     meta = _read_json(os.path.join(session_dir, sc.META_FILE), "meta.json sessionId")
     if not (isinstance(meta, dict) and _text(meta.get("sessionId"))):
         raise Refusal(UNREADABLE, "meta.json sessionId")
     rows = _journal(session_dir)
-    if state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS:
+    if abandoned is None and state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS:
         raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not a certified verdict")
     by_hand = not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows)
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
@@ -582,7 +594,13 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
-        reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
+        try:
+            reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
+        except Refusal as refusal:
+            # an abandoned session may have run no seat yet: it lists no reviewer, and any other refusal still stands
+            if abandoned is None or refusal.args[:2] != (UNSUPPORTED, NO_SEAT_RESULT):
+                raise
+            reviewers, raw = [], []
     else:
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                     review_record._readers(readers)["engine_run"], raw_dir)
@@ -592,6 +610,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     if pr_body_line is not None:
         checked.append(pr_body_line)
     checked += _verify_via_checked(rounds)
+    if abandoned is not None:
+        checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
@@ -610,8 +630,11 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             makers.append({"family": family, "source": "seat map maker list"})
     wider = _wider_rounds(rounds)
     last = decisions[-1] if decisions else {}
-    cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
-    capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
+    if abandoned is not None:
+        cause, capped = {}, False  # no terminal to map
+    else:
+        cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
+        capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
@@ -623,7 +646,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
-            "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked}
+            "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked,
+            **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {})}
 
 
 def _verify_via_checked(rounds):
@@ -686,7 +710,7 @@ def _carried(account, extras, repo_root, readers):
     return out
 
 
-def write_from_session(session_dir, extras_path, repo_root, readers=None):
+def write_from_session(session_dir, extras_path, repo_root, readers=None, abandoned=None):
     tmp = []
 
     def go():
@@ -696,7 +720,7 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None):
                 extras = json.load(fh)
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
-        account = account_from_session(session_dir, extras, readers, tmp[0])
+        account = account_from_session(session_dir, extras, readers, tmp[0], abandoned)
         account["findings"] += _carried(account, extras, repo_root, readers)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
@@ -715,8 +739,9 @@ def main(argv=None):
     w.add_argument("--session-dir", required=True, dest="session_dir")
     w.add_argument("--extras", required=True)
     w.add_argument("--repo-root", required=True, dest="repo_root")
+    w.add_argument("--abandoned", default=None)
     args = p.parse_args(argv)
-    result = write_from_session(args.session_dir, args.extras, args.repo_root)
+    result = write_from_session(args.session_dir, args.extras, args.repo_root, abandoned=args.abandoned)
     print(json.dumps(result))
     return 0 if result.get("ok") else 1
 
