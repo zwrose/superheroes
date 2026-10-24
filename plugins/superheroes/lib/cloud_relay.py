@@ -242,8 +242,9 @@ _MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfir
 
 def fix_orders(repo_root, *, env=None):
     """{"ok": True, "records": [...]} of the fix orders whose text may have reached the builder, else
-    {"ok": False, "reason": ...}. A record is `msgId`, `session`, `configDir` and `at` (the decision's stamp).
-    A fix order never checked (a draft) or whose send failed is left out. Reads only; never writes."""
+    {"ok": False, "reason": ...}. A record is `msgId`, `session`, `configDir` and `at` (the message's `sentAfter`, written once at
+    compose: a stable send boundary that a later check or re-check never moves). A fix order never checked
+    (a draft) or whose send failed is left out; the decision only decides eligibility. Reads only; never writes."""
     _path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return refusal
@@ -253,8 +254,9 @@ def fix_orders(repo_root, *, env=None):
         # axis: only a fix order the check decided delivered, or may have reached the builder, opens the watch — see bite-proof record wo_2148_fix_order.md
         if (isinstance(entry, dict) and entry.get("fixOrder") is True and isinstance(decision, dict)
                 and (decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)):
+            # axis: the window opens at the message's own sentAfter, never at the decision's check time, which a later check moves — see bite-proof record wo_2148_fix_order.md
             records.append({"msgId": msg_id, "session": entry.get("session"),
-                            "configDir": entry.get("configDir"), "at": decision.get("at")})
+                            "configDir": entry.get("configDir"), "at": entry.get("sentAfter")})
     return {"ok": True, "records": records}
 
 

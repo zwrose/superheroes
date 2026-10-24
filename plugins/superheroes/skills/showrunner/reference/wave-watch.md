@@ -432,7 +432,8 @@ skipped that tick, so a cloud ending in the same tick surfaces on the next arm.
 
 A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
 moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the
-lane's session (`compose --fix-order`) once its `check` read delivered or a may-hold-text verdict. A
+lane's session (`compose --fix-order`) once its `check` read delivered or a may-hold-text verdict; the relay opens the window at the
+message's own compose time (`sentAfter`), never at the check, so a re-check moves nothing. A
 `reoutcome` amendment, or a vet `ready` or `parked-blocker`, closes it; the newest opener must be later
 than the newest closer. The window runs from the fix order to the lane's first ending (handback, stop
 or park, a superseded park not counting): endings and notes from before the fix order are not

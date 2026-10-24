@@ -160,15 +160,29 @@ def test_row2_a_stored_close_does_not_outlive_a_newer_fix_order(repo, clock):
 
 def test_row2_a_partial_read_keeps_the_close_a_complete_read_showed(repo):
     comments = _closed_by_a_handback(repo)
+    # axis: a partial read filters notes and endings by the close a complete read showed — see bite-proof record wo_2148_fix_order.md
     gh = _ProgressGh(comments, script=[
         lambda argv: _ok(argv, comments),
-        lambda argv: _ok(argv, comments, link=True),
+        lambda argv: _ok(argv, comments + [_later(6, secs=20)], link=True),  # a note after the close
         lambda argv: _raw(argv, "HTTP/2.0 502 Bad Gateway\r\n\r\n"),
     ])
     # Ticks at 0 (complete), 1 (partial) and 2 seconds (the deadline: no read).
     result = ww.watch_arm(repo, _BATCH, max_seconds=2, interval_seconds=1, gh_run=gh)
     assert result["event"] == ww.EVENT_TIMER
     assert result["unreadIssues"] == [{"launchId": "cloud-a", "issue": 101}]
+
+
+def test_row2_a_partial_read_does_not_surface_an_ending_after_the_close_a_complete_read_showed(repo):
+    # axis: a partial read filters notes and endings by the close a complete read showed — see bite-proof record wo_2148_fix_order.md
+    comments = _closed_by_a_handback(repo)
+    later_stop = _later(6, _ending("park"), secs=20)
+    gh = _ProgressGh(comments, script=[
+        lambda argv: _ok(argv, comments),
+        lambda argv: _ok(argv, comments + [later_stop], link=True),
+        lambda argv: _raw(argv, "HTTP/2.0 502 Bad Gateway\r\n\r\n"),
+    ])
+    result = ww.watch_arm(repo, _BATCH, max_seconds=2, interval_seconds=1, gh_run=gh)
+    assert result["event"] == ww.EVENT_TIMER
 
 
 def test_row2_a_later_reoutcome_closes_the_fix_order_and_the_lane_is_not_watched(repo):
@@ -258,6 +272,17 @@ def test_row7_a_delivered_fix_order_relay_re_opens_the_lane(repo):
     assert result["cloudLanes"][0]["reopenedBy"] == "fix-order-relay"
 
 
+def test_row7_the_window_opens_at_the_send_not_at_a_later_check(repo):
+    # axis: the relay opens the window at the message's sentAfter, never the decision's check time — see bite-proof record wo_2148_fix_order.md
+    _handed_back(repo, start_age=_LONG_AGO)
+    # Sent 100 seconds ago, the builder answered 50 seconds ago, and the check only now read it delivered.
+    _relay(repo, _delivered(sentAfter=_relay_stamp(age=100)))
+    result = _arm(repo, _NoteGh([_comment(7, 101, _NOTE_BODY, age=50)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    assert result["cloudLanes"][0]["reopenedBy"] == "fix-order-relay"
+
+
 def test_row7_a_relay_that_may_hold_the_text_re_opens_the_lane(repo):
     _handed_back(repo)
     _relay(repo, {"msgId": "m1", "fixOrder": True,
@@ -294,9 +319,7 @@ def test_row7_a_relay_to_another_session_does_not_re_open_the_lane(repo):
 
 def test_row7_a_relay_stamp_that_cannot_be_read_is_skipped(repo):
     _handed_back(repo)
-    bad = _delivered()
-    bad["decision"]["at"] = "yesterday"
-    _relay(repo, bad)
+    _relay(repo, _delivered(sentAfter="yesterday"))
     result = _arm(repo, _NoteGh([_later(7)]))
     assert result["event"] == ww.EVENT_TIMER
     assert ww.DEGRADATION_FIX_ORDER_UNAVAILABLE not in result["degraded"]

@@ -972,7 +972,7 @@ def test_fix_orders_lists_only_flagged_records_whose_text_may_have_reached_the_b
         _decide(world, out["msgId"], decision)
         return out["msgId"]
 
-    stamp = "2026-10-24T01:02:03.456Z"
+    stamp = "2099-10-24T01:02:03.456Z"  # the check's stamp: long after every compose below
     listed = {
         flagged({"delivered": True, "reason": None, "at": stamp}),
         flagged({"delivered": False, "reason": "relay-silent", "at": stamp}),
@@ -988,8 +988,11 @@ def test_fix_orders_lists_only_flagged_records_whose_text_may_have_reached_the_b
     out = cr.fix_orders(world.repo, env=world.env)
     assert out["ok"] is True and draft["msgId"] not in {r["msgId"] for r in out["records"]}
     assert {r["msgId"] for r in out["records"]} == listed
-    assert all(r == {"msgId": r["msgId"], "session": SESSION, "configDir": world.config, "at": stamp}
-               for r in out["records"])
+    # axis: the exported `at` is the message's own sentAfter, which a decision stamped later does not move — see bite-proof record wo_2148_fix_order.md
+    sent = {m: e["sentAfter"] for m, e in json.load(open(_state_file(world)))["pending"].items()}
+    assert all(r == {"msgId": r["msgId"], "session": SESSION, "configDir": world.config,
+                     "at": sent[r["msgId"]]} for r in out["records"])
+    assert all(r["at"] != stamp for r in out["records"])
     assert open(_state_file(world)).read() == before
 
 
