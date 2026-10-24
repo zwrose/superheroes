@@ -1010,7 +1010,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
             lines.append(_fill(words["historyMissing"], name=m["name"],
                                goAhead=_fill(words["historyGoAhead"], goAhead=said) if said else words["historyNoGoAhead"]))
         lines += [_fill(words["historyNotRun"], name=s["name"], why=s["why"]) for s in r.get("seatsNotRun") or []]
-        gaps = (r.get("whatIsMissing") or []) if r.get("status") == "not-reviewed" else []
+        gaps = (r.get("whatIsMissing") or []) if not review_record.cleared(r.get("status")) else []
         owned = [review_record.leftover_line(f) for f in r["findings"] if f.get("outcome") == _LEFT]
         count, counted = sum(1 for m in gaps if m in owned), False
         for m in gaps:
