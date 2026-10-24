@@ -29,9 +29,10 @@ TRANSPORT_GRAPHQL = "graphql"
 TRANSPORT_REST = "rest"
 TRANSPORTS = (TRANSPORT_AUTO, TRANSPORT_GRAPHQL, TRANSPORT_REST)
 
-# The cloud proxy's GraphQL refusal (HTTP 403). Only a gh call that exited non-zero with
-# both strings in its output lets transport="auto" restart the read on REST.
-GRAPHQL_REFUSED_MARKERS = ("(HTTP 403)", "use the REST API")
+# The cloud proxy's GraphQL refusal. `gh api graphql` ends its stderr "... (HTTP 403)";
+# `gh pr view` and `gh repo view` start theirs "HTTP 403: ..." with no parentheses. Only a gh
+# call that exited non-zero with both strings in its output restarts a read on REST.
+GRAPHQL_REFUSED_MARKERS = ("HTTP 403", "use the REST API")
 
 REASON_BAD_ARGUMENT = "bad-argument"
 REASON_NOT_LINKED = "not-linked"
@@ -46,6 +47,7 @@ VET_NOT_READY = "vet-not-ready"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_SHA40_LOWER_RE = re.compile(r"^[0-9a-f]{40}\Z")
 PR_VET_STATE_VALUES = frozenset({"OPEN", "CLOSED", "MERGED"})
 
 # Machine-readable home: rubric/vet-verdict-form.json (loaded lazily on first
@@ -682,16 +684,28 @@ def _parse_repo_slug_payload(proc):
         return None, _read_refusal(
             REASON_STACK_UNREADABLE, "gh repo view returned JSON that is not an object")
 
-    name = payload.get("nameWithOwner")
+    return _validate_repo_slug(payload.get("nameWithOwner"), "nameWithOwner")
+
+
+def _validate_repo_slug(name, field):
+    """Return (slug, refusal) for the owner/name string read from `field`."""
     if not isinstance(name, str) or not name:
         return None, _read_refusal(
-            REASON_STACK_UNREADABLE, "nameWithOwner is missing, not a string, or empty")
+            REASON_STACK_UNREADABLE, "%s is missing, not a string, or empty" % field)
 
     if not _REPO_RE.match(name):
         return None, _read_refusal(
-            REASON_STACK_UNREADABLE, "nameWithOwner is not a valid owner/name slug")
+            REASON_STACK_UNREADABLE, "%s is not a valid owner/name slug" % field)
 
     return name, None
+
+
+def _rest_repo_argv():
+    return ["gh", "api", "repos/{owner}/{repo}"]
+
+
+def _graphql_refused_rest_refusal(refusal):
+    return _read_refusal(refusal["reason"], "graphql refused; rest: " + refusal["detail"])
 
 
 def _pr_vet_state_argv(pr, repo):
@@ -716,6 +730,81 @@ def _parse_pr_vet_state_payload(proc, pr):
         return None, _read_refusal(
             REASON_STACK_UNREADABLE, "gh pr view returned JSON that is not an object")
 
+    return _validate_pr_vet_state(payload, pr)
+
+
+def _pr_vet_state_from_rest(pull):
+    """Map a REST pull-request object to the GraphQL vet payload. Return (payload, refusal)."""
+    state = pull.get("state")
+    # axis: REST state is missing or not open/closed
+    if state not in (_REST_STATE_OPEN, _REST_STATE_CLOSED):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is missing or not open or closed: %r" % (state,))
+
+    merged = pull.get("merged")
+    # axis: REST merged is missing or not a boolean
+    if not isinstance(merged, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "merged is missing or not a boolean")
+
+    # axis: REST merged_at key is missing
+    if "merged_at" not in pull:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "merged_at is missing")
+    merged_at = pull["merged_at"]
+    # axis: REST merged_at is neither null nor a non-empty string
+    if merged_at is not None and (not isinstance(merged_at, str) or not merged_at):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "merged_at is neither null nor a non-empty string")
+
+    # axis: REST merged and merged_at disagree
+    if merged != (merged_at is not None):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "merged and merged_at disagree")
+
+    # axis: REST reports an open pull request as merged
+    if state == _REST_STATE_OPEN and merged:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is open but merged is true")
+
+    draft = pull.get("draft")
+    # axis: REST draft is missing or not a boolean
+    if not isinstance(draft, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "draft is missing or not a boolean")
+
+    head = pull.get("head")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    # axis: REST head is not an object, or head.sha is not 40 lowercase hex
+    if not isinstance(head_sha, str) or not _SHA40_LOWER_RE.match(head_sha):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "head.sha is missing, not a string, or not 40 lowercase hex")
+
+    # axis: REST body key is missing, or neither a string nor null
+    if "body" not in pull:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "body is missing")
+    body = pull["body"]
+    if body is None:
+        body = ""
+    if not isinstance(body, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "body is neither a string nor null")
+
+    if merged:
+        mapped_state = "MERGED"
+    elif state == _REST_STATE_OPEN:
+        mapped_state = "OPEN"
+    else:
+        mapped_state = "CLOSED"
+    return {
+        "state": mapped_state,
+        "isDraft": draft,
+        "headRefOid": head_sha,
+        "body": body,
+    }, None
+
+
+def _validate_pr_vet_state(payload, pr):
+    """Return (state, refusal) from a GraphQL-shaped vet payload — the checks both reads share."""
     state = payload.get("state")
     if not isinstance(state, str):
         return None, _read_refusal(
@@ -798,7 +887,22 @@ def read_pr_vet_state(pr, repo, *, deadline=None, timeout=GH_TIMEOUT, run=None, 
     except subprocess.TimeoutExpired:
         return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
 
-    return _parse_pr_vet_state_payload(proc, pr)
+    if not _is_graphql_proxy_refusal_proc(proc):
+        return _parse_pr_vet_state_payload(proc, pr)
+
+    # The cloud proxy refused GraphQL: re-read the same pull request through REST.
+    owner, name = repo.split("/", 1)
+    pull, refusal = _transport_rest(
+        _rest_pull_argv(owner, name, pr), timeout, run, repo, pr, 0,
+        deadline=deadline, deadline_at=deadline_at, run_kwargs=run_kwargs)
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    payload, refusal = _pr_vet_state_from_rest(pull)
+    if refusal is None:
+        state, refusal = _validate_pr_vet_state(payload, pr)
+        if refusal is None:
+            return state, None
+    return None, _graphql_refused_rest_refusal(refusal)
 
 
 def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
@@ -844,7 +948,20 @@ def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None,
     except subprocess.TimeoutExpired:
         return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
 
-    return _parse_repo_slug_payload(proc)
+    if not _is_graphql_proxy_refusal_proc(proc):
+        return _parse_repo_slug_payload(proc)
+
+    # The cloud proxy refused GraphQL: gh fills the placeholders from the checkout's remote.
+    repo_payload, refusal = _transport_rest(
+        _rest_repo_argv(), timeout, run, None, None, 0,
+        deadline=deadline, deadline_at=deadline_at,
+        run_kwargs=dict(cwd=repo_root, **run_kwargs))
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    slug, refusal = _validate_repo_slug(repo_payload.get("full_name"), "full_name")
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    return slug, None
 
 
 def same_commit(a, b):
@@ -945,8 +1062,12 @@ def _rest_stack_argv(owner, name, number):
     return ["gh", "api", "repos/%s/%s/stacks/%d" % (owner, name, number)]
 
 
-def _transport_rest(argv, timeout, run, repo, pr, pages, deadline=None, deadline_at=None):
-    """Run one gh api REST GET. Return (payload, refusal) — exactly one is non-None."""
+def _transport_rest(
+    argv, timeout, run, repo, pr, pages, deadline=None, deadline_at=None, *, run_kwargs=None,
+):
+    """Run one gh api REST GET. Return (payload, refusal) — exactly one is non-None.
+
+    run_kwargs are passed through to run (env, cwd) for the single-read callers."""
     endpoint = argv[-1]
     # axis: read budget exhausted before a REST GET
     if deadline_at is not None and time.monotonic() >= deadline_at:
@@ -956,7 +1077,9 @@ def _transport_rest(argv, timeout, run, repo, pr, pages, deadline=None, deadline
 
     effective_timeout = _effective_timeout(timeout, deadline_at)
     try:
-        proc = run(argv, capture_output=True, text=True, timeout=effective_timeout)
+        proc = run(
+            argv, capture_output=True, text=True, timeout=effective_timeout,
+            **(run_kwargs or {}))
     except (FileNotFoundError, OSError) as exc:
         # axis: REST run raises FileNotFoundError/OSError
         return None, _refusal(REASON_STACK_UNREADABLE, "gh api %s: %s" % (endpoint, exc),
@@ -1186,14 +1309,18 @@ def _recording_run(run, seen):
     return _run
 
 
+def _is_graphql_proxy_refusal_proc(proc):
+    """True when one gh process is the proxy's GraphQL refusal."""
+    output = _proc_output(proc)
+    # axis: only a non-zero gh exit carrying both proxy-refusal markers falls back to REST
+    return proc.returncode != 0 and all(marker in output for marker in GRAPHQL_REFUSED_MARKERS)
+
+
 def _is_graphql_proxy_refusal(seen):
     """True when the read made exactly one gh call and it was the proxy's GraphQL refusal."""
     if len(seen) != 1:
         return False
-    proc = seen[0]
-    output = _proc_output(proc)
-    # axis: only a non-zero gh exit carrying both proxy-refusal markers falls back to REST
-    return proc.returncode != 0 and all(marker in output for marker in GRAPHQL_REFUSED_MARKERS)
+    return _is_graphql_proxy_refusal_proc(seen[0])
 
 
 def read_membership(

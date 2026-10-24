@@ -218,7 +218,7 @@ def test_exact_text_refused_by_the_session_is_send_failed(world):
                                      success=False))
     out, clock = _check(world, msg["msgId"])
     assert out["ok"] is False and out["reason"] == "relay-send-failed"
-    assert "No agent named" in out["say"] and clock.t == 0
+    assert "No agent named" in out["say"] and clock.t >= 60
 
 
 def test_exact_send_without_result_is_unconfirmed_at_the_end(world):
@@ -243,6 +243,87 @@ def test_result_arriving_during_the_wait_is_delivered(world):
     out = cr.check(world.repo, msg["msgId"], wait=30, interval=2, env=world.env,
                    clock=clock, sleep=sleep)
     assert out["delivered"] is True and clock.t == 2
+
+
+STAMP = "2026-10-12T10:00:00.000Z"
+
+
+def test_a_failed_attempt_then_a_recorded_retry_success_is_delivered(world):
+    # axis: retry success — a failed send followed by a recorded successful retry is delivered — a failure that sticks makes it fail
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
+                  _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP))
+    out, clock = _check(world, msg["msgId"], wait=60)
+    assert out["ok"] is True and out["delivered"] is True and out["reason"] is None
+    assert clock.t == 0
+
+
+def test_a_failed_attempt_then_a_retry_success_arriving_during_the_wait_is_delivered(world):
+    # axis: retry success during the wait — a retry success that lands mid-wait is delivered — a failure that ends the wait early makes it fail
+    msg = _composed(world)
+    failed = _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False)
+    _write_record(world, failed)
+    clock = Clock()
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        _write_record(world, failed, _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP))
+
+    out = cr.check(world.repo, msg["msgId"], wait=30, interval=2, env=world.env,
+                   clock=clock, sleep=sleep)
+    assert out["delivered"] is True and clock.t == 2
+
+
+def test_only_failed_attempts_are_send_failed_at_the_end_of_the_wait(world):
+    # axis: failure only at the end of the wait — send-failed is reported after the full wait, not before — a failure reported early makes it fail
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
+                  _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP, success=False))
+    out, clock = _check(world, msg["msgId"], wait=10, interval=2)
+    assert out["ok"] is False and out["reason"] == "relay-send-failed"
+    assert "No agent named" in out["say"] and clock.t >= 10
+
+
+def test_a_failed_attempt_and_a_retry_without_a_result_is_unconfirmed(world):
+    # axis: unconfirmed over failed — a retry with no result outranks an earlier failure at the end of the wait — a failed verdict makes it fail
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, msg["forward"], STAMP, success=False),
+                  _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP, result=False))
+    out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+    assert out["reason"] == "relay-send-unconfirmed" and clock.t >= 6
+
+
+@pytest.mark.parametrize("to", [
+    "someone-else [3fa9c1]", "[3fa9c1]", "3fa9c1", SESSION + " []", SESSION + "  [x]",
+    SESSION + " [a b]", SESSION + " [x]y", SESSION + " [x[y]", SESSION + "x [3fa9c1]",
+    SESSION + " [3fa9c1] ", SESSION + "[3fa9c1]"])
+def test_a_send_to_a_loosely_bracketed_recipient_is_not_this_messages_send(world, to):
+    # axis: strict recipient form — only `<session> [<ref>]` is this session's send — a loose bracket match makes it fail
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", to, msg["forward"], STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+
+
+def test_a_bracketed_send_with_altered_text_is_a_mismatch(world):
+    # axis: text check — altered text to a bracketed recipient is a mismatch — a text check skipped for the bracketed form makes it fail
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION + " [3fa9c1]", msg["forward"][:-1], STAMP))
+    out, clock = _check(world, msg["msgId"])
+    assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False and clock.t == 0
+
+
+def test_the_disambiguated_recipient_form_is_session_space_bracketed_ref(world):
+    # axis: literal pin — the host SendMessage `to` form is `<session> [<ref>]` — a changed form makes it fail
+    # Literal pin of the host SendMessage tool's `to` form: `worker [3fa9c1]` (CONVENTIONS §11.3).
+    assert "%s [3fa9c1]" % SESSION == "builder-1748 [3fa9c1]"
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", "%s [3fa9c1]" % SESSION, msg["forward"], STAMP))
+    out, _ = _check(world, msg["msgId"])
+    assert out["delivered"] is True
 
 
 def test_send_to_another_session_is_ignored(world):
@@ -394,6 +475,159 @@ def test_a_send_whose_header_line_carries_more_text_is_attributed_and_a_mismatch
     out, _ = _check(world, msg["msgId"], wait=4, interval=2)
     assert out["delivered"] is False and out["reason"] == "relay-text-mismatch"
     assert "firstDifference" in out
+
+
+def _header_dropped(msg):
+    """The forward text with its header line dropped: the body, as the relay's record showed it."""
+    return msg["forward"].split("\n\n", 1)[1]
+
+
+@pytest.mark.parametrize("to", [SESSION, SESSION + " [8af960]"], ids=["bare", "bracketed"])
+def test_a_send_with_the_header_dropped_is_a_mismatch_not_silent_or_delivered(world, to):
+    # axis: header-dropped attribution — a send of exactly the forward text minus its header line is this message sent altered, never delivered — a send the header rule drops as foreign makes it read silent
+    # The recorded shape of relay message 817905576fcf: right session, success true, header line gone.
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", to, _header_dropped(msg), STAMP))
+    out, clock = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["ok"] is False and out["delivered"] is False
+    assert out["reason"] == "relay-text-mismatch" and out["headerDropped"] is True
+    assert "header line dropped" in out["say"] and "not delivered" in out["say"]
+    assert "character" not in out["say"] and msg["msgId"] in out["say"]
+    assert clock.t >= 4  # provisional while the wait runs
+    assert out["firstDifference"]["index"] == 0
+    assert out["firstDifference"]["sent"] == _header_dropped(msg)[:20]
+
+
+def test_a_header_dropped_send_after_leading_whitespace_is_still_header_dropped(world):
+    # axis: header-dropped attribution ignores leading whitespace — the exact suffix from the blank line on is the same send — a whitespace-sensitive match makes it read silent
+    msg = _composed(world)
+    header = cr.FORWARD_HEADER % msg["msgId"]
+    suffix = msg["forward"][len(header):]
+    assert suffix.startswith("\n\n")
+    _write_record(world, _send_lines("toolu_1", SESSION, suffix, STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-text-mismatch" and out["headerDropped"] is True
+    assert out["delivered"] is False
+
+
+@pytest.mark.parametrize("text", [
+    "A different body entirely.",
+    TEXT.rstrip().replace("narrow", "narrov"),
+    TEXT.rstrip()[:-1],
+    TEXT.rstrip() + "!"], ids=["different-body", "one-character-changed", "body-minus-last", "body-plus-one"])
+def test_a_send_that_is_not_this_messages_body_is_not_a_header_dropped_send(world, text):
+    # axis: header-dropped match is exact — only this message's own body, header dropped, counts — a prefix or loose match makes it fail
+    msg = _composed(world)
+    assert text != _header_dropped(msg)
+    _write_record(world, _send_lines("toolu_1", SESSION, text, STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+    assert "headerDropped" not in out and "firstDifference" not in out
+
+
+def test_a_header_dropped_send_is_provisional_while_a_retry_may_still_arrive(world):
+    # axis: header-dropped is provisional during the wait — an exact retry success landing mid-wait is delivered — a header-dropped verdict returned early makes it fail
+    msg = _composed(world)
+    dropped = _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP)
+    _write_record(world, dropped)
+    clock = Clock()
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        _write_record(world, dropped, _send_lines("toolu_2", SESSION + " [3fa9c1]", msg["forward"], STAMP))
+
+    out = cr.check(world.repo, msg["msgId"], wait=30, interval=2, env=world.env,
+                   clock=clock, sleep=sleep)
+    assert out["delivered"] is True and out["reason"] is None and clock.t == 2
+    assert "headerDropped" not in out
+
+
+def test_a_header_dropped_send_for_another_pending_message_with_the_same_body_does_not_spoil_delivery(world):
+    # axis: delivered outranks header-dropped — another message's header-dropped send of the same body never blocks an exact success — a header-dropped check ahead of the delivered check makes it fail
+    _ensure_alive(world)
+    a = _compose(world)
+    b = _compose(world)
+    for msg in (a, b):
+        _backdate(world, msg["msgId"], BEFORE)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, _header_dropped(a), STAMP),
+                  _send_lines("toolu_2", SESSION, b["forward"], "2026-10-12T10:00:01.000Z"))
+    out, _ = _check(world, b["msgId"], wait=0)
+    assert out["delivered"] is True and out["reason"] is None and "headerDropped" not in out
+    out, _ = _check(world, a["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-text-mismatch"
+    assert out["headerDropped"] is True
+
+
+def test_an_altered_send_with_the_header_still_wins_at_once_over_a_header_dropped_send(world):
+    # axis: header-carrying mismatch first — an altered send that carries the header returns at once with its own difference — a header-dropped verdict ahead of it makes it fail
+    msg = _composed(world)
+    altered = msg["forward"][:-1]
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP),
+                  _send_lines("toolu_2", SESSION, altered, "2026-10-12T10:00:01.000Z"))
+    out, clock = _check(world, msg["msgId"])
+    assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False
+    assert out["firstDifference"]["index"] == len(msg["forward"]) - 1
+    assert "headerDropped" not in out and "header line dropped" not in out["say"]
+    assert clock.t == 0
+
+
+@pytest.mark.parametrize("success, result", [(False, True), (True, False), (True, True)],
+                         ids=["failed", "no-result", "success"])
+def test_a_header_dropped_send_is_a_mismatch_whatever_its_result_says(world, success, result):
+    # axis: header-dropped reads mismatch whatever its own result says — it was sent, altered — a verdict read from the send's own result makes it fail
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP,
+                                     success=success, result=result))
+    out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+    assert out["reason"] == "relay-text-mismatch" and out["headerDropped"] is True
+    assert out["delivered"] is False and out["ok"] is False and clock.t >= 6
+
+
+@pytest.mark.parametrize("success, result", [(False, True), (True, False)], ids=["failed", "no-result"])
+def test_a_header_dropped_send_outranks_an_exact_send_that_failed_or_has_no_result(world, success, result):
+    # axis: header-dropped outranks a competing exact send that failed or has no result at the end of the wait — the altered send is the verdict — a failed or unconfirmed verdict ahead of it makes it fail
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP),
+                  _send_lines("toolu_2", SESSION, msg["forward"], STAMP, success=success, result=result))
+    out, clock = _check(world, msg["msgId"], wait=6, interval=2)
+    assert out["reason"] == "relay-text-mismatch"
+    assert out["headerDropped"] is True
+    assert out["delivered"] is False
+    assert clock.t >= 6
+
+
+def test_a_header_dropped_send_stamped_before_sent_after_is_not_this_messages(world):
+    # axis: header-dropped sends are read through the same time window — one stamped before sentAfter is not this message's — a window skipped for them makes it fail
+    msg = _composed(world, stamp=AFTER)
+    _write_record(world, _send_lines("toolu_1", SESSION, _header_dropped(msg), STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+    assert "headerDropped" not in out
+
+
+def test_a_header_dropped_send_to_another_session_is_not_this_messages(world):
+    # axis: header-dropped sends are read through the same recipient match — one to another session is not this message's — a recipient check skipped for them makes it fail
+    msg = _composed(world)
+    _write_record(world, _send_lines("toolu_1", "someone-else", _header_dropped(msg), STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+    assert "headerDropped" not in out
+
+
+def test_an_empty_body_is_never_a_header_dropped_send(world):
+    # axis: header-dropped needs a non-empty body — an empty or blank send is not this message sent altered — an unguarded empty match makes it fail
+    msg = _composed(world)
+    state = json.load(open(_state_file(world)))
+    state["pending"][msg["msgId"]]["forward"] = cr.FORWARD_HEADER % msg["msgId"]
+    json.dump(state, open(_state_file(world), "w"))
+    _write_record(world, _send_lines("toolu_1", SESSION, "", STAMP),
+                  _send_lines("toolu_2", SESSION, " \n\n ", STAMP))
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+    assert "headerDropped" not in out
 
 
 def test_results_and_calls_need_their_ids(world):
