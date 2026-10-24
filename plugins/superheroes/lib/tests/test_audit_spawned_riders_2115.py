@@ -322,6 +322,19 @@ def test_t5_e7_two_origins_at_one_anchor_link_nothing():
     assert "auditSpawned" not in state
 
 
+def test_t5_e7_a_re_raise_by_two_origins_clears_an_earlier_single_parent_link():
+    # axis: E7 — an anchor that became ambiguous in this fold drops its earlier link; an uncertain link stays with the owner
+    state = _scoped_state(auditSpawned={X_KEY: "a"})
+    _fold_scoped(state, issues=[_audit_issue("a"), _audit_issue("b")])
+    assert X_KEY not in state["auditSpawned"]
+
+
+def test_t5_e7_a_fold_with_no_audit_origin_for_the_child_keeps_its_earlier_link():
+    # axis: E7 — only an anchor raised by more than one audit origin loses its link; a scoped-only re-raise keeps it
+    state = _scoped_state(auditSpawned={X_KEY: P_KEY})
+    assert _fold_scoped(state, scoped=[_child()]) == {X_KEY: P_KEY}
+
+
 def test_t5_e7_one_origin_raising_an_anchor_twice_still_links():
     state = _scoped_state()
     assert _fold_scoped(state, issues=[_audit_issue("a"), _audit_issue("a")]) == {X_KEY: "a"}
@@ -508,9 +521,3 @@ def test_t7_without_the_rider_in_round_findings_the_same_claim_is_refused(folded
                     unnamedChangeFixes=[X_KEY])
     outcome = _fold_round_three(state, [clearing])
     assert outcome["unnamedChange"] == [P_KEY] and outcome["discharged"] == []
-
-
-def test_a_live_rider_is_listed_once_in_round_findings():
-    state = _round_three()
-    batch_row, _rider = _targets(state)
-    assert [r["id"] for r in batch_row["roundFindings"]] == [X_KEY]

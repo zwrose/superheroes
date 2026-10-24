@@ -6470,7 +6470,9 @@ def _bind_audit_spawned(state, new_issues, compiled):
     Bound by compile anchor, never by reading ``originAuditId`` off a survivor: when a scoped candidate
     and an audit candidate share an anchor at equal severity, the compile keeps the scoped dict and the
     audit's link is lost. A survivor links only when exactly one distinct origin raised its anchor; none,
-    or two, link nothing (the finding is then left to the settle for the owner)."""
+    or two, link nothing (the finding is then left to the settle for the owner). A survivor raised by
+    two or more origins in this fold also loses any link an earlier round bound: an uncertain link is
+    not kept."""
     origins_by_anchor = {}
     for ni in new_issues:
         origin = ni.get(AUDIT_ORIGIN_FIELD)
@@ -6483,7 +6485,7 @@ def _bind_audit_spawned(state, new_issues, compiled):
             continue
         anchor = _finding_anchor(dict(ni, line=line))
         origins_by_anchor.setdefault(anchor, set()).add(origin)
-    bound = {}
+    bound, ambiguous = {}, []
     for finding in compiled:
         if not isinstance(finding, dict) or finding.get("summaryEntry"):
             continue
@@ -6491,6 +6493,12 @@ def _bind_audit_spawned(state, new_issues, compiled):
         origins = origins_by_anchor.get(_finding_anchor(finding))
         if key and origins and len(origins) == 1:
             bound[key] = next(iter(origins))
+        elif key and origins:
+            ambiguous.append(key)
+    existing = state.get(AUDIT_SPAWNED_KEY)
+    if isinstance(existing, dict):
+        for key in ambiguous:
+            existing.pop(key, None)
     if bound:
         spawned = state.get(AUDIT_SPAWNED_KEY)
         if not isinstance(spawned, dict):
