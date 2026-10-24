@@ -333,3 +333,62 @@ FAILED plugins/superheroes/lib/tests/test_host_model_2110_break_it_credentials.p
 
 - **restore:** inverse Edits of G6 then G5; both files back to their before sha256; `git status --porcelain` empty.
 - **raw green:** `1 passed in 0.22s`.
+
+---
+
+## Added after advisor vet 632 (WO-5)
+
+WO-5 removed the break-it test's surrogate-named file (macOS refuses it; the code refuses the path before touching it) and rebuilt the reader test's fixture: a user line, the older `claude-haiku-5-5` turn, the qualifying `claude-opus-5-5` turn, then every non-qualifying kind after it. Run by the build orchestrator in a detached probe worktree at `e3f0c9c9`, by the same method as above. `host_model.py` sha256 before every neutralization and after every restore: `b0cb019ddc8c7af5bffb1749eccdc809462bdeec9cebffd8448d68d2efe8e71c`; `session_start.py`: `200d89c98486ff6c7da7b1d2897c2efa60cdc4c673cfd7f58914015d1a2da200`; `git status --porcelain` empty after each restore.
+
+| ID | Guarded element | Axis | Proving test |
+|---|---|---|---|
+| G7 | the backward within-block scan in `from_transcript` (`plugins/superheroes/lib/host_model.py:108`) | the latest qualifying main-chain turn wins over an earlier one | `test_from_transcript_picks_the_last_main_chain_assistant_model` |
+| G3 (re-proof) | the sidechain skip in `_line_model` (`host_model.py:78`) | as above; the sidechain line now sits after the qualifying turn | same |
+| G6 (re-proof, E3) | the handler widening, with G5 also removed | as above; the break-it test no longer creates the file | `test_host_model_2110_break_it_credentials.py` |
+
+### G7 — the backward scan
+
+- **neutralization:** `                for line in reversed(parts[1:]):` → `                for line in parts[1:]:  # BITE-PROOF G7: forward scan` (sha256 neutralized `1f4745f10a6fce05009da6a34e87139223e045e3b9325d034eedfecef17a3a22`)
+- **raw red** (exit 1, decisive lines):
+
+```
+E       AssertionError: assert 'claude-haiku-5-5' == 'claude-opus-5-5'
+E         
+E         - claude-opus-5-5
+E         ?        ^^ -
+E         + claude-haiku-5-5
+E         ?        ^^^^
+FAILED plugins/superheroes/lib/tests/test_host_model_2110.py::test_from_transcript_picks_the_last_main_chain_assistant_model
+1 failed in 1.42s
+```
+
+- **restore:** inverse Edit. **raw green:** the two files, `32 passed in 2.64s`.
+
+### G3 — re-proof on the rebuilt fixture
+
+- **neutralization:** `obj.get("type") != "assistant" or obj.get("isSidechain") is True:` → `obj.get("type") != "assistant":  # BITE-PROOF G3: sidechain skip dropped` (sha256 neutralized `6a0d3006682b3e2f8bc24bb591fcf7b8dffc525ef894f7e3c456875f1509841c`)
+- **raw red** (exit 1, decisive lines):
+
+```
+E       AssertionError: assert 'gpt-5.6-sol' == 'claude-opus-5-5'
+E         
+E         - claude-opus-5-5
+E         + gpt-5.6-sol
+FAILED plugins/superheroes/lib/tests/test_host_model_2110.py::test_from_transcript_picks_the_last_main_chain_assistant_model
+1 failed in 1.40s
+```
+
+- **restore:** inverse Edit; green as above.
+
+### G6 with G5 — re-proof without the fixture file
+
+- **neutralization:** both the G5 and the G6 swaps above (`session_start.py` sha256 neutralized `65562e38ec1de205ab56da24c1a40ac27ebb945e3978a11ca812867bbf6c1039`)
+- **raw red** (exit 1, decisive lines):
+
+```
+E                   UnicodeEncodeError: 'utf-8' codec can't encode character '\udcff' in position 109: surrogates not allowed
+FAILED plugins/superheroes/lib/tests/test_host_model_2110_break_it_credentials.py::test_surrogate_transcript_path_does_not_bypass_pass_scrubbing
+1 failed in 0.20s
+```
+
+- **restore:** inverse Edits; green as above.
