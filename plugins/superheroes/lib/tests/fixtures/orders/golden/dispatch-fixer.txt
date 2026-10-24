@@ -78,7 +78,7 @@ Guidance in this section overrides the original suggestion for the named finding
    Delete the throwaway before step 4's commit — it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round 2: <count> findings (<dimensions>)"`
-5. Land last, every time: write your payload landing, per the Payload contract section below, as the LAST thing you write, on every ending — after the step-4 commit when you made one, and anyway (with no commit) when you stopped on CHECK_FAILED, escalated, or had nothing to commit. Step 3's "never commit broken code" still wins: the landing never licenses a commit. A committed fix with no landing is read as an unlanded fix.
+5. Land last, every time: write your payload landing, per the Payload contract section below, as the LAST thing you write, on every ending — after the step-4 commit when you made one, and anyway (with no commit) when you stopped on CHECK_FAILED, escalated, or had nothing to commit. Step 3's "never commit broken code" still wins: the landing never licenses a commit. A committed fix with no landing is read as an unlanded fix. Leave `headDiff` and `headDiffPath` out of your result, on every ending. The orchestrator derives the post-fix diff from git itself (the whole branch against the review's pinned base, not your commit alone) and only checks a supplied diff against it, so a supplied diff that differs, your own commit's diff included, stops the round as head-diff-mismatch.
 
 ## Escalation
 If a finding you were told to auto-fix actually requires a judgment call you

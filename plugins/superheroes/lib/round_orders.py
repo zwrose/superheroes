@@ -509,6 +509,17 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     return ph
 
 
+# The fixer reports no diff (#2109): the driver derives the post-fix diff from git against the
+# review's pinned base, which the fixer is not told, and parks `head-diff-mismatch` on any supplied
+# diff that differs, so leaving both keys out is the only report that can never stop the round.
+FIXER_NO_HEAD_DIFF_RULE = (
+    "Leave `headDiff` and `headDiffPath` out of your result, on every ending. The orchestrator "
+    "derives the post-fix diff from git itself (the whole branch against the review's pinned "
+    "base, not your commit alone) and only checks a supplied diff against it, so a supplied "
+    "diff that differs, your own commit's diff included, stops the round as head-diff-mismatch."
+)
+
+
 def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     host_seat = context.get("host_seat") is True
@@ -519,7 +530,7 @@ def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
             "commit when you made one, and anyway (with no commit) when you stopped on "
             "CHECK_FAILED, escalated, or had nothing to commit. Step 3's \"never commit broken "
             "code\" still wins: the landing never licenses a commit. A committed fix with no "
-            "landing is read as an unlanded fix."
+            "landing is read as an unlanded fix. " + FIXER_NO_HEAD_DIFF_RULE
         )
         ph["FIXER_ESCALATION_BLOCK"] = (
             "Report it for owner escalation (see Payload contract) with the id and why."
@@ -531,7 +542,8 @@ def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
             "record from git; you are not asked to emit it. Land last, every time: your "
             "result on the runner's declared result channel is the last thing you deliver, "
             "on every ending — after the step-4 commit when you made one, and anyway when "
-            "you stopped without one. Step 3's \"never commit broken code\" still wins."
+            "you stopped without one. Step 3's \"never commit broken code\" still wins. "
+            + FIXER_NO_HEAD_DIFF_RULE
         )
         ph["FIXER_ESCALATION_BLOCK"] = (
             "Report it for owner escalation via the runner's native write-result contract "
