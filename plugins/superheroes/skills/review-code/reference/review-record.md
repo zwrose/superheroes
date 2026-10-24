@@ -111,6 +111,14 @@ What comes from the session:
 - A later session's account relists the latest earlier record's findings that this session did not raise, each with the outcome and reason it had.
 - Before writing a record over an earlier one, the driver re-checks each carried left-for-owner finding at the final head itself, by a run or a read it makes and never a review seat's claim, and records an entry `{key, settled, commit, checkedHead, evidence}` in the extras' `carriedChecks`: `fixed` names the fix commit and the head it checked; `applies` or `unsettled` keeps the finding for the owner. The writer marks a carried finding `fixed` only on a `fixed` entry whose `checkedHead` is the record's final commit and whose fix commit is in that commit's history; every other case keeps it left-for-owner, with the reason saying why. Every check is listed under `carriedRechecks`, and no finding is ever dropped.
 
+An abandoned session:
+
+- When the orchestrator closes a session before its loop ends, in PR mode, write its record with `--abandoned "<why>"` after the command above; the session never reached a terminal, so the flag is what admits it. The reason must be non-blank.
+- The record reads `not-reviewed` and can never read `reviewed`. Its `whatIsMissing` carries the line "session abandoned: ...". A finding still open reads undecided ("still open when the review loop ended").
+- The account carries an optional `abandoned` key, `{"reason": "<why>"}`; the writer admits an empty `reviewers` list only when it is present. A session abandoned before any seat result lists no reviewer.
+- `checked` carries the reason ("the review loop was abandoned before it ended: <why>") and a line that findings in seat results recorded but never folded appear only in the raw findings files.
+- A session that ended is refused `review-session-not-abandonable`; write it without the flag. Without `--abandoned` nothing above changes.
+
 Outcomes:
 
 - A fixed finding becomes `fixed`, with the round it was audited in; a finding an audit raised and a later audit discharged under its own key reads `fixed` like any audited fix; a fix a later full panel did not raise again reads `fixed; the full panel in round <n> did not raise it again`.
@@ -123,8 +131,10 @@ Outcomes:
 Refusals, before anything is posted:
 
 - `review-session-unreadable`: a session file the account needs is missing or malformed; the detail names it (the loop state, the journal or its fault file, `meta.json`'s `sessionId`, the disposition ledger). Restore the session directory and write again; never edit the files by hand.
-- `review-session-not-terminal`: the loop has not ended. Finish the loop, then write.
-- `review-session-unsupported`: the session recorded no seat result and no round's seat status, or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account".
+- `review-session-not-terminal`: the loop has not ended. Finish the loop, then write; or, when the loop is abandoned, write with `--abandoned`.
+- `review-session-unsupported`: the session recorded no seat result and no round's seat status, or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account"; an abandoned session is never written by hand, so it takes `--abandoned` instead.
+- `review-session-not-abandonable`: `--abandoned` was given for a session that ended. Write its record without the flag.
+- `review-session-abandon-reason-missing`: `--abandoned` was given a blank reason. Give the reason the loop was closed.
 - `review-session-extras-invalid`: the extras file is missing, unparseable or malformed; the detail names the key. Fix it and write again.
 
 ## When it refuses
@@ -157,7 +167,8 @@ Reading and independence are computed by the record, never taken from the sessio
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed. A standing-ruling go-ahead counts only when the writer finds its Canon entry on record at write time; an owner's-words go-ahead needs no such check.
-- A finding whose ruling cites a decision that is not on record when the record is written is listed as left for the owner, so the record reads not reviewed until the owner decides.
+- A finding whose ruling cites a decision that is not on record when the record is written is listed as left for the owner, so the record reads not reviewed, or `awaits-owner`, until the owner decides.
+- A record whose only open lines are findings left for the owner reads `awaits-owner`, shown as "reviewed; N findings wait for your decision" with their ids. It reads so exactly when every line of `whatIsMissing` is such a finding, that is, when the same record without them would read `reviewed`; any other open line keeps `not-reviewed`. It never clears a gate: every reader treats it as `not-reviewed` until the owner rules, and once the findings are ruled (`ownerRulings`) the record reads `reviewed`. In code, `review_record.cleared(status)` is the one test, true only for `reviewed`.
 - A grounding-seat row carrying `notRunReason: "no-loop-phase"` is listed under `seatsNotRun` (`{name, reason, why}`, present only when non-empty), not under `missingReviews`. It does not park and does not make the record read not reviewed.
 - The record and the PR text never say a change has no bugs; they say what was checked and what
   is left.

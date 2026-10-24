@@ -1060,19 +1060,25 @@ _SECTION_10_7_MISSING_MARKER_SENTENCE = (
 _OMISSION_FLOOR_ENUMERATION_PINS = {
     "rubric/review-discipline.md (Ship-phase honesty)": (
         "(1) every **deferred** DoD row; (2) every **blocking or important** review finding that was\n"
-        "  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**."
+        "  **not fixed**, whatever its disposition is called; (3) every **costly disclosed degradation** "
+        "(sorted in skills/workhorse/reference/handback.md § Disclosed degradations)."
     ),
     "skills/workhorse/SKILL.md §11": (
         "(1) every\n"
         "  **deferred** DoD row; (2) every **blocking or important** review finding that was **not fixed**,\n"
-        "  whatever its disposition is called; (3) every **disclosed degradation**."
+        "  whatever its disposition is called; (3) every **costly disclosed degradation** "
+        "(sorted in skills/workhorse/reference/handback.md § Disclosed degradations)."
     ),
     "skills/review-code/SKILL.md step 8": (
         "enumerate (1) each deferred DoD row, (2) each blocking or important dispositions-table "
-        "finding not fixed (by severity, not disposition label), and (3) each disclosed degradation "
+        "finding not fixed (by severity, not disposition label), and (3) each costly disclosed degradation "
         "under `<!-- superheroes:degradations -->` (bullets, or **None** when empty)"
     ),
 }
+
+# Home pin: §10.7's row 3 names the costly class. The copy check cannot see a home-only revert, because
+# "costly disclosed degradation" contains "disclosed degradation".
+_SECTION_10_7_COSTLY_ROW = "3. every **costly disclosed degradation**"
 
 
 def _omission_floor_expectations_from_home(home):
@@ -1275,6 +1281,10 @@ def _assert_omission_floor_matches_home(copy_text, label, home):
 def test_omission_floor_matches_conventions_10_7():
     """§11: the omission floor and marker semantics in every copy-holder match CONVENTIONS §10.7."""
     home = _conventions_section_10_7()
+    # bite-axis: the home's omission-floor row 3 names the costly class.
+    assert _anchor_whitespace_normalize(_SECTION_10_7_COSTLY_ROW) in _anchor_whitespace_normalize(home), (
+        "CONVENTIONS §10.7 omission floor row 3 no longer reads %r" % _SECTION_10_7_COSTLY_ROW
+    )
 
     copies = (
         ("rubric/review-discipline.md (Ship-phase honesty)", _review_discipline_ship_phase_honesty()),
@@ -1283,6 +1293,53 @@ def test_omission_floor_matches_conventions_10_7():
     )
     for label, text in copies:
         _assert_omission_floor_matches_home(text, label, home)
+
+
+_BUILD_DEVIATIONS_HEADING = "### Build deviations: only costly ones are accepted on the merge sheet"
+
+
+def _build_deviations_note(text):
+    """The text from the build-deviations heading to the next line starting with `#`, under whatever version heading holds it."""
+    lines = text.splitlines()
+    assert _BUILD_DEVIATIONS_HEADING in lines, "TRANSITION.md has no %r heading" % _BUILD_DEVIATIONS_HEADING
+    start = lines.index(_BUILD_DEVIATIONS_HEADING)
+    end = next((n for n in range(start + 1, len(lines)) if lines[n].startswith("#")), len(lines))
+    return "\n".join(lines[start:end])
+
+
+def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes():
+    """The handback sort and the TRANSITION note put the costly test before the named harmless causes."""
+    section = _read("skills/workhorse/reference/handback.md").split("## Disclosed degradations", 1)[1].split("\n## ", 1)[0]
+    sort = _anchor_whitespace_normalize(section)
+    # bite-axis: the costly test applies whatever the cause, before the named harmless causes are listed.
+    assert "whatever caused it" in sort, "handback.md sort no longer says the costly test applies whatever caused it"
+    assert "The named harmless causes are" in sort, "handback.md sort no longer lists the named harmless causes"
+    assert sort.index("whatever caused it") < sort.index("The named harmless causes are"), (
+        "handback.md sort lists the named harmless causes before the costly test"
+    )
+    # bite-axis: rule 2 states the costly predicate exactly: costly when a promised check did not run, or work bypassed its owner engine.
+    assert "Every other deviation is **costly** when a promised check did not run, or work bypassed its owner engine" in sort, (
+        "handback.md sort rule 2 no longer states the costly predicate exactly"
+    )
+    # bite-axis: the grounding seat not running is the one cause that sorts harmless by name.
+    assert "The grounding seat not running sorts **harmless**, as named." in sort, (
+        "handback.md sort no longer names the grounding seat not running as harmless"
+    )
+    # bite-axis: cloud platform limits are bounded to the cloud session's own channel limits.
+    assert "never a build check that could not run there" in sort, (
+        "handback.md sort no longer bounds cloud platform limits to the session's own channel limits"
+    )
+    note = _anchor_whitespace_normalize(_build_deviations_note(_read("TRANSITION.md")))
+    # bite-axis: TRANSITION's build-deviations note says the same as the handback sort.
+    for phrase in ("whatever caused it", "never a build check that could not run there"):
+        assert phrase in note, "TRANSITION.md's build-deviations note no longer says %r" % phrase
+    # bite-axis: TRANSITION's first sentence states the costly predicate exactly, as rule 2 does.
+    assert "A deviation is costly when a promised check did not run, or work bypassed its owner engine, whatever caused it" in note, (
+        "TRANSITION.md's build-deviations note no longer states the costly predicate exactly"
+    )
+    # The note is found by its own heading, so the version heading above it does not matter.
+    body = "### Build deviations: only costly ones are accepted on the merge sheet\n\nA note.\n"
+    assert _build_deviations_note("## Unreleased\n\n" + body + "\n## 0.1.0\n") == _build_deviations_note("## 9.9.9\n\n" + body + "\n## 0.1.0\n") == body
 
 
 def test_grounding_stage_region_markers_match_conventions_10_7():

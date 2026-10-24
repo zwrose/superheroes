@@ -133,7 +133,7 @@
     "schema": "review-record/1",
     "sessionDisagreements": [],
     "sessionId": "s1",
-    "status": "not-reviewed",
+    "status": "awaits-owner",
     "unreadFiles": [],
     "whatIsMissing": [
       "finding code-retry-window waits for the owner's decision"
