@@ -247,6 +247,12 @@ def test_transcript_from_payload_bounds_the_path(tmp_path):
     assert HM.transcript_from_payload(None) == ("", "")
 
 
+def test_transcript_from_payload_rejects_a_path_utf8_cannot_encode():
+    # axis: E1 — a lone-surrogate path the UTF-8 env file cannot hold is not vouched for (bite-proof G5)
+    path = "/tmp/session-" + chr(0xDCFF) + ".jsonl"
+    assert HM.transcript_from_payload({"transcript_path": path}) == ("", "")
+
+
 # --- the hook -----------------------------------------------------------------------------------
 
 
@@ -326,6 +332,17 @@ def test_a_later_start_replaces_the_earlier_starts_values_when_sourced(tmp_path,
     second = _write(tmp_path / "second.jsonl", _assistant("claude-opus-5-5"), _assistant("x-1"))
     _start(monkeypatch, env_file, {"transcript_path": second})
     assert _sourced(env_file) == ["", second, str(os.path.getsize(second))]
+
+
+def test_a_start_with_a_path_utf8_cannot_encode_clears_the_earlier_starts_transcript(tmp_path, monkeypatch):
+    # axis: E2 — an unencodable transcript path exports '' for both transcript lines, so an earlier
+    # start's transcript never stays in force (bite-proof G5)
+    first = _write(tmp_path / "first.jsonl", _assistant("gpt-5.6-sol"))
+    env_file = tmp_path / "env.sh"
+    _start(monkeypatch, env_file, {"model": "claude-opus-5", "transcript_path": first})
+    assert _sourced(env_file) == ["claude-opus-5", first, str(os.path.getsize(first))]
+    _start(monkeypatch, env_file, {"transcript_path": "/tmp/session-" + chr(0xDCFF) + ".jsonl"})
+    assert _sourced(env_file) == ["", "", ""]
 
 
 # --- the launcher -------------------------------------------------------------------------------

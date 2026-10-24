@@ -50,13 +50,15 @@ def from_payload(payload):
 
 def transcript_from_payload(payload):
     """`(path, start)` for the payload's transcript: the path when it is an absolute, bounded,
-    single-line string, and the file's size now as the byte offset this session starts from
-    ('0' when the file does not exist yet, '' when its size cannot be read). Else ('', '')."""
+    single-line string that encodes as strict UTF-8 (the env file is written in UTF-8), and the
+    file's size now as the byte offset this session starts from ('0' when the file does not exist
+    yet, '' when its size cannot be read). Else ('', '')."""
     try:
         path = payload.get("transcript_path")
         if (not isinstance(path, str) or not os.path.isabs(path) or len(path) > _MAX_PATH
                 or "\n" in path or "\r" in path or "\x00" in path):
             return "", ""
+        path.encode("utf-8")
         try:
             return path, str(os.path.getsize(path))
         except FileNotFoundError:
