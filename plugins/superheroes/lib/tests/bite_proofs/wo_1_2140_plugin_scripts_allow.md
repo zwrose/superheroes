@@ -821,3 +821,52 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 157 passed in 1.18s
 ```
 
+---
+
+## G10′ — exact hook invocation (WO-3)
+
+**Guarded element:** `plugins/superheroes/lib/tests/test_hook_wiring.py` `test_plugin_scripts_allow_hook_is_wired_fail_soft_after_worktree_guard`, the assertion `approver == [_PLUGIN_SCRIPTS_ALLOW_COMMAND]`. Axis: the whole own-scripts approver invocation is pinned — the interpreter, the plugin-root path and fail-soft; a command that lost `python3 -B ` (the hook file is mode 100644, so it cannot run directly, and `|| true` would swallow the launch failure) goes red.
+
+This entry runs only `test_hook_wiring.py`, the one file WO-3 changes, with this command from `/home/user/wt-2140`:
+
+`scripts/pinned-python -B -m pytest plugins/superheroes/lib/tests/test_hook_wiring.py -q --tb=line -p no:cacheprovider`
+
+Baseline before the neutralization (the new assertion in place, hooks.json committed text): `10 passed in 0.16s`.
+
+**Neutralization:** in `plugins/superheroes/hooks/hooks.json` line 11, the `plugin_scripts_allow.py` entry's command loses `python3 -B ` (one Edit): `python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py\"` → `\"${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py\"`.
+
+**Raw red:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+....F.....                                                               [100%]
+=================================== FAILURES ===================================
+E   assert ['"${CLAUDE_P....py" || true'] == ['python3 -B ....py" || true']
+      
+      At index 0 diff: '"${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py" || true' != 'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py" || true'
+      Use -v to get more diff
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_hook_wiring.py:87: assert ['"${CLAUDE_P....py" || true'] == ['python3 -B ....py" || true']
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_hook_wiring.py::test_plugin_scripts_allow_hook_is_wired_fail_soft_after_worktree_guard
+1 failed, 9 passed in 0.16s
+```
+Red on the claimed axis: the exact-invocation assertion fires at `test_hook_wiring.py:87`. The old `assert "|| true" in approver[0]` would have stayed green here, since `|| true` is still present.
+
+**Restore:** the inverse Edit, putting `python3 -B ` back.
+
+**Restore receipt (hooks.json lines 9-12 read back after the restore):**
+```
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_timeout.py\" || true" },
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/iphone_allow.py\" || true" },
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py\" || true" },
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/implementer_fence.py\" || true" }
+```
+
+**Raw green:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+..........                                                               [100%]
+10 passed in 0.18s
+```
+
+Edges not neutralized in this proof: a command missing `|| true` and a duplicate wiring of the hook. Both fail the same equality by construction (the string differs, or the list has two elements), but only the missing-`python3 -B ` edge was run red.
+

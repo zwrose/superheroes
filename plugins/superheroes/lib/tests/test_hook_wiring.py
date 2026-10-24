@@ -72,6 +72,9 @@ def test_iphone_allow_hook_is_wired_fail_soft_after_worktree_guard():
         "iphone_allow must be listed after the worktree guard on the Bash matcher"
 
 
+_PLUGIN_SCRIPTS_ALLOW_COMMAND = 'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py" || true'
+
+
 def test_plugin_scripts_allow_hook_is_wired_fail_soft_after_worktree_guard():
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -80,8 +83,8 @@ def test_plugin_scripts_allow_hook_is_wired_fail_soft_after_worktree_guard():
 
     approver = [c for c in cmds if "plugin_scripts_allow.py" in c]
     assert approver, "hooks.json must wire plugin_scripts_allow.py on the Bash matcher"
-    # axis: the own-scripts approver is fail-soft — a failure to start leaves no decision, never a block
-    assert "|| true" in approver[0]
+    # axis: the whole own-scripts approver invocation is pinned — the interpreter, the plugin-root path and fail-soft
+    assert approver == [_PLUGIN_SCRIPTS_ALLOW_COMMAND]
 
     guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
     approver_idx = next(i for i, c in enumerate(cmds) if "plugin_scripts_allow.py" in c)
