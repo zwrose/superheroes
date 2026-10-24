@@ -12,6 +12,31 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** An orchestrator that knows no fixer was dispatched for a pending fixer order can pass `rule --fixer-not-dispatched`, and a ruling then re-renders that order at the next attempt; without the flag a ruling leaves an emitted order alone, as before. See [Review rulings: a late ruling re-renders a fixer order nobody has picked up](#review-rulings-a-late-ruling-re-renders-a-fixer-order-nobody-has-picked-up).
+- **After switching.** **Nothing is owed.** An orchestrator that closes a review session before its loop ends can write the session's record with `review_record_session.py write ... --abandoned "<why>"`; a write without the flag is unchanged. See [Review record: an abandoned session writes its own record](#review-record-an-abandoned-session-writes-its-own-record).
+
+### Review rulings: a late ruling re-renders a fixer order nobody has picked up
+
+- `round_driver.py rule` takes a new flag, `--fixer-not-dispatched`. Without it, a ruling on a pending `dispatch-fixer` attempt whose orders are already emitted leaves the order alone: the attempt is never stopped and its batch never reshaped.
+- With the flag, and when the driver sees no pickup evidence (no store, landing or bare-payload file for a fixer slot at the attempt, and no commits past the order's emission head), `rule` re-slices the batch through the same ruling filter and re-emits the order at the next attempt in one commit with the ruling. The next `next` hands out that order, and the superseded attempt can no longer be recorded: `record-result` and `record-missing` refuse it `attempt-not-pending`, and a hand `submit` echo for it no longer matches.
+- When the re-slice empties the batch, the fixer pending is dropped and the session settles as it does when a ruling empties the batch before emission.
+- A render or commit refusal during the re-emission refuses the whole `rule` with state unchanged and `fix-batch.json` restored. If the session process dies between the re-render and its commit, run the same `rule` again.
+- Every `rule` on an emitted attempt returns a new result key, `fixerOrder`. Not reshaped: `{reshaped: false, attempt, reason}` with `reason` `dispatch-not-ruled-out`, `fixer-landed` or `fixer-committed`. Reshaped: `{reshaped: true, attempt, supersededAttempt, reason, commitCheck}` with `reason` `reshaped` or `batch-emptied` and `commitCheck` `clean` or `unreadable` (git could not tell, which does not block the re-emission).
+
+### Review record: an abandoned session writes its own record
+
+- `review_record_session.py write` takes a new flag, `--abandoned "<reason>"`, for a session the orchestrator closed before its loop ended. Without it nothing changes.
+- Two new refusals: `review-session-not-abandonable` (the session ended; write its record without the flag) and `review-session-abandon-reason-missing` (the reason is blank). `review-session-not-terminal` is still the refusal for an unfinished session written without the flag.
+- The record reads `not-reviewed` and can never read `reviewed`. Its `whatIsMissing` carries the line "session abandoned: ...", and a finding still open reads undecided ("still open when the review loop ended").
+- `checked` carries the reason and a line that findings in seat results recorded but never folded appear only in the raw findings files.
+- A new optional account key, `abandoned: {"reason": ...}`, admits an empty `reviewers` list: a session abandoned before any seat result lists no reviewer. An account without the key still needs at least one reviewer.
+
 ## 0.46.0
 
 ### Before you upgrade
