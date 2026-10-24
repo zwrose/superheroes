@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "url": "https://github.com/shop/app/pull/2075#issuecomment-6368852415",
+  "earlierRecords": [],
+  "schema": "review-record/1",
+  "pr": 2075,
+  "sessionId": "session-2075",
+  "lane": {"value": "full", "reason": "The change decides what a review seat may run on the owner's machine.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "049519a241d6f0f2adac1ffff8911f9da262d588", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "049519a241d6f0f2adac1ffff8911f9da262d588", "source": "GitHub checks"},
+  "reviewers": [
+    {"name": "code-reviewer", "family": "codex", "ran": "engine-record"},
+    {"name": "test-reviewer", "family": "codex", "ran": "engine-record"}
+  ],
+  "findings": [
+    {"id": "F1", "outcome": "left-for-owner", "title": "The test for the list and search size caps uses too little data", "reason": "Only the owner can say whether a few test lines are worth a follow-up.", "consequence": "A later change could remove the list and search caps and only be caught when a review drops out.", "findingKey": "caps/test-too-small"}
+  ],
+  "missingReviews": [],
+  "rounds": {"count": 2, "stoppedAtCap": false, "source": "reported by the session"}
+}
