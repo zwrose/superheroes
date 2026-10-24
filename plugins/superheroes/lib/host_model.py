@@ -123,7 +123,7 @@ def resolve(host_model, transcript_path, transcript_start):
             return model, "start-event"
         model = from_transcript(transcript_path, transcript_start)
         if model:
-            return model, "transcript"
+            return model, "session-transcript"
     except Exception:
         pass
     return "", "none"

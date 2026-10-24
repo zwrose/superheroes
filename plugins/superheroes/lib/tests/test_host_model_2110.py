@@ -215,8 +215,8 @@ def test_resolve_reports_where_the_model_came_from(tmp_path):
     # axis: resolve — the start event wins, then the transcript, else none
     transcript = _write(tmp_path / "t.jsonl", _assistant("claude-opus-5-5"))
     assert HM.resolve("gpt-5.6-sol", transcript, "0") == ("gpt-5.6-sol", "start-event")
-    assert HM.resolve("", transcript, "0") == ("claude-opus-5-5", "transcript")
-    assert HM.resolve("bad model; rm", transcript, "0") == ("claude-opus-5-5", "transcript")
+    assert HM.resolve("", transcript, "0") == ("claude-opus-5-5", "session-transcript")
+    assert HM.resolve("bad model; rm", transcript, "0") == ("claude-opus-5-5", "session-transcript")
     assert HM.resolve("", "", "") == ("", "none")
     assert HM.resolve("", transcript, str(os.path.getsize(transcript))) == ("", "none")
 
