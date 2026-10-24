@@ -1256,9 +1256,13 @@ def _cloud_activity_repository_rest(
                 head_ref = head.get("ref") if isinstance(head, dict) else None
                 if not isinstance(base_ref, str):
                     return None
-                # axis: GitHub ignores a closing keyword on a pull request to another branch
                 if base_ref != default_branch:
-                    continue
+                    snapshot, refusal = sc._parse_rest_pull(pull, slug, pr_number, 0)
+                    # axis: a closing keyword counts off the default branch only for a stack layer; a stack read that cannot say makes the whole read None
+                    if snapshot is None:
+                        if refusal["reason"] == sc.REASON_NOT_LINKED:
+                            continue
+                        return None
                 if not isinstance(head_ref, str) or not isinstance(pull.get("updated_at"), str):
                     return None
                 closing.append({

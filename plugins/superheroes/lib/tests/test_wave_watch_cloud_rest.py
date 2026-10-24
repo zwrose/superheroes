@@ -150,8 +150,18 @@ def _xref(pr, body="Closes #2110.", repo=_SLUG):
     }
 
 
-def _pull(pr, base="main", updated=_PR_AT, head="claude/issue-2110-nxhfk5"):
-    return {"number": pr, "base": {"ref": base}, "head": {"ref": head}, "updated_at": updated}
+_NO_STACK = object()
+
+
+def _pull(pr, base="main", updated=_PR_AT, head="claude/issue-2110-nxhfk5", stack=_NO_STACK):
+    """A `pulls/<n>` object; it carries a `stack` key only when `stack` is given."""
+    payload = {
+        "number": pr, "base": {"ref": base}, "head": {"ref": head, "sha": _BRANCH_SHA},
+        "updated_at": updated,
+    }
+    if stack is not _NO_STACK:
+        payload["stack"] = stack
+    return payload
 
 
 def _issue(number, updated=_ISSUE_AT):
@@ -420,9 +430,71 @@ def test_w7_a_manual_link_event_is_unreadable(tmp_path, clock, event):
 
 
 def test_w8_a_keyword_pr_to_another_branch_is_not_a_closing_node(tmp_path, clock):
+    # a plain PR (no stack) to another branch: GitHub lists it in no closing reference
     other = _pull(2113, base="dev", updated=_FRESH_AT)
+    assert "stack" not in other
     gh = _activity_gh(_GRAPHQL_REFUSED, pulls={2113: other})
     assert _fetch(gh, tmp_path, clock=clock) == {2110: _epoch(_ISSUE_AT)}
+
+
+def _graphql_2103():
+    """The GraphQL response for issue 2103, built from the recorded REST data."""
+    pull = _json("pulls_2105.json")
+    return {"data": {"repository": {
+        "i2103": {
+            "updatedAt": _json("issues_2103.json")["updated_at"],
+            "closedByPullRequestsReferences": {
+                "pageInfo": {"hasNextPage": False},
+                "nodes": [{
+                    "number": pull["number"], "updatedAt": pull["updated_at"],
+                    "headRefName": pull["head"]["ref"],
+                }],
+            },
+        },
+        "b2103": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+    }}}
+
+
+def _gh_2103(graphql, pull=None):
+    routes = {
+        _BASE: (0, _text(_STACK / "repos_superheroes.json"), ""),
+        "%s/issues/2103" % _BASE: (0, _text(_CLOUD / "issues_2103.json"), ""),
+        "%s/pulls/2105" % _BASE: (0, json.dumps(_json("pulls_2105.json") if pull is None else pull), ""),
+        "graphql": graphql,
+    }
+    routes.update(_pages("%s/branches" % _BASE, _branch_rows()))
+    routes.update(_pages("%s/issues/2103/timeline" % _BASE, _json("issues_2103_timeline_page1.json")))
+    return _Gh(routes)
+
+
+@pytest.mark.parametrize("transport", ["graphql", "rest"])
+def test_a_stack_layer_closing_pr_counts_the_same_on_both_transports(tmp_path, clock, transport):
+    assert not any("2103" in row["name"] for row in _branch_rows())
+    pull = _json("pulls_2105.json")
+    assert pull["base"]["ref"] != "main" and pull["stack"]["number"] == 2106
+    graphql = (0, json.dumps(_graphql_2103()), "") if transport == "graphql" else _GRAPHQL_REFUSED
+    gh = _gh_2103(graphql)
+    assert _fetch(gh, tmp_path, issues=(2103,), clock=clock) == {2103: _epoch(pull["updated_at"])}
+    assert gh.unrouted == []
+    if transport == "graphql":
+        assert gh.rest_calls() == []
+
+
+@pytest.mark.parametrize("stack", [{"number": "x"}, "not-an-object", 7, []],
+                         ids=["bad-number", "string", "integer", "list"])
+def test_a_stack_layer_whose_stack_is_malformed_makes_the_whole_read_unavailable(
+    tmp_path, clock, stack,
+):
+    pull = _json("pulls_2105.json")
+    pull["stack"] = stack
+    gh = _gh_2103(_GRAPHQL_REFUSED, pull=pull)
+    assert _fetch(gh, tmp_path, issues=(2103,), clock=clock) == {2103: None}
+
+
+def test_a_default_branch_pr_with_a_stack_key_still_counts(tmp_path, clock):
+    pull = _pull(2113, base="main", updated=_FRESH_AT, stack={"number": "x"})
+    gh = _activity_gh(_GRAPHQL_REFUSED, pulls={2113: pull})
+    assert _fetch(gh, tmp_path, clock=clock) == {2110: _epoch(_FRESH_AT)}
 
 
 def test_w8_control_the_same_pr_to_the_default_branch_counts(tmp_path, clock):
