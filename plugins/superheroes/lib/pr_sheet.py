@@ -362,7 +362,7 @@ def degradations_listed(body):
     if not isinstance(body, str):
         return []
     lines = body.splitlines()
-    inert = md_fence.scan_contexts(lines).inert  # a marker inside a code fence is an example, not the section
+    inert = md_fence.scan(lines).inert  # a marker inside a code fence is an example, not the section
     start = next((n for n, line in enumerate(lines) if not inert[n] and line.rstrip() == _DEGRADATIONS_MARKER), None)
     if start is None:
         return []

@@ -2930,7 +2930,7 @@ def test_a_nested_bullet_under_a_harmless_deviation_is_part_of_it_and_needs_no_l
 def test_a_costly_deviation_carried_into_what_we_are_accepting_builds_whatever_the_emphasis_or_full_stop():
     # Bites on: the match being exact (emphasis or the trailing full stop breaking it), or the check adding a card or changing what the sheet records.
     # Axis: K5 and the cards edge: the text after the label found inside an accepting line builds; the acceptance's own item is the only card; no nothingListed.
-    text = (ACCEPTING + f"\n- **{VERIFY_GATE}**, so the last commit is unverified until CI runs.\n\n" + BUILD_RECORD + DEGRADATIONS
+    text = (ACCEPTING + "\n- The **verify gate** did not run on the final head, so the last commit is unverified until CI runs.\n\n" + BUILD_RECORD + DEGRADATIONS
             + f"- [costly] {VERIFY_GATE}.\n")
     ((bullet, _),) = pr_sheet.listed_bullets(211, text)
 
