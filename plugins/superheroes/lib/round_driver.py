@@ -12906,6 +12906,36 @@ def _run_verify_claim_pid(claim_path):
     return pid
 
 
+def _run_verify_record_group(claim_path, token, pgid):
+    """Record the verify child's process group in this run's claim, so a retry after a driver that
+    died without cleanup can reap the orphaned group before it reclaims the slot. Best effort."""
+    obj, err = round_records.read_json(claim_path)
+    if err is not None or not isinstance(obj, dict) or obj.get("token") != token:
+        return
+    obj["pgid"] = pgid
+    tmp_path = claim_path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(round_records.canonical(obj))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, claim_path)
+    except OSError:
+        pass
+
+
+def _run_verify_reap_group(claim_path):
+    """Kill the process group a dead holder's claim recorded, if any survived it."""
+    obj, err = round_records.read_json(claim_path)
+    pgid = obj.get("pgid") if err is None and isinstance(obj, dict) else None
+    if isinstance(pgid, bool) or not isinstance(pgid, int) or pgid <= 1:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def _run_verify_take_claim(claim_path):
     """(status, token, stale). `status` is `ok`, `in-progress` or `claim-failed`. The claim is
     created exclusively, so only one runner holds a slot; a claim whose holder is gone (dead pid,
@@ -12923,6 +12953,7 @@ def _run_verify_take_claim(claim_path):
             if pid is not None and _run_verify_pid_alive(pid):
                 return "in-progress", None, stale
             stale = True
+            _run_verify_reap_group(claim_path)
             try:
                 os.remove(claim_path)
             except FileNotFoundError:
@@ -13039,8 +13070,11 @@ def _run_in_process_group(argv, *, timeout=None, **kwargs):
 
 
 def _run_in_process_group_supervised(argv, timeout, kwargs):
+    on_spawn = kwargs.pop("on_spawn", None)
     with subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True, **kwargs) as proc:
         try:
+            if on_spawn is not None:
+                on_spawn(proc.pid)
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
@@ -13066,9 +13100,12 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     command = claim["command"]
     cwd = _gate_policy_repo_root(claim["config"])
     exit_code = None
+    extra = {}
+    if run is _run_in_process_group:  # the child is a session leader: its pid is its group id
+        extra["on_spawn"] = lambda pgid: _run_verify_record_group(claim["claimPath"], claim["token"], pgid)
     try:
         done = run([claim["bash"], "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, **extra)
         output = done.stdout or b""
         exit_code = done.returncode
         result = "pass" if exit_code == 0 else "fail"

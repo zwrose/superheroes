@@ -586,6 +586,7 @@ def _kill_if_alive(pid):
 _GROUP_KWARGS = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 
+@pytest.mark.proc_containment
 def test_a_timeout_kills_the_whole_process_group():
     pid = None
     try:
@@ -603,6 +604,7 @@ def test_a_timeout_kills_the_whole_process_group():
         _kill_if_alive(pid)
 
 
+@pytest.mark.proc_containment
 def test_an_interrupted_wait_kills_the_whole_process_group(tmp_path, monkeypatch):
     pid_file = tmp_path / "child.pid"
     real_communicate = subprocess.Popen.communicate
@@ -638,6 +640,7 @@ def test_an_interrupted_wait_kills_the_whole_process_group(tmp_path, monkeypatch
         _kill_if_alive(pid)
 
 
+@pytest.mark.proc_containment
 def test_a_sigterm_to_the_driver_kills_the_whole_process_group(tmp_path):
     import threading
 
@@ -673,6 +676,32 @@ def test_a_sigterm_to_the_driver_kills_the_whole_process_group(tmp_path):
         if pid is None and pid_file.exists() and pid_file.read_text().strip().isdigit():
             pid = int(pid_file.read_text())
         _kill_if_alive(pid)
+
+
+def test_a_stale_claim_reaps_the_orphaned_verify_group_before_the_slot_is_retaken(tmp_path):
+    claim_path = str(tmp_path / "claim.json")
+    orphan = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        with open(claim_path, "w", encoding="utf-8") as fh:
+            json.dump({"pid": dead.pid, "token": "old", "pgid": orphan.pid}, fh)
+        status, token, stale = RD._run_verify_take_claim(claim_path)
+        assert (status, stale) == ("ok", True) and token
+        assert orphan.wait(timeout=5) == -signal.SIGKILL, "the orphaned verify group survived the retake"
+    finally:
+        _kill_if_alive(orphan.pid)
+        orphan.wait()
+
+
+def test_the_spawned_verify_group_is_recorded_in_the_claim(tmp_path):
+    claim_path = str(tmp_path / "claim.json")
+    status, token, _stale = RD._run_verify_take_claim(claim_path)
+    assert status == "ok"
+    RD._run_verify_record_group(claim_path, token, 4242)
+    assert RR.read_json(claim_path)[0]["pgid"] == 4242
+    RD._run_verify_record_group(claim_path, "someone-else", 7)
+    assert RR.read_json(claim_path)[0]["pgid"] == 4242
 
 
 class _Clock(object):
