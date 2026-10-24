@@ -283,7 +283,10 @@ refuses.
   text also fills the dependency caches the project's Python launcher needs; when the setup log
   shows `dependency fill FAILED` (or no fill line for a project that should have one), run the
   launcher once from the builder's own shell before the first dispatch and disclose it in the build
-  record.
+  record. Even after a good fill, the claude write sandbox runs uv offline (`UV_OFFLINE=1`) and
+  cannot fetch a test runner it has not cached, so before the first implementer order warm the uv
+  cache with one pinned test run (one pytest run through the project's Python launcher) from the
+  builder's own shell.
 - The write sandbox has no network. An implementer order inlines or cites only what is in the
   worktree.
 - The commit signer is not reachable from inside the write sandbox, so implementers never commit.
