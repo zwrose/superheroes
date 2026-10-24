@@ -13019,6 +13019,24 @@ def _run_in_process_group(argv, *, timeout=None, **kwargs):
     """subprocess.run in its own process group; on timeout the whole group is killed, so a
     compound verify command leaves no surviving descendants."""
     kwargs.pop("start_new_session", None)
+
+    def _on_sigterm(signum, frame):
+        # The child sits in its own session, so cancelling the driver's group never reaches it;
+        # turning SIGTERM into an exception runs the group-kill cleanup below.
+        raise SystemExit(128 + signal.SIGTERM)
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _on_sigterm)
+    except ValueError:  # not the main thread: no handler can be installed
+        previous = None
+    try:
+        return _run_in_process_group_supervised(argv, timeout, kwargs)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+
+
+def _run_in_process_group_supervised(argv, timeout, kwargs):
     with subprocess.Popen(argv, start_new_session=True, **kwargs) as proc:
         try:
             out, _ = proc.communicate(timeout=timeout)

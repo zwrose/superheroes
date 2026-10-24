@@ -634,6 +634,39 @@ def test_an_interrupted_wait_kills_the_whole_process_group(tmp_path, monkeypatch
         _kill_if_alive(pid)
 
 
+def test_a_sigterm_to_the_driver_kills_the_whole_process_group(tmp_path):
+    import threading
+
+    pid_file = tmp_path / "child.pid"
+    pid = None
+
+    def send_sigterm_once_the_child_is_up():
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            text = pid_file.read_text() if pid_file.exists() else ""
+            if text.endswith("\n") and text.strip().isdigit():
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+            time.sleep(0.02)
+
+    sender = threading.Thread(target=send_sigterm_once_the_child_is_up, daemon=True)
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        sender.start()
+        with pytest.raises(SystemExit) as caught:
+            RD._run_in_process_group(["bash", "-c", "sleep 30 & echo $! > %s; wait" % pid_file],
+                                     **_GROUP_KWARGS)
+        assert caught.value.code == 128 + signal.SIGTERM
+        pid = int(pid_file.read_text())
+        assert _pid_gone(pid), "the background child %d outlived the driver's SIGTERM" % pid
+        assert signal.getsignal(signal.SIGTERM) == previous, "the SIGTERM handler was not restored"
+    finally:
+        sender.join(timeout=15)
+        if pid is None and pid_file.exists() and pid_file.read_text().strip().isdigit():
+            pid = int(pid_file.read_text())
+        _kill_if_alive(pid)
+
+
 class _Clock(object):
     def __init__(self):
         self.t = 0.0
