@@ -18,7 +18,14 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **Advisors stop hand-building review records to get a merge sheet for a PR that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet).
 - **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
+
+### Showrunner: a PR with no review run gets no merge sheet
+
+- Duty 6 of the showrunner charter (`skills/showrunner/SKILL.md`, the merge policy's one home) gains one rule: a PR that had no review run, typically a dependency bump the advisor vets directly in place of a review-crew run where the project allows that, gets no merge sheet, and the advisor never hand-builds a review record to make one. The advisor posts its vet receipt and owner half on the PR and tells the owner the PR is theirs to merge with their own click; it executes no merge for such a PR on a chat word. `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics (batch 3) and `theme/review-template.md` (beside `pr_sheet.py build`'s `--record` requirement) point to it.
+- Review discipline is unchanged: whether a project's dependency PRs may skip review-crew stays that project's owner's call, and a review record the driver mandate owes for a disclosed skip is still written.
+- No command, result key or file shape changes.
 
 ### Relay: the advisor sends exactly the text it was shown
 
