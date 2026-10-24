@@ -179,10 +179,12 @@ _SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "u
                    "!", "{", "}", "time"}
 # Builtins (and `for`/`select` headers): their own words are arguments, so the whole simple
 # command up to the next control operator is skipped.
-_SHELL_BUILTINS = {"[", "[[", "test", "cd", ":", "true", "false", "export", "set", "unset",
-                   "source", ".", "echo", "printf", "eval", "exec", "command", "builtin",
+_SHELL_BUILTINS = {"[", "test", "cd", ":", "true", "false", "export", "set", "unset",
+                   "source", ".", "echo", "printf", "eval", "builtin",
                    "local", "read", "shift", "exit", "return", "umask", "trap", "wait",
                    "pushd", "popd", "alias", "type", "hash", "for", "select"}
+# Prefixes whose operand is the program they run (`command -v` only queries, so it is skipped).
+_SHELL_PREFIXES = {"command", "exec"}
 _SHELL_UNPARSED = {"case", "function", "coproc"}
 _CONTROL_OPS = {";", "&&", "||", "|", "&", "(", ")", ";;", "|&", ";&"}
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -215,8 +217,20 @@ def _verify_program(verify_command):
             return None, "starts a `%s` construct" % tok
         elif tok in _SHELL_KEYWORDS or _ASSIGNMENT.match(tok):
             continue
+        elif tok == "[[":
+            # `&&`/`||` inside `[[ … ]]` are operands, not control operators.
+            if "]]" not in tokens[i:]:
+                return None, "an unclosed `[[`"
+            i = tokens.index("]]", i) + 1
+            skipping = True
+        elif tok in _SHELL_PREFIXES:
+            while i < len(tokens) and tokens[i].startswith("-"):
+                skipping = skipping or "v" in tokens[i].lower()
+                i += 2 if tokens[i] == "-a" else 1  # `exec -a <name>`
         elif tok in _SHELL_BUILTINS:
             skipping = True
+        elif tok.isdigit() and i < len(tokens) and tokens[i][0] in "<>":
+            continue  # the file descriptor of `2>file`
         elif tok[0] in "<>":
             i += 1  # a redirection and its target
         elif any(c in _UNRESOLVABLE for c in tok):
@@ -363,10 +377,11 @@ def _hash_drift(drift):
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()
 
 
-def _message(drift, unchecked):
-    """The one-line nudge: drift first, then any check that could not run."""
+def _message(drift, unchecked, acked):
+    """The one-line nudge: drift first, then any check that could not run. Drift the owner
+    already acknowledged is left out when a note still has to be shown."""
     parts = []
-    if drift:
+    if drift and not (acked and unchecked):
         parts.append("review-crew profile drift: " + "; ".join(drift)
                      + " — consider re-running review-init")
     if unchecked:
@@ -444,8 +459,8 @@ def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
         "drift": drift,
         "unchecked": unchecked,
         "signal_hash": signal_hash,
-        "nudge_acked": nudge_acked,
-        "message": refusal or _message(drift, unchecked),
+        "nudge_acked": nudge_acked and not unchecked,
+        "message": refusal or _message(drift, unchecked, nudge_acked),
     }
 
 
@@ -490,8 +505,8 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
             "drift": drift,
             "unchecked": unchecked,
             "signal_hash": signal_hash,
-            "nudge_acked": nudge_acked,
-            "message": refusal or _message(drift, unchecked),
+            "nudge_acked": nudge_acked and not unchecked,
+            "message": refusal or _message(drift, unchecked, nudge_acked),
         }
     except Exception:
         # Internal failure mid-check → degrade to a readable-but-soft result so

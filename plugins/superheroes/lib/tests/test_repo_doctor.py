@@ -245,10 +245,53 @@ def test_keyword_led_verify_command_with_absent_program_drifts(tmp_path, capsys)
 
 
 @pytest.mark.parametrize("verify", [
+    "true && [[ -n x && -n y ]] && verifybin --run",
+    "true && 2>/dev/null verifybin --run",
+    "command -v gonebin && verifybin --run",
+    "exec -a name verifybin --run",
+    "FOO=1 verifybin --run",
+])
+def test_shell_prefixes_resolve_to_the_real_program(tmp_path, capsys, verify):
+    """#2088 review: `[[ … && … ]]`, an fd redirection, `command -v`, `exec -a` and an
+    assignment never put a non-program word in front of the real program."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert (res["drift"], res["unchecked"]) == ([], [])
+
+
+@pytest.mark.parametrize("verify", [
+    "command gonebin && verifybin --run",
+    "exec -p gonebin",
+])
+def test_command_and_exec_check_the_program_they_run(tmp_path, capsys, verify):
+    """#2088 review: the operand of `command`/`exec` is the program, so an absent one drifts."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert "verify command no longer resolves: gonebin" in res["drift"]
+
+
+def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):
+    """#2088 review: acknowledged drift never hides a new "could not be checked" note."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify="$PY -m x")
+    rc, res = run(profile, "review-crew@0.1.0", 3, root, env, capsys)
+    h = res["signal_hash"]
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify="$PY -m x",
+                            nudge_ack="{%r: true}" % h)
+    rc, res = run(profile, "review-crew@0.1.0", 3, root, env, capsys)
+    assert res["signal_hash"] == h
+    assert res["nudge_acked"] is False
+    assert res["message"].startswith("review-crew profile note: verify command could not")
+
+
+@pytest.mark.parametrize("verify", [
     "if true; then :; fi",
     "case x in a) verifybin;; esac",
     '"$PY" -m pytest',
     "verifybin 'unterminated",
+    "[[ -n x && verifybin",
 ])
 def test_verify_command_without_a_readable_program_is_unchecked_not_stale(
         tmp_path, capsys, verify):

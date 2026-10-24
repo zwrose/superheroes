@@ -50,8 +50,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 ### Review: the verify-command check skips shell keywords
 
-- `lib/repo_doctor.py` check 5 resolves the verify command's first word in command position that names a program. It skips shell keywords (`if`, `then`, `!`, `{`, …), builtins with their arguments (`[`, `test`, `cd`, …) and `VAR=value` prefixes. A program word with a `/` resolves as an executable file under the project root, not the caller's directory.
-- When no word can be read as a program (a `case` construct, a program the shell expands such as `$PY`, an unclosed quote), the result's new `unchecked` list says so and the message carries it as a note. It is never drift, so it adds nothing to `signal_hash` and asks for no re-run of review-init.
+- `lib/repo_doctor.py` check 5 resolves the verify command's first word in command position that names a program. It skips shell keywords (`if`, `then`, `!`, `{`, …), builtins with their arguments (`[`, `[[ … ]]`, `test`, `cd`, …), `VAR=value` prefixes and redirections; after `command` or `exec` it checks the program they run (`command -v` only queries, so it is skipped). A program word with a `/` resolves as an executable file under the project root, not the caller's directory.
+- When no word can be read as a program (a `case` construct, a program the shell expands such as `$PY`, an unclosed quote), the result's new `unchecked` list says so and the message carries it as a note. It is never drift, so it adds nothing to `signal_hash` and asks for no re-run of review-init. While a note stands, `nudge_acked` reads false so the note is shown, and drift the owner already acknowledged is left out of the message.
 - A command whose real program is absent still reports "verify command no longer resolves: <program>".
 
 ### Review: a finding an audit raised is audited under its own key
