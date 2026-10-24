@@ -2970,6 +2970,8 @@ DEGRADATIONS_CASES = [
                  id="a-nested-bullet-joins-its-labelled-degradation"),
     pytest.param("<!-- superheroes:degradations -->\n\n- [harmless] One.\n- Two.\n", [("harmless", "One."), (None, "Two.")],
                  id="a-flush-bullet-after-a-labelled-one-is-its-own-degradation"),
+    pytest.param("```md\n<!-- superheroes:degradations -->\n- [costly] Example.\n```\n\n<!-- superheroes:degradations -->\n\nNone\n", [],
+                 id="a-fenced-example-marker-is-not-the-section"),
 ]
 
 

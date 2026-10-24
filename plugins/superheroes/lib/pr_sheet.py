@@ -150,6 +150,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import canon  # noqa: E402
+import md_fence  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import review_record  # noqa: E402
 import sheet_prose  # noqa: E402
@@ -361,7 +362,8 @@ def degradations_listed(body):
     if not isinstance(body, str):
         return []
     lines = body.splitlines()
-    start = next((n for n, line in enumerate(lines) if line.rstrip() == _DEGRADATIONS_MARKER), None)
+    inert = md_fence.scan_contexts(lines).inert  # a marker inside a code fence is an example, not the section
+    start = next((n for n, line in enumerate(lines) if not inert[n] and line.rstrip() == _DEGRADATIONS_MARKER), None)
     if start is None:
         return []
     entries, open_entry, blank, column = [], None, False, 0
