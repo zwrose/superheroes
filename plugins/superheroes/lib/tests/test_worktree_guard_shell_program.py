@@ -140,6 +140,44 @@ def test_shell_program_reads_the_program_shapes(text, expected):
     assert _program(text) == expected
 
 
+@pytest.mark.parametrize("command", [
+    "if bash -c 'git reset --hard'; then echo done; fi",
+    "while bash -c 'git reset --hard'; do echo x; done",
+    "until bash -c 'git reset --hard'; do echo x; done",
+])
+def test_a_program_in_a_conditional_command_position_is_read(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", _RESET), command
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'exec \"$@\"' _ git reset --hard",
+    "bash -c '`printf \"git reset --hard\"`'",
+    "bash -c '$(printf \"git reset --hard\")'",
+])
+def test_substitution_or_positional_execution_in_a_program_is_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'git reset $FLAGS'",
+    "bash -c 'git $SUBCOMMAND --hard'",
+    r"bash -c 'g\it reset --hard'",
+])
+def test_unreadable_inner_program_cannot_hide_discard(command, dirty_repo, monkeypatch):
+    monkeypatch.setenv("FLAGS", "--hard")
+    monkeypatch.setenv("SUBCOMMAND", "reset")
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+@pytest.mark.parametrize("shell", ["bash", "sh", "zsh"])
+def test_variable_script_path_without_c_remains_allowed(shell, dirty_repo, monkeypatch):
+    with open(os.path.join(dirty_repo, "harmless.sh"), "w") as f:
+        f.write("printf hi\n")
+    monkeypatch.setenv("SCRIPT", "harmless.sh")
+    command = f'{shell} "./$SCRIPT"'
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
 def test_split_segments_with_ends_names_the_boundary_that_flushed_each_segment():
     assert wg._split_segments_with_ends("eval 'git' `echo x`; ls") == [
         ("eval 'git'", "`"), ("echo x", "`"), ("ls", ""),

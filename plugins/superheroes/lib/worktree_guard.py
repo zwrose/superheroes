@@ -25,7 +25,7 @@ _DESTRUCTIVE_SUBCOMMANDS = frozenset({
 })
 
 _SHELL_PREFIXES = frozenset({
-    "!", "then", "do", "else", "elif", "(", ";;",
+    "!", "then", "do", "else", "elif", "if", "while", "until", "(", ";;",
 })
 
 # Sentences carried word for word by more than one template below; no braces, so each
@@ -801,9 +801,19 @@ def _shell_program(raw_tokens):
         break
     if i >= len(raw_tokens):
         return ("unreadable", None) if saw_c else None
+    if not saw_c:
+        # A script-file operand is not read; a bare leading expansion could itself be `-c`.
+        return ("unreadable", None) if raw_tokens[i][:1] in ("$", "`") else None
     if not re.fullmatch(_WORD, raw_tokens[i]):
         return ("unreadable", None)
-    return ("program", _plain_word(raw_tokens[i])) if saw_c else None
+    program = _plain_word(raw_tokens[i])
+    # Operands after the program are its positional parameters: `exec "$@"` would run them.
+    if i + 1 < len(raw_tokens) and "$" in program:
+        return ("unreadable", None)
+    # A substitution inside the program hides the command it produces from the one-level read.
+    if "`" in program or "$(" in program:
+        return ("unreadable", None)
+    return ("program", program)
 
 
 def segment_accounting(command, cwd=None, _depth=0):
@@ -843,7 +853,10 @@ def segment_accounting(command, cwd=None, _depth=0):
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
         _, tokens = _command_tokens(tokens)
-        if _depth >= 1 and tokens and ("$" in tokens[0] or "`" in tokens[0]):
+        if _depth >= 1 and tokens and (
+                any(c in tokens[0] for c in "$`\\")
+                or (_is_git_token(tokens[0])
+                    and any(c in tok for tok in tokens[1:] for c in "$`\\"))):
             records.append({"segment": segment, "kind": "unreadable-program", "action": None})
             continue
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
