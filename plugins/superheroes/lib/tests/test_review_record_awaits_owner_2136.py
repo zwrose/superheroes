@@ -200,6 +200,8 @@ def test_the_sheet_reads_awaits_owner_exactly_as_not_reviewed():
     # axis: pr_sheet's gap reader; awaits-owner (or an unknown status) dropping the gap and leftover lines
     awaiting, unread = _sheet_history("awaits-owner"), _sheet_history("not-reviewed")
     assert awaiting == unread
+    assert _sheet_history("future-status") == unread
+    assert _sheet_history(None) == unread
     assert fill("historyLeftovers", count=2) == "2 findings are left for you below."
     assert awaiting.count("2 findings are left for you below.") == 1
     assert _sheet_history("reviewed") != unread
