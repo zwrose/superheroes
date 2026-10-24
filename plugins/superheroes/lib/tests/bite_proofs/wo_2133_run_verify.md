@@ -195,3 +195,157 @@ pytest exit: 1
 3 passed in 4.24s
 pytest exit: 0
 ```
+
+---
+
+# Work order B (#2133) addendum: the process-group kill in `_run_in_process_group`
+
+**Provenance:** claude / sonnet-5.5 (implementer, order wo-2133-b), maker family anthropic. Production under proof: `plugins/superheroes/lib/round_driver.py` (`_run_in_process_group`). Tests: `plugins/superheroes/lib/tests/test_round_driver_run_verify_2133.py`.
+
+Declared guarded-element set (from order B): **G5**, **G6**. Each was neutralized by one targeted Edit (the two `os.killpg` calls are textually identical, so each Edit carries its `except` line as context to occur once), the proving node run alone by exact node id (no `-n auto`, no `-k`), the inverse Edit applied, `git diff --stat 288328ca -- plugins/superheroes/lib/round_driver.py` taken (the file carries order B's item-1 edits, so the receipt is "unchanged from the pre-neutralization stat", not "empty": `194 ++++-----, 100 insertions(+), 94 deletions(-)` before G5, after G5's restore and after G6's restore), and the same node run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used.
+
+Capture directory (outside the repository; every pytest run is redirected there unfiltered, `pytest exit: N` appended as the last line of each file):
+`/tmp/claude-0/-home-user-superheroes/e97672d9-3217-5822-bed0-00a86a030606/scratchpad/wo-2133-b/`
+
+| ID | Guarded element | Axis | Proving node | Captures (red / green) |
+|---|---|---|---|---|
+| G5 | the group kill on timeout (`os.killpg(proc.pid, signal.SIGKILL)` in the `except subprocess.TimeoutExpired` branch, `round_driver.py:13027`) | a timed-out command leaves no live descendant: the whole process group is killed, not only the shell | `test_round_driver_run_verify_2133.py::test_a_timeout_kills_the_whole_process_group` | `G5_red.txt` / `G5_green.txt` |
+| G6 | the group kill in the `except BaseException` branch (`os.killpg(proc.pid, signal.SIGKILL)`, `round_driver.py:13034`) | an interrupted or failed wait that abandons the child leaves no live descendant | `test_round_driver_run_verify_2133.py::test_an_interrupted_wait_kills_the_whole_process_group` | `G6_red.txt` / `G6_green.txt` |
+
+## Disclosures
+
+- G5's red is the elapsed-time assertion, not the pid check. With only the shell killed, the background `sleep 30` keeps the output pipe open, so the second `communicate()` returns only when that `sleep` ends by itself (30.0 s); by then the pid is gone on its own and the order's "pid gone within 5 s" check alone would pass against the defect. The test therefore also asserts the call returned in under 15 s (a normal run returns in about 1 s), and that assertion is what goes red. The pid check still guards a kill that returns early but spares the child.
+- G6's red is the pid check itself: the child's `sleep 30` outlives the interrupted wait (pid 29 in the capture), because the shell's death closes nothing the test waits on.
+- `_pid_gone` polls `os.kill(pid, 0)` until `ProcessLookupError`, and also counts a zombie (`/proc/<pid>/stat` state `Z`/`X`) as gone: a killed orphan is re-parented, and in a container whose pid 1 never reaps it would stay a zombie that `os.kill(pid, 0)` still finds, which would make the green run flaky. A live process (state `S`, as in both reds) is never counted as gone.
+- Both tests clean up in a `finally` (SIGKILL of the recorded pid if it is still there), so a red run leaves nothing behind.
+- Neutralizations: G5 `os.killpg(proc.pid, signal.SIGKILL)` replaced by `proc.kill()` in the `TimeoutExpired` branch; G6 the same replacement in the `BaseException` branch. The `except OSError: proc.kill()` fallback stays in both, so each branch still kills the shell.
+- Order B renamed `_run_verify_publish_locked` to `_run_verify_publish` (it now takes the session lock itself, so `_locked` would mislead); G4 above names the old function and its line numbers as taken at order A3. The slot re-check it guards is unchanged and still proven by the same three `test_e11_...` ids, which pass in the order B runs.
+- Redaction: none needed; local `/tmp/claude-0/...` paths are kept as printed. Captures are under 32 KiB each.
+
+---
+
+## G5: the group kill on timeout
+
+- **axis:** a timed-out command leaves no live descendant (the whole group is killed)
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_run_in_process_group`, line 13027):
+```diff
+-                os.killpg(proc.pid, signal.SIGKILL)
++                proc.kill()
+```
+
+**red capture:** `G5_red.txt` (exit 1), excerpt:
+```
+F                                                                        [100%]
+_________________ test_a_timeout_kills_the_whole_process_group _________________
+[...]
+>           assert elapsed < 15, "the call took %.1fs; the group was not killed at the timeout" % elapsed
+E           AssertionError: the call took 30.0s; the group was not killed at the timeout
+E           assert 30.0042493990004 < 15
+[...]
+FAILED plugins/superheroes/lib/tests/test_round_driver_run_verify_2133.py::test_a_timeout_kills_the_whole_process_group
+1 failed in 32.08s
+pytest exit: 1
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`proc.kill()` back to `os.killpg(proc.pid, signal.SIGKILL)` in the `TimeoutExpired` branch).
+
+**restore receipt** (`git diff --stat 288328ca -- plugins/superheroes/lib/round_driver.py` equals its pre-neutralization value; line 13027 read back):
+```
+ plugins/superheroes/lib/round_driver.py | 194 ++++++++++++++++----------------
+ 1 file changed, 100 insertions(+), 94 deletions(-)
+```
+```
+                os.killpg(proc.pid, signal.SIGKILL)
+```
+
+**green capture:** `G5_green.txt` (exit 0), same id:
+```
+.                                                                        [100%]
+1 passed in 3.15s
+pytest exit: 0
+```
+
+---
+
+## G6: the group kill in the `BaseException` branch
+
+- **axis:** an interrupted or failed wait that abandons the child leaves no live descendant
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_run_in_process_group`, line 13034):
+```diff
+-                os.killpg(proc.pid, signal.SIGKILL)
++                proc.kill()
+```
+
+**red capture:** `G6_red.txt` (exit 1), excerpt:
+```
+F                                                                        [100%]
+____________ test_an_interrupted_wait_kills_the_whole_process_group ____________
+[...]
+>           assert _pid_gone(pid), "the background child %d outlived the interrupted wait" % pid
+E           AssertionError: the background child 29 outlived the interrupted wait
+E           assert False
+E            +  where False = _pid_gone(29)
+[...]
+FAILED plugins/superheroes/lib/tests/test_round_driver_run_verify_2133.py::test_an_interrupted_wait_kills_the_whole_process_group
+1 failed in 12.17s
+pytest exit: 1
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`proc.kill()` back to `os.killpg(proc.pid, signal.SIGKILL)` in the `BaseException` branch).
+
+**restore receipt** (`git diff --stat 288328ca -- plugins/superheroes/lib/round_driver.py` equals its pre-neutralization value; lines 13027-13036 read back by a grep for `os.killpg|proc.kill()` show both `os.killpg(proc.pid, signal.SIGKILL)` calls at 13027 and 13034 and both fallback `proc.kill()` at 13029 and 13036):
+```
+ plugins/superheroes/lib/round_driver.py | 194 ++++++++++++++++----------------
+ 1 file changed, 100 insertions(+), 94 deletions(-)
+```
+
+**green capture:** `G6_green.txt` (exit 0), same id:
+```
+.                                                                        [100%]
+1 passed in 1.10s
+pytest exit: 0
+```
+
+## G7: `_verify_via_row`'s configured-command fallback
+
+- **axis:** a local verify submitted without a `command` records the session's configured `verifyCommand`, not `None` (the hand-submit path; the verb path always carries a command)
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_verify_via_row`, line 5559):
+```diff
+-            else config.get("verifyCommand")}
++            else None}
+```
+
+**red capture:** `G7_red.txt` (exit 1), excerpt, run alone by exact id `plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_a_local_verify_without_a_command_records_the_configured_one`:
+```
+F                                                                        [100%]
+[...]
+>       assert TA._state(d)["rounds"]["1"]["verifyVia"] == {"via": "local", "command": "make verify"}
+E       AssertionError: assert {'command': N...via': 'local'} == {'via': 'loca...'make verify'}
+E         Differing items:
+E         {'command': None} != {'command': 'make verify'}
+[...]
+FAILED plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_a_local_verify_without_a_command_records_the_configured_one
+1 failed in 2.11s
+pytest exit: 1
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`else None}` back to `else config.get("verifyCommand")}`).
+
+**restore receipt** (`git diff --stat bdf29cc5 -- plugins/superheroes/lib/round_driver.py` shows only the stdin change, and lines 5557-5559 read back):
+```
+ plugins/superheroes/lib/round_driver.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+    command = artifact.get("command")
+    return {"via": "local", "command": command if isinstance(command, str) and command
+            else config.get("verifyCommand")}
+```
+
+**green capture:** `G7_green.txt` (exit 0), same id:
+```
+.                                                                        [100%]
+1 passed in 2.17s
+pytest exit: 0
+```

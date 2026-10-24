@@ -48,6 +48,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -10540,6 +10541,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "FIX_BATCH_SHA256",
     "FIXER_STEP_5_BLOCK",
     "FIXER_ESCALATION_BLOCK",
+    "FILE_WRITE_RULE",
     "PR_BODY_LINE",
 })
 
@@ -12957,78 +12959,110 @@ def _run_verify_release_claim(claim_path, token):
 
 
 def _run_verify_open(session_dir):
-    """Under the session lock: gate, resolve the verify slot, take the claim. Returns a refusal body,
-    or the claim dict `_run_verify_run_and_publish` carries on with."""
-    upgrade = _upgrade_gate(session_dir, RUN_VERIFY_CMD)
-    if upgrade is not None:
-        return upgrade
-    refusal = _commit_recover_or_refuse(session_dir, RUN_VERIFY_CMD)
-    if refusal is not None:
-        return refusal
-    state, refusal = _load_driver_state(session_dir, RUN_VERIFY_CMD)
-    if refusal is not None:
-        return refusal
-    slot = _run_verify_slot(state)
-    if slot is None:
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-not-pending",
-                           detail="the pending step opens no verify slot")
-    rnd, attempt = slot
-    skey = round_records.storage_key("verify")
-    try:
-        landing_path = round_records.bare_payload_path(session_dir, rnd, P_VERIFY, skey, attempt)
-        record_path = round_records.store_path(session_dir, rnd, P_VERIFY, skey, attempt)
-        landing_dir = round_records.landing_dir(session_dir, rnd, P_VERIFY)
-    except ValueError as exc:
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-not-pending", phase=P_VERIFY,
-                           rnd=rnd, attempt=attempt, detail=str(exc))
-    if _store_file_exists(landing_path) or _store_file_exists(record_path):
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-already-landed",
-                           phase=P_VERIFY, rnd=rnd, attempt=attempt, path=landing_path,
-                           storePath=record_path)
-    config = state.get("config") or {}
-    command = _verify_command(config)
-    bash = None
-    if _verify_command_configured(config):
-        bash = shutil.which("bash")
-        if bash is None:
-            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-no-bash", phase=P_VERIFY,
-                               rnd=rnd, attempt=attempt,
-                               detail="bash is not on PATH; the verify command runs under bash -c")
-    try:
-        os.makedirs(landing_dir, exist_ok=True)
-    except OSError as exc:
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-claim-failed", phase=P_VERIFY,
-                           rnd=rnd, attempt=attempt, detail=str(exc))
-    claim_path = os.path.join(landing_dir, RUN_VERIFY_CLAIM_NAME % attempt)
-    status, token, stale = _run_verify_take_claim(claim_path)
-    if status == "in-progress":
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-in-progress", phase=P_VERIFY,
-                           rnd=rnd, attempt=attempt, claimPath=claim_path)
-    if status != "ok":
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-claim-failed", phase=P_VERIFY,
-                           rnd=rnd, attempt=attempt, claimPath=claim_path)
-    return {"slot": slot, "config": config, "command": command, "bash": bash,
-            "landingPath": landing_path, "recordPath": record_path, "landingDir": landing_dir,
-            "claimPath": claim_path, "token": token, "stale": stale}
+    """Takes the session lock itself, then: gate, resolve the verify slot, take the claim. Returns a
+    refusal body, or the claim dict `_run_verify_run_and_publish` carries on with. Raises
+    `round_records.SessionLockHeld` when the lock is held elsewhere."""
+    with round_records.session_lock(session_dir):
+        upgrade = _upgrade_gate(session_dir, RUN_VERIFY_CMD)
+        if upgrade is not None:
+            return upgrade
+        refusal = _commit_recover_or_refuse(session_dir, RUN_VERIFY_CMD)
+        if refusal is not None:
+            return refusal
+        state, refusal = _load_driver_state(session_dir, RUN_VERIFY_CMD)
+        if refusal is not None:
+            return refusal
+        slot = _run_verify_slot(state)
+        if slot is None:
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-not-pending",
+                               detail="the pending step opens no verify slot")
+        rnd, attempt = slot
+        skey = round_records.storage_key("verify")
+        try:
+            landing_path = round_records.bare_payload_path(session_dir, rnd, P_VERIFY, skey, attempt)
+            record_path = round_records.store_path(session_dir, rnd, P_VERIFY, skey, attempt)
+            landing_dir = round_records.landing_dir(session_dir, rnd, P_VERIFY)
+        except ValueError as exc:
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-not-pending", phase=P_VERIFY,
+                               rnd=rnd, attempt=attempt, detail=str(exc))
+        if _store_file_exists(landing_path) or _store_file_exists(record_path):
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-already-landed",
+                               phase=P_VERIFY, rnd=rnd, attempt=attempt, path=landing_path,
+                               storePath=record_path)
+        config = state.get("config") or {}
+        command = _verify_command(config)
+        bash = None
+        if _verify_command_configured(config):
+            bash = shutil.which("bash")
+            if bash is None:
+                return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-no-bash", phase=P_VERIFY,
+                                   rnd=rnd, attempt=attempt,
+                                   detail="bash is not on PATH; the verify command runs under bash -c")
+        try:
+            os.makedirs(landing_dir, exist_ok=True)
+        except OSError as exc:
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-claim-failed", phase=P_VERIFY,
+                               rnd=rnd, attempt=attempt, detail=str(exc))
+        claim_path = os.path.join(landing_dir, RUN_VERIFY_CLAIM_NAME % attempt)
+        status, token, stale = _run_verify_take_claim(claim_path)
+        if status == "in-progress":
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-in-progress", phase=P_VERIFY,
+                               rnd=rnd, attempt=attempt, claimPath=claim_path)
+        if status != "ok":
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-claim-failed", phase=P_VERIFY,
+                               rnd=rnd, attempt=attempt, claimPath=claim_path)
+        return {"slot": slot, "config": config, "command": command, "bash": bash,
+                "landingPath": landing_path, "recordPath": record_path, "landingDir": landing_dir,
+                "claimPath": claim_path, "token": token, "stale": stale}
+
+
+_POST_KILL_DRAIN_SECONDS = 2
 
 
 def _run_in_process_group(argv, *, timeout=None, **kwargs):
     """subprocess.run in its own process group; on timeout the whole group is killed, so a
     compound verify command leaves no surviving descendants."""
     kwargs.pop("start_new_session", None)
-    with subprocess.Popen(argv, start_new_session=True, **kwargs) as proc:
+    kwargs.pop("stdin", None)
+
+    def _on_sigterm(signum, frame):
+        # The child sits in its own session, so cancelling the driver's group never reaches it;
+        # turning SIGTERM into an exception runs the group-kill cleanup below.
+        raise SystemExit(128 + signal.SIGTERM)
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _on_sigterm)
+    except ValueError:  # not the main thread: no handler can be installed
+        previous = None
+    try:
+        return _run_in_process_group_supervised(argv, timeout, kwargs)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+
+
+def _run_in_process_group_supervised(argv, timeout, kwargs):
+    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True, **kwargs) as proc:
         try:
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(proc.pid, 9)
+                os.killpg(proc.pid, signal.SIGKILL)
             except OSError:
                 proc.kill()
-            out, _ = proc.communicate()
+            try:
+                out, _ = proc.communicate(timeout=_POST_KILL_DRAIN_SECONDS)
+            except subprocess.TimeoutExpired as drain:
+                # A descendant that left the group (its own session) still holds the pipe open:
+                # return what was read and release the pipes rather than wait on it.
+                out = drain.output
+                for pipe in (proc.stdout, proc.stderr):
+                    if pipe is not None:
+                        pipe.close()
             raise subprocess.TimeoutExpired(argv, timeout, output=out)
         except BaseException:
             try:
-                os.killpg(proc.pid, 9)
+                os.killpg(proc.pid, signal.SIGKILL)
             except OSError:
                 proc.kill()
             raise
@@ -13073,39 +13107,45 @@ def _run_verify_execute(session_dir, claim, timeout, run):
             "command": command, "ranBy": "round-driver"}, None
 
 
-def _run_verify_publish_locked(session_dir, claim, payload):
-    """Under the session lock: re-check the slot, then land the payload and its journal row in one
-    commit. State is not touched, so the state hash the audits echo does not move."""
-    rnd, attempt = claim["slot"]
-    refusal = _commit_recover_or_refuse(session_dir, RUN_VERIFY_CMD)
-    if refusal is not None:
-        return refusal
-    state, refusal = _load_driver_state(session_dir, RUN_VERIFY_CMD)
-    if refusal is not None:
-        return refusal
-    # axis: the slot is re-read under the lock before anything lands — a result computed for a slot that moved or filled is never published — see bite-proof record wo_2133_run_verify
-    if (_run_verify_slot(state) != claim["slot"] or _store_file_exists(claim["landingPath"])
-            or _store_file_exists(claim["recordPath"])):
-        return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-slot-moved", phase=P_VERIFY,
-                           rnd=rnd, attempt=attempt, path=claim["landingPath"])
-    payload_sha = round_records.payload_sha256(payload)
-    entry = _journal_entry_for_commit(session_dir, RUN_VERIFY_CMD, "landed", phase=P_VERIFY,
-                                      round=rnd, attempt=attempt, payloadSha256=payload_sha,
-                                      ts=time.time())
-    try:
-        c = round_commit.begin(session_dir, "run-verify-land")
-        c.add_replace_file(claim["landingPath"], round_records.canonical(payload).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, RUN_VERIFY_CMD, exc, phase=P_VERIFY, rnd=rnd,
-                                        attempt=attempt)
-    out = {"ok": True, "result": payload["result"], "round": rnd, "attempt": attempt,
-           "landingPath": claim["landingPath"], "outputPath": payload.get("outputPath"),
-           "payloadSha256": payload_sha}
-    if claim["stale"]:
-        out["staleClaimTakenOver"] = True
-    return out
+def _run_verify_publish(session_dir, claim, payload, acquired):
+    """Takes the session lock itself, then re-checks the slot and lands the payload and its journal
+    row in one commit. State is not touched, so the state hash the audits echo does not move.
+
+    `acquired` is a list the helper appends to once the lock is held, so the caller can tell a
+    `SessionLockHeld` refused at acquisition (contention) from one raised under the held lock.
+    (Renamed from `_run_verify_publish_locked`: the lock is now taken here, not by the caller.)"""
+    with round_records.session_lock(session_dir):
+        acquired.append(True)
+        rnd, attempt = claim["slot"]
+        refusal = _commit_recover_or_refuse(session_dir, RUN_VERIFY_CMD)
+        if refusal is not None:
+            return refusal
+        state, refusal = _load_driver_state(session_dir, RUN_VERIFY_CMD)
+        if refusal is not None:
+            return refusal
+        # axis: the slot is re-read under the lock before anything lands — a result computed for a slot that moved or filled is never published — see bite-proof record wo_2133_run_verify
+        if (_run_verify_slot(state) != claim["slot"] or _store_file_exists(claim["landingPath"])
+                or _store_file_exists(claim["recordPath"])):
+            return _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-slot-moved", phase=P_VERIFY,
+                               rnd=rnd, attempt=attempt, path=claim["landingPath"])
+        payload_sha = round_records.payload_sha256(payload)
+        entry = _journal_entry_for_commit(session_dir, RUN_VERIFY_CMD, "landed", phase=P_VERIFY,
+                                          round=rnd, attempt=attempt, payloadSha256=payload_sha,
+                                          ts=time.time())
+        try:
+            c = round_commit.begin(session_dir, "run-verify-land")
+            c.add_replace_file(claim["landingPath"], round_records.canonical(payload).encode("utf-8"))
+            c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
+            c.run()
+        except round_commit.CommitRefused as exc:
+            return _commit_refused_response(session_dir, RUN_VERIFY_CMD, exc, phase=P_VERIFY, rnd=rnd,
+                                            attempt=attempt)
+        out = {"ok": True, "result": payload["result"], "round": rnd, "attempt": attempt,
+               "landingPath": claim["landingPath"], "outputPath": payload.get("outputPath"),
+               "payloadSha256": payload_sha}
+        if claim["stale"]:
+            out["staleClaimTakenOver"] = True
+        return out
 
 
 def _run_verify_run_and_publish(session_dir, claim, timeout, run, sleep, clock, lock_wait):
@@ -13115,11 +13155,9 @@ def _run_verify_run_and_publish(session_dir, claim, timeout, run, sleep, clock, 
     rnd, attempt = claim["slot"]
     deadline = clock() + lock_wait
     while True:
-        acquired = False
+        acquired = []
         try:
-            with round_records.session_lock(session_dir):
-                acquired = True
-                return _run_verify_publish_locked(session_dir, claim, payload)
+            return _run_verify_publish(session_dir, claim, payload, acquired)
         except round_records.SessionLockHeld:
             if acquired:
                 raise
@@ -13147,8 +13185,7 @@ def cmd_run_verify(session_dir, timeout=3600, *, run=None, sleep=None, clock=Non
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
     try:
-        with round_records.session_lock(session_dir):
-            claim = _run_verify_open(session_dir)
+        claim = _run_verify_open(session_dir)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, RUN_VERIFY_CMD, held)
     if "slot" not in claim:
