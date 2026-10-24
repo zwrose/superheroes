@@ -1,0 +1,672 @@
+"""Tests for the launcher's refusal of an adoption whose original cloud builder is still live (issue #2119).
+
+A premise that carries `adoptsBranch` reaches no reservation, worktree, cloud command or spawn while an
+earlier cloud lane for the same issue has a session the recorded host listing shows live, and none when
+that cannot be decided. Everything else refuses `adopt-original-session-live` or
+`adopt-original-session-unread` before anything is spent. Nothing here touches the network: the
+repositories are throwaway, with a bare remote under tmp_path for the cloud path, and the host listings
+are the recorded files under fixtures/cloud_sessions.
+"""
+import calendar
+import json
+import os
+import time
+
+import pytest
+
+import cloud_recover as CR
+import launch_ledger as ll
+
+from test_launcher import (
+    L,
+    _all_checks,
+    _head_sha,
+    _make_spawn_fn,
+    _valid_premise,
+)
+from test_launcher_cloud import (  # noqa: F401  (_isolated is an autouse fixture)
+    _assert_refused_cloud_lane,
+    _cloud_repo,
+    _fake_spawn,
+    _git,
+    _isolated,
+    _launch,
+)
+
+TOKEN_LIVE = "adopt-original-session-live"
+TOKEN_UNREAD = "adopt-original-session-unread"
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "cloud_sessions")
+LANE_ID = "lane-a"
+SESSION_ID = "session_01FixtureLane0000000000"
+SESSION_TITLE = "issue-656-fixturelane000001"
+HEX40 = "c" * 40
+# The seeded lane started at a fixed instant (2026-10-24T12:00:00Z) so the recorded fixture rows,
+# created at 11:13:25Z, are older than it whatever the clock reads when the suite runs.
+LANE_STARTED_TS = calendar.timegm((2026, 10, 24, 12, 0, 0))
+# The environment the recorded newest-page row (list_page_recorded_newest.json) was created in.
+RECORDED_ENVIRONMENT = "env_01UTDZ5skRKJT1PhMdo3k936"
+
+
+def _fixture(name):
+    return os.path.join(FIXTURES, name)
+
+
+def _write_listing(tmp_path, value, name="listing.json"):
+    path = tmp_path / name
+    path.write_text(value if isinstance(value, str) else json.dumps(value))
+    return str(path)
+
+
+def _seed_lane(
+    repo, launch_id=LANE_ID, *, session_id=SESSION_ID, title=SESSION_TITLE, outcome="handback",
+    issue=656, environment="env-1",
+):
+    """An earlier cloud lane for the issue that started a session, ended with `outcome` (None: still running)."""
+    assert ll.append(repo, {
+        "event": "reserved", "launchId": launch_id, "ts": LANE_STARTED_TS - 60, "schema": ll.SCHEMA,
+        "batchId": "wave-test", "repoId": ll.repo_identity(repo), "issue": issue,
+        "surfaces": ["plugins/x-%s" % launch_id], "premise": {"issue": issue, "baseCommit": HEX40},
+        "preflight": {}, "argv": [], "doctrineDigest": "abc123", "model": "test-model",
+        "place": ll.PLACE_CLOUD, "cloudEnvironment": environment, "pluginVersion": "1.2.3",
+        "configDir": "/cfg/acct",
+    })
+    started = {
+        "event": "started", "launchId": launch_id, "ts": LANE_STARTED_TS, "schema": ll.SCHEMA,
+        "attempt": 1, "pid": 999999999, "logPath": "/tmp/log", "errPath": "/tmp/err",
+        "cloudSessionName": title, "cloudSessionUrl": "https://claude.ai/code/session_x",
+    }
+    if session_id is not None:
+        started["cloudSessionId"] = session_id
+    else:
+        started["cloudSessionUnconfirmed"] = True
+    assert ll.append(repo, started)
+    if outcome is not None:
+        assert ll.record_outcome(repo, launch_id, outcome, "ended")["ok"]
+
+
+def _assess(repo, launch_id=LANE_ID, evidence="handover"):
+    entry = {
+        "verdict": "stopped", "evidence": evidence, "at": "2026-10-24T00:00:00Z",
+        "stoppedAt": None, "handoverSha": HEX40,
+    }
+    assert CR._record(repo, "assessed", launch_id, entry)["ok"]
+
+
+def _adoption(repo):
+    """An adoption premise that passes the head-on-base check: the checkout's head is its own base."""
+    branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+    head = _head_sha(repo)
+    return _valid_premise(repo, baseCommit=head, adoptsBranch=branch, adoptsHead=head)
+
+
+def _adopt(repo, tmp_path, listing=None):
+    calls = []
+    kwargs = {} if listing is None else {"cloud_sessions_file": listing}
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls), premise=_adoption(repo), **kwargs)
+    return result, calls
+
+
+def _refused_unread(repo, result, calls, failed):
+    _assert_refused_cloud_lane(repo, result, TOKEN_UNREAD, "original-session")
+    assert result["failedRead"] == failed
+    assert result["remedy"] == L._ADOPT_ORIGINAL_REMEDY_UNREAD
+    assert calls == []
+
+
+def _proceeds(result, calls):
+    assert result["ok"] is True, result
+    assert len(calls) == 1
+
+
+# --- a live original builder refuses ------------------------------------------------------
+
+
+def test_a_handed_back_builder_whose_session_the_host_shows_live_refuses(tmp_path):
+    # axis: the field case — a handed-back builder still listed running refuses the adoption before spend
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"))
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"] == [{
+        "launchId": LANE_ID, "cloudSessionName": SESSION_TITLE, "cloudSessionId": SESSION_ID,
+        "sessionStatus": "SESSION_STATUS_RUNNING",
+        "statusBucket": "SESSION_STATUS_BUCKET_REVIEW_READY",
+    }]
+    assert result["remedy"] == L._ADOPT_ORIGINAL_REMEDY_LIVE
+    assert calls == []
+
+
+def test_a_complete_listing_page_that_shows_the_session_running_refuses(tmp_path):
+    # axis: a complete list page that holds the lane's running session refuses live
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_running.json"))
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert result["originalSessions"][0]["statusBucket"] == "SESSION_STATUS_BUCKET_WORKING"
+    assert calls == []
+
+
+def test_a_session_failed_assessment_does_not_exempt_a_live_session(tmp_path):
+    # axis: only a handover-stopped assessment exempts a lane; a session-failed one leaves the listing to decide
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _assess(repo, evidence="session-failed")
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_running.json"))
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert calls == []
+
+
+def test_a_matched_row_with_no_status_fields_is_live(tmp_path):
+    # axis: a matched row whose status is unknown or absent is live, never gone
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    listing = _write_listing(tmp_path, {"data": [{"id": SESSION_ID}], "has_more": False})
+    result, calls = _adopt(repo, tmp_path, listing)
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["sessionStatus"] is None
+    assert result["originalSessions"][0]["statusBucket"] is None
+    assert calls == []
+
+
+def test_a_lane_whose_session_id_was_never_confirmed_matches_by_title(tmp_path):
+    # axis: a lane with no confirmed session id is matched by its session name
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, session_id=None)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_running.json"))
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["cloudSessionId"] is None
+    assert calls == []
+
+
+# --- a listing that cannot be read or that does not cover the lane refuses ----------------
+
+
+def test_a_prior_cloud_lane_and_no_listing_refuses_not_given(tmp_path):
+    # axis: an adoption over a lane that started a session with no listing given refuses unread
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_missing_listing_file_refuses_listing_file(tmp_path):
+    # axis: a listing path that cannot be opened refuses unread
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, str(tmp_path / "no-such-listing.json"))
+    _refused_unread(repo, result, calls, "listing-file")
+
+
+def test_a_listing_that_is_not_json_refuses_listing_json(tmp_path):
+    # axis: a listing that does not parse refuses unread
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, '{"data": ['))
+    _refused_unread(repo, result, calls, "listing-json")
+
+
+def test_a_listing_with_a_duplicate_key_refuses_listing_json(tmp_path):
+    # axis: a duplicate key anywhere in the listing refuses unread, since the reader cannot say which won
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    text = (
+        '{"data": [{"id": "%s", "session_status": "SESSION_STATUS_ARCHIVED", '
+        '"session_status": "SESSION_STATUS_RUNNING"}], "has_more": false}' % SESSION_ID
+    )
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, text))
+    _refused_unread(repo, result, calls, "listing-json")
+
+
+@pytest.mark.parametrize("shape", [
+    [],
+    {"data": "x"},
+    {"id": 5},
+    {"data": [{"id": SESSION_ID, "status_bucket": 7}], "has_more": False},
+    {"data": [{"id": SESSION_ID, "archived": "yes"}], "has_more": False},
+    {"data": [{"id": SESSION_ID}], "has_more": "no"},
+    {"data": [{"title": "no id"}], "has_more": False},
+    '"a string"',
+], ids=[
+    "empty-array", "data-not-a-list", "id-not-a-string", "status-bucket-not-a-string",
+    "archived-not-a-bool", "has-more-not-a-bool", "row-without-id", "not-an-object",
+])
+def test_a_listing_that_is_not_a_host_shape_refuses_listing_shape(tmp_path, shape):
+    # axis: a listing that is not a recorded host shape refuses unread
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, shape))
+    _refused_unread(repo, result, calls, "listing-shape")
+
+
+def test_a_page_with_more_to_read_that_lacks_the_lane_refuses_incomplete(tmp_path):
+    # axis: absence from a page with has_more true proves nothing, so the lane is unproven
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_more.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_get_session_result_for_another_session_refuses_incomplete(tmp_path):
+    # axis: a get_session result covers only the session it returns, never one that is gone
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_unrelated.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_two_complete_pages_that_lack_a_lane_refuse_incomplete(tmp_path):
+    # axis: only exactly one complete page proves absence; an array of pages does not
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, "lane-a")
+    _seed_lane(repo, "lane-b", session_id="session_01FixtureLaneB000000000", title="issue-656-fixturelane00000b")
+    with open(_fixture("list_page_complete_archived.json")) as fh:
+        lane_a_archived = json.load(fh)
+    with open(_fixture("list_page_complete_without.json")) as fh:
+        without = json.load(fh)
+    listing = _write_listing(tmp_path, [lane_a_archived, without])
+    result, calls = _adopt(repo, tmp_path, listing)
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == ["lane-b"]
+
+
+def test_a_live_lane_wins_over_an_unproven_one(tmp_path):
+    # axis: a live candidate refuses live even when another candidate is unproven in the same launch
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, "lane-a")
+    _seed_lane(repo, "lane-b", session_id="session_01FixtureLaneB000000000", title="issue-656-fixturelane00000b")
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"))
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert [s["launchId"] for s in result["originalSessions"]] == ["lane-a"]
+    assert calls == []
+
+
+def _page_of(rows):
+    return {"data": rows, "has_more": False}
+
+
+def _unrelated_row(created_at, row_id="session_01Unrelated0000000000", environment_id=None):
+    row = {"id": row_id, "title": "issue-1-other", "created_at": created_at}
+    if environment_id is not None:
+        row["environment_id"] = environment_id
+    return row
+
+
+def test_a_complete_page_whose_rows_are_all_older_than_the_lane_start_refuses_incomplete(tmp_path):
+    # axis: a has_more-false page older than the lane start is a cursor-read last page, which proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    listing = _write_listing(tmp_path, _page_of([_unrelated_row("2026-10-24T11:59:59.000000Z")]))
+    result, calls = _adopt(repo, tmp_path, listing)
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_complete_page_whose_rows_are_out_of_created_order_refuses_incomplete(tmp_path):
+    # axis: rows not newest-created first prove nothing about the page's span; the first row is newer than the lane start, so only the order check can refuse it
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01First000000000000000", environment_id="env-1"),
+        _unrelated_row("2026-10-24T10:00:00.000000Z", "session_01Second00000000000000", environment_id="env-1"),
+        _unrelated_row("2026-10-24T14:00:00.000000Z", "session_01Third000000000000000", environment_id="env-1"),
+    ]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+@pytest.mark.parametrize("created_at", [
+    "not-a-time", "2026-10-24T12:00:00", "2026-10-24T12:00:00+02:00", 12345, None,
+], ids=["garbage", "no-zone", "non-utc-zone", "not-a-string", "null"])
+def test_a_complete_page_with_an_unparseable_created_at_refuses_incomplete(tmp_path, created_at):
+    # axis: a created_at that is not an ISO-8601 UTC time proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T13:00:00.000000Z"), _unrelated_row("x", "session_01Bad")]
+    rows[1]["created_at"] = created_at
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_a_complete_page_with_no_created_at_refuses_incomplete(tmp_path):
+    # axis: a row with no created_at proves nothing about the page's span
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    listing = _write_listing(tmp_path, _page_of([{"id": "session_01Unrelated0000000000"}]))
+    result, calls = _adopt(repo, tmp_path, listing)
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_an_empty_complete_page_refuses_incomplete(tmp_path):
+    # axis: an empty page spans no instant, so absence from it proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of([])))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_a_lane_with_no_started_time_is_never_proven_gone(tmp_path, monkeypatch):
+    # axis: a candidate lane with no started timestamp proves nothing by absence
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    real_fold = ll.fold
+
+    def fold_without_started_ts(records):
+        folded = real_fold(records)
+        for info in folded["launches"].values():
+            info.pop("startedTs", None)
+        return folded
+
+    monkeypatch.setattr(ll, "fold", fold_without_started_ts)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_newer.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_a_complete_page_with_a_row_newer_than_the_lane_start_proves_absence(tmp_path):
+    # axis: an ordered page whose newest row is at or after the lane start spans its creation, so absence is proven
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000", "env-1"),
+        _unrelated_row("2026-10-24T12:00:00.000000Z", "session_01AtStart0000000000000"),
+        _unrelated_row("2026-10-24T09:00:00Z", "session_01Older00000000000000"),
+    ]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _proceeds(result, calls)
+
+
+def test_a_newer_row_from_another_environment_refuses_incomplete(tmp_path):
+    # axis: absence is proven only by a row of the lane's own cloud environment, so another account's page proves nothing — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T13:00:00.000000Z", environment_id="env-other")]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_newer_row_with_no_or_non_string_environment_refuses_incomplete(tmp_path):
+    # axis: a row with no environment_id never counts as the absence proof, and a non-string one is not a listing shape — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T13:00:00.000000Z")]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    rows[0]["environment_id"] = 7
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows), "bad.json"))
+    _refused_unread(repo, result, calls, "listing-shape")
+
+
+def test_a_row_only_300_seconds_after_the_lane_start_refuses_incomplete(tmp_path):
+    # axis: a row inside the clock-skew allowance after the lane start cannot prove absence — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T12:05:00Z", environment_id="env-1")]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_an_unconfirmed_lane_with_a_retitled_live_session_is_never_proven_gone(tmp_path):
+    # axis: a lane whose session id was never confirmed is matched by title only, so a live session under another title is not proven gone by a newer row of the same environment — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, session_id=None)
+    rows = [
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000", "env-1"),
+        {
+            "id": "session_01RetitledLive000000000", "title": "Fix the launcher gate",
+            "session_status": "SESSION_STATUS_RUNNING",
+            "status_bucket": "SESSION_STATUS_BUCKET_WORKING",
+            "created_at": "2026-10-24T11:59:30.000000Z", "environment_id": "env-1",
+        },
+    ]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_lane_with_no_cloud_environment_is_never_proven_gone(tmp_path, monkeypatch):
+    # axis: a candidate lane with no cloudEnvironment proves nothing by absence — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    real_fold = ll.fold
+
+    def fold_without_environment(records):
+        folded = real_fold(records)
+        if LANE_ID in folded["launches"]:
+            folded["launches"][LANE_ID]["cloudEnvironment"] = None
+        return folded
+
+    monkeypatch.setattr(ll, "fold", fold_without_environment)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_newer.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+# --- healthy launches proceed -------------------------------------------------------------
+
+
+def test_an_adoption_with_no_prior_cloud_lane_proceeds_without_a_listing(tmp_path):
+    # axis: no earlier lane started a session, so no listing is needed and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_when_a_complete_page_does_not_hold_the_session(tmp_path):
+    # axis: a session absent from one complete page that reaches past the lane start is gone, and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_newer.json"))
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_when_the_session_is_archived(tmp_path):
+    # axis: a session listed archived is not live, and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_archived.json"))
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_when_the_recorded_archived_session_is_listed(tmp_path):
+    # axis: the archived spelling recorded from the live host (SESSION_STATUS_ARCHIVED, bucket COMPLETED) reads not live, and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, session_id="session_01JrM7yEUSzgrgDkpqoPrA7e", title="issue-2118-2ae8a497deff24a2")
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_archived_recorded.json"))
+    _proceeds(result, calls)
+
+
+def test_a_recorded_newest_page_with_more_to_read_refuses_incomplete(tmp_path):
+    # axis: the recorded row is in the lane's environment and created well past the lane start, so only has_more true can refuse it
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, environment=RECORDED_ENVIRONMENT)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_recorded_newest.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_the_recorded_newest_page_with_has_more_false_proves_absence(tmp_path):
+    # axis: the same recorded row and lane with has_more false is a complete page that reaches past the lane start, so the session is gone and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, environment=RECORDED_ENVIRONMENT)
+    with open(_fixture("list_page_recorded_newest.json")) as handle:
+        recorded = json.load(handle)
+    listing = _write_listing(tmp_path, {"data": recorded["data"], "has_more": False})
+    result, calls = _adopt(repo, tmp_path, listing)
+    _proceeds(result, calls)
+
+
+def test_a_live_cloud_lane_of_another_issue_does_not_hold_this_adoption(tmp_path):
+    # axis: only lanes of this issue are candidates, so another issue's live lane (no outcome, its own surfaces, so only the issue scoping is under test) needs no listing — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, "lane-other", issue=999, outcome=None)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_when_the_session_bucket_reads_failed(tmp_path):
+    # axis: a session whose status bucket reads failed is not live, and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_failed.json"))
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_over_a_handover_stopped_lane_with_no_listing(tmp_path):
+    # axis: a lane assess recorded stopped on a handover is exempt and needs no listing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _assess(repo)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_over_a_lane_that_refused_at_intake_with_no_listing(tmp_path):
+    # axis: a lane whose latest outcome is refusal built nothing, so its still-listed session is not an original builder
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, outcome="refusal")
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_a_launch_that_adopts_nothing_is_none_of_the_gates_business(tmp_path):
+    # axis: without adoptsBranch the gate does not apply, whatever earlier cloud lanes exist
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
+    _proceeds(result, calls)
+
+
+# --- unreadable state refuses -------------------------------------------------------------
+
+
+def test_an_unreadable_recover_state_with_a_handed_back_lane_refuses_recover_state(tmp_path):
+    # axis: a recover state that cannot be read refuses unread while a lane still needs it
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    path = CR._state_path(repo, os.environ)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not json at all")
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_without.json"))
+    _refused_unread(repo, result, calls, "recover-state")
+
+
+def test_an_unreadable_recover_state_does_not_matter_when_every_lane_refused_at_intake(tmp_path):
+    # axis: the recover state is read only while a lane still needs it
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, outcome="refusal")
+    path = CR._state_path(repo, os.environ)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not json at all")
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_a_ledger_that_cannot_be_read_refuses_ledger(tmp_path, monkeypatch):
+    # axis: a ledger that cannot be read refuses unread, since the earlier lanes are unknown
+    repo = _cloud_repo(tmp_path)
+    monkeypatch.setattr(L.ll, "read", lambda *args, **kwargs: {"state": "corrupt", "records": []})
+    got = L._original_session_refusal(
+        repo, 656, {"adoptsBranch": "feature/x"}, None, dict(os.environ),
+    )
+    assert got is not None
+    reason, detail = got
+    assert reason == TOKEN_UNREAD
+    assert detail == {"failedRead": "ledger", "remedy": L._ADOPT_ORIGINAL_REMEDY_UNREAD}
+
+
+def test_a_stamped_premise_without_adopts_branch_passes_without_reading_the_ledger(monkeypatch):
+    # axis: a premise that adopts nothing is none of this check's business
+    def boom(*args, **kwargs):
+        raise AssertionError("the ledger must not be read")
+
+    monkeypatch.setattr(L.ll, "read", boom)
+    assert L._original_session_refusal(".", 656, {"baseCommit": HEX40}, None, {}) is None
+
+
+# --- the local path and the command line --------------------------------------------------
+
+
+def test_local_launch_over_a_prior_cloud_lane_with_no_listing_refuses_and_spawns_nothing(tmp_path):
+    # axis: the refusal holds for a local launch too — no child is spawned
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    spawned = []
+    delegate = _make_spawn_fn("sleep")
+
+    def recording_spawn(*args, **kwargs):
+        spawned.append(args)
+        return delegate(*args, **kwargs)
+
+    result = L.launch_build(
+        repo, 656, _adoption(repo), _all_checks(), str(tmp_path / "logs"),
+        spawn_fn=recording_spawn, settle_seconds=0.2,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == TOKEN_UNREAD
+    assert result["failedRead"] == "listing-not-given"
+    assert spawned == []
+
+
+def test_the_launch_command_accepts_and_forwards_cloud_sessions_file(tmp_path, monkeypatch):
+    # axis: the launch subparser takes --cloud-sessions-file and hands it to launch_build
+    repo = _cloud_repo(tmp_path)
+    checks_path = _write_listing(tmp_path, _all_checks(), "checks.json")
+    premise_path = _write_listing(tmp_path, _valid_premise(repo), "premise.json")
+    listing = _fixture("list_page_complete_without.json")
+    forwarded = []
+
+    def capture_launch_build(*args, **kwargs):
+        forwarded.append(kwargs)
+        return {"ok": False, "reason": "injected-stop", "launchId": "l-test"}
+
+    monkeypatch.setattr(L, "launch_build", capture_launch_build)
+    code = L.main([
+        "launch", "--repo-root", repo, "--issue", "656", "--checks", checks_path,
+        "--premise", premise_path, "--log-dir", str(tmp_path / "logs"),
+        "--cloud-sessions-file", listing,
+    ])
+    assert code == 1
+    assert forwarded and all(kw["cloud_sessions_file"] == listing for kw in forwarded)
+    forwarded.clear()
+    L.main([
+        "launch", "--repo-root", repo, "--issue", "656", "--checks", checks_path,
+        "--premise", premise_path, "--log-dir", str(tmp_path / "logs"),
+    ])
+    assert forwarded and all(kw["cloud_sessions_file"] is None for kw in forwarded)
+
+
+def test_the_launch_command_refuses_an_adoption_over_a_live_original_and_spawns_nothing(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: the shipped launch command, through the real launch guard, refuses live, accounts the refusal and spawns zero builders
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    spawns = []
+    monkeypatch.setattr(L, "default_cloud_spawn", _fake_spawn(calls=spawns))
+    # routing is not under test: pin it to a cloud placement so only the spawn boundary is replaced
+    monkeypatch.setattr(
+        L.launch_place, "route",
+        lambda *a, **k: L.launch_place._placement(
+            "cloud", True, "word", None, None, None, None, "env_01AbCdEf", None,
+        ),
+    )
+    checks_path = _write_listing(tmp_path, _all_checks(), "checks.json")
+    premise_path = _write_listing(tmp_path, _adoption(repo), "premise.json")
+    code = L.main([
+        "launch", "--repo-root", repo, "--issue", "656", "--checks", checks_path,
+        "--premise", premise_path, "--log-dir", str(tmp_path / "logs"), "--place", "cloud",
+        "--cloud-sessions-file", _fixture("list_page_complete_running.json"),
+    ])
+    assert code == 1
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert spawns == []
