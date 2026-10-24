@@ -409,6 +409,24 @@ def test_a_row_only_300_seconds_after_the_lane_start_refuses_incomplete(tmp_path
     assert result["launchIds"] == [LANE_ID]
 
 
+def test_an_unconfirmed_lane_with_a_retitled_live_session_is_never_proven_gone(tmp_path):
+    # axis: a lane whose session id was never confirmed is matched by title only, so a live session under another title is not proven gone by a newer row of the same environment — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, session_id=None)
+    rows = [
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000", "env-1"),
+        {
+            "id": "session_01RetitledLive000000000", "title": "Fix the launcher gate",
+            "session_status": "SESSION_STATUS_RUNNING",
+            "status_bucket": "SESSION_STATUS_BUCKET_WORKING",
+            "created_at": "2026-10-24T11:59:30.000000Z", "environment_id": "env-1",
+        },
+    ]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
 def test_a_lane_with_no_cloud_environment_is_never_proven_gone(tmp_path, monkeypatch):
     # axis: a candidate lane with no cloudEnvironment proves nothing by absence — see bite-proof record i2119_original_session
     repo = _cloud_repo(tmp_path)
@@ -449,6 +467,31 @@ def test_an_adoption_proceeds_when_the_session_is_archived(tmp_path):
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
     result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_archived.json"))
+    _proceeds(result, calls)
+
+
+def test_an_adoption_proceeds_when_the_recorded_archived_session_is_listed(tmp_path):
+    # axis: the archived spelling recorded from the live host (SESSION_STATUS_ARCHIVED, bucket COMPLETED) reads not live, and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, session_id="session_01JrM7yEUSzgrgDkpqoPrA7e", title="issue-2118-2ae8a497deff24a2")
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_archived_recorded.json"))
+    _proceeds(result, calls)
+
+
+def test_a_recorded_newest_page_with_more_to_read_refuses_incomplete(tmp_path):
+    # axis: the newest row of a real no-cursor page (has_more true) does not hold the lane's session, so the lane is unproven
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_recorded_newest.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_live_cloud_lane_of_another_issue_does_not_hold_this_adoption(tmp_path):
+    # axis: only lanes of this issue are candidates, so another issue's live lane (no outcome, its own surfaces, so only the issue scoping is under test) needs no listing — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, "lane-other", issue=999, outcome=None)
+    result, calls = _adopt(repo, tmp_path)
     _proceeds(result, calls)
 
 

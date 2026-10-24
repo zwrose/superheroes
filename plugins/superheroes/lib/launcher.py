@@ -2983,11 +2983,12 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                 created_by_env.get(lane_env)
                 if created_by_env is not None and isinstance(lane_env, str) else None
             )
-            # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing — see bite-proof record i2119_original_session
+            # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing, and a lane whose session id was never confirmed is matched by title only, so absence never proves it gone — see bite-proof record i2119_original_session
             if (
                 newest is None or not isinstance(started_ts, (int, float))
                 or isinstance(started_ts, bool)
                 or newest < started_ts + _ADOPT_ABSENCE_SKEW_SECONDS
+                or info.get("cloudSessionId") is None
             ):
                 unproven.append(launch_id)
             continue
