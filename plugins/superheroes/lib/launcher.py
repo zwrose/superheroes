@@ -2846,11 +2846,12 @@ def _listing_row_ok(row):
 
 
 def _listing_rows(parsed):
-    """``(rows, pages)`` of a parsed listing, or ``None`` when its shape is not a recorded host shape.
+    """``(rows, pages, result_count)`` of a parsed listing, or ``None`` when its shape is not a recorded host shape.
 
     A JSON array is a list of results, anything else is one result; a result that is only a
     ``ccr`` wrapper is unwrapped. A result is a list page (``data`` list, ``has_more`` a bool when
-    present) or a session object. ``pages`` are the list-page results, ``rows`` every session row.
+    present) or a session object. ``pages`` are the list-page results, ``rows`` every session row,
+    ``result_count`` the number of results the listing held.
     """
     results = parsed if isinstance(parsed, list) else [parsed]
     if not results:
@@ -2949,7 +2950,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             if not complete:
                 unproven.append(launch_id)
             continue
-        # a row is not live only when it is archived or failed; any other row, an unknown status included, is
+        # a row is not live only when it is archived or failed; any other row, an unknown status included, is live
         showing = [
             row for row in matched
             if row.get("archived") is not True
