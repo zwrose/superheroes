@@ -211,7 +211,7 @@ this rule, in this order:
    that could not run there.
 4. Doubt sorts costly.
 
-Only a costly bullet gets a consequence line under `## What we're accepting`. On the PR body, a
+Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet. On the PR body, a
 harmless one stays only in the build record: it is never a body acceptance, so the merge sheet's
 accounting never counts it. On the merge sheet, the advisor may mention a harmless one as a line of
 the sheet's routine "What you're accepting" fold item; such a fold line is sheet-side, is not a body

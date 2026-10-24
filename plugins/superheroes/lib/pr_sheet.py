@@ -29,7 +29,9 @@ is true only when every covered body was read and lists none, and the page, the 
 then; prSheet.canonAccounted lists the Canon entry ids (sorted, distinct) when every covered body was read, they list at least one
 acceptance and every listed acceptance is accounted to a Canon ruling, and those surfaces say it was checked and all covered by
 Canon rulings; with neither field (a sheet built through the API with no bodies, or an earlier one) they say the sheet was not
-checked against the bodies. The two fields never come together.
+checked against the bodies. The two fields never come together. The build also reads the body's degradations list
+(degradations_listed) and refuses a [costly] or unlabelled deviation whose text (after its label) appears in no What we're
+accepting line, naming the bullet; a [harmless] one never needs a line.
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
@@ -340,6 +342,76 @@ def accepting_listed(body):
         blank = False
     texts = (" ".join(part for part in (line.strip() for line in item) if part) for item in items)
     return [t for t in texts if t and (t[:-1] if t.endswith(".") else t).strip().lower() not in _NO_ACCEPTANCE]
+
+
+_DEGRADATIONS_MARKER = "<!-- superheroes:degradations -->"  # the line that opens the body's degradations list, in the build record
+_DEGRADATIONS_HEADING = "### Disclosed degradations"
+_TOP_ITEM = re.compile(r"^ {0,3}[-*+][ \t]+(.*)")
+_LABEL = re.compile(r"\[(costly|harmless)\][ \t]*", re.IGNORECASE)
+
+
+def degradations_listed(body):
+    """(label, text) for each degradation a PR body lists after its degradations marker line, in order; [] for a body that
+    is not a string, has no marker, or lists only the word None (as the one item or the one paragraph, any case, with or
+    without a period). An item is a top-level list item with its continuation lines joined by one space, or a paragraph.
+    The list ends at the next heading, a line starting `</details>` or another `<!-- superheroes:` marker; the `### Disclosed
+    degradations` heading itself is skipped. label is "costly" or "harmless" when the text starts with that label
+    (case-insensitive; the label and the spaces after it are dropped from text), else None."""
+    if not isinstance(body, str):
+        return []
+    lines = body.splitlines()
+    start = next((n for n, line in enumerate(lines) if line.rstrip() == _DEGRADATIONS_MARKER), None)
+    if start is None:
+        return []
+    entries, open_entry, blank = [], None, False
+    for line in lines[start + 1:]:
+        stripped = line.strip()
+        if not stripped:
+            blank = True
+            continue
+        if stripped == _DEGRADATIONS_HEADING:
+            continue
+        if _HEADING.match(line) or stripped.startswith(("</details>", "<!-- superheroes:")):
+            break
+        item = _TOP_ITEM.match(line)
+        if item:
+            open_entry = [item.group(1)]
+            entries.append(open_entry)
+        elif open_entry is not None and not (blank and not line.startswith(("  ", "\t"))):
+            open_entry.append(line)  # a continuation line (lazy, or indented after a blank line)
+        else:
+            open_entry = [line]
+            entries.append(open_entry)
+        blank = False
+    texts = [t for t in (" ".join(part for part in (line.strip() for line in entry) if part) for entry in entries) if t]
+    if len(texts) == 1 and (texts[0][:-1] if texts[0].endswith(".") else texts[0]).strip().lower() == "none":
+        return []
+    listed = []
+    for text in texts:
+        label = _LABEL.match(text)
+        listed.append((label.group(1).lower(), text[label.end():]) if label else (None, text))
+    return listed
+
+
+def _line_key(text):
+    """A line of text as the degradation check compares it: emphasis marks dropped, whitespace collapsed, case folded, one
+    trailing full stop removed."""
+    key = re.sub(r"\s+", " ", text.replace("*", "").replace("_", "")).strip().casefold()
+    return key[:-1] if key.endswith(".") else key
+
+
+def costly_unlisted(body):
+    """The (label, text) degradations of a PR body (degradations_listed) that are labelled costly or carry no label and whose
+    text appears in no line under What we're accepting (accepting_listed), compared by _line_key. A harmless one is never
+    returned."""
+    accepted = [_line_key(line) for line in accepting_listed(body)]
+    missing = []
+    for label, text in degradations_listed(body):
+        key = _line_key(text)
+        # bite-axis: a costly or unlabelled deviation must have a line under What we're accepting
+        if label != "harmless" and not any(key in line for line in accepted):
+            missing.append((label, text))
+    return missing
 
 
 def listed_bullets(pr, body):
@@ -846,6 +918,10 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
     listed = {pr: listed_bullets(pr, bodies[pr]) for pr in allowed} if bodies_sound else {}
     if bodies_sound:
         _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems)
+        for pr in allowed:
+            for label, text in costly_unlisted(bodies[pr]):
+                problems.append(f'PR #{pr}\'s {"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
+                                "What we're accepting: carry its text, after the label, into a line there")
     if problems:
         raise Refusal(problems)
     stack = kind == "stack"

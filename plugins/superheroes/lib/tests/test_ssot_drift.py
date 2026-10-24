@@ -1295,6 +1295,18 @@ def test_omission_floor_matches_conventions_10_7():
         _assert_omission_floor_matches_home(text, label, home)
 
 
+_BUILD_DEVIATIONS_HEADING = "### Build deviations: only costly ones are accepted on the merge sheet"
+
+
+def _build_deviations_note(text):
+    """The text from the build-deviations heading to the next line starting with `#`, under whatever version heading holds it."""
+    lines = text.splitlines()
+    assert _BUILD_DEVIATIONS_HEADING in lines, "TRANSITION.md has no %r heading" % _BUILD_DEVIATIONS_HEADING
+    start = lines.index(_BUILD_DEVIATIONS_HEADING)
+    end = next((n for n in range(start + 1, len(lines)) if lines[n].startswith("#")), len(lines))
+    return "\n".join(lines[start:end])
+
+
 def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes():
     """The handback sort and the TRANSITION note put the costly test before the named harmless causes."""
     section = _read("skills/workhorse/reference/handback.md").split("## Disclosed degradations", 1)[1].split("\n## ", 1)[0]
@@ -1313,11 +1325,13 @@ def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes(
     assert "never a build check that could not run there" in sort, (
         "handback.md sort no longer bounds cloud platform limits to the session's own channel limits"
     )
-    unreleased = _read("TRANSITION.md").split("## Unreleased", 1)[1].split("\n## ", 1)[0]
-    note = _anchor_whitespace_normalize(unreleased)
-    # bite-axis: TRANSITION's Unreleased note says the same as the handback sort.
+    note = _anchor_whitespace_normalize(_build_deviations_note(_read("TRANSITION.md")))
+    # bite-axis: TRANSITION's build-deviations note says the same as the handback sort.
     for phrase in ("whatever caused it", "never a build check that could not run there"):
-        assert phrase in note, "TRANSITION.md ## Unreleased no longer says %r" % phrase
+        assert phrase in note, "TRANSITION.md's build-deviations note no longer says %r" % phrase
+    # The note is found by its own heading, so the version heading above it does not matter.
+    body = "### Build deviations: only costly ones are accepted on the merge sheet\n\nA note.\n"
+    assert _build_deviations_note("## Unreleased\n\n" + body + "\n## 0.1.0\n") == _build_deviations_note("## 9.9.9\n\n" + body + "\n## 0.1.0\n") == body
 
 
 def test_grounding_stage_region_markers_match_conventions_10_7():

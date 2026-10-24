@@ -301,7 +301,9 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   with no `accounting` lists every bullet's id. The accounting covers only what the body lists
   under What we're accepting, above the build record; a harmless deviation listed only in the build
   record's degradations needs no card, and a costly one, listed there and under What we're
-  accepting, cannot be left off.
+  accepting, cannot be left off. The build also refuses a body whose `[costly]` or unlabelled
+  degradation bullet has no line under What we're accepting, naming the bullet; a `[harmless]` one
+  never needs one.
 - A collector item that concerns this PR is its own card, from the input's `collectorItems`. It is never
   folded into the "What you're accepting" item and never only mentioned there by number. The builder
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435

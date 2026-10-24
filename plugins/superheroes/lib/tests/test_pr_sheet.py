@@ -2429,7 +2429,8 @@ def test_a_collector_input_that_breaks_a_rule_is_refused(edit, expected):
 VET_SLOT = Path(__file__).resolve().parent / "fixtures" / "vet_slot"
 BODY_TWIN = {241: FIXTURES / "body-twin-241.md", 242: FIXTURES / "body-twin-242.md"}
 NONE_BODY = FIXTURES / "body-none.md"
-BODY_2075 = FIXTURES / "body-2075.md"
+BODY_2075 = FIXTURES / "body-2075-labelled.md"
+BODY_2075_REAL = FIXTURES / "body-2075.md"
 CASE_2075 = (["record-2075.json"], "input-2075.json")
 BODIES_2075 = {2075: BODY_2075.read_text(encoding="utf-8")}
 BULLETS_2075 = [bullet for bullet, _ in pr_sheet.listed_bullets(2075, BODIES_2075[2075])]
@@ -2883,6 +2884,84 @@ def test_a_costly_acceptance_accounted_to_an_item_gets_its_card_and_the_harmless
     assert [c["id"][:2] for c in sheet["cards"]] == ["i-"] and sheet["cards"][0]["question"] == "The verify gate did not run on the final head"
     assert not any(HARMLESS_3303 in json.dumps(card) for card in sheet["cards"])
     assert a_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"]
+
+
+DEGRADATIONS = "<!-- superheroes:degradations -->\n### Disclosed degradations\n\n"
+VERIFY_GATE = "The verify gate did not run on the final head"
+
+
+def degraded(*bullets):
+    """A body that accepts nothing and lists the bullets under its degradations marker."""
+    return ACCEPTING + "None.\n\n" + BUILD_RECORD + DEGRADATIONS + "".join(f"- {bullet}\n" for bullet in bullets)
+
+
+def test_a_costly_deviation_with_no_line_under_what_we_are_accepting_is_refused_naming_it():
+    # Bites on: the build reading the degradations list and not refusing a [costly] bullet that no What we're accepting line carries.
+    # Axis: K1 and K4: a costly deviation must have a line under What we're accepting; exactly one problem, naming the PR, the bullet and the missing line.
+    (problem,) = refused_with_bodies(SMALL, {211: degraded(f"[costly] {VERIFY_GATE}.")})
+    assert "PR #211's costly deviation" in problem and VERIFY_GATE in problem and "has no line under What we're accepting" in problem
+
+
+def test_an_unlabelled_deviation_with_no_line_under_what_we_are_accepting_is_refused_as_costly():
+    # Bites on: a bullet with no label being read as harmless (so a body written before the labels is let through).
+    # Axis: K2: an unlabelled deviation reads costly; exactly one problem, saying it is unlabelled.
+    (problem,) = refused_with_bodies(SMALL, {211: degraded(f"{VERIFY_GATE}.")})
+    assert "unlabelled (read as costly)" in problem and VERIFY_GATE in problem
+
+
+def test_a_harmless_deviation_needs_no_line_under_what_we_are_accepting():
+    # Bites on: a [harmless] bullet being asked for a line under What we're accepting, or becoming a card.
+    # Axis: K3: a harmless deviation never needs a line: the build succeeds, lists nothing and makes no card.
+    sheet = with_bodies(SMALL, {211: degraded("[harmless] The order rode a prompt file.")})
+    assert sheet["prSheet"]["nothingListed"] is True and sheet["cards"] == []
+
+
+def test_a_costly_deviation_carried_into_what_we_are_accepting_builds_whatever_the_emphasis_or_full_stop():
+    # Bites on: the match being exact (emphasis or the trailing full stop breaking it), or the check adding a card or changing what the sheet records.
+    # Axis: K5 and the cards edge: the text after the label found inside an accepting line builds; the acceptance's own item is the only card; no nothingListed.
+    text = (ACCEPTING + f"\n- **{VERIFY_GATE}**, so the last commit is unverified until CI runs.\n\n" + BUILD_RECORD + DEGRADATIONS
+            + f"- [costly] {VERIFY_GATE}.\n")
+    ((bullet, _),) = pr_sheet.listed_bullets(211, text)
+
+    def edit(advisor):
+        advisor.setdefault("items", []).append({"id": "verify-gate", "kind": "Accept", "title": VERIFY_GATE, "ifLeft": "The last commit is unverified until CI runs.", "options": "none"})
+        advisor["accounting"] = {bullet: {"item": "verify-gate"}}
+    sheet = with_bodies(SMALL, {211: text}, edit)
+    assert [c["id"][:2] for c in sheet["cards"]] == ["i-"] and a_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"]
+
+
+@pytest.mark.parametrize("listing", ["- None\n", "None\n"], ids=["bullet", "paragraph"])
+def test_a_degradations_list_that_reads_none_is_not_checked(listing):
+    # Bites on: the word None being read as a costly deviation with no line.
+    # Axis: K6: a list that is the single word None is no deviation: the build succeeds with nothingListed.
+    sheet = with_bodies(SMALL, {211: ACCEPTING + "None.\n\n" + BUILD_RECORD + DEGRADATIONS + listing})
+    assert sheet["prSheet"]["nothingListed"] is True and sheet["cards"] == []
+
+
+def test_the_real_2075_body_with_unlabelled_deviations_is_refused_for_each_of_its_nine():
+    # Bites on: a body written before the labels slipping through, or the check naming the wrong PR or missing a bullet.
+    # Axis: K7: all nine unlabelled bullets of the real body are refused, each naming PR #2075, and nothing else is wrong with its accounting.
+    problems = refused_with_bodies(CASE_2075, {2075: BODY_2075_REAL.read_text(encoding="utf-8")})
+    assert len(problems) == 9
+    assert all("unlabelled (read as costly)" in p and "PR #2075" in p for p in problems)
+
+
+DEGRADATIONS_CASES = [
+    pytest.param(BODY_3303.read_text(encoding="utf-8"), [
+        ("harmless", "The order rode a prompt file, not inline: the builder was pointed at the file and read it there."),
+        ("costly", COSTLY_3303)], id="shaped-fixture"),
+    pytest.param(ACCEPTING + "- One.\n", [], id="no-marker"),
+    pytest.param(None, [], id="not-a-string"),
+    pytest.param(DEGRADATIONS + "- [Costly]  One,\n  and two.\n</details>\n- Three.\n", [("costly", "One, and two.")], id="stops-at-details"),
+    pytest.param(DEGRADATIONS + "- One.\n\n### Next\n- Two.\n", [(None, "One.")], id="stops-at-a-heading"),
+]
+
+
+@pytest.mark.parametrize("body, expected", DEGRADATIONS_CASES)
+def test_degradations_listed_reads_the_labelled_items_and_stops_where_the_list_ends(body, expected):
+    # Bites on: a label kept in the text or misread, an item past the list's end read, or a body with no marker (or none at all) listing items.
+    # Axis: K1: the degradations the build checks are exactly the list under the marker, label split from text.
+    assert pr_sheet.degradations_listed(body) == expected
 
 
 def test_a_build_given_no_bodies_makes_no_accounting_check_and_has_no_nothing_listed():
