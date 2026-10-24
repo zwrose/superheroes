@@ -21,6 +21,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Advisors stop hand-building review records to get a merge sheet for a PR that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet).
 - **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
 - **After switching.** **Nothing is owed, except that a consumer that reads a review record's `status` with a closed set of values must accept `awaits-owner` and treat it as `not-reviewed`.** See [Review record: `awaits-owner` when only owner calls are left](#review-record-awaits-owner-when-only-owner-calls-are-left).
+- **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
 
 ### Showrunner: a PR with no review run gets no merge sheet
 
@@ -39,6 +40,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 - It needs nothing else open: every line of the record's `whatIsMissing` is a finding left for the owner, so the same record without those findings would read `reviewed`. Any other open line (a missing review, CI not green on the final commit, an undecided finding, an unread raw output, no planned reviewer covering the final commit) keeps `not-reviewed`. A withheld path or raw output, or reviewers that covered an earlier commit beside one that covered the final commit, change nothing here, because they do not keep a record from `reviewed` either.
 - It never clears a gate. The merge sheet builder, the vet's review-record checks and every other reader treat it exactly as `not-reviewed` until the owner rules; once the findings are ruled (`ownerRulings`) the record reads `reviewed`. `lib/review_record.py` gains `REVIEWED`, `NOT_REVIEWED`, `AWAITS_OWNER`, `STATUSES` and `cleared(status)`, true only for `reviewed`.
 - No key, flag, or refusal reason changes.
+
+### Cloud builds: credential-like text is redacted, and the review record says so
+
+- A cloud session replaces credential-like text (API keys, tokens, private keys) before a file is written or a comment posted, so a test fixture holding a whole key failed before it tested anything. The instruction to build such a value at runtime from pieces, and to describe such text in a finding rather than quote it, now lives in the dispatch preamble every engine review dispatch is fed (`CREDENTIAL_TEXT_RULE` in `lib/engine_dispatch.py`), `rubric/review-base.md`, `agents/test-role.md`, `agents/implementer.md` and `skills/workhorse/reference/cloud.md`. It is a request in the prompt text, best effort; nothing enforces it.
+- The review record carries `transitDamage.redactedFields` (the path of each recorded field whose text holds `[REDACTED`) and a `Transit damage:` summary line. An earlier record carrying only redacted fields is listed under `earlierRecordsNotChecked` with the reason `redacted text`. A record with no redacted field is unchanged.
 
 ## 0.46.0
 
