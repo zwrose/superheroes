@@ -283,6 +283,45 @@ def _cluster_for(pend, seat):
     raise AssertionError("no cluster %r in the pending payload" % key)
 
 
+def _verify_payload_via_verb(session_dir):
+    """The verify payload as production lands it (#2133): the driver runs the session's bound verify
+    command — the `run` seam stands in for the process — and writes the landing and its journal row
+    itself; a hand-written `run-verify` landing is refused at `advance`. The bare landing is taken
+    off disk so the seat record is the one landing, and the driver's payload rides it unchanged.
+
+    Idempotent for a slot the verb already filled: a caller that asks twice (the record-submit
+    fence's census records the slot, then builds the hand-submit artifact) gets the driver's payload
+    from the landing or the durable store record, and the verb is not run a second time."""
+    slot = round_driver._run_verify_slot(_state(session_dir))
+    if slot is not None:
+        rnd, attempt = slot
+        skey = round_records.storage_key("verify")
+        landing = round_records.bare_payload_path(session_dir, rnd, round_driver.P_VERIFY, skey,
+                                                  attempt)
+        record = round_records.store_path(session_dir, rnd, round_driver.P_VERIFY, skey, attempt)
+        if os.path.exists(landing):
+            filled, err = round_records.read_json(landing)
+            assert err is None, err
+            return filled
+        if os.path.exists(record):
+            # the durable record is the seat-result envelope; the driver's payload rides inside it
+            stored, err = round_records.read_json(record)
+            assert err is None, err
+            if isinstance(stored, dict) and isinstance(stored.get("payload"), dict):
+                return stored["payload"]
+            # a seat-missing wedge (the census's refuse-fold shape) holds the slot with no driver
+            # payload and the verb refuses it; the hand submit it builds is not driver-checked
+            return {"result": "pass", "command": "none", "exit": 0}
+    out = round_driver.cmd_run_verify(
+        session_dir,
+        run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=b"verify output\n"))
+    assert out["ok"] is True, out
+    payload, err = round_records.read_json(out["landingPath"])
+    assert err is None, err
+    os.remove(out["landingPath"])
+    return payload
+
+
 def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):
     phase = pend["phase"]
     if phase == round_driver.P_PANEL:
@@ -303,7 +342,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         return {"fixes": [{"file": FIXED_FILE, "summary": "guard restored"}],
                 "escalated": False, "headDiffPath": head_diff_path}
     if phase == round_driver.P_VERIFY:
-        return {"result": "pass", "command": "none", "exit": 0}
+        return _verify_payload_via_verb(session_dir)
     if phase == round_driver.P_AUDITS:
         return {"id": seat, "ruling": "discharged", "auditorVendor": "claude",
                 "reason": "re-read the fixed hunk; the cited defect is gone"}

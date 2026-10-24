@@ -85,9 +85,11 @@ def round_driver_record(session_dir, seat, occurrence=0):
     return RD.cmd_record_result(session_dir, seat)
 
 
-def _write_verify_landing(landing_path):
-    os.makedirs(os.path.dirname(landing_path), exist_ok=True)
-    round_records.atomic_write_json(landing_path, {"result": "pass"})
+def _write_verify_landing(session_dir):
+    out = RD.cmd_run_verify(
+        session_dir,
+        run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=b"verify output\n"))
+    assert out["ok"] is True, out
 
 
 def _assert_verify_payload(verify, session_dir):
@@ -104,11 +106,11 @@ def _finish_post_audits_verify(session_dir, gitdir, head_path, state, pend, find
     verify = pend["payload"]["verify"]
     _assert_verify_payload(verify, session_dir)
     if verify_first:
-        _write_verify_landing(verify["landingPath"])
+        _write_verify_landing(session_dir)
         out = _advance_audits(session_dir, gitdir, head_path, state, pend, findings)
     else:
         out = _advance_audits(session_dir, gitdir, head_path, state, pend, findings)
-        _write_verify_landing(verify["landingPath"])
+        _write_verify_landing(session_dir)
     assert out["ok"] is True, out
     out2 = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out2["ok"] is True, out2
