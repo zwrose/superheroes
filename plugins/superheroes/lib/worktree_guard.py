@@ -861,7 +861,8 @@ def _shell_program(raw_tokens):
             i += 1
             continue
         if len(tok) > 1 and tok[0] in "-+":
-            if any(c in tok for c in "$`"):  # an expansion inside an option word could spell `-c`
+            # An expansion, redirection or attached `-o` value inside an option word hides `-c`.
+            if not re.fullmatch(r"[-+][A-Za-z]+", tok) or re.search("[oO].", tok):
                 return ("unreadable", None)
             saw_c = saw_c or "c" in tok
             i += 2 if ("o" in tok or "O" in tok) else 1
@@ -988,7 +989,8 @@ def segment_accounting(command, cwd=None, _depth=0):
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
         _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
-        parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
+        core = _skip_builtins(tokens)
+        parsed =_parse_git_invocation(core) if core and _is_git_token(core[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
         # A raw word still holding < or > outside its quoted spans after the real redirections
         # went hides what Bash consumes.
@@ -1109,17 +1111,23 @@ def mentions_destructive_git(command):
     return any(_segment_mentions_destructive_git(seg) for seg in _split_segments(command))
 
 
+def _skip_builtins(tokens):
+    """Tokens after leading exec/command/builtin/env words and options; `command -v` runs nothing."""
+    while tokens and (tokens[0] in _EXECUTION_BUILTINS or tokens[0] == "env"):
+        builtin, tokens = tokens[0], _command_tokens(tokens[1:])[1]
+        while tokens and tokens[0].startswith("-"):
+            if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
+                return []
+            tokens = tokens[2:] if tokens[0] in ("-a", "-u") else tokens[1:]
+    return tokens
+
+
 def _segment_has_unresolvable_target(tokens):
     """True when segment may act outside payload cwd."""
     keys, tokens = _command_tokens(tokens)
     if "GIT_DIR" in keys or "GIT_WORK_TREE" in keys:
         return True
-    while tokens and tokens[0] in _EXECUTION_BUILTINS:
-        builtin, tokens = tokens[0], tokens[1:]
-        while tokens and tokens[0].startswith("-"):
-            if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
-                return False
-            tokens = tokens[1:]
+    tokens = _skip_builtins(tokens)
     if tokens and tokens[0] in ("cd", "pushd"):
         return True
     if tokens and _is_git_token(tokens[0]):

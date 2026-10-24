@@ -162,6 +162,10 @@ def test_a_variable_command_word_behind_an_execution_builtin_is_unreadable(comma
     "bash -c 'command -V git'",
     "bash -c 'command -pv git'",
     "bash -c 'exec git status'",
+    "bash -c 'exec -a x git status'",
+    "bash -lc 'git status'",
+    "bash -eo pipefail -c 'git status'",
+    "bash -o pipefail -c 'git status'",
     "bash -c 'timeout 5 git status'",
 ])
 def test_command_v_lookup_and_plain_wrapped_commands_in_a_program_are_allowed(command, dirty_repo):
@@ -171,6 +175,8 @@ def test_command_v_lookup_and_plain_wrapped_commands_in_a_program_are_allowed(co
 @pytest.mark.parametrize("command", [
     "bash -c 'exec git reset --hard'",
     "exec git reset --hard",
+    "bash -c 'exec -a x \"git\" reset --hard'",
+    "bash -c 'command \"git\" reset --hard'",
 ])
 def test_a_destructive_git_behind_a_bare_execution_builtin_is_still_denied(command, dirty_repo):
     assert wg.classify(command, dirty_repo)[0] == "deny", command
@@ -406,6 +412,9 @@ def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
     "bash -c '\"git\" reset --hard>/dev/null'",
     "bash -c 'git \"reset\" --hard>/dev/null'",
     "eval git \"'reset' --hard>/dev/null\"",
+    "bash -c< /dev/null 'git reset --hard'",
+    "sh -c> /tmp/x 'git reset --hard'",
+    "zsh -oerrexit -c 'git reset --hard'",
 ])
 def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
