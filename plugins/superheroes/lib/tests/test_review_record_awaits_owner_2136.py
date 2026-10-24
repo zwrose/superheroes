@@ -221,3 +221,20 @@ def test_no_reader_outside_review_record_spells_the_status_literals():
             if STATUS_LITERAL.search(line) or REVIEWED_COMPARE.search(line):
                 found.append(f"{rel}:{n}: {line.strip()}")
     assert not found, "status literals outside review_record.py:\n" + "\n".join(found)
+
+
+DOCTRINE = (
+    "skills/review-code/reference/review-record.md",
+    "skills/showrunner/reference/vet-receipt.md",
+    "skills/workhorse/reference/cloud.md",
+    "TRANSITION.md",
+)
+
+
+def test_the_doctrine_names_awaits_owner_and_says_it_never_clears_a_gate():
+    # axis: the doctrine; a reference or the transition note that stops naming the status, or stops saying it clears nothing
+    texts = {name: (LIB.parent / name).read_text(encoding="utf-8") for name in DOCTRINE}
+    for name, text in texts.items():
+        assert "awaits-owner" in text, name
+    for name in (DOCTRINE[0], DOCTRINE[3]):
+        assert "never clears a gate" in texts[name], name

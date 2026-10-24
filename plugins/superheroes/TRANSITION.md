@@ -12,6 +12,19 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed, except that a consumer that reads a review record's `status` with a closed set of values must accept `awaits-owner` and treat it as `not-reviewed`.** See [Review record: `awaits-owner` when only owner calls are left](#review-record-awaits-owner-when-only-owner-calls-are-left).
+
+### Review record: `awaits-owner` when only owner calls are left
+
+- A review record whose only open lines are findings left for the owner now reads `awaits-owner` instead of `not-reviewed`, and its summary's first line reads "reviewed; N findings wait for your decision" with their ids (a count only, in a compacted summary). For the owner: the review itself is complete, and what is left is their decision on those findings.
+- It needs nothing else open: no missing review, every planned reviewer that ran covering the final commit, no park, CI green on the final commit, nothing withheld from reviewers and no raw output withheld. Any other open line keeps `not-reviewed`.
+- It never clears a gate. The merge sheet builder, the vet's review-record checks and every other reader treat it exactly as `not-reviewed` until the owner rules; once the findings are ruled (`ownerRulings`) the record reads `reviewed`. `lib/review_record.py` gains `REVIEWED`, `NOT_REVIEWED`, `AWAITS_OWNER`, `STATUSES` and `cleared(status)`, true only for `reviewed`.
+- No key, flag, or refusal reason changes.
+
 ## 0.46.0
 
 ### Before you upgrade

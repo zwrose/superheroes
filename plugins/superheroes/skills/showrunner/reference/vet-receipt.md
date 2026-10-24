@@ -259,7 +259,7 @@ never re-grades a finding the owner already answered as a card on this PR, or to
 mine" on this PR, so an entry for either holds the PR.
 
 **`status` is not the test.** A record with a leftover that is shown to the owner, or with a
-go-ahead for a review that did not run, reads `not-reviewed` and can still be returned as ready. A
+go-ahead for a review that did not run, reads `not-reviewed` and can still be returned as ready. A record that reads `awaits-owner` is read exactly as `not-reviewed`: it says only that every open line is a finding left for the owner, and it clears nothing. A
 record whose finding with a real consequence was decided as craft reads `reviewed` and is held. Read
 the fields the rows name. Any line of `whatIsMissing` that the three rows do not account for is a vet
 finding. The line saying no planned reviewer ran is accounted for when every planned review that did
