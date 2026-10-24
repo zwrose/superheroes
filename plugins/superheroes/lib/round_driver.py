@@ -6033,23 +6033,20 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             continue
         if (ledger_by_key.get(rkey) or {}).get("disposition") in ("refuted", "out-of-scope"):
             continue
-        entry = {"id": rkey, "file": rf.get("file"), "line": rf.get("line"), "title": rf.get("title")}
-        for carried in ("body", "suggestion"):
-            if rf.get(carried) is not None:
-                entry[carried] = rf[carried]
-        entry_ruling, entry_seq = _carried_owner_ruling(rdecision)
-        if entry_ruling is not None:
-            entry["ownerRuling"] = entry_ruling
-            entry["ownerRulingSeq"] = entry_seq
-        round_findings.append(entry)
+        round_findings.append(_round_finding_entry(
+            rkey, rf, _carried_owner_ruling(rdecision)))
+    # A finding an audit raised, whose parent this batch carries again, is audited under its own key:
+    # a rider. Its content and the round-findings entry it needs (so its parent's auditor can attribute
+    # the fix of it) come from the ledger or the live findings, whichever is newer.
+    riders = _spawned_riders(state, effective, ledger_by_key, _fault, batch_keys)
+    for child, _parent, content in riders:
+        if not any(r["id"] == child for r in round_findings):
+            round_findings.append(_round_finding_entry(
+                child, content, _carried_owner_ruling(_row_decision(state, effective, ledger_by_key, child))))
     reported_changes = _reported_unnamed_changes(state)
-    for f in state.get("fixBatch") or []:
-        if not isinstance(f, dict):
-            continue
-        tid = _finding_key_of(f)
-        if tid in seen_keys:
-            continue
-        seen_keys.add(tid)
+
+    def target_row(f, tid):
+        """One audit target row — a batch finding's and a rider's alike, so the two never drift."""
         row = {
             "id": tid,
             session_contract.FINDING_KEY_FIELD: tid,
@@ -6078,7 +6075,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if attempt_delta is not None:
             row["fixerDelta"] = list(attempt_delta)
         row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
-        row["roundFindings"] = list(round_findings)
+        row["roundFindings"] = [r for r in round_findings if r["id"] != tid]
         row["reportedUnnamedChanges"] = list(reported_changes)
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
         # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
@@ -6102,8 +6099,73 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                     row[carried] = f[carried]
         if auditor_vendor is not None:
             row["auditorVendor"] = auditor_vendor
-        targets.append(row)
+        return row
+
+    for f in state.get("fixBatch") or []:
+        if not isinstance(f, dict):
+            continue
+        tid = _finding_key_of(f)
+        if tid in seen_keys:
+            continue
+        seen_keys.add(tid)
+        targets.append(target_row(f, tid))
+    for child, parent, content in riders:
+        if child in seen_keys:
+            continue
+        seen_keys.add(child)
+        rider = target_row(content, child)
+        rider["spawnedFrom"] = parent
+        targets.append(rider)
     return targets
+
+
+def _round_finding_entry(key, finding, carried_ruling):
+    """One round-findings entry — id, place, title, body and suggestion, and the finding's carried owner
+    ruling — in the one shape every audit target lists its round's other findings in."""
+    entry = {"id": key, "file": finding.get("file"), "line": finding.get("line"),
+             "title": finding.get("title")}
+    for carried in ("body", "suggestion"):
+        if finding.get(carried) is not None:
+            entry[carried] = finding[carried]
+    entry_ruling, entry_seq = carried_ruling
+    if entry_ruling is not None:
+        entry["ownerRuling"] = entry_ruling
+        entry["ownerRulingSeq"] = entry_seq
+    return entry
+
+
+def _spawned_riders(state, effective, ledger_by_key, ledger_fault, batch_keys):
+    """The findings an audit raised that ride this round's audits as targets of their own, as
+    ``(child key, parent key, content)`` in child-key order. A child rides when its parent is in the
+    fix batch again, it is no batch finding itself, and it has no disposition settling it: never a
+    summary row, a merged-in or out-of-scope one, nor one a current disposition (a ruling the owner has
+    not reopened) already closed, nor one whose effective owner decision rules anything but a fix
+    (``_OWNER_FIX_RULINGS``). A ledger that cannot be read gives no riders."""
+    spawned = _audit_spawned(state)
+    if not spawned or ledger_fault is not None:
+        return []
+    live_by_key = {}
+    for finding in state.get("findings") or []:
+        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        if key and not finding.get("summaryEntry"):
+            live_by_key.setdefault(key, finding)
+    riders = []
+    for child in sorted(k for k in spawned if isinstance(k, str)):
+        parent = spawned[child]
+        if not isinstance(parent, str) or parent not in batch_keys or child in batch_keys:
+            continue
+        live = live_by_key.get(child)
+        row = ledger_by_key.get(child) or live
+        if (not isinstance(row, dict) or row.get("summaryEntry")
+                or row.get(session_contract.MERGED_INTO_FIELD)
+                or row.get("disposition") == "out-of-scope"
+                or (_disposition_is_current(row) and not _restaged_after(state, child, row))):
+            continue
+        rdecision = _row_decision(state, effective, ledger_by_key, child)
+        if rdecision is not None and rdecision.get("ruling") not in _OWNER_FIX_RULINGS:
+            continue
+        riders.append((child, parent, _newest_content(row, live)))
+    return riders
 
 
 AUDIT_PROVENANCE_RUNNER_RECORD = round_records.AUDIT_PROVENANCE_RUNNER_RECORD
@@ -6236,6 +6298,16 @@ def _fold_audits(state, config, artifact, session_dir=None):
                                          collection_manifest=collection_manifest,
                                          carry_fields=(session_contract.FINDING_KEY_FIELD,),
                                          change_allowed_ids=change_allowed_ids)
+    # A rider is a finding an audit raised, audited under its own key beside its parent's target. A
+    # discharge records it `fixed` below; anything else leaves it with no disposition, for the settle.
+    # It never joins the fix list, the breaker's outcomes or the PR-body audited set, so it leaves
+    # `notDischarged` here, before anything reads that list. The disclosure lists stay as they are.
+    spawned_from = {t["id"]: t["spawnedFrom"] for t in targets
+                    if isinstance(t, dict) and isinstance(t.get("id"), str)
+                    and t.get("spawnedFrom") is not None}
+    rider_ids = set(spawned_from)
+    riders_open = [i for i in outcome["notDischarged"] if i in rider_ids]
+    outcome["notDischarged"] = [i for i in outcome["notDischarged"] if i not in rider_ids]
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -6246,7 +6318,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
         {"identity": a.get("identity"), "ruling": a.get("ruling"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
-        for a in outcome["audits"]]}
+        for a in outcome["audits"] if a.get("id") not in rider_ids]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         audit_reason = None
@@ -6297,13 +6369,18 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
     _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
     _record_round(state, "audits", outcome["audits"])
+    spawned_audits = [{"id": a.get("id"), "spawnedFrom": spawned_from[a.get("id")],
+                       "ruling": a.get("ruling")}
+                      for a in outcome["audits"] if a.get("id") in rider_ids]
+    if spawned_audits:
+        _record_round(state, "spawnedAudits", spawned_audits)
     # The staged PR body is audited only when every target of the round folded to an authenticated
     # clearing ruling: `discharged` holds exactly those (a clearing ruling the manifest could not
     # authenticate folds to not-discharged), and `notDischarged` holds every other target.
     # The fix folds in round N and its audits in round N+1 (`_enter_post_fix` advances the round).
     fix_round = state["rounds"].get(str(state["round"] - 1))
     pr_body_fix = fix_round.get("prBodyFix") if isinstance(fix_round, dict) else None
-    audit_ids = {t.get("id") for t in targets if isinstance(t, dict)}
+    audit_ids = {t.get("id") for t in targets if isinstance(t, dict) and t.get("id") not in rider_ids}
     if (isinstance(pr_body_fix, dict) and isinstance(pr_body_fix.get("after"), str)
             and pr_body_fix["after"] and audit_ids
             and not outcome.get("notDischarged")
@@ -6334,6 +6411,8 @@ def _fold_audits(state, config, artifact, session_dir=None):
                 root = _lineage_root(lineage, at)
                 sent[root] = max(sent.get(root, 0), _decision_seq(decision))
     still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
+    if still_open is not None:
+        still_open |= set(riders_open)  # a rider left open still holds its restage marks
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
@@ -6348,6 +6427,8 @@ def _fold_audits(state, config, artifact, session_dir=None):
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
+    for aid in riders_open:
+        _decision(state, "spawned-audit-not-discharged", aid)
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
         state["step"] = P_VERIFY
         return
@@ -6372,13 +6453,70 @@ def _after_audits(state, config):
     _fold_scoped(state, config, {})
 
 
+AUDIT_ORIGIN_FIELD = "originAuditId"
+AUDIT_SPAWNED_KEY = "auditSpawned"
+
+
+def _audit_spawned(state):
+    """The driver's spawn map ``{child finding key: parent finding key}`` — a finding an audit raised,
+    keyed to the audit target it came from. Absent or not a dict (an older session) reads as empty."""
+    spawned = state.get(AUDIT_SPAWNED_KEY) if isinstance(state, dict) else None
+    return spawned if isinstance(spawned, dict) else {}
+
+
+def _bind_audit_spawned(state, new_issues, compiled):
+    """Record, for each compiled survivor an audit's new issue produced, the audit target it came from.
+
+    Bound by compile anchor, never by reading ``originAuditId`` off a survivor: when a scoped candidate
+    and an audit candidate share an anchor at equal severity, the compile keeps the scoped dict and the
+    audit's link is lost. A survivor links only when exactly one distinct origin raised its anchor; none,
+    or two, link nothing (the finding is then left to the settle for the owner). A survivor raised by
+    two or more origins in this fold also loses any link an earlier round bound: an uncertain link is
+    not kept."""
+    origins_by_anchor = {}
+    for ni in new_issues:
+        origin = ni.get(AUDIT_ORIGIN_FIELD)
+        if not (isinstance(origin, str) and origin.strip()) or not isinstance(ni.get("file"), str):
+            continue
+        if ni.get("line") is None:
+            continue
+        ok, line = _coerce_line(ni.get("line"))
+        if not ok:
+            continue
+        anchor = _finding_anchor(dict(ni, line=line))
+        origins_by_anchor.setdefault(anchor, set()).add(origin)
+    bound, ambiguous = {}, []
+    for finding in compiled:
+        if not isinstance(finding, dict) or finding.get("summaryEntry"):
+            continue
+        key = _finding_identity_key(finding)
+        origins = origins_by_anchor.get(_finding_anchor(finding))
+        if key and origins and len(origins) == 1:
+            bound[key] = next(iter(origins))
+        elif key and origins:
+            ambiguous.append(key)
+    existing = state.get(AUDIT_SPAWNED_KEY)
+    if isinstance(existing, dict):
+        for key in ambiguous:
+            existing.pop(key, None)
+    if bound:
+        spawned = state.get(AUDIT_SPAWNED_KEY)
+        if not isinstance(spawned, dict):
+            spawned = state[AUDIT_SPAWNED_KEY] = {}
+        spawned.update(bound)
+
+
 def _fold_scoped(state, config, artifact):
     """Fold the scoped new-finding scan over the fix's new surface; its candidates + the audits'
     new-issue candidates route through the same stage/cluster/verify fold."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
     new_issues = state.pop("_newIssues", None) or []  # consumed: the terminal seeds only what is left
-    combined = list(candidates) + [ni for ni in new_issues if isinstance(ni, dict)]
-    compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    new_issues = [ni for ni in new_issues if isinstance(ni, dict)]
+    # axis: a scoped-finder seat never supplies a parent link — only an audit's new issue carries one
+    scoped = [{k: v for k, v in c.items() if k != AUDIT_ORIGIN_FIELD} if isinstance(c, dict) else c
+              for c in candidates]
+    compiled, drops = mechanical_compile(scoped + new_issues, state.get("reviewedDiff"))
+    _bind_audit_spawned(state, new_issues, compiled)
     _record_compile_drops(state, drops)
     state["_postAudit"] = True
     if compiled:
