@@ -431,3 +431,21 @@ def test_split_segments_with_ends_names_the_boundary_that_flushed_each_segment()
     assert wg._split_segments_with_ends("eval 'git' `echo x`; ls") == [
         ("eval 'git'", "`"), ("echo x", "`"), ("ls", ""),
     ]
+
+
+@pytest.mark.parametrize("command", [
+    "eval git reset>'/tmp/output log' --hard",
+    "bash -c 'git reset>\"/tmp/error log\" --hard'",
+    "eval git '\"reset\" --hard<<<\" x\"'",
+])
+def test_quoted_redirection_target_attached_to_a_destructive_word_is_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+@pytest.mark.parametrize("command", [
+    "git diff --word-diff-regex='<[^>]*>'",
+    'git commit -m "a->b"',
+    'git commit -m "a>b"',
+])
+def test_angle_brackets_inside_quoted_git_arguments_stay_allowed(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command

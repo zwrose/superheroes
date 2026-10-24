@@ -988,11 +988,10 @@ def segment_accounting(command, cwd=None, _depth=0):
         _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
-        # A word still holding < or > after the real redirections went hides what Bash consumes.
-        # A git word holding whitespace was quoted (a `-m "$(cat <<EOF ...)"` message): it counts only
-        # when the segment mentions a destructive git.
+        # A raw word still holding < or > outside its quoted spans after the real redirections
+        # went hides what Bash consumes.
         attached = (mentions or parsed is not None) and any(
-            c in tok for tok in tokens if mentions or len(tok.split()) == 1 for c in "<>")
+            re.search("[<>]", re.sub(r"'[^']*'|\"[^\"]*\"", "", w)) for w in _drop_redirections(all_raw))
         if _depth >= 1 and (attached or tokens and (
                 any(c in tokens[0] for c in "$`\\")
                 or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
