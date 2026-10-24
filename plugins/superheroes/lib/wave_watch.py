@@ -1802,10 +1802,17 @@ def _cloud_endings(comments, watched):
 
 
 def _cloud_closes(comments, watched):
-    """{launch id: created epoch of the close} for each reopened watched lane whose comments show one.
+    """{launch id: created epoch of the close} for each reopened watched lane whose comments show one."""
+    return {lid: close for lid, (close, _kind) in _cloud_close_kinds(comments, watched).items()}
+
+
+def _cloud_close_kinds(comments, watched):
+    """{launch id: (created epoch of the close, its ending kind)} for each reopened watched lane showing one.
 
     The close is the lane's first ending (handback, stop, park or handover) created at or after its
-    reopenedAt that is not a superseded park, by the same rule `_cloud_terminals` applies.
+    reopenedAt that is not a superseded park, by the same rule `_cloud_terminals` applies. The kind
+    travels with the close so a later partial read can tell a park close, which later activity can
+    supersede, from a handback, stop or handover close, which stays.
     """
     reopened = {lid for lid, info in watched.items() if "reopenedAt" in info}
     if not reopened:
@@ -1822,7 +1829,7 @@ def _cloud_closes(comments, watched):
         # axis: the first ending that is not a superseded park closes a reopened lane, so a later note or ending is not its own — see bite-proof record wo_2148_fix_order.md
         if lid not in closes and not (
                 kind == "park" and _park_superseded(lid, created, progress, note_times)):
-            closes[lid] = created
+            closes[lid] = (created, kind)
     return closes
 
 
@@ -1969,7 +1976,9 @@ def _evaluate_cloud_comments(
     caller set it. `closed_out` is a one-slot list set to the closes of the reopened lanes the complete read
     shows closed ({launch id: created epoch}, `_cloud_closes`); a read that made no request or was partial
     shows none, so the slot is left as the caller set it. `known_closes` is the closes an earlier complete
-    read showed for the lanes' current reopening: a partial read filters notes and endings by them. `unread_out` is a dict that gains {launch id: issue} for each watched
+    read showed for the lanes' current reopening ({launch id: (close epoch, ending kind)}): a partial read
+    filters notes and endings by them, after dropping from it (in place) each park close the observed
+    comments show superseded. `unread_out` is a dict that gains {launch id: issue} for each watched
     lane when a request was made and came back partial: any watched issue may hold a comment on an unread page.
     """
     watched = {
@@ -2006,12 +2015,22 @@ def _evaluate_cloud_comments(
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
-    closes = _cloud_closes(comments, watched) if state else {
-        lid: close for lid, close in (known_closes or {}).items() if lid in watched
-    }
+    close_kinds = _cloud_close_kinds(comments, watched) if state else {}
+    closes = {lid: close for lid, (close, _kind) in close_kinds.items()}
+    if not state and known_closes:
+        progress = _cloud_progress(comments, watched)
+        note_times = _cloud_note_times(comments, watched)
+        for lid, (close, kind) in list(known_closes.items()):
+            if lid not in watched:
+                continue
+            # axis: a cached park close that the comments a partial read observed show superseded is dropped from the cache, never kept to filter out the note that superseded it — see bite-proof record wo_2148_fix_order.md
+            if kind == "park" and _park_superseded(lid, close, progress, note_times):
+                del known_closes[lid]
+                continue
+            closes[lid] = close
     # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
     if state and isinstance(closed_out, list) and closed_out:
-        closed_out[0] = dict(closes)
+        closed_out[0] = dict(close_kinds)
     notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
         (note for note in notes if note is not None),
@@ -2903,13 +2922,15 @@ def _evaluate_tick(
             )
         progress_out = [None]
         closed_out = [None]
-        # Stored closes ({launch id: (the reopenedAt it was closed at, its close epoch)}) hold only
-        # for the reopening they were read at: a newer fix order starts a new window.
+        # Stored closes ({launch id: (the reopenedAt it was closed at, its close epoch, its ending kind)})
+        # hold only for the reopening they were read at: a newer fix order starts a new window.
         stored_closes = closed_state[0] if closed_state is not None else None
         known_closes = {
-            lid: pair[1] for lid, pair in (stored_closes if isinstance(stored_closes, dict) else {}).items()
-            if lid in live_lanes and live_lanes[lid].get("reopenedAt") == pair[0]
+            lid: (triple[1], triple[2])
+            for lid, triple in (stored_closes if isinstance(stored_closes, dict) else {}).items()
+            if lid in live_lanes and live_lanes[lid].get("reopenedAt") == triple[0]
         }
+        closes_before = set(known_closes)
         builder_notes, cloud_terminals = _evaluate_cloud_comments(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
@@ -2938,17 +2959,23 @@ def _evaluate_tick(
             stale_cloud_launches, live_lanes, progress, time.time(),
         )
         # A complete read replaces the stored closes ({launch id: (the reopenedAt it was closed at, the
-        # close's created epoch)}); a tick without one keeps those whose lane has not been sent a newer
-        # fix order since.
+        # close's created epoch, its ending kind)}); a tick without one keeps those whose lane has not
+        # been sent a newer fix order since, less each park close a partial read showed superseded.
         if closed_out[0] is not None:
             closed = set(closed_out[0])
             if closed_state is not None:
                 closed_state[0] = {
-                    lid: (live_lanes[lid].get("reopenedAt"), close) for lid, close in closed_out[0].items()
+                    lid: (live_lanes[lid].get("reopenedAt"), close, kind)
+                    for lid, (close, kind) in closed_out[0].items()
                 }
         else:
             # axis: a stored close is kept on a tick with no complete read, only for the reopenedAt it was read at — see bite-proof record wo_2148_fix_order.md
             closed = set(known_closes)
+            dropped = closes_before - closed
+            if dropped and closed_state is not None and isinstance(closed_state[0], dict):
+                closed_state[0] = {
+                    lid: triple for lid, triple in closed_state[0].items() if lid not in dropped
+                }
         # A reopened lane its comments show closed is no longer watched: never stale, whichever rule said so.
         stale_cloud_launches = [
             entry for entry in stale_cloud_launches if entry["launchId"] not in closed

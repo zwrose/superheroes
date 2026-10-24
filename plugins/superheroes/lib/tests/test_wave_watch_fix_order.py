@@ -185,6 +185,21 @@ def test_row2_a_partial_read_does_not_surface_an_ending_after_the_close_a_comple
     assert result["event"] == ww.EVENT_TIMER
 
 
+def test_row2_a_partial_read_drops_a_cached_park_close_that_a_note_it_shows_supersedes(repo):
+    _reopened(repo)
+    assert _note_answered(repo, 5)["ok"] is True
+    park, note = _later(5, _ending("park"), secs=10), _later(6, secs=20)
+    # axis: a cached park close that the comments a partial read observed show superseded is dropped, so its note surfaces — see bite-proof record wo_2148_fix_order.md
+    gh = _NoteGh([park], script=[
+        lambda argv: _ok(argv, [park]),
+        lambda argv: _ok(argv, [park, note], link=True),  # page one: the park and a note after it
+        lambda argv: _raw(argv, "HTTP/2.0 502 Bad Gateway\r\n\r\n"),  # page two fails
+    ])
+    result = ww.watch_arm(repo, _BATCH, max_seconds=2, interval_seconds=1, gh_run=gh)
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [n["commentId"] for n in result["notes"]] == [6]
+
+
 def test_row2_a_later_reoutcome_closes_the_fix_order_and_the_lane_is_not_watched(repo):
     _reopened(repo)
     assert ll.amend(repo, "cloud-a", "reoutcome", "handback", "re-handed back")["ok"] is True
