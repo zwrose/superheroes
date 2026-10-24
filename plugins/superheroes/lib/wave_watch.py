@@ -151,9 +151,7 @@ import heartbeat as hb  # noqa: E402
 import stack_check as sc  # noqa: E402
 import store_core  # noqa: E402
 
-_GH_PR_LIST_ARGV = [
-    "gh", "pr", "list", "--state", "open", "--json", "number", "--limit", "1000",
-]
+_GH_PR_LIST_ARGV = sc.open_prs_argv(("number",))
 
 _MIN_PR_POLL_SECONDS = 1.0
 
@@ -853,11 +851,7 @@ def _transcript_cold(
     return still_stale
 
 
-def _parse_pr_numbers(stdout):
-    try:
-        parsed = json.loads(stdout)
-    except (ValueError, TypeError):
-        return None
+def _pr_numbers_from_rows(parsed):
     if not isinstance(parsed, list):
         return None
     numbers = []
@@ -869,6 +863,12 @@ def _parse_pr_numbers(stdout):
             return None
         numbers.append(number)
     return numbers
+
+
+def _stack_deadline_at(remaining):
+    """The seconds left on the watch's deadline (measured on the injected monotonic) as the absolute
+    time.monotonic() deadline_at the stack_check readers take."""
+    return time.monotonic() + remaining
 
 
 def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env, granted=False):
@@ -1022,23 +1022,23 @@ def _poll_open_pr_numbers(
     if timeout < _MIN_PR_POLL_SECONDS:
         return None, False
     try:
-        proc = gh_run(
-            _GH_PR_LIST_ARGV,
-            capture_output=True,
-            text=True,
+        # axis: the REST list is read only on the proxy's GraphQL refusal, inside list_open_prs
+        rows, refusal = sc.list_open_prs(
+            ("number",),
+            run=gh_run,
             timeout=timeout,
-            cwd=repo_root,
-            env=_gh_scrub_env(env),
+            deadline_at=_stack_deadline_at(remaining),
+            run_kwargs=dict(cwd=repo_root, env=_gh_scrub_env(env)),
         )
     except Exception:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
         return None, False
 
-    if proc.returncode != 0:
+    if refusal is not None:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
         return None, False
 
-    numbers = _parse_pr_numbers(proc.stdout)
+    numbers = _pr_numbers_from_rows(rows)
     if numbers is None:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
         return None, False
@@ -1125,6 +1125,180 @@ def _lane_activity_epoch(repository, number):
     return max(epochs)
 
 
+class _RestUnreadable(Exception):
+    """A REST part of the cloud activity read failed, or cannot be established whole."""
+
+
+# What GraphQL's `first:` returns for one issue; a longer list is a partial read (hasNextPage).
+_ACTIVITY_PR_LIMIT = 10
+_ACTIVITY_BRANCH_LIMIT = 50
+_MANUAL_LINK_EVENTS = ("connected", "disconnected")
+
+
+# GitHub's closing connection: the keyword and its reference sit together on one line, the
+# reference being #n, owner/repo#n or an issue URL. (Not the shared first-line CLOSES_RE, which
+# lets \s+ cross paragraphs and cannot read a URL.)
+_CLOSING_REF_RE = re.compile(
+    sc.CLOSING_KEYWORD + r"[ \t]*:?[ \t]+"
+    r"(?:(?P<slug>[^/\s#]+/[^/\s#]+)#(?P<n>\d+)(?!\w)|#(?P<bare>\d+)(?!\w)"
+    r"|https?://(?:www\.)?github\.com/(?P<uslug>[^/\s#]+/[^/\s#]+)/issues/(?P<un>\d+)(?![\w/]))",
+    re.IGNORECASE)
+
+
+def _closing_pr_numbers_rest(timeline, slug, number):
+    """The PR numbers whose body names this repository's issue with a closing keyword. Raises
+    _RestUnreadable for a link the REST timeline cannot name or a closing link from another repository."""
+    # axis: a manual link names no PR in the REST timeline, so the closing set cannot be established
+    if any(isinstance(row, dict) and row.get("event") in _MANUAL_LINK_EVENTS for row in timeline):
+        raise _RestUnreadable("manual link")
+    found = {}
+    for row in timeline:
+        if not isinstance(row, dict):
+            raise _RestUnreadable("timeline row")
+        if row.get("event") != "cross-referenced":
+            continue
+        source = row.get("source")
+        issue = source.get("issue") if isinstance(source, dict) else None
+        if not isinstance(issue, dict):
+            raise _RestUnreadable("cross-reference without an issue")
+        if "pull_request" not in issue:
+            continue
+        pr_number = issue.get("number")
+        if not isinstance(pr_number, int) or isinstance(pr_number, bool):
+            raise _RestUnreadable("cross-reference number")
+        body = issue.get("body")
+        if body is None:
+            body = ""
+        if not isinstance(body, str):
+            raise _RestUnreadable("cross-reference body")
+        repository = issue.get("repository")
+        pr_repo = repository.get("full_name") if isinstance(repository, dict) else None
+        in_repo = isinstance(pr_repo, str) and pr_repo.lower() == slug.lower()
+        names_here = False
+        for match in _CLOSING_REF_RE.finditer(body):
+            ref_number = match.group("n") or match.group("bare") or match.group("un")
+            if ref_number != str(number):
+                continue
+            target = match.group("slug") or match.group("uslug")
+            if target is None:
+                # A bare #n names the issue of the repository the pull request is in.
+                if not isinstance(pr_repo, str):
+                    raise _RestUnreadable("cross-reference repository")
+                names_here = names_here or in_repo
+            elif target.lower() == slug.lower():
+                names_here = True
+        if not names_here:
+            continue
+        # axis: a closing link from another repository is not readable here
+        if not in_repo:
+            raise _RestUnreadable("cross-repository closing link")
+        found[pr_number] = True
+    return sorted(found)
+
+
+def _cloud_activity_repository_rest(
+    slug, issues, repo_root, env, gh_run, timeout, deadline_at,
+):
+    """GraphQL's `data.repository` for the cloud activity query, built from REST reads, or None.
+
+    Any one read that fails, or a completeness REST cannot establish, makes the whole read None,
+    as one failed GraphQL query fails every issue. Never raises."""
+    run_kwargs = dict(cwd=repo_root, env=_gh_scrub_env(env))
+    base = "repos/%s" % slug
+
+    def get(path):
+        payload, refusal = sc._transport_rest(
+            ["gh", "api", path], timeout, gh_run, None, None, 0,
+            deadline_at=deadline_at, run_kwargs=run_kwargs,
+        )
+        # axis: a failed read makes the whole read None, never a partial answer
+        if refusal is not None:
+            raise _RestUnreadable(path)
+        return payload
+
+    def get_list(path):
+        rows, refusal = sc.read_rest_list(
+            path, run=gh_run, timeout=timeout, deadline_at=deadline_at, run_kwargs=run_kwargs,
+        )
+        # axis: a failed page makes the whole read None, never a partial answer
+        if refusal is not None:
+            raise _RestUnreadable(path)
+        return rows
+
+    try:
+        default_branch = get(base).get("default_branch")
+        if not isinstance(default_branch, str) or not default_branch:
+            return None
+        heads = []
+        for row in get_list(base + "/branches"):
+            commit = row.get("commit") if isinstance(row, dict) else None
+            name = row.get("name") if isinstance(row, dict) else None
+            sha = commit.get("sha") if isinstance(commit, dict) else None
+            if not isinstance(name, str) or not isinstance(sha, str):
+                return None
+            heads.append((name, sha))
+        commit_dates = {}
+        repository = {}
+        for number in issues:
+            issue = get("%s/issues/%d" % (base, number))
+            # axis: GraphQL's issue(number:) errors on a pull request, which fails the whole query
+            if "pull_request" in issue or issue.get("number") != number:
+                return None
+            pr_numbers = _closing_pr_numbers_rest(
+                get_list("%s/issues/%d/timeline" % (base, number)), slug, number,
+            )
+            closing = []
+            for pr_number in pr_numbers:
+                pull = get("%s/pulls/%d" % (base, pr_number))
+                pull_base = pull.get("base")
+                head = pull.get("head")
+                base_ref = pull_base.get("ref") if isinstance(pull_base, dict) else None
+                head_ref = head.get("ref") if isinstance(head, dict) else None
+                if not isinstance(base_ref, str):
+                    return None
+                if base_ref != default_branch:
+                    snapshot, refusal = sc._parse_rest_pull(pull, slug, pr_number, 0)
+                    # axis: a closing keyword counts off the default branch only for a stack layer; a stack read that cannot say makes the whole read None
+                    if snapshot is None:
+                        if refusal["reason"] == sc.REASON_NOT_LINKED:
+                            continue
+                        return None
+                if not isinstance(head_ref, str) or not isinstance(pull.get("updated_at"), str):
+                    return None
+                closing.append({
+                    "number": pr_number,
+                    "updatedAt": pull.get("updated_at"),
+                    "headRefName": head_ref,
+                })
+            repository["i%d" % number] = {
+                "updatedAt": issue.get("updated_at"),
+                "closedByPullRequestsReferences": {
+                    "pageInfo": {"hasNextPage": len(closing) > _ACTIVITY_PR_LIMIT},
+                    "nodes": closing[:_ACTIVITY_PR_LIMIT],
+                },
+            }
+            # GraphQL's refs(query:) matches substrings; only a whole-number match is ever read.
+            matching = [(name, sha) for name, sha in heads if str(number) in name]
+            nodes = []
+            for name, sha in matching[:_ACTIVITY_BRANCH_LIMIT]:
+                target = {}
+                if len(matching) <= _ACTIVITY_BRANCH_LIMIT and carries_issue(name, number):
+                    if sha not in commit_dates:
+                        committer = get("%s/git/commits/%s" % (base, sha)).get("committer")
+                        commit_dates[sha] = committer.get("date") if isinstance(committer, dict) else None
+                    if not isinstance(commit_dates[sha], str):
+                        return None
+                    target = {"committedDate": commit_dates[sha]}
+                nodes.append({"name": name, "target": target})
+            repository["b%d" % number] = {
+                "pageInfo": {"hasNextPage": len(matching) > _ACTIVITY_BRANCH_LIMIT},
+                "nodes": nodes,
+            }
+        return repository
+    except Exception:
+        return None
+
+
 def _fetch_cloud_activity(
     repo_root, issues, deadline, monotonic, gh_run, env, known_slug, slug_cell=None,
 ):
@@ -1164,7 +1338,18 @@ def _fetch_cloud_activity(
             env=_gh_scrub_env(env),
         )
         if proc.returncode != 0:
-            return unreadable
+            # axis: only the proxy's GraphQL refusal re-reads through REST; any other failure stays unreadable
+            if not sc._is_graphql_proxy_refusal_proc(proc):
+                return unreadable
+            repository = _cloud_activity_repository_rest(
+                slug, issues, repo_root, env, gh_run, timeout,
+                _stack_deadline_at(deadline - monotonic()),
+            )
+            if repository is None:
+                return unreadable
+            return {
+                number: _lane_activity_epoch(repository, number) for number in issues
+            }
         parsed = json.loads(proc.stdout)
         if not isinstance(parsed, dict) or "errors" in parsed:
             return unreadable
