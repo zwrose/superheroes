@@ -928,17 +928,14 @@ def _status(rec, unread=(), finding_lines=()):
 
 
 def _owner_only(rec, missing_lines):
-    """True when the record reads not-reviewed for nothing but findings left for the owner.
-
-    Whether any raw output was withheld is known only in `write`, which downgrades the status there."""
-    if rec["status"] != NOT_REVIEWED or rec["parked"] or rec["withheldFromReviewers"] != []:
+    """True when the record reads not-reviewed, is not parked, and every missing line is a leftover line: with its leftovers it reads awaits-owner exactly when the same record without them reads reviewed."""
+    if rec["status"] != NOT_REVIEWED or rec["parked"]:
         return False
     leftovers = {leftover_line(f) for f in rec["findings"] if f.get("outcome") == _LEFT_FOR_OWNER}
     # axis: a record is awaits-owner only when every missing line is a leftover finding
     if not missing_lines or not all(m in leftovers for m in missing_lines):
         return False
-    # axis: a planned reviewer that ran on an earlier commit keeps the record not-reviewed
-    return all(v["coversFinalCommit"] for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run")
+    return True
 
 
 def _ruling_hits(findings, key):
@@ -1934,9 +1931,6 @@ def write(account_path, repo_root, readers=None):
                 raise Refusal("review-record-gh-failed", f"the raw output comment for {name} could not be written")
             links.append({"file": name, "id": sent["id"], "url": sent.get("url"), "withheld": withheld})
         record.update(rawOutputs=links, previousRecord=previous)
-        # axis: a withheld raw output is known only here, so the owner-only status is taken back before the record renders
-        if record["status"] == AWAITS_OWNER and any(x["withheld"] for x in links):
-            record["status"] = NOT_REVIEWED
         plan = render_plan(record)
         # The parts go up before the head: a write that stops part-way leaves parts no head names, never a half record.
         part_ids = []

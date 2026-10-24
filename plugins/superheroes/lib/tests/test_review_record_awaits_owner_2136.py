@@ -1,10 +1,9 @@
 """The `awaits-owner` review-record status (#2136).
 
-A record reads `awaits-owner` exactly when it would read `not-reviewed` and every line of its `whatIsMissing`
-is the leftover line of a finding left for the owner, nothing was withheld from the reviewers (the list is
-known and empty), no raw output was withheld (known only in `write`), every planned reviewer that ran covers
-the final commit, and the record is not parked. Every reader of `status` treats it as `not-reviewed`; only
-`reviewed` clears.
+A record reads `awaits-owner` exactly when it would read `not-reviewed`, it is not parked, its `whatIsMissing`
+is non-empty, and every line of it is the leftover line of one of its own findings left for the owner. With
+its leftovers it reads `awaits-owner` if and only if the same record without them reads `reviewed`. Every
+reader of `status` treats it as `not-reviewed`; only `reviewed` clears.
 
 Edges: E1 withheldFromReviewers null · E2 empty whatIsMissing reads reviewed · E3 a leftover line for a finding
 that is not left-for-owner · E4 parked · E5 a raw output withheld · E6 a planned reviewer that ran on an earlier
@@ -12,6 +11,8 @@ commit · E7 an unknown status at a reader · E8 go-ahead note lines · E9 an un
 """
 import re
 from pathlib import Path
+
+import pytest
 
 import review_record as rr
 from test_pr_sheet import BIG, bundle as sheet_bundle, build as sheet_build, fill
@@ -117,16 +118,16 @@ def test_a_reviewed_record_stays_reviewed(tmp_path):
     assert rec["status"] == rr.REVIEWED and rec["whatIsMissing"] == []
 
 
-def test_leftovers_with_a_withheld_path_stay_not_reviewed(tmp_path):
-    # axis: withheldFromReviewers must be the empty list; a withheld path no reviewer saw
+def test_leftovers_with_a_withheld_path_read_awaits_owner(tmp_path):
+    # axis: a withheld path narrowing the status; it keeps no record from reviewed, so it must not keep one from awaits-owner
     rec = build(acct(tmp_path), Clean(withheld=["x/.claude/settings.json"]))
-    assert rec["withheldFromReviewers"] == ["x/.claude/settings.json"] and rec["status"] == rr.NOT_REVIEWED
+    assert rec["withheldFromReviewers"] == ["x/.claude/settings.json"] and rec["status"] == rr.AWAITS_OWNER
 
 
-def test_leftovers_with_an_unknown_withheld_list_stay_not_reviewed():
-    # axis: E1, a null withheld list is not an empty one; an account naming no repository reads no changed files
+def test_leftovers_with_an_unknown_withheld_list_read_awaits_owner():
+    # axis: E1, a null withheld list narrowing the status; an account naming no repository reads no changed files
     rec = build(account(findings=left_two()), Clean())
-    assert rec["withheldFromReviewers"] is None and rec["status"] == rr.NOT_REVIEWED
+    assert rec["withheldFromReviewers"] is None and rec["status"] == rr.AWAITS_OWNER
 
 
 def test_leftovers_with_an_unreadable_raw_file_stay_not_reviewed(tmp_path):
@@ -137,15 +138,15 @@ def test_leftovers_with_an_unreadable_raw_file_stay_not_reviewed(tmp_path):
     assert f"the raw output file {gone} could not be read" in rec["whatIsMissing"]
 
 
-def test_a_withheld_raw_output_takes_awaits_owner_back_at_write(tmp_path):
-    # axis: E5, a raw output withheld for a credential is known only in write; the record must read not-reviewed there
+def test_a_withheld_raw_output_still_reads_awaits_owner_at_write(tmp_path):
+    # axis: E5, a withheld raw output narrowing the status at write; its text stays out of the posted comments, the status is unchanged
     secret, clean = tmp_path / "secret.txt", tmp_path / "clean.txt"
     secret.write_text('password = "LEAKMARK"\n')
     clean.write_text("intro\nnothing sensitive here\n")
     bad = Clean()
     out = send(tmp_path, bad, repoRoot=str(tmp_path), findings=left_two(), rawFindingsFiles=[str(secret)])
-    assert out["status"] == rr.NOT_REVIEWED
-    assert rr.read(7, readers=bad.readers())["status"] == rr.NOT_REVIEWED
+    assert out["status"] == rr.AWAITS_OWNER
+    assert rr.read(7, readers=bad.readers())["status"] == rr.AWAITS_OWNER
     assert "LEAKMARK" not in "".join(c["body"] for c in bad.comments)
     good = Clean()
     out = send(tmp_path, good, repoRoot=str(tmp_path), findings=left_two(), rawFindingsFiles=[str(clean)])
@@ -153,13 +154,66 @@ def test_a_withheld_raw_output_takes_awaits_owner_back_at_write(tmp_path):
     assert rr.read(7, readers=good.readers())["status"] == rr.AWAITS_OWNER
 
 
-def test_leftovers_in_a_mixed_head_fix_round_stay_not_reviewed(tmp_path):
-    # axis: every planned reviewer that ran covers the final commit; specialists on an earlier commit beside a covering auditor
+def test_leftovers_in_a_mixed_head_fix_round_read_awaits_owner(tmp_path):
+    # axis: a per-seat coverage check narrowing the status; specialists on an earlier commit beside a covering auditor
     rec = build(_fix_round_account(repoRoot=str(tmp_path), findings=left_two()), Clean(runs=_fix_round_runs()))
     assert [v["coversFinalCommit"] for v in rec["reviewers"]] == [False, False, True]
-    assert rec["status"] == rr.NOT_REVIEWED and rec["whatIsMissing"] == lines_of(left_two())
+    assert rec["status"] == rr.AWAITS_OWNER and rec["whatIsMissing"] == lines_of(left_two())
     same = build(_fix_round_account(repoRoot=str(tmp_path)), Clean(runs=_fix_round_runs()))
     assert same["status"] == rr.REVIEWED
+
+
+GO_AHEAD = {"reviewer": "security-reviewer", "kind": "owner-words", "words": "go ahead", "where": "the issue thread"}
+NOT_RUN = reviewer("security-reviewer", ran=False, runDir=None)
+
+
+def _read_status(tmp_path, findings, fake=None, **over):
+    return build(acct(tmp_path, findings=findings, **over), fake or Clean())["status"]
+
+
+def _undecided(tmp_path, findings):
+    return _read_status(tmp_path, [*findings, finding("f3", outcome=None)])
+
+
+def _unreadable(tmp_path, findings):
+    return _read_status(tmp_path, findings, rawFindingsFiles=[str(tmp_path / "gone.txt")])
+
+
+def _credential(tmp_path, findings):
+    secret = tmp_path / "secret.txt"
+    secret.write_text('password = "LEAKMARK"\n')
+    return send(tmp_path, Clean(), repoRoot=str(tmp_path), findings=findings, rawFindingsFiles=[str(secret)])["status"]
+
+
+SHAPES = {
+    "clean": (rr.AWAITS_OWNER, lambda p, f: _read_status(p, f)),
+    "ci-red": (rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, Clean(ci=RED))),
+    "reviewer-did-not-run": (rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, reviewers=[reviewer(), NOT_RUN])),
+    "reviewer-did-not-run-with-go-ahead": (
+        rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, reviewers=[reviewer(), NOT_RUN], goAheads=[GO_AHEAD])),
+    "undecided-finding": (rr.NOT_REVIEWED, _undecided),
+    "no-maker": (rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, makers=[])),
+    "mixed-head-fix-round": (rr.AWAITS_OWNER, lambda p, f: build(
+        _fix_round_account(repoRoot=str(p), findings=f), Clean(runs=_fix_round_runs()))["status"]),
+    "withheld-path": (rr.AWAITS_OWNER, lambda p, f: _read_status(p, f, Clean(withheld=["x/.claude/settings.json"]))),
+    "null-withheld-list": (rr.AWAITS_OWNER, lambda p, f: build(account(findings=f), Clean())["status"]),
+    "unreadable-raw-file": (rr.NOT_REVIEWED, _unreadable),
+    "credential-raw-output": (rr.AWAITS_OWNER, _credential),
+}
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_awaits_owner_iff_the_record_without_leftovers_reads_reviewed(tmp_path, shape):
+    # axis: the parity; a narrowing condition on awaits-owner that does not also keep the leftover-free record from reviewed
+    expected, make = SHAPES[shape]
+    arms = {}
+    for arm, findings in (("with", left_two()), ("without", [])):
+        (tmp_path / arm).mkdir()
+        arms[arm] = make(tmp_path / arm, findings)
+    with_leftovers, without = arms["with"], arms["without"]
+    assert with_leftovers in (rr.AWAITS_OWNER, rr.NOT_REVIEWED)
+    assert (with_leftovers == rr.AWAITS_OWNER) == (without == rr.REVIEWED)
+    assert with_leftovers == expected
 
 
 def test_leftovers_ruled_through_owner_rulings_read_reviewed(tmp_path):
@@ -202,27 +256,28 @@ def test_the_sheet_reads_awaits_owner_exactly_as_not_reviewed():
     assert awaiting == unread
     assert _sheet_history("future-status") == unread
     assert _sheet_history(None) == unread
-    assert fill("historyLeftovers", count=2) == "2 findings are left for you below."
-    assert awaiting.count("2 findings are left for you below.") == 1
+    expected = fill("historyLeftovers", count=2)
+    assert awaiting.count(expected) == 1
     assert _sheet_history("reviewed") != unread
 
 
 SKIPPED = ("review_record.py",)
 STATUS_LITERAL = re.compile(r"""["']not-reviewed["']""")
 REVIEWED_COMPARE = re.compile(r"""(?:[=!]=\s*["']reviewed["']|["']reviewed["']\s*[=!]=)""")
+STATUS_CONSTANT = re.compile(r"\b(NOT_REVIEWED|REVIEWED|AWAITS_OWNER)\b")
 
 
 def test_no_reader_outside_review_record_spells_the_status_literals():
-    # axis: the status vocabulary has one home; a reader comparing against the literal instead of review_record.cleared
+    # axis: the status vocabulary has one home; a reader comparing against the literal or the exported constant instead of review_record.cleared
     found = []
     for path in sorted(LIB.rglob("*.py")):
         rel = path.relative_to(LIB)
         if "tests" in rel.parts or "__pycache__" in rel.parts or rel.name.startswith("test_") or rel.name in SKIPPED:
             continue
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if STATUS_LITERAL.search(line) or REVIEWED_COMPARE.search(line):
+            if STATUS_LITERAL.search(line) or REVIEWED_COMPARE.search(line) or STATUS_CONSTANT.search(line):
                 found.append(f"{rel}:{n}: {line.strip()}")
-    assert not found, "status literals outside review_record.py:\n" + "\n".join(found)
+    assert not found, "status literals or constants outside review_record.py:\n" + "\n".join(found)
 
 
 DOCTRINE = (

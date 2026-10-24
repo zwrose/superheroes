@@ -36,7 +36,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 ### Review record: `awaits-owner` when only owner calls are left
 
 - A review record whose only open lines are findings left for the owner now reads `awaits-owner` instead of `not-reviewed`, and its summary's first line reads "reviewed; N findings wait for your decision" with their ids (a count only, in a compacted summary). For the owner: the review itself is complete, and what is left is their decision on those findings.
-- It needs nothing else open: no missing review, every planned reviewer that ran covering the final commit, no park, CI green on the final commit, nothing withheld from reviewers and no raw output withheld. Any other open line keeps `not-reviewed`.
+- It needs nothing else open: every line of the record's `whatIsMissing` is a finding left for the owner, so the same record without those findings would read `reviewed`. Any other open line (a missing review, CI not green on the final commit, an undecided finding, an unread raw output, no planned reviewer covering the final commit) keeps `not-reviewed`. A withheld path or raw output, or reviewers that covered an earlier commit beside one that covered the final commit, change nothing here, because they do not keep a record from `reviewed` either.
 - It never clears a gate. The merge sheet builder, the vet's review-record checks and every other reader treat it exactly as `not-reviewed` until the owner rules; once the findings are ruled (`ownerRulings`) the record reads `reviewed`. `lib/review_record.py` gains `REVIEWED`, `NOT_REVIEWED`, `AWAITS_OWNER`, `STATUSES` and `cleared(status)`, true only for `reviewed`.
 - No key, flag, or refusal reason changes.
 
