@@ -11,13 +11,16 @@ Five verbs, one JSON object on stdout each:
   route   --cwd W                       the one chokepoint: native, or the calibrated engine
   open    --run-dir D --order-path P --cwd W --base-sha S --deadline-seconds N
           [--expect-item X]... [--items-base-sha S] --seat JSON
-                                        journal ``run-opened`` and write ``agent-prompt.md``
+                                        journal ``run-opened``, write ``agent-prompt.md`` and print
+                                        the ``agent`` to dispatch, ``launchPrompt`` included
   enroll  --run-dir D                   run by the subagent, in its own worktree, as its first
-                                        Bash command; checks only, writes nothing to the journal
-                                        (the hook records the ``native-enrolled`` binding)
+                                        Bash command; checks the worktree, links the builder's
+                                        installed dependency folders into it, writes nothing to the
+                                        journal (the hook records the ``native-enrolled`` binding)
   wait    --run-dir D --max-wait S      poll for ``result.json`` or the deadline
   close   --run-dir D --worktree T --transcript F --into B [--forfeit deadline]
-                                        grade the run and collect the subagent's change into B
+                                        grade the run and collect the subagent's change into B,
+                                        enroll's untracked dependency links left out
 
 Exit 0 on ``ok: true`` and on a non-forfeit terminal (``needs_context``, ``blocked``); exit 1 on a
 refusal or a forfeit. Grading rests on git and on the harness's transcript and journal records.
@@ -39,6 +42,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import bite_proof_format  # noqa: E402  the record format an order that asks for one carries (#2082)
+import break_it  # noqa: E402  _link_dependencies, DEPENDENCY_DIRS — the one home of the dependency link and its guard
 import cloud_pass  # noqa: E402  _is_cloud
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import core_md  # noqa: E402  read_sandbox_access
@@ -93,6 +97,11 @@ The order follows, verbatim.
 ---
 
 """
+
+LAUNCH_PROMPT = (
+    "Read the file {PROMPT_PATH} in full with the Read tool before doing anything else, "
+    "then follow it exactly: it is your whole work order."
+)
 
 GIT_TIMEOUT = 60
 DEADLINE_MIN_SECONDS = 60
@@ -408,7 +417,8 @@ def _cmd_open(args):
     return {
         "ok": True, "terminal": False, "runDir": run_dir, "deadlineAt": record["deadlineAt"],
         "agent": {"subagent_type": _SUBAGENT_TYPE, "model": token, "isolation": "worktree",
-                  "run_in_background": True, "promptPath": prompt_path},
+                  "run_in_background": True, "promptPath": prompt_path,
+                  "launchPrompt": LAUNCH_PROMPT.replace("{PROMPT_PATH}", prompt_path)},
     }
 
 
@@ -417,6 +427,24 @@ def _cmd_open(args):
 
 def _enroll_refusal(reason):
     return {"ok": False, "reason": reason}
+
+
+def _enroll_dependencies(top, builder_top):
+    """Link the builder's installed dependency folders into ``top`` through the one guarded helper,
+    ``break_it._link_dependencies``. Returns the ``dependencies`` object: ``linked`` names exactly the links that
+    exist, and ``note`` the helper's reason, or why nothing was linked."""
+    installed = {name: os.path.isdir(os.path.join(builder_top, name)) for name in break_it.DEPENDENCY_DIRS}
+    present = {name: os.path.lexists(os.path.join(top, name)) for name in break_it.DEPENDENCY_DIRS}
+    reason = break_it._link_dependencies(builder_top, top)
+    linked = [name for name in break_it.DEPENDENCY_DIRS
+              if os.path.islink(os.path.join(top, name)) and not present[name]]
+    dependencies = {"linked": linked}
+    if reason:
+        dependencies["note"] = reason
+    elif not linked:
+        some = [name for name in installed if installed[name]]
+        dependencies["note"] = "already-present" if some and all(present[n] for n in some) else "none-installed"
+    return dependencies
 
 
 def _cmd_enroll(args):
@@ -456,7 +484,7 @@ def _cmd_enroll(args):
     head_rc, head, _ = _git(top, "rev-parse", "HEAD")
     if rc != 0 or head_rc != 0 or head.strip() != base:
         return _enroll_refusal("native-base-checkout-failed")
-    return {"ok": True, "head": base}
+    return {"ok": True, "head": base, "dependencies": _enroll_dependencies(top, builder_top)}
 
 
 # --- wait ----------------------------------------------------------------------------------
@@ -662,6 +690,16 @@ class _Close(object):
             if item_check.get("missing"):
                 return self._forfeit("items-undelivered", **extra)
         patch_path = os.path.join(self.run_dir, _PATCH_NAME)
+        for name in break_it.DEPENDENCY_DIRS:
+            link = os.path.join(target, name)
+            # axis: only enroll's own untracked link to the builder's folder is dropped; a path the base tracks, or a link resolving elsewhere, is collected as it stands
+            if (os.path.islink(link)
+                    and os.path.realpath(link) == os.path.realpath(os.path.join(into, name))
+                    and not _in_tree(target, base, name)):
+                try:
+                    os.unlink(link)
+                except OSError:
+                    return self._forfeit("native-collect-failed", **extra)
         if _git(target, "add", "-A")[0] != 0:
             return self._forfeit("native-collect-failed", **extra)
         rc, names, _ = _git(target, "diff", "--cached", "--name-only", "-z",
