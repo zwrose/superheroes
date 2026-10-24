@@ -2869,6 +2869,34 @@ def _listing_rows(parsed):
     return rows, pages, len(results)
 
 
+def _listing_created_ts(row):
+    """Epoch seconds of a row's ISO-8601 UTC ``created_at``, or ``None`` when absent or not that."""
+    raw = row.get("created_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith("Z") else raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None or stamp.utcoffset() != timedelta(0):
+        return None
+    return stamp.timestamp()
+
+
+def _page_newest_created(pages):
+    """Epoch of the newest row of the one complete page when its rows prove the page's span, else ``None``.
+
+    Every row needs a parseable UTC ``created_at`` and the rows must run newest-created first
+    (non-increasing); an empty page, an unparseable stamp or a page out of order proves nothing.
+    """
+    stamps = [_listing_created_ts(row) for row in pages[0]["data"]]
+    if not stamps or any(t is None for t in stamps):
+        return None
+    if any(later > earlier for earlier, later in zip(stamps, stamps[1:])):
+        return None
+    return stamps[0]
+
+
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     """None, or ``(reason, detail)``: an adoption must not launch beside a live original builder.
 
@@ -2930,6 +2958,8 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
         return unread("listing-shape")
     rows, pages, result_count = listing
     complete = result_count == 1 and len(pages) == 1 and pages[0].get("has_more") is False
+    # axis: a has_more-false page proves absence only when its rows are ordered and parseable, so a cursor-read last page cannot pass — see bite-proof record i2119_original_session
+    newest = _page_newest_created(pages) if complete else None
     live = []
     unproven = []
     for launch_id, info in candidates.items():
@@ -2938,7 +2968,12 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
         else:
             matched = [row for row in rows if row.get("title") == info["cloudSessionName"]]
         if not matched:
-            if not complete:
+            started_ts = info.get("startedTs")
+            # axis: absence needs the page's newest row created at or after the lane started, and a lane with no started time proves nothing — see bite-proof record i2119_original_session
+            if (
+                newest is None or not isinstance(started_ts, (int, float))
+                or isinstance(started_ts, bool) or newest < started_ts
+            ):
                 unproven.append(launch_id)
             continue
         # a row is not live only when it is archived or failed; any other row, an unknown status included, is live
@@ -2961,7 +2996,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
         return _ADOPT_ORIGINAL_SESSION_LIVE, {
             "originalSessions": live, "remedy": _ADOPT_ORIGINAL_REMEDY_LIVE,
         }
-    # axis: a candidate absent from a listing that is not one complete page is unproven, never gone — see bite-proof record i2119_original_session
+    # axis: a candidate absent from a listing that is not one complete page spanning its start is unproven, never gone — see bite-proof record i2119_original_session
     if unproven:
         return unread("listing-incomplete", launchIds=unproven)
     return None

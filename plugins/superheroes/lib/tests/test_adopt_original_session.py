@@ -7,6 +7,7 @@ that cannot be decided. Everything else refuses `adopt-original-session-live` or
 repositories are throwaway, with a bare remote under tmp_path for the cloud path, and the host listings
 are the recorded files under fixtures/cloud_sessions.
 """
+import calendar
 import json
 import os
 import time
@@ -39,6 +40,9 @@ LANE_ID = "lane-a"
 SESSION_ID = "session_01FixtureLane0000000000"
 SESSION_TITLE = "issue-656-fixturelane000001"
 HEX40 = "c" * 40
+# The seeded lane started at a fixed instant (2026-10-24T12:00:00Z) so the recorded fixture rows,
+# created at 11:13:25Z, are older than it whatever the clock reads when the suite runs.
+LANE_STARTED_TS = calendar.timegm((2026, 10, 24, 12, 0, 0))
 
 
 def _fixture(name):
@@ -57,7 +61,7 @@ def _seed_lane(
 ):
     """An earlier cloud lane for the issue that started a session, ended with `outcome` (None: still running)."""
     assert ll.append(repo, {
-        "event": "reserved", "launchId": launch_id, "ts": time.time() - 7260, "schema": ll.SCHEMA,
+        "event": "reserved", "launchId": launch_id, "ts": LANE_STARTED_TS - 60, "schema": ll.SCHEMA,
         "batchId": "wave-test", "repoId": ll.repo_identity(repo), "issue": issue,
         "surfaces": ["plugins/x-%s" % launch_id], "premise": {"issue": issue, "baseCommit": HEX40},
         "preflight": {}, "argv": [], "doctrineDigest": "abc123", "model": "test-model",
@@ -65,7 +69,7 @@ def _seed_lane(
         "configDir": "/cfg/acct",
     })
     started = {
-        "event": "started", "launchId": launch_id, "ts": time.time() - 7200, "schema": ll.SCHEMA,
+        "event": "started", "launchId": launch_id, "ts": LANE_STARTED_TS, "schema": ll.SCHEMA,
         "attempt": 1, "pid": 999999999, "logPath": "/tmp/log", "errPath": "/tmp/err",
         "cloudSessionName": title, "cloudSessionUrl": "https://claude.ai/code/session_x",
     }
@@ -278,6 +282,96 @@ def test_a_live_lane_wins_over_an_unproven_one(tmp_path):
     assert calls == []
 
 
+def _page_of(rows):
+    return {"data": rows, "has_more": False}
+
+
+def _unrelated_row(created_at, row_id="session_01Unrelated0000000000"):
+    return {"id": row_id, "title": "issue-1-other", "created_at": created_at}
+
+
+def test_a_complete_page_whose_rows_are_all_older_than_the_lane_start_refuses_incomplete(tmp_path):
+    # axis: a has_more-false page older than the lane start is a cursor-read last page, which proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    listing = _write_listing(tmp_path, _page_of([_unrelated_row("2026-10-24T11:59:59.000000Z")]))
+    result, calls = _adopt(repo, tmp_path, listing)
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_complete_page_whose_rows_are_out_of_created_order_refuses_incomplete(tmp_path):
+    # axis: rows not newest-created first prove nothing about the page's span
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [
+        _unrelated_row("2026-10-24T10:00:00.000000Z", "session_01Older00000000000000"),
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000"),
+    ]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+@pytest.mark.parametrize("created_at", [
+    "not-a-time", "2026-10-24T12:00:00", "2026-10-24T12:00:00+02:00", 12345, None,
+], ids=["garbage", "no-zone", "non-utc-zone", "not-a-string", "null"])
+def test_a_complete_page_with_an_unparseable_created_at_refuses_incomplete(tmp_path, created_at):
+    # axis: a created_at that is not an ISO-8601 UTC time proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T13:00:00.000000Z"), _unrelated_row("x", "session_01Bad")]
+    rows[1]["created_at"] = created_at
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_a_complete_page_with_no_created_at_refuses_incomplete(tmp_path):
+    # axis: a row with no created_at proves nothing about the page's span
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    listing = _write_listing(tmp_path, _page_of([{"id": "session_01Unrelated0000000000"}]))
+    result, calls = _adopt(repo, tmp_path, listing)
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_an_empty_complete_page_refuses_incomplete(tmp_path):
+    # axis: an empty page spans no instant, so absence from it proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of([])))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_a_lane_with_no_started_time_is_never_proven_gone(tmp_path, monkeypatch):
+    # axis: a candidate lane with no started timestamp proves nothing by absence
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    real_fold = ll.fold
+
+    def fold_without_started_ts(records):
+        folded = real_fold(records)
+        for info in folded["launches"].values():
+            info.pop("startedTs", None)
+        return folded
+
+    monkeypatch.setattr(ll, "fold", fold_without_started_ts)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_newer.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+
+
+def test_a_complete_page_with_a_row_newer_than_the_lane_start_proves_absence(tmp_path):
+    # axis: an ordered page whose newest row is at or after the lane start spans its creation, so absence is proven
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000"),
+        _unrelated_row("2026-10-24T12:00:00.000000Z", "session_01AtStart0000000000000"),
+        _unrelated_row("2026-10-24T09:00:00Z", "session_01Older00000000000000"),
+    ]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _proceeds(result, calls)
+
+
 # --- healthy launches proceed -------------------------------------------------------------
 
 
@@ -289,10 +383,10 @@ def test_an_adoption_with_no_prior_cloud_lane_proceeds_without_a_listing(tmp_pat
 
 
 def test_an_adoption_proceeds_when_a_complete_page_does_not_hold_the_session(tmp_path):
-    # axis: a session absent from one complete page is gone, and the launch goes ahead
+    # axis: a session absent from one complete page that reaches past the lane start is gone, and the launch goes ahead
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
-    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_without.json"))
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_newer.json"))
     _proceeds(result, calls)
 
 
@@ -437,3 +531,32 @@ def test_the_launch_command_accepts_and_forwards_cloud_sessions_file(tmp_path, m
         "--premise", premise_path, "--log-dir", str(tmp_path / "logs"),
     ])
     assert forwarded and all(kw["cloud_sessions_file"] is None for kw in forwarded)
+
+
+def test_the_launch_command_refuses_an_adoption_over_a_live_original_and_spawns_nothing(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: the shipped launch command, through the real launch guard, refuses live, accounts the refusal and spawns zero builders
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    spawns = []
+    monkeypatch.setattr(L, "default_cloud_spawn", _fake_spawn(calls=spawns))
+    # routing is not under test: pin it to a cloud placement so only the spawn boundary is replaced
+    monkeypatch.setattr(
+        L.launch_place, "route",
+        lambda *a, **k: L.launch_place._placement(
+            "cloud", True, "word", None, None, None, None, "env_01AbCdEf", None,
+        ),
+    )
+    checks_path = _write_listing(tmp_path, _all_checks(), "checks.json")
+    premise_path = _write_listing(tmp_path, _adoption(repo), "premise.json")
+    code = L.main([
+        "launch", "--repo-root", repo, "--issue", "656", "--checks", checks_path,
+        "--premise", premise_path, "--log-dir", str(tmp_path / "logs"), "--place", "cloud",
+        "--cloud-sessions-file", _fixture("list_page_complete_running.json"),
+    ])
+    assert code == 1
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert spawns == []

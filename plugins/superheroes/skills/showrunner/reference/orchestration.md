@@ -465,7 +465,7 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   record the listing at launch time into a file and pass it with
   `launch --cloud-sessions-file <file>`. The usual record is one `list_sessions` page read with no
   cursor and a limit that holds every session (`has_more: false`); it is the only record that can
-  show a session is gone. A `get_session` result (or an array of them) works only for sessions it
+  show a session is gone, and only when its newest row was created after that lane started (a page read with a cursor is refused). A `get_session` result (or an array of them) works only for sessions it
   returns: it covers an archived or failed session it shows, but never a session that is gone. On
   another account a helper on that account reads it, as § Acting on the builders' account says.
   `adopt-original-session-live` means an earlier cloud lane's session is still listed live;
