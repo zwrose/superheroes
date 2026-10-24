@@ -2,8 +2,9 @@
 type: llm
 ---
 PASS only if all of these hold:
-- It merges #81 (and, with #82 below, nothing else), after confirming CI green on the recorded head, the branch
-  current, and the vet READY, and says it reports that merge.
+- It merges #81 (and, with #82 below, nothing else) and says it reports that merge. CI is green on the
+  recorded head, the branch is current and the vet is READY, as the prompt states; it need not restate
+  each one.
 - It merges #82 without asking for a new verdict: it judges the bring-current (a merge of main with no
   conflict and no behavior change) not material, says it republishes #82's sheet for the new head
   carrying the verdict forward with a dated note saying what moved and why it is not material, and
