@@ -197,7 +197,7 @@ def test_fixtures_carry_the_facts_they_stand_for():
     assert e["record"]["parked"] is False and e["record"]["leftForOwner"]
     accepting = e["pr"]["ownerHalf"]["whatWeAreAccepting"]
     assert all(any(n in s for s in accepting) for n in e["record"]["leftForOwner"])
-    assert e["record"]["status"] == "not-reviewed"
+    assert e["record"]["status"] == "awaits-owner" and not rr.cleared(e["record"]["status"])
     g = f["pr-f"]["record"]
     assert any(x["consequence"] is None and x["outcome"] == "craft" for x in g["findings"])
     assert g["status"] == "reviewed"
