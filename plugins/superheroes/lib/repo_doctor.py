@@ -176,15 +176,19 @@ def _detect_live_src_dirs(root):
 
 # Words that open, join or close a shell construct: the next word is still in command position.
 _SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until",
-                   "!", "{", "}", "time"}
+                   "!", "{", "}"}
 # Builtins (and `for`/`select` headers): their own words are arguments, so the whole simple
 # command up to the next control operator is skipped.
 _SHELL_BUILTINS = {"[", "test", "cd", ":", "true", "false", "export", "set", "unset",
                    "source", ".", "echo", "printf", "eval", "builtin",
                    "local", "read", "shift", "exit", "return", "umask", "trap", "wait",
                    "pushd", "popd", "alias", "type", "hash", "for", "select"}
-# Prefixes whose operand is the program they run (`command -v` only queries, so it is skipped).
-_SHELL_PREFIXES = {"command", "exec"}
+# Prefixes whose operand, after their options, is the program they run (`command -v` only
+# queries, so it is skipped). The pairs are the options that take an argument.
+_SHELL_PREFIXES = {"command", "exec", "time"}
+_PREFIX_OPTION_ARGS = {("exec", "-a"), ("time", "-o"), ("time", "-f")}
+# A program word that only the shell can read: an expansion, a glob, quoting or an escape.
+_SHELL_ONLY = set("*?$(){}[]|<>&;`~\"'\\")
 _SHELL_UNPARSED = {"case", "function", "coproc"}
 _CONTROL_OPS = {";", "&&", "||", "|", "&", "(", ")", ";;", "|&", ";&"}
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -199,8 +203,10 @@ def _verify_program(verify_command):
     if not verify_command:
         return None, None
     try:
-        lex = shlex.shlex(verify_command, posix=True, punctuation_chars=True)
+        # Non-POSIX mode keeps quotes on their words, so a quoted `";"` is never an operator.
+        lex = shlex.shlex(verify_command, posix=False, punctuation_chars=True)
         lex.whitespace_split = True
+        lex.commenters = ""
         tokens = list(lex)
     except ValueError as exc:
         return None, "unparseable (%s)" % exc
@@ -225,16 +231,16 @@ def _verify_program(verify_command):
             skipping = True
         elif tok in _SHELL_PREFIXES:
             while i < len(tokens) and tokens[i].startswith("-"):
-                skipping = skipping or "v" in tokens[i].lower()
-                i += 2 if tokens[i] == "-a" else 1  # `exec -a <name>`
+                skipping = skipping or (tok == "command" and "v" in tokens[i].lower())
+                i += 2 if (tok, tokens[i]) in _PREFIX_OPTION_ARGS else 1
         elif tok in _SHELL_BUILTINS:
             skipping = True
-        elif tok.isdigit() and i < len(tokens) and tokens[i][0] in "<>":
+        elif tok.isdigit() and i < len(tokens) and tokens[i][:1] in ("<", ">"):
             continue  # the file descriptor of `2>file`
         elif tok[0] in "<>":
             i += 1  # a redirection and its target
-        elif any(c in _UNRESOLVABLE for c in tok):
-            return None, "program %r is expanded by the shell" % tok
+        elif any(c in _SHELL_ONLY for c in tok):
+            return None, "program %r is read only by the shell" % tok
         else:
             return tok, None
     return None, "no word names a program"

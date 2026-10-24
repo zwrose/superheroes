@@ -250,26 +250,31 @@ def test_keyword_led_verify_command_with_absent_program_drifts(tmp_path, capsys)
     "command -v gonebin && verifybin --run",
     "exec -a name verifybin --run",
     "FOO=1 verifybin --run",
+    'printf %s ";" marker && verifybin --run',
+    "time -p verifybin --run",
 ])
 def test_shell_prefixes_resolve_to_the_real_program(tmp_path, capsys, verify):
-    """#2088 review: `[[ … && … ]]`, an fd redirection, `command -v`, `exec -a` and an
-    assignment never put a non-program word in front of the real program."""
+    """#2088 review: `[[ … && … ]]`, an fd redirection, `command -v`, `exec -a`, an
+    assignment, a quoted operator and `time -p` never put a non-program word in front of
+    the real program."""
     root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
     profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
     assert (res["drift"], res["unchecked"]) == ([], [])
 
 
-@pytest.mark.parametrize("verify", [
-    "command gonebin && verifybin --run",
-    "exec -p gonebin",
+@pytest.mark.parametrize("verify, program", [
+    ("command gonebin && verifybin --run", "gonebin"),
+    ("exec -p gonebin", "gonebin"),
+    ("gonebin#x --run", "gonebin#x"),
 ])
-def test_command_and_exec_check_the_program_they_run(tmp_path, capsys, verify):
-    """#2088 review: the operand of `command`/`exec` is the program, so an absent one drifts."""
+def test_command_and_exec_check_the_program_they_run(tmp_path, capsys, verify, program):
+    """#2088 review: the operand of `command`/`exec` is the program, so an absent one drifts,
+    and an in-word `#` is part of the program's name, not a comment."""
     root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
     profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
-    assert "verify command no longer resolves: gonebin" in res["drift"]
+    assert "verify command no longer resolves: %s" % program in res["drift"]
 
 
 def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):
@@ -292,6 +297,7 @@ def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):
     '"$PY" -m pytest',
     "verifybin 'unterminated",
     "[[ -n x && verifybin",
+    '""',
 ])
 def test_verify_command_without_a_readable_program_is_unchecked_not_stale(
         tmp_path, capsys, verify):
