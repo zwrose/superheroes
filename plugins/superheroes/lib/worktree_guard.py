@@ -91,6 +91,17 @@ _UNPARSED_TEMPLATE = (
     "inverse Edit rather than a git discard."
 )
 
+_UNREADABLE_PROGRAM_TEMPLATE = (
+    "superheroes worktree guard: this command runs a `bash`/`sh`/`zsh -c` or `eval` program "
+    "this guard cannot read — the program holds a variable, a substitution, an escape, a "
+    "nested quote, or a second level of `-c`/`eval` — so it is refused (fail-closed) "
+    "whatever your tree holds. The guard reads such a program as commands only when it is "
+    "one plain quoted string, one level in. "
+    "Next step: run the program's commands as plain commands, or pass the program as one "
+    "single-quoted string with no variable, substitution or nested shell. To keep work you "
+    "care about, commit it or run `git stash push -u` first."
+)
+
 _GIT_TIMEOUT = 5
 
 _TRACKED_ONLY_PROBE_ACTIONS = frozenset({
@@ -436,6 +447,26 @@ def _strip_shell_prefixes(tokens):
     return tokens
 
 
+def _command_tokens(tokens):
+    """The shared normalizer: (assignment_keys, tokens) once leading shell prefixes and
+    `NAME=value` assignments are stripped, alternating until neither moves (so
+    `then LC_ALL=C bash -c ...` reaches `bash`)."""
+    keys = []
+    while True:
+        stripped = _strip_shell_prefixes(tokens)
+        start = 0
+        while start < len(stripped) and "=" in stripped[start] and not stripped[start].startswith("="):
+            key = stripped[start].split("=", 1)[0]
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                break
+            keys.append(key)
+            start += 1
+        rest = stripped[start:]
+        if rest == tokens:
+            return keys, tokens
+        tokens = rest
+
+
 def _iter_git_segments(command):
     """Yield parsed git invocations from each command-position segment."""
     if not isinstance(command, str):
@@ -444,14 +475,7 @@ def _iter_git_segments(command):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        start = 0
-        while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
-            key = tokens[start].split("=", 1)[0]
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-                start += 1
-                continue
-            break
-        tokens = _strip_shell_prefixes(tokens[start:])
+        _, tokens = _command_tokens(tokens)
         if tokens and _is_git_token(tokens[0]):
             parsed = _parse_git_invocation(tokens)
             if parsed is not None:
@@ -737,12 +761,65 @@ def _segment_destructive_action(parsed, cwd=None):
     return action
 
 
-def segment_accounting(command, cwd=None):
+def _plain_word(raw):
+    """A raw token without its surrounding quotes."""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        return raw[1:-1]
+    return raw
+
+
+# Axis: a quoted bash|sh|zsh -c or eval program is checked as commands one level in; an unreadable one is refused.
+def _shell_program(raw_tokens):
+    """The `bash|sh|zsh -c` or `eval` program in normalized raw tokens: None when the segment is
+    not a program shape, ("unreadable", None), or ("program", <text>)."""
+    if not raw_tokens:
+        return None
+    if raw_tokens[0] == "eval":
+        args = raw_tokens[1:]
+        if not args or not all(re.fullmatch(_WORD, arg) for arg in args):
+            return ("unreadable", None)
+        return ("program", " ".join(_plain_word(arg) for arg in args))
+    if os.path.basename(_plain_word(raw_tokens[0])) not in ("bash", "sh", "zsh"):
+        return None
+    saw_c = False
+    i = 1
+    while i < len(raw_tokens):
+        tok = _plain_word(raw_tokens[i])
+        if tok == "--":
+            i += 1
+            break
+        if tok in ("--rcfile", "--init-file"):
+            i += 2
+            continue
+        if tok.startswith("--"):
+            i += 1
+            continue
+        if len(tok) > 1 and tok[0] in "-+":
+            saw_c = saw_c or "c" in tok
+            i += 2 if ("o" in tok or "O" in tok) else 1
+            continue
+        break
+    if i >= len(raw_tokens):
+        return ("unreadable", None) if saw_c else None
+    if not re.fullmatch(_WORD, raw_tokens[i]):
+        return ("unreadable", None)
+    return ("program", _plain_word(raw_tokens[i])) if saw_c else None
+
+
+def segment_accounting(command, cwd=None, _depth=0):
     """Account for every command-position segment. Returns one record per segment:
 
-    {"segment": <the segment text>, "kind": "safe"|"destructive"|"unaccounted", "action": <str|None>}
+    {"segment": <the segment text>, "kind": "safe"|"destructive"|"unaccounted"|"unreadable-program",
+     "action": <str|None>}
+
+    A `bash|sh|zsh -c` or `eval` program is accounted one level in (its records replace the
+    segment's), via _depth.
 
     kind is:
+      "unreadable-program" — the segment runs a `-c`/`eval` program the guard cannot read (a
+                       variable, substitution, escape, nested quote, a second level, or a cut
+                       at a substitution boundary). "action" is None. FAIL-CLOSED, like
+                       "unaccounted".
       "destructive"  — parsed as a git invocation whose subcommand is destructive AND whose
                        resolved action is not None. "action" carries that action name.
       "unaccounted"  — the crude scanner sees a destructive git mention in this segment, but the
@@ -753,19 +830,23 @@ def segment_accounting(command, cwd=None):
     if not isinstance(command, str):
         return []
     records = []
-    for segment in _split_segments(command):
+    for segment, end in _split_segments_with_ends(command):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        start = 0
-        while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
-            key = tokens[start].split("=", 1)[0]
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-                start += 1
-                continue
-            break
-        tokens = _strip_shell_prefixes(tokens[start:])
-        parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
+        _, raw_tokens = _command_tokens(_tokenize_segment(segment, keep_quotes=True))
+        shape = _shell_program(raw_tokens)
+        if shape is not None:
+            if shape[0] == "unreadable" or end in ("`", "(") or _depth >= 1:
+                records.append({"segment": segment, "kind": "unreadable-program", "action": None})
+            else:
+                records.extend(segment_accounting(shape[1], cwd, _depth + 1))
+            continue
+        _, tokens = _command_tokens(tokens)
+        if _depth >= 1 and tokens and ("$" in tokens[0] or "`" in tokens[0]):
+            records.append({"segment": segment, "kind": "unreadable-program", "action": None})
+            continue
+        parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
         if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
             action = _segment_destructive_action(parsed, cwd)
@@ -877,21 +958,11 @@ def mentions_destructive_git(command):
 
 def _segment_has_unresolvable_target(tokens):
     """True when segment may act outside payload cwd."""
-    if not tokens:
-        return False
-    start = 0
-    while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
-        key, _, val = tokens[start].partition("=")
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-            if key in ("GIT_DIR", "GIT_WORK_TREE"):
-                return True
-            start += 1
-            continue
-        break
-    if start < len(tokens) and tokens[start] in ("cd", "pushd"):
+    keys, tokens = _command_tokens(tokens)
+    if "GIT_DIR" in keys or "GIT_WORK_TREE" in keys:
         return True
-    tokens = tokens[start:]
-    tokens = _strip_shell_prefixes(tokens)
+    if tokens and tokens[0] in ("cd", "pushd"):
+        return True
     if tokens and _is_git_token(tokens[0]):
         i = 1
         while i < len(tokens):
@@ -914,11 +985,18 @@ def _segment_has_unresolvable_target(tokens):
     return False
 
 
-def target_is_resolvable(command):
-    """False when the command may act on a worktree other than the payload cwd."""
+def target_is_resolvable(command, _depth=0):
+    """False when the command may act on a worktree other than the payload cwd; a readable
+    `bash|sh|zsh -c` or `eval` program is read one level in."""
     if not isinstance(command, str):
         return True
-    for segment in _split_segments(command):
+    for segment, end in _split_segments_with_ends(command):
+        _, raw_tokens = _command_tokens(_tokenize_segment(segment, keep_quotes=True))
+        shape = _shell_program(raw_tokens)
+        if (shape is not None and shape[0] == "program" and _depth < 1
+                and end not in ("`", "(")
+                and not target_is_resolvable(shape[1], _depth + 1)):
+            return False
         tokens = _tokenize_segment(segment)
         if _segment_has_unresolvable_target(tokens):
             return False
@@ -1562,6 +1640,11 @@ def unparsed_message():
     return _UNPARSED_TEMPLATE
 
 
+def unreadable_program_message():
+    """Verbatim fail-closed refusal when a `-c`/`eval` program could not be read."""
+    return _UNREADABLE_PROGRAM_TEMPLATE
+
+
 def classify(command, cwd):
     """('deny'|'allow', reason) for a candidate Bash command. Fails closed on errors."""
     try:
@@ -1574,6 +1657,8 @@ def classify(command, cwd):
             return ("allow", "")
 
         records = segment_accounting(command, cwd)
+        if any(record["kind"] == "unreadable-program" for record in records):
+            return ("deny", unreadable_program_message())
         if any(record["kind"] == "unaccounted" for record in records):
             return ("deny", unparsed_message())
         actions = [record["action"] for record in records if record["kind"] == "destructive"]
