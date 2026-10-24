@@ -15,7 +15,10 @@ writing fails it removes the pictures that run created. --record and --pr-body a
 --pr-body N=FILE names the body of covered PR N (gh api repos/<owner>/<repo>/pulls/N --jq .body, read as UTF-8), and `build`
 needs one for every covered PR (number on a pr sheet, every prs[].number on a stack), no more and no fewer; a missing, extra or
 repeated one, a value that is not <PR number>=<file>, and a file that cannot be read are refusal problems. No acceptance a body
-lists under its "What we're accepting" heading (accepting_listed) becomes a card on its own: the advisor decides which are
+lists under its "What we're accepting" heading (accepting_listed) becomes a card on its own (the reader stops at the first
+build-record marker line at column 0 after that heading; a marker above the heading, indented, fenced or inside a comment is
+plain text, so a deviation listed only in the build record, a harmless one, is never an acceptance and needs no card, while a
+costly one, listed under What we're accepting above the marker, must still be accounted for): the advisor decides which are
 Accept items, which fold into one item and which a leftover card or a Canon ruling already carries, and the input's "accounting"
 says so for every one. Each acceptance has a bullet id, "<PR number>:<10 hex>" (listed_bullets), made from the PR, the
 acceptance's text and its place among identical ones, so a bullet added above the others leaves every other id as it was and
@@ -26,7 +29,9 @@ is true only when every covered body was read and lists none, and the page, the 
 then; prSheet.canonAccounted lists the Canon entry ids (sorted, distinct) when every covered body was read, they list at least one
 acceptance and every listed acceptance is accounted to a Canon ruling, and those surfaces say it was checked and all covered by
 Canon rulings; with neither field (a sheet built through the API with no bodies, or an earlier one) they say the sheet was not
-checked against the bodies. The two fields never come together.
+checked against the bodies. The two fields never come together. The build also reads the body's degradations list
+(degradations_listed) and refuses a [costly] or unlabelled deviation whose text (after its label) appears in no What we're
+accepting line, naming the bullet; a [harmless] one never needs a line.
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
@@ -145,6 +150,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import canon  # noqa: E402
+import md_fence  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import review_record  # noqa: E402
 import sheet_prose  # noqa: E402
@@ -220,6 +226,7 @@ _NO_ACCEPTANCE = ("none", "n/a", "na", "nothing")
 
 
 _WHOLE_COMMENT = re.compile(r"^\s*<!--(?:(?!-->).)*-->\s*$")  # one comment, through its first `-->`, and nothing after it
+_BUILD_RECORD_MARKER = "<!-- superheroes:build-record -->"  # the line that opens the body's build record, below the owner half
 
 
 def _outside_comments(lines):
@@ -229,7 +236,8 @@ def _outside_comments(lines):
     and holding no `-->`, through the first later line holding `-->`, and only when such a line exists in the same section
     (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
     A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
-    outside fences only."""
+    outside fences only. The first build-record marker line at column 0 after the What we're accepting heading ends the body
+    (a marker above the heading, indented, fenced or inside a comment is plain text): nothing after it is kept."""
     kept, fence, column, inside, level, item_column = [], None, 0, False, None, 0
     for n, line in enumerate(lines):
         if fence is not None:
@@ -248,6 +256,9 @@ def _outside_comments(lines):
             if not inside and line.split("-->", 1)[1].strip():
                 kept.append((line, False))
             continue
+        # bite-axis: build-record boundary — an unindented marker line after the accepting heading ends the body.
+        if level is not None and line.rstrip() == _BUILD_RECORD_MARKER:
+            break
         spaced = line.expandtabs(4)
         if line.strip() and len(spaced) - len(spaced.lstrip(" ")) < item_column and not _ITEM.match(line):
             item_column = 0  # a non-blank line left of the item's content ends the item, comments included
@@ -292,7 +303,10 @@ def _closes(rest, level):
 def accepting_listed(body):
     """The acceptances a PR body lists under its What we're accepting heading, in order; [] for no such heading, no
     acceptance, or anything that is not a string. An item is a top-level list item with its nested lines, or a paragraph;
-    one that reads None, N/A, NA or Nothing is no acceptance. A line that is none of these is an acceptance, never dropped."""
+    one that reads None, N/A, NA or Nothing is no acceptance. A line that is none of these is an acceptance, never dropped.
+    The reader stops at the first build-record marker line at column 0 after the What we're accepting heading (a marker above
+    the heading, indented, fenced or inside a comment is plain text): a deviation listed only in the build record (a harmless
+    one) is never an acceptance and needs no card, while a costly one, listed under What we're accepting, must still be accounted for."""
     if not isinstance(body, str):
         return []
     lines = _outside_comments(body.splitlines())
@@ -329,6 +343,90 @@ def accepting_listed(body):
         blank = False
     texts = (" ".join(part for part in (line.strip() for line in item) if part) for item in items)
     return [t for t in texts if t and (t[:-1] if t.endswith(".") else t).strip().lower() not in _NO_ACCEPTANCE]
+
+
+_DEGRADATIONS_MARKER = "<!-- superheroes:degradations -->"  # the line that opens the body's degradations list, in the build record
+_DEGRADATIONS_HEADING = "### Disclosed degradations"
+_TOP_ITEM = re.compile(r"^( {0,3})([-*+])([ \t]+)(.*)")
+_LABEL = re.compile(r"\[(costly|harmless)\][ \t]*", re.IGNORECASE)
+
+
+def degradations_listed(body):
+    """(label, text) for each degradation a PR body lists after its degradations marker line, in order; [] for a body that
+    is not a string, has no marker, or lists only the word None (as the one item or the one paragraph, any case, with or
+    without a period). An item is a top-level list item with its continuation lines joined by one space, or a paragraph;
+    a list item indented to the open item's content column is part of that item; a nested item that opens with a label
+    starts its own degradation; a line inside a code fence never ends the list or starts an item (it joins the open item,
+    or is skipped when none is open).
+    The list ends at the next heading, a line starting `</details>` or another `<!-- superheroes:` marker; the `### Disclosed
+    degradations` heading itself is skipped. label is "costly" or "harmless" when the text starts with that label
+    (case-insensitive; the label and the spaces after it are dropped from text), else None."""
+    if not isinstance(body, str):
+        return []
+    lines = body.splitlines()
+    inert = md_fence.scan(lines).inert  # a marker inside a code fence is an example, not the section
+    start = next((n for n, line in enumerate(lines) if not inert[n] and line.rstrip() == _DEGRADATIONS_MARKER), None)
+    if start is None:
+        return []
+    entries, open_entry, blank, column = [], None, False, 0
+    for n in range(start + 1, len(lines)):
+        line = lines[n]
+        if inert[n]:
+            if open_entry is not None:
+                open_entry.append(line)
+                blank = False
+            continue
+        stripped = line.strip()
+        if not stripped:
+            blank = True
+            continue
+        if stripped == _DEGRADATIONS_HEADING:
+            continue
+        if _HEADING.match(line) or stripped.startswith(("</details>", "<!-- superheroes:")):
+            break
+        item = _TOP_ITEM.match(line)
+        if item and open_entry is not None and len(item.group(1)) >= column and not _LABEL.match(item.group(4)):
+            item = None  # indented to the open item's content column: it nests in that item
+        if item:
+            gap = len(item.group(3))
+            column = len(item.group(1)) + len(item.group(2)) + (gap if gap <= 4 else 1)
+            open_entry = [item.group(4)]
+            entries.append(open_entry)
+        elif open_entry is not None and not (blank and not line.startswith(("  ", "\t"))):
+            open_entry.append(line)  # a continuation line (lazy, or indented after a blank line)
+        else:
+            open_entry, column = [line], 4  # a paragraph has no content column: a top-level bullet after it starts a new item
+            entries.append(open_entry)
+        blank = False
+    texts = [t for t in (" ".join(part for part in (line.strip() for line in entry) if part) for entry in entries) if t]
+    if len(texts) == 1 and (texts[0][:-1] if texts[0].endswith(".") else texts[0]).strip().lower() == "none":
+        return []
+    listed = []
+    for text in texts:
+        label = _LABEL.match(text)
+        listed.append((label.group(1).lower(), text[label.end():]) if label else (None, text))
+    return listed
+
+
+def _line_key(text):
+    """A line of text as the degradation check compares it: emphasis marks dropped, whitespace collapsed, case folded, one
+    trailing full stop removed."""
+    key = re.sub(r"\s+", " ", text.replace("*", "").replace("_", "")).strip().casefold()
+    return key[:-1] if key.endswith(".") else key
+
+
+def costly_unlisted(body):
+    """The (label, text) degradations of a PR body (degradations_listed) that are labelled costly or carry no label and whose
+    text appears in no line under What we're accepting (accepting_listed), compared by _line_key. A harmless one is never
+    returned; an empty text after the label is never matched."""
+    accepted = [_line_key(line) for line in accepting_listed(body)]
+    missing = []
+    for label, text in degradations_listed(body):
+        key = _line_key(text)
+        # bite-axis: a costly or unlabelled deviation must have a line under What we're accepting, and an empty text is never carried
+        if label != "harmless" and (not key or not any(key in line for line in accepted)):
+            missing.append((label, text))
+    return missing
 
 
 def listed_bullets(pr, body):
@@ -835,6 +933,10 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
     listed = {pr: listed_bullets(pr, bodies[pr]) for pr in allowed} if bodies_sound else {}
     if bodies_sound:
         _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems)
+        for pr in allowed:
+            for label, text in costly_unlisted(bodies[pr]):
+                problems.append(f'PR #{pr}\'s {"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
+                                "What we're accepting: carry its text, after the label, into a line there")
     if problems:
         raise Refusal(problems)
     stack = kind == "stack"
