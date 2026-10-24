@@ -13016,6 +13016,9 @@ def _run_verify_open(session_dir):
                 "claimPath": claim_path, "token": token, "stale": stale}
 
 
+_POST_KILL_DRAIN_SECONDS = 2
+
+
 def _run_in_process_group(argv, *, timeout=None, **kwargs):
     """subprocess.run in its own process group; on timeout the whole group is killed, so a
     compound verify command leaves no surviving descendants."""
@@ -13047,7 +13050,15 @@ def _run_in_process_group_supervised(argv, timeout, kwargs):
                 os.killpg(proc.pid, signal.SIGKILL)
             except OSError:
                 proc.kill()
-            out, _ = proc.communicate()
+            try:
+                out, _ = proc.communicate(timeout=_POST_KILL_DRAIN_SECONDS)
+            except subprocess.TimeoutExpired as drain:
+                # A descendant that left the group (its own session) still holds the pipe open:
+                # return what was read and release the pipes rather than wait on it.
+                out = drain.output
+                for pipe in (proc.stdout, proc.stderr):
+                    if pipe is not None:
+                        pipe.close()
             raise subprocess.TimeoutExpired(argv, timeout, output=out)
         except BaseException:
             try:

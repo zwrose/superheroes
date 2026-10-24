@@ -605,6 +605,28 @@ def test_a_timeout_kills_the_whole_process_group():
 
 
 @pytest.mark.proc_containment
+def test_a_detached_helper_holding_the_pipe_does_not_stall_the_timeout(tmp_path, monkeypatch):
+    pid_file = tmp_path / "helper.pid"
+    monkeypatch.setattr(RD, "_POST_KILL_DRAIN_SECONDS", 0.5)
+    parent = ("import subprocess,sys,time; "
+              "p=subprocess.Popen(['sleep','30'], start_new_session=True); "
+              "open(sys.argv[1],'w').write(str(p.pid)); print('partial', flush=True); time.sleep(60)")
+    pid = None
+    try:
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            RD._run_in_process_group([sys.executable, "-B", "-c", parent, str(pid_file)], timeout=1.5,
+                                     **_GROUP_KWARGS)
+        elapsed = time.monotonic() - started
+        if pid_file.exists():
+            pid = int(pid_file.read_text())
+        assert elapsed < 15, "the call took %.1fs; the drain after the kill was unbounded" % elapsed
+        assert b"partial" in caught.value.output
+    finally:
+        _kill_if_alive(pid)
+
+
+@pytest.mark.proc_containment
 def test_an_interrupted_wait_kills_the_whole_process_group(tmp_path, monkeypatch):
     pid_file = tmp_path / "child.pid"
     real_communicate = subprocess.Popen.communicate
