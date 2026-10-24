@@ -283,6 +283,21 @@ def _cluster_for(pend, seat):
     raise AssertionError("no cluster %r in the pending payload" % key)
 
 
+def _verify_payload_via_verb(session_dir):
+    """The verify payload as production lands it (#2133): the driver runs the session's bound verify
+    command — the `run` seam stands in for the process — and writes the landing and its journal row
+    itself; a hand-written `run-verify` landing is refused at `advance`. The bare landing is taken
+    off disk so the seat record is the one landing, and the driver's payload rides it unchanged."""
+    out = round_driver.cmd_run_verify(
+        session_dir,
+        run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=b"verify output\n"))
+    assert out["ok"] is True, out
+    payload, err = round_records.read_json(out["landingPath"])
+    assert err is None, err
+    os.remove(out["landingPath"])
+    return payload
+
+
 def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):
     phase = pend["phase"]
     if phase == round_driver.P_PANEL:
@@ -303,7 +318,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         return {"fixes": [{"file": FIXED_FILE, "summary": "guard restored"}],
                 "escalated": False, "headDiffPath": head_diff_path}
     if phase == round_driver.P_VERIFY:
-        return {"result": "pass", "command": "none", "exit": 0}
+        return _verify_payload_via_verb(session_dir)
     if phase == round_driver.P_AUDITS:
         return {"id": seat, "ruling": "discharged", "auditorVendor": "claude",
                 "reason": "re-read the fixed hunk; the cited defect is gone"}
