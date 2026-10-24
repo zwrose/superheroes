@@ -458,7 +458,7 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   `SendMessage`, `check`) on another), as `skills/showrunner/reference/wave-watch.md` § Answering a
   builder note sends an answer. The builder fixes, pushes and hands back as usual. Launch a new fix
   leg (a premise with `adoptsBranch`/`adoptsHead`) only when that session is archived, gone from the
-  listing (shown by a complete listing, as the next paragraph says), its status bucket reads failed,
+  listing (shown by a complete listing, as below), its status bucket reads failed,
   or `cloud_recover.py assess` recorded it `stopped` on a handover. A lane whose builder refused at
   intake built nothing and is outside this rule. An alive session that never answers the fix order
   is resolved by the owner archiving it, which then reads `archived`. The launcher enforces this:
