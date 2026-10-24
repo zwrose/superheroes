@@ -47,6 +47,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** A cloud advisor can now launch a build that depends on another pull request, and the wave watch can resolve its repository, where the cloud proxy refuses GraphQL. See [Cloud: the dependency gate and the watch's repository read work through REST](#cloud-the-dependency-gate-and-the-watchs-repository-read-work-through-rest)
 - **After switching.** **Nothing is owed.** Owners see fewer already-fixed leftover cards: a finding an audit raised, which the review then fixed and audited under its own key, is recorded fixed and no longer left for the owner. See [Review: a finding an audit raised is audited under its own key](#review-a-finding-an-audit-raised-is-audited-under-its-own-key).
 - **After switching.** **Nothing is owed.** An advisor with two or more PRs waiting can draft their vets in parallel with the new `vet-drafter` agent, which runs on the advisor's own model; the advisor still checks each draft, posts the receipt and writes the slot. See [Vetting: the vet-drafter drafts vets in parallel](#vetting-the-vet-drafter-drafts-vets-in-parallel).
+- **After switching.** **Nothing is owed.** A review panel keeps its Claude seats when a session's start event omits the model: compose reads the model from the session's own transcript instead of reading it as unknown. See [Review panel: the host model falls back to the session transcript](#review-panel-the-host-model-falls-back-to-the-session-transcript).
 
 ### Launcher: an adoption onto a live original cloud builder is refused
 
@@ -221,6 +222,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 - Before the fold, the driver fetches the run (`gh api repos/{owner}/{repo}/actions/runs/<runId>` in the repository root) and refuses the submit with `ci-verify-run-unreadable` (the head or repository root is unresolved, the fetch failed, or a field is missing), `ci-verify-sha-mismatch` (the run's `head_sha` differs from the claimed `headSha` or from the head the fold verifies, or its `id` differs from `runId`), `ci-verify-workflow-mismatch` (its `name` differs from `workflow` or from the declared `ciWorkflow`) or `ci-verify-conclusion-mismatch` (it is not `completed`, its conclusion differs from the claimed one, or it is not `success`), checked in that order. The refusal is not terminal and the pending step is kept, so a corrected resubmit folds.
 - The check sits at the one submit chokepoint, so hand `submit`, the bare-payload `advance` and the durable-seat `advance` all get it. The durable-seat assembly carries `via`, `ci` and `reason`.
 - A passing verify fold records the round key `verifyVia`: `{"via": "local", "command"}` for a local run, or the CI evidence with its `reason`. The receipt's disclosures carry a `verify-via-ci (round N): …` line for a CI round, and the review record adds a "Verify in round N: CI workflow … run … on … passed, in place of the local verify command (…)" line to what it checked.
+
+### Review panel: the host model falls back to the session transcript
+
+- The session-start hook now exports two more variables on every start beside `SUPERHEROES_HOST_MODEL`: `SUPERHEROES_SESSION_TRANSCRIPT` (the session transcript's absolute path) and `SUPERHEROES_SESSION_TRANSCRIPT_FROM` (the file's size in bytes at that start). A value the hook cannot vouch for is exported empty. The host-model export is unchanged, including the clear on every start.
+- `seat_map.py compose` takes `--session-transcript` and `--session-transcript-from`, which `review-code` passes from those variables. The start event's model wins whenever it names one; only when it names none does compose read the model from the transcript, and `host-model-unknown` fires only when neither names one.
+- Only a main-chain assistant turn written at or after the recorded start counts, so a resumed or copied transcript's history, a subagent turn or a `<synthetic>` entry never stands in for the live model.
+- The launcher drops all three variables from every child it spawns, so a child session derives its own host model and never inherits a parent's.
+- With a Claude host the known `hostFamily` keeps native host seats eligible downstream; maker-family exclusions are unchanged (a `claude` implementation engine still keeps anthropic off the panel). No new receipt key; no consumer owes anything.
 
 ### Showrunner: the board duty names the filing rule
 

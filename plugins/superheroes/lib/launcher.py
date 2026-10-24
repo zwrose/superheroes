@@ -36,6 +36,7 @@ import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import host_model  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import launch_place  # noqa: E402
@@ -2069,6 +2070,8 @@ def _spawn_attempt(
     if os.path.realpath(cwd) == os.path.realpath(repo_root):
         return {"ok": False, "reason": "spawn-cwd-is-repo-root", "proc": None}
     child_env = ll.scrub_env(env)
+    for name in host_model.SESSION_ENV_VARS:
+        child_env.pop(name, None)   # a child session derives its own host model; a parent's (or its transcript) must never stand in (#2110)
     child_env[hb.LAUNCH_ID_ENV] = launch_id
     if slot is not None and generation is not None:
         child_env[SLOT_REF_ENV] = pilot_slot.format_slot_ref(slot, generation)
