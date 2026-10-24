@@ -29,6 +29,13 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** `open` prints one more field in its `agent` object, `launchPrompt`, and the native implementer and the native fixer are dispatched with it. See [Native dispatch: open prints a launch prompt](#native-dispatch-open-prints-a-launch-prompt).
 - **After switching.** **Nothing is owed.** In a cloud session on Linux whose calibration turns on `localSockets`, the review's host-seat fixer runs as a native fixer subagent in the build worktree. See [Review fixer: the cloud localSockets route](#review-fixer-the-cloud-localsockets-route).
 - **After switching.** **Nothing is owed.** A review's staleness check no longer reports a verify command that opens with a shell keyword (`if [ -x … ]; then …`) as "no longer resolves: if"; it checks the first word that names a program, and reports a command it cannot read as not checked rather than stale. See [Review: the verify-command check skips shell keywords](#review-the-verify-command-check-skips-shell-keywords).
+- **After switching.** **Nothing is owed.** A builder's scoped single-reviewer pass after a handback now ends with a review record written on the head it reviewed. See [Workhorse: a scoped pass after a handback writes a review record](#workhorse-a-scoped-pass-after-a-handback-writes-a-review-record).
+
+### Workhorse: a scoped pass after a handback writes a review record
+
+- Workhorse §12 (`skills/workhorse/SKILL.md`) sends a fix inside an already-reviewed surface to a scoped single-reviewer pass. That pass now ends with `review_record.py write` on the head it reviewed, and the new record relists every finding the earlier record listed, with its outcome, plus the scoped pass's own. §12's table says so in the scoped-pass row.
+- Before this, the vet row "the checks ran on the final commit", which reads only the latest record, held every fix round that followed §12 to the letter on a missing record.
+- No command, result key or file shape changes.
 
 ### Showrunner: a PR with no review run gets no merge sheet
 
