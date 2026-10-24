@@ -656,7 +656,7 @@ on a very large PR.
   owner still carries after merging appears here, stated as a consequence.** The
   **omission floor** requires three rows here, keyed on **severity, not disposition label**: (1) every
   **deferred** DoD row; (2) every **blocking or important** review finding that was **not fixed**,
-  whatever its disposition is called; (3) every **disclosed degradation**. When there are genuinely none,
+  whatever its disposition is called; (3) every **costly disclosed degradation** (sorted in skills/workhorse/reference/handback.md § Disclosed degradations). When there are genuinely none,
   write exactly **None**, never **N/A**.
 - **`## How to see it`**, for **show it** cases only. On **say it** and **nothing to see**, write
   exactly **N/A** with a brief why. An honest entry point of `command`, `attended`, or `none` is a
