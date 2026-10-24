@@ -323,6 +323,36 @@ def test_variable_script_path_without_c_remains_allowed(shell, dirty_repo, monke
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
 
 
+@pytest.mark.parametrize("command", [
+    "env -u FOO bash -c 'git reset --hard'",
+    "exec -a process bash -c 'git reset --hard'",
+    "bash -c 'echo hi' \"$(echo x; git reset --hard)\"",
+    "FOO=\"$(git reset --hard)\" bash -c 'echo hi'",
+])
+def test_wrapper_operands_and_outer_substitutions_cannot_hide_a_discard(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+@pytest.mark.parametrize("command", [
+    "rg bash -c notes.txt",
+    "bash script.sh -c value",
+    "bash -c 'echo hi'",
+    "eval 'echo hi' 2>/dev/null",
+    "git checkout HEAD &>/dev/null",
+])
+def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
+@pytest.mark.parametrize("command, message", [
+    ("eval 'command cd /other;' git reset --hard", wg.indeterminate_message("reset-hard")),
+    ("bash -c 'builtin cd /x && git reset --hard'", wg.indeterminate_message("reset-hard")),
+    ("eval 'git reset --hard' 2>/dev/null", _RESET),
+])
+def test_wrapped_directory_change_and_redirected_eval_are_still_refused(command, message, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", message), command
+
+
 def test_split_segments_with_ends_names_the_boundary_that_flushed_each_segment():
     assert wg._split_segments_with_ends("eval 'git' `echo x`; ls") == [
         ("eval 'git'", "`"), ("echo x", "`"), ("ls", ""),

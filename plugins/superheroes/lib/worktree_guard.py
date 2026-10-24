@@ -472,6 +472,19 @@ def _redirection_width(tokens, i):
     return 1
 
 
+def _drop_redirections(tokens):
+    """The tokens with every redirection word (and its detached target) removed."""
+    kept, i = [], 0
+    while i < len(tokens):
+        width = _redirection_width(tokens, i)
+        if width:
+            i += width
+            continue
+        kept.append(tokens[i])
+        i += 1
+    return kept
+
+
 def _command_tokens(tokens):
     """The shared normalizer: (assignment_keys, tokens) once leading shell prefixes,
     redirection words and `NAME=value` assignments are stripped, alternating until none moves
@@ -806,7 +819,7 @@ def _shell_program(raw_tokens):
     if not raw_tokens:
         return None
     if raw_tokens[0] == "eval":
-        args = raw_tokens[1:]
+        args = _drop_redirections(raw_tokens[1:])
         if args and _plain_word(args[0]) == "--":
             args = args[1:]
         if not args or not all(re.fullmatch(_WORD, arg) for arg in args):
@@ -885,9 +898,14 @@ def _only_wrapper_words(before):
             i += 1
             continue
         plain = _plain_word(before[i])
+        # A wrapper or execution builtin owns every later word up to the shell word (option
+        # operands such as `env -u FOO` or `exec -a name`), so the rest is its argument.
+        if (not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", plain) and plain not in _SHELL_PREFIXES
+                and (plain in _EXECUTION_BUILTINS
+                     or os.path.basename(plain) in _WRAPPER_WORDS)):
+            return True
         if (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", plain)
-                or plain in _SHELL_PREFIXES or plain in _EXECUTION_BUILTINS
-                or os.path.basename(plain) in _WRAPPER_WORDS
+                or plain in _SHELL_PREFIXES
                 or plain[:1] in ("-", "+") or plain.isdigit()):
             i += 1
             continue
@@ -956,12 +974,14 @@ def segment_accounting(command, cwd=None, _depth=0):
         if shape is None and _depth <= 1 and _hidden_shell_c(all_raw):
             shape = ("unreadable", None)
         if shape is not None:
-            if shape[0] == "unreadable" or end in ("`", "(") or _depth >= 1:
+            if (shape[0] == "unreadable" or end in ("`", "(") or _depth >= 1
+                    or any("$(" in raw or "`" in raw for raw in all_raw)):
                 records.append({"segment": segment, "kind": "unreadable-program", "action": None})
             else:
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
         _, tokens = _command_tokens(tokens)
+        tokens = _drop_redirections(tokens)
         parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         if _depth >= 1 and tokens and (
                 any(c in tokens[0] for c in "$`\\")
@@ -1084,6 +1104,10 @@ def _segment_has_unresolvable_target(tokens):
     keys, tokens = _command_tokens(tokens)
     if "GIT_DIR" in keys or "GIT_WORK_TREE" in keys:
         return True
+    while tokens and tokens[0] in _EXECUTION_BUILTINS:
+        tokens = tokens[1:]
+        while tokens and tokens[0].startswith("-"):
+            tokens = tokens[1:]
     if tokens and tokens[0] in ("cd", "pushd"):
         return True
     if tokens and _is_git_token(tokens[0]):
