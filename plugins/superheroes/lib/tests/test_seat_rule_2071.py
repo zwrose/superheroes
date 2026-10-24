@@ -160,3 +160,13 @@ def test_denylist_guard_bites_on_a_denylist_sentence():
     assert _denylist_faults("Do not call security for it.")
     assert not _denylist_faults(RO.REVIEW_SEAT_RULE)
     assert not _denylist_faults(RO.FIXER_SEAT_RULE)
+
+
+def test_dispatch_preamble_carries_the_credential_text_rule_once():
+    import engine_dispatch as ED
+    assert ED.ANTIHIJACK_PREAMBLE.count(ED.CREDENTIAL_TEXT_RULE) == 1
+    assert (ED.ANTIHIJACK_PREAMBLE.index(ED.CREDENTIAL_TEXT_RULE)
+            > ED.ANTIHIJACK_PREAMBLE.index(RO.REVIEW_SEAT_RULE))
+    assert "rather than quote it" in ED.CREDENTIAL_TEXT_RULE
+    assert '"sk-" + "a" * 48' in ED.CREDENTIAL_TEXT_RULE
+    assert not _denylist_faults(ED.CREDENTIAL_TEXT_RULE)
