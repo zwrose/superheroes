@@ -336,6 +336,30 @@ def test_b_activity_equivalence_same_epoch_on_both_transports(tmp_path, clock, t
         assert gh.rest_calls() == []
 
 
+def test_rest_branch_committer_date_is_the_newest_activity(tmp_path, clock):
+    # axis: the branch head commit's committer date, not its author date or the issue's time
+    gh = _activity_gh(_GRAPHQL_REFUSED)
+    commit = _json("git_commits_34dc2c5c.json")
+    commit["author"]["date"] = _OTHER_TIME
+    commit["committer"]["date"] = _FRESH_AT
+    endpoint = "%s/git/commits/%s" % (_BASE, _BRANCH_SHA)
+    gh.routes[endpoint] = (0, json.dumps(commit), "")
+    assert _fetch(gh, tmp_path, clock=clock) == {2110: _epoch(_FRESH_AT)}
+    assert gh.unrouted == []
+
+
+def test_graphql_branch_committed_date_is_the_newest_activity(tmp_path, clock):
+    # the same data on the GraphQL transport answers the same epoch as the REST test above
+    body = _graphql_body()
+    nodes = body["data"]["repository"]["b2110"]["nodes"]
+    assert nodes
+    for node in nodes:
+        node["target"]["committedDate"] = _FRESH_AT
+    gh = _activity_gh((0, json.dumps(body), ""))
+    assert _fetch(gh, tmp_path, clock=clock) == {2110: _epoch(_FRESH_AT)}
+    assert gh.rest_calls() == []
+
+
 def _lane(started_ts):
     return {
         "2110": {
