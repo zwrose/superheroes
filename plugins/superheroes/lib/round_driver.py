@@ -8456,7 +8456,49 @@ def _fix_batch_file_sha256(session_dir, rnd, state):
         raise ValueError("order-render-refused:fix-batch-unreadable")
 
 
-def cmd_rule(session_dir, ruling_file, by):
+def _late_ruling_fixer_decision(session_dir, state, pending, fixer_not_dispatched):
+    """(decision, refusal) — whether a ruling arriving after a fixer order was emitted re-renders it.
+
+    The order is re-rendered only when the caller says the fixer was not dispatched AND the driver
+    sees no pickup evidence for the pending attempt: exactly a store, landing or bare-payload file
+    for a fixer slot, or commits past the order's emission head (the two checks of the
+    `fixer-committed-unlanded` chokepoint). Every other case leaves the order as it is."""
+    rnd = pending.get("round")
+    attempt = pending.get("attempt")
+    if not fixer_not_dispatched:
+        return {"reshape": False, "reason": "dispatch-not-ruled-out"}, None
+    roster, roster_refusal = _roster_of(session_dir, state, RULE_CMD, P_FIXER, rnd, attempt)
+    if roster_refusal is not None:
+        return None, roster_refusal
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        try:
+            skey = round_records.storage_key(seat_key, occurrence)
+            slot_paths = (round_records.store_path(session_dir, rnd, P_FIXER, skey, attempt),
+                          round_records.landing_path(session_dir, rnd, P_FIXER, skey, attempt),
+                          round_records.bare_payload_path(session_dir, rnd, P_FIXER, skey, attempt))
+        except ValueError:
+            # a slot whose paths cannot be named cannot be shown unlanded: leave the order alone
+            return {"reshape": False, "reason": "fixer-landed"}, None
+        if any(os.path.lexists(path) for path in slot_paths):
+            return {"reshape": False, "reason": "fixer-landed"}, None
+    commits = _fixer_unlanded_commits(state, session_dir, rnd, attempt)
+    if commits:
+        return {"reshape": False, "reason": "fixer-committed"}, None
+    # None = git could not tell; the caller's assertion plus no landing is enough, so it never blocks
+    return {"reshape": True, "reason": "reshaped",
+            "commitCheck": "clean" if commits == [] else "unreadable"}, None
+
+
+def _restore_fix_batch_file(session_dir, rnd, original_state):
+    """Put fix-batch.json back to what the unchanged state renders, after a refused reshape; a
+    failure of the restore itself never masks the refusal that called it."""
+    try:
+        _ensure_fix_batch_file(session_dir, rnd, original_state)
+    except Exception:  # noqa: BLE001 — best-effort restore; the caller's refusal stands
+        pass
+
+
+def cmd_rule(session_dir, ruling_file, by, fixer_not_dispatched=False):
     try:
         with round_records.session_lock(session_dir):
             upgrade = _upgrade_gate(session_dir, RULE_CMD)
@@ -8465,16 +8507,18 @@ def cmd_rule(session_dir, ruling_file, by):
             refusal = _commit_recover_or_refuse(session_dir, RULE_CMD)
             if refusal is not None:
                 return refusal
-            return _cmd_rule_locked(session_dir, ruling_file, by)
+            return _cmd_rule_locked(session_dir, ruling_file, by,
+                                    fixer_not_dispatched=fixer_not_dispatched)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, RULE_CMD, held)
 
 
-def _cmd_rule_locked(session_dir, ruling_file, by):
+def _cmd_rule_locked(session_dir, ruling_file, by, fixer_not_dispatched=False):
     ok, state = load_state(session_dir)
     if not ok or state is None:
         detail = state if not ok else "no state"
         return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE, detail=detail)
+    original_state = copy.deepcopy(state)
     if state.get("terminal"):
         return _refuse_cmd(session_dir, RULE_CMD, RULING_SESSION_TERMINAL)
     doc, file_sha, load_reason = _load_ruling_file(ruling_file)
@@ -8511,10 +8555,24 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
                                    id=entry["id"])
     # Timing never refuses a ruling: it is recorded whenever it arrives and binds the next fix of its
-    # finding. A fixer attempt whose orders are out is left alone (its batch is not re-sliced).
+    # finding. A fixer attempt whose orders are out is left alone (never stopped, never reshaped),
+    # unless the caller says it was not dispatched (--fixer-not-dispatched) and the driver sees no
+    # pickup evidence: then the batch is re-sliced and the order re-emitted at the next attempt.
     emitted = (isinstance(pending, dict) and pending.get("phase") == P_FIXER
                and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
                                                pending.get("attempt")))
+    reshape = False
+    fixer_order = None
+    commit_check = None
+    if emitted:
+        decision, decision_refusal = _late_ruling_fixer_decision(
+            session_dir, state, pending, fixer_not_dispatched)
+        if decision_refusal is not None:
+            return decision_refusal
+        reshape = decision["reshape"]
+        commit_check = decision.get("commitCheck")
+        fixer_order = {"reshaped": reshape, "attempt": pending.get("attempt"),
+                       "reason": decision["reason"]}
     cfg = state.get("config") or {}
     round_rulings = []
     restored_rows = []
@@ -8588,7 +8646,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
-    if not emitted:
+    if not emitted or reshape:
         _reconcile_fixer_queue_after_rulings(
             state, cfg, extra_rows=restored_rows, session_dir=session_dir)
     if not emitted and state.get("step") == P_FIXER:
@@ -8609,23 +8667,64 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                          if isinstance(pending_render_check, dict) else None)
             return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
                                phase=phase_r, rnd=rnd_r, attempt=attempt_r, detail=str(exc))
+    journal_fields = {"phase": phase, "round": rnd, "attempt": attempt,
+                      "rulingFileSha256": file_sha, "count": len(parsed)}
+    if reshape:
+        journal_fields["supersededAttempt"] = attempt
     journal_entry = _journal_entry_for_commit(
-        session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
-        rulingFileSha256=file_sha, count=len(parsed))
-    try:
-        c = round_commit.begin(session_dir, "rule-record")
-        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
-        journal_path = os.path.join(session_dir, JOURNAL_FILE)
-        c.add_journal_append(journal_path, journal_entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
-                                        rnd=rnd, attempt=attempt)
+        session_dir, RULE_CMD, "ruling-recorded", **journal_fields)
+    emit_committed = False
+    # axis: a ruling on an undispatched, unpicked-up fixer order re-renders it at the next attempt — see bite-proof record wo_a_2137_late_ruling_rerender
+    if reshape:
+        fixer_order = {"reshaped": True, "attempt": None, "supersededAttempt": attempt,
+                       "reason": "batch-emptied", "commitCheck": commit_check}
+        pending_now = state.get("pending")
+        if (isinstance(pending_now, dict) and pending_now.get("phase") == P_FIXER
+                and not state.get("terminal")):
+            new_attempt = max(attempt + 1, _next_dispatch_attempt(session_dir, rnd, P_FIXER, state))
+            pending_now["attempt"] = new_attempt
+            roster, roster_refusal = _roster_of(session_dir, state, RULE_CMD, P_FIXER, rnd,
+                                                new_attempt)
+            if roster_refusal is not None:
+                return roster_refusal
+            try:
+                _emit_orders_manifest(session_dir, state, rnd, P_FIXER, new_attempt, roster,
+                                      journal_cmd=RULE_CMD, pending_payload=pending_now.get("payload"),
+                                      seat_map=_effective_seat_map(state),
+                                      extra_journal_entries=(journal_entry,))
+            except round_commit.CommitRefused as exc:
+                _restore_fix_batch_file(session_dir, rnd, original_state)
+                return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
+                                                rnd=rnd, attempt=attempt)
+            except AuditorUnseatable as exc:
+                _restore_fix_batch_file(session_dir, rnd, original_state)
+                return _refuse_cmd(session_dir, RULE_CMD, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                                   rnd=rnd, attempt=attempt, liveVendors=exc.live_vendors,
+                                   fixerVendor=exc.fixer_vendor, detail=exc.detail)
+            except ValueError as exc:
+                _restore_fix_batch_file(session_dir, rnd, original_state)
+                return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused", phase=phase,
+                                   rnd=rnd, attempt=attempt, detail=str(exc))
+            emit_committed = True
+            fixer_order = {"reshaped": True, "attempt": new_attempt, "supersededAttempt": attempt,
+                           "reason": "reshaped", "commitCheck": commit_check}
+    if not emit_committed:
+        try:
+            c = round_commit.begin(session_dir, "rule-record")
+            _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
+            journal_path = os.path.join(session_dir, JOURNAL_FILE)
+            c.add_journal_append(journal_path, journal_entry)
+            c.run()
+        except round_commit.CommitRefused as exc:
+            return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
+                                            rnd=rnd, attempt=attempt)
     response = {"ok": True, "recorded": len(parsed), "rulingFileSha256": file_sha}
     pending_after = state.get("pending")
     if (isinstance(pending_after, dict) and pending_after.get("action")
             and not state.get("terminal")):
         response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
+    if fixer_order is not None:
+        response["fixerOrder"] = fixer_order
     return response
 
 
@@ -10517,6 +10616,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "FIX_BATCH_SHA256",
     "FIXER_STEP_5_BLOCK",
     "FIXER_ESCALATION_BLOCK",
+    "FILE_WRITE_RULE",
     "PR_BODY_LINE",
 })
 
@@ -14221,6 +14321,11 @@ def build_parser():
     cli_contract.add_argument(pru, "--ruling-file", contract="free-text", required=True,
                               dest="ruling_file")
     cli_contract.add_argument(pru, "--by", contract="free-text", required=True)
+    cli_contract.add_argument(pru, "--fixer-not-dispatched", contract="boolean-flag",
+                              dest="fixer_not_dispatched",
+                              help="the pending fixer order was never dispatched: a ruling then "
+                                   "re-renders it at the next attempt, unless the driver sees the "
+                                   "fixer already landed or committed")
 
     return parser
 
@@ -14448,7 +14553,8 @@ def _dispatch(args):
     elif args.cmd == "checkpoint":
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "rule":
-        out = cmd_rule(args.session_dir, args.ruling_file, args.by)
+        out = cmd_rule(args.session_dir, args.ruling_file, args.by,
+                       fixer_not_dispatched=args.fixer_not_dispatched)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:

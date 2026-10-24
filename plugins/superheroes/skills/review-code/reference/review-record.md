@@ -20,6 +20,8 @@ under `rawOutputs`. Each review ends by writing it. A raw output that holds a cr
 
 A record that does not fit one comment posts as a head comment plus part comments (`<!-- superheroes:review-record-part -->`), each under GitHub's limit. The parts go up first, then the head, which names them by comment id and carries a hash and a length that check them. The record's JSON writes every `/` as `\/`, which is valid JSON with the same values, so a host that rewrites bare URLs in transit leaves it unchanged; the parts' hash and length are taken over that text. `read`, and the next write's look at the earlier record, join the parts back into the whole record. A host's attribution footer after a part's closing fence is dropped. A part that is missing, or whose framing is broken, makes the record unreadable (`review-record-unreadable`). A part whose text changed in transit but still parses as a record is read, and the record carries `transitDamage` (the recorded and found lengths) so the vet can check it; a part comment is never a record by itself, and a write that stops part-way leaves parts no head names, never a half record. When even the head would be too long, its summary shows a count (listed in the full record) in place of the long lists; the full lists stay in the record.
 
+The writer also adds `transitDamage.redactedFields` to a record it posts: the path of every recorded value or key whose text holds `[REDACTED` (the writer's own withholding or redaction, or one made upstream), such as `findings[2].body`. The summary then carries a `Transit damage:` line, so a reader sees that text was lost; at the compact levels the line gives the count and the full list stays in the record. A record with no such text carries neither. `read` adds the length and hash keys (`recordedChars`, `foundChars`, `hashMatches`) to the same `transitDamage` object. An earlier record that carries only redacted fields is listed under `earlierRecordsNotChecked` with why `redacted text`.
+
 The writer computes `withheldFromReviewers` in code from the PR's changed files: each changed path an external reviewer could not read in full (any stripped agent or IDE configuration path; a changed regular file under `.claude/superheroes/` is shown to reviewers in full and is not listed). It is `[]` when nothing was withheld, and `null` when the changed files were not read (the account names no repository, or the read failed). It never changes the record's status.
 
 Each finding carries the sheet part its outcome lands in (`sheetPart`; none while the outcome is undecided). The writer re-checks every cited decision against what is on record when it writes: a `ruling` whose cited decision is not on record becomes `left-for-owner`, and a finding left for the owner whose cited decision is on record becomes a `ruling`. An owner ruling is on record only when its pointer resolves (see `ownerRulings` under Write the account). Each change is listed under `decisionRechecks`, and the finding's reason says why. Each carried-finding check is listed under `carriedRechecks` (`finding`, `settled`, `result` of `fixed`, `kept` or `unchanged`, `why`, `commit`, `checkedHead`, `evidence`). A ruling that cites no decision names its basis in prose and is left as it is. The summary says how many rounds ran against which cap (the round cap or the round ceiling) and whether the loop stopped at it, and lists findings that were not taken into the review, with their reasons, under `refused`.
@@ -109,6 +111,14 @@ What comes from the session:
 - A later session's account relists the latest earlier record's findings that this session did not raise, each with the outcome and reason it had.
 - Before writing a record over an earlier one, the driver re-checks each carried left-for-owner finding at the final head itself, by a run or a read it makes and never a review seat's claim, and records an entry `{key, settled, commit, checkedHead, evidence}` in the extras' `carriedChecks`: `fixed` names the fix commit and the head it checked; `applies` or `unsettled` keeps the finding for the owner. The writer marks a carried finding `fixed` only on a `fixed` entry whose `checkedHead` is the record's final commit and whose fix commit is in that commit's history; every other case keeps it left-for-owner, with the reason saying why. Every check is listed under `carriedRechecks`, and no finding is ever dropped.
 
+An abandoned session:
+
+- When the orchestrator closes a session before its loop ends, in PR mode, write its record with `--abandoned "<why>"` after the command above; the session never reached a terminal, so the flag is what admits it. The reason must be non-blank.
+- The record reads `not-reviewed` and can never read `reviewed`. Its `whatIsMissing` carries the line "session abandoned: ...". A finding still open reads undecided ("still open when the review loop ended").
+- The account carries an optional `abandoned` key, `{"reason": "<why>"}`; the writer admits an empty `reviewers` list only when it is present. A session abandoned before any seat result lists no reviewer.
+- `checked` carries the reason ("the review loop was abandoned before it ended: <why>") and a line that findings in seat results recorded but never folded appear only in the raw findings files.
+- A session that ended is refused `review-session-not-abandonable`; write it without the flag. Without `--abandoned` nothing above changes.
+
 Outcomes:
 
 - A fixed finding becomes `fixed`, with the round it was audited in; a finding an audit raised and a later audit discharged under its own key reads `fixed` like any audited fix; a fix a later full panel did not raise again reads `fixed; the full panel in round <n> did not raise it again`.
@@ -121,8 +131,10 @@ Outcomes:
 Refusals, before anything is posted:
 
 - `review-session-unreadable`: a session file the account needs is missing or malformed; the detail names it (the loop state, the journal or its fault file, `meta.json`'s `sessionId`, the disposition ledger). Restore the session directory and write again; never edit the files by hand.
-- `review-session-not-terminal`: the loop has not ended. Finish the loop, then write.
-- `review-session-unsupported`: the session recorded no seat result and no round's seat status, or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account".
+- `review-session-not-terminal`: the loop has not ended. Finish the loop, then write; or, when the loop is abandoned, write with `--abandoned`.
+- `review-session-unsupported`: the session recorded no seat result and no round's seat status, or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account"; an abandoned session is never written by hand, so it takes `--abandoned` instead.
+- `review-session-not-abandonable`: `--abandoned` was given for a session that ended. Write its record without the flag.
+- `review-session-abandon-reason-missing`: `--abandoned` was given a blank reason. Give the reason the loop was closed.
 - `review-session-extras-invalid`: the extras file is missing, unparseable or malformed; the detail names the key. Fix it and write again.
 
 ## When it refuses
