@@ -188,6 +188,13 @@ overrunning or silently truncating.
 - **Install nothing and use no network unless your order authorizes it; describe only what you
   did.** Report a need for either as a finding, and never present code you wrote in this dispatch
   as something you found.
+- **Credential-like literals are redacted in cloud sessions.** A cloud session replaces
+  credential-like text (API keys, tokens, private keys), for example with a bare `[REDACTED]`, before
+  a file is written or a comment posted; the redactor's exact patterns are not known, so this is
+  best effort. A test fixture that holds a whole key, token or private key is rewritten before the
+  file is written, so the test fails before it tests the code. Build such a value at runtime from
+  pieces (for example `"sk-" + "a" * 48`) rather than writing it whole. In your return, describe such
+  text rather than quote it.
 - **A cited path you cannot resolve is an order defect — stop and report it.** Your order should
   **cite** a reference path rather than paste its contents (CONVENTIONS §11.4), so a path that does
   not resolve is the loud half of that trade: report the path you tried and what happened, and do

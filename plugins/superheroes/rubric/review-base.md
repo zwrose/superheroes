@@ -86,6 +86,10 @@ Minor and Nit findings never change the verdict regardless of strictness.
    your evidence supports. Naming the check is the useful act; claiming the run is the defect,
    and silently dropping the finding is worse than either.
 
+## Credential-like text is redacted in cloud sessions
+
+A cloud session redacts credential-like text (API keys, tokens, private keys): it replaces the text, for example with a bare `[REDACTED]`, before a file is written or a comment posted. The redactor's exact patterns are not known, so treat this as best effort. In a finding, describe such text rather than quote it, because a finding that quotes it loses it from the review record (the record flags the loss as `transitDamage.redactedFields`). A break-it test you write builds any such value at runtime from pieces (for example `"sk-" + "a" * 48`) rather than writing it whole.
+
 ## Findings output format (the single schema — agents reference this, never restate it)
 
 The JSON array below is the one authoritative schema; you must not redefine the
