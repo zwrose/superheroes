@@ -604,8 +604,9 @@ phase and then emits the next order through `next` in the same call, so the `adv
 queues a fix batch returns the fixer order itself: record rulings before any `advance` that folds
 synthesis, the gap sweep, the scoped finder, or an owner gate (judgment or stall). On the hand path
 a `submit` emits nothing, so record them before the `next` that follows that fold's `submit`. A
-ruling recorded after the order is out reaches only the next order, so the fixer builds the old
-direction once and the next round reworks it. The late-ruling behaviour below is the backstop, not the path.
+ruling recorded after the order is out reaches only the next order, unless no fixer has picked the
+order up and `rule --fixer-not-dispatched` re-emits it (below), so the fixer builds the old direction
+once and the next round reworks it. The late-ruling behaviour below is the backstop, not the path.
 
 A ruling is accepted whenever it arrives, at any step that is not terminal, and binds the next fix of
 its finding. When the pending step is a `dispatch-fixer` attempt K whose orders are already emitted,
