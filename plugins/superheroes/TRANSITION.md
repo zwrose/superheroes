@@ -24,6 +24,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** Every implementer order now tells the implementer to create and edit files only with the host's Write and Edit tools, so fewer orders stop on a refused shell write. See [Implementer orders: the file-write rule rides every order](#implementer-orders-the-file-write-rule-rides-every-order).
 - **After switching.** **Nothing is owed.** An orchestrator that knows no fixer was dispatched for a pending fixer order can pass `rule --fixer-not-dispatched`, and a ruling then re-renders that order at the next attempt; without the flag a ruling leaves an emitted order alone, as before. See [Review rulings: a late ruling re-renders a fixer order nobody has picked up](#review-rulings-a-late-ruling-re-renders-a-fixer-order-nobody-has-picked-up).
 - **After switching.** **Nothing is owed.** An orchestrator that closes a review session before its loop ends can write the session's record with `review_record_session.py write ... --abandoned "<why>"`; a write without the flag is unchanged. See [Review record: an abandoned session writes its own record](#review-record-an-abandoned-session-writes-its-own-record).
+- **After switching.** **Nothing is owed.** The worktree guard now checks the program inside `bash -c`, `sh -c`, `zsh -c` and `eval` as commands, one level in, and refuses one it cannot read. See [Worktree guard: a quoted shell program is read as commands](#worktree-guard-a-quoted-shell-program-is-read-as-commands).
 
 ### Showrunner: a PR with no review run gets no merge sheet
 
@@ -65,6 +66,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 - `checked` carries the reason and a line that findings in seat results recorded but never folded appear only in the raw findings files.
 - A new optional account key, `abandoned: {"reason": ...}`, admits an empty `reviewers` list: a session abandoned before any seat result lists no reviewer. An account without the key still needs at least one reviewer.
 
+### Worktree guard: a quoted shell program is read as commands
+
+- For `bash`, `sh` and `zsh` given `-c` (option clusters such as `-lc` and `-ec`, `-o`/`-O` values and `--` included), and for `eval`, the guard checks the program text one level in, the same way it checks a top-level command. So `bash -c "git checkout -- ."` and `eval "git checkout -- ."` are refused in a dirty tree, and `bash -c "echo hi"` stays allowed.
+- A program the guard cannot read is refused whatever the tree holds. That covers a variable, a `$(...)` or backtick substitution, a backslash escape, a nested quote, a `-c` with no program, a command word inside the program that comes from a variable, an option or script word before `-c` that comes from a variable, and a second level of `-c` or `eval`. The refusal names the next step: run the program's commands as plain commands, or pass the program as one single-quoted string.
+- Inside a program, an `exec`, `command` or `builtin` with any word holding `$`, a backtick or a backslash is refused the same way, `command -v "$TOOL"` included; `command -v git` stays allowed.
+- Leading shell words and environment assignments are skipped in any order (`then LC_ALL=C bash -c ...`) before the guard reads the command word.
+- A known wrapper (`timeout`, `env`, `nohup`, `nice`, `sudo`, `xargs` and the like) before a `bash`/`sh`/`zsh` `-c` is refused as an unreadable program. `find -exec`, another interpreter's `-c` and a script file are not read.
+
 ## 0.46.0
 
 ### Before you upgrade
@@ -91,7 +100,6 @@ Check these in a consuming project when it adopts 0.46.0. Each step names the no
 - **After switching.** **Nothing is owed.** The worktree guard no longer refuses a `git checkout --ours|--theirs` or `git restore` of paths the merge left unedited because of the merge's staged changes elsewhere. See [Worktree guard: a merge in progress](#worktree-guard-a-merge-in-progress).
 - **After switching.** **Nothing is owed.** A heredoc body in a few exact command shapes is no longer scanned for commands. See [Worktree guard: text that only names a command](#worktree-guard-text-that-only-names-a-command).
 - **After switching.** **Nothing is owed.** Every worktree guard refusal text now ends with the exact command or tool to use next. See [Worktree guard: every refusal names its next step](#worktree-guard-every-refusal-names-its-next-step).
-- **After switching.** **Nothing is owed.** The worktree guard now checks the program inside `bash -c`, `sh -c`, `zsh -c` and `eval` as commands, one level in, and refuses one it cannot read. See [Worktree guard: a quoted shell program is read as commands](#worktree-guard-a-quoted-shell-program-is-read-as-commands).
 - **After switching.** **Nothing is owed.** A desktop-started session's automatic checkpoint runs while the session is off screen, and the mod writes `<id>.skip` beside the notes. See [Automatic checkpoint: a desktop-started session counts as attended off screen](#automatic-checkpoint-a-desktop-started-session-counts-as-attended-off-screen).
 - **After switching.** **Nothing is owed.** An orchestrator that wants the review loop to cross-check a review fixer's reported refusals against the fixer subagent's transcript passes `--fixer-transcript <path>` on `record-result`, `advance` or `submit`; without it every fixer row journals `refusalCheck: unobserved` and nothing is refused. A fixer that committed and wrote no landing is now refused `fixer-committed-unlanded`: re-dispatch the order so it lands. See [Review fixer: Write/Edit only, every refusal reported, and the landing always written](#review-fixer-writeedit-only-every-refusal-reported-and-the-landing-always-written).
 - **After switching.** **Nothing is owed.** The showrunner charter's board duty now says a new issue files only on the owner's word. See [Showrunner: the board duty names the filing rule](#showrunner-the-board-duty-names-the-filing-rule).
@@ -260,13 +268,6 @@ Check these in a consuming project when it adopts 0.46.0. Each step names the no
 ### Worktree guard: every refusal names its next step
 
 - Each worktree guard refusal text ends with the exact command or tool to use next, which is the route the stop rule's exception lets an agent take.
-
-### Worktree guard: a quoted shell program is read as commands
-
-- For `bash`, `sh` and `zsh` given `-c` (option clusters such as `-lc` and `-ec`, `-o`/`-O` values and `--` included), and for `eval`, the guard checks the program text one level in, the same way it checks a top-level command. So `bash -c "git checkout -- ."` and `eval "git checkout -- ."` are refused in a dirty tree, and `bash -c "echo hi"` stays allowed.
-- A program the guard cannot read is refused whatever the tree holds. That covers a variable, a `$(...)` or backtick substitution, a backslash escape, a nested quote, a `-c` with no program, a command word inside the program that comes from a variable, an option or script word before `-c` that comes from a variable, and a second level of `-c` or `eval`. The refusal names the next step: run the program's commands as plain commands, or pass the program as one single-quoted string.
-- Leading shell words and environment assignments are skipped in any order (`then LC_ALL=C bash -c ...`) before the guard reads the command word.
-- A known wrapper (`timeout`, `env`, `nohup`, `nice`, `sudo`, `xargs` and the like) before a `bash`/`sh`/`zsh` `-c` is refused as an unreadable program. `find -exec`, another interpreter's `-c` and a script file are not read.
 
 ### Automatic checkpoint: a desktop-started session counts as attended off screen
 
