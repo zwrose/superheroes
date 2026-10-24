@@ -272,6 +272,11 @@ def _split_segments_with_ends(command):
                 flush("&")
                 i += 2
                 continue
+            # An `&` that belongs to a redirection (`>&`, `<&`, `2>&1`, `&>`, `&>>`) is no boundary.
+            if (i > 0 and command[i - 1] in "<>") or (i + 1 < n and command[i + 1] == ">"):
+                current.append(ch)
+                i += 1
+                continue
             flush("&")
             i += 1
             continue
@@ -860,6 +865,19 @@ def _shell_program(raw_tokens):
     return ("program", program)
 
 
+def _hidden_shell_c(raw_tokens):
+    """Fail-closed backstop: a bare bash|sh|zsh word with a later short `-`/`+` cluster holding
+    `c`, in a segment `_shell_program` did not read (a wrapper or redirection in front)."""
+    for k, raw in enumerate(raw_tokens):
+        if "'" in raw or '"' in raw or os.path.basename(raw) not in ("bash", "sh", "zsh"):
+            continue
+        for later in raw_tokens[k + 1:]:
+            plain = _plain_word(later)
+            if len(plain) > 1 and plain[0] in "-+" and not plain.startswith("--") and "c" in plain:
+                return True
+    return False
+
+
 def _inner_git_unreadable(tokens, parsed):
     """Whether a git segment inside a program hides its action: an expansion or escape in the
     subcommand word, or in any word once the subcommand is destructive (or unparsed)."""
@@ -897,8 +915,11 @@ def segment_accounting(command, cwd=None, _depth=0):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        _, raw_tokens = _command_tokens(_tokenize_segment(segment, keep_quotes=True))
+        all_raw = _tokenize_segment(segment, keep_quotes=True)
+        _, raw_tokens = _command_tokens(all_raw)
         shape = _shell_program(raw_tokens)
+        if shape is None and _depth <= 1 and _hidden_shell_c(all_raw):
+            shape = ("unreadable", None)
         if shape is not None:
             if shape[0] == "unreadable" or end in ("`", "(") or _depth >= 1:
                 records.append({"segment": segment, "kind": "unreadable-program", "action": None})

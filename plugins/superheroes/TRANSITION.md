@@ -198,7 +198,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - For `bash`, `sh` and `zsh` given `-c` (option clusters such as `-lc` and `-ec`, `-o`/`-O` values and `--` included), and for `eval`, the guard checks the program text one level in, the same way it checks a top-level command. So `bash -c "git checkout -- ."` and `eval "git checkout -- ."` are refused in a dirty tree, and `bash -c "echo hi"` stays allowed.
 - A program the guard cannot read is refused whatever the tree holds. That covers a variable, a `$(...)` or backtick substitution, a backslash escape, a nested quote, a `-c` with no program, a command word inside the program that comes from a variable, an option or script word before `-c` that comes from a variable, and a second level of `-c` or `eval`. The refusal names the next step: run the program's commands as plain commands, or pass the program as one single-quoted string.
 - Leading shell words and environment assignments are skipped in any order (`then LC_ALL=C bash -c ...`) before the guard reads the command word.
-- A wrapper before the shell word (`timeout`, `env`, `exec`, `xargs`, `find -exec`), another interpreter's `-c`, and a script file are not read.
+- A wrapper before a `bash`/`sh`/`zsh` `-c` (`timeout`, `env`, `exec`, `xargs`, `find -exec`) is now refused as an unreadable program. Another interpreter's `-c` and a script file are still not read.
 
 ### Automatic checkpoint: a desktop-started session counts as attended off screen
 

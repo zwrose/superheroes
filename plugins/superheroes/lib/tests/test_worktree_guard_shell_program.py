@@ -99,6 +99,40 @@ def test_an_unreadable_program_is_denied_with_the_unreadable_message(name, dirty
     assert wg.classify(_UNREADABLE[name], dirty_repo) == ("deny", wg.unreadable_program_message())
 
 
+_REDIRECT_PROGRAMS = {
+    "dup-before": "2>&1 bash -c 'git reset --hard'",
+    "dup-between": "bash 2>&1 -c 'git reset --hard'",
+    "amp-redirect-before": "&>/dev/null bash -c 'git reset --hard'",
+    "quoted-space-target": "2>\"/tmp/error log\" bash -c 'git reset --hard'",
+}
+
+
+@pytest.mark.parametrize("name", sorted(_REDIRECT_PROGRAMS))
+def test_a_program_behind_a_redirection_is_denied(name, dirty_repo):
+    assert wg.classify(_REDIRECT_PROGRAMS[name], dirty_repo)[0] == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "timeout 5 bash -c 'echo hi'",
+    "env bash -c 'echo hi'",
+    "xargs sh -c 'echo hi'",
+])
+def test_a_wrapper_before_a_shell_c_is_refused_as_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message())
+
+
+@pytest.mark.parametrize("command", ["grep -c bash notes.txt", "echo bash"])
+def test_the_backstop_leaves_ordinary_bash_mentions_alone(command, dirty_repo):
+    assert wg.classify(command, dirty_repo)[0] == "allow"
+
+
+def test_a_redirection_ampersand_is_not_a_segment_boundary():
+    assert wg._split_segments("git status 2>&1") == ["git status 2>&1"]
+    assert wg._split_segments("git status &>/dev/null") == ["git status &>/dev/null"]
+    assert wg._split_segments("a && b") == ["a", "b"]
+    assert wg._split_segments("a & b") == ["a", "b"]
+
+
 def test_the_unreadable_message_names_its_next_step():
     message = wg.unreadable_program_message()
     assert message.startswith("superheroes worktree guard:")
