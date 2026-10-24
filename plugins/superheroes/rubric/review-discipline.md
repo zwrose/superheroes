@@ -718,7 +718,7 @@ fail-closed gates operate on the PR body — a review seat flags a PR missing an
   missed a genuine Important-severity race dispositioned "Deferred — follow-up"; severity is
   already carried by every dispositions table, and it keeps craft nits below the bar for free:
   (1) every **deferred** DoD row; (2) every **blocking or important** review finding that was
-  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**. A
+  **not fixed**, whatever its disposition is called; (3) every **costly disclosed degradation** (sorted in skills/workhorse/reference/handback.md § Disclosed degradations). A
   **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing**
   `<!-- superheroes:degradations -->` section is **itself** a finding — same **Important** /
   `tradeoff` / author-resolved shape as the DoD-table check, not a silent pass; an empty

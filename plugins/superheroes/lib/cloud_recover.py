@@ -194,6 +194,17 @@ def superseded_ids(repo_root, env=None):
     return (set(), False) if data is None else (set(data["superseded"]), True)
 
 
+def handover_stopped_ids(repo_root, env=None):
+    """(the launch ids `assess` recorded as stopped on a confirmed handover, whether the state could be
+    read). A missing file is readable and empty; an unreadable one is not, and the caller treats no lane as
+    stopped."""
+    path, data = _load(repo_root, _env(env))
+    if data is None:
+        return set(), False
+    return {lid for lid, entry in data["assessed"].items()
+            if entry.get("verdict") == "stopped" and entry.get("evidence") == "handover"}, True
+
+
 def _lane(repo_root, launch_id, env):
     """(folded lane, its reserved record, refusal). Refused when the ledger cannot be read or folded, the
     launch id is not in it, or the lane is not a cloud lane."""

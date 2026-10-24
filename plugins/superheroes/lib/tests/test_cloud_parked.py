@@ -94,9 +94,9 @@ def _lapsed_comment(pr, created_at="2026-10-05T10:00:00Z", cid=None):
     return comment
 
 
-def _record_comment(pr, missing, sha="h1"):
+def _record_comment(pr, missing, sha="h1", status=None):
     rec = {"schema": RR.RECORD_SCHEMA, "pr": pr, "missingReviews": missing, "finalCommit": {"sha": sha},
-           "parked": any(m["goAhead"] is None for m in missing)}
+           "parked": any(m["goAhead"] is None for m in missing), **({"status": status} if status is not None else {})}
     return {"id": 500 + pr, "body": RR.MARKER + "\n<details>\n\n```json\n" + json.dumps(rec) + "\n```\n</details>\n"}
 
 
@@ -419,6 +419,23 @@ def test_a_parked_pr_the_owner_let_through_is_not_sent_back(w):
     assert out["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}]
     assert [s["pr"] for s in out["sendBack"]] == [11]
     assert [e["outcome"] for e in _entries(w)] == ["owner-let-through", None]
+
+
+def test_a_record_reading_awaits_owner_is_let_through_or_sent_back_exactly_as_not_reviewed(w):
+    # axis: the let-through check reads no status; an awaits-owner record treated differently from a not-reviewed one
+    go = {"name": "codex", "goAhead": {"kind": "owner-words"}}
+    for n, (launch, issue, surface) in enumerate([("l-a", 101, "a"), ("l-b", 102, "b"), ("l-c", 103, "c"), ("l-d", 104, "d")]):
+        _lane(w, launch, issue, f"session-{surface}", surface)
+        _park(w, 10 + n, issue=issue)
+    for pr, missing, status in [(10, [go], "awaits-owner"), (11, [go], "not-reviewed"),
+                                (12, [go, {"name": "claude", "goAhead": None}], "awaits-owner"),
+                                (13, [go, {"name": "claude", "goAhead": None}], "not-reviewed")]:
+        w.gh.comments[pr].append(_record_comment(pr, missing, status=status))
+    _renew(w)
+    out = _send(w)
+    assert out["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}, {"pr": 11, "outcome": "owner-let-through"}]
+    assert [s["pr"] for s in out["sendBack"]] == [12, 13]
+    assert [e["outcome"] for e in _entries(w)] == ["owner-let-through", "owner-let-through", None, None]
 
 
 def test_a_pr_already_reviewed_on_its_current_head_is_not_sent_back(w):
