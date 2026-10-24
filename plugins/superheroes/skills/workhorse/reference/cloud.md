@@ -298,6 +298,15 @@ refuses.
 - The size count, run as `python3 -B <plugin root>/lib/size_count.py count --base <sha> --worktree`,
   can fail inside the sandbox on stray dotfiles in the home directory
   (`git-failed: ./.bash_profile`). Run it from the builder's own shell.
+- **Credential-like text is redacted.** A cloud session replaces credential-like text (API keys,
+  tokens, private keys), for example with a bare `[REDACTED]`, before a file is written or a comment
+  posted; the redactor's exact patterns are not known, so this is best effort. Build a test value of
+  that kind at runtime from pieces (for example `"sk-" + "a" * 48`) rather than writing it whole, and
+  describe such text in a finding or a comment rather than quote it. An order that seeds a
+  credential-like test value spells it as pieces too. Implementers get the rule from
+  `agents/implementer.md` and review seats from `rubric/review-base.md` and the dispatch preamble. A
+  review record field that arrives redacted is flagged as `transitDamage.redactedFields` with a
+  `Transit damage:` summary line (`skills/review-code/reference/review-record.md`).
 
 ## Verify: cloud-only failures
 
