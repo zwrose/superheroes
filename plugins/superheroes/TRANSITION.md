@@ -22,6 +22,9 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
 - **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
 - **After switching.** **Nothing is owed.** Every implementer order now tells the implementer to create and edit files only with the host's Write and Edit tools, so fewer orders stop on a refused shell write. See [Implementer orders: the file-write rule rides every order](#implementer-orders-the-file-write-rule-rides-every-order).
+- **After switching.** **Nothing is owed.** A native implementer's isolated worktree now gets a link to the build worktree's installed dependency folders (`node_modules`), so `npx --no-install <bin>` and `npm run <script>` work there; `enroll` reports it under a new `dependencies` key and `close` removes the link before collecting. See [Native implementer: enroll links the installed dependencies](#native-implementer-enroll-links-the-installed-dependencies).
+- **After switching.** **Nothing is owed.** `open` prints one more field in its `agent` object, `launchPrompt`, and the native implementer and the native fixer are dispatched with it. See [Native dispatch: open prints a launch prompt](#native-dispatch-open-prints-a-launch-prompt).
+- **After switching.** **Nothing is owed.** In a cloud session on Linux whose calibration turns on `localSockets`, the review's host-seat fixer runs as a native fixer subagent in the build worktree. See [Review fixer: the cloud localSockets route](#review-fixer-the-cloud-localsockets-route).
 
 ### Showrunner: a PR with no review run gets no merge sheet
 
@@ -46,6 +49,24 @@ Check these in a consuming project when it adopts this release. Each step names 
 - The native implementer preamble (`lib/native_engine.py`) carries it as its rule 4; the refused-command rule, the result and the deadline rules move to 5, 6 and 7.
 - The fixer order template (`rubric/orders/dispatch-fixer.md`) fills the same sentence from the constant through the `{{FILE_WRITE_RULE}}` placeholder; its rendered text is unchanged apart from line wrapping.
 - No key, flag, or refusal reason changes.
+
+### Native implementer: enroll links the installed dependencies
+
+- `native_engine.py enroll` now links each installed dependency folder of the build worktree (`break_it.DEPENDENCY_DIRS`, today `node_modules`) that the base does not track into the isolated worktree, through the one helper `break_it._link_dependencies`. A caller that reads the enroll result finds a new key, `dependencies`, beside `ok` and `head`: `{"linked": [...]}` lists exactly the links that exist.
+- `dependencies` carries a `note` when the helper declined or nothing was linked: `dependency-link-unsafe` and `dependency-link-failed` (the helper's reasons, which never refuse enroll), `already-present` (every installed folder is already in the tree because the base tracks it) and `none-installed` (the build worktree has no dependency folder). A link made cleanly has no `note`.
+- `close` removes that link before `git add -A`, only when the base does not track the path and the link resolves to the build worktree's own folder; a path the base tracks, or a link resolving elsewhere, is collected as before. An unlink failure forfeits `native-collect-failed`.
+- The break-it guard (`_link_dependencies`) gains two checks, which also apply to a break-it run: a dependency folder that is itself a link into another part of the checkout is `dependency-link-unsafe`, and the entries of a `.bin` directory are scanned like package links, so one that links into the checkout outside the dependency folder is `dependency-link-unsafe` too.
+- A new result key (`dependencies`, with its `note` tokens). No flag or refusal reason changed; `native-collect-failed` now also covers an unlink failure.
+
+### Native dispatch: open prints a launch prompt
+
+- `native_engine.py open` prints `agent.launchPrompt`: one sentence that points the subagent at `agent.promptPath` ("Read the file `<promptPath>` in full with the Read tool before doing anything else, then follow it exactly: it is your whole work order."). The standard dispatch path for the native implementer, and for the native fixer with the emitted order file's path, is that sentence as the subagent's prompt; the order is never re-emitted inline.
+- A new key in the printed `agent` object. No flag or refusal reason changed.
+
+### Review fixer: the cloud localSockets route
+
+- In a cloud session on Linux whose calibration turns on `localSockets`, the claude write channel refuses `engine-config:sandbox-access-unsupported-platform`, so the review's host-seat fixer runs as a native fixer subagent in the build worktree (no worktree isolation), dispatched with the pointer prompt, writing its own payload landing and its own commit as the fixer order says. It is never a native implementer order.
+- No key, flag or refusal reason changed; the reason above is the existing one the channel already gave.
 
 ## 0.46.0
 

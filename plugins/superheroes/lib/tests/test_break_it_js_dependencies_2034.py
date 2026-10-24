@@ -212,6 +212,27 @@ def test_t6_a_dependency_linking_into_tracked_files_is_never_linked(tmp_path, li
     assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-unsafe"), got
 
 
+def test_t6_a_dependency_folder_that_is_itself_a_link_into_the_checkout_is_never_linked(tmp_path):
+    repo = _repo(tmp_path, install=False)
+    _write(repo, "vendor/pkg/index.js", "module.exports = 1;\n")
+    _git(repo, "add", "-A")
+    _git(repo, *_ID, "commit", "-q", "-m", "vendor")
+    os.symlink("vendor", repo / "node_modules")
+    got = _run(repo, PASSING, NPM_RUN)
+    assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-unsafe"), got
+
+
+def test_t6_a_bin_entry_linking_into_tracked_files_is_never_linked(tmp_path):
+    repo = _repo(tmp_path, install=False)
+    _write(repo, "scripts/tool.js", "console.log(1);\n")
+    _git(repo, "add", "-A")
+    _git(repo, *_ID, "commit", "-q", "-m", "scripts")
+    _install_fake(repo / "node_modules")
+    os.symlink("../../scripts/tool.js", repo / "node_modules" / ".bin" / "tool")
+    got = _run(repo, PASSING, NPM_RUN)
+    assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-unsafe"), got
+
+
 # T7
 def test_t7_a_link_that_fails_is_not_run(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
