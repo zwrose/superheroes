@@ -167,6 +167,8 @@ Your dispatch names the risk areas this change touches. When it names none, or s
 
 For each touched area, write at least one **break-it test**: a new test file, in the project's own test framework and test folder, that tries to break the change on a named risky scenario in that area (for example, a payment charged twice on retry). The test must be deterministic, need no network, and target the code the diff changed. Write at most three break-it tests per review. While under that cap, write at least one per touched area. A credential-like value in a break-it test is built at runtime from pieces (for example `"sk-" + "a" * 48`), never written whole, because a cloud session redacts it and the test then fails before it tests anything (for example with a `NameError`); see `rubric/review-base.md` § Credential-like text is redacted in cloud sessions.
 
+The test is committed exactly as you write it and is kept only when it comes through unchanged, so write it the way the project's own rules require a committed test to be. Read CLAUDE.md, the calibration and any check the project runs over its test files, and write every marker or directive comment they require in its full required form (for example, a marker the project requires to carry a reason carries one), never as a bare marker the project would then have to extend.
+
 You never write the file into the repository. You deliver it as a finding, and the review loop runs it in a throwaway copy of the change and records the run under your name. A failing run is your finding. A passing run means the change held, and the loop drops that finding. Writing break-it tests does not make you a maker of the change.
 
 Shape the finding exactly as follows, because the loop parses it:
