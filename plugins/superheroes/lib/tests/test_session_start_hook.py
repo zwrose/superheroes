@@ -250,9 +250,9 @@ def test_host_model_string_writes_env_and_context(tmp_path, monkeypatch, capsys)
     env_file.write_text("", encoding="utf-8")
     model = "claude-opus-5"
     assert _run_startup(monkeypatch, capsys, {"model": model}, env_file=env_file) == 0
-    assert env_file.read_text(encoding="utf-8") == (
-        "export SUPERHEROES_HOST_MODEL=%s\n" % shlex.quote(model)
-    )
+    # #2110: the hook also exports the session transcript, so the env file holds more than this line.
+    assert "export SUPERHEROES_HOST_MODEL=%s" % shlex.quote(model) in env_file.read_text(
+        encoding="utf-8").splitlines()
     ctx = _context_from_stdout(capsys)
     assert "### Host model" in ctx
     assert "Host model (read from the session-start hook payload): %s" % model in ctx
@@ -263,11 +263,14 @@ def test_host_model_absent_writes_empty_env_and_unknown_context(tmp_path, monkey
     env_file = tmp_path / "session_env.sh"
     env_file.write_text("", encoding="utf-8")
     assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
-    assert env_file.read_text(encoding="utf-8") == "export SUPERHEROES_HOST_MODEL=''\n"
+    # #2110: the hook also exports the session transcript, so the env file holds more than this line.
+    assert "export SUPERHEROES_HOST_MODEL=''" in env_file.read_text(encoding="utf-8").splitlines()
     ctx = _context_from_stdout(capsys)
     assert "### Host model" in ctx
     assert "Host model: unknown" in ctx
-    assert "seat composition falls back to the claude host's family" in ctx
+    # #2110: the disclosure now names the transcript read first, then the family fallback.
+    assert "seat composition reads the model from this session's own transcript" in ctx
+    assert "falling back to the claude host's family" in ctx
 
 
 def test_host_model_stale_reset_clears_via_env_file(tmp_path, monkeypatch, capsys):
@@ -276,7 +279,9 @@ def test_host_model_stale_reset_clears_via_env_file(tmp_path, monkeypatch, capsy
     env_file.write_text("export SUPERHEROES_HOST_MODEL=claude-opus-5\n", encoding="utf-8")
     assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
     lines = env_file.read_text(encoding="utf-8").splitlines()
-    assert lines[-1] == "export SUPERHEROES_HOST_MODEL=''"
+    # #2110: the hook also exports the session transcript, so the env file holds more than this line.
+    assert [ln for ln in lines if ln.startswith("export SUPERHEROES_HOST_MODEL=")][-1] == (
+        "export SUPERHEROES_HOST_MODEL=''")
     proc = subprocess.run(
         ["/bin/sh", "-c", ". %s; printf %%s \"$SUPERHEROES_HOST_MODEL\"" % shlex.quote(str(env_file))],
         capture_output=True,
@@ -302,7 +307,8 @@ def test_host_model_malformed_or_injection_writes_empty(tmp_path, monkeypatch, c
     env_file = tmp_path / "session_env.sh"
     env_file.write_text("", encoding="utf-8")
     assert _run_startup(monkeypatch, capsys, {"model": model}, env_file=env_file) == 0
-    assert env_file.read_text(encoding="utf-8") == "export SUPERHEROES_HOST_MODEL=''\n"
+    # #2110: the hook also exports the session transcript, so the env file holds more than this line.
+    assert "export SUPERHEROES_HOST_MODEL=''" in env_file.read_text(encoding="utf-8").splitlines()
     ctx = _context_from_stdout(capsys)
     assert "Host model: unknown" in ctx
 
@@ -314,9 +320,9 @@ def test_host_model_dict_id_writes_env_and_context(tmp_path, monkeypatch, capsys
     model_id = "claude-opus-5[1m]"
     payload_model = {"id": model_id, "display_name": "Opus"}
     assert _run_startup(monkeypatch, capsys, {"model": payload_model}, env_file=env_file) == 0
-    assert env_file.read_text(encoding="utf-8") == (
-        "export SUPERHEROES_HOST_MODEL=%s\n" % shlex.quote(model_id)
-    )
+    # #2110: the hook also exports the session transcript, so the env file holds more than this line.
+    assert "export SUPERHEROES_HOST_MODEL=%s" % shlex.quote(model_id) in env_file.read_text(
+        encoding="utf-8").splitlines()
     ctx = _context_from_stdout(capsys)
     assert "Host model (read from the session-start hook payload): %s" % model_id in ctx
 
