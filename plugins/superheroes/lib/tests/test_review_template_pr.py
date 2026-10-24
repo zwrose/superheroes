@@ -117,7 +117,8 @@ def _expected_order(sheet):
         expected.append("pr-changed")
     if "walk" in prs:
         expected.append("pr-walk")
-    expected += ["pr-accepting"] + (["card"] * len(sheet["cards"]) or ["pr-nothing"])
+    none = "pr-nothing" if prs.get("nothingListed") is True else "pr-canon" if "canonAccounted" in prs else "pr-unchecked"
+    expected += ["pr-accepting"] + (["card"] * len(sheet["cards"]) or [none])
     for key, part_id in (("craft", "pr-craft"), ("alreadyDecided", "pr-decided"), ("history", "pr-review")):
         if prs[key]:
             expected.append(part_id)
@@ -142,13 +143,29 @@ def _carried_from(earlier, *older, head="111111111111111111111111111111111111111
     return _with(earlier, mutate)
 
 
-def _emptied(sheet):
+def _emptied(sheet, listed=True):
+    """The sheet with no cards, no walk and no folded entries; listed is whether it records that the PR bodies list no acceptance."""
     def mutate(clone):
         clone["cards"] = []
         clone["prSheet"].pop("walk", None)
+        if listed:
+            clone["prSheet"]["nothingListed"] = True
+        else:
+            clone["prSheet"].pop("nothingListed", None)
         for key in ("craft", "alreadyDecided", "history"):
             clone["prSheet"][key] = []
     return _with(sheet, mutate)
+
+
+CANON_IDS = ["2026-10-22-abcdefgh-1", "2026-10-22-abcdefgh-2"]
+
+
+def _canon_emptied(sheet):
+    """The emptied sheet as the build records one whose every listed acceptance is a Canon ruling: prSheet.canonAccounted, each id cited in the summary, and no nothingListed."""
+    def mutate(clone):
+        clone["prSheet"]["canonAccounted"] = CANON_IDS
+        clone["prSheet"]["whatChanged"]["summary"] += " Ruled in %s and %s." % tuple(CANON_IDS)
+    return _with(_emptied(sheet, listed=False), mutate)
 
 
 # Bites on: the five parts of a pr sheet or a stack sheet drawn in any other order (What changed, the walk, What you're accepting, the folded parts with the stack's PR list, the merge verdict), a part with nothing in it kept, or the box that says the PR moved drawn anywhere but directly under What changed.
@@ -563,6 +580,48 @@ def test_no_cards_reads_the_nothing_to_accept_words_and_still_draws_the_verdict(
     assert PW["nothingToAccept"] not in with_cards["result"]
 
 
+# Bites on: a zero-card pr or stack sheet saying "nothing to accept" (in the accepting part or in the app bar's count) when it did not record that its PR bodies list none, or the recorded one saying it was not checked.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_a_zero_card_sheet_says_nothing_only_when_it_recorded_that_the_bodies_list_none(kind):
+    # Axis: the accepting part and the count are answered by prSheet.nothingListed alone: pr-nothing and nothingToAcceptCount with it, pr-unchecked and acceptingUncheckedCount without it.
+    scenario = """
+      return { order: order(), count: t.count(), accepting: elements["sheet-cards"].children.map((node) => node.textContent) };
+    """
+    listed = _page(_emptied(SAMPLES[kind]), scenario)["result"]
+    assert "pr-nothing" in listed["order"] and "pr-unchecked" not in listed["order"]
+    assert listed["count"] == PW["nothingToAcceptCount"]
+    assert PW["nothingToAccept"] in listed["accepting"] and PW["acceptingUnchecked"] not in listed["accepting"]
+    unchecked = _page(_emptied(SAMPLES[kind], listed=False), scenario)["result"]
+    assert "pr-unchecked" in unchecked["order"] and "pr-nothing" not in unchecked["order"]
+    assert unchecked["count"] == PW["acceptingUncheckedCount"] != PW["nothingToAcceptCount"]
+    assert PW["acceptingUnchecked"] in unchecked["accepting"] and PW["nothingToAccept"] not in unchecked["accepting"]
+    assert unchecked["order"][-1] == "sheet-verdict"
+
+
+# Bites on: a zero-card pr or stack sheet that recorded prSheet.canonAccounted reading "nothing to accept" or "not checked" (in the accepting part or in the app bar's count), dropping the ids, or the exclusion of the two recorded states not holding.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_a_zero_card_sheet_that_recorded_canon_accounted_says_checked_all_covered_by_canon_rulings(kind):
+    # Axis: the accepting part and the count are answered by prSheet.canonAccounted: pr-canon with acceptingCanon filled with the ids joined by ", " and acceptingCanonCount, neither pr-nothing nor pr-unchecked nor their words; with a card the line is not drawn.
+    scenario = """
+      return { order: order(), count: t.count(), accepting: elements["sheet-cards"].children.map((node) => node.textContent) };
+    """
+    canon = _page(_canon_emptied(SAMPLES[kind]), scenario)["result"]
+    line = PW["acceptingCanon"].replace("{ids}", ", ".join(CANON_IDS))
+    assert "{ids}" in PW["acceptingCanon"] and all(i in line for i in CANON_IDS)
+    assert canon["order"] == _expected_order(_canon_emptied(SAMPLES[kind])) and "pr-canon" in canon["order"]
+    assert "pr-nothing" not in canon["order"] and "pr-unchecked" not in canon["order"]
+    assert canon["count"] == PW["acceptingCanonCount"] and PW["acceptingCanonCount"] not in (PW["nothingToAcceptCount"], PW["acceptingUncheckedCount"])
+    assert line in canon["accepting"]
+    assert PW["nothingToAccept"] not in canon["accepting"] and PW["acceptingUnchecked"] not in canon["accepting"]
+
+    def with_canon(clone):
+        clone["prSheet"].pop("nothingListed", None)
+        clone["prSheet"]["canonAccounted"] = CANON_IDS
+        clone["prSheet"]["whatChanged"]["summary"] += " Ruled in %s and %s." % tuple(CANON_IDS)
+    carded = _page(_with(SAMPLES[kind], with_canon), scenario)["result"]
+    assert "pr-canon" not in carded["order"] and line not in carded["accepting"]
+
+
 # Bites on: a folded part drawn open, a wrong count or order or cue, a part that does not open on a tap, an entry not read "title — detail", a stack PR list line not "#number title · first 7", or an empty list's toggle kept.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
 def test_folded_parts_open_on_a_tap(kind):
@@ -628,8 +687,8 @@ def test_every_new_word_comes_from_the_words_file():
         "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark", "caughtHeading", "roundsLine", "ciLine",
         "laneLine", "describesCommit", "changedHeading", "changed", "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading",
         "craftHeading", "decidedHeading", "reviewHeading", "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel",
-        "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "historyCap",
-        "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro", "decidedGround",
+        "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "acceptingUnchecked", "acceptingUncheckedCount",
+        "acceptingCanon", "acceptingCanonCount", "historyCap", "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro", "decidedGround",
     ]
     words = copy.deepcopy(WORDS)
     for key in new_keys:
@@ -650,6 +709,8 @@ def test_every_new_word_comes_from_the_words_file():
       return t.everyText();
     """)
     collect(_emptied(PR_SAMPLE))
+    collect(_emptied(PR_SAMPLE, listed=False))
+    collect(_canon_emptied(PR_SAMPLE))
     collect(PR_SAMPLE)
     collect(_carried_from(PR_SAMPLE))
     collect(_with_decided(PR_SAMPLE, DECIDED_1, DECIDED_2), DECIDED_JS + """

@@ -369,6 +369,7 @@ above).
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
      field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
+     **With two or more PRs waiting, read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` § Parallel vets, which says when to draft them in parallel with the `vet-drafter`.**
    - **Ask the principle question, unconditionally:** *what does the owner still carry after merging
      that this PR's owner half does not say?* It is a **mandatory receipt field with an explicit `None`**.
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves

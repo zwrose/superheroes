@@ -983,7 +983,8 @@ def test_the_chat_walk_lists_each_stops_answers_in_the_reordered_schema_order(tm
     fixtures = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
     built = tmp_path / "sheet.json"
     done = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "pr_sheet.py"), "build", "--record", str(fixtures / "record-big.json"),
-                           "--input", str(fixtures / "input-walk.json"), "--out", str(built)], capture_output=True, text=True)
+                           "--pr-body", "214=" + str(fixtures / "body-none.md"), "--input", str(fixtures / "input-walk.json"), "--out", str(built)],
+                          capture_output=True, text=True)
     assert done.returncode == 0, done.stdout
     sheet = json.loads(built.read_text(encoding="utf-8"))
     monkeypatch.setattr(sheet_prose, "SCHEMA", path)
