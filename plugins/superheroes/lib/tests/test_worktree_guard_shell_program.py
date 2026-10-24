@@ -394,6 +394,8 @@ def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
     "timeout 5 bash -o pipefail -c 'git reset --hard'",
     "env FOO=1 bash --rcfile /dev/null -c 'git reset --hard'",
     "env FOO=1 bash 2>/dev/null -c 'git reset --hard'",
+    "eval 'echo \\\";' git reset --hard",
+    "bash -c 'echo \\\"; git reset --hard'",
 ])
 def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command

@@ -486,7 +486,8 @@ def _drop_redirections(tokens, raw=None):
         if width:
             i += width
             continue
-        kept.append(tokens[i])
+        # An unquoted operator inside a word (`--hard>/dev/null`) ends the word there.
+        kept.append(tokens[i] if re.search(r"['\"]", raw[i]) else re.split(r"[<>]", tokens[i])[0])
         i += 1
     return kept
 
@@ -824,14 +825,14 @@ def _shell_program(raw_tokens):
     not a program shape, ("unreadable", None), or ("program", <text>)."""
     if not raw_tokens:
         return None
-    if raw_tokens[0] == "eval":
+    if _plain_word(raw_tokens[0]) == "eval":
         args = _drop_redirections(raw_tokens[1:])
         if args and _plain_word(args[0]) == "--":
             args = args[1:]
         if not args or not all(re.fullmatch(_WORD, arg) for arg in args):
             return ("unreadable", None)
         joined = " ".join(_plain_word(arg) for arg in args)
-        if "`" in joined or "$(" in joined:
+        if "`" in joined or "$(" in joined or "\\" in joined:
             return ("unreadable", None)
         return ("program", joined)
     if os.path.basename(_plain_word(raw_tokens[0])) not in ("bash", "sh", "zsh"):
@@ -890,7 +891,7 @@ def _shell_program(raw_tokens):
     if i + 1 < len(raw_tokens) and "$" in program:
         return ("unreadable", None)
     # A substitution inside the program hides the command it produces from the one-level read.
-    if "`" in program or "$(" in program:
+    if "`" in program or "$(" in program or "\\" in program:
         return ("unreadable", None)
     return ("program", program)
 
@@ -927,7 +928,7 @@ def _hidden_shell_c(raw_tokens):
     known wrapper word or an option/number argument of one (a wrapper in front)."""
     command_index = len(raw_tokens) - len(_command_tokens(raw_tokens)[1])
     for k, raw in enumerate(raw_tokens):
-        if "'" in raw or '"' in raw or os.path.basename(raw) not in ("bash", "sh", "zsh", "eval"):
+        if os.path.basename(_plain_word(raw)) not in ("bash", "sh", "zsh", "eval"):
             continue
         if k == command_index or not _only_wrapper_words(raw_tokens[:k]):
             continue
