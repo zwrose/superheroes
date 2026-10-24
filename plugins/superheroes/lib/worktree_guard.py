@@ -486,8 +486,7 @@ def _drop_redirections(tokens, raw=None):
         if width:
             i += width
             continue
-        # An unquoted operator inside a word (`--hard>/dev/null`) ends the word there.
-        kept.append(tokens[i] if re.search(r"['\"]", raw[i]) else re.split(r"[<>]", tokens[i])[0])
+        kept.append(tokens[i])
         i += 1
     return kept
 
@@ -988,15 +987,17 @@ def segment_accounting(command, cwd=None, _depth=0):
             continue
         _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
-        if _depth >= 1 and tokens and (
+        mentions = _segment_mentions_destructive_git(segment)
+        # A word still holding < or > after the real redirections went hides what Bash consumes.
+        attached = mentions and any(c in tok for tok in tokens for c in "<>")
+        if _depth >= 1 and (attached or tokens and (
                 any(c in tokens[0] for c in "$`\\")
                 or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
                     and any(c in tok for tok in tokens[1:] for c in "$`\\"))
-                or (_is_git_token(tokens[0]) and _inner_git_unreadable(tokens, parsed))):
+                or (_is_git_token(tokens[0]) and _inner_git_unreadable(tokens, parsed)))):
             records.append({"segment": segment, "kind": "unreadable-program", "action": None})
             continue
-        mentions = _segment_mentions_destructive_git(segment)
-        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
+        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS and not attached:
             action = _segment_destructive_action(parsed, cwd)
             if action is not None:
                 records.append({

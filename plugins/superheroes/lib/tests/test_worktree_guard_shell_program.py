@@ -396,9 +396,20 @@ def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
     "env FOO=1 bash 2>/dev/null -c 'git reset --hard'",
     "eval 'echo \\\";' git reset --hard",
     "bash -c 'echo \\\"; git reset --hard'",
+    "bash -c 'git reset --hard>/dev/null'",
+    "eval 'git reset --hard>/dev/null'",
+    "eval git> /dev/null reset --hard",
+    "\"eval\" git reset '--hard>\"/dev/null\"'",
 ])
 def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+def test_an_attached_redirection_target_cannot_hide_a_flag_and_plain_redirections_stay_allowed(dirty_repo):
+    assert wg.classify("git restore .>& --staged", dirty_repo) == ("deny", wg.unparsed_message())
+    for ok in ("bash -c 'git status 2>/dev/null'", "bash -c 'git status > /tmp/x'",
+               "git status>/tmp/x", "bash -c 'echo hi>/tmp/x'"):
+        assert wg.classify(ok, dirty_repo) == ("allow", ""), ok
 
 
 def test_a_word_named_eval_and_a_literal_option_value_stay_as_before(dirty_repo):
