@@ -73,13 +73,14 @@ def test_vet_drafter_grant_is_the_stated_shape():
 def test_vet_drafter_names_the_three_misses():
     _, body = _agent()
     body = _collapse(body)
-    # axis: each of the three rules every draft keeps is stated in the agent body
+    # axis: each of the three rules every draft keeps stands as its whole bold sentence, decision included
     for phrase in (
-        "is never a review escape",
-        "the stack's sheet carries them as cards",
-        "Write the receipt as the advisor's own",
+        "**A finding the vet catches before merge is never a review escape.**",
+        "**A stack layer is not held NOT-READY for review leftovers its own PR body does not name when "
+        "the stack's sheet carries them as cards.**",
+        "**Write the receipt as the advisor's own.**",
     ):
-        assert phrase in body, f"vet-drafter body no longer carries the rule phrase {phrase!r}"
+        assert phrase in body, f"vet-drafter body no longer carries the rule sentence {phrase!r}"
 
 
 def test_vet_drafter_forbids_posting_and_the_slot_write():
@@ -104,5 +105,17 @@ def test_vetting_reference_and_duty_4_point_at_the_drafter():
         f"{VETTING} must carry the heading line {heading!r} exactly once"
     )
     assert "no model parameter" in _collapse(vetting), f"{VETTING} must say the drafter is dispatched with no model parameter"
-    # axis: duty 4 of the showrunner charter points at that section
-    assert skill.count("§ Parallel vets") == 1, f"{SKILL} must carry `§ Parallel vets` exactly once"
+    lines = skill.split("\n")
+    starts = [i for i, line in enumerate(lines) if line.startswith("4. **Vet PRs from artifacts, never narratives.**")]
+    ends = [i for i, line in enumerate(lines) if line.startswith("5. **")]
+    assert len(starts) == 1, f"{SKILL} must carry exactly one line opening duty 4, found {len(starts)}"
+    assert len(ends) == 1, f"{SKILL} must carry exactly one line opening duty 5, found {len(ends)}"
+    assert starts[0] < ends[0], f"{SKILL} duty 5 must come after duty 4"
+    duty_4 = _collapse("\n".join(lines[starts[0] : ends[0]]))
+    pointer = "`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` § Parallel vets"
+    # axis: the charter names `§ Parallel vets` exactly once
+    assert skill.count("§ Parallel vets") == 1, (
+        f"{SKILL} must carry `§ Parallel vets` exactly once (the #2107 duty-4 pointer)"
+    )
+    # axis: duty 4 itself cites the vetting reference by its exact path, so the pointer neither retargets nor leaves duty 4
+    assert pointer in duty_4, f"{SKILL} duty 4 must carry the exact #2107 pointer {pointer!r}"
