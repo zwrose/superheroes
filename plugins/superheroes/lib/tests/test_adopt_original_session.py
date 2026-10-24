@@ -308,9 +308,9 @@ def test_a_complete_page_whose_rows_are_out_of_created_order_refuses_incomplete(
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
     rows = [
-        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01First000000000000000"),
-        _unrelated_row("2026-10-24T10:00:00.000000Z", "session_01Second00000000000000"),
-        _unrelated_row("2026-10-24T14:00:00.000000Z", "session_01Third000000000000000"),
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01First000000000000000", environment_id="env-1"),
+        _unrelated_row("2026-10-24T10:00:00.000000Z", "session_01Second00000000000000", environment_id="env-1"),
+        _unrelated_row("2026-10-24T14:00:00.000000Z", "session_01Third000000000000000", environment_id="env-1"),
     ]
     result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
     _refused_unread(repo, result, calls, "listing-incomplete")
