@@ -121,7 +121,6 @@ def test_a_program_behind_a_redirection_is_denied(name, dirty_repo):
     "env FOO=1 bash -c 'echo hi'",
     "nohup bash -c 'echo hi'",
     "xargs -0 sh -c 'echo hi'",
-    "2>\"/tmp/error log\" bash -c 'echo hi'",
 ])
 def test_a_wrapper_before_a_shell_c_is_refused_as_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message())
@@ -340,6 +339,7 @@ def test_wrapper_operands_and_outer_substitutions_cannot_hide_a_discard(command,
     "bash script.sh -c value",
     "bash -c 'echo hi'",
     "eval 'echo hi' 2>/dev/null",
+    "2>\"/tmp/error log\" bash -c 'echo hi'",
 ])
 def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
@@ -358,6 +358,7 @@ def test_wrapped_directory_change_and_redirected_eval_are_still_refused(command,
     "git checkout HEAD '>notes'",
     "git checkout \">f.txt\"",
     "git 2>/dev/null reset --hard",
+    "git 2>\"/tmp/error log\" reset --hard",
 ])
 def test_a_quoted_lookalike_is_kept_and_a_real_redirection_cannot_hide_a_discard(command, dirty_repo):
     assert wg.classify(command, dirty_repo)[0] == "deny", command
@@ -367,6 +368,12 @@ def test_a_detached_redirection_target_cannot_hide_a_clean(dirty_repo):
     with open(os.path.join(dirty_repo, "untracked.txt"), "w") as f:
         f.write("x")
     assert wg.classify("git clean -fd > --dry-run", dirty_repo)[0] == "deny"
+
+
+def test_a_redirection_is_not_the_worktree_removal_target(dirty_repo, tmp_path):
+    linked = str(tmp_path / "linked")
+    _git(dirty_repo, "worktree", "add", "-q", linked)
+    assert wg.classify(f"git worktree remove --force {linked} &>/dev/null", dirty_repo) == ("allow", "")
 
 
 def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
@@ -379,6 +386,9 @@ def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
     "nohup eval 'echo hi'",
     "bash -o $OPT 'git reset --hard'",
     "bash --rcfile \"$RC\" -c 'echo hi'",
+    "timeout 5 bash -o pipefail -c 'git reset --hard'",
+    "env FOO=1 bash --rcfile /dev/null -c 'git reset --hard'",
+    "env FOO=1 bash 2>/dev/null -c 'git reset --hard'",
 ])
 def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command

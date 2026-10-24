@@ -461,7 +461,7 @@ _WRAPPER_WORDS = frozenset({
     "timeout", "env", "nohup", "nice", "ionice", "sudo", "time", "stdbuf", "xargs", "setsid",
 })
 
-_REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)\S*$")
+_REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)")  # a quoted target with a space stays one raw token (`2>"/tmp/error log"`)
 _REDIRECTION_OPERATOR = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)$")
 
 
@@ -525,7 +525,7 @@ def _iter_git_segments(command):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        _, tokens = _command_tokens(tokens)
+        _, tokens = _command_tokens(_drop_redirections(tokens, _tokenize_segment(segment, keep_quotes=True)))
         if tokens and _is_git_token(tokens[0]):
             parsed = _parse_git_invocation(tokens)
             if parsed is not None:
@@ -904,10 +904,6 @@ def _only_wrapper_words(before):
         if width:
             i += width
             continue
-        # A quoted target with a space stays one token (`2>"/tmp/error log"`).
-        if re.match(r"^[0-9]*(?:<|>|&>|>&|<&)", before[i]):
-            i += 1
-            continue
         plain = _plain_word(before[i])
         # A wrapper or execution builtin owns every later word up to the shell word (option
         # operands such as `env -u FOO` or `exec -a name`), so the rest is its argument.
@@ -935,14 +931,8 @@ def _hidden_shell_c(raw_tokens):
             continue
         if k == command_index or not _only_wrapper_words(raw_tokens[:k]):
             continue
-        if raw == "eval":
+        if _shell_program(raw_tokens[k:]) is not None:
             return True
-        for later in raw_tokens[k + 1:]:
-            plain = _plain_word(later)
-            if len(plain) < 2 or plain[0] not in "-+" or plain == "--":
-                break  # a script operand (or `--`) ends the shell's options; later words are its own
-            if not plain.startswith("--") and "c" in plain:
-                return True
     return False
 
 
