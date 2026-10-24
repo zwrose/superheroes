@@ -597,16 +597,15 @@ fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
 
 **Rule before the fixer step.** Record every ruling on a round's findings before the call that
-emits the fixer order. That order follows the fold that settles the round's findings: its last
-synthesis, a gap sweep that adds nothing, or, when that fold routes a blocker to an owner judgment
-gate, the gate's fold. On the durable-record path `advance` folds the phase and then emits the next
-order through `next` in the same call, so the `advance` making that fold also emits the fixer
-order: record rulings before it. With no gate between, a finding that fold first raises is not in
-state until the call has already emitted the order, so a ruling on it reaches only the next order;
-while a gate is pending it can be ruled on. On the hand path a `submit` emits nothing: the fixer
-order comes from the `next` after that fold's `submit`, so record rulings between the two. A ruling
-recorded after the order is out reaches only the next order, so the fixer builds the old direction
-once and the next round reworks it. The late-ruling behaviour below is the backstop, not the path.
+emits the fixer order. A finding can be ruled on from the fold that staged it: staging seeds its
+disposition-ledger row, and `rule` resolves it there by the `findingKey` the verifiers and synthesis
+orders carry (a bare staged id does not resolve). On the durable-record path `advance` folds the
+phase and then emits the next order through `next` in the same call, so the `advance` whose fold
+queues a fix batch returns the fixer order itself: record rulings before any `advance` that folds
+synthesis, the gap sweep, the scoped finder, or an owner gate (judgment or stall). On the hand path
+a `submit` emits nothing, so record them before the `next` that follows that fold's `submit`. A
+ruling recorded after the order is out reaches only the next order, so the fixer builds the old
+direction once and the next round reworks it. The late-ruling behaviour below is the backstop, not the path.
 
 A ruling is accepted whenever it arrives, at any step that is not terminal, and binds the next fix of
 its finding. `rule` only records: a fixer attempt whose orders are already out is never stopped and
