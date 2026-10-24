@@ -1,7 +1,7 @@
 """plugin_scripts_allow.py — the PreToolUse(Bash) hook that approves the plugin's own helper scripts (#2140).
 
 The hook prints `permissionDecision: "allow"` iff the whole command is one plain call
-`python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` one of ten of this plugin's own
+`python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` one of nine of this plugin's own
 scripts (for `round_driver.py`: one of eight verbs, and no flag that hands it a command line) and the
 worktree guard's classifier does not deny it. Every other input — any other command, any parse
 doubt, any internal error — prints nothing and exits 0.
@@ -35,8 +35,8 @@ _spec = importlib.util.spec_from_file_location("plugin_scripts_allow_test", _HOO
 hook = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hook)
 
-_TEN_SCRIPTS = [
-    "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py", "review_result.py",
+_NINE_SCRIPTS = [
+    "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py",
     "mode_reconcile.py", "calibration_resolve.py", "size_count.py", "order_lint.py",
     "dispatch_guard.py",
 ]
@@ -73,14 +73,14 @@ def _short(command):
 
 def test_the_lists_are_pinned():
     # axis: the approved-script list, the driver verb list and the command-flag list are exactly the ruled ones
-    assert hook.APPROVED_SCRIPTS == frozenset(_TEN_SCRIPTS)
+    assert hook.APPROVED_SCRIPTS == frozenset(_NINE_SCRIPTS)
     assert hook.ROUND_DRIVER_VERBS == frozenset(_DRIVER_VERBS)
     assert tuple(hook.COMMAND_FLAGS) == ("verify-command", "break-it-interpreter")
 
 
-@pytest.mark.parametrize("name", _TEN_SCRIPTS)
+@pytest.mark.parametrize("name", _NINE_SCRIPTS)
 def test_each_listed_script_at_the_plugin_root_is_allowed(name):
-    # axis: each of the ten listed scripts at the plugin's own root is approved, `-B` and all
+    # axis: each of the nine listed scripts at the plugin's own root is approved, `-B` and all
     args = "next --session-dir /tmp/s" if name == "round_driver.py" else "check --x 1"
     command = f"python3 -B {os.path.join(LIB, name)} {args}"
     got = _decide(_payload(command))
@@ -202,6 +202,8 @@ _NO_DECISION_ROWS = [
     f"python3 -B {os.path.join(LIB, 'cloud_builder.py')} check",
     # axis: an unlisted plugin script gets no decision — review_record.py
     f"python3 -B {os.path.join(LIB, 'review_record.py')} check",
+    # axis: a script that replaces a caller-named path gets no decision
+    f"python3 -B {os.path.join(LIB, 'review_result.py')} write --path /tmp/x --action halt --round 1",
     # axis: the program must be bare `python3` — `python`
     f"python -B {DRIVER} next --session-dir /tmp/s",
     # axis: the program must be bare `python3` — `bash`

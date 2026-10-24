@@ -2,7 +2,7 @@
 """PreToolUse(Bash) approver — the plugin approves its own review-loop and build helper scripts (#2140).
 
 Reads the PreToolUse payload from stdin. When the Bash command is, as a whole, one plain call
-`python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` on `APPROVED_SCRIPTS` (ten of THIS
+`python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` on `APPROVED_SCRIPTS` (nine of THIS
 plugin's own scripts), and the worktree guard's classifier does not deny it, it emits
 `permissionDecision: "allow"`. For every other input it stays silent.
 
@@ -13,7 +13,9 @@ the approved scripts, an internal error) fails toward no decision, never toward 
 other program, any compound or variable form (`;`, `&&`, `|`, a redirect, `$ROOT_DIR`, `$(…)`, a
 backtick), the `round_driver.py` verbs `run-verify` and `rule`, and a `round_driver.py` call that
 carries `--verify-command` or `--break-it-interpreter` (or an argparse abbreviation of either),
-because those two flags hand a command line to a later run.
+because those two flags hand a command line to a later run. A listed script may write only its own
+fixed file names under a session or store directory its caller names; a script that writes to a path
+its caller names verbatim stays off the list.
 
 Contract (fail-closed — "closed" here means no decision, never allow):
 
@@ -35,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from iphone_allow import _REFUSED_CHARS, _is_operator, plugin_roots  # noqa: E402
 
 APPROVED_SCRIPTS = frozenset((
-    "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py", "review_result.py",
+    "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py",
     "mode_reconcile.py", "calibration_resolve.py", "size_count.py", "order_lint.py",
     "dispatch_guard.py",
 ))

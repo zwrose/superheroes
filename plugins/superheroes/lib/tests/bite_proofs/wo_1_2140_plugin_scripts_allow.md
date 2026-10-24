@@ -772,3 +772,52 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 157 passed in 1.32s
 ```
 
+---
+
+## G6′ — review_result.py exclusion (WO-2)
+
+**Guarded element:** `plugins/superheroes/hooks/plugin_scripts_allow.py` `APPROVED_SCRIPTS` membership (lines 39-43) — the exclusion of `review_result.py`. Axis: a script that replaces a caller-named path gets no decision. Detector: the new row `python3 -B <root>/lib/review_result.py write --path /tmp/x --action halt --round 1` in `_NO_DECISION_ROWS` of `test_plugin_scripts_allow_hook.py`, which `test_everything_else_gets_no_decision` asserts is False (the pinned-list test `test_the_lists_are_pinned` goes red too).
+
+**Neutralization:** in `APPROVED_SCRIPTS`, `"grounding_stage.py",` → `"grounding_stage.py", "review_result.py",` (one Edit).
+
+**Raw red:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F.................................................................F..... [ 45%]
+........................................................................ [ 91%]
+.............                                                            [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert frozenset({'b...int.py', ...}) == frozenset({'b...int.py', ...})
+      
+      Extra items in the left set:
+      'review_result.py'
+      Use -v to get more diff
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:76: AssertionError: assert frozenset({'b...int.py', ...}) == frozenset({'b...int.py', ...})
+E   AssertionError: python3 -B <root>/lib/review_result.py write --path /tmp/x --action halt --round 1
+    assert True is False
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:277: AssertionError: python3 -B <root>/lib/review_result.py write --path /tmp/x --action halt --round 1
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_the_lists_are_pinned
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_everything_else_gets_no_decision[python3 -B <root>/lib/review_result.py write --path /tmp/x --action halt --round 1]
+2 failed, 155 passed in 1.12s
+```
+
+**Restore:** the inverse Edit, `"grounding_stage.py", "review_result.py",` → `"grounding_stage.py",`.
+
+**Restore receipt (lines 39-42 read back after the restore):**
+```
+APPROVED_SCRIPTS = frozenset((
+    "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py",
+    "mode_reconcile.py", "calibration_resolve.py", "size_count.py", "order_lint.py",
+    "dispatch_guard.py",
+```
+
+**Raw green (after the restore):**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+........................................................................ [ 45%]
+........................................................................ [ 91%]
+.............                                                            [100%]
+157 passed in 1.18s
+```
+
