@@ -243,6 +243,15 @@ class _World(object):
             self.landed = True
         return TA._advance(self.d, self.tmp_path)
 
+    def submit_local(self, command="make test"):
+        """A local verify that passed: a hand submit on the hand path; on the advance paths the
+        driver's own `run-verify` verb runs the command and lands the result (#2133)."""
+        if self.path == "hand":
+            return self.submit({"result": "pass", "command": command, "exit": 0})
+        TA._land_verify_via_verb(self.d, command=command, as_record=self.path == "seat")
+        self.landed = self.path == "seat"
+        return TA._advance(self.d, self.tmp_path)
+
     def folded(self, out):
         return out.get("ok") is True and TA._state(self.d)["rounds"]["1"].get("verifyResult") == "pass"
 
@@ -289,7 +298,7 @@ def test_a_sha_mismatch_twin_is_refused_on_every_path(world, fetch):
 
 
 def test_a_local_verify_never_calls_the_fetch_seam_and_records_it_local(world, fetch):
-    out = world.submit({"result": "pass", "command": "make test", "exit": 0})
+    out = world.submit_local("make test")
     assert world.folded(out), out
     assert fetch.calls == []
     assert world.via() == {"via": "local", "command": "make test"}
@@ -298,7 +307,7 @@ def test_a_local_verify_never_calls_the_fetch_seam_and_records_it_local(world, f
 def test_a_local_verify_without_a_command_records_the_configured_one(tmp_path, adapters, fetch):
     d = TA._session(tmp_path, verifyCommand="make verify")
     TA._at_run_verify(tmp_path, d)
-    TA._write_verify_payload(d, {"result": "pass"})
+    TA._land_verify_via_verb(d, command="make verify")
     assert TA._advance(d, tmp_path)["ok"] is True
     assert TA._state(d)["rounds"]["1"]["verifyVia"] == {"via": "local", "command": "make verify"}
     assert fetch.calls == []

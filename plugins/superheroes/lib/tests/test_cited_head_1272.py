@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -649,6 +650,19 @@ def _at_run_verify(tmp_path, session_dir):
     RD.save_state(session_dir, state)
 
 
+def _land_verify_via_verb(session_dir, command="make test", exit_code=0):
+    """Land the pending `run-verify` slot through the driver's own verb (#2133); the `run` seam
+    stands in for the verify process. Returns the verb's answer."""
+    state = _state(session_dir)
+    state["config"]["verifyCommand"] = command
+    RD.save_state(session_dir, state)
+    out = RD.cmd_run_verify(
+        session_dir,
+        run=lambda argv, **kw: subprocess.CompletedProcess(argv, exit_code, stdout=b"verify output\n"))
+    assert out["ok"] is True, out
+    return out
+
+
 def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path, adapters, monkeypatch):
     monkeypatch.setattr(
         RD,
@@ -659,8 +673,7 @@ def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path
     _at_run_verify(tmp_path, d)
     pend = _pending(d)
     skey = RR.storage_key("verify")
-    path = RR.bare_payload_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
-    RR.atomic_write_json(path, {"result": "pass"})
+    _land_verify_via_verb(d)
     out = _advance(d, tmp_path)
     assert out["ok"], out
     store_path = RR.store_path(d, pend["round"], RD.P_VERIFY, skey, pend["attempt"])
