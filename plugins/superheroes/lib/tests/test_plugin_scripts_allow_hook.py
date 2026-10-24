@@ -75,7 +75,7 @@ def test_the_lists_are_pinned():
     # axis: the approved-script list, the driver verb list and the command-flag list are exactly the ruled ones
     assert hook.APPROVED_SCRIPTS == frozenset(_NINE_SCRIPTS)
     assert hook.ROUND_DRIVER_VERBS == frozenset(_DRIVER_VERBS)
-    assert tuple(hook.COMMAND_FLAGS) == ("verify-command", "break-it-interpreter")
+    assert tuple(hook.COMMAND_FLAGS) == ("verify-command", "break-it-interpreter", "records-path")
 
 
 @pytest.mark.parametrize("name", _NINE_SCRIPTS)
@@ -262,6 +262,11 @@ _NO_DECISION_ROWS = [
     f"{_ALLOWED} --break-it-i=x",
     # axis: argparse prefix abbreviation — `--br`
     f"{_ALLOWED} --br x",
+    # axis: `--records-path` names a file the driver later replaces — refused in full, `=value` and abbreviated
+    f"{_ALLOWED} --records-path /tmp/notes.txt",
+    f"{_ALLOWED} --records-path=/tmp/notes.txt",
+    f"{_ALLOWED} --rec /tmp/notes.txt",
+    f"python3 -B {DRIVER} submit --session-dir /tmp/s --records-path /tmp/notes.txt",
     # axis: a command flag is refused on any approved verb, not only `next`
     f"python3 -B {DRIVER} submit --session-dir /tmp/s --verify-command x",
     # axis: brief-check F1 — a brace expansion spells the flag twice (`--verify-command=id` x2)

@@ -12,8 +12,9 @@ the approved scripts, an internal error) fails toward no decision, never toward 
 `APPROVED_SCRIPTS`. What it leaves to the normal permission path: every other plugin script, any
 other program, any compound or variable form (`;`, `&&`, `|`, a redirect, `$ROOT_DIR`, `$(…)`, a
 backtick), the `round_driver.py` verbs `run-verify` and `rule`, and a `round_driver.py` call that
-carries `--verify-command` or `--break-it-interpreter` (or an argparse abbreviation of either),
-because those two flags hand a command line to a later run. A listed script may write only its own
+carries `--verify-command`, `--break-it-interpreter` or `--records-path` (or an argparse
+abbreviation of any), because the first two hand a command line to a later run and the third names
+a file the driver later replaces with the records export. A listed script may write only its own
 fixed file names under a session or store directory its caller names; a script that writes to a path
 its caller names verbatim stays off the list.
 
@@ -45,7 +46,7 @@ ROUND_DRIVER_VERBS = frozenset((
     "next", "submit", "record-result", "record-missing", "advance", "correct-fixer-refusals",
     "attest", "checkpoint",
 ))
-COMMAND_FLAGS = ("verify-command", "break-it-interpreter")
+COMMAND_FLAGS = ("verify-command", "break-it-interpreter", "records-path")
 
 _EXPANSION_CHARS = frozenset("{}*?[]~")
 
@@ -141,7 +142,7 @@ def _match(payload, roots):
     if name not in APPROVED_SCRIPTS:
         return None
 
-    # 7. the round driver: one of the eight verbs, and no flag that hands it a command line
+    # 7. the round driver: one of the eight verbs, and no flag that hands it a command line or a caller-named export path
     if name == "round_driver.py":
         # axis: the first token after the driver is an allowed verb (`run-verify`, `rule`, `--help`, an option, nothing refuse)
         if not rest or rest[0] not in ROUND_DRIVER_VERBS:
@@ -150,7 +151,7 @@ def _match(payload, roots):
             # axis: `--` ends option parsing and is refused
             if t == "--":
                 return None
-            # axis: `--verify-command` / `--break-it-interpreter`, in full or as an argparse prefix abbreviation, refuse
+            # axis: `--verify-command` / `--break-it-interpreter` / `--records-path`, in full or as an argparse prefix abbreviation, refuse
             if t.startswith("--"):
                 stem = t[2:].split("=", 1)[0]
                 if stem and any(flag.startswith(stem) for flag in COMMAND_FLAGS):
