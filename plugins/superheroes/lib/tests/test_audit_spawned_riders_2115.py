@@ -31,7 +31,7 @@ import session_contract as SC  # noqa: E402
 import test_review_record_session as TRS  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 from test_fix_scope_c7 import (  # noqa: E402,F401
-    _decisions, _finding, _key, _ledger, _staged_state, captured_state)
+    _decide, _decisions, _finding, _key, _ledger, _staged_state, captured_state)
 
 RD = TRD.RD  # run_loop runs on test_round_driver's own load of the module
 
@@ -450,6 +450,24 @@ def test_t6_e8_a_summary_row_is_no_rider():
     state[SC.DISPOSITION_LEDGER_KEY] = [r for r in state[SC.DISPOSITION_LEDGER_KEY]
                                         if SC.finding_identity_key(r) != X_KEY]
     assert [t["id"] for t in _targets(state)] == [P_KEY]
+
+
+def test_t6_a_child_the_owner_ruled_out_of_scope_by_the_rule_verb_is_no_rider():
+    # axis: the owner's effective decision, not the ledger disposition, keeps a skip ruling off the audit
+    state = _round_three()
+    assert [t["id"] for t in _targets(state)] == [P_KEY, X_KEY]
+    _decide(state, X_KEY, "out-of-scope", 2)  # a `rule` ruling: the ledger row has no disposition
+    assert not _ledger(state)[X_KEY].get("disposition")
+    assert [t["id"] for t in _targets(state)] == [P_KEY]
+
+
+def test_t6_a_child_the_owner_gave_guidance_still_rides():
+    # axis: a fix-family owner decision (`guidance`) is no skip ruling, so the child still rides
+    state = _round_three()
+    _decide(state, X_KEY, "guidance", 2)
+    batch_row, rider = _targets(state)
+    assert rider["id"] == X_KEY and rider["spawnedFrom"] == P_KEY
+    assert rider["ownerRuling"]["ruling"] == "guidance"
 
 
 def test_t6_e10_a_ledger_that_cannot_be_read_gives_no_riders():

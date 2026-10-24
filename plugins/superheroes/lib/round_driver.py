@@ -6038,7 +6038,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     # A finding an audit raised, whose parent this batch carries again, is audited under its own key:
     # a rider. Its content and the round-findings entry it needs (so its parent's auditor can attribute
     # the fix of it) come from the ledger or the live findings, whichever is newer.
-    riders = _spawned_riders(state, ledger_by_key, _fault, batch_keys)
+    riders = _spawned_riders(state, effective, ledger_by_key, _fault, batch_keys)
     for child, _parent, content in riders:
         if not any(r["id"] == child for r in round_findings):
             round_findings.append(_round_finding_entry(
@@ -6134,12 +6134,13 @@ def _round_finding_entry(key, finding, carried_ruling):
     return entry
 
 
-def _spawned_riders(state, ledger_by_key, ledger_fault, batch_keys):
+def _spawned_riders(state, effective, ledger_by_key, ledger_fault, batch_keys):
     """The findings an audit raised that ride this round's audits as targets of their own, as
     ``(child key, parent key, content)`` in child-key order. A child rides when its parent is in the
     fix batch again, it is no batch finding itself, and it has no disposition settling it: never a
     summary row, a merged-in or out-of-scope one, nor one a current disposition (a ruling the owner has
-    not reopened) already closed. A ledger that cannot be read gives no riders."""
+    not reopened) already closed, nor one whose effective owner decision rules anything but a fix
+    (``_OWNER_FIX_RULINGS``). A ledger that cannot be read gives no riders."""
     spawned = _audit_spawned(state)
     if not spawned or ledger_fault is not None:
         return []
@@ -6159,6 +6160,9 @@ def _spawned_riders(state, ledger_by_key, ledger_fault, batch_keys):
                 or row.get(session_contract.MERGED_INTO_FIELD)
                 or row.get("disposition") == "out-of-scope"
                 or (_disposition_is_current(row) and not _restaged_after(state, child, row))):
+            continue
+        rdecision = _row_decision(state, effective, ledger_by_key, child)
+        if rdecision is not None and rdecision.get("ruling") not in _OWNER_FIX_RULINGS:
             continue
         riders.append((child, parent, _newest_content(row, live)))
     return riders
