@@ -224,8 +224,14 @@ def _verify_program(verify_command):
         i += 1
         if tok in _CONTROL_OPS:
             skipping = False
+        elif tok.startswith("#"):
+            # A comment runs to the end of its line, operators in it included.
+            unsure = unsure or "the command has a comment"
+            if not skipping:
+                return None, "a comment stands where the program should be", None
         elif skipping:
-            continue
+            if _ASSIGNMENT.match(tok):  # `export PATH=…`
+                unsure = unsure or "an assignment comes before it"
         elif tok in _SHELL_UNPARSED:
             return None, "starts a `%s` construct" % tok, None
         elif tok in _SHELL_KEYWORDS:

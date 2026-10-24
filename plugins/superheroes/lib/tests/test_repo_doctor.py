@@ -282,6 +282,8 @@ def test_command_and_exec_check_the_program_they_run(tmp_path, capsys, verify, p
     ("test -d src && cd src && ./gonebin --run", "`cd` comes before it"),
     ("true && PATH=src:$PATH gonebin --run", "an assignment comes before it"),
     ("source env.sh && gonebin --run", "`source` comes before it"),
+    ("true && export PATH=src; gonebin --run", "an assignment comes before it"),
+    ("echo hi # a && b; gonebin --run", "the command has a comment"),
 ])
 def test_unresolved_program_the_walk_cannot_be_sure_of_is_unchecked_not_stale(
         tmp_path, capsys, verify, unsure):
@@ -317,6 +319,7 @@ def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):
     "verifybin 'unterminated",
     "[[ -n x && verifybin",
     '""',
+    "true && # run the suite\nverifybin --run",
 ])
 def test_verify_command_without_a_readable_program_is_unchecked_not_stale(
         tmp_path, capsys, verify):
