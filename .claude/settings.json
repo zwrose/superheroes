@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -B /opt/superheroes/plugin/lib/round_driver.py *)"
+    ]
+  }
+}
