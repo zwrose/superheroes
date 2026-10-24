@@ -198,6 +198,157 @@ def test_verify_binary_absent_drifts(tmp_path, capsys):
     assert any("verify" in d.lower() for d in res["drift"])
 
 
+# The calibrated verify command of this repo (#2088) — keyword-led, so its first word is `if`.
+_KEYWORD_LED = (
+    "if [ -x scripts/pinned-python ]; then scripts/pinned-python "
+    ".github/scripts/validate_marketplace.py --base {baseRef}; "
+    "else python3 .github/scripts/validate_marketplace.py; fi"
+)
+
+
+def _keyword_led_root(tmp_path, *, pinned_present):
+    root, env = make_root(tmp_path, src_dirs=["src", "scripts", ".github/scripts"],
+                          deps=["a"])
+    (open(os.path.join(root, ".github/scripts/validate_marketplace.py"), "w")
+     .write("print()\n"))
+    if pinned_present:
+        pinned = os.path.join(root, "scripts", "pinned-python")
+        with open(pinned, "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(pinned, 0o755)
+    return root, env
+
+
+def test_keyword_led_verify_command_resolves(tmp_path, capsys):
+    """#2088: a verify command that opens with `if [ … ]` resolves through its first
+    program word (here a repo-relative script), not the keyword `if`."""
+    root, env = _keyword_led_root(tmp_path, pinned_present=True)
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=_KEYWORD_LED)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["drift"] == []
+    assert res["unchecked"] == []
+    assert res["message"] is None
+
+
+def test_keyword_led_verify_command_with_absent_program_drifts(tmp_path, capsys):
+    """#2088: skipping keywords never hides a program that is really gone."""
+    root, env = _keyword_led_root(tmp_path, pinned_present=False)
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=_KEYWORD_LED)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert "verify command no longer resolves: scripts/pinned-python" in res["drift"]
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify="if [ -d src ]; then test -f x || gonebin --run; fi")
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert "verify command no longer resolves: gonebin" in res["drift"]
+
+
+@pytest.mark.parametrize("verify", [
+    "true && [[ -n x && -n y ]] && verifybin --run",
+    "true && 2>/dev/null verifybin --run",
+    "command -v gonebin && verifybin --run",
+    "exec -a name verifybin --run",
+    "FOO=1 verifybin --run",
+    'printf %s ";" marker && verifybin --run',
+    "time -p verifybin --run",
+    "true && ulimit -n 1024 && shopt -s nullglob && verifybin --run",
+])
+def test_shell_prefixes_resolve_to_the_real_program(tmp_path, capsys, verify):
+    """#2088 review: `[[ … && … ]]`, an fd redirection, `command -v`, `exec -a`, an
+    assignment, a quoted operator and `time -p` never put a non-program word in front of
+    the real program."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert (res["drift"], res["unchecked"]) == ([], [])
+
+
+@pytest.mark.parametrize("verify, program", [
+    ("command gonebin && verifybin --run", "gonebin"),
+    ("exec -p gonebin", "gonebin"),
+    ("gonebin#x --run", "gonebin#x"),
+])
+def test_command_and_exec_check_the_program_they_run(tmp_path, capsys, verify, program):
+    """#2088 review: the operand of `command`/`exec` is the program, so an absent one drifts,
+    and an in-word `#` is part of the program's name, not a comment."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert "verify command no longer resolves: %s" % program in res["drift"]
+
+
+@pytest.mark.parametrize("verify, unsure", [
+    ('true && OPTS="-q --gone-a --gone-b" verifybin --run', "quotes or escapes"),
+    ("test -d src && cd src && ./gonebin --run", "`cd` comes before it"),
+    ("true && PATH=src:$PATH gonebin --run", "an assignment comes before it"),
+    ("source env.sh && gonebin --run", "`source` comes before it"),
+    ("true && export PATH=src; gonebin --run", "an assignment comes before it"),
+    ("echo hi # a && b; gonebin --run", "the command has a comment"),
+])
+def test_unresolved_program_the_walk_cannot_be_sure_of_is_unchecked_not_stale(
+        tmp_path, capsys, verify, unsure):
+    """#2088 fail-safe (advisor ruling A): when the walk met anything that can change which
+    word is the program or where it resolves, an unresolved program reads unchecked."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert not any("no longer resolves" in d for d in res["drift"])
+    assert len(res["unchecked"]) == 1
+    assert "does not resolve here, but" in res["unchecked"][0]
+    assert unsure in res["unchecked"][0]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to list its builtins")
+def test_every_bash_builtin_and_keyword_is_classified():
+    """#2088 review: a builtin or keyword the walk does not know is read as the program and
+    reported stale (`ulimit -n 1024 && …`). Census against bash's own lists."""
+    words = subprocess.run(["bash", "-c", "compgen -b; compgen -k"], capture_output=True,
+                           text=True, check=True).stdout.split()
+    known = (repo_doctor._SHELL_KEYWORDS | repo_doctor._SHELL_BUILTINS
+             | repo_doctor._SHELL_PREFIXES | repo_doctor._SHELL_UNPARSED
+             | {"[[", "]]", "in", "esac"})
+    assert sorted(set(words) - known) == []
+
+
+def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):
+    """#2088 review: acknowledged drift never hides a new "could not be checked" note."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify="$PY -m x")
+    rc, res = run(profile, "review-crew@0.1.0", 3, root, env, capsys)
+    h = res["signal_hash"]
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify="$PY -m x",
+                            nudge_ack="{%r: true}" % h)
+    rc, res = run(profile, "review-crew@0.1.0", 3, root, env, capsys)
+    assert res["signal_hash"] == h
+    assert res["nudge_acked"] is False
+    assert res["message"].startswith("review-crew profile note: verify command could not")
+
+
+@pytest.mark.parametrize("verify", [
+    "if true; then :; fi",
+    "case x in a) verifybin;; esac",
+    '"$PY" -m pytest',
+    "verifybin 'unterminated",
+    "[[ -n x && verifybin",
+    '""',
+    "true && # run the suite\nverifybin --run",
+])
+def test_verify_command_without_a_readable_program_is_unchecked_not_stale(
+        tmp_path, capsys, verify):
+    """#2088: no readable program word → reported as unchecked, never as drift."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert not any("no longer resolves" in d for d in res["drift"])
+    assert res["signal_hash"] == ""
+    assert len(res["unchecked"]) == 1
+    assert res["unchecked"][0].startswith("verify command could not be checked: ")
+    assert "could not be checked" in res["message"]
+    assert "consider re-running review-init" not in res["message"]
+
+
 def test_verify_path_missing_drifts(tmp_path, capsys):
     # The verify command names a test path that does not exist under root — the
     # staleness class from issue #16 (a suite moved/removed, command not updated).
