@@ -495,12 +495,20 @@ def _command_tokens(tokens):
         rest = stripped[start:]
         if rest and rest[0] in _EXECUTION_BUILTINS:
             builtin = rest[0]
+            kept = rest
             rest = rest[1:]
+            lookup = False
             while rest and rest[0].startswith("-"):
                 option = rest[0]
                 rest = rest[1:]
-                if builtin == "exec" and option == "-a" and rest:
+                cluster = option[1:] if not option.startswith("--") else ""
+                if builtin == "command" and ("v" in cluster or "V" in cluster):
+                    lookup = True
+                if builtin == "exec" and "a" in cluster and rest:
                     rest = rest[1:]
+            if lookup:
+                # `command -v|-V` only looks a name up: leave `command` as the command word.
+                rest = kept
         if rest == tokens:
             return keys, tokens
         tokens = rest
@@ -973,6 +981,8 @@ def segment_accounting(command, cwd=None, _depth=0):
         parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         if _depth >= 1 and tokens and (
                 any(c in tokens[0] for c in "$`\\")
+                or (os.path.basename(tokens[0]) in _WRAPPER_WORDS
+                    and any(c in tok for tok in tokens[1:] for c in "$`\\"))
                 or (_is_git_token(tokens[0]) and _inner_git_unreadable(tokens, parsed))):
             records.append({"segment": segment, "kind": "unreadable-program", "action": None})
             continue
