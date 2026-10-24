@@ -194,6 +194,7 @@ def test_a_redirection_ampersand_is_not_a_segment_boundary():
     assert wg._split_segments("git status &>/dev/null") == ["git status &>/dev/null"]
     assert wg._split_segments("a && b") == ["a", "b"]
     assert wg._split_segments("a & b") == ["a", "b"]
+    assert wg._split_segments("echo \\>& bash -c x") == ["echo \\>", "bash -c x"]
 
 
 def test_the_unreadable_message_names_its_next_step():
@@ -400,15 +401,20 @@ def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
     "eval 'git reset --hard>/dev/null'",
     "eval git> /dev/null reset --hard",
     "\"eval\" git reset '--hard>\"/dev/null\"'",
+    "bash -c 'git reset>/dev/null --hard'",
+    "bash -c '\"git\" reset --hard>/dev/null'",
+    "bash -c 'git \"reset\" --hard>/dev/null'",
+    "eval git \"'reset' --hard>/dev/null\"",
 ])
 def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
 
 
 def test_an_attached_redirection_target_cannot_hide_a_flag_and_plain_redirections_stay_allowed(dirty_repo):
-    assert wg.classify("git restore .>& --staged", dirty_repo) == ("deny", wg.unparsed_message())
+    for bad in ("git restore .>& --staged", "git reset>/dev/null --hard", "git status>/tmp/x"):
+        assert wg.classify(bad, dirty_repo) == ("deny", wg.unparsed_message()), bad
     for ok in ("bash -c 'git status 2>/dev/null'", "bash -c 'git status > /tmp/x'",
-               "git status>/tmp/x", "bash -c 'echo hi>/tmp/x'"):
+               "bash -c 'echo hi>/tmp/x'"):
         assert wg.classify(ok, dirty_repo) == ("allow", ""), ok
 
 

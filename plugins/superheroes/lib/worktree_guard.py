@@ -273,7 +273,7 @@ def _split_segments_with_ends(command):
                 i += 2
                 continue
             # An `&` that belongs to a redirection (`>&`, `<&`, `2>&1`, `&>`, `&>>`) is no boundary.
-            if (i > 0 and command[i - 1] in "<>") or (i + 1 < n and command[i + 1] == ">"):
+            if (i > 0 and command[i - 1] in "<>" and (i < 2 or command[i - 2] != "\\")) or (i + 1 < n and command[i + 1] == ">"):
                 if (i + 1 < n and command[i + 1] == ">" and current
                         and not current[-1].isspace() and command[i - 1] not in "<>"):
                     current.append(" ")  # `&>` starts its own word, never glues to a flag
@@ -989,7 +989,10 @@ def segment_accounting(command, cwd=None, _depth=0):
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
         # A word still holding < or > after the real redirections went hides what Bash consumes.
-        attached = mentions and any(c in tok for tok in tokens for c in "<>")
+        # A git word holding whitespace was quoted (a `-m "$(cat <<EOF ...)"` message): it counts only
+        # when the segment mentions a destructive git.
+        attached = (mentions or parsed is not None) and any(
+            c in tok for tok in tokens if mentions or len(tok.split()) == 1 for c in "<>")
         if _depth >= 1 and (attached or tokens and (
                 any(c in tokens[0] for c in "$`\\")
                 or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
@@ -1007,7 +1010,7 @@ def segment_accounting(command, cwd=None, _depth=0):
                 })
             else:
                 records.append({"segment": segment, "kind": "safe", "action": None})
-        elif mentions:
+        elif mentions or attached:
             records.append({"segment": segment, "kind": "unaccounted", "action": None})
         else:
             records.append({"segment": segment, "kind": "safe", "action": None})
