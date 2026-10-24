@@ -43,6 +43,8 @@ HEX40 = "c" * 40
 # The seeded lane started at a fixed instant (2026-10-24T12:00:00Z) so the recorded fixture rows,
 # created at 11:13:25Z, are older than it whatever the clock reads when the suite runs.
 LANE_STARTED_TS = calendar.timegm((2026, 10, 24, 12, 0, 0))
+# The environment the recorded newest-page row (list_page_recorded_newest.json) was created in.
+RECORDED_ENVIRONMENT = "env_01UTDZ5skRKJT1PhMdo3k936"
 
 
 def _fixture(name):
@@ -57,7 +59,7 @@ def _write_listing(tmp_path, value, name="listing.json"):
 
 def _seed_lane(
     repo, launch_id=LANE_ID, *, session_id=SESSION_ID, title=SESSION_TITLE, outcome="handback",
-    issue=656,
+    issue=656, environment="env-1",
 ):
     """An earlier cloud lane for the issue that started a session, ended with `outcome` (None: still running)."""
     assert ll.append(repo, {
@@ -65,7 +67,7 @@ def _seed_lane(
         "batchId": "wave-test", "repoId": ll.repo_identity(repo), "issue": issue,
         "surfaces": ["plugins/x-%s" % launch_id], "premise": {"issue": issue, "baseCommit": HEX40},
         "preflight": {}, "argv": [], "doctrineDigest": "abc123", "model": "test-model",
-        "place": ll.PLACE_CLOUD, "cloudEnvironment": "env-1", "pluginVersion": "1.2.3",
+        "place": ll.PLACE_CLOUD, "cloudEnvironment": environment, "pluginVersion": "1.2.3",
         "configDir": "/cfg/acct",
     })
     started = {
@@ -479,12 +481,23 @@ def test_an_adoption_proceeds_when_the_recorded_archived_session_is_listed(tmp_p
 
 
 def test_a_recorded_newest_page_with_more_to_read_refuses_incomplete(tmp_path):
-    # axis: the newest row of a real no-cursor page (has_more true) does not hold the lane's session, so the lane is unproven
+    # axis: the recorded row is in the lane's environment and created well past the lane start, so only has_more true can refuse it
     repo = _cloud_repo(tmp_path)
-    _seed_lane(repo)
+    _seed_lane(repo, environment=RECORDED_ENVIRONMENT)
     result, calls = _adopt(repo, tmp_path, _fixture("list_page_recorded_newest.json"))
     _refused_unread(repo, result, calls, "listing-incomplete")
     assert result["launchIds"] == [LANE_ID]
+
+
+def test_the_recorded_newest_page_with_has_more_false_proves_absence(tmp_path):
+    # axis: the same recorded row and lane with has_more false is a complete page that reaches past the lane start, so the session is gone and the launch goes ahead
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, environment=RECORDED_ENVIRONMENT)
+    with open(_fixture("list_page_recorded_newest.json")) as handle:
+        recorded = json.load(handle)
+    listing = _write_listing(tmp_path, {"data": recorded["data"], "has_more": False})
+    result, calls = _adopt(repo, tmp_path, listing)
+    _proceeds(result, calls)
 
 
 def test_a_live_cloud_lane_of_another_issue_does_not_hold_this_adoption(tmp_path):
