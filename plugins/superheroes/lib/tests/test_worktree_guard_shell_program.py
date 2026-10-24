@@ -353,12 +353,37 @@ def test_wrapped_directory_change_and_redirected_eval_are_still_refused(command,
 
 
 @pytest.mark.parametrize("command", [
-    "git checkout HEAD &>/dev/null",
     "git checkout HEAD '>notes'",
     "git checkout \">f.txt\"",
+    "git 2>/dev/null reset --hard",
 ])
-def test_a_quoted_redirection_lookalike_operand_is_not_dropped(command, dirty_repo):
+def test_a_quoted_lookalike_is_kept_and_a_real_redirection_cannot_hide_a_discard(command, dirty_repo):
     assert wg.classify(command, dirty_repo)[0] == "deny", command
+
+
+def test_a_detached_redirection_target_cannot_hide_a_clean(dirty_repo):
+    with open(os.path.join(dirty_repo, "untracked.txt"), "w") as f:
+        f.write("x")
+    assert wg.classify("git clean -fd > --dry-run", dirty_repo)[0] == "deny"
+
+
+def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
+    assert wg.classify("git checkout HEAD &>/dev/null", dirty_repo) == ("allow", "")
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'command eval \"git reset --hard\"'",
+    "command eval \"git reset --hard\"",
+    "nohup eval 'echo hi'",
+    "bash -o $OPT 'git reset --hard'",
+    "bash --rcfile \"$RC\" -c 'echo hi'",
+])
+def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+def test_a_word_named_eval_and_a_literal_option_value_stay_as_before(dirty_repo):
+    assert wg.classify("grep eval file.py", dirty_repo) == ("allow", "")
 
 
 def test_an_ampersand_redirection_adjoining_a_flag_is_its_own_word(dirty_repo):

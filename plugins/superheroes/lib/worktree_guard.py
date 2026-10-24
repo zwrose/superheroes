@@ -475,11 +475,14 @@ def _redirection_width(tokens, i):
     return 1
 
 
-def _drop_redirections(tokens):
-    """The tokens with every redirection word (and its detached target) removed."""
+def _drop_redirections(tokens, raw=None):
+    """The tokens with every redirection word (and its detached target) removed. With `raw`
+    (the index-aligned quote-keeping tokens) the decision is made on those, so a quoted
+    `'>notes'` operand is kept."""
+    raw = tokens if raw is None or len(raw) != len(tokens) else raw
     kept, i = [], 0
     while i < len(tokens):
-        width = _redirection_width(tokens, i)
+        width = _redirection_width(raw, i)
         if width:
             i += width
             continue
@@ -846,6 +849,11 @@ def _shell_program(raw_tokens):
             ended_options = True
             i += 1
             break
+        takes_value = tok in ("--rcfile", "--init-file") or (
+            len(tok) > 1 and tok[0] in "-+" and tok[1] != "-" and ("o" in tok or "O" in tok))
+        if takes_value and i + 1 < len(raw_tokens) and (
+                not re.fullmatch(_WORD, raw_tokens[i + 1]) or "$" in raw_tokens[i + 1]):
+            return ("unreadable", None)
         if tok in ("--rcfile", "--init-file"):
             i += 2
             continue
@@ -923,10 +931,12 @@ def _hidden_shell_c(raw_tokens):
     known wrapper word or an option/number argument of one (a wrapper in front)."""
     command_index = len(raw_tokens) - len(_command_tokens(raw_tokens)[1])
     for k, raw in enumerate(raw_tokens):
-        if "'" in raw or '"' in raw or os.path.basename(raw) not in ("bash", "sh", "zsh"):
+        if "'" in raw or '"' in raw or os.path.basename(raw) not in ("bash", "sh", "zsh", "eval"):
             continue
         if k == command_index or not _only_wrapper_words(raw_tokens[:k]):
             continue
+        if raw == "eval":
+            return True
         for later in raw_tokens[k + 1:]:
             plain = _plain_word(later)
             if len(plain) > 1 and plain[0] in "-+" and not plain.startswith("--") and "c" in plain:
@@ -983,7 +993,7 @@ def segment_accounting(command, cwd=None, _depth=0):
             else:
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
-        _, tokens = _command_tokens(tokens)
+        _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         if _depth >= 1 and tokens and (
                 any(c in tokens[0] for c in "$`\\")
