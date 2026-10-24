@@ -2216,30 +2216,18 @@ def _lookup_stack_entry_pr(
         if remaining <= 0:
             return {"ok": False, "reason": "stack-read-unavailable"}
         pr_timeout = min(120, remaining)
-    try:
-        pr_proc = gh_run(
-            [
-                "gh", "pr", "list",
-                "--state", "open",
-                "--json", "number,headRefOid,state",
-                "--limit", "1000",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            env=scrubbed,
-            timeout=pr_timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    if pr_proc.returncode != 0:
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    try:
-        pr_list = json.loads(pr_proc.stdout or "")
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    if not isinstance(pr_list, list):
-        return {"ok": False, "reason": "stack-read-unavailable"}
+    pr_list, pr_refusal = stack_check.list_open_prs(
+        ("number", "headRefOid", "state"),
+        run=gh_run,
+        timeout=pr_timeout,
+        deadline_at=deadline,
+        run_kwargs=dict(cwd=repo_root, env=scrubbed),
+    )
+    if pr_refusal is not None:
+        out = {"ok": False, "reason": "stack-read-unavailable"}
+        if pr_refusal.get("detail"):
+            out["detail"] = pr_refusal["detail"]
+        return out
     candidates = []
     for pr in pr_list:
         if not isinstance(pr, dict):

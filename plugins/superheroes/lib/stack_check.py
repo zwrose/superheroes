@@ -17,6 +17,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import gh_pages  # noqa: E402
 import grounding_stage  # noqa: E402
 
 GH_TIMEOUT = 120
@@ -33,6 +34,15 @@ TRANSPORTS = (TRANSPORT_AUTO, TRANSPORT_GRAPHQL, TRANSPORT_REST)
 # `gh pr view` and `gh repo view` start theirs "HTTP 403: ..." with no parentheses. Only a gh
 # call that exited non-zero with both strings in its output restarts a read on REST.
 GRAPHQL_REFUSED_MARKERS = ("HTTP 403", "use the REST API")
+
+# The closing keywords a PR body's first line uses to name the issue it closes; its one home, read by review_record.
+CLOSES_RE = re.compile(r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w):?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)",
+                       re.IGNORECASE)
+
+# Every read of the open-PR list asks for at most this many rows, on either transport (`gh pr list --limit`).
+OPEN_PRS_LIMIT = 1000
+OPEN_PRS_FIELDS = ("number", "headRefOid", "state")
+_OPEN_PRS_REST_PATH = "repos/{owner}/{repo}/pulls?state=open&sort=created&direction=desc"
 
 REASON_BAD_ARGUMENT = "bad-argument"
 REASON_NOT_LINKED = "not-linked"
@@ -964,6 +974,115 @@ def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None,
     return slug, None
 
 
+def read_rest_list(path, *, run, timeout, deadline_at=None, run_kwargs=None, limit=None):
+    """Every row of the REST list at `path` (or its first `limit` rows), read page by page by number.
+
+    Return (rows, refusal) — exactly one is non-None. A page that cannot be read refuses the whole read with
+    the first failing page's detail. It never asks gh to paginate: that follows repositories/{id}/ links the
+    cloud proxy refuses."""
+    refused = []
+
+    def _fetch(endpoint):
+        payload, refusal = _transport_rest(
+            ["gh", "api", endpoint], timeout, run, None, None, 0,
+            deadline_at=deadline_at, run_kwargs=run_kwargs, expect_list=True)
+        if refusal is not None:
+            refused.append(refusal)
+            return None
+        return json.dumps(payload)
+
+    rows = gh_pages.read(_fetch, path, limit=limit)
+    # axis: a page that cannot be read refuses the whole read with that page's detail, never a partial list
+    if rows is None:
+        if refused:
+            return None, _read_refusal(refused[0]["reason"], refused[0]["detail"])
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh api %s: the list did not end within %d pages" % (path, gh_pages.MAX_PAGES))
+    return rows, None
+
+
+def open_prs_argv(fields):
+    return ["gh", "pr", "list", "--state", "open", "--json", ",".join(fields), "--limit", str(OPEN_PRS_LIMIT)]
+
+
+def _open_pr_row_from_rest(row, fields):
+    """Return (row in `gh pr list --json` shape holding only `fields`, detail) — exactly one is non-None."""
+    if not isinstance(row, dict):
+        return None, "a pull request row is not an object"
+    # axis: a REST state other than open on an open-PR list refuses the read
+    if row.get("state") != _REST_STATE_OPEN:
+        return None, "a pull request row's state is not open"
+    head = row.get("head")
+    sha = head.get("sha") if isinstance(head, dict) else None
+    mapped = {}
+    for field in fields:
+        if field == "number":
+            # axis: a row whose number is missing or not an int refuses the read
+            if not _is_int(row.get("number")):
+                return None, "a pull request row's number is missing or not an integer"
+            mapped["number"] = row["number"]
+        elif field == "headRefOid":
+            # axis: a row whose head.sha is missing or not a string refuses the read
+            if not isinstance(sha, str):
+                return None, "a pull request row's head.sha is missing or not a string"
+            mapped["headRefOid"] = sha
+        else:
+            mapped["state"] = "OPEN"
+    return mapped, None
+
+
+def list_open_prs(fields, *, run, timeout, deadline_at=None, run_kwargs=None):
+    """The open pull requests, newest created first and at most OPEN_PRS_LIMIT of them, as `gh pr list --json
+    <fields>` rows. Return (rows, refusal) — exactly one is non-None.
+
+    It reads `gh pr list` first and re-reads the same list through REST only when that call is the proxy's
+    GraphQL refusal; the REST rows are mapped to the GraphQL shape, so both transports return the same rows."""
+    if (not isinstance(fields, (tuple, list)) or not fields
+            or any(field not in OPEN_PRS_FIELDS for field in fields)):
+        raise ValueError("fields must be drawn from %r" % (OPEN_PRS_FIELDS,))
+    kwargs = dict(run_kwargs or {})
+    argv = open_prs_argv(fields)
+    try:
+        proc = run(
+            argv, capture_output=True, text=True,
+            timeout=_effective_timeout(timeout, deadline_at), **kwargs)
+    except (FileNotFoundError, OSError) as exc:
+        # axis: the GraphQL list read raises, so the list is unreadable
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh pr list: %s" % exc)
+    except subprocess.TimeoutExpired:
+        # axis: the GraphQL list read times out, so the list is unreadable
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh pr list timed out")
+
+    if not _is_graphql_proxy_refusal_proc(proc):
+        # axis: a non-zero exit that is not the proxy refusal is a GraphQL failure, never a REST fallback
+        if proc.returncode != 0:
+            return None, _read_refusal(
+                REASON_STACK_UNREADABLE, "gh pr list failed: %s" % (_proc_output(proc) or "no output"))
+        try:
+            rows = json.loads(proc.stdout or "")
+        except (ValueError, TypeError):
+            return None, _read_refusal(REASON_STACK_UNREADABLE, "gh pr list returned output that is not JSON")
+        # axis: a GraphQL list that is not a list of objects refuses the read
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            return None, _read_refusal(
+                REASON_STACK_UNREADABLE, "gh pr list returned JSON that is not a list of objects")
+        return rows, None
+
+    # The cloud proxy refused GraphQL: re-read the same list through REST; gh fills {owner}/{repo} from the cwd.
+    pulls, refusal = read_rest_list(
+        _OPEN_PRS_REST_PATH, run=run, timeout=timeout, deadline_at=deadline_at, run_kwargs=kwargs,
+        limit=OPEN_PRS_LIMIT)
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    rows = []
+    for pull in pulls:
+        mapped, detail = _open_pr_row_from_rest(pull, fields)
+        if detail is not None:
+            return None, _graphql_refused_rest_refusal(_read_refusal(REASON_STACK_UNREADABLE, detail))
+        rows.append(mapped)
+    return rows, None
+
+
 def same_commit(a, b):
     return isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower()
 
@@ -1064,16 +1183,21 @@ def _rest_stack_argv(owner, name, number):
 
 def _transport_rest(
     argv, timeout, run, repo, pr, pages, deadline=None, deadline_at=None, *, run_kwargs=None,
+    expect_list=False,
 ):
     """Run one gh api REST GET. Return (payload, refusal) — exactly one is non-None.
 
-    run_kwargs are passed through to run (env, cwd) for the single-read callers."""
+    run_kwargs are passed through to run (env, cwd) for the single-read callers. expect_list reads a JSON list
+    instead of a JSON object."""
     endpoint = argv[-1]
     # axis: read budget exhausted before a REST GET
     if deadline_at is not None and time.monotonic() >= deadline_at:
-        return None, _refusal(REASON_STACK_UNREADABLE,
-            "read budget of %g seconds exhausted after %d pages" % (deadline, pages),
-            repo=repo, pr=pr, pages=pages)
+        # axis: a read given only an absolute deadline has no duration to name, and must refuse rather than raise
+        if deadline is None:
+            exhausted = "read budget exhausted after %d pages" % pages
+        else:
+            exhausted = "read budget of %g seconds exhausted after %d pages" % (deadline, pages)
+        return None, _refusal(REASON_STACK_UNREADABLE, exhausted, repo=repo, pr=pr, pages=pages)
 
     effective_timeout = _effective_timeout(timeout, deadline_at)
     try:
@@ -1101,6 +1225,13 @@ def _transport_rest(
         # axis: REST stdout is not JSON
         return None, _refusal(REASON_STACK_UNREADABLE,
             "gh api %s returned output that is not JSON" % endpoint, repo=repo, pr=pr, pages=pages)
+
+    if expect_list:
+        # axis: REST parsed JSON is not a list
+        if not isinstance(payload, list):
+            return None, _refusal(REASON_STACK_UNREADABLE,
+                "gh api %s returned JSON that is not a list" % endpoint, repo=repo, pr=pr, pages=pages)
+        return payload, None
 
     # axis: REST parsed JSON is not an object
     if not isinstance(payload, dict):

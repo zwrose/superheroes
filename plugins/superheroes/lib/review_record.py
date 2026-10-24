@@ -51,6 +51,7 @@ import review_findings_schema as rfs  # noqa: E402
 import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
+import stack_check  # noqa: E402
 import store_core  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
@@ -89,8 +90,7 @@ _LANE_RE = re.compile(
     r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
-_CLOSES_RE = re.compile(r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w):?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)",
-                        re.IGNORECASE)
+_CLOSES_RE = stack_check.CLOSES_RE
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
