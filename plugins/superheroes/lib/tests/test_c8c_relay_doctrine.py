@@ -145,3 +145,23 @@ def test_cleanup_steps_point_at_the_owner_message_not_one_tap():
     assert "until the owner taps Allow" not in section
     assert "`ownerMessage`" in _cleanup_step(3)
     assert "`ownerMessage`" in _cleanup_step(5)
+
+
+def _another_account_steps():
+    """The relayed-answer steps of wave-watch.md, from "Another account." to "Not delivered", as one line."""
+    text = _collapsed(_read(_WAVE_WATCH))
+    start, end = text.index("**Another account.**"), text.index("**Not delivered, or `ensure` refused.**")
+    return text[start:end]
+
+
+@pytest.mark.parametrize("rule", [
+    "never carries a shell-evaluated value you have not seen expanded",
+    "print the whole composed `relayMessage`, never a truncated view",
+    "Send exactly the `relayMessage` you printed",
+    "never retyped from your own draft",
+    "composing a new message; never edit a composed one",
+    "a mismatch does not say which step changed it",
+], ids=["no-unseen-shell-value", "print-whole", "send-printed", "no-retype", "recompose", "no-blame"])
+def test_the_relayed_answer_steps_carry_the_advisor_send_rule(rule):
+    # axis: the advisor sends exactly the composed text it read and recomposes on a change — see bite-proof record wo_2124_relay_say.md
+    assert rule in _another_account_steps()

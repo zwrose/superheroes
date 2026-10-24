@@ -82,15 +82,16 @@ do not try another route into the worktree.
 2. Work only in your own worktree. Do not commit. Leave your change in the working tree.
 3. Install nothing and reach no network: no package installs, no curl or wget, no git push, \
 fetch, pull or clone, no gh.
-4. """ + command_refusals.ORDER_TEXT + """
-5. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
+4. """ + command_refusals.FILE_WRITE_RULE + """
+5. """ + command_refusals.ORDER_TEXT + """
+6. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
    {"status": "done" | "needs_context" | "blocked", "summary": "<text>", "refusals": [ ... ]}
    Include refusals, in the entry shape the rule above names, whenever you met a refused or \
 denied command; an empty list or no refusals key means you met none. If your enroll command is \
 refused or denied, still write this result with status "blocked" and that refusal before you stop.
    Use "done" only when the order is carried out; "needs_context" when you need information the \
 order does not give; "blocked" when something outside your reach stops you.
-6. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
+7. Stop when the deadline given to the orchestrator passes; the fence refuses your commands after it.
 
 The order follows, verbatim.
 
