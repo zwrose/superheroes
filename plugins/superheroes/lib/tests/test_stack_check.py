@@ -2503,6 +2503,7 @@ def _assert_fallback_refusal(refusal):
     ids=["merged", "open-draft", "open", "closed-unmerged"],
 )
 def test_v_vet_state_rest_fallback_equals_graphql_read(pull, graphql_state):
+    # axis: REST fallback missing or mapping a pull field differently from the GraphQL read
     pr = pull["number"]
     graphql_run, _graphql_calls = _make_run({
         _vet_view_argv(pr): _pr_vet_ok(
@@ -2523,18 +2524,21 @@ def test_v_vet_state_rest_fallback_equals_graphql_read(pull, graphql_state):
 
 
 def test_v_vet_state_rest_null_body_is_the_empty_string():
+    # axis: null REST body not normalised to the empty string
     state, refusal, _calls, _run = _vet_fallback(_with(PULL_2093_OPEN, ("body",), None))
     assert refusal is None
     assert state["body"] == ""
 
 
 def test_v_vet_state_fallback_passes_env_to_both_calls():
+    # axis: env not passed to the REST call (or the GraphQL call) of the vet-state fallback
     env = {"GH_TOKEN": "x"}
     _state, _refusal, _calls, run = _vet_fallback(PULL_2093_OPEN, env=env)
     assert [kw["env"] for kw in run.kw_calls] == [env, env]
 
 
 def test_v_repo_slug_rest_fallback_equals_graphql_read():
+    # axis: REST fallback missing or yielding a slug different from the GraphQL read
     graphql_run, _graphql_calls = _make_run(
         {_repo_slug_argv(): _repo_slug_ok(REPO_SUPERHEROES["full_name"])})
     expected = sc.resolve_repo_slug(REPO_ROOT, run=graphql_run)
@@ -2548,6 +2552,7 @@ def test_v_repo_slug_rest_fallback_equals_graphql_read():
 
 
 def test_v_repo_slug_fallback_passes_env_to_both_calls():
+    # axis: env not passed to the REST call (or the GraphQL call) of the repo-slug fallback
     env = {"GH_TOKEN": "x"}
     _slug, _refusal, _calls, run = _slug_fallback(env=env)
     assert [kw["env"] for kw in run.kw_calls] == [env, env]
@@ -2566,6 +2571,7 @@ _REST_FAILURE_IDS = ["exit-1-with-json-stdout", "timeout", "non-json", "json-arr
 
 @pytest.mark.parametrize("failure", _REST_FAILURES, ids=_REST_FAILURE_IDS)
 def test_v_vet_state_rest_failure_after_refusal_refuses(failure):
+    # axis: REST failure after the refusal not refused, or refused without the fallback prefix
     state, refusal, calls, _run = _vet_fallback(
         PULL_2093_OPEN, rest=failure(PULL_2093_OPEN))
     assert state is None
@@ -2575,6 +2581,7 @@ def test_v_vet_state_rest_failure_after_refusal_refuses(failure):
 
 @pytest.mark.parametrize("failure", _REST_FAILURES, ids=_REST_FAILURE_IDS)
 def test_v_repo_slug_rest_failure_after_refusal_refuses(failure):
+    # axis: REST failure after the refusal not refused, or refused without the fallback prefix
     slug, refusal, calls, _run = _slug_fallback(rest=failure(REPO_SUPERHEROES))
     assert slug is None
     _assert_fallback_refusal(refusal)
@@ -2589,6 +2596,8 @@ def test_v_repo_slug_rest_failure_after_refusal_refuses(failure):
         (PULL_2093_OPEN, ("state",), "OPEN"),
         (PULL_2077, ("merged",), _DELETE),
         (PULL_2077, ("merged",), "true"),
+        (PULL_2077, ("merged",), 1),
+        (PULL_2075_CLOSED, ("merged",), 0),
         (PULL_2077, ("merged_at",), _DELETE),
         (PULL_2077, ("merged_at",), 5),
         (PULL_2077, ("merged_at",), ""),
@@ -2608,7 +2617,7 @@ def test_v_repo_slug_rest_failure_after_refusal_refuses(failure):
     ],
     ids=[
         "state-missing", "state-unknown", "state-uppercase",
-        "merged-missing", "merged-not-bool",
+        "merged-missing", "merged-not-bool", "merged-int-one", "merged-int-zero",
         "merged-at-missing", "merged-at-int", "merged-at-empty",
         "merged-without-merged-at", "unmerged-with-merged-at",
         "open-but-merged",
@@ -2618,6 +2627,7 @@ def test_v_repo_slug_rest_failure_after_refusal_refuses(failure):
     ],
 )
 def test_v_vet_state_malformed_rest_fields_refuse(pull, path, value):
+    # axis: a malformed or inconsistent REST pull field accepted instead of refused
     state, refusal, calls, _run = _vet_fallback(pull, rest=_with(pull, path, value))
     assert state is None
     _assert_fallback_refusal(refusal)
@@ -2630,6 +2640,7 @@ def test_v_vet_state_malformed_rest_fields_refuse(pull, path, value):
     ids=["missing", "empty", "not-a-string", "no-slash", "null"],
 )
 def test_v_repo_slug_malformed_full_name_refuses(value):
+    # axis: a malformed REST full_name accepted instead of refused
     slug, refusal, calls, _run = _slug_fallback(_with(REPO_SUPERHEROES, ("full_name",), value))
     assert slug is None
     _assert_fallback_refusal(refusal)
@@ -2648,6 +2659,7 @@ _NOT_THE_REFUSAL_IDS = ["http-502", "only-403", "only-rest-hint", "exit-zero-wit
 
 @pytest.mark.parametrize("view", _NOT_THE_REFUSAL, ids=_NOT_THE_REFUSAL_IDS)
 def test_v_vet_state_without_the_refusal_makes_one_call_and_refuses(view):
+    # axis: REST fallback taken although the GraphQL failure is not the proxy refusal
     state, refusal, calls, _run = _vet_fallback(PULL_2093_OPEN, view=view)
     assert state is None
     _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
@@ -2657,6 +2669,7 @@ def test_v_vet_state_without_the_refusal_makes_one_call_and_refuses(view):
 
 @pytest.mark.parametrize("view", _NOT_THE_REFUSAL, ids=_NOT_THE_REFUSAL_IDS)
 def test_v_repo_slug_without_the_refusal_makes_one_call_and_refuses(view):
+    # axis: REST fallback taken although the GraphQL failure is not the proxy refusal
     slug, refusal, calls, _run = _slug_fallback(view=view)
     assert slug is None
     _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
@@ -2677,11 +2690,13 @@ def test_v_repo_slug_without_the_refusal_makes_one_call_and_refuses(view):
     ids=["gh-api-graphql", "gh-view"],
 )
 def test_v_both_recorded_refusals_satisfy_the_predicate(refusal_proc):
+    # axis: a recorded refusal shape (gh api graphql or gh view) not matched by the predicate
     assert sc._is_graphql_proxy_refusal_proc(refusal_proc) is True
     assert sc._is_graphql_proxy_refusal([refusal_proc]) is True
 
 
 def test_v_vet_state_deadline_exhausted_before_the_rest_get_refuses(monkeypatch):
+    # axis: deadline not honoured before the REST GET — gh called after the deadline is spent
     _fake_monotonic(monkeypatch, [0, 1, 2, 100])
     state, refusal, calls, _run = _vet_fallback(PULL_2093_OPEN, deadline=100.0)
     assert state is None
@@ -2690,6 +2705,7 @@ def test_v_vet_state_deadline_exhausted_before_the_rest_get_refuses(monkeypatch)
 
 
 def test_v_repo_slug_deadline_exhausted_before_the_rest_get_refuses(monkeypatch):
+    # axis: deadline not honoured before the REST GET — gh called after the deadline is spent
     _fake_monotonic(monkeypatch, [0, 1, 2, 100])
     slug, refusal, calls, _run = _slug_fallback(deadline=100.0)
     assert slug is None
