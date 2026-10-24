@@ -13019,6 +13019,7 @@ def _run_in_process_group(argv, *, timeout=None, **kwargs):
     """subprocess.run in its own process group; on timeout the whole group is killed, so a
     compound verify command leaves no surviving descendants."""
     kwargs.pop("start_new_session", None)
+    kwargs.pop("stdin", None)
 
     def _on_sigterm(signum, frame):
         # The child sits in its own session, so cancelling the driver's group never reaches it;
@@ -13037,7 +13038,7 @@ def _run_in_process_group(argv, *, timeout=None, **kwargs):
 
 
 def _run_in_process_group_supervised(argv, timeout, kwargs):
-    with subprocess.Popen(argv, start_new_session=True, **kwargs) as proc:
+    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True, **kwargs) as proc:
         try:
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:

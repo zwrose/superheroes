@@ -307,3 +307,45 @@ pytest exit: 1
 1 passed in 1.10s
 pytest exit: 0
 ```
+
+## G7: `_verify_via_row`'s configured-command fallback
+
+- **axis:** a local verify submitted without a `command` records the session's configured `verifyCommand`, not `None` (the hand-submit path; the verb path always carries a command)
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, `_verify_via_row`, line 5559):
+```diff
+-            else config.get("verifyCommand")}
++            else None}
+```
+
+**red capture:** `G7_red.txt` (exit 1), excerpt, run alone by exact id `plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_a_local_verify_without_a_command_records_the_configured_one`:
+```
+F                                                                        [100%]
+[...]
+>       assert TA._state(d)["rounds"]["1"]["verifyVia"] == {"via": "local", "command": "make verify"}
+E       AssertionError: assert {'command': N...via': 'local'} == {'via': 'loca...'make verify'}
+E         Differing items:
+E         {'command': None} != {'command': 'make verify'}
+[...]
+FAILED plugins/superheroes/lib/tests/test_verify_ci_head_2072.py::test_a_local_verify_without_a_command_records_the_configured_one
+1 failed in 2.11s
+pytest exit: 1
+```
+
+**restore:** the inverse edit on `plugins/superheroes/lib/round_driver.py` (`else None}` back to `else config.get("verifyCommand")}`).
+
+**restore receipt** (`git diff --stat bdf29cc5 -- plugins/superheroes/lib/round_driver.py` shows only the stdin change, and lines 5557-5559 read back):
+```
+ plugins/superheroes/lib/round_driver.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+    command = artifact.get("command")
+    return {"via": "local", "command": command if isinstance(command, str) and command
+            else config.get("verifyCommand")}
+```
+
+**green capture:** `G7_green.txt` (exit 0), same id:
+```
+.                                                                        [100%]
+1 passed in 2.17s
+pytest exit: 0
+```
