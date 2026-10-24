@@ -1317,6 +1317,10 @@ def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes(
     assert sort.index("whatever caused it") < sort.index("The named harmless causes are"), (
         "handback.md sort lists the named harmless causes before the costly test"
     )
+    # bite-axis: rule 2 states the costly predicate exactly: costly when a promised check did not run, or work bypassed its owner engine.
+    assert "Every other deviation is **costly** when a promised check did not run, or work bypassed its owner engine" in sort, (
+        "handback.md sort rule 2 no longer states the costly predicate exactly"
+    )
     # bite-axis: the grounding seat not running is the one cause that sorts harmless by name.
     assert "The grounding seat not running sorts **harmless**, as named." in sort, (
         "handback.md sort no longer names the grounding seat not running as harmless"
@@ -1329,6 +1333,10 @@ def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes(
     # bite-axis: TRANSITION's build-deviations note says the same as the handback sort.
     for phrase in ("whatever caused it", "never a build check that could not run there"):
         assert phrase in note, "TRANSITION.md's build-deviations note no longer says %r" % phrase
+    # bite-axis: TRANSITION's first sentence states the costly predicate exactly, as rule 2 does.
+    assert "A deviation is costly when a promised check did not run, or work bypassed its owner engine, whatever caused it" in note, (
+        "TRANSITION.md's build-deviations note no longer states the costly predicate exactly"
+    )
     # The note is found by its own heading, so the version heading above it does not matter.
     body = "### Build deviations: only costly ones are accepted on the merge sheet\n\nA note.\n"
     assert _build_deviations_note("## Unreleased\n\n" + body + "\n## 0.1.0\n") == _build_deviations_note("## 9.9.9\n\n" + body + "\n## 0.1.0\n") == body

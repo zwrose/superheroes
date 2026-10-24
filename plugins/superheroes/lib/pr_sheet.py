@@ -346,14 +346,15 @@ def accepting_listed(body):
 
 _DEGRADATIONS_MARKER = "<!-- superheroes:degradations -->"  # the line that opens the body's degradations list, in the build record
 _DEGRADATIONS_HEADING = "### Disclosed degradations"
-_TOP_ITEM = re.compile(r"^ {0,3}[-*+][ \t]+(.*)")
+_TOP_ITEM = re.compile(r"^( {0,3})([-*+])([ \t]+)(.*)")
 _LABEL = re.compile(r"\[(costly|harmless)\][ \t]*", re.IGNORECASE)
 
 
 def degradations_listed(body):
     """(label, text) for each degradation a PR body lists after its degradations marker line, in order; [] for a body that
     is not a string, has no marker, or lists only the word None (as the one item or the one paragraph, any case, with or
-    without a period). An item is a top-level list item with its continuation lines joined by one space, or a paragraph.
+    without a period). An item is a top-level list item with its continuation lines joined by one space, or a paragraph;
+    a list item indented to the open item's content column is part of that item.
     The list ends at the next heading, a line starting `</details>` or another `<!-- superheroes:` marker; the `### Disclosed
     degradations` heading itself is skipped. label is "costly" or "harmless" when the text starts with that label
     (case-insensitive; the label and the spaces after it are dropped from text), else None."""
@@ -363,7 +364,7 @@ def degradations_listed(body):
     start = next((n for n, line in enumerate(lines) if line.rstrip() == _DEGRADATIONS_MARKER), None)
     if start is None:
         return []
-    entries, open_entry, blank = [], None, False
+    entries, open_entry, blank, column = [], None, False, 0
     for line in lines[start + 1:]:
         stripped = line.strip()
         if not stripped:
@@ -374,13 +375,17 @@ def degradations_listed(body):
         if _HEADING.match(line) or stripped.startswith(("</details>", "<!-- superheroes:")):
             break
         item = _TOP_ITEM.match(line)
+        if item and open_entry is not None and len(item.group(1)) >= column:
+            item = None  # indented to the open item's content column: it nests in that item
         if item:
-            open_entry = [item.group(1)]
+            gap = len(item.group(3))
+            column = len(item.group(1)) + len(item.group(2)) + (gap if gap <= 4 else 1)
+            open_entry = [item.group(4)]
             entries.append(open_entry)
         elif open_entry is not None and not (blank and not line.startswith(("  ", "\t"))):
             open_entry.append(line)  # a continuation line (lazy, or indented after a blank line)
         else:
-            open_entry = [line]
+            open_entry, column = [line], 4  # a paragraph has no content column: a top-level bullet after it starts a new item
             entries.append(open_entry)
         blank = False
     texts = [t for t in (" ".join(part for part in (line.strip() for line in entry) if part) for entry in entries) if t]

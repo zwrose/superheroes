@@ -2916,6 +2916,17 @@ def test_a_harmless_deviation_needs_no_line_under_what_we_are_accepting():
     assert sheet["prSheet"]["nothingListed"] is True and sheet["cards"] == []
 
 
+def test_a_nested_bullet_under_a_harmless_deviation_is_part_of_it_and_needs_no_line():
+    # Bites on: a two-space nested bullet under a [harmless] bullet being read as its own unlabelled (costly) deviation, so the build refuses a valid body.
+    # Axis: a nested bullet stays with its degradation: the build succeeds, lists nothing and makes no card.
+    text = BODY_3303_HARMLESS_ONLY.read_text(encoding="utf-8")
+    harmless_line = next(line for line in text.splitlines(keepends=True) if line.startswith("- [harmless]"))
+    nested = text.replace(harmless_line, harmless_line + "  - The builder read the file before starting.\n")
+    assert nested != text
+    sheet = with_bodies(SMALL, {211: nested})
+    assert sheet["prSheet"]["nothingListed"] is True and sheet["cards"] == []
+
+
 def test_a_costly_deviation_carried_into_what_we_are_accepting_builds_whatever_the_emphasis_or_full_stop():
     # Bites on: the match being exact (emphasis or the trailing full stop breaking it), or the check adding a card or changing what the sheet records.
     # Axis: K5 and the cards edge: the text after the label found inside an accepting line builds; the acceptance's own item is the only card; no nothingListed.
@@ -2954,6 +2965,11 @@ DEGRADATIONS_CASES = [
     pytest.param(None, [], id="not-a-string"),
     pytest.param(DEGRADATIONS + "- [Costly]  One,\n  and two.\n</details>\n- Three.\n", [("costly", "One, and two.")], id="stops-at-details"),
     pytest.param(DEGRADATIONS + "- One.\n\n### Next\n- Two.\n", [(None, "One.")], id="stops-at-a-heading"),
+    pytest.param(DEGRADATIONS + "- [harmless] The order rode a prompt file.\n  - The builder read the file before starting.\n",
+                 [("harmless", "The order rode a prompt file. - The builder read the file before starting.")],
+                 id="a-nested-bullet-joins-its-labelled-degradation"),
+    pytest.param("<!-- superheroes:degradations -->\n\n- [harmless] One.\n- Two.\n", [("harmless", "One."), (None, "Two.")],
+                 id="a-flush-bullet-after-a-labelled-one-is-its-own-degradation"),
 ]
 
 
