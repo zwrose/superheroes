@@ -157,7 +157,8 @@ Reading and independence are computed by the record, never taken from the sessio
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed. A standing-ruling go-ahead counts only when the writer finds its Canon entry on record at write time; an owner's-words go-ahead needs no such check.
-- A finding whose ruling cites a decision that is not on record when the record is written is listed as left for the owner, so the record reads not reviewed until the owner decides.
+- A finding whose ruling cites a decision that is not on record when the record is written is listed as left for the owner, so the record reads not reviewed, or `awaits-owner`, until the owner decides.
+- A record whose only open lines are findings left for the owner reads `awaits-owner`, shown as "reviewed; N findings wait for your decision" with their ids. It reads so exactly when every line of `whatIsMissing` is such a finding, that is, when the same record without them would read `reviewed`; any other open line keeps `not-reviewed`. It never clears a gate: every reader treats it as `not-reviewed` until the owner rules, and once the findings are ruled (`ownerRulings`) the record reads `reviewed`. In code, `review_record.cleared(status)` is the one test, true only for `reviewed`.
 - A grounding-seat row carrying `notRunReason: "no-loop-phase"` is listed under `seatsNotRun` (`{name, reason, why}`, present only when non-empty), not under `missingReviews`. It does not park and does not make the record read not reviewed.
 - The record and the PR text never say a change has no bugs; they say what was checked and what
   is left.

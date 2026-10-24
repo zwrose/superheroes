@@ -252,7 +252,7 @@ final commit was reported by the session rather than read from the PR (`whatIsMi
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
 as a comment naming the head it reviewed, leaves the PR not ready, and parks, naming the review
 record as missing. The park is also posted on the issue with `terminal --kind park` (§ Terminal
-comments). A record that was written and reads `not-reviewed` for any other reason, such as
+comments). A record that was written and reads `not-reviewed` or `awaits-owner` for any other reason, such as
 an owner-authorized go-ahead covering a missing review, is a written record: handback follows
 `skills/review-code/reference/review-record.md`.
 
