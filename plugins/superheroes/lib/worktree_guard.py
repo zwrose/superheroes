@@ -861,6 +861,8 @@ def _shell_program(raw_tokens):
             i += 1
             continue
         if len(tok) > 1 and tok[0] in "-+":
+            if any(c in tok for c in "$`"):  # an expansion inside an option word could spell `-c`
+                return ("unreadable", None)
             saw_c = saw_c or "c" in tok
             i += 2 if ("o" in tok or "O" in tok) else 1
             continue

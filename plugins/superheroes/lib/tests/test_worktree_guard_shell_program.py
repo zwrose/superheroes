@@ -263,6 +263,7 @@ def test_substitution_or_positional_execution_in_a_program_is_unreadable(command
     "bash -c 'git reset $FLAGS'",
     "bash -c 'git $SUBCOMMAND --hard'",
     r"bash -c 'g\it reset --hard'",
+    "FLAGS=c bash \"-${FLAGS}\" 'git reset --hard'",
 ])
 def test_unreadable_inner_program_cannot_hide_discard(command, dirty_repo, monkeypatch):
     monkeypatch.setenv("FLAGS", "--hard")
