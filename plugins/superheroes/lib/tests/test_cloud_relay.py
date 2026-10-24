@@ -573,6 +573,34 @@ def test_an_altered_send_with_the_header_still_wins_at_once_over_a_header_droppe
     assert clock.t == 0
 
 
+@pytest.mark.parametrize("case", ["header-dropped", "unattributable"])
+def test_the_mismatch_sentences_name_only_the_relays_send_against_the_stored_text(world, case):
+    # axis: a mismatch sentence names only the relay's send against the stored text, never which step changed it — a sentence saying the relay changed or sent altered text makes it fail
+    # unattributable: the recorded shape of 5f1414592a29, header kept and the body changed, which the
+    # advisor's own send did before the relay received it.
+    msg = _composed(world)
+    mid = msg["msgId"]
+    sent = (_header_dropped(msg) if case == "header-dropped"
+            else msg["forward"].replace("narrow", "narrov"))
+    _write_record(world, _send_lines("toolu_1", SESSION, sent, STAMP))
+    out, _ = _check(world, mid, wait=4, interval=2)
+    assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False
+    if case == "header-dropped":
+        assert out["headerDropped"] is True
+        assert out["say"] == ("The relay's send of message %s is the stored text with its header "
+                              "line dropped; it was not delivered." % mid)
+    else:
+        assert "headerDropped" not in out
+        index = msg["forward"].index("narrow") + 5
+        assert out["firstDifference"]["index"] == index
+        assert out["say"] == ("The relay's send of message %s differs from the stored text (first "
+                              "difference at character %s); this check sees only that send, so it "
+                              "cannot tell which step changed the text; it was not delivered."
+                              % (mid, index))
+    for blame in ("The relay sent", "relay changed", "relay dropped", "from yours"):
+        assert blame not in out["say"]
+
+
 @pytest.mark.parametrize("success, result", [(False, True), (True, False), (True, True)],
                          ids=["failed", "no-result", "success"])
 def test_a_header_dropped_send_is_a_mismatch_whatever_its_result_says(world, success, result):
