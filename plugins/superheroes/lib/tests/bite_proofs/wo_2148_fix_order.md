@@ -371,6 +371,11 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 - **Axis:** a comments read that did not complete names every watched issue it may have left unread.
 - **Neutralization:** in `_record_unread`, `if unread_out is not None:` became `if False and unread_out is not None:`.
+- **WO-2148-2 update:** the axis now reads "a request that came back partial" (the `since` failure and
+  `state is None` calls are gone; see WO-2148-2 element 3). The neutralization is unchanged and still silences
+  the partial-read tests below; none of those tests changed. The captures below are WO-2148-1's and were not
+  re-run (WO-2148-2's budget covers its four new elements). `-k row9` now also selects the new no-request test,
+  which passes under this neutralization (it asserts the key is absent).
 - **Raw red** (`-k row9`):
 
 ```
@@ -529,4 +534,182 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_fix_order.py::test_row10_a_
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
 1 passed, 34 deselected in 0.64s
+```
+
+# Bite-proof record: WO-2148-2 (#2148) a closed re-watched lane's close, and `unreadIssues`
+
+Detector under proof: `plugins/superheroes/lib/tests/test_wave_watch_fix_order.py` (four tests added: the three
+`row2_*` tests with `closed`/`stored close`/`partial read` in their names, and `row9_a_tick_that_made_no_request...`).
+Guarded code: `plugins/superheroes/lib/wave_watch.py`. Base: WO-2148-1's head `8af8f8c8`. Declared guarded-element
+set: the four below. Every neutralization was a targeted Edit, undone by the inverse Edit before the next element;
+no `git checkout`, `restore`, `reset` or `stash`. Same command prefix as above, with the single test as the selector.
+Nothing in the captures was redacted (temp paths only); each is under 32 KiB. The production sites cite this record
+with `# axis:` comments. The red runs exit 1 by design (bite-proof reds, not failures).
+
+## WO-2148-2 element 1. Stored-close reuse on a tick with no complete read (`_evaluate_tick`, `wave_watch.py`)
+
+- **Axis:** a re-watched lane the last complete read showed closed stays closed on a later tick that has no complete read.
+- **Neutralization:** `stored = closed_state[0] if closed_state is not None else None` became `stored = None` (the stored map is ignored).
+- **Raw red** (`-k test_row2_a_closed_lane_stays_closed_on_a_tick_that_makes_no_comments_read`):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_row2_a_closed_lane_stays_closed_on_a_tick_that_makes_no_comments_read __
+
+repo = '/tmp/claude-0/pytest-of-root/pytest-24/test_row2_a_closed_lane_stays_0/repo'
+
+    def test_row2_a_closed_lane_stays_closed_on_a_tick_that_makes_no_comments_read(repo):
+        # The arm reads on its ticks at 0, 1 and 2 seconds; the tick at its 3-second deadline has no budget.
+        result = _arm(repo, _ProgressGh(_closed_by_a_handback(repo)))
+>       assert result["event"] == ww.EVENT_TIMER
+E       AssertionError: assert 'lane-stale' == 'timer'
+E         
+E         - timer
+E         + lane-stale
+
+/home/user/wt-2148/plugins/superheroes/lib/tests/test_wave_watch_fix_order.py:140: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_fix_order.py::test_row2_a_closed_lane_stays_closed_on_a_tick_that_makes_no_comments_read
+1 failed, 38 deselected in 0.89s
+```
+
+- **Restore:** inverse Edit. **Restore receipt:** `grep -n` of the restored line, `2934:            stored = closed_state[0] if closed_state is not None else None`
+- **Raw green** (same selector; the `grep` line above is the same shell call's first output):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 38 deselected in 7.15s
+```
+
+## WO-2148-2 element 2. Stored close keyed by `reopenedAt` (`_evaluate_tick`, `wave_watch.py`)
+
+- **Axis:** a newer opener (a different `reopenedAt`) discards a lane's stored close.
+- **Neutralization:** `if lid in live_lanes and live_lanes[lid].get("reopenedAt") == at` became `if lid in live_lanes` (stored closes apply whatever the `reopenedAt`).
+- **Raw red** (`-k test_row2_a_stored_close_does_not_outlive_a_newer_fix_order`):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_row2_a_stored_close_does_not_outlive_a_newer_fix_order __________
+
+repo = '/tmp/claude-0/pytest-of-root/pytest-26/test_row2_a_stored_close_does_0/repo'
+clock = <test_wave_watch_cloud._Clock object at 0x7fc89f5b20f0>
+
+    def test_row2_a_stored_close_does_not_outlive_a_newer_fix_order(repo, clock):
+        _handed_back(repo, start_age=_LONG_AGO)
+        _amend_at(repo, "cloud-a", "not-ready", 1000)
+        assert _note_answered(repo, 5)["ok"] is True
+        gh = _ProgressGh([_comment(5, 101, _ending("handback"), age=500),
+                          _progress(9, 101, updated_age=-3000, created_age=3000)])
+    
+        def sleep(duration):
+            clock.sleep(duration)
+            if clock.now >= 3:  # a second fix order lands before the deadline tick, which makes no read
+                _fix_order(repo)
+    
+        result = _arm(repo, gh, sleep=sleep)
+>       assert result["event"] == ww.EVENT_LANE_STALE
+E       AssertionError: assert 'timer' == 'lane-stale'
+E         
+E         - lane-stale
+E         + timer
+
+/home/user/wt-2148/plugins/superheroes/lib/tests/test_wave_watch_fix_order.py:157: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_fix_order.py::test_row2_a_stored_close_does_not_outlive_a_newer_fix_order
+1 failed, 38 deselected in 1.26s
+```
+
+- **Restore:** inverse Edit. **Restore receipt:** `grep -n` of the restored line, `2938:                if lid in live_lanes and live_lanes[lid].get("reopenedAt") == at`
+- **Raw green** (same selector):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 38 deselected in 0.76s
+```
+
+## WO-2148-2 element 3. `unreadIssues` only on a partial read (`_evaluate_cloud_comments`, `wave_watch.py`)
+
+- **Axis:** `unreadIssues` names watched lanes' issues only when a comments request was made and came back partial; a tick that made no request adds nothing (its `builder-note-unavailable` disclosure is unchanged).
+- **Neutralization:** `_record_unread(unread_out, watched)` restored in the `if state is None:` branch, before its `return [], []`.
+- **Raw red** (`-k test_row9_a_tick_that_made_no_request_discloses_it_and_names_no_unread_issue`):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_row9_a_tick_that_made_no_request_discloses_it_and_names_no_unread_issue _
+
+repo = '/tmp/claude-0/pytest-of-root/pytest-28/test_row9_a_tick_that_made_no_0/repo'
+
+    def test_row9_a_tick_that_made_no_request_discloses_it_and_names_no_unread_issue(repo):
+        _reopened(repo)
+        result = _arm(repo, _NoteGh([]))  # the deadline tick has no budget to read
+        assert result["event"] == ww.EVENT_TIMER
+        assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
+>       assert "unreadIssues" not in result
+E       AssertionError: assert 'unreadIssues' not in {'ok': True, 'event': 'timer', 'batchId': 'batch-cloud', 'degraded': ['builder-note-unavailable'], ...}
+
+/home/user/wt-2148/plugins/superheroes/lib/tests/test_wave_watch_fix_order.py:366: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_fix_order.py::test_row9_a_tick_that_made_no_request_discloses_it_and_names_no_unread_issue
+1 failed, 38 deselected in 0.76s
+```
+
+- **Restore:** inverse Edit (the call removed again). **Restore receipt:** `sed -n 1986,2004p` of the restored region, showing `if state is None:` / the disclosure comment / `degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)` / `return [], []` with no `_record_unread` between them, and the call still under `if not state:`.
+- **Raw green** (same selector; the `sed` output above is the same shell call's first output):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 38 deselected in 0.84s
+```
+
+## WO-2148-2 element 4. The `closed_out` slot is written only on a complete read (`_evaluate_cloud_comments`, `wave_watch.py`)
+
+- **Axis:** a partial read leaves the closed slot as the caller set it, so it is never taken for a complete read with no closes.
+- **Neutralization:** `if state and isinstance(closed_out, list) and closed_out:` became `if isinstance(closed_out, list) and closed_out:`.
+- **Raw red** (`-k test_row2_a_partial_read_keeps_the_close_a_complete_read_showed`):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_row2_a_partial_read_keeps_the_close_a_complete_read_showed ________
+
+repo = '/tmp/claude-0/pytest-of-root/pytest-30/test_row2_a_partial_read_keeps0/repo'
+
+    def test_row2_a_partial_read_keeps_the_close_a_complete_read_showed(repo):
+        comments = _closed_by_a_handback(repo)
+        gh = _ProgressGh(comments, script=[
+            lambda argv: _ok(argv, comments),
+            lambda argv: _ok(argv, comments, link=True),
+            lambda argv: _raw(argv, "HTTP/2.0 502 Bad Gateway\r\n\r\n"),
+        ])
+        # Ticks at 0 (complete), 1 (partial) and 2 seconds (the deadline: no read).
+        result = ww.watch_arm(repo, _BATCH, max_seconds=2, interval_seconds=1, gh_run=gh)
+>       assert result["event"] == ww.EVENT_TIMER
+E       AssertionError: assert 'lane-stale' == 'timer'
+E         
+E         - timer
+E         + lane-stale
+
+/home/user/wt-2148/plugins/superheroes/lib/tests/test_wave_watch_fix_order.py:170: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_fix_order.py::test_row2_a_partial_read_keeps_the_close_a_complete_read_showed
+1 failed, 38 deselected in 0.72s
+```
+
+- **Restore:** inverse Edit. **Restore receipt:** `grep -n` of the restored line, `2007:    if state and isinstance(closed_out, list) and closed_out:`
+- **Raw green** (same selector):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 38 deselected in 0.76s
 ```

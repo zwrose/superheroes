@@ -481,7 +481,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; when the read was partial or skipped, the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only then) names the issues it left unread, and across an arm or a loop a lane named once stays named
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; when the read was partial, the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only then) names the issues it left unread, and across an arm or a loop a lane named once stays named
 - `fix-order-unavailable` — the relay's state file could not be read, so a fix order relayed to a terminal cloud lane may go unseen; only `vet not-ready` amendments re-open lanes meanwhile
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane

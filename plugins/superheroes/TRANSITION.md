@@ -108,7 +108,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - The window is the fix order to the lane's first handback, stop or park (a superseded park does not count). Endings and notes from before the fix order are not re-reported; the closing ending fires `lane-terminal` as a live lane's does; nothing about the lane surfaces after it. A refused, never-started or local lane is never re-opened, and a lane passed `--ignore-launch` is not re-added.
 - A reopened lane's `cloudLanes` entry carries `reopenedAt` and `reopenedBy` (`vet-not-ready` or `fix-order-relay`). Its stale clock starts at the fix order.
 - A new degradation token, `fix-order-unavailable`, discloses an unreadable relay state; only `vet not-ready` amendments re-open lanes meanwhile.
-- A comments read that was partial or skipped adds a result key, `unreadIssues` (`[{"launchId", "issue"}]`, absent when nothing went unread), on `run`, `watch_arm` and `loop` results.
+- A comments read that was partial adds a result key, `unreadIssues` (`[{"launchId", "issue"}]`, absent when nothing went unread), on `run`, `watch_arm` and `loop` results.
 - A not-ready lane whose fix goes to a fresh launch is now passed `--ignore-launch` (or its vet recorded `ready` or `parked-blocker` when done), or the watch keeps waiting on the old lane.
 - No ledger record kind changes; `cloud-relay.json` gains one optional key, `fixOrder`.
 

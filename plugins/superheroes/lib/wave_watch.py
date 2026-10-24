@@ -102,7 +102,7 @@ Contract:
   started cloud lane's issue, created at or after that lane's start, as builder-note. It
   keeps surfacing until `note-answered` records its comment id; a read that could not be
   made records builder-note-unavailable and the lane is neither noted nor clean. When the comments
-  read was partial or skipped, every watched lane's issue may hold an unread comment, so the result
+  read was partial, every watched lane's issue may hold an unread comment, so the result
   names them under `unreadIssues` ([{launchId, issue}], present only when non-empty; across an arm
   or a loop a lane named once stays named).
 - Fix orders: a terminal, started cloud lane is watched again, exactly like a live cloud lane, from
@@ -1967,7 +1967,7 @@ def _evaluate_cloud_comments(
     caller set it. `closed_out` is a one-slot list set to the set of reopened lanes the complete read
     shows closed (`_cloud_closes`); a read that made no request or was partial knows no close, so the slot
     is left as the caller set it. `unread_out` is a dict that gains {launch id: issue} for each watched
-    lane when the read did not complete: any watched issue may hold a comment on an unread page.
+    lane when a request was made and came back partial: any watched issue may hold a comment on an unread page.
     """
     watched = {
         lid: info for lid, info in live_lanes.items()
@@ -1985,7 +1985,6 @@ def _evaluate_cloud_comments(
         ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
     except (ValueError, OverflowError, OSError):
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        _record_unread(unread_out, watched)
         return [], []
     state, comments = _read_issue_comments(
         repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state, slug_cell,
@@ -1993,18 +1992,19 @@ def _evaluate_cloud_comments(
     if state is None:
         # A watched channel that was never sampled for lack of budget is disclosed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        _record_unread(unread_out, watched)
         return [], []
     if not state:
         # Disclose the incomplete read, but still evaluate whatever was observed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+        # axis: only a request that came back partial names the issues it left unread, never a tick that made none — see bite-proof record wo_2148_fix_order.md
         _record_unread(unread_out, watched)
     if isinstance(progress_out, list) and progress_out:
         progress_out[0] = _cloud_progress(comments, watched)
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     closes = _cloud_closes(comments, watched) if state else {}
-    if isinstance(closed_out, list) and closed_out:
+    # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
+    if state and isinstance(closed_out, list) and closed_out:
         closed_out[0] = set(closes)
     notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
@@ -2790,6 +2790,7 @@ def _evaluate_tick(
     cloud_payload_out=None,
     note_state=None,
     progress_state=None,
+    closed_state=None,
     ignore_notes=frozenset(),
     unread_out=None,
 ):
@@ -2895,7 +2896,7 @@ def _evaluate_tick(
                 cloud_deadline, activity_deadline + _MIN_PR_POLL_SECONDS,
             )
         progress_out = [None]
-        closed_out = [set()]
+        closed_out = [None]
         builder_notes, cloud_terminals = _evaluate_cloud_comments(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
@@ -2923,9 +2924,22 @@ def _evaluate_tick(
         stale_cloud_launches = _apply_cloud_progress(
             stale_cloud_launches, live_lanes, progress, time.time(),
         )
+        # A complete read replaces the stored closes ({launch id: the reopenedAt it was closed at}); a tick
+        # without one keeps those whose lane has not been sent a newer fix order since.
+        if closed_out[0] is not None:
+            closed = closed_out[0]
+            if closed_state is not None:
+                closed_state[0] = {lid: live_lanes[lid].get("reopenedAt") for lid in closed}
+        else:
+            stored = closed_state[0] if closed_state is not None else None
+            # axis: a stored close is kept on a tick with no complete read, only for the reopenedAt it was read at — see bite-proof record wo_2148_fix_order.md
+            closed = {
+                lid for lid, at in (stored if isinstance(stored, dict) else {}).items()
+                if lid in live_lanes and live_lanes[lid].get("reopenedAt") == at
+            }
         # A reopened lane its comments show closed is no longer watched: never stale, whichever rule said so.
         stale_cloud_launches = [
-            entry for entry in stale_cloud_launches if entry["launchId"] not in closed_out[0]
+            entry for entry in stale_cloud_launches if entry["launchId"] not in closed
         ]
         stale_live_launches = stale_live_launches + stale_cloud_launches
         # bite-axis: CLOUD ENDING — a cloud lane's ending comment joins the lane-terminal
@@ -3085,6 +3099,7 @@ def watch_arm(
     cloud_state=None,
     note_state=None,
     progress_state=None,
+    closed_state=None,
 ):
     """Windowed watch — one arm until the first event or arm deadline."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -3133,6 +3148,8 @@ def watch_arm(
             note_state = [None]
         if progress_state is None:
             progress_state = [None]
+        if closed_state is None:
+            closed_state = [None]
 
         start = monotonic()
         deadline = start + max_seconds
@@ -3162,6 +3179,7 @@ def watch_arm(
                 cloud_state=cloud_state,
                 note_state=note_state,
                 progress_state=progress_state,
+                closed_state=closed_state,
                 ignore_notes=ignore_notes,
                 unread_out=unread,
             )
@@ -3243,6 +3261,7 @@ def run(
         pr_sampled = [False]
         cloud_state = [None]
         progress_state = [None]
+        closed_state = [None]
         cloud_payload = {}
 
         start = monotonic()
@@ -3272,6 +3291,7 @@ def run(
             cloud_payload_out=cloud_payload,
             note_state=[None],
             progress_state=progress_state,
+            closed_state=closed_state,
             ignore_notes=ignore_notes,
             unread_out=unread,
         )
@@ -3379,6 +3399,7 @@ def loop(
         cloud_state = [None]
         note_state = [None]
         progress_state = [None]
+        closed_state = [None]
         last_cloud_lanes = [None]
         loop_unread = {}
         total_start = monotonic()
@@ -3441,6 +3462,7 @@ def loop(
                 cloud_state=cloud_state,
                 note_state=note_state,
                 progress_state=progress_state,
+                closed_state=closed_state,
             )
 
             result_degraded = set(result.get("degraded", []))

@@ -126,6 +126,51 @@ def test_row2_after_the_closing_handback_a_later_note_is_not_surfaced_and_the_la
     assert ww.run(repo, _BATCH, gh_run=gh)["event"] == ww.EVENT_TIMER
 
 
+def _closed_by_a_handback(repo_root):
+    """A reopened lane whose closing handback (comment 5) is answered, and the comments that read it:
+    the handback, and a future-dated progress comment that would read the lane stale at once if watched."""
+    _reopened(repo_root, start_age=_LONG_AGO)
+    assert _note_answered(repo_root, 5)["ok"] is True
+    return [_later(5, _ending("handback"), secs=10), _progress(9, 101, updated_age=-3000, created_age=3000)]
+
+
+def test_row2_a_closed_lane_stays_closed_on_a_tick_that_makes_no_comments_read(repo):
+    # The arm reads on its ticks at 0, 1 and 2 seconds; the tick at its 3-second deadline has no budget.
+    result = _arm(repo, _ProgressGh(_closed_by_a_handback(repo)))
+    assert result["event"] == ww.EVENT_TIMER
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]  # the deadline tick made no read
+
+
+def test_row2_a_stored_close_does_not_outlive_a_newer_fix_order(repo, clock):
+    _handed_back(repo, start_age=_LONG_AGO)
+    _amend_at(repo, "cloud-a", "not-ready", 1000)
+    assert _note_answered(repo, 5)["ok"] is True
+    gh = _ProgressGh([_comment(5, 101, _ending("handback"), age=500),
+                      _progress(9, 101, updated_age=-3000, created_age=3000)])
+
+    def sleep(duration):
+        clock.sleep(duration)
+        if clock.now >= 3:  # a second fix order lands before the deadline tick, which makes no read
+            _fix_order(repo)
+
+    result = _arm(repo, gh, sleep=sleep)
+    assert result["event"] == ww.EVENT_LANE_STALE
+    assert [launch["launchId"] for launch in result["launches"]] == ["cloud-a"]
+
+
+def test_row2_a_partial_read_keeps_the_close_a_complete_read_showed(repo):
+    comments = _closed_by_a_handback(repo)
+    gh = _ProgressGh(comments, script=[
+        lambda argv: _ok(argv, comments),
+        lambda argv: _ok(argv, comments, link=True),
+        lambda argv: _raw(argv, "HTTP/2.0 502 Bad Gateway\r\n\r\n"),
+    ])
+    # Ticks at 0 (complete), 1 (partial) and 2 seconds (the deadline: no read).
+    result = ww.watch_arm(repo, _BATCH, max_seconds=2, interval_seconds=1, gh_run=gh)
+    assert result["event"] == ww.EVENT_TIMER
+    assert result["unreadIssues"] == [{"launchId": "cloud-a", "issue": 101}]
+
+
 def test_row2_a_later_reoutcome_closes_the_fix_order_and_the_lane_is_not_watched(repo):
     _reopened(repo)
     assert ll.amend(repo, "cloud-a", "reoutcome", "handback", "re-handed back")["ok"] is True
@@ -311,6 +356,14 @@ def test_row9_a_complete_read_carries_no_unread_issues(repo):
     result = _arm(repo, _NoteGh([_later(7)]))
     assert result["event"] == ww.EVENT_BUILDER_NOTE and "unreadIssues" not in result
     assert "unreadIssues" not in ww.run(repo, _BATCH, gh_run=_NoteGh([]))
+
+
+def test_row9_a_tick_that_made_no_request_discloses_it_and_names_no_unread_issue(repo):
+    _reopened(repo)
+    result = _arm(repo, _NoteGh([]))  # the deadline tick has no budget to read
+    assert result["event"] == ww.EVENT_TIMER
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
+    assert "unreadIssues" not in result
 
 
 def test_row9_a_lane_named_unread_in_an_arm_stays_named_in_the_loop_ceiling_timer(repo):
