@@ -198,6 +198,73 @@ def test_verify_binary_absent_drifts(tmp_path, capsys):
     assert any("verify" in d.lower() for d in res["drift"])
 
 
+# The calibrated verify command of this repo (#2088) — keyword-led, so its first word is `if`.
+_KEYWORD_LED = (
+    "if [ -x scripts/pinned-python ]; then scripts/pinned-python "
+    ".github/scripts/validate_marketplace.py --base {baseRef}; "
+    "else python3 .github/scripts/validate_marketplace.py; fi"
+)
+
+
+def _keyword_led_root(tmp_path, *, pinned_present):
+    root, env = make_root(tmp_path, src_dirs=["src", "scripts", ".github/scripts"],
+                          deps=["a"])
+    (open(os.path.join(root, ".github/scripts/validate_marketplace.py"), "w")
+     .write("print()\n"))
+    if pinned_present:
+        pinned = os.path.join(root, "scripts", "pinned-python")
+        with open(pinned, "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(pinned, 0o755)
+    return root, env
+
+
+def test_keyword_led_verify_command_resolves(tmp_path, capsys):
+    """#2088: a verify command that opens with `if [ … ]` resolves through its first
+    program word (here a repo-relative script), not the keyword `if`."""
+    root, env = _keyword_led_root(tmp_path, pinned_present=True)
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=_KEYWORD_LED)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["drift"] == []
+    assert res["unchecked"] == []
+    assert res["message"] is None
+
+
+def test_keyword_led_verify_command_with_absent_program_drifts(tmp_path, capsys):
+    """#2088: skipping keywords never hides a program that is really gone."""
+    root, env = _keyword_led_root(tmp_path, pinned_present=False)
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=_KEYWORD_LED)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert "verify command no longer resolves: scripts/pinned-python" in res["drift"]
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify="if [ -d src ]; then cd src && gonebin --run; fi")
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert "verify command no longer resolves: gonebin" in res["drift"]
+
+
+@pytest.mark.parametrize("verify", [
+    "if true; then :; fi",
+    "case x in a) verifybin;; esac",
+    '"$PY" -m pytest',
+    "verifybin 'unterminated",
+])
+def test_verify_command_without_a_readable_program_is_unchecked_not_stale(
+        tmp_path, capsys, verify):
+    """#2088: no readable program word → reported as unchecked, never as drift."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert not any("no longer resolves" in d for d in res["drift"])
+    assert res["signal_hash"] == ""
+    assert len(res["unchecked"]) == 1
+    assert res["unchecked"][0].startswith("verify command could not be checked: ")
+    assert "could not be checked" in res["message"]
+    assert "consider re-running review-init" not in res["message"]
+
+
 def test_verify_path_missing_drifts(tmp_path, capsys):
     # The verify command names a test path that does not exist under root — the
     # staleness class from issue #16 (a suite moved/removed, command not updated).

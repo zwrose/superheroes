@@ -46,6 +46,13 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** A cloud advisor can now launch a build that depends on another pull request, and the wave watch can resolve its repository, where the cloud proxy refuses GraphQL. See [Cloud: the dependency gate and the watch's repository read work through REST](#cloud-the-dependency-gate-and-the-watchs-repository-read-work-through-rest)
 - **After switching.** **Nothing is owed.** Owners see fewer already-fixed leftover cards: a finding an audit raised, which the review then fixed and audited under its own key, is recorded fixed and no longer left for the owner. See [Review: a finding an audit raised is audited under its own key](#review-a-finding-an-audit-raised-is-audited-under-its-own-key).
 - **After switching.** **Nothing is owed.** An advisor with two or more PRs waiting can draft their vets in parallel with the new `vet-drafter` agent, which runs on the advisor's own model; the advisor still checks each draft, posts the receipt and writes the slot. See [Vetting: the vet-drafter drafts vets in parallel](#vetting-the-vet-drafter-drafts-vets-in-parallel).
+- **After switching.** **Nothing is owed.** A review's staleness check no longer reports a verify command that opens with a shell keyword (`if [ -x … ]; then …`) as "no longer resolves: if"; it checks the first word that names a program, and reports a command it cannot read as not checked rather than stale. See [Review: the verify-command check skips shell keywords](#review-the-verify-command-check-skips-shell-keywords).
+
+### Review: the verify-command check skips shell keywords
+
+- `lib/repo_doctor.py` check 5 resolves the verify command's first word in command position that names a program. It skips shell keywords (`if`, `then`, `!`, `{`, …), builtins with their arguments (`[`, `test`, `cd`, …) and `VAR=value` prefixes. A program word with a `/` resolves as an executable file under the project root, not the caller's directory.
+- When no word can be read as a program (a `case` construct, a program the shell expands such as `$PY`, an unclosed quote), the result's new `unchecked` list says so and the message carries it as a note. It is never drift, so it adds nothing to `signal_hash` and asks for no re-run of review-init.
+- A command whose real program is absent still reports "verify command no longer resolves: <program>".
 
 ### Review: a finding an audit raised is audited under its own key
 

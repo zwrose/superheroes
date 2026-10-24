@@ -13,7 +13,7 @@ CLI:
     python3 repo_doctor.py <profile-path> <plugin-version> <rubric-version> [--root <dir>]
 
 Output (stdout, JSON):
-    { "ok": true, "readable": true, "drift": [...],
+    { "ok": true, "readable": true, "drift": [...], "unchecked": [...],
       "signal_hash": "<hex or ''>", "nudge_acked": <bool>,
       "message": "<one-line nudge or null>" }
 
@@ -23,7 +23,10 @@ Material drift is ANY of:
   - >= DEP_THRESHOLD added top-level deps (set-diff of live vs profile; only
     ADDED deps count);
   - a new top-level source dir not reflected in the profile's recorded src-dirs;
-  - the verify command no longer resolves (its binary is absent on PATH);
+  - the verify command no longer resolves (its program is absent on PATH, or for a
+    word with a `/`, under root). The program is the first word in command position
+    that is not a shell keyword, builtin or `VAR=value`; when no word can be read as
+    one, the check lands in "unchecked" — reported in the message, never as drift;
   - the verify command names a concrete path (a test dir / script) that no
     longer exists under root — a suite that moved or was removed without the
     command being updated;
@@ -33,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -170,12 +174,56 @@ def _detect_live_src_dirs(root):
     return {d for d in SRC_DIR_CANDIDATES if os.path.isdir(os.path.join(root, d))}
 
 
-def _verify_binary(verify_command):
-    """First token of the verify command — the binary that must resolve."""
+# Words that open, join or close a shell construct: the next word is still in command position.
+_SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until",
+                   "!", "{", "}", "time"}
+# Builtins (and `for`/`select` headers): their own words are arguments, so the whole simple
+# command up to the next control operator is skipped.
+_SHELL_BUILTINS = {"[", "[[", "test", "cd", ":", "true", "false", "export", "set", "unset",
+                   "source", ".", "echo", "printf", "eval", "exec", "command", "builtin",
+                   "local", "read", "shift", "exit", "return", "umask", "trap", "wait",
+                   "pushd", "popd", "alias", "type", "hash", "for", "select"}
+_SHELL_UNPARSED = {"case", "function", "coproc"}
+_CONTROL_OPS = {";", "&&", "||", "|", "&", "(", ")", ";;", "|&", ";&"}
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _verify_program(verify_command):
+    """(program, unchecked) for the verify command (#2088). `program` is the first word in
+    command position that names a program, skipping shell keywords, builtins with their
+    arguments, and `VAR=value` prefixes. `unchecked` is a reason when no such word can be read
+    (shell syntax this check does not parse, or a program only the shell can expand); the
+    caller reports it as unchecked, never as a command that no longer resolves."""
     if not verify_command:
-        return None
-    parts = verify_command.split()
-    return parts[0] if parts else None
+        return None, None
+    try:
+        lex = shlex.shlex(verify_command, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError as exc:
+        return None, "unparseable (%s)" % exc
+    skipping = False
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        i += 1
+        if tok in _CONTROL_OPS:
+            skipping = False
+        elif skipping:
+            continue
+        elif tok in _SHELL_UNPARSED:
+            return None, "starts a `%s` construct" % tok
+        elif tok in _SHELL_KEYWORDS or _ASSIGNMENT.match(tok):
+            continue
+        elif tok in _SHELL_BUILTINS:
+            skipping = True
+        elif tok[0] in "<>":
+            i += 1  # a redirection and its target
+        elif any(c in _UNRESOLVABLE for c in tok):
+            return None, "program %r is expanded by the shell" % tok
+        else:
+            return tok, None
+    return None, "no word names a program"
 
 
 # Shell metacharacters that make a token impossible to resolve statically
@@ -214,13 +262,16 @@ def _missing_verify_paths(verify_command, root):
     ]
 
 
-def _binary_resolves(binary, env):
-    """True if the binary is on PATH. Package-manager wrappers (npm/pnpm/yarn/
-    make/python3) are treated as resolvable iff the wrapper itself is on PATH —
-    we cannot cheaply resolve their subcommands here."""
+def _binary_resolves(binary, root, env):
+    """True if the binary is on PATH, or, for a word with a `/`, is an executable file at that
+    path under root. Package-manager wrappers (npm/pnpm/yarn/make/python3) are treated as
+    resolvable iff the wrapper itself is on PATH — we cannot cheaply resolve their
+    subcommands here."""
     if not binary:
         # No verify command recorded → nothing to resolve, not a degradation.
         return True
+    if "/" in binary:
+        return shutil.which(os.path.join(root, binary)) is not None
     path = env.get("PATH")
     return shutil.which(binary, path=path) is not None
 
@@ -240,7 +291,9 @@ def _branch_resolves(root, branch, env):
         return True
 
 
-def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env):
+def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env, unchecked=None):
+    """Material drift, as a list. A check that could not run appends its reason to
+    `unchecked` (when given) instead of reporting drift."""
     drift = []
 
     # 1. rubric-version behind the engine.
@@ -280,8 +333,11 @@ def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env):
             drift.append("new top-level source dir: %s" % ", ".join(new_dirs))
 
     # 5. verify command no longer resolves.
-    binary = _verify_binary(prof["verify-command"])
-    if not _binary_resolves(binary, env):
+    binary, why = _verify_program(prof["verify-command"])
+    if why:
+        if unchecked is not None:
+            unchecked.append("verify command could not be checked: %s" % why)
+    elif not _binary_resolves(binary, root, env):
         drift.append("verify command no longer resolves: %s" % binary)
 
     # 6. verify command names a concrete path that no longer exists.
@@ -307,11 +363,23 @@ def _hash_drift(drift):
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()
 
 
+def _message(drift, unchecked):
+    """The one-line nudge: drift first, then any check that could not run."""
+    parts = []
+    if drift:
+        parts.append("review-crew profile drift: " + "; ".join(drift)
+                     + " — consider re-running review-init")
+    if unchecked:
+        parts.append("review-crew profile note: " + "; ".join(unchecked))
+    return " · ".join(parts) or None
+
+
 def _soft_fail():
     return {
         "ok": False,
         "readable": False,
         "drift": [],
+        "unchecked": [],
         "signal_hash": "",
         "nudge_acked": False,
         "message": "profile unreadable — re-run superheroes:configure",
@@ -366,20 +434,18 @@ def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
         "verify-command": None,
     }
     prof["verify-command"], refusal = _core_verify(root)
-    drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env)
+    unchecked = []
+    drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env, unchecked)
     signal_hash = _hash_drift(drift)
     nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
-    message = None
-    if drift:
-        message = "review-crew profile drift: " + "; ".join(drift) \
-            + " — consider re-running review-init"
     return {
         "ok": refusal is None,
         "readable": True,
         "drift": drift,
+        "unchecked": unchecked,
         "signal_hash": signal_hash,
         "nudge_acked": nudge_acked,
-        "message": refusal or message,
+        "message": refusal or _message(drift, unchecked),
     }
 
 
@@ -414,20 +480,18 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
         core_verify, refusal = _core_verify(root)
         if core_verify is not None:
             prof["verify-command"] = core_verify
-        drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env)
+        unchecked = []
+        drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env, unchecked)
         signal_hash = _hash_drift(drift)
         nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
-        message = None
-        if drift:
-            message = "review-crew profile drift: " + "; ".join(drift) \
-                + " — consider re-running review-init"
         return {
             "ok": refusal is None,
             "readable": True,
             "drift": drift,
+            "unchecked": unchecked,
             "signal_hash": signal_hash,
             "nudge_acked": nudge_acked,
-            "message": refusal or message,
+            "message": refusal or _message(drift, unchecked),
         }
     except Exception:
         # Internal failure mid-check → degrade to a readable-but-soft result so
@@ -436,6 +500,7 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
             "ok": False,
             "readable": True,
             "drift": [],
+            "unchecked": [],
             "signal_hash": "",
             "nudge_acked": False,
             "message": "profile self-check failed — proceeding without staleness data",
