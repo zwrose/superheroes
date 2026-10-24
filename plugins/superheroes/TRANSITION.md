@@ -12,6 +12,18 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** A harmless build deviation stays in the PR body's build record and no longer gets its own merge-sheet card; a costly one keeps its card until its fix lands, and doubt sorts costly. See [Build deviations: only costly ones are accepted on the merge sheet](#build-deviations-only-costly-ones-are-accepted-on-the-merge-sheet).
+
+### Build deviations: only costly ones are accepted on the merge sheet
+
+A deviation is costly when a promised check did not run, or work bypassed its owner engine; otherwise it is harmless. The prompt-file pointer, the cloud fixer route, an unreadable host model, a classifier stop, the grounding seat not running and cloud platform limits sort harmless as named, and doubt sorts costly. Every deviation, either class, keeps a bullet under `### Disclosed degradations` in the build record, opening with `[costly]` or `[harmless]`; a bullet with no label reads costly. Only a costly one gets a consequence line under `## What we're accepting`. The merge sheet's `lib/pr_sheet.py` reads acceptances only from that section, above the `<!-- superheroes:build-record -->` marker line and never at or below it, so a harmless deviation listed only in the build record needs no accounting entry and no card. The omission floor's third row, in CONVENTIONS `§10.7` and its three copy-holders, now reads "every **costly disclosed degradation**".
+
 ## 0.46.0
 
 ### Before you upgrade

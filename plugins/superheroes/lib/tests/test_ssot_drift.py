@@ -1060,19 +1060,25 @@ _SECTION_10_7_MISSING_MARKER_SENTENCE = (
 _OMISSION_FLOOR_ENUMERATION_PINS = {
     "rubric/review-discipline.md (Ship-phase honesty)": (
         "(1) every **deferred** DoD row; (2) every **blocking or important** review finding that was\n"
-        "  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**."
+        "  **not fixed**, whatever its disposition is called; (3) every **costly disclosed degradation** "
+        "(sorted in skills/workhorse/reference/handback.md § Disclosed degradations)."
     ),
     "skills/workhorse/SKILL.md §11": (
         "(1) every\n"
         "  **deferred** DoD row; (2) every **blocking or important** review finding that was **not fixed**,\n"
-        "  whatever its disposition is called; (3) every **disclosed degradation**."
+        "  whatever its disposition is called; (3) every **costly disclosed degradation** "
+        "(sorted in skills/workhorse/reference/handback.md § Disclosed degradations)."
     ),
     "skills/review-code/SKILL.md step 8": (
         "enumerate (1) each deferred DoD row, (2) each blocking or important dispositions-table "
-        "finding not fixed (by severity, not disposition label), and (3) each disclosed degradation "
+        "finding not fixed (by severity, not disposition label), and (3) each costly disclosed degradation "
         "under `<!-- superheroes:degradations -->` (bullets, or **None** when empty)"
     ),
 }
+
+# Home pin: §10.7's row 3 names the costly class. The copy check cannot see a home-only revert, because
+# "costly disclosed degradation" contains "disclosed degradation".
+_SECTION_10_7_COSTLY_ROW = "3. every **costly disclosed degradation**"
 
 
 def _omission_floor_expectations_from_home(home):
@@ -1275,6 +1281,10 @@ def _assert_omission_floor_matches_home(copy_text, label, home):
 def test_omission_floor_matches_conventions_10_7():
     """§11: the omission floor and marker semantics in every copy-holder match CONVENTIONS §10.7."""
     home = _conventions_section_10_7()
+    # bite-axis: the home's omission-floor row 3 names the costly class (#2127).
+    assert _anchor_whitespace_normalize(_SECTION_10_7_COSTLY_ROW) in _anchor_whitespace_normalize(home), (
+        "CONVENTIONS §10.7 omission floor row 3 no longer reads %r" % _SECTION_10_7_COSTLY_ROW
+    )
 
     copies = (
         ("rubric/review-discipline.md (Ship-phase honesty)", _review_discipline_ship_phase_honesty()),
