@@ -603,8 +603,8 @@ synthesis (or a gap sweep that adds nothing), or, when that fold routes a blocke
 judgment gate, the `advance` that folds the gate: record rulings before it. With no gate between, a
 finding that fold first raises is not in state until the call has already emitted the order, so a
 ruling on it reaches only the next order; while the gate is pending it can be ruled on. On the hand
-path the `submit` that folds the synthesis emits nothing; the next `next` call emits the fixer
-order, so record rulings between the two. A ruling recorded after the
+path a `submit` emits nothing: the fixer order comes from the `next` after the `submit` that folds
+the last synthesis, or the gate when one opens, so record rulings between the two. A ruling recorded after the
 order is out reaches only the next order, so the fixer builds the old direction once and the next
 round reworks it. The late-ruling behaviour below is the backstop, not the path.
 

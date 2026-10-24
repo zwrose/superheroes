@@ -15,6 +15,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import break_it  # noqa: E402
+import proc_namespace  # noqa: E402
 
 PY = shlex.quote(sys.executable)
 # The fixture repo's commits pass an inline identity (a CI runner has no configured one); the throwaway fixture repo also signs nothing.
@@ -267,10 +268,15 @@ def _env_tags_readable():
 
 @pytest.fixture
 def env_tags_readable():
-    # A skip here on Linux outside the sandbox is still turned into a failure by the proc_containment outcome hook.
-    if not _env_tags_readable():
-        pytest.skip("this host cannot read process environments (break_it._tagged_pids did not see a "
-                    "tagged child), so the containment nets cannot be observed here")
+    # Skips only inside the write sandbox: a blind net anywhere else (macOS included) is a regression and fails.
+    if _env_tags_readable():
+        return
+    if proc_namespace.in_write_sandbox():
+        pytest.skip("claude write sandbox: this host cannot read process environments (break_it._tagged_pids "
+                    "did not see a tagged child), so the containment nets cannot be observed here")
+    pytest.fail("break_it._tagged_pids did not see a tagged child outside the claude write sandbox (%s is not "
+                "1), so the environment-tag net is broken here" % proc_namespace.SANDBOX_MARKER_ENV,
+                pytrace=False)
 
 
 # T9
