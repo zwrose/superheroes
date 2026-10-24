@@ -780,7 +780,10 @@ def _shell_program(raw_tokens):
             args = args[1:]
         if not args or not all(re.fullmatch(_WORD, arg) for arg in args):
             return ("unreadable", None)
-        return ("program", " ".join(_plain_word(arg) for arg in args))
+        joined = " ".join(_plain_word(arg) for arg in args)
+        if "`" in joined or "$(" in joined:
+            return ("unreadable", None)
+        return ("program", joined)
     if os.path.basename(_plain_word(raw_tokens[0])) not in ("bash", "sh", "zsh"):
         return None
     saw_c = False
@@ -812,6 +815,9 @@ def _shell_program(raw_tokens):
         # A script-file operand is not read; a bare leading expansion could itself be `-c`,
         # and an unreadable word followed by a `c` cluster could hide where `-c` sits.
         if raw_tokens[i][:1] in ("$", "`"):
+            return ("unreadable", None)
+        # A quoted word that is exactly one expansion (`"$OPT"`) is just as able to be `-c`.
+        if re.fullmatch(r"\$(?:\w+|\{[^}]*\})", _plain_word(raw_tokens[i])):
             return ("unreadable", None)
         if any(c in raw_tokens[i] for c in "$`") and any(
                 len(t) > 1 and t[0] in "-+" and not t.startswith("--") and "c" in t

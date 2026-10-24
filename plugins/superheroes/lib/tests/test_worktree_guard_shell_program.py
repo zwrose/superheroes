@@ -187,6 +187,9 @@ def test_expansion_that_hides_no_discard_or_option_stays_allowed(command, dirty_
 @pytest.mark.parametrize("command", [
     'bash "$OPT" -c "git reset --hard"',
     "bash -c 'git reset $FLAGS'",
+    "bash \"$OPT\" 'git reset --hard'",
+    "bash \"${OPT}\" 'git reset --hard'",
+    "eval '`printf \"git reset --hard\"`'",
 ])
 def test_expansion_hiding_a_discard_or_option_is_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
