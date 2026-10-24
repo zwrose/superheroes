@@ -16,7 +16,8 @@ carries `--verify-command`, `--break-it-interpreter` or `--records-path` (or an 
 abbreviation of any), because the first two hand a command line to a later run and the third names
 a file the driver later replaces with the records export. A listed script may write only its own
 fixed file names under a session or store directory its caller names; a script that writes to a path
-its caller names verbatim stays off the list.
+its caller names verbatim stays off the list. For the round driver, the session's saved state must
+also match the stamp the driver wrote beside it, so a hand-edited `loop-state.json` gets no decision.
 
 Contract (fail-closed — "closed" here means no decision, never allow):
 
@@ -28,6 +29,7 @@ Contract (fail-closed — "closed" here means no decision, never allow):
 
 Stdlib-only.
 """
+import hashlib
 import json
 import os
 import shlex
@@ -47,6 +49,8 @@ ROUND_DRIVER_VERBS = frozenset((
     "attest", "checkpoint",
 ))
 COMMAND_FLAGS = ("verify-command", "break-it-interpreter", "records-path")
+STATE_FILE = "loop-state.json"
+MIRROR_FILE = "loop-state.mirror.json"
 
 _EXPANSION_CHARS = frozenset("{}*?[]~")
 
@@ -84,6 +88,45 @@ def _unquoted_expansion(command):
         elif ch == quote:
             quote = None
     return quote is not None
+
+
+def _session_state_is_drivers(rest, cwd):
+    """True when `rest` (the tokens after the verb) names its session folder exactly once, as the
+    literal `--session-dir`, and that folder holds either no state file or a state file whose sha256
+    equals the `stateSha256` of the mirror beside it. Never raises: any error is False."""
+    try:
+        values = []
+        for i, t in enumerate(rest):
+            if not t.startswith("--"):
+                continue
+            stem = t[2:].split("=", 1)[0]
+            if stem and stem != "session-dir" and "session-dir".startswith(stem):
+                return False
+            if t == "--session-dir":
+                if i + 1 >= len(rest):
+                    return False
+                values.append(rest[i + 1])
+            elif t.startswith("--session-dir="):
+                values.append(t[len("--session-dir="):])
+        if len(values) != 1 or not values[0]:
+            return False
+        session_dir = values[0]
+        if not os.path.isabs(session_dir):
+            if not isinstance(cwd, str) or not os.path.isabs(cwd):
+                return False
+            session_dir = os.path.join(cwd, session_dir)
+        state_path = os.path.join(session_dir, STATE_FILE)
+        if not os.path.lexists(state_path):
+            return True
+        with open(state_path, "rb") as f:
+            state_bytes = f.read()
+        with open(os.path.join(session_dir, MIRROR_FILE), "rb") as f:
+            mirror = json.loads(f.read().decode("utf-8"))
+        if not isinstance(mirror, dict) or not isinstance(mirror.get("stateSha256"), str):
+            return False
+        return mirror["stateSha256"] == hashlib.sha256(state_bytes).hexdigest()
+    except Exception:
+        return False
 
 
 def _match(payload, roots):
@@ -156,6 +199,9 @@ def _match(payload, roots):
                 stem = t[2:].split("=", 1)[0]
                 if stem and any(flag.startswith(stem) for flag in COMMAND_FLAGS):
                     return None
+        # axis: a driver call whose session state does not match the driver's own mirror stamp gets no decision
+        if not _session_state_is_drivers(rest[1:], payload.get("cwd")):
+            return None
 
     # 8. the worktree guard's classifier has the last word
     # axis: an otherwise-approved command is refused when the worktree guard says deny

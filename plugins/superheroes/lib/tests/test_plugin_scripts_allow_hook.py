@@ -2,23 +2,30 @@
 
 The hook prints `permissionDecision: "allow"` iff the whole command is one plain call
 `python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` one of nine of this plugin's own
-scripts (for `round_driver.py`: one of eight verbs, and no flag that hands it a command line) and the
-worktree guard's classifier does not deny it. Every other input — any other command, any parse
+scripts (for `round_driver.py`: one of eight verbs, no flag that hands it a command line, and a session
+folder whose saved state still matches the driver's own mirror stamp) and the worktree guard's
+classifier does not deny it. Every other input — any other command, any parse
 doubt, any internal error — prints nothing and exits 0.
 
 Two channels: `decide` / `plugin_roots` in-process (the truth table), and the real hook as a
 subprocess (the stdout and exit-code contract).
 """
+import atexit
+import hashlib
 import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
 import mode_registry
+import round_driver
+import session_contract
 import worktree_guard
 
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,7 +35,10 @@ DRIVER = os.path.join(LIB, "round_driver.py")
 GUARD = os.path.join(LIB, "dispatch_guard.py")
 
 _OTHER_ROOT_LIB = "/tmp/other/plugin/lib"
-_ALLOWED = f"python3 -B {DRIVER} next --session-dir /tmp/s"
+# a real session folder with no state file yet: the fresh-session case the hook allows
+_FRESH = tempfile.mkdtemp(prefix="wo4-fresh-session-")
+atexit.register(shutil.rmtree, _FRESH, ignore_errors=True)
+_ALLOWED = f"python3 -B {DRIVER} next --session-dir {_FRESH}"
 _SEAT = '{"vendor":"codex","model":null,"effort":null,"role":"mechanical"}'
 
 _spec = importlib.util.spec_from_file_location("plugin_scripts_allow_test", _HOOK)
@@ -81,7 +91,7 @@ def test_the_lists_are_pinned():
 @pytest.mark.parametrize("name", _NINE_SCRIPTS)
 def test_each_listed_script_at_the_plugin_root_is_allowed(name):
     # axis: each of the nine listed scripts at the plugin's own root is approved, `-B` and all
-    args = "next --session-dir /tmp/s" if name == "round_driver.py" else "check --x 1"
+    args = f"next --session-dir {_FRESH}" if name == "round_driver.py" else "check --x 1"
     command = f"python3 -B {os.path.join(LIB, name)} {args}"
     got = _decide(_payload(command))
     assert got is True, _short(command)
@@ -90,16 +100,16 @@ def test_each_listed_script_at_the_plugin_root_is_allowed(name):
 @pytest.mark.parametrize("verb", _DRIVER_VERBS)
 def test_each_driver_verb_is_allowed(verb):
     # axis: each of the eight round_driver verbs is approved
-    command = f"python3 -B {DRIVER} {verb} --session-dir /tmp/s"
+    command = f"python3 -B {DRIVER} {verb} --session-dir {_FRESH}"
     got = _decide(_payload(command))
     assert got is True, _short(command)
 
 
 _ALLOWED_ROWS = [
     # axis: the `-B` flag is optional
-    f"python3 {DRIVER} next --session-dir /tmp/s",
+    f"python3 {DRIVER} next --session-dir {_FRESH}",
     # axis: a quoted script path is the same path
-    f'python3 -B "{DRIVER}" next --session-dir /tmp/s',
+    f'python3 -B "{DRIVER}" next --session-dir {_FRESH}',
     # axis: a single-quoted JSON argument keeps its `{`, `}` and `*` out of the expansion scan
     f"python3 -B {GUARD} check --seat '{_SEAT}'",
     # axis: a single-quoted argument holding `{`, `}` and `*` is allowed
@@ -111,11 +121,11 @@ _ALLOWED_ROWS = [
     # axis: quote state is tracked — a double quote inside single quotes does not open a double quote
     f"python3 -B {GUARD} check --seat 'say \"hi\"'",
     # axis: a driver flag that is not a command flag is allowed (`--vendors` is not an abbreviation of either)
-    f"python3 -B {DRIVER} next --session-dir /tmp/s --leg code --vendors '[\"claude\",\"codex\"]' --max-rounds 3",
+    f"python3 -B {DRIVER} next --session-dir {_FRESH} --leg code --vendors '[\"claude\",\"codex\"]' --max-rounds 3",
     # axis: `--flag=value` is allowed for a flag that is not a command flag
-    f"python3 -B {DRIVER} next --session-dir=/tmp/s --seat-map '{{\"a\":1}}'",
+    f"python3 -B {DRIVER} next --session-dir={_FRESH} --seat-map '{{\"a\":1}}'",
     # axis: a driver verb with a later `-`-prefixed value that is not a long option is allowed
-    f"python3 -B {DRIVER} attest --session-dir /tmp/s --failure 3 --note -x",
+    f"python3 -B {DRIVER} attest --session-dir {_FRESH} --failure 3 --note -x",
 ]
 
 
@@ -353,12 +363,152 @@ def test_run_verify_gets_no_decision_whatever_the_session_state_holds(tmp_path):
     assert _decide(_payload(nxt)) is True
 
 
+# --- the session's saved state must be the driver's own ------------------------
+
+_STATE = b'{"config":{"verifyCommand":"none"},"round":1}'
+
+
+def _driver_session(tmp_path, state_bytes):
+    """A session folder holding `state_bytes` as loop-state.json and a mirror stamped as
+    `round_driver._mirror_bytes` stamps it (same `stateSha256` of the exact bytes)."""
+    d = tmp_path / "session"
+    d.mkdir()
+    (d / session_contract.STATE_FILE).write_bytes(state_bytes)
+    mirror = {"schema": round_driver.MIRROR_SCHEMA, "sessionId": None,
+              "stateSha256": hashlib.sha256(state_bytes).hexdigest(),
+              "state": state_bytes.decode("utf-8")}
+    (d / round_driver.MIRROR_FILE).write_text(json.dumps(mirror, sort_keys=True, separators=(",", ":")))
+    return d
+
+
+def _submit(*args):
+    return f"python3 -B {DRIVER} submit " + " ".join(str(a) for a in args)
+
+
+def test_a_matching_session_is_allowed(tmp_path):
+    # axis: a session whose state matches the driver's mirror stamp is allowed (isolation guard for the rows below)
+    d = _driver_session(tmp_path, _STATE)
+    assert _decide(_payload(_submit("--session-dir", d))) is True
+
+
+def test_a_state_edited_after_the_mirror_was_written_gets_no_decision(tmp_path):
+    # axis: a driver call whose session state does not match the driver's own mirror stamp gets no decision (E1)
+    d = _driver_session(tmp_path, _STATE)
+    command = _submit("--session-dir", d)
+    assert _decide(_payload(command)) is True, "isolation guard: the matching session is allowed"
+    (d / session_contract.STATE_FILE).write_bytes(_STATE.replace(b'"none"', b'"touch /tmp/escaped"'))
+    assert _decide(_payload(command)) is False
+
+
+def test_a_state_with_no_mirror_gets_no_decision(tmp_path):
+    # axis: a state file with no mirror beside it gets no decision (E2)
+    d = _driver_session(tmp_path, _STATE)
+    (d / round_driver.MIRROR_FILE).unlink()
+    assert _decide(_payload(_submit("--session-dir", d))) is False
+
+
+@pytest.mark.parametrize("mirror_text", ["not json {", "[1,2]", "{}", '{"stateSha256":7}', ""])
+def test_a_mirror_that_is_not_a_stamp_gets_no_decision(tmp_path, mirror_text):
+    # axis: a mirror that is not JSON, not an object, or without a string `stateSha256` gets no decision (E3)
+    d = _driver_session(tmp_path, _STATE)
+    (d / round_driver.MIRROR_FILE).write_text(mirror_text)
+    assert _decide(_payload(_submit("--session-dir", d))) is False
+
+
+def test_session_dir_given_twice_gets_no_decision(tmp_path):
+    # axis: `--session-dir` named twice gets no decision, in either spelling (E4)
+    d = _driver_session(tmp_path, _STATE)
+    assert _decide(_payload(_submit("--session-dir", d, "--session-dir", _FRESH))) is False
+    assert _decide(_payload(_submit(f"--session-dir={d}", f"--session-dir={_FRESH}"))) is False
+    assert _decide(_payload(_submit("--session-dir", d, f"--session-dir={_FRESH}"))) is False
+
+
+def test_session_dir_missing_gets_no_decision():
+    # axis: a driver call with no `--session-dir` gets no decision, and so does one with no value (E5)
+    assert _decide(_payload(_submit())) is False
+    assert _decide(_payload(_submit("--leg", "code"))) is False
+    assert _decide(_payload(_submit("--session-dir"))) is False
+
+
+@pytest.mark.parametrize("abbrev", ["--s", "--se", "--session", "--session-d"])
+def test_an_abbreviated_session_dir_gets_no_decision(abbrev):
+    # axis: an argparse abbreviation of `--session-dir` gets no decision, alone or beside the full option (E6)
+    assert _decide(_payload(_submit(abbrev, "/x"))) is False
+    assert _decide(_payload(_submit("--session-dir", _FRESH, abbrev, "/x"))) is False
+    assert _decide(_payload(_submit("--session-dir", _FRESH, f"{abbrev}=/x"))) is False
+
+
+def test_a_relative_session_dir_with_no_cwd_gets_no_decision(tmp_path):
+    # axis: a relative `--session-dir` with no absolute payload `cwd` gets no decision (E7)
+    _driver_session(tmp_path, _STATE)
+    command = _submit("--session-dir", "session")
+    assert _decide(_payload(command)) is False
+    assert _decide(_payload(command, cwd="relative/cwd")) is False
+    assert _decide(_payload(command, cwd=7)) is False
+    assert _decide(_payload(command, cwd=str(tmp_path))) is True, "isolation guard: allowed with an absolute cwd"
+
+
+def test_a_relative_session_dir_is_resolved_against_the_payload_cwd(tmp_path):
+    # axis: a relative `--session-dir` joins the payload's absolute `cwd`, and the state there is checked (h)
+    d = _driver_session(tmp_path, _STATE)
+    command = _submit("--session-dir", "session")
+    assert _decide(_payload(command, cwd=str(tmp_path))) is True
+    (d / session_contract.STATE_FILE).write_bytes(_STATE + b" ")
+    assert _decide(_payload(command, cwd=str(tmp_path))) is False
+
+
+def test_session_dir_equals_form_is_allowed_for_a_matching_session(tmp_path):
+    # axis: `--session-dir=<dir>` is read the same as `--session-dir <dir>` (i)
+    d = _driver_session(tmp_path, _STATE)
+    assert _decide(_payload(_submit(f"--session-dir={d}"))) is True
+    (d / session_contract.STATE_FILE).write_bytes(_STATE + b" ")
+    assert _decide(_payload(_submit(f"--session-dir={d}"))) is False
+
+
+def test_a_fresh_session_with_no_state_file_is_allowed(tmp_path):
+    # axis: a session folder holding no loop-state.json (nothing saved yet) is still allowed (E9)
+    assert _decide(_payload(_submit("--session-dir", tmp_path))) is True
+    assert _decide(_payload(_submit("--session-dir", tmp_path / "not-yet-made"))) is True
+
+
+def test_an_unreadable_state_or_mirror_gets_no_decision(tmp_path):
+    # axis: a state path that cannot be read as a file (here a directory) gets no decision (E8)
+    d = _driver_session(tmp_path, _STATE)
+    (d / session_contract.STATE_FILE).unlink()
+    (d / session_contract.STATE_FILE).mkdir()
+    assert _decide(_payload(_submit("--session-dir", d))) is False
+
+
+def test_an_exception_in_the_session_check_gets_no_decision():
+    # axis: an exception inside the session-state check is no decision, never allow (E8)
+    assert hook._session_state_is_drivers(["--session-dir", _FRESH], None) is True, "isolation guard"
+    assert hook._session_state_is_drivers([None], None) is False
+    assert hook._session_state_is_drivers(["--session-dir", None], None) is False
+
+
+def test_the_state_and_mirror_names_match_the_driver_s():
+    # axis: the hook's copies of the state and mirror file names equal the driver's own, so a rename there turns this red
+    assert hook.STATE_FILE == session_contract.STATE_FILE
+    assert hook.MIRROR_FILE == round_driver.MIRROR_FILE
+
+
+def test_a_state_the_real_driver_wrote_is_allowed(tmp_path):
+    # axis: the stamp the driver itself writes (`_write_state_bytes`) is the stamp the hook accepts
+    d = tmp_path / "session"
+    d.mkdir()
+    round_driver._write_state_bytes(str(d), _STATE)
+    assert (d / session_contract.STATE_FILE).read_bytes() == _STATE
+    assert _decide(_payload(_submit("--session-dir", d))) is True
+    (d / session_contract.STATE_FILE).write_bytes(_STATE + b" ")
+    assert _decide(_payload(_submit("--session-dir", d))) is False
+
+
 # --- the worktree guard's deny still wins --------------------------------------
 
 def test_classifier_deny_wins_on_a_real_destructive_git_mention(monkeypatch):
     # axis: step 8 — a destructive git mention in an approved call's arguments is `unaccounted` to the
     # real classifier on a calibrated project, which denies it; the hook then gives no decision
-    command = f"python3 -B {DRIVER} next --session-dir /tmp/s git reset --hard"
+    command = f"python3 -B {DRIVER} next --session-dir {_FRESH} git reset --hard"
     monkeypatch.setattr(mode_registry, "calibration_state", lambda cwd: "uncalibrated")
     assert _decide(_payload(command)) is True, "isolation guard: allowed when the guard allows (uncalibrated)"
     monkeypatch.setattr(mode_registry, "calibration_state", lambda cwd: "calibrated")
@@ -406,7 +556,7 @@ def test_classifier_receives_command_and_cwd(monkeypatch):
 def test_plugin_root_from_environment_is_allowed(tmp_path):
     # axis: an absolute CLAUDE_PLUGIN_ROOT adds its lib/<name>.py to the approved scripts
     d = str(tmp_path)
-    command = f"python3 -B {os.path.join(d, 'lib', 'round_driver.py')} next --session-dir /tmp/s"
+    command = f"python3 -B {os.path.join(d, 'lib', 'round_driver.py')} next --session-dir {_FRESH}"
     assert _decide(_payload(command), {"CLAUDE_PLUGIN_ROOT": d}) is True
     # axis: the same path without the environment root is another root's script
     assert _decide(_payload(command), {}) is False
@@ -428,7 +578,7 @@ def test_relative_plugin_root_in_environment_is_ignored():
 # --- the real hook as a process ------------------------------------------------
 
 @pytest.mark.parametrize("name,args", [
-    ("round_driver.py", "next --session-dir /tmp/s"),
+    ("round_driver.py", f"next --session-dir {_FRESH}"),
     ("dispatch_guard.py", "check --x 1"),
 ])
 def test_process_allow_row_prints_one_allow_line(name, args):
