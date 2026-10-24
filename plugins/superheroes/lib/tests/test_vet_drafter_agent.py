@@ -60,6 +60,12 @@ def test_vet_drafter_model_is_inherit_never_a_pin():
 
 def test_vet_drafter_grant_is_the_stated_shape():
     pairs, _ = _agent()
+    disallowed = [value for key, value in pairs if key == "disallowedTools"]
+    # axis: a disallowedTools key strips granted tools while the tools line stays unchanged
+    assert not disallowed, (
+        f"vet-drafter carries a disallowedTools key {disallowed!r}; it would remove tools "
+        "the drafter needs for its probes"
+    )
     tools_values = [value for key, value in pairs if key == "tools"]
     assert len(tools_values) == 1, f"vet-drafter must carry exactly one tools key, found {tools_values!r}"
     tools = [t.strip() for t in tools_values[0].split(",")]
