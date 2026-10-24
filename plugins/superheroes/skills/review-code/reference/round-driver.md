@@ -596,10 +596,15 @@ the ledger and the live finding (history stays in `rulingsLog`) and restores the
 fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
 
-**Rule before the fixer step.** Once a round's findings are folded, record every ruling on them
-before the next `next` call: `next` is the call that emits the fixer order, and a ruling recorded
-after that order is out reaches only the next order, so the fixer builds the old direction once and
-the next round reworks it. The late-ruling behaviour below is the backstop, not the path.
+**Rule before the fixer step.** Record every ruling on a round's findings before the call that
+emits the fixer order. On the durable-record path that call is the `advance` that folds the round's
+last synthesis (or a gap sweep that adds nothing): `advance` folds the phase and then emits the next
+order through `next` in the same call, so record rulings before that `advance`. A finding that fold
+first raises is not in state until the call has already emitted the order, so a ruling on it reaches
+only the next order. On the hand path the `submit` that folds the synthesis emits nothing; the next
+`next` call emits the fixer order, so record rulings between the two. A ruling recorded after the
+order is out reaches only the next order, so the fixer builds the old direction once and the next
+round reworks it. The late-ruling behaviour below is the backstop, not the path.
 
 A ruling is accepted whenever it arrives, at any step that is not terminal, and binds the next fix of
 its finding. `rule` only records: a fixer attempt whose orders are already out is never stopped and

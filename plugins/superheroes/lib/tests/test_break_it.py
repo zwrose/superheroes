@@ -240,6 +240,39 @@ def _gone(pid):
     return False
 
 
+_ENV_TAGS = {}
+
+
+def _env_tags_readable():
+    """Whether this host lets break_it's environment-tag net see a child's tag, found by trying it:
+    a child started with a fresh tag must show up in ``_tagged_pids``. Inside the claude write
+    sandbox ``ps`` cannot read process environments, so the net sees nothing there."""
+    if "ok" not in _ENV_TAGS:
+        token = "probe-%d" % os.getpid()
+        env = dict(os.environ, **{break_it._TOKEN_ENV: token})
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], env=env)
+        try:
+            deadline = time.monotonic() + 5
+            seen = False
+            while not seen and time.monotonic() < deadline:
+                seen = child.pid in break_it._tagged_pids(token)
+                if not seen:
+                    time.sleep(0.1)
+            _ENV_TAGS["ok"] = seen
+        finally:
+            child.kill()
+            child.wait()
+    return _ENV_TAGS["ok"]
+
+
+@pytest.fixture
+def env_tags_readable():
+    # A skip here on Linux outside the sandbox is still turned into a failure by the proc_containment outcome hook.
+    if not _env_tags_readable():
+        pytest.skip("this host cannot read process environments (break_it._tagged_pids did not see a "
+                    "tagged child), so the containment nets cannot be observed here")
+
+
 # T9
 # axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
 # A detached worker that also clears its environment is contained by the Linux reaper only.
@@ -248,7 +281,7 @@ def _gone(pid):
     (False, False), (True, False),
     pytest.param(True, True, marks=pytest.mark.skipif(
         not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper"))])
-def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env):
+def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env, env_tags_readable):
     pidfile = tmp_path / "worker.pid"
     content = ("import os, subprocess\n"
                "p = subprocess.Popen([%r, '60'], start_new_session=%s%s)\n"
@@ -268,7 +301,7 @@ def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env
 
 @pytest.mark.proc_containment
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc to disable the reaper")
-def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, monkeypatch):
+def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, monkeypatch, env_tags_readable):
     # The reaper cannot scan (no /proc for it), the worker has its own session and no environment: only the working-directory net can catch it.
     marker = 'PROC_ROOT = "/proc"'
     assert marker in break_it._REAPER
@@ -289,7 +322,7 @@ def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, m
 
 
 @pytest.mark.proc_containment
-def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, monkeypatch):
+def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, monkeypatch, env_tags_readable):
     # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the copy's directory but kept its environment, so only the environment-tag net can catch it; the worker is a Python child because macOS hides a system program's environment from `ps -E`.
     marker = 'PROC_ROOT = "/proc"'
     assert marker in break_it._REAPER
@@ -310,7 +343,7 @@ def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, m
 
 
 @pytest.mark.proc_containment
-def test_t9_drain_start_failure_still_reaps_the_launched_process(repo, monkeypatch):
+def test_t9_drain_start_failure_still_reaps_the_launched_process(repo, monkeypatch, env_tags_readable):
     launched = []
     real = subprocess.Popen
 
