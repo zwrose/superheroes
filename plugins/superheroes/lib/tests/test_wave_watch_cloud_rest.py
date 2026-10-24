@@ -431,6 +431,29 @@ def test_w8_control_the_same_pr_to_the_default_branch_counts(tmp_path, clock):
     assert _fetch(gh, tmp_path, clock=clock) == {2110: _epoch(_FRESH_AT)}
 
 
+@pytest.mark.parametrize("body,counts", [
+    ("Closes https://github.com/%s/issues/2110" % _SLUG, True),
+    ("Fixes: https://github.com/%s/issues/2110." % _SLUG, True),
+    ("Intro line\n\nResolves #2110", True),
+    ("Closes:\n\n#2110", False),
+    ("Closes\n#2110", False),
+    ("Closes https://github.com/%s/issues/21100" % _SLUG, False),
+])
+def test_the_closing_reference_follows_githubs_same_line_syntax(tmp_path, clock, body, counts):
+    timeline = [_xref(2113, body=body)]
+    fresh = _pull(2113, base="main", updated=_FRESH_AT)
+    gh = _activity_gh(_GRAPHQL_REFUSED, timeline=timeline, pulls={2113: fresh})
+    expected = _epoch(_FRESH_AT) if counts else _epoch(_ISSUE_AT)
+    assert _fetch(gh, tmp_path, clock=clock) == {2110: expected}
+
+
+def test_a_closing_url_for_another_repository_is_unreadable(tmp_path, clock):
+    timeline = [_xref(3001, body="Closes https://github.com/%s/issues/2110" % _SLUG,
+                      repo="other/repo")]
+    gh = _activity_gh(_GRAPHQL_REFUSED, timeline=timeline, pulls={})
+    assert _fetch(gh, tmp_path, clock=clock) == {2110: None}
+
+
 def _many_prs(count):
     timeline = [_xref(3000 + k) for k in range(count)]
     pulls = {3000 + k: _pull(3000 + k, updated=_OTHER_TIME) for k in range(count)}

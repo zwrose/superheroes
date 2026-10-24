@@ -1135,6 +1135,16 @@ _ACTIVITY_BRANCH_LIMIT = 50
 _MANUAL_LINK_EVENTS = ("connected", "disconnected")
 
 
+# GitHub's closing connection: the keyword and its reference sit together on one line, the
+# reference being #n, owner/repo#n or an issue URL. (Not the shared first-line CLOSES_RE, which
+# lets \s+ cross paragraphs and cannot read a URL.)
+_CLOSING_REF_RE = re.compile(
+    r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w)[ \t]*:?[ \t]+"
+    r"(?:(?P<slug>[^/\s#]+/[^/\s#]+)#(?P<n>\d+)(?!\w)|#(?P<bare>\d+)(?!\w)"
+    r"|https?://(?:www\.)?github\.com/(?P<uslug>[^/\s#]+/[^/\s#]+)/issues/(?P<un>\d+)(?![\w/]))",
+    re.IGNORECASE)
+
+
 def _closing_pr_numbers_rest(timeline, slug, number):
     """The PR numbers whose body names this repository's issue with a closing keyword. Raises
     _RestUnreadable for a link the REST timeline cannot name or a closing link from another repository."""
@@ -1165,10 +1175,11 @@ def _closing_pr_numbers_rest(timeline, slug, number):
         pr_repo = repository.get("full_name") if isinstance(repository, dict) else None
         in_repo = isinstance(pr_repo, str) and pr_repo.lower() == slug.lower()
         names_here = False
-        for match in sc.CLOSES_RE.finditer(body):
-            if match.group(2) != str(number):
+        for match in _CLOSING_REF_RE.finditer(body):
+            ref_number = match.group("n") or match.group("bare") or match.group("un")
+            if ref_number != str(number):
                 continue
-            target = match.group(1)
+            target = match.group("slug") or match.group("uslug")
             if target is None:
                 # A bare #n names the issue of the repository the pull request is in.
                 if not isinstance(pr_repo, str):
