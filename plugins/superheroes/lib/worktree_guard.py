@@ -782,10 +782,12 @@ def _shell_program(raw_tokens):
     if os.path.basename(_plain_word(raw_tokens[0])) not in ("bash", "sh", "zsh"):
         return None
     saw_c = False
+    ended_options = False
     i = 1
     while i < len(raw_tokens):
         tok = _plain_word(raw_tokens[i])
         if tok == "--":
+            ended_options = True
             i += 1
             break
         if tok in ("--rcfile", "--init-file"):
@@ -802,8 +804,18 @@ def _shell_program(raw_tokens):
     if i >= len(raw_tokens):
         return ("unreadable", None) if saw_c else None
     if not saw_c:
-        # A script-file operand is not read; a bare leading expansion could itself be `-c`.
-        return ("unreadable", None) if raw_tokens[i][:1] in ("$", "`") else None
+        # `--` ends options, so what follows is a script path, never `-c`.
+        if ended_options:
+            return None
+        # A script-file operand is not read; a bare leading expansion could itself be `-c`,
+        # and an unreadable word followed by a `c` cluster could hide where `-c` sits.
+        if raw_tokens[i][:1] in ("$", "`"):
+            return ("unreadable", None)
+        if any(c in raw_tokens[i] for c in "$`") and any(
+                len(t) > 1 and t[0] in "-+" and not t.startswith("--") and "c" in t
+                for t in (_plain_word(r) for r in raw_tokens[i + 1:])):
+            return ("unreadable", None)
+        return None
     if not re.fullmatch(_WORD, raw_tokens[i]):
         return ("unreadable", None)
     program = _plain_word(raw_tokens[i])
@@ -814,6 +826,15 @@ def _shell_program(raw_tokens):
     if "`" in program or "$(" in program:
         return ("unreadable", None)
     return ("program", program)
+
+
+def _inner_git_unreadable(tokens, parsed):
+    """Whether a git segment inside a program hides its action: an expansion or escape in the
+    subcommand word, or in any word once the subcommand is destructive (or unparsed)."""
+    hidden = "$`\\"
+    if parsed is None or parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
+        return any(c in tok for tok in tokens[1:] for c in hidden)
+    return any(c in parsed["subcommand"] for c in hidden)
 
 
 def segment_accounting(command, cwd=None, _depth=0):
@@ -853,13 +874,12 @@ def segment_accounting(command, cwd=None, _depth=0):
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
         _, tokens = _command_tokens(tokens)
+        parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         if _depth >= 1 and tokens and (
                 any(c in tokens[0] for c in "$`\\")
-                or (_is_git_token(tokens[0])
-                    and any(c in tok for tok in tokens[1:] for c in "$`\\"))):
+                or (_is_git_token(tokens[0]) and _inner_git_unreadable(tokens, parsed))):
             records.append({"segment": segment, "kind": "unreadable-program", "action": None})
             continue
-        parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         mentions = _segment_mentions_destructive_git(segment)
         if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
             action = _segment_destructive_action(parsed, cwd)

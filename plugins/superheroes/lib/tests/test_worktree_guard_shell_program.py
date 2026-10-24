@@ -169,6 +169,26 @@ def test_unreadable_inner_program_cannot_hide_discard(command, dirty_repo, monke
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
 
 
+@pytest.mark.parametrize("command", [
+    "bash -c 'git commit -m \"$m\"'",
+    "bash -c 'git commit -m \"msg $m\"'",
+    'sh "${CLAUDE_PLUGIN_ROOT}/scripts/check.sh"',
+    'bash -- "$script"',
+    "bash -- $script",
+    'bash -s -- "$arg"',
+])
+def test_expansion_that_hides_no_discard_or_option_stays_allowed(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
+@pytest.mark.parametrize("command", [
+    'bash "$OPT" -c "git reset --hard"',
+    "bash -c 'git reset $FLAGS'",
+])
+def test_expansion_hiding_a_discard_or_option_is_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
 @pytest.mark.parametrize("shell", ["bash", "sh", "zsh"])
 def test_variable_script_path_without_c_remains_allowed(shell, dirty_repo, monkeypatch):
     with open(os.path.join(dirty_repo, "harmless.sh"), "w") as f:
