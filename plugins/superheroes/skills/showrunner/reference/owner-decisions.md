@@ -814,7 +814,9 @@ rulings have been carried out. **A ruling routinely sends a vetted pull request 
 built any earlier describes a PR that is no longer ready, and the owner is left working out which
 sheets still stand. A PR that a ruling sent back has no sheet waiting for answers. Bring each PR
 current with its base before its sheet is published, so the sheet describes the commit that would
-merge. **The sheets are delivered, not requested.**
+merge. **The sheets are delivered, not requested.** A PR that had no review run gets no sheet, and no
+review record is hand-built to make one: the owner merges it with their own click, as the
+showrunner charter's duty 6 says ([`../SKILL.md`](../SKILL.md)).
 
 **Walk a sheet's stops before sending it.** Before a sheet that has a walk is sent, the advisor
 walks its stops. A stop that a pilot run already walked, with that run's evidence, counts as walked,
