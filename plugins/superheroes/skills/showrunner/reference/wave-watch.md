@@ -500,8 +500,14 @@ reading `success: true`.
    before every relayed answer. It starts the relay if none is listed, which keeps it alive and
    follows the builders to whichever account they run on, one relay per account. It returns `name`.
 2. Write the answer to a file, then `compose --repo-root <root> --config-dir <configDir> --session
-   <cloudSessionName> --text-file <file>`. It returns `msgId`, `relayMessage` and `forward`.
-3. Send `relayMessage` verbatim by `SendMessage` to the relay's `name`.
+   <cloudSessionName> --text-file <file>`. It returns `msgId`, `relayMessage` and `forward`. The
+   answer text never carries a shell-evaluated value you have not seen expanded, such as a time
+   from `$(date -u …)` inside a heredoc: run the command first, read its output, and write the
+   value into the answer as text. Then print the whole composed `relayMessage`, never a truncated
+   view such as `head` or the message id alone, so the text you send is text you have read.
+3. Send exactly the `relayMessage` you printed by `SendMessage` to the relay's `name`, copied from
+   that output and never retyped from your own draft. A change after compose, even one word, means
+   writing a new answer file and composing a new message; never edit a composed one.
 4. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`. A message counts as
    delivered only when the text the relay sent matches `forward` exactly; the relay's own words about
    what it sent are never the receipt. `check` reads every send of that exact text, to the session's
@@ -512,7 +518,9 @@ reading `success: true`.
    `relay-send-failed` when every exact send failed, and `relay-silent` when there was none.
    Re-running `check` later re-reads the relay's record. A send of the message's text with its header
    line dropped reads `relay-text-mismatch` with `headerDropped: true` at the end of the wait, unless an
-   exact send succeeded; it was sent, altered, so the builder may hold the text.
+   exact send succeeded; it was sent, altered, so the builder may hold the text. `check` sees only
+   the relay's send compared with the stored text, so a mismatch does not say which step changed
+   it: your own send can reach the relay already changed.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
 owner the `say` sentence, or the refusal and its `detail`. After `relay-silent` or

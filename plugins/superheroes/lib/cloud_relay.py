@@ -362,15 +362,18 @@ def _decide(msg, relay_id, final):
 def _say(verdict, msg_id, wait, detail):
     if verdict == "delivered":
         return "Message %s was delivered to the cloud session." % msg_id
+    # axis: a mismatch names only what check observes, the relay's send against the stored text, never which step changed it — see bite-proof record wo_2124_relay_say.md
     if verdict == "relay-text-mismatch" and (detail or {}).get("headerDropped"):
-        return "The relay sent message %s with its header line dropped; it was not delivered." % msg_id
+        return ("The relay's send of message %s is the stored text with its header line dropped; "
+                "it was not delivered." % msg_id)
     why = {
         "relay-silent": "The relay did not send message %s within %s seconds",
         "relay-send-unconfirmed": "The relay sent message %s but no result for the send appeared "
                                   "within %s seconds",
         "relay-send-failed": "The relay's send of message %s failed (%s)",
-        "relay-text-mismatch": "The relay sent message %s with text that differs from yours "
-                               "(first difference at character %s)",
+        "relay-text-mismatch": "The relay's send of message %s differs from the stored text "
+                               "(first difference at character %s); this check sees only that send, "
+                               "so it cannot tell which step changed the text",
     }[verdict]
     arg = {"relay-send-failed": (detail or {}).get("result"),
            "relay-text-mismatch": ((detail or {}).get("firstDifference") or {}).get("index")
