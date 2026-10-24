@@ -567,7 +567,7 @@ when the field is absent or disagrees with `--repo-root`.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" rule --session-dir "$SESSION_DIR" \
-  --ruling-file /path/to/rulings.json --by "<who>"
+  --ruling-file /path/to/rulings.json --by "<who>" [--fixer-not-dispatched]
 ```
 
 The ruling file is JSON: `_provenance` (same shape as owner gate artifacts) plus a non-empty
@@ -602,9 +602,32 @@ after that order is out reaches only the next order, so the fixer builds the old
 the next round reworks it. The late-ruling behaviour below is the backstop, not the path.
 
 A ruling is accepted whenever it arrives, at any step that is not terminal, and binds the next fix of
-its finding. `rule` only records: a fixer attempt whose orders are already out is never stopped and
-its batch never reshaped, so its result folds normally. Refusal tokens (each leaves state bytes unchanged;
-none is about timing):
+its finding. When the pending step is a `dispatch-fixer` attempt K whose orders are already emitted,
+`rule` without `--fixer-not-dispatched` only records: the attempt is never stopped and its batch never
+reshaped, so its result folds normally. With `--fixer-not-dispatched` the caller says no fixer was
+dispatched for attempt K, and the driver re-renders the order only when it sees no pickup evidence: no
+store, landing or bare-payload file for a fixer slot at attempt K, and no commits past the order's
+emission head (the two checks of the `fixer-committed-unlanded` refusal). It then re-slices the batch
+through the same ruling filter and re-emits the order at attempt K+1 in one commit with the ruling. The
+next `next` hands out that order, and attempt K can no longer be recorded: `record-result` and
+`record-missing` for it refuse `attempt-not-pending`, and a hand `submit` echo for K no longer matches.
+When the re-slice empties the batch, the fixer pending is dropped and the session settles as it does
+when a ruling empties the batch before emission (convergence or post-fix). A render or commit refusal
+during the re-emission refuses the whole `rule` with state unchanged and `fix-batch.json` restored. If
+the session process dies between the re-render and its commit, run the same `rule` again.
+
+Every `rule` on an emitted attempt returns `fixerOrder`. When the order is left as it is it reads
+`{reshaped: false, attempt, reason}` with `reason` one of `dispatch-not-ruled-out` (the flag was not
+given), `fixer-landed` (a store, landing or bare-payload file exists for a fixer slot at attempt K, or a
+slot's paths cannot be named) or `fixer-committed` (commits sit past the order's emission head). When it
+is re-emitted it reads `{reshaped: true, attempt, supersededAttempt, reason, commitCheck}`: `attempt` is
+K+1 and `supersededAttempt` is K; `reason` is `reshaped`, or `batch-emptied` when the re-slice left no
+fixer step (`attempt` is then null); `commitCheck` is `clean` when git showed no commits past the
+emission head and `unreadable` when git could not tell, which does not block the re-emission.
+
+Refusal tokens (each leaves state bytes unchanged; none is about timing; a refusal during the
+re-emission adds `order-render-refused`, `auditor-unseatable` and the commit-refusal reasons the
+driver's other commands return):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
@@ -1035,6 +1058,13 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 When the driver cannot continue — a refusal, a park, `journal-fault-unrecordable`, `receipt-fault`,
 or any other halt — park citing the blocker and never hand-drive the remainder; `rubric/review-discipline.md`
 is the home for the driver-or-park valve.
+
+A session the orchestrator abandons, because it will not drive the loop to a terminal, still writes its
+review record in PR mode from the session: `python3 -B "$ROOT_DIR/lib/review_record_session.py" write
+--session-dir "$SESSION_DIR" --extras <extras file> --repo-root <repo root> --abandoned "<why>"`. The record
+reads `not-reviewed` and names the reason; see [the full lane writes it from the
+session](review-record.md#the-full-lane-writes-it-from-the-session). Never hand-build an account for an
+abandoned session.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
