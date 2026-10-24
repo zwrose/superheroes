@@ -12,6 +12,20 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** Every implementer order now tells the implementer to create and edit files only with the host's Write and Edit tools, so fewer orders stop on a refused shell write. See [Implementer orders: the file-write rule rides every order](#implementer-orders-the-file-write-rule-rides-every-order).
+
+### Implementer orders: the file-write rule rides every order
+
+- The review fixer's file-write rule (#2067) has one home now, `command_refusals.FILE_WRITE_RULE` in `lib/command_refusals.py`: create and edit files only with the host's file-write and file-edit tools (Write and Edit on Claude Code), never through a shell command that writes a file.
+- `dispatch-write` appends it to every staged write prompt, after the refused-command rule (`command_refusals.ORDER_TEXT`) and before the result contract, on every engine.
+- The native implementer preamble (`lib/native_engine.py`) carries it as its rule 4; the refused-command rule, the result and the deadline rules move to 5, 6 and 7.
+- The fixer order template (`rubric/orders/dispatch-fixer.md`) fills the same sentence from the constant through the `{{FILE_WRITE_RULE}}` placeholder; its rendered text is unchanged apart from line wrapping.
+- No key, flag, or refusal reason changes.
+
 ## 0.46.0
 
 ### Before you upgrade
