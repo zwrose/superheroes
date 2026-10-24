@@ -3487,6 +3487,7 @@ def loop(
             if _loop_exits_on(result):
                 final = dict(result)
                 final["arms"] = arms
+                final.update(_unread_payload(loop_unread))
                 final_degraded = set(final.get("degraded", []))
                 final_degraded.update(loop_degraded)
                 final["degraded"] = sorted(final_degraded)

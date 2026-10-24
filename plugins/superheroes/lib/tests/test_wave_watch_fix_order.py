@@ -399,6 +399,22 @@ def test_row9_a_lane_named_unread_in_an_arm_stays_named_in_the_loop_ceiling_time
     assert result["unreadIssues"] == [{"launchId": "cloud-a", "issue": 101}]
 
 
+def test_row9_a_lane_named_unread_in_an_earlier_arm_stays_named_when_a_later_arm_exits_on_attention(repo):
+    # axis: an attention exit keeps the lanes an earlier arm named unread — see bite-proof record wo_2148_fix_order.md
+    _reopened(repo)
+    arms = [
+        {"ok": True, "event": ww.EVENT_TIMER, "unreadIssues": [{"launchId": "cloud-a", "issue": 101}]},
+        {"ok": True, "event": ww.EVENT_BUILDER_NOTE, "notes": []},
+    ]
+    result = ww.loop(
+        repo, _BATCH, max_seconds=2, interval_seconds=1,
+        run_fn=lambda *args, **kwargs: dict(arms.pop(0)),
+    )
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert result["arms"] == 2
+    assert result["unreadIssues"] == [{"launchId": "cloud-a", "issue": 101}]
+
+
 # --- row 10: an unreadable relay state, and the cloud-only rule -----------------------------
 
 
