@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.46.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.45.0...superheroes-v0.46.0) (2026-10-24)
+
+
+### Features
+
+* **superheroes:** a vet-drafter agent lets the advisor vet several PRs in parallel ([#2112](https://github.com/zwrose/superheroes/issues/2112)) ([384bc3c](https://github.com/zwrose/superheroes/commit/384bc3c5371264d6764fc0406676ca4bf57919b9))
+* **superheroes:** engine-auth refuses a claude probe taken under another config dir ([#2059](https://github.com/zwrose/superheroes/issues/2059)) ([fb8ecfa](https://github.com/zwrose/superheroes/commit/fb8ecfa8280967e82ca2dddd1d91f9294d7b9b48))
+* **superheroes:** readiness, the cloud check and the setup text read the plugin pin ([#2042](https://github.com/zwrose/superheroes/issues/2042)) ([b1b5c4b](https://github.com/zwrose/superheroes/commit/b1b5c4b4281b76488476d34224933298b8d118fd))
+* **superheroes:** the plugin pin hook module ([#2041](https://github.com/zwrose/superheroes/issues/2041)) ([ec8bdd8](https://github.com/zwrose/superheroes/commit/ec8bdd8091d427b36c76fbe4bbc0b67ae820bb49))
+
+
+### Bug Fixes
+
+* **superheroes:** a cloud build's implementer can run the tests on its first dispatch ([#2048](https://github.com/zwrose/superheroes/issues/2048)) ([f1d1142](https://github.com/zwrose/superheroes/commit/f1d1142d9a127e27a6b4c12c36b4a41cfc434b58))
+* **superheroes:** a cloud lane's watch ignores a superseded park, and the relay check reads every send attempt ([#2101](https://github.com/zwrose/superheroes/issues/2101)) ([e404db3](https://github.com/zwrose/superheroes/commit/e404db3adb9af99a22349b08709b954b111ed917))
+* **superheroes:** a continuation dispatch counts items an earlier attempt already delivered ([#2038](https://github.com/zwrose/superheroes/issues/2038)) ([41a7c84](https://github.com/zwrose/superheroes/commit/41a7c841a50c092bdc775483da888df4f0e1cdda))
+* **superheroes:** a JavaScript break-it test runs against the project's installed dependencies ([#2036](https://github.com/zwrose/superheroes/issues/2036)) ([74ee553](https://github.com/zwrose/superheroes/commit/74ee553c6e6de3dd39e2aef88fce9c4e8ee9ac7f))
+* **superheroes:** a JavaScript or TypeScript break-it test counts as kept by its body at any path ([#2069](https://github.com/zwrose/superheroes/issues/2069)) ([87ef476](https://github.com/zwrose/superheroes/commit/87ef47687a40fcdce05648d8293104ad0415e0b3))
+* **superheroes:** a merge sheet accounts for every acceptance its PR bodies list ([#2093](https://github.com/zwrose/superheroes/issues/2093)) ([07bd1ac](https://github.com/zwrose/superheroes/commit/07bd1ac5d8d5fa13248cd88df7e24cb7ed040f74))
+* **superheroes:** a merge-train PR's currency follows the base branch's up-to-date requirement ([#2080](https://github.com/zwrose/superheroes/issues/2080)) ([178caa2](https://github.com/zwrose/superheroes/commit/178caa2ce89eff67f0ba9f4d736e4c694314e76d))
+* **superheroes:** a PR sheet keeps each weighed acceptance as its own item and folds only routine notes, as a list ([#2051](https://github.com/zwrose/superheroes/issues/2051)) ([0c1a0dc](https://github.com/zwrose/superheroes/commit/0c1a0dc2d9f433631c9b73118f2993f8226276d4))
+* **superheroes:** a PR-body finding is fixed in a staged copy and published by the review ([#2086](https://github.com/zwrose/superheroes/issues/2086)) ([9464afc](https://github.com/zwrose/superheroes/commit/9464afc15ede3ce51bc51fee8e71eee64dbe269a))
+* **superheroes:** a PR-tied collector item rides its PR's sheet as an option card, and a card that points away is refused ([#2031](https://github.com/zwrose/superheroes/issues/2031)) ([b065116](https://github.com/zwrose/superheroes/commit/b0651162bd383b09612eb97fb5552854b7ff1e41))
+* **superheroes:** a Python break-it test counts as kept by its body at any path ([#2068](https://github.com/zwrose/superheroes/issues/2068)) ([81fa40f](https://github.com/zwrose/superheroes/commit/81fa40fefb60c2c7aede32ffd80c36d4d5f35e49))
+* **superheroes:** a refusal-named route is sanctioned and the worktree guard understands a merge in progress ([#2065](https://github.com/zwrose/superheroes/issues/2065)) ([711cbed](https://github.com/zwrose/superheroes/commit/711cbedc2fc66dc808ac56fb0c2d7d0efcd47d24))
+* **superheroes:** a review record no longer leaves an audit-spawned finding the review fixed and confirmed for the owner ([#2116](https://github.com/zwrose/superheroes/issues/2116)) ([13516b7](https://github.com/zwrose/superheroes/commit/13516b74214e74f7d0b3456394a7a900e53b1c47))
+* **superheroes:** a ruled-out break-it test is exempt from the keep check, and CI on the exact head can stand in for verify ([#2076](https://github.com/zwrose/superheroes/issues/2076)) ([9d6fddf](https://github.com/zwrose/superheroes/commit/9d6fddf6fef5c38e79b0bcdc5cf104294732fc9a))
+* **superheroes:** a timed-out write forfeit names what landed on either attempt ([#2058](https://github.com/zwrose/superheroes/issues/2058)) ([65d65f1](https://github.com/zwrose/superheroes/commit/65d65f10c373e989ee49917c28396e6266e7271b))
+* **superheroes:** an unreadable or non-UTF-8 guardian config is degraded, not healthy ([#2057](https://github.com/zwrose/superheroes/issues/2057)) ([b3227dc](https://github.com/zwrose/superheroes/commit/b3227dc31eb9de95b65768a064eca368d033a2f3))
+* **superheroes:** cloud cleanup finds the lane of a stack launched on its parent issue ([#2028](https://github.com/zwrose/superheroes/issues/2028)) ([503a2a1](https://github.com/zwrose/superheroes/commit/503a2a17d316ae6f798976fadbe798af9ae298ae))
+* **superheroes:** cloud readiness checks the dependency hook on the launched commit ([#2032](https://github.com/zwrose/superheroes/issues/2032)) ([26da011](https://github.com/zwrose/superheroes/commit/26da011f8b4194e7ef157cf3e643db68c9d0901a))
+* **superheroes:** configure saves the detected setup inputs when the dependency hook is declined ([#2027](https://github.com/zwrose/superheroes/issues/2027)) ([806cb9a](https://github.com/zwrose/superheroes/commit/806cb9ad326b014992e8fcbf2f4e37c2712f1f8d))
+* **superheroes:** every review seat order carries one standing rule: review by reading, never run the project's files ([#2100](https://github.com/zwrose/superheroes/issues/2100)) ([170f370](https://github.com/zwrose/superheroes/commit/170f3705a911a480a27031e9beb9afdb4fd112ad))
+* **superheroes:** guardian reads TSX/JSX complexity as unmeasured, not lizard's figure ([#2056](https://github.com/zwrose/superheroes/issues/2056)) ([899853d](https://github.com/zwrose/superheroes/commit/899853d326aa734d8dea0c4d91b615db9f20788b))
+* **superheroes:** implementer orders carry the bite-proof record format inline ([#2084](https://github.com/zwrose/superheroes/issues/2084)) ([d708eed](https://github.com/zwrose/superheroes/commit/d708eedcb20fcb43c59814e955678db8dc0ab7aa))
+* **superheroes:** one stdin chokepoint for engine CLI calls, with a census ([#2062](https://github.com/zwrose/superheroes/issues/2062)) ([ec8cc57](https://github.com/zwrose/superheroes/commit/ec8cc574bf64aecc96a1b7db2d750a0cdc9bf77e))
+* **superheroes:** stack membership reads work in a cloud session, through GitHub's REST stacks API ([#2104](https://github.com/zwrose/superheroes/issues/2104)) ([c19fad4](https://github.com/zwrose/superheroes/commit/c19fad4edc72ee9239531d5682fa080952541977))
+* **superheroes:** stack merges work in a cloud session, through REST merge-async ([#2105](https://github.com/zwrose/superheroes/issues/2105)) ([8181c20](https://github.com/zwrose/superheroes/commit/8181c2057f5ce0fabd47dbc9c5de937b60c5be7d))
+* **superheroes:** the abandon test waits for a ready engine, and a slow Canon git status says it timed out ([#2066](https://github.com/zwrose/superheroes/issues/2066)) ([971c5e7](https://github.com/zwrose/superheroes/commit/971c5e70c006af0e4d15d688c4b34f57e81f47b5))
+* **superheroes:** the automatic checkpoint runs in a desktop-started session even when it is off screen ([#2085](https://github.com/zwrose/superheroes/issues/2085)) ([c50b6a6](https://github.com/zwrose/superheroes/commit/c50b6a613d475d6aecff70db37a096943334c8c0))
+* **superheroes:** the launcher's dependency check and the watch's repository read work in a cloud session ([#2114](https://github.com/zwrose/superheroes/issues/2114)) ([9b13f48](https://github.com/zwrose/superheroes/commit/9b13f48a8d09cb0e19174577468b6cf05feee882))
+* **superheroes:** the review fixer order says how to write files, reports every refusal, and always lands its result ([#2067](https://github.com/zwrose/superheroes/issues/2067)) ([28040c8](https://github.com/zwrose/superheroes/commit/28040c840620a549d635b434bde80a838060cdd2))
+* **superheroes:** the review fixer's order says to leave the head-diff keys out ([#2111](https://github.com/zwrose/superheroes/issues/2111)) ([146b4c4](https://github.com/zwrose/superheroes/commit/146b4c4f772e17f16404087093323b8ff5a8a504))
+* **superheroes:** the review panel reads the session's model from its transcript when the start event omits it ([#2113](https://github.com/zwrose/superheroes/issues/2113)) ([fa5db99](https://github.com/zwrose/superheroes/commit/fa5db99c67fd4525ce9e084d2cff38e8de2d7abc))
+* **superheroes:** the review record reads each check's latest run ([#2026](https://github.com/zwrose/superheroes/issues/2026)) ([3c6a83b](https://github.com/zwrose/superheroes/commit/3c6a83b555a43539edd8e525c59da5cdde911ef0))
+* **superheroes:** the showrunner board duty says a new issue files only on the owner's word ([#2097](https://github.com/zwrose/superheroes/issues/2097)) ([b3beb7c](https://github.com/zwrose/superheroes/commit/b3beb7c19d39deb13f17c16a9339b9289464f323))
+* **superheroes:** the wave watch's PR list and activity read and the launcher's base-layer lookup work in a cloud session ([#2122](https://github.com/zwrose/superheroes/issues/2122)) ([720668d](https://github.com/zwrose/superheroes/commit/720668da0ea05aac0670e09ed554f068da96258f))
+* **superheroes:** the worktree guard tells text from a command, and every refusal names its next step ([#2077](https://github.com/zwrose/superheroes/issues/2077)) ([6a98f3d](https://github.com/zwrose/superheroes/commit/6a98f3de6cf0aeaddb1a794b418abb0666388957))
+
+
+### Chores
+
+* **superheroes:** retire identifiers.py's content hash and the unreached cross-vendor escalation step ([#2055](https://github.com/zwrose/superheroes/issues/2055)) ([179e007](https://github.com/zwrose/superheroes/commit/179e007fdb394e4ec6f42bca03cb864227bcac7c))
+* **superheroes:** retire the certification loop's leftovers ([#2074](https://github.com/zwrose/superheroes/issues/2074)) ([c24c2e3](https://github.com/zwrose/superheroes/commit/c24c2e38cb03370b51d37cf29543ccc415cad218))
+
 ## [0.45.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.44.0...superheroes-v0.45.0) (2026-10-21)
 
 
