@@ -870,3 +870,79 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 Edges not neutralized in this proof: a command missing `|| true` and a duplicate wiring of the hook. Both fail the same equality by construction (the string differs, or the list has two elements), but only the missing-`python3 -B ` edge was run red.
 
+---
+
+## G11 — the session-state stamp check (WO-4)
+
+**Guarded element:** `plugins/superheroes/hooks/plugin_scripts_allow.py:127` in `_session_state_is_drivers`, the comparison `return mirror["stateSha256"] == hashlib.sha256(state_bytes).hexdigest()`. Axis: a driver call whose saved `loop-state.json` does not hash to the `stateSha256` stamped in `loop-state.mirror.json` gets no decision.
+
+Command (the order's, from `/home/user/wt-2140`, both test files unedited): `scripts/pinned-python -B -X pycache_prefix=/home/user/wt-2140/docs/pyc-wo4 -m pytest plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py plugins/superheroes/lib/tests/test_hook_wiring.py -q --tb=line -p no:cacheprovider`
+
+Baseline before the neutralization (WO-4b edits in place): `183 passed in 1.43s`.
+
+**Neutralization:** line 127 `return mirror["stateSha256"] == hashlib.sha256(state_bytes).hexdigest()` → `return mirror["stateSha256"] == mirror["stateSha256"]` (one Edit), so the comparison is always true for any readable mirror holding a string stamp.
+
+**Raw red:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+........................................................................ [ 39%]
+.........................................................F.F............ [ 78%]
+.FF....F...............................                                  [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert True is False
+     +  where True = _decide({'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py next --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_run_verify_gets_no_decisi0/session'}})
+     +    where {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py next --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_run_verify_gets_no_decisi0/session'}} = _payload('python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py next --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_run_verify_gets_no_decisi0/session')
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:369: AssertionError: assert True is False
+E   AssertionError: assert True is False
+     +  where True = _decide({'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_edited_after_the_0/session'}})
+     +    where {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_edited_after_the_0/session'}} = _payload('python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_edited_after_the_0/session')
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:406: AssertionError: assert True is False
+E   AssertionError: assert True is False
+     +  where True = _decide({'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir session'}, 'cwd': '/tmp/claude-0/pytest-of-root/pytest-36/test_a_relative_session_dir_is0'})
+     +    where {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir session'}, 'cwd': '/tmp/claude-0/pytest-of-root/pytest-36/test_a_relative_session_dir_is0'} = _payload('python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir session', cwd='/tmp/claude-0/pytest-of-root/pytest-36/test_a_relative_session_dir_is0')
+     +      where '/tmp/claude-0/pytest-of-root/pytest-36/test_a_relative_session_dir_is0' = str(PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_a_relative_session_dir_is0'))
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:463: AssertionError: assert True is False
+E   AssertionError: assert True is False
+     +  where True = _decide({'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir=/tmp/claude-0/pytest-of-root/pytest-36/test_session_dir_equals_form_i0/session'}})
+     +    where {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir=/tmp/claude-0/pytest-of-root/pytest-36/test_session_dir_equals_form_i0/session'}} = _payload('python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir=/tmp/claude-0/pytest-of-root/pytest-36/test_session_dir_equals_form_i0/session')
+     +      where 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir=/tmp/claude-0/pytest-of-root/pytest-36/test_session_dir_equals_form_i0/session' = _submit('--session-dir=/tmp/claude-0/pytest-of-root/pytest-36/test_session_dir_equals_form_i0/session')
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:471: AssertionError: assert True is False
+E   AssertionError: assert True is False
+     +  where True = _decide({'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_the_real_driver_w0/session'}})
+     +    where {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_the_real_driver_w0/session'}} = _payload('python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_the_real_driver_w0/session')
+     +      where 'python3 -B /home/user/wt-2140/plugins/superheroes/lib/round_driver.py submit --session-dir /tmp/claude-0/pytest-of-root/pytest-36/test_a_state_the_real_driver_w0/session' = _submit('--session-dir', PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_a_state_the_real_driver_w0/session'))
+/home/user/wt-2140/plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py:509: AssertionError: assert True is False
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_run_verify_gets_no_decision_whatever_the_session_state_holds
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_a_state_edited_after_the_mirror_was_written_gets_no_decision
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_a_relative_session_dir_is_resolved_against_the_payload_cwd
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_session_dir_equals_form_is_allowed_for_a_matching_session
+FAILED plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py::test_a_state_the_real_driver_wrote_is_allowed
+5 failed, 178 passed in 1.41s
+```
+Red on the claimed axis: row (a), `test_a_state_edited_after_the_mirror_was_written_gets_no_decision`, fails at `test_plugin_scripts_allow_hook.py:406` (a hand-edited state is approved). Four more rows that edit the state after the stamp fail the same way, including the rewritten `run-verify` test at line 369 and the real-driver row at line 509.
+**Restore:** the inverse Edit, line 127 `mirror["stateSha256"] == mirror["stateSha256"]` → `mirror["stateSha256"] == hashlib.sha256(state_bytes).hexdigest()`.
+
+**Restore receipt (hook lines 121-129 read back after the restore):**
+```
+        with open(state_path, "rb") as f:
+            state_bytes = f.read()
+        with open(os.path.join(session_dir, MIRROR_FILE), "rb") as f:
+            mirror = json.loads(f.read().decode("utf-8"))
+        if not isinstance(mirror, dict) or not isinstance(mirror.get("stateSha256"), str):
+            return False
+        return mirror["stateSha256"] == hashlib.sha256(state_bytes).hexdigest()
+    except Exception:
+        return False
+```
+
+**Raw green:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+.......................................                                  [100%]
+183 passed in 1.53s
+```
+No secrets, tokens, private URLs or PII; nothing redacted.
+

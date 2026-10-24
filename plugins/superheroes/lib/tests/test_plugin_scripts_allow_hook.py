@@ -348,19 +348,25 @@ def test_malformed_payload_gets_no_decision(payload):
     assert got is False, repr(payload)
 
 
-# --- F2: the decision does not read the session's state ------------------------
+# --- F2: `run-verify` is refused by its verb, whatever the session's state holds -
 
 def test_run_verify_gets_no_decision_whatever_the_session_state_holds(tmp_path):
-    # axis: F2 — `run-verify` is refused by its verb alone; the session dir's loop-state.json (which
-    # may name a verify command) is never read, so the same text is refused with or without it
+    # axis: F2 — `run-verify` is refused by its verb alone, with a fresh folder and with a driver-stamped
+    # state that names a verify command; a hand-written state without the driver's stamp is refused for
+    # every verb, `next` included
     d = str(tmp_path)
     run_verify = f"python3 -B {DRIVER} run-verify --session-dir {d}"
     nxt = f"python3 -B {DRIVER} next --session-dir {d}"
     assert _decide(_payload(run_verify)) is False
     assert _decide(_payload(nxt)) is True
-    (tmp_path / "loop-state.json").write_text(json.dumps({"config": {"verifyCommand": "touch /tmp/escaped"}}))
+    state = json.dumps({"config": {"verifyCommand": "touch /tmp/escaped"}}).encode("utf-8")
+    s = _driver_session(tmp_path, state)
+    run_verify = f"python3 -B {DRIVER} run-verify --session-dir {s}"
+    nxt = f"python3 -B {DRIVER} next --session-dir {s}"
     assert _decide(_payload(run_verify)) is False
     assert _decide(_payload(nxt)) is True
+    (s / session_contract.STATE_FILE).write_bytes(state + b" ")
+    assert _decide(_payload(nxt)) is False
 
 
 # --- the session's saved state must be the driver's own ------------------------
