@@ -338,7 +338,6 @@ def test_wrapper_operands_and_outer_substitutions_cannot_hide_a_discard(command,
     "bash script.sh -c value",
     "bash -c 'echo hi'",
     "eval 'echo hi' 2>/dev/null",
-    "git checkout HEAD &>/dev/null",
 ])
 def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
@@ -351,6 +350,20 @@ def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo)
 ])
 def test_wrapped_directory_change_and_redirected_eval_are_still_refused(command, message, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", message), command
+
+
+@pytest.mark.parametrize("command", [
+    "git checkout HEAD &>/dev/null",
+    "git checkout HEAD '>notes'",
+    "git checkout \">f.txt\"",
+])
+def test_a_quoted_redirection_lookalike_operand_is_not_dropped(command, dirty_repo):
+    assert wg.classify(command, dirty_repo)[0] == "deny", command
+
+
+def test_an_ampersand_redirection_adjoining_a_flag_is_its_own_word(dirty_repo):
+    assert wg.classify("git reset --hard&>/dev/null", dirty_repo) == ("deny", _RESET)
+    assert wg._split_segments("git status 2>&1") == ["git status 2>&1"]
 
 
 def test_split_segments_with_ends_names_the_boundary_that_flushed_each_segment():

@@ -274,6 +274,9 @@ def _split_segments_with_ends(command):
                 continue
             # An `&` that belongs to a redirection (`>&`, `<&`, `2>&1`, `&>`, `&>>`) is no boundary.
             if (i > 0 and command[i - 1] in "<>") or (i + 1 < n and command[i + 1] == ">"):
+                if (i + 1 < n and command[i + 1] == ">" and current
+                        and not current[-1].isspace() and command[i - 1] not in "<>"):
+                    current.append(" ")  # `&>` starts its own word, never glues to a flag
                 current.append(ch)
                 i += 1
                 continue
@@ -981,8 +984,7 @@ def segment_accounting(command, cwd=None, _depth=0):
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
         _, tokens = _command_tokens(tokens)
-        tokens = _drop_redirections(tokens)
-        parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
+        parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         if _depth >= 1 and tokens and (
                 any(c in tokens[0] for c in "$`\\")
                 or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
