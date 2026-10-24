@@ -44,7 +44,7 @@ class Train:
     def publish(self, number, version, source):
         path = self.path(number, version)
         path.parent.mkdir(parents=True, exist_ok=True)
-        code, said = run(self.capsys, "build", "--record", self.inputs / PRS[number][0], "--input", source, "--out", path)
+        code, said = run(self.capsys, "build", "--record", self.inputs / PRS[number][0], "--pr-body", f"{number}={self.inputs / 'body-none.md'}", "--input", source, "--out", path)
         assert code == 0, said
         return path
 
