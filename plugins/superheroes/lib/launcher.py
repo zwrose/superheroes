@@ -2808,7 +2808,9 @@ _ADOPT_ORIGINAL_REMEDY_UNREAD = (
     "returns, never one that is gone) and pass it with --cloud-sessions-file; a listing that "
     "cannot be read, or that does not cover every earlier session, refuses."
 )
-_LISTING_STRING_FIELDS = ("title", "session_status", "status_bucket")
+_LISTING_STRING_FIELDS = ("title", "session_status", "status_bucket", "environment_id")
+# The owner machine clock that stamped startedTs and the host clock that stamped created_at can disagree.
+_ADOPT_ABSENCE_SKEW_SECONDS = 600
 
 
 def _listing_value(text):
@@ -2883,18 +2885,25 @@ def _listing_created_ts(row):
     return stamp.timestamp()
 
 
-def _page_newest_created(pages):
-    """Epoch of the newest row of the one complete page when its rows prove the page's span, else ``None``.
+def _page_created_by_environment(pages):
+    """``{environment_id: newest created epoch}`` of the one complete page when its rows prove the page's span, else ``None``.
 
     Every row needs a parseable UTC ``created_at`` and the rows must run newest-created first
     (non-increasing); an empty page, an unparseable stamp or a page out of order proves nothing.
+    A row with no ``environment_id`` is left out of the map, so it never proves a lane's absence.
     """
-    stamps = [_listing_created_ts(row) for row in pages[0]["data"]]
+    rows = pages[0]["data"]
+    stamps = [_listing_created_ts(row) for row in rows]
     if not stamps or any(t is None for t in stamps):
         return None
     if any(later > earlier for earlier, later in zip(stamps, stamps[1:])):
         return None
-    return stamps[0]
+    newest = {}
+    for row, stamp in zip(rows, stamps):
+        env_id = row.get("environment_id")
+        if isinstance(env_id, str) and stamp > newest.get(env_id, float("-inf")):
+            newest[env_id] = stamp
+    return newest
 
 
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
@@ -2959,7 +2968,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     rows, pages, result_count = listing
     complete = result_count == 1 and len(pages) == 1 and pages[0].get("has_more") is False
     # axis: a has_more-false page proves absence only when its rows are ordered and parseable, so a cursor-read last page cannot pass — see bite-proof record i2119_original_session
-    newest = _page_newest_created(pages) if complete else None
+    created_by_env = _page_created_by_environment(pages) if complete else None
     live = []
     unproven = []
     for launch_id, info in candidates.items():
@@ -2969,10 +2978,16 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             matched = [row for row in rows if row.get("title") == info["cloudSessionName"]]
         if not matched:
             started_ts = info.get("startedTs")
-            # axis: absence needs the page's newest row created at or after the lane started, and a lane with no started time proves nothing — see bite-proof record i2119_original_session
+            lane_env = info.get("cloudEnvironment")
+            newest = (
+                created_by_env.get(lane_env)
+                if created_by_env is not None and isinstance(lane_env, str) else None
+            )
+            # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing — see bite-proof record i2119_original_session
             if (
                 newest is None or not isinstance(started_ts, (int, float))
-                or isinstance(started_ts, bool) or newest < started_ts
+                or isinstance(started_ts, bool)
+                or newest < started_ts + _ADOPT_ABSENCE_SKEW_SECONDS
             ):
                 unproven.append(launch_id)
             continue

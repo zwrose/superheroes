@@ -286,8 +286,11 @@ def _page_of(rows):
     return {"data": rows, "has_more": False}
 
 
-def _unrelated_row(created_at, row_id="session_01Unrelated0000000000"):
-    return {"id": row_id, "title": "issue-1-other", "created_at": created_at}
+def _unrelated_row(created_at, row_id="session_01Unrelated0000000000", environment_id=None):
+    row = {"id": row_id, "title": "issue-1-other", "created_at": created_at}
+    if environment_id is not None:
+        row["environment_id"] = environment_id
+    return row
 
 
 def test_a_complete_page_whose_rows_are_all_older_than_the_lane_start_refuses_incomplete(tmp_path):
@@ -366,12 +369,61 @@ def test_a_complete_page_with_a_row_newer_than_the_lane_start_proves_absence(tmp
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
     rows = [
-        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000"),
+        _unrelated_row("2026-10-24T13:00:00.000000Z", "session_01Newer00000000000000", "env-1"),
         _unrelated_row("2026-10-24T12:00:00.000000Z", "session_01AtStart0000000000000"),
         _unrelated_row("2026-10-24T09:00:00Z", "session_01Older00000000000000"),
     ]
     result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
     _proceeds(result, calls)
+
+
+def test_a_newer_row_from_another_environment_refuses_incomplete(tmp_path):
+    # axis: absence is proven only by a row of the lane's own cloud environment, so another account's page proves nothing — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T13:00:00.000000Z", environment_id="env-other")]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_newer_row_with_no_or_non_string_environment_refuses_incomplete(tmp_path):
+    # axis: a row with no environment_id never counts as the absence proof, and a non-string one is not a listing shape — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T13:00:00.000000Z")]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    rows[0]["environment_id"] = 7
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows), "bad.json"))
+    _refused_unread(repo, result, calls, "listing-shape")
+
+
+def test_a_row_only_300_seconds_after_the_lane_start_refuses_incomplete(tmp_path):
+    # axis: a row inside the clock-skew allowance after the lane start cannot prove absence — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    rows = [_unrelated_row("2026-10-24T12:05:00Z", environment_id="env-1")]
+    result, calls = _adopt(repo, tmp_path, _write_listing(tmp_path, _page_of(rows)))
+    _refused_unread(repo, result, calls, "listing-incomplete")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_lane_with_no_cloud_environment_is_never_proven_gone(tmp_path, monkeypatch):
+    # axis: a candidate lane with no cloudEnvironment proves nothing by absence — see bite-proof record i2119_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    real_fold = ll.fold
+
+    def fold_without_environment(records):
+        folded = real_fold(records)
+        if LANE_ID in folded["launches"]:
+            folded["launches"][LANE_ID]["cloudEnvironment"] = None
+        return folded
+
+    monkeypatch.setattr(ll, "fold", fold_without_environment)
+    result, calls = _adopt(repo, tmp_path, _fixture("list_page_complete_newer.json"))
+    _refused_unread(repo, result, calls, "listing-incomplete")
 
 
 # --- healthy launches proceed -------------------------------------------------------------
