@@ -1295,6 +1295,31 @@ def test_omission_floor_matches_conventions_10_7():
         _assert_omission_floor_matches_home(text, label, home)
 
 
+def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes():
+    """The handback sort and the TRANSITION note put the costly test before the named harmless causes."""
+    section = _read("skills/workhorse/reference/handback.md").split("## Disclosed degradations", 1)[1].split("\n## ", 1)[0]
+    sort = _anchor_whitespace_normalize(section)
+    # bite-axis: the costly test applies whatever the cause, before the named harmless causes are listed.
+    assert "whatever caused it" in sort, "handback.md sort no longer says the costly test applies whatever caused it"
+    assert "The named harmless causes are" in sort, "handback.md sort no longer lists the named harmless causes"
+    assert sort.index("whatever caused it") < sort.index("The named harmless causes are"), (
+        "handback.md sort lists the named harmless causes before the costly test"
+    )
+    # bite-axis: the grounding seat not running is the one cause that sorts harmless by name.
+    assert "The grounding seat not running sorts **harmless**, as named." in sort, (
+        "handback.md sort no longer names the grounding seat not running as harmless"
+    )
+    # bite-axis: cloud platform limits are bounded to the cloud session's own channel limits.
+    assert "never a build check that could not run there" in sort, (
+        "handback.md sort no longer bounds cloud platform limits to the session's own channel limits"
+    )
+    unreleased = _read("TRANSITION.md").split("## Unreleased", 1)[1].split("\n## ", 1)[0]
+    note = _anchor_whitespace_normalize(unreleased)
+    # bite-axis: TRANSITION's Unreleased note says the same as the handback sort.
+    for phrase in ("whatever caused it", "never a build check that could not run there"):
+        assert phrase in note, "TRANSITION.md ## Unreleased no longer says %r" % phrase
+
+
 def test_grounding_stage_region_markers_match_conventions_10_7():
     """§10.7 + §11: grounding_stage.REGION_MARKERS tracks the PR-body region family."""
     # bite-axis: region-marker SSOT — plugin REGION_MARKERS must match CONVENTIONS §10.7.

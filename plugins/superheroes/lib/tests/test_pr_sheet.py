@@ -2797,6 +2797,8 @@ READER_CASES = [
     pytest.param(ACCEPTING + "- One.\n```\n<!-- superheroes:build-record -->\n```\n- Two.\n", ["One. ``` <!-- superheroes:build-record --> ```", "Two."], id="a-fenced-build-record-marker-does-not-end-the-section"),
     pytest.param(ACCEPTING + "- Keep `<!-- superheroes:build-record -->` as text.\n- Next.\n", ["Keep `<!-- superheroes:build-record -->` as text.", "Next."], id="an-inline-build-record-marker-does-not-end-the-section"),
     pytest.param(ACCEPTING + "- One.\n<!--\n<!-- superheroes:build-record -->\n-->\n- Two.\n", ["One. -->", "Two."], id="a-build-record-marker-inside-a-comment-block-does-not-end-the-section"),
+    pytest.param(ACCEPTING + "- One.\n    " + BUILD_RECORD + "- Two.\n", ["One.", "Two."], id="an-indented-build-record-marker-in-a-list-item-does-not-end-the-section"),
+    pytest.param(BUILD_RECORD + ACCEPTING + "- A costly one.\n", ["A costly one."], id="a-build-record-marker-above-the-heading-does-not-end-the-body"),
 ]
 
 

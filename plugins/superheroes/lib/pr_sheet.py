@@ -15,8 +15,9 @@ writing fails it removes the pictures that run created. --record and --pr-body a
 --pr-body N=FILE names the body of covered PR N (gh api repos/<owner>/<repo>/pulls/N --jq .body, read as UTF-8), and `build`
 needs one for every covered PR (number on a pr sheet, every prs[].number on a stack), no more and no fewer; a missing, extra or
 repeated one, a value that is not <PR number>=<file>, and a file that cannot be read are refusal problems. No acceptance a body
-lists under its "What we're accepting" heading (accepting_listed) becomes a card on its own (the reader stops at the build-record
-marker line, so a deviation listed only in the build record, a harmless one, is never an acceptance and needs no card, while a
+lists under its "What we're accepting" heading (accepting_listed) becomes a card on its own (the reader stops at the first
+build-record marker line at column 0 after that heading; a marker above the heading, indented, fenced or inside a comment is
+plain text, so a deviation listed only in the build record, a harmless one, is never an acceptance and needs no card, while a
 costly one, listed under What we're accepting above the marker, must still be accounted for): the advisor decides which are
 Accept items, which fold into one item and which a leftover card or a Canon ruling already carries, and the input's "accounting"
 says so for every one. Each acceptance has a bullet id, "<PR number>:<10 hex>" (listed_bullets), made from the PR, the
@@ -232,8 +233,8 @@ def _outside_comments(lines):
     and holding no `-->`, through the first later line holding `-->`, and only when such a line exists in the same section
     (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
     A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
-    outside fences only. The build-record marker line, outside a fence and a comment block, ends the body: nothing at or
-    after it is kept, so the build record is never read as an acceptance."""
+    outside fences only. The first build-record marker line at column 0 after the What we're accepting heading ends the body
+    (a marker above the heading, indented, fenced or inside a comment is plain text): nothing after it is kept."""
     kept, fence, column, inside, level, item_column = [], None, 0, False, None, 0
     for n, line in enumerate(lines):
         if fence is not None:
@@ -252,8 +253,8 @@ def _outside_comments(lines):
             if not inside and line.split("-->", 1)[1].strip():
                 kept.append((line, False))
             continue
-        # bite-axis: build-record boundary — nothing at or below the marker is read as an acceptance.
-        if line.strip() == _BUILD_RECORD_MARKER:
+        # bite-axis: build-record boundary — an unindented marker line after the accepting heading ends the body.
+        if level is not None and line.rstrip() == _BUILD_RECORD_MARKER:
             break
         spaced = line.expandtabs(4)
         if line.strip() and len(spaced) - len(spaced.lstrip(" ")) < item_column and not _ITEM.match(line):
@@ -300,8 +301,9 @@ def accepting_listed(body):
     """The acceptances a PR body lists under its What we're accepting heading, in order; [] for no such heading, no
     acceptance, or anything that is not a string. An item is a top-level list item with its nested lines, or a paragraph;
     one that reads None, N/A, NA or Nothing is no acceptance. A line that is none of these is an acceptance, never dropped.
-    The reader stops at the build-record marker line: a deviation listed only in the build record (a harmless one) is never
-    an acceptance and needs no card, while a costly one, listed under What we're accepting, must still be accounted for."""
+    The reader stops at the first build-record marker line at column 0 after the What we're accepting heading (a marker above
+    the heading, indented, fenced or inside a comment is plain text): a deviation listed only in the build record (a harmless
+    one) is never an acceptance and needs no card, while a costly one, listed under What we're accepting, must still be accounted for."""
     if not isinstance(body, str):
         return []
     lines = _outside_comments(body.splitlines())
