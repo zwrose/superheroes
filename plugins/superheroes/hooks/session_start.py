@@ -45,7 +45,7 @@ def _write_host_model_env(value, transcript, transcript_from):
                               (host_model.TRANSCRIPT_ENV, transcript),
                               (host_model.TRANSCRIPT_FROM_ENV, transcript_from)):
                 fh.write("export %s=%s\n" % (name, shlex.quote(val)))
-    except OSError as exc:
+    except (OSError, UnicodeEncodeError) as exc:
         sys.stderr.write(
             "superheroes session_start: could not write host model env (%s)\n"
             % type(exc).__name__)
