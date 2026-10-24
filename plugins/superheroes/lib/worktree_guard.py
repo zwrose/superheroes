@@ -939,7 +939,9 @@ def _hidden_shell_c(raw_tokens):
             return True
         for later in raw_tokens[k + 1:]:
             plain = _plain_word(later)
-            if len(plain) > 1 and plain[0] in "-+" and not plain.startswith("--") and "c" in plain:
+            if len(plain) < 2 or plain[0] not in "-+" or plain == "--":
+                break  # a script operand (or `--`) ends the shell's options; later words are its own
+            if not plain.startswith("--") and "c" in plain:
                 return True
     return False
 

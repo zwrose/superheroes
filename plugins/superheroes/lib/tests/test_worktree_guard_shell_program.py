@@ -72,6 +72,8 @@ def test_a_discard_inside_a_readable_program_is_denied_with_its_next_step(name, 
     'eval "echo hi"',
     "eval -- 'git clean -n'",
     "bash script.sh",
+    "env FOO=1 bash script.sh -c value",
+    "timeout 5 bash script.sh -c value",
 ])
 def test_a_harmless_program_or_script_is_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
