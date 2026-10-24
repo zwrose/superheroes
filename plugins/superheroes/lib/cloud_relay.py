@@ -269,6 +269,18 @@ def _blocks(rec):
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
 
+def _to_session(to, session):
+    """Whether a SendMessage `to` names `session`: the bare name, or the host's disambiguated form
+    `<session> [<ref>]` with exactly one space and a non-empty ref free of whitespace and brackets."""
+    if to == session:
+        return True
+    if not (isinstance(to, str) and to.startswith(session + " [") and to.endswith("]")):
+        return False
+    ref = to[len(session) + 2:-1]
+    # axis: only the bare name or the host's one-space `[ref]` form is this session — a bare ref, another name, a prefix or a loose bracket is not — see bite-proof record wo_2099_relay_check.md
+    return bool(ref) and not any(c.isspace() or c in "[]" for c in ref)
+
+
 def _sends(records, session, after):
     """[(sent text, tool_use id)] of SendMessage calls to `session` stamped at or after `after`,
     and {tool_use id: (success, message)} for the results that read as a JSON object. A call
@@ -295,7 +307,7 @@ def _sends(records, session, after):
                 when = _time(rec.get("timestamp"))
                 if (isinstance(b.get("id"), str) and b["id"] and isinstance(args, dict)
                         and isinstance(args.get("message"), str)
-                        and args.get("to") == session and when is not None and when >= after):
+                        and _to_session(args.get("to"), session) and when is not None and when >= after):
                     sends.append((args["message"], b["id"]))
     return sends, results
 
@@ -310,11 +322,21 @@ def _decide(msg, relay_id, final):
     """(verdict, detail) from the relay's record now; verdict None means keep waiting.
 
     A send belongs to this message only when its text, leading whitespace aside, starts with this
-    message's own complete header line. Every other send is ignored, whatever ids it quotes."""
+    message's own complete header line. Every other send is ignored, whatever ids it quotes.
+
+    The one exception is a send whose text, leading whitespace aside, is exactly the forward text
+    with its header line dropped (a non-empty body): that is this message sent altered. It is
+    provisional while the wait runs, since another pending message with the same body may have
+    produced it, and an exact successful send still reads delivered. At the end of the wait it
+    reads relay-text-mismatch with `headerDropped` true, whatever its result says, before the
+    unconfirmed, failed and silent verdicts. It is never delivered."""
     paths, records = _records(msg["configDir"], relay_id)
     after = _time(msg.get("sentAfter"))
     sends, results = _sends(records, msg["session"], after) if after else ([], {})
     header = FORWARD_HEADER % msg["msgId"]
+    body = msg["forward"][len(header):].lstrip() if msg["forward"].startswith(header) else ""
+    # axis: a send of exactly this message's body with its header line dropped is this message sent altered, never delivered — see bite-proof record wo_2099_fixleg_relay.md
+    dropped = [(t, i) for t, i in sends if body and t.lstrip() == body]
     # axis: a send is this message's only by its own complete header line at the start — see bite-proof record c8a_wo4.md
     sends = [(t, i) for t, i in sends if t.lstrip().startswith(header)]
     other = [t for t, _ in sends if t != msg["forward"]]
@@ -323,17 +345,25 @@ def _decide(msg, relay_id, final):
     exact = [results.get(i) for t, i in sends if t == msg["forward"]]
     if any(r and r[0] for r in exact):
         return "delivered", None
-    failed = [r for r in exact if r and not r[0]]
-    if failed:
-        return "relay-send-failed", {"result": failed[0][1]}
+    # axis: a failed attempt is provisional while the wait runs — a retry's success may still be recorded — see bite-proof record wo_2099_relay_check.md
     if not final:
         return None, None
-    return ("relay-send-unconfirmed" if exact else "relay-silent"), None
+    if dropped:
+        return "relay-text-mismatch", {"firstDifference": _first_difference(msg["forward"], dropped[0][0]),
+                                       "headerDropped": True}
+    if any(r is None for r in exact):
+        return "relay-send-unconfirmed", None
+    failed = [r for r in exact if not r[0]]
+    if failed:
+        return "relay-send-failed", {"result": failed[0][1]}
+    return "relay-silent", None
 
 
 def _say(verdict, msg_id, wait, detail):
     if verdict == "delivered":
         return "Message %s was delivered to the cloud session." % msg_id
+    if verdict == "relay-text-mismatch" and (detail or {}).get("headerDropped"):
+        return "The relay sent message %s with its header line dropped; it was not delivered." % msg_id
     why = {
         "relay-silent": "The relay did not send message %s within %s seconds",
         "relay-send-unconfirmed": "The relay sent message %s but no result for the send appeared "

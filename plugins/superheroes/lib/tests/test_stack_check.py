@@ -1,6 +1,8 @@
 """Fake-based units for stack_check.py. No real gh or network — every gh call is faked."""
+import copy
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1862,3 +1864,850 @@ def test_l2f_read_pr_vet_state_closed_accepted():
     state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
     assert refusal is None
     assert state["state"] == "CLOSED"
+
+
+# --- #2098: REST transport -------------------------------------------------------
+#
+# The REST fixtures are recorded verbatim with `gh api` (see fixtures/stack_rest/). The
+# GraphQL side of the equality test is constructed from them, because GraphQL cannot be
+# recorded from a cloud session.
+
+REST_FIXTURES = Path(__file__).parent / "fixtures" / "stack_rest"
+RREPO = "zwrose/superheroes"
+ROWNER = "zwrose"
+RNAME = "superheroes"
+RPR = 2077
+RSTACK = 2078
+_DELETE = object()
+
+
+def _fixture_json(name):
+    with open(REST_FIXTURES / name, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _fixture_text(name):
+    with open(REST_FIXTURES / name, encoding="utf-8") as fh:
+        return fh.read()
+
+
+PULL_2077 = _fixture_json("pulls_2077.json")
+PULL_2086_UNSTACKED = _fixture_json("pulls_2086_unstacked.json")
+STACKS_2078 = _fixture_json("stacks_2078.json")
+
+
+def _with(obj, path, value):
+    out = copy.deepcopy(obj)
+    node = out
+    for key in path[:-1]:
+        node = node[key]
+    if value is _DELETE:
+        del node[path[-1]]
+    else:
+        node[path[-1]] = value
+    return out
+
+
+def _rest_resp(value):
+    if isinstance(value, (SimpleNamespace, Exception)):
+        return value
+    return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr="")
+
+
+def _pull_argv(pr=RPR):
+    return tuple(sc._rest_pull_argv(ROWNER, RNAME, pr))
+
+
+def _stack_argv(number=RSTACK):
+    return tuple(sc._rest_stack_argv(ROWNER, RNAME, number))
+
+
+def _rest_handlers(pull=None, stack=None, pr=RPR, stack_number=RSTACK):
+    return {
+        _pull_argv(pr): _rest_resp(PULL_2077 if pull is None else pull),
+        _stack_argv(stack_number): _rest_resp(STACKS_2078 if stack is None else stack),
+    }
+
+
+def _read_rest(pull=None, stack=None, pr=RPR, **kwargs):
+    run, calls = _make_run(_rest_handlers(pull=pull, stack=stack, pr=pr))
+    kwargs.setdefault("transport", sc.TRANSPORT_REST)
+    result = sc.read_membership(pr=pr, repo=RREPO, run=run, **kwargs)
+    return result, calls
+
+
+def _graphql_stack_2078_payload():
+    """GraphQL answer for PR 2077 built from the recorded REST files' values.
+
+    Constructed, not recorded: GraphQL cannot be recorded from a cloud session (the
+    proxy refuses it), so this mirrors what the GraphQL query returns for the same stack.
+    """
+    nodes = [
+        {
+            "position": index + 1,
+            "pullRequest": {
+                "number": member["number"],
+                "state": "MERGED",
+                "isDraft": False,
+                "headRefName": member["head"]["ref"],
+                "headRefOid": member["head"]["sha"],
+                "baseRefName": member["base"]["ref"],
+            },
+        }
+        for index, member in enumerate(STACKS_2078["pull_requests"])
+    ]
+    return {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "number": PULL_2077["number"],
+                    "baseRefName": PULL_2077["base"]["ref"],
+                    "headRefName": PULL_2077["head"]["ref"],
+                    "headRefOid": PULL_2077["head"]["sha"],
+                    "stackEntry": {
+                        "position": PULL_2077["stack"]["position"],
+                        "stack": {
+                            "number": STACKS_2078["number"],
+                            "size": PULL_2077["stack"]["size"],
+                            "baseRefName": STACKS_2078["base"]["ref"],
+                            "entries": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": nodes,
+                            },
+                        },
+                    },
+                }
+            }
+        }
+    }
+
+
+def _graphql_argv_2077():
+    return tuple(sc._graphql_argv(ROWNER, RNAME, RPR, sc.DEFAULT_PAGE_SIZE))
+
+
+def _graphql_ok_2077():
+    return SimpleNamespace(
+        returncode=0, stdout=json.dumps(_graphql_stack_2078_payload()), stderr="")
+
+
+def _graphql_refused():
+    return SimpleNamespace(
+        returncode=1,
+        stdout=_fixture_text("graphql_refused.stdout"),
+        stderr=_fixture_text("graphql_refused.stderr"),
+    )
+
+
+def _stack_404():
+    return SimpleNamespace(
+        returncode=1,
+        stdout=_fixture_text("stacks_unknown.stdout"),
+        stderr=_fixture_text("stacks_unknown.stderr"),
+    )
+
+
+def _graphql_result_2077():
+    run, _calls = _make_run({_graphql_argv_2077(): _graphql_ok_2077()})
+    return sc.read_membership(
+        pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_GRAPHQL)
+
+
+# T1: equality
+
+
+def test_r_rest_read_equals_graphql_read():
+    result, calls = _read_rest()
+    assert result["ok"] is True
+    assert result == _graphql_result_2077()
+    assert result["pages"] == 1
+    assert result["stack"] == {"number": 2078, "size": 2, "baseRefName": "main"}
+    assert [m["position"] for m in result["members"]] == [1, 2]
+    assert [m["number"] for m in result["members"]] == [2065, 2077]
+    assert [m["state"] for m in result["members"]] == ["MERGED", "MERGED"]
+    assert calls[0] == ["gh", "api", "repos/zwrose/superheroes/pulls/2077"]
+    assert calls[1] == ["gh", "api", "repos/zwrose/superheroes/stacks/2078"]
+
+
+# T2-T5: auto fallback
+
+
+def _auto_handlers(graphql_responses):
+    handlers = _rest_handlers()
+    handlers[_graphql_argv_2077()] = graphql_responses
+    return handlers
+
+
+def test_r_auto_falls_back_to_rest_on_proxy_graphql_refusal():
+    run, calls = _make_run(_auto_handlers(_graphql_refused()))
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run)
+    assert result == _graphql_result_2077()
+    assert tuple(calls[0]) == _graphql_argv_2077()
+    assert [tuple(c) for c in calls[1:]] == [_pull_argv(), _stack_argv(), _pull_argv(), _stack_argv()]
+
+
+def test_r_auto_without_proxy_refusal_does_not_fall_back():
+    bad = SimpleNamespace(returncode=1, stdout="", stderr="gh: Something went wrong (HTTP 502)")
+    run, calls = _make_run(_auto_handlers(bad))
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "502" in result["detail"]
+    assert [tuple(c) for c in calls] == [_graphql_argv_2077()]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        SimpleNamespace(returncode=1, stdout="", stderr="gh: x (HTTP 403)"),
+        SimpleNamespace(returncode=1, stdout="", stderr="use the REST API"),
+        SimpleNamespace(returncode=0, stdout="(HTTP 403) use the REST API", stderr=""),
+        subprocess.TimeoutExpired(cmd="gh", timeout=1),
+        SimpleNamespace(returncode=0, stdout="not json", stderr=""),
+    ],
+    ids=["only-403", "only-rest-hint", "exit-zero-with-markers", "timeout", "non-json"],
+)
+def test_r_auto_other_first_call_failures_do_not_fall_back(response):
+    run, calls = _make_run(_auto_handlers(response))
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert [tuple(c) for c in calls] == [_graphql_argv_2077()]
+
+
+def test_r_auto_parsed_graphql_refusal_does_not_fall_back():
+    errors = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"errors": [{"message": "(HTTP 403) use the REST API"}]}),
+        stderr="",
+    )
+    run, calls = _make_run(_auto_handlers(errors))
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert [tuple(c) for c in calls] == [_graphql_argv_2077()]
+
+
+def test_r_auto_graphql_refused_on_second_pass_does_not_fall_back():
+    run, calls = _make_run(_auto_handlers([_graphql_ok_2077(), _graphql_refused()]))
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert [tuple(c) for c in calls] == [_graphql_argv_2077(), _graphql_argv_2077()]
+
+
+def test_r_auto_fallback_then_rest_refusal_prefixes_detail():
+    handlers = _auto_handlers(_graphql_refused())
+    handlers[_stack_argv()] = _stack_404()
+    run, _calls = _make_run(handlers)
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["detail"].startswith("graphql refused; rest: ")
+
+
+def test_r_graphql_transport_never_calls_rest():
+    handlers = {_graphql_argv_2077(): _graphql_refused()}
+    run, calls = _make_run(handlers)
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_GRAPHQL)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert [tuple(c) for c in calls] == [_graphql_argv_2077()]
+
+
+# T6: one test per REST refusal clause
+
+
+def test_r_bad_transport_value_refuses():
+    for bad in ("soap", "", None, True, ["rest"]):
+        result = sc.read_membership(
+            pr=RPR, repo=RREPO, transport=bad, run=lambda *a, **k: None)
+        _assert_refusal(result, sc.REASON_BAD_ARGUMENT)
+
+
+def test_r_unstacked_pull_request_is_not_linked():
+    result, calls = _read_rest(pull=PULL_2086_UNSTACKED, pr=2086)
+    _assert_refusal(result, sc.REASON_NOT_LINKED)
+    assert result["pages"] == 0
+    assert len(calls) == 1
+
+
+def test_r_null_stack_is_not_linked():
+    result, _calls = _read_rest(pull=_with(PULL_2077, ("stack",), None))
+    _assert_refusal(result, sc.REASON_NOT_LINKED)
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("number",), "2077"),
+        (("number",), True),
+        (("head", "ref"), _DELETE),
+        (("head", "sha"), 7),
+        (("head",), None),
+        (("base", "ref"), None),
+        (("base",), "main"),
+    ],
+)
+def test_r_malformed_pull_request_fields_refuse(path, value):
+    result, calls = _read_rest(pull=_with(PULL_2077, path, value))
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["pages"] == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("stack",), "main"),
+        (("stack",), []),
+        (("stack", "number"), True),
+        (("stack", "number"), "2078"),
+        (("stack", "position"), "2"),
+        (("stack", "position"), _DELETE),
+        (("stack", "size"), None),
+        (("stack", "size"), 2.0),
+        (("stack", "base", "ref"), _DELETE),
+        (("stack", "base"), "main"),
+    ],
+)
+def test_r_malformed_stack_object_refuses(path, value):
+    result, calls = _read_rest(pull=_with(PULL_2077, path, value))
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert len(calls) == 1
+
+
+def test_r_stack_get_404_refuses_and_names_the_endpoint():
+    run, calls = _make_run(_rest_handlers(stack=_stack_404()))
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "stacks/2078" in result["detail"]
+    assert "Not Found" in result["detail"]
+    assert result["pages"] == 0
+
+
+@pytest.mark.parametrize("endpoint", ["pull", "stack"])
+@pytest.mark.parametrize(
+    "response",
+    [
+        FileNotFoundError("no gh"),
+        OSError("boom"),
+        subprocess.TimeoutExpired(cmd="gh", timeout=120),
+        SimpleNamespace(returncode=1, stdout="", stderr="gh: Server Error (HTTP 500)"),
+        SimpleNamespace(returncode=0, stdout="not json", stderr=""),
+        SimpleNamespace(returncode=0, stdout="", stderr=""),
+        SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+        SimpleNamespace(returncode=0, stdout="null", stderr=""),
+    ],
+    ids=["file-not-found", "oserror", "timeout", "exit-1", "non-json", "empty", "array", "null"],
+)
+def test_r_transport_failures_on_either_get_refuse(endpoint, response):
+    handlers = _rest_handlers()
+    handlers[_pull_argv() if endpoint == "pull" else _stack_argv()] = response
+    run, _calls = _make_run(handlers)
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    expected = "pulls/2077" if endpoint == "pull" else "stacks/2078"
+    assert expected in result["detail"]
+    assert result["pages"] == 0
+
+
+@pytest.mark.parametrize("endpoint", ["pull", "stack"])
+def test_r_gh_exits_nonzero_with_valid_json_stdout_refuses(endpoint):
+    valid = PULL_2077 if endpoint == "pull" else STACKS_2078
+    failed = SimpleNamespace(returncode=1, stdout=json.dumps(valid), stderr="gh: Bad Gateway (HTTP 502)")
+    handlers = _rest_handlers()
+    handlers[_pull_argv() if endpoint == "pull" else _stack_argv()] = failed
+    run, _calls = _make_run(handlers)
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "HTTP 502" in result["detail"]
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("number",), "2078"),
+        (("number",), True),
+        (("base", "ref"), _DELETE),
+        (("base",), None),
+        (("pull_requests",), {}),
+        (("pull_requests",), _DELETE),
+    ],
+)
+def test_r_malformed_stack_response_refuses(path, value):
+    result, _calls = _read_rest(stack=_with(STACKS_2078, path, value))
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["pages"] == 1
+
+
+def test_r_stack_number_mismatch_is_order_mismatch():
+    result, _calls = _read_rest(stack=_with(STACKS_2078, ("number",), 9999))
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert "number" in result["detail"]
+
+
+def test_r_stack_base_mismatch_is_order_mismatch():
+    result, _calls = _read_rest(stack=_with(STACKS_2078, ("base", "ref"), "develop"))
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert "base" in result["detail"]
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("pull_requests", 1, "state"), "merged"),
+        (("pull_requests", 1, "state"), "OPEN"),
+        (("pull_requests", 1, "state"), None),
+        (("pull_requests", 1, "merged_at"), 5),
+        (("pull_requests", 1, "draft"), "no"),
+        (("pull_requests", 1, "draft"), _DELETE),
+        (("pull_requests", 0, "head"), _DELETE),
+        (("pull_requests", 0, "head", "sha"), 1),
+        (("pull_requests", 0, "base", "ref"), None),
+        (("pull_requests", 0, "number"), "2065"),
+        (("pull_requests", 0), "not-an-object"),
+    ],
+)
+def test_r_malformed_member_refuses(path, value):
+    result, _calls = _read_rest(stack=_with(STACKS_2078, path, value))
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert result["pages"] == 1
+
+
+def test_r_member_states_map_to_graphql_vocabulary():
+    stack = copy.deepcopy(STACKS_2078)
+    stack["pull_requests"][0]["state"] = "closed"
+    stack["pull_requests"][0]["merged_at"] = None
+    stack["pull_requests"][0]["draft"] = True
+    stack["pull_requests"][1]["state"] = "open"
+    stack["pull_requests"][1]["merged_at"] = None
+    result, _calls = _read_rest(stack=stack)
+    assert result["ok"] is True
+    assert [m["state"] for m in result["members"]] == ["CLOSED", "OPEN"]
+    assert result["members"][0]["isDraft"] is True
+
+
+def test_r_more_members_than_size_refuses():
+    stack = copy.deepcopy(STACKS_2078)
+    extra = copy.deepcopy(stack["pull_requests"][1])
+    extra["number"] = 2090
+    stack["pull_requests"].append(extra)
+    result, _calls = _read_rest(stack=stack)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "exceed stack size" in result["detail"]
+
+
+def test_r_fewer_members_than_size_is_order_mismatch():
+    stack = copy.deepcopy(STACKS_2078)
+    del stack["pull_requests"][0]
+    result, _calls = _read_rest(stack=stack)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def test_r_expect_stack_mismatch_is_order_mismatch():
+    result, _calls = _read_rest(expect_stack=1)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert "expect_stack" in result["detail"]
+    ok_result, _calls = _read_rest(expect_stack=RSTACK)
+    assert ok_result["ok"] is True
+
+
+def test_r_queried_pull_request_not_at_its_position_is_order_mismatch():
+    stack = copy.deepcopy(STACKS_2078)
+    stack["pull_requests"].reverse()
+    result, _calls = _read_rest(stack=stack)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def test_r_queried_member_head_mismatch_is_order_mismatch():
+    result, _calls = _read_rest(stack=_with(STACKS_2078, ("pull_requests", 1, "head", "sha"), "f" * 40))
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+
+
+def _fake_monotonic(monkeypatch, times):
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+
+
+def test_r_deadline_exhausted_before_the_first_get_refuses(monkeypatch):
+    _fake_monotonic(monkeypatch, [0, 100])
+    result, calls = _read_rest(deadline=100.0)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "100" in result["detail"]
+    assert calls == []
+
+
+def test_r_deadline_exhausted_before_the_stack_get_refuses(monkeypatch):
+    _fake_monotonic(monkeypatch, [0, 1, 100])
+    result, calls = _read_rest(deadline=100.0)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert len(calls) == 1
+
+
+def test_r_effective_timeout_is_bounded_by_remaining_budget(monkeypatch):
+    _fake_monotonic(monkeypatch, [0, 1, 40, 41, 42])
+    run, _calls = _make_run(_rest_handlers())
+    sc.read_membership(
+        pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST, timeout=120, deadline=50.0)
+    assert run.kw_calls[0]["timeout"] == 10.0
+
+
+def test_r_timeout_none_with_deadline_uses_remaining_budget(monkeypatch):
+    _fake_monotonic(monkeypatch, [0, 1, 40])
+    run, _calls = _make_run(_rest_handlers())
+    result = sc.read_membership(
+        pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST, timeout=None, deadline=50.0)
+    assert isinstance(result, dict)
+    assert run.kw_calls[0]["timeout"] == 10.0
+
+
+def test_r_no_deadline_leaves_timeout_untouched():
+    run, _calls = _make_run(_rest_handlers())
+    sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST, timeout=77)
+    assert run.kw_calls[0]["timeout"] == 77
+
+
+# T7: the second pass must match the first pass's whole snapshot
+
+
+def test_r_graphql_second_pass_different_stack_number_is_order_mismatch():
+    def _page(stack_number):
+        return _graphql_ok(_pull_request(
+            pr_number=PR, position=1, stack_number=stack_number, stack_size=2,
+            nodes=[_member(1, number=PR), _member(2)]))
+
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): [_page(7), _page(8)]})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run, transport=sc.TRANSPORT_GRAPHQL)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "stack snapshot changed between enumeration passes"
+
+
+def test_r_rest_second_pass_different_stack_number_is_order_mismatch():
+    pull_b = _with(PULL_2077, ("stack", "number"), 2079)
+    stack_b = _with(STACKS_2078, ("number",), 2079)
+    handlers = {
+        _pull_argv(): [_rest_resp(PULL_2077), _rest_resp(pull_b)],
+        _stack_argv(2078): _rest_resp(STACKS_2078),
+        _stack_argv(2079): _rest_resp(stack_b),
+    }
+    run, _calls = _make_run(handlers)
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "stack snapshot changed between enumeration passes"
+
+
+def test_r_rest_second_pass_member_drift_keeps_the_membership_refusal():
+    stack_b = _with(STACKS_2078, ("pull_requests", 0, "head", "sha"), "a" * 40)
+    handlers = {
+        _pull_argv(): _rest_resp(PULL_2077),
+        _stack_argv(): [_rest_resp(STACKS_2078), _rest_resp(stack_b)],
+    }
+    run, _calls = _make_run(handlers)
+    result = sc.read_membership(pr=RPR, repo=RREPO, run=run, transport=sc.TRANSPORT_REST)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "membership changed between enumeration passes"
+
+
+# T8: CLI
+
+
+def test_r_cli_transport_rest_prints_the_success_json(capsys, monkeypatch):
+    run, _calls = _make_run(_rest_handlers())
+    monkeypatch.setattr(subprocess, "run", run)
+    rc = sc.main(["list", "--pr", str(RPR), "--repo", RREPO, "--transport", "rest"])
+    printed = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert printed == _graphql_result_2077()
+
+
+def test_r_cli_transport_defaults_to_auto(capsys, monkeypatch):
+    handlers = _auto_handlers(_graphql_refused())
+    run, calls = _make_run(handlers)
+    monkeypatch.setattr(subprocess, "run", run)
+    rc = sc.main(["list", "--pr", str(RPR), "--repo", RREPO])
+    printed = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert printed["ok"] is True
+    assert tuple(calls[0]) == _graphql_argv_2077()
+
+
+def test_r_cli_bogus_transport_is_bad_argument(capsys):
+    rc = sc.main(["list", "--pr", str(RPR), "--repo", RREPO, "--transport", "bogus"])
+    out = capsys.readouterr().out
+    _assert_refusal(json.loads(out), sc.REASON_BAD_ARGUMENT)
+    assert rc == 1
+    assert "usage:" not in out.lower()
+
+
+# --- #2108: vet-state and repo-slug REST fallback ---------------------------------------
+#
+# The refusal is the one recorded from `gh pr view` / `gh repo view` in a cloud session
+# (no parentheses around HTTP 403); the REST answers are the recorded `gh api` files. The
+# GraphQL side of each equality is the unchanged GraphQL path fed the same fixture's values.
+
+PULL_2111_DRAFT = _fixture_json("pulls_2111_open_draft.json")
+PULL_2093_OPEN = _fixture_json("pulls_2093_open.json")
+PULL_2075_CLOSED = _fixture_json("pulls_2075_closed_unmerged.json")
+REPO_SUPERHEROES = _fixture_json("repos_superheroes.json")
+FALLBACK_PREFIX = "graphql refused; rest: "
+
+
+def _view_refused():
+    return SimpleNamespace(
+        returncode=1, stdout="", stderr=_fixture_text("gh_view_refused.stderr"))
+
+
+def _vet_view_argv(pr):
+    return tuple(sc._pr_vet_state_argv(pr, RREPO))
+
+
+def _slug_rest_argv():
+    return tuple(sc._rest_repo_argv())
+
+
+def _vet_fallback(pull, pr=None, view=None, rest=None, **kwargs):
+    pr = pull["number"] if pr is None else pr
+    run, calls = _make_run({
+        _vet_view_argv(pr): _view_refused() if view is None else view,
+        _pull_argv(pr): _rest_resp(pull if rest is None else rest),
+    })
+    state, refusal = sc.read_pr_vet_state(pr, RREPO, run=run, **kwargs)
+    return state, refusal, calls, run
+
+
+def _slug_fallback(repo_payload=None, view=None, rest=None, **kwargs):
+    run, calls = _make_run({
+        _repo_slug_argv(): _view_refused() if view is None else view,
+        _slug_rest_argv(): _rest_resp(REPO_SUPERHEROES if repo_payload is None else repo_payload)
+        if rest is None else rest,
+    })
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run, **kwargs)
+    return slug, refusal, calls, run
+
+
+def _assert_fallback_refusal(refusal):
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert refusal["detail"].startswith(FALLBACK_PREFIX)
+
+
+@pytest.mark.parametrize(
+    "pull,graphql_state",
+    [
+        (PULL_2077, "MERGED"),
+        (PULL_2111_DRAFT, "OPEN"),
+        (PULL_2093_OPEN, "OPEN"),
+        (PULL_2075_CLOSED, "CLOSED"),
+    ],
+    ids=["merged", "open-draft", "open", "closed-unmerged"],
+)
+def test_v_vet_state_rest_fallback_equals_graphql_read(pull, graphql_state):
+    # axis: REST fallback missing or mapping a pull field differently from the GraphQL read
+    pr = pull["number"]
+    graphql_run, _graphql_calls = _make_run({
+        _vet_view_argv(pr): _pr_vet_ok(
+            head_ref_oid=pull["head"]["sha"],
+            state=graphql_state,
+            is_draft=pull["draft"],
+            body=pull["body"] or "",
+        ),
+    })
+    expected = sc.read_pr_vet_state(pr, RREPO, run=graphql_run)
+    assert expected[1] is None
+    assert expected[0]["state"] == graphql_state
+
+    state, refusal, calls, _run = _vet_fallback(pull)
+    assert refusal is None
+    assert (state, refusal) == expected
+    assert calls == [list(_vet_view_argv(pr)), list(_pull_argv(pr))]
+
+
+def test_v_vet_state_rest_null_body_is_the_empty_string():
+    # axis: null REST body not normalised to the empty string
+    state, refusal, _calls, _run = _vet_fallback(_with(PULL_2093_OPEN, ("body",), None))
+    assert refusal is None
+    assert state["body"] == ""
+
+
+def test_v_vet_state_fallback_passes_env_to_both_calls():
+    # axis: env not passed to the REST call (or the GraphQL call) of the vet-state fallback
+    env = {"GH_TOKEN": "x"}
+    _state, _refusal, _calls, run = _vet_fallback(PULL_2093_OPEN, env=env)
+    assert [kw["env"] for kw in run.kw_calls] == [env, env]
+
+
+def test_v_repo_slug_rest_fallback_equals_graphql_read():
+    # axis: REST fallback missing or yielding a slug different from the GraphQL read
+    graphql_run, _graphql_calls = _make_run(
+        {_repo_slug_argv(): _repo_slug_ok(REPO_SUPERHEROES["full_name"])})
+    expected = sc.resolve_repo_slug(REPO_ROOT, run=graphql_run)
+    assert expected == ("zwrose/superheroes", None)
+
+    slug, refusal, calls, run = _slug_fallback()
+    assert (slug, refusal) == expected
+    assert calls == [list(_repo_slug_argv()), ["gh", "api", "repos/{owner}/{repo}"]]
+    assert run.kw_calls[1]["cwd"] == REPO_ROOT
+    assert run.kw_calls[0]["cwd"] == REPO_ROOT
+
+
+def test_v_repo_slug_fallback_passes_env_to_both_calls():
+    # axis: env not passed to the REST call (or the GraphQL call) of the repo-slug fallback
+    env = {"GH_TOKEN": "x"}
+    _slug, _refusal, _calls, run = _slug_fallback(env=env)
+    assert [kw["env"] for kw in run.kw_calls] == [env, env]
+
+
+# Each factory takes the otherwise-valid success payload and returns a failed REST answer.
+_REST_FAILURES = [
+    lambda valid: SimpleNamespace(
+        returncode=1, stdout=json.dumps(valid), stderr="gh: Bad Gateway (HTTP 502)"),
+    lambda valid: subprocess.TimeoutExpired(cmd="gh", timeout=120),
+    lambda valid: SimpleNamespace(returncode=0, stdout="not json", stderr=""),
+    lambda valid: SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+]
+_REST_FAILURE_IDS = ["exit-1-with-json-stdout", "timeout", "non-json", "json-array"]
+
+
+@pytest.mark.parametrize("failure", _REST_FAILURES, ids=_REST_FAILURE_IDS)
+def test_v_vet_state_rest_failure_after_refusal_refuses(failure):
+    # axis: REST failure after the refusal not refused, or refused without the fallback prefix
+    state, refusal, calls, _run = _vet_fallback(
+        PULL_2093_OPEN, rest=failure(PULL_2093_OPEN))
+    assert state is None
+    _assert_fallback_refusal(refusal)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", _REST_FAILURES, ids=_REST_FAILURE_IDS)
+def test_v_repo_slug_rest_failure_after_refusal_refuses(failure):
+    # axis: REST failure after the refusal not refused, or refused without the fallback prefix
+    slug, refusal, calls, _run = _slug_fallback(rest=failure(REPO_SUPERHEROES))
+    assert slug is None
+    _assert_fallback_refusal(refusal)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "pull,path,value",
+    [
+        (PULL_2093_OPEN, ("state",), _DELETE),
+        (PULL_2093_OPEN, ("state",), "all"),
+        (PULL_2093_OPEN, ("state",), "OPEN"),
+        (PULL_2077, ("merged",), _DELETE),
+        (PULL_2077, ("merged",), "true"),
+        (PULL_2077, ("merged",), 1),
+        (PULL_2075_CLOSED, ("merged",), 0),
+        (PULL_2077, ("merged_at",), _DELETE),
+        (PULL_2077, ("merged_at",), 5),
+        (PULL_2077, ("merged_at",), ""),
+        (PULL_2077, ("merged_at",), None),
+        (PULL_2075_CLOSED, ("merged_at",), "2026-10-23T19:39:34Z"),
+        (_with(_with(PULL_2093_OPEN, ("merged",), True), ("merged_at",), "2026-10-23T19:39:34Z"),
+         ("state",), "open"),
+        (PULL_2093_OPEN, ("draft",), _DELETE),
+        (PULL_2093_OPEN, ("draft",), "no"),
+        (PULL_2093_OPEN, ("head",), "abc"),
+        (PULL_2093_OPEN, ("head",), None),
+        (PULL_2093_OPEN, ("head", "sha"), _DELETE),
+        (PULL_2093_OPEN, ("head", "sha"), "abc123"),
+        (PULL_2093_OPEN, ("head", "sha"), "A" * 40),
+        (PULL_2093_OPEN, ("body",), _DELETE),
+        (PULL_2093_OPEN, ("body",), 7),
+    ],
+    ids=[
+        "state-missing", "state-unknown", "state-uppercase",
+        "merged-missing", "merged-not-bool", "merged-int-one", "merged-int-zero",
+        "merged-at-missing", "merged-at-int", "merged-at-empty",
+        "merged-without-merged-at", "unmerged-with-merged-at",
+        "open-but-merged",
+        "draft-missing", "draft-not-bool",
+        "head-not-object", "head-null", "head-sha-missing", "head-sha-short", "head-sha-uppercase",
+        "body-missing", "body-not-string",
+    ],
+)
+def test_v_vet_state_malformed_rest_fields_refuse(pull, path, value):
+    # axis: a malformed or inconsistent REST pull field accepted instead of refused
+    state, refusal, calls, _run = _vet_fallback(pull, rest=_with(pull, path, value))
+    assert state is None
+    _assert_fallback_refusal(refusal)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_DELETE, "", 7, "no-slash", None],
+    ids=["missing", "empty", "not-a-string", "no-slash", "null"],
+)
+def test_v_repo_slug_malformed_full_name_refuses(value):
+    # axis: a malformed REST full_name accepted instead of refused
+    slug, refusal, calls, _run = _slug_fallback(_with(REPO_SUPERHEROES, ("full_name",), value))
+    assert slug is None
+    _assert_fallback_refusal(refusal)
+    assert "full_name" in refusal["detail"]
+    assert len(calls) == 2
+
+
+_NOT_THE_REFUSAL = [
+    SimpleNamespace(returncode=1, stdout="", stderr="gh: Something went wrong (HTTP 502)"),
+    SimpleNamespace(returncode=1, stdout="", stderr="gh: x HTTP 403"),
+    SimpleNamespace(returncode=1, stdout="", stderr="use the REST API"),
+    SimpleNamespace(returncode=0, stdout="HTTP 403 use the REST API", stderr=""),
+]
+_NOT_THE_REFUSAL_IDS = ["http-502", "only-403", "only-rest-hint", "exit-zero-with-markers"]
+
+
+@pytest.mark.parametrize("view", _NOT_THE_REFUSAL, ids=_NOT_THE_REFUSAL_IDS)
+def test_v_vet_state_without_the_refusal_makes_one_call_and_refuses(view):
+    # axis: REST fallback taken although the GraphQL failure is not the proxy refusal
+    state, refusal, calls, _run = _vet_fallback(PULL_2093_OPEN, view=view)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert not refusal["detail"].startswith(FALLBACK_PREFIX)
+    assert calls == [list(_vet_view_argv(PULL_2093_OPEN["number"]))]
+
+
+@pytest.mark.parametrize("view", _NOT_THE_REFUSAL, ids=_NOT_THE_REFUSAL_IDS)
+def test_v_repo_slug_without_the_refusal_makes_one_call_and_refuses(view):
+    # axis: REST fallback taken although the GraphQL failure is not the proxy refusal
+    slug, refusal, calls, _run = _slug_fallback(view=view)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert not refusal["detail"].startswith(FALLBACK_PREFIX)
+    assert calls == [list(_repo_slug_argv())]
+
+
+@pytest.mark.parametrize(
+    "refusal_proc",
+    [
+        SimpleNamespace(
+            returncode=1,
+            stdout=_fixture_text("graphql_refused.stdout"),
+            stderr=_fixture_text("graphql_refused.stderr")),
+        SimpleNamespace(
+            returncode=1, stdout="", stderr=_fixture_text("gh_view_refused.stderr")),
+    ],
+    ids=["gh-api-graphql", "gh-view"],
+)
+def test_v_both_recorded_refusals_satisfy_the_predicate(refusal_proc):
+    # axis: a recorded refusal shape (gh api graphql or gh view) not matched by the predicate
+    assert sc._is_graphql_proxy_refusal_proc(refusal_proc) is True
+    assert sc._is_graphql_proxy_refusal([refusal_proc]) is True
+
+
+def test_v_vet_state_deadline_exhausted_before_the_rest_get_refuses(monkeypatch):
+    # axis: deadline not honoured before the REST GET — gh called after the deadline is spent
+    _fake_monotonic(monkeypatch, [0, 1, 2, 100])
+    state, refusal, calls, _run = _vet_fallback(PULL_2093_OPEN, deadline=100.0)
+    assert state is None
+    _assert_fallback_refusal(refusal)
+    assert calls == [list(_vet_view_argv(PULL_2093_OPEN["number"]))]
+
+
+def test_v_repo_slug_deadline_exhausted_before_the_rest_get_refuses(monkeypatch):
+    # axis: deadline not honoured before the REST GET — gh called after the deadline is spent
+    _fake_monotonic(monkeypatch, [0, 1, 2, 100])
+    slug, refusal, calls, _run = _slug_fallback(deadline=100.0)
+    assert slug is None
+    _assert_fallback_refusal(refusal)
+    assert calls == [list(_repo_slug_argv())]

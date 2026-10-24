@@ -24,6 +24,16 @@ DEFAULT_PAGE_SIZE = 50
 MIN_PAGE_SIZE = 1
 MAX_PAGE_SIZE = 100
 
+TRANSPORT_AUTO = "auto"
+TRANSPORT_GRAPHQL = "graphql"
+TRANSPORT_REST = "rest"
+TRANSPORTS = (TRANSPORT_AUTO, TRANSPORT_GRAPHQL, TRANSPORT_REST)
+
+# The cloud proxy's GraphQL refusal. `gh api graphql` ends its stderr "... (HTTP 403)";
+# `gh pr view` and `gh repo view` start theirs "HTTP 403: ..." with no parentheses. Only a gh
+# call that exited non-zero with both strings in its output restarts a read on REST.
+GRAPHQL_REFUSED_MARKERS = ("HTTP 403", "use the REST API")
+
 REASON_BAD_ARGUMENT = "bad-argument"
 REASON_NOT_LINKED = "not-linked"
 REASON_STACK_UNREADABLE = "stack-unreadable"
@@ -37,6 +47,7 @@ VET_NOT_READY = "vet-not-ready"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_SHA40_LOWER_RE = re.compile(r"^[0-9a-f]{40}\Z")
 PR_VET_STATE_VALUES = frozenset({"OPEN", "CLOSED", "MERGED"})
 
 # Machine-readable home: rubric/vet-verdict-form.json (loaded lazily on first
@@ -302,7 +313,7 @@ def _parse_member(node):
     )
 
 
-def _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline):
+def _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline, transport=TRANSPORT_AUTO):
     """Return None when arguments are good, or the refusal dict to return."""
     # axis: pr is not an int (bool is not an int here)
     if not _is_int(pr):
@@ -359,6 +370,11 @@ def _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline):
     if deadline is not None and not (deadline > 0):
         return _refusal(REASON_BAD_ARGUMENT,
             "deadline must be a positive number of seconds", repo=repo, pr=pr)
+
+    # axis: transport is not one of auto, graphql, rest
+    if transport not in TRANSPORTS:
+        return _refusal(REASON_BAD_ARGUMENT,
+            "transport must be one of %s" % ", ".join(TRANSPORTS), repo=repo, pr=pr)
 
     # axis: gh is not on PATH
     if not shutil.which("gh"):
@@ -549,6 +565,7 @@ def _validate_stack_invariants(
     pages,
     prior_members,
     verification_pass,
+    prior_snapshot=None,
 ):
     """Whole-stack invariants after pagination. Return tagged refusal, continue, or success."""
     # axis: expect_stack was supplied and does not equal stack.number
@@ -588,13 +605,19 @@ def _validate_stack_invariants(
 
     if verification_pass == 0:
         return {"tag": _INVARIANT_TAG_CONTINUE,
-            "prior_members": sorted(collected, key=lambda item: item["position"])}
+            "prior_members": sorted(collected, key=lambda item: item["position"]),
+            "prior_snapshot": snapshot}
 
     current_members = sorted(collected, key=lambda item: item["position"])
     # axis: membership changes between two complete enumeration passes
     if current_members != prior_members:
         return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
             "membership changed between enumeration passes", repo=repo, pr=pr, pages=pages)}
+
+    # axis: the stack snapshot (not only the members) changes between two complete enumeration passes
+    if snapshot != prior_snapshot:
+        return {"tag": _INVARIANT_TAG_REFUSAL, "result": _refusal(REASON_ORDER_MISMATCH,
+            "stack snapshot changed between enumeration passes", repo=repo, pr=pr, pages=pages)}
 
     members = sorted(collected, key=lambda item: item["position"])
     stack = {
@@ -661,16 +684,28 @@ def _parse_repo_slug_payload(proc):
         return None, _read_refusal(
             REASON_STACK_UNREADABLE, "gh repo view returned JSON that is not an object")
 
-    name = payload.get("nameWithOwner")
+    return _validate_repo_slug(payload.get("nameWithOwner"), "nameWithOwner")
+
+
+def _validate_repo_slug(name, field):
+    """Return (slug, refusal) for the owner/name string read from `field`."""
     if not isinstance(name, str) or not name:
         return None, _read_refusal(
-            REASON_STACK_UNREADABLE, "nameWithOwner is missing, not a string, or empty")
+            REASON_STACK_UNREADABLE, "%s is missing, not a string, or empty" % field)
 
     if not _REPO_RE.match(name):
         return None, _read_refusal(
-            REASON_STACK_UNREADABLE, "nameWithOwner is not a valid owner/name slug")
+            REASON_STACK_UNREADABLE, "%s is not a valid owner/name slug" % field)
 
     return name, None
+
+
+def _rest_repo_argv():
+    return ["gh", "api", "repos/{owner}/{repo}"]
+
+
+def _graphql_refused_rest_refusal(refusal):
+    return _read_refusal(refusal["reason"], "graphql refused; rest: " + refusal["detail"])
 
 
 def _pr_vet_state_argv(pr, repo):
@@ -695,6 +730,81 @@ def _parse_pr_vet_state_payload(proc, pr):
         return None, _read_refusal(
             REASON_STACK_UNREADABLE, "gh pr view returned JSON that is not an object")
 
+    return _validate_pr_vet_state(payload, pr)
+
+
+def _pr_vet_state_from_rest(pull):
+    """Map a REST pull-request object to the GraphQL vet payload. Return (payload, refusal)."""
+    state = pull.get("state")
+    # axis: REST state is missing or not open/closed
+    if state not in (_REST_STATE_OPEN, _REST_STATE_CLOSED):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is missing or not open or closed: %r" % (state,))
+
+    merged = pull.get("merged")
+    # axis: REST merged is missing or not a boolean
+    if not isinstance(merged, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "merged is missing or not a boolean")
+
+    # axis: REST merged_at key is missing
+    if "merged_at" not in pull:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "merged_at is missing")
+    merged_at = pull["merged_at"]
+    # axis: REST merged_at is neither null nor a non-empty string
+    if merged_at is not None and (not isinstance(merged_at, str) or not merged_at):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "merged_at is neither null nor a non-empty string")
+
+    # axis: REST merged and merged_at disagree
+    if merged != (merged_at is not None):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "merged and merged_at disagree")
+
+    # axis: REST reports an open pull request as merged
+    if state == _REST_STATE_OPEN and merged:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is open but merged is true")
+
+    draft = pull.get("draft")
+    # axis: REST draft is missing or not a boolean
+    if not isinstance(draft, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "draft is missing or not a boolean")
+
+    head = pull.get("head")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    # axis: REST head is not an object, or head.sha is not 40 lowercase hex
+    if not isinstance(head_sha, str) or not _SHA40_LOWER_RE.match(head_sha):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "head.sha is missing, not a string, or not 40 lowercase hex")
+
+    # axis: REST body key is missing, or neither a string nor null
+    if "body" not in pull:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "body is missing")
+    body = pull["body"]
+    if body is None:
+        body = ""
+    if not isinstance(body, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "body is neither a string nor null")
+
+    if merged:
+        mapped_state = "MERGED"
+    elif state == _REST_STATE_OPEN:
+        mapped_state = "OPEN"
+    else:
+        mapped_state = "CLOSED"
+    return {
+        "state": mapped_state,
+        "isDraft": draft,
+        "headRefOid": head_sha,
+        "body": body,
+    }, None
+
+
+def _validate_pr_vet_state(payload, pr):
+    """Return (state, refusal) from a GraphQL-shaped vet payload — the checks both reads share."""
     state = payload.get("state")
     if not isinstance(state, str):
         return None, _read_refusal(
@@ -777,7 +887,22 @@ def read_pr_vet_state(pr, repo, *, deadline=None, timeout=GH_TIMEOUT, run=None, 
     except subprocess.TimeoutExpired:
         return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
 
-    return _parse_pr_vet_state_payload(proc, pr)
+    if not _is_graphql_proxy_refusal_proc(proc):
+        return _parse_pr_vet_state_payload(proc, pr)
+
+    # The cloud proxy refused GraphQL: re-read the same pull request through REST.
+    owner, name = repo.split("/", 1)
+    pull, refusal = _transport_rest(
+        _rest_pull_argv(owner, name, pr), timeout, run, repo, pr, 0,
+        deadline=deadline, deadline_at=deadline_at, run_kwargs=run_kwargs)
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    payload, refusal = _pr_vet_state_from_rest(pull)
+    if refusal is None:
+        state, refusal = _validate_pr_vet_state(payload, pr)
+        if refusal is None:
+            return state, None
+    return None, _graphql_refused_rest_refusal(refusal)
 
 
 def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
@@ -823,7 +948,20 @@ def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None,
     except subprocess.TimeoutExpired:
         return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
 
-    return _parse_repo_slug_payload(proc)
+    if not _is_graphql_proxy_refusal_proc(proc):
+        return _parse_repo_slug_payload(proc)
+
+    # The cloud proxy refused GraphQL: gh fills the placeholders from the checkout's remote.
+    repo_payload, refusal = _transport_rest(
+        _rest_repo_argv(), timeout, run, None, None, 0,
+        deadline=deadline, deadline_at=deadline_at,
+        run_kwargs=dict(cwd=repo_root, **run_kwargs))
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    slug, refusal = _validate_repo_slug(repo_payload.get("full_name"), "full_name")
+    if refusal is not None:
+        return None, _graphql_refused_rest_refusal(refusal)
+    return slug, None
 
 
 def same_commit(a, b):
@@ -916,6 +1054,275 @@ def read_vet_verdict(body, head_sha):
     return _parse_vet_verdict_line(line, head_sha, separator, tokens), None
 
 
+def _rest_pull_argv(owner, name, pr):
+    return ["gh", "api", "repos/%s/%s/pulls/%d" % (owner, name, pr)]
+
+
+def _rest_stack_argv(owner, name, number):
+    return ["gh", "api", "repos/%s/%s/stacks/%d" % (owner, name, number)]
+
+
+def _transport_rest(
+    argv, timeout, run, repo, pr, pages, deadline=None, deadline_at=None, *, run_kwargs=None,
+):
+    """Run one gh api REST GET. Return (payload, refusal) — exactly one is non-None.
+
+    run_kwargs are passed through to run (env, cwd) for the single-read callers."""
+    endpoint = argv[-1]
+    # axis: read budget exhausted before a REST GET
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted after %d pages" % (deadline, pages),
+            repo=repo, pr=pr, pages=pages)
+
+    effective_timeout = _effective_timeout(timeout, deadline_at)
+    try:
+        proc = run(
+            argv, capture_output=True, text=True, timeout=effective_timeout,
+            **(run_kwargs or {}))
+    except (FileNotFoundError, OSError) as exc:
+        # axis: REST run raises FileNotFoundError/OSError
+        return None, _refusal(REASON_STACK_UNREADABLE, "gh api %s: %s" % (endpoint, exc),
+            repo=repo, pr=pr, pages=pages)
+    except subprocess.TimeoutExpired:
+        # axis: REST run raises subprocess.TimeoutExpired
+        return None, _refusal(REASON_STACK_UNREADABLE, "gh api %s timed out" % endpoint,
+            repo=repo, pr=pr, pages=pages)
+
+    # axis: REST gh exits non-zero
+    if proc.returncode != 0:
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "gh api %s failed: %s" % (endpoint, _proc_output(proc) or "no output"),
+            repo=repo, pr=pr, pages=pages)
+
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        # axis: REST stdout is not JSON
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "gh api %s returned output that is not JSON" % endpoint, repo=repo, pr=pr, pages=pages)
+
+    # axis: REST parsed JSON is not an object
+    if not isinstance(payload, dict):
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "gh api %s returned JSON that is not an object" % endpoint, repo=repo, pr=pr, pages=pages)
+
+    return payload, None
+
+
+def _parse_rest_pull(pull, repo, pr, pages):
+    """Return (snapshot, refusal) from the pull-request GET — exactly one is non-None."""
+    head = pull.get("head")
+    base = pull.get("base")
+    pr_number = pull.get("number")
+    head_ref = head.get("ref") if isinstance(head, dict) else None
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    base_ref = base.get("ref") if isinstance(base, dict) else None
+    # axis: a required REST pull-request field is missing or of the wrong type
+    if (
+        not _is_int(pr_number)
+        or not isinstance(head_ref, str)
+        or not isinstance(head_sha, str)
+        or not isinstance(base_ref, str)
+    ):
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "required pull request field is missing or of the wrong type",
+            repo=repo, pr=pr, pages=pages)
+
+    stack = pull.get("stack")
+    # axis: REST stack key is absent or null
+    if stack is None:
+        return None, _refusal(REASON_NOT_LINKED,
+            "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
+
+    stack_number = stack.get("number") if isinstance(stack, dict) else None
+    stack_position = stack.get("position") if isinstance(stack, dict) else None
+    stack_size = stack.get("size") if isinstance(stack, dict) else None
+    stack_base = stack.get("base") if isinstance(stack, dict) else None
+    stack_base_ref = stack_base.get("ref") if isinstance(stack_base, dict) else None
+    # axis: REST stack is not an object, or number/position/size/base.ref wrong type
+    if (
+        not isinstance(stack, dict)
+        or not _is_int(stack_number)
+        or not _is_int(stack_position)
+        or not _is_int(stack_size)
+        or not isinstance(stack_base_ref, str)
+    ):
+        return None, _refusal(REASON_STACK_UNREADABLE, "stack field is missing or of the wrong type",
+            repo=repo, pr=pr, pages=pages)
+
+    return {
+        "pr_number": pr_number,
+        "pr_baseRefName": base_ref,
+        "pr_headRefName": head_ref,
+        "pr_headRefOid": head_sha,
+        "position": stack_position,
+        "stack_number": stack_number,
+        "stack_size": stack_size,
+        "stack_baseRefName": stack_base_ref,
+    }, None
+
+
+_REST_STATE_OPEN = "open"
+_REST_STATE_CLOSED = "closed"
+
+
+def _parse_rest_member(item, index):
+    if not isinstance(item, dict):
+        return None, "stack pull request is not an object"
+    number = item.get("number")
+    if not _is_int(number):
+        return None, "stack pull request number is missing or not an integer"
+    state = item.get("state")
+    merged_at = item.get("merged_at")
+    if state == _REST_STATE_OPEN:
+        mapped_state = "OPEN"
+    elif state == _REST_STATE_CLOSED and isinstance(merged_at, str):
+        mapped_state = "MERGED"
+    elif state == _REST_STATE_CLOSED and merged_at is None:
+        mapped_state = "CLOSED"
+    else:
+        return None, "stack pull request state or merged_at is missing, unknown or of the wrong type"
+    is_draft = item.get("draft")
+    if not isinstance(is_draft, bool):
+        return None, "stack pull request draft is missing or not a boolean"
+    head = item.get("head")
+    head_ref_name = head.get("ref") if isinstance(head, dict) else None
+    if not isinstance(head_ref_name, str):
+        return None, "stack pull request head.ref is missing or not a string"
+    head_ref_oid = head.get("sha")
+    if not isinstance(head_ref_oid, str):
+        return None, "stack pull request head.sha is missing or not a string"
+    base = item.get("base")
+    base_ref_name = base.get("ref") if isinstance(base, dict) else None
+    if not isinstance(base_ref_name, str):
+        return None, "stack pull request base.ref is missing or not a string"
+    return (
+        {
+            "position": index + 1,
+            "number": number,
+            "state": mapped_state,
+            "isDraft": is_draft,
+            "headRefName": head_ref_name,
+            "headRefOid": head_ref_oid,
+            "baseRefName": base_ref_name,
+        },
+        None,
+    )
+
+
+def _parse_rest_stack(stack_payload, snapshot, repo, pr, pages):
+    """Return (members, refusal) from the stack GET — exactly one is non-None."""
+    number = stack_payload.get("number")
+    base = stack_payload.get("base")
+    base_ref = base.get("ref") if isinstance(base, dict) else None
+    pull_requests = stack_payload.get("pull_requests")
+    # axis: REST stack GET number, base.ref or pull_requests is missing or of the wrong type
+    if not _is_int(number) or not isinstance(base_ref, str) or not isinstance(pull_requests, list):
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "stack response number/base.ref/pull_requests is missing or of the wrong type",
+            repo=repo, pr=pr, pages=pages)
+
+    # axis: REST stack GET reports a different stack number than the pull request
+    if number != snapshot["stack_number"]:
+        return None, _refusal(REASON_ORDER_MISMATCH,
+            "stack response number disagrees with the pull request's stack number",
+            repo=repo, pr=pr, pages=pages)
+
+    # axis: REST stack GET reports a different base than the pull request
+    if base_ref != snapshot["stack_baseRefName"]:
+        return None, _refusal(REASON_ORDER_MISMATCH,
+            "stack response base disagrees with the pull request's stack base",
+            repo=repo, pr=pr, pages=pages)
+
+    members = []
+    for index, item in enumerate(pull_requests):
+        member, parse_err = _parse_rest_member(item, index)
+        if parse_err:
+            # axis: a REST stack member or one of its fields is missing, unknown or wrong type
+            return None, _refusal(REASON_STACK_UNREADABLE, parse_err, repo=repo, pr=pr, pages=pages)
+        # axis: the REST member count would exceed stack size
+        if len(members) + 1 > snapshot["stack_size"]:
+            return None, _refusal(REASON_STACK_UNREADABLE,
+                "collected member count would exceed stack size", repo=repo, pr=pr, pages=pages)
+        members.append(member)
+    return members, None
+
+
+def _read_membership_rest(
+    owner, name, pr, repo, expect_stack, timeout, deadline, deadline_at, run,
+):
+    """One complete REST read: two verification passes of GET pulls/<pr> then GET stacks/<n>."""
+    prior_members = None
+    prior_snapshot = None
+    for verification_pass in (0, 1):
+        pages = 0
+        pull, refusal = _transport_rest(
+            _rest_pull_argv(owner, name, pr), timeout, run, repo, pr, pages,
+            deadline=deadline, deadline_at=deadline_at)
+        if refusal is not None:
+            return refusal
+
+        snapshot, refusal = _parse_rest_pull(pull, repo, pr, pages)
+        if refusal is not None:
+            return refusal
+
+        stack_payload, refusal = _transport_rest(
+            _rest_stack_argv(owner, name, snapshot["stack_number"]), timeout, run, repo, pr, pages,
+            deadline=deadline, deadline_at=deadline_at)
+        if refusal is not None:
+            return refusal
+        pages += 1
+
+        collected, refusal = _parse_rest_stack(stack_payload, snapshot, repo, pr, pages)
+        if refusal is not None:
+            return refusal
+
+        invariant_result = _validate_stack_invariants(
+            collected,
+            snapshot,
+            snapshot["stack_size"],
+            expect_stack,
+            repo,
+            pr,
+            pages,
+            prior_members,
+            verification_pass,
+            prior_snapshot,
+        )
+        invariant_tag = invariant_result.get("tag")
+        if invariant_tag == _INVARIANT_TAG_CONTINUE:
+            prior_members = invariant_result["prior_members"]
+            prior_snapshot = invariant_result["prior_snapshot"]
+            continue
+        if invariant_tag in (_INVARIANT_TAG_REFUSAL, _INVARIANT_TAG_SUCCESS):
+            return invariant_result["result"]
+        raise AssertionError("_validate_stack_invariants returned unknown tag: %r" % invariant_tag)
+
+
+def _recording_run(run, seen):
+    """Wrap run so each completed call's process lands in seen."""
+    def _run(argv, **kwargs):
+        proc = run(argv, **kwargs)
+        seen.append(proc)
+        return proc
+    return _run
+
+
+def _is_graphql_proxy_refusal_proc(proc):
+    """True when one gh process is the proxy's GraphQL refusal."""
+    output = _proc_output(proc)
+    # axis: only a non-zero gh exit carrying both proxy-refusal markers falls back to REST
+    return proc.returncode != 0 and all(marker in output for marker in GRAPHQL_REFUSED_MARKERS)
+
+
+def _is_graphql_proxy_refusal(seen):
+    """True when the read made exactly one gh call and it was the proxy's GraphQL refusal."""
+    if len(seen) != 1:
+        return False
+    return _is_graphql_proxy_refusal_proc(seen[0])
+
+
 def read_membership(
     *,
     pr,
@@ -925,19 +1332,47 @@ def read_membership(
     timeout=GH_TIMEOUT,
     deadline=None,
     run=None,
+    transport=TRANSPORT_AUTO,
 ):
     """Return the membership read dict; GitHub-side and argument-side failures return a refusal dict and raise nothing, while a violated internal pair-slot invariant raises AssertionError."""
     if run is None:
         run = subprocess.run
 
-    arg_refusal = _validate_membership_arguments(pr, repo, expect_stack, page_size, deadline)
+    arg_refusal = _validate_membership_arguments(
+        pr, repo, expect_stack, page_size, deadline, transport)
     if arg_refusal is not None:
         return arg_refusal
 
     owner, name = repo.split("/", 1)
     deadline_at = None if deadline is None else time.monotonic() + deadline
 
+    if transport == TRANSPORT_REST:
+        return _read_membership_rest(
+            owner, name, pr, repo, expect_stack, timeout, deadline, deadline_at, run)
+
+    if transport == TRANSPORT_GRAPHQL:
+        return _read_membership_graphql(
+            owner, name, pr, repo, expect_stack, page_size, timeout, deadline, deadline_at, run)
+
+    seen = []
+    result = _read_membership_graphql(
+        owner, name, pr, repo, expect_stack, page_size, timeout, deadline, deadline_at,
+        _recording_run(run, seen))
+    if result["ok"] or not _is_graphql_proxy_refusal(seen):
+        return result
+    # The first GraphQL call was the proxy's refusal: restart from scratch on REST.
+    rest_result = _read_membership_rest(
+        owner, name, pr, repo, expect_stack, timeout, deadline, deadline_at, run)
+    if not rest_result["ok"]:
+        rest_result["detail"] = "graphql refused; rest: %s" % rest_result["detail"]
+    return rest_result
+
+
+def _read_membership_graphql(
+    owner, name, pr, repo, expect_stack, page_size, timeout, deadline, deadline_at, run,
+):
     prior_members = None
+    prior_snapshot = None
     for verification_pass in (0, 1):
         collected = []
         pages = 0
@@ -1008,11 +1443,13 @@ def read_membership(
             pages,
             prior_members,
             verification_pass,
+            prior_snapshot,
         )
         # bite-axis: invariant outcome is distinguished by explicit tag, not result shape
         invariant_tag = invariant_result.get("tag")
         if invariant_tag == _INVARIANT_TAG_CONTINUE:
             prior_members = invariant_result["prior_members"]
+            prior_snapshot = invariant_result["prior_snapshot"]
             continue
         if invariant_tag == _INVARIANT_TAG_REFUSAL:
             return invariant_result["result"]
@@ -1036,6 +1473,7 @@ def main(argv=None):
         list_parser.add_argument("--repo", required=True)
         list_parser.add_argument("--stack", type=int, default=None)
         list_parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)
+        list_parser.add_argument("--transport", choices=TRANSPORTS, default=TRANSPORT_AUTO)
         args = parser.parse_args(argv)
         if args.verb != "list":
             raise _ParseError("unknown or missing verb")
@@ -1050,6 +1488,7 @@ def main(argv=None):
         repo=args.repo,
         expect_stack=args.stack,
         page_size=args.page_size,
+        transport=args.transport,
     )
     sys.stdout.write(json.dumps(result) + "\n")
     return 0 if result["ok"] else 1

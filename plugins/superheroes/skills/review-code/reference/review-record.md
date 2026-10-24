@@ -111,7 +111,7 @@ What comes from the session:
 
 Outcomes:
 
-- A fixed finding becomes `fixed`, with the round it was audited in; a fix a later full panel did not raise again reads `fixed; the full panel in round <n> did not raise it again`.
+- A fixed finding becomes `fixed`, with the round it was audited in; a finding an audit raised and a later audit discharged under its own key reads `fixed` like any audited fix; a fix a later full panel did not raise again reads `fixed; the full panel in round <n> did not raise it again`.
 - A finding refuted by verification becomes `shown-wrong`, with the refuted reason; a refutation whose reason starts `author-justified` becomes `left-for-owner`.
 - When the loop ends, every finding it took in that is not fixed or shown wrong is settled by its consequence ([how the loop settles what is left](round-driver.md#how-the-loop-settles-what-is-left) says how). The adapter reads a settled disposition `craft`, `left-for-owner` or `ruling` as the outcome of the same name, with the recorded `settledReason` as its reason.
 - An out-of-scope finding is settled like any other open one: it becomes `ruling` only when a decision on record settles it, and otherwise `left-for-owner`, a leftover.

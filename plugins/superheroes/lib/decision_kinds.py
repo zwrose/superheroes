@@ -41,6 +41,7 @@ DECISION_KINDS = (
     "seat-map-constraint-violated",
     "seat-vacuous",
     "self-recovery",
+    "spawned-audit-not-discharged",
     "stall-choice",
     "stall-menu",
     "synthesis-no-survivors",

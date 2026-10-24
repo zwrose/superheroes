@@ -209,11 +209,13 @@ A PR sheet (`kind` is `pr`) puts one PR's review to the owner before the merge. 
 `prAnswers` blocks of `sheet-words.json`.
 
 The advisor never writes the data file by hand. It builds it from the PR's review record, one
-`--record` for each PR of a stack, and its own input:
+`--record` for each PR of a stack, one `--pr-body` for each PR it covers, and its own input:
 
 ```
-python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--record <file> ...] --input <file> --out sheet.json
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--record <file> ...] --pr-body <number>=<file> [--pr-body ...] --input <file> --out sheet.json
 ```
+
+Each `--pr-body` file holds one covered PR's body, read with `gh api repos/<o>/<r>/pulls/<n> --jq .body`.
 
 The shape of the advisor's input is defined in the docstring of `lib/pr_sheet.py`, and nowhere else.
 Publishing is as § Publishing a sheet says.
@@ -250,8 +252,14 @@ reviewer's run covers it. It adds one line counting the findings left for the ow
 one line each. It says "the review record is incomplete" only for the record's other gaps. On a stack,
 each line names its PR.
 
-A part with nothing in it is left out, except the items, which then say that the review left nothing
-for the owner. The app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
+A part with nothing in it is left out, except the items. With no card, the items say one of three things,
+read from what the build recorded about the covered PR bodies. They say that the review left nothing
+for the owner only when the build recorded that every covered PR body lists no acceptance
+(`prSheet.nothingListed`). They say the sheet was checked and every acceptance is covered by a Canon
+ruling, naming the entry ids, only when the build recorded that the bodies list at least one acceptance
+and each one is accounted to a Canon ruling (`prSheet.canonAccounted`, the ids sorted and distinct, each
+appearing in the summary). With neither record they say the sheet was not checked against the PR body. The
+app bar follows the same rule for its count. With cards the app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
 block of `sheet-words.json`, the home of the words.
 
 ### The items
@@ -266,6 +274,9 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
 - An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
   with the entry id.
+- A sheet with no card whose every acceptance is accounted to a Canon ruling reads the Canon line:
+  "Checked against the PR body's What we're accepting: every acceptance it lists is covered by a Canon
+  ruling", with the ids. It is not the nothing-to-accept line, which is for a body that lists none.
 - An item is only for a call that passes Test 2 (showrunner duty 5 in `skills/showrunner/SKILL.md`),
   and it names its ground as `skills/showrunner/reference/owner-decisions.md` § The filter says.
 - An acceptance no Canon ruling covers that carries its own consequence for the owner to weigh is
@@ -278,6 +289,13 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   one short line per note, and the page shows it as a bulleted list, never one paragraph (the list
   shape is in `lib/pr_sheet.py`'s docstring). Neither the fold nor these Accept items are calls, so
   the item bar above does not apply to them.
+- Every acceptance a covered PR body lists is accounted for exactly once in the input's `accounting`,
+  keyed by the bullet id the build names. An acceptance is accounted for as its own Accept item
+  (`item`), as one line of the fold (`fold` with `line`), as the leftover card it restates
+  (`leftover`), or as the Canon entry the summary cites (`canon`). No body bullet becomes a card on
+  its own. The build refuses a sheet that leaves one out, counts one twice, or points at an item,
+  fold line, leftover or Canon id that is not there, and each refusal names the bullet. A first build
+  with no `accounting` lists every bullet's id.
 - A collector item that concerns this PR is its own card, from the input's `collectorItems`. It is never
   folded into the "What you're accepting" item and never only mentioned there by number. The builder
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435

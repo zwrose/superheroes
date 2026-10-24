@@ -64,7 +64,11 @@ Contract:
   for that lane only — lane-terminal, lane-blocked, builder-exited, and
   lane-stale are suppressible; builder-note, stack-state-changed, pr-set-changed,
   and timer are not. Suppression
-  affects actionability only.
+  affects actionability only. One note can be ignored by id: a (launchId, "builder-note",
+  commentId) triple, on the CLI `LAUNCHID:builder-note:COMMENTID`, suppresses that one note on
+  that lane for that invocation, and no other note. Every non-refusal result of run, watch_arm
+  and loop given at least one such ignore carries `ignoredNotes`, the sorted comment ids, so a
+  still-unanswered note is never invisible; without one the key is absent.
 - Pid liveness: probes ONLY the recorded leader pid (never the process group).
   launch_ledger._child_group_is_live biases uncertain toward ALIVE because a
   false dead there causes a wrong kill/outcome record; this watcher biases
@@ -102,7 +106,12 @@ Contract:
   comment opening with a `cloud_builder.TERMINAL_HEADERS` header (handback, stop, park),
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
   with state handback, stopped or parked. A newer handover, or an answered newest comment,
-  surfaces nothing.
+  surfaces nothing. A park is superseded, and surfaces nothing, when the same lane has later
+  builder activity in the same read: a builder note created strictly after the park was created
+  (answered or not), or a progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS
+  after the park was created whose phase reads resumed (no word beginning park or stop, unless
+  a word begins resum). A handback or stop is never superseded, and a park at or after the
+  latest activity, or whose progress edit is inside the window or reads parked, still fires.
 - Cloud progress: a cloud builder keeps one progress comment on its issue, edited in place, that
   opens with cloud_builder.PROGRESS_HEADER and states how long its current step is expected to
   run. For a started cloud lane whose tick's comments read observed at least one such comment
@@ -155,6 +164,10 @@ _CLOUD_ACTIVITY_QUERY_HEAD = (
     "{ repository(owner: $owner, name: $name) { "
 )
 _CLOUD_ACTIVITY_QUERY_TAIL = "} }"
+
+# A builder edits its progress comment seconds after posting a park; only an edit later than this
+# many seconds after the park, whose phase reads resumed, shows the lane resumed.
+PARK_SUPERSESSION_GRACE_SECONDS = 300
 
 BUILDER_NOTES_ANSWERED_NAME = "builder-notes-answered.json"
 _NOTE_COMMENTS_MAX_PAGES = 10
@@ -415,20 +428,41 @@ def _valid_repo_root(repo_root):
 
 def _validate_ignore_events(ignore_events, batch_id, *, arms=None):
     for item in ignore_events:
-        if not isinstance(item, (tuple, list)) or len(item) != 2:
+        if not isinstance(item, (tuple, list)) or len(item) not in (2, 3):
             return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
         launch_id, event = item[0], item[1]
         if not isinstance(launch_id, str) or not launch_id:
             return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
         if not isinstance(event, str) or not event:
             return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
+        if len(item) == 3:
+            # bite-axis: NOTE ID — the one-note form is `builder-note` with a positive int
+            # comment id; any other event or id is refused, and the bare class stays refused.
+            if event != EVENT_BUILDER_NOTE or not _valid_positive_int(item[2]):
+                return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
+            continue
         if event not in _SUPPRESSIBLE_EVENTS:
             return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
     return None
 
 
 def _ignore_events_set(ignore_events):
-    return frozenset((item[0], item[1]) for item in ignore_events)
+    return frozenset((item[0], item[1]) for item in ignore_events if len(item) == 2)
+
+
+def _ignored_notes_set(ignore_events):
+    """{(launch id, comment id)} of the one-note ignores."""
+    return frozenset((item[0], item[2]) for item in ignore_events if len(item) == 3)
+
+
+def _with_ignored_notes(result, ignore_events):
+    """`result` with `ignoredNotes` (sorted comment ids) when a note was ignored; a refusal is left alone."""
+    if result.get("ok") is not True:
+        return result
+    ids = sorted({comment_id for _launch_id, comment_id in _ignored_notes_set(ignore_events)})
+    if ids:
+        result["ignoredNotes"] = ids
+    return result
 
 
 def _filter_suppressed_launches(launches, event, ignore_set):
@@ -1415,11 +1449,47 @@ def _builder_note(comment, watched, answered):
 _TERMINAL_STATE = {"handback": "handback", "stop": "stopped", "park": "parked"}
 
 
+def _cloud_note_times(comments, watched):
+    """{launch id: created epoch of the lane's newest builder note}, answered or not.
+
+    Never raises on a malformed element: one without a string body, the note header or a lane is skipped.
+    """
+    newest = {}
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or not body.lstrip().startswith(cb.NOTE_HEADER):
+            continue
+        lane = _comment_lane(comment, watched)
+        if lane is None:
+            continue
+        lid, _number, created = lane
+        if lid not in newest or created > newest[lid]:
+            newest[lid] = created
+    return newest
+
+
+def _phase_reads_resumed(phase):
+    """Whether a progress phase reads as resumed: a non-empty string with no word starting park or stop, or one starting resum."""
+    if not isinstance(phase, str) or not phase:
+        return False
+    words = re.findall(r"[a-z]+", phase.lower())
+    return not any(word.startswith(("park", "stop")) for word in words) or any(
+        word.startswith("resum") for word in words
+    )
+
+
 def _cloud_terminals(comments, watched, answered):
     """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
 
-    Never raises on a malformed element. Sorted by launch id.
+    A park the same lane's later builder note, or progress edit, supersedes surfaces nothing. A note
+    supersedes when created strictly after the park. A progress edit supersedes only when it is more
+    than PARK_SUPERSESSION_GRACE_SECONDS after the park and its phase reads resumed (no word beginning
+    park or stop, unless a word begins resum). Never raises on a malformed element. Sorted by launch id.
     """
+    progress = _cloud_progress(comments, watched)
+    note_times = _cloud_note_times(comments, watched)
     newest = {}
     for comment in comments:
         if not isinstance(comment, dict):
@@ -1441,7 +1511,7 @@ def _cloud_terminals(comments, watched, answered):
         if lid not in newest or key > newest[lid][0]:
             newest[lid] = (key, kind, comment, number)
     entries = []
-    for lid, (_key, kind, comment, number) in newest.items():
+    for lid, (key, kind, comment, number) in newest.items():
         # bite-axis: HANDOVER — a newer handover means the lane moved on: no entry, and no
         # fallback to an older comment.
         if kind == "handover":
@@ -1449,6 +1519,20 @@ def _cloud_terminals(comments, watched, answered):
         # bite-axis: ANSWERED — a comment the advisor recorded answered stops surfacing.
         if comment["id"] in answered:
             continue
+        # bite-axis: SUPERSEDED — a park is not terminal once the same lane has a builder note
+        # strictly later than it, or a progress edit more than PARK_SUPERSESSION_GRACE_SECONDS later
+        # whose phase reads resumed (a builder edits its progress seconds after a park, with a parked
+        # phase: not a resume); no older ending is read in its place; a handback or stop is never
+        # superseded, and a tie, or exactly the window, keeps the park.
+        if kind == "park":
+            parked_at = key[0]
+            progress_at = progress[lid]["updatedEpoch"] if lid in progress else None
+            if (progress_at is not None
+                    and progress_at - parked_at > PARK_SUPERSESSION_GRACE_SECONDS
+                    and _phase_reads_resumed(progress[lid]["phase"])):
+                continue
+            if lid in note_times and note_times[lid] > parked_at:
+                continue
         info = watched[lid]
         entries.append({
             "launchId": lid,
@@ -2341,6 +2425,7 @@ def _evaluate_tick(
     cloud_payload_out=None,
     note_state=None,
     progress_state=None,
+    ignore_notes=frozenset(),
 ):
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
@@ -2449,6 +2534,13 @@ def _evaluate_tick(
             monotonic=monotonic, degraded=degraded, note_state=note_state,
             known_slug=repo_slug, slug_cell=slug_cell, progress_out=progress_out,
         )
+        # bite-axis: NOTE IGNORE — a note named by launch id and comment id is dropped here, before
+        # the event context is built; every other note, and every other event, is untouched.
+        if ignore_notes:
+            builder_notes = [
+                note for note in builder_notes
+                if (note["launchId"], note["commentId"]) not in ignore_notes
+            ]
         # A tick whose comments read made no request (budget spent, or no watched lane) reuses the
         # stored snapshot; one that made a request replaces it with what it observed, `{}` included.
         if progress_out[0] is None:
@@ -2672,6 +2764,7 @@ def watch_arm(
         degraded = set()
         first_tick = [True]
         ignore_set = _ignore_events_set(ignore_events)
+        ignore_notes = _ignored_notes_set(ignore_events)
 
         while True:
             tick_result = _evaluate_tick(
@@ -2692,12 +2785,15 @@ def watch_arm(
                 cloud_state=cloud_state,
                 note_state=note_state,
                 progress_state=progress_state,
+                ignore_notes=ignore_notes,
             )
             if tick_result is not None:
-                return _with_ledger_path(tick_result, resolved_ledger_path)
+                return _with_ignored_notes(
+                    _with_ledger_path(tick_result, resolved_ledger_path), ignore_events,
+                )
 
             if monotonic() >= deadline:
-                return _with_ledger_path(_timer_at_deadline(
+                return _with_ignored_notes(_with_ledger_path(_timer_at_deadline(
                     repo_root,
                     batch_id,
                     env=env,
@@ -2707,7 +2803,7 @@ def watch_arm(
                     add_window_degradations=True,
                     cloud_state=cloud_state,
                     progress_state=progress_state,
-                ), resolved_ledger_path)
+                ), resolved_ledger_path), ignore_events)
 
             tick = max(
                 tick + 1,
@@ -2775,6 +2871,7 @@ def run(
         degraded = set()
         first_tick = [True]
         ignore_set = _ignore_events_set(ignore_events)
+        ignore_notes = _ignored_notes_set(ignore_events)
 
         tick_result = _evaluate_tick(
             repo_root,
@@ -2795,16 +2892,19 @@ def run(
             cloud_payload_out=cloud_payload,
             note_state=[None],
             progress_state=progress_state,
+            ignore_notes=ignore_notes,
         )
         if tick_result is not None:
-            return _with_ledger_path(tick_result, resolved_ledger_path)
+            return _with_ignored_notes(
+                _with_ledger_path(tick_result, resolved_ledger_path), ignore_events,
+            )
 
-        return _event_result(
+        return _with_ignored_notes(_event_result(
             EVENT_TIMER,
             batch_id,
             degraded,
             **cloud_payload
-        )
+        ), ignore_events)
     except Exception as exc:
         result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal)
         result["detail"] = type(exc).__name__
@@ -2926,6 +3026,7 @@ def loop(
                     final_degraded = set(final.get("degraded", []))
                     final_degraded.update(loop_degraded)
                     final["degraded"] = sorted(final_degraded)
+                    _with_ignored_notes(final, ignore_events)
                     _close_log_silent(log_file)
                     _release_loop_lock(lock_fd)
                     lock_fd = None
@@ -2969,6 +3070,7 @@ def loop(
                 final_degraded.update(loop_degraded)
                 final["degraded"] = sorted(final_degraded)
                 _loop_attach_passed_over(final, passed_over, passed_over_count)
+                _with_ignored_notes(final, ignore_events)
                 _close_log_silent(log_file)
                 _release_loop_lock(lock_fd)
                 lock_fd = None
@@ -3014,6 +3116,7 @@ def loop(
                     final_degraded = set(final.get("degraded", []))
                     final_degraded.update(loop_degraded)
                     final["degraded"] = sorted(final_degraded)
+                    _with_ignored_notes(final, ignore_events)
                     _close_log_silent(log_file)
                     _release_loop_lock(lock_fd)
                     lock_fd = None
@@ -3031,14 +3134,22 @@ def loop(
         return result
 
 def _parse_ignore_event_cli(value):
+    """(launch id, event) or (launch id, "builder-note", comment id), else None.
+
+    Launch ids may contain ':', so both forms split from the right.
+    """
     if ":" not in value:
         return None
     launch_id, event = value.rsplit(":", 1)
-    if not launch_id or not event:
+    if launch_id and event in _SUPPRESSIBLE_EVENTS:
+        return (launch_id, event)
+    parts = value.rsplit(":", 2)
+    if len(parts) != 3 or parts[1] != EVENT_BUILDER_NOTE or not parts[0]:
         return None
-    if event not in _SUPPRESSIBLE_EVENTS:
+    comment_id = _parse_comment_id(parts[2])
+    if comment_id is None:
         return None
-    return (launch_id, event)
+    return (parts[0], EVENT_BUILDER_NOTE, comment_id)
 
 
 def _emit(result):
@@ -3066,7 +3177,10 @@ def main(argv):
         default=[],
         dest="ignore_event_raw",
         metavar="LAUNCHID:EVENT",
-        help="suppress one event for one lane (repeatable)",
+        help=(
+            "suppress one event for one lane, or one note: LAUNCHID:builder-note:COMMENTID "
+            "(repeatable)"
+        ),
     )
 
     loop_parser = sub.add_parser("loop")
@@ -3090,7 +3204,10 @@ def main(argv):
         default=[],
         dest="ignore_event_raw",
         metavar="LAUNCHID:EVENT",
-        help="suppress one event for one lane (repeatable)",
+        help=(
+            "suppress one event for one lane, or one note: LAUNCHID:builder-note:COMMENTID "
+            "(repeatable)"
+        ),
     )
 
     answered_parser = sub.add_parser("note-answered")

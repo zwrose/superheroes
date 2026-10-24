@@ -63,6 +63,7 @@
       "security-reviewer did not run. No owner's word or standing ruling lets the PR go ahead without it.",
       "design-reviewer is from a maker's model family, so its review was not independent."
     ],
+    "nothingListed": true,
     "walk": {
       "open": {
         "label": "Open the test shop"
