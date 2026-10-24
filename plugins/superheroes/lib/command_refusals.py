@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""The one home of the refused-command stop rule and of the refusal-entry shape (#2011).
+"""The one home of the refused-command stop rule, the refusal-entry shape (#2011), and the
+file-write rule (#2067, #2126).
 
-Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT`; no order
-surface keeps a hand copy of the sentence. `refusals_fault` is the one check of a result's
-`refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
+Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT` and
+`FILE_WRITE_RULE`; no order surface keeps a hand copy of either. `refusals_fault` is the one
+check of a result's `refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
 """
 
 STOP_RULE = (
@@ -35,6 +36,12 @@ ENTRY_SHAPE = (
 )
 
 ORDER_TEXT = STOP_RULE + " " + REFUSAL_MEANING + " " + ENTRY_SHAPE
+
+FILE_WRITE_RULE = (
+    "Create and edit files only with the host's file-write and file-edit tools (Write and Edit on "
+    "Claude Code); never through a shell command that writes a file — a heredoc, `cat >` or `>` "
+    "redirection, `tee`, `sed -i`, or an interpreter script (`python -`, `node -e`)."
+)
 
 
 def _blank(value):
