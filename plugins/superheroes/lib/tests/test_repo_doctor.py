@@ -252,6 +252,7 @@ def test_keyword_led_verify_command_with_absent_program_drifts(tmp_path, capsys)
     "FOO=1 verifybin --run",
     'printf %s ";" marker && verifybin --run',
     "time -p verifybin --run",
+    "true && ulimit -n 1024 && shopt -s nullglob && verifybin --run",
 ])
 def test_shell_prefixes_resolve_to_the_real_program(tmp_path, capsys, verify):
     """#2088 review: `[[ … && … ]]`, an fd redirection, `command -v`, `exec -a`, an
@@ -296,6 +297,18 @@ def test_unresolved_program_the_walk_cannot_be_sure_of_is_unchecked_not_stale(
     assert len(res["unchecked"]) == 1
     assert "does not resolve here, but" in res["unchecked"][0]
     assert unsure in res["unchecked"][0]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to list its builtins")
+def test_every_bash_builtin_and_keyword_is_classified():
+    """#2088 review: a builtin or keyword the walk does not know is read as the program and
+    reported stale (`ulimit -n 1024 && …`). Census against bash's own lists."""
+    words = subprocess.run(["bash", "-c", "compgen -b; compgen -k"], capture_output=True,
+                           text=True, check=True).stdout.split()
+    known = (repo_doctor._SHELL_KEYWORDS | repo_doctor._SHELL_BUILTINS
+             | repo_doctor._SHELL_PREFIXES | repo_doctor._SHELL_UNPARSED
+             | {"[[", "]]", "in", "esac"})
+    assert sorted(set(words) - known) == []
 
 
 def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):

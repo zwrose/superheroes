@@ -179,10 +179,15 @@ _SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "u
                    "!", "{", "}"}
 # Builtins (and `for`/`select` headers): their own words are arguments, so the whole simple
 # command up to the next control operator is skipped.
-_SHELL_BUILTINS = {"[", "test", "cd", ":", "true", "false", "export", "set", "unset",
-                   "source", ".", "echo", "printf", "eval", "builtin",
-                   "local", "read", "shift", "exit", "return", "umask", "trap", "wait",
-                   "pushd", "popd", "alias", "type", "hash", "for", "select"}
+# Every bash builtin (`compgen -b`, bash 5.2) except the prefixes below.
+_SHELL_BUILTINS = {".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller", "cd",
+                   "compgen", "complete", "compopt", "continue", "declare", "dirs", "disown",
+                   "echo", "enable", "eval", "exit", "export", "false", "fc", "fg", "getopts",
+                   "hash", "help", "history", "jobs", "kill", "let", "local", "logout",
+                   "mapfile", "popd", "printf", "pushd", "pwd", "read", "readarray", "readonly",
+                   "return", "set", "shift", "shopt", "source", "suspend", "test", "times",
+                   "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset",
+                   "wait", "for", "select"}
 # Prefixes whose operand, after their options, is the program they run (`command -v` only
 # queries, so it is skipped). The pairs are the options that take an argument.
 _SHELL_PREFIXES = {"command", "exec", "time"}
