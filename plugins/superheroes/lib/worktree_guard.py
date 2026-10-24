@@ -447,15 +447,35 @@ def _strip_shell_prefixes(tokens):
     return tokens
 
 
+_REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|&>|&>>|>&|<&)\S*$")
+_REDIRECTION_OPERATOR = re.compile(r"^[0-9]*(?:<|>|>>|<<<|&>|&>>|>&|<&)$")
+
+
+def _redirection_width(tokens, i):
+    """How many tokens a redirection at tokens[i] spans (0 when it is not one): the word
+    itself, plus the next word when the operator has no attached target."""
+    if i >= len(tokens) or not _REDIRECTION_WORD.match(tokens[i]):
+        return 0
+    if _REDIRECTION_OPERATOR.match(tokens[i]) and i + 1 < len(tokens):
+        return 2
+    return 1
+
+
 def _command_tokens(tokens):
-    """The shared normalizer: (assignment_keys, tokens) once leading shell prefixes and
-    `NAME=value` assignments are stripped, alternating until neither moves (so
-    `then LC_ALL=C bash -c ...` reaches `bash`)."""
+    """The shared normalizer: (assignment_keys, tokens) once leading shell prefixes,
+    redirection words and `NAME=value` assignments are stripped, alternating until none moves
+    (so `then LC_ALL=C bash -c ...` and `2>/dev/null bash -c ...` reach `bash`)."""
     keys = []
     while True:
         stripped = _strip_shell_prefixes(tokens)
         start = 0
-        while start < len(stripped) and "=" in stripped[start] and not stripped[start].startswith("="):
+        while start < len(stripped):
+            width = _redirection_width(stripped, start)
+            if width:
+                start += width
+                continue
+            if not ("=" in stripped[start] and not stripped[start].startswith("=")):
+                break
             key = stripped[start].split("=", 1)[0]
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
                 break
@@ -790,6 +810,10 @@ def _shell_program(raw_tokens):
     ended_options = False
     i = 1
     while i < len(raw_tokens):
+        width = _redirection_width(raw_tokens, i)
+        if width:
+            i += width
+            continue
         tok = _plain_word(raw_tokens[i])
         if tok == "--":
             ended_options = True
@@ -817,7 +841,7 @@ def _shell_program(raw_tokens):
         if raw_tokens[i][:1] in ("$", "`"):
             return ("unreadable", None)
         # A quoted word that is exactly one expansion (`"$OPT"`) is just as able to be `-c`.
-        if re.fullmatch(r"\$(?:\w+|\{[^}]*\})", _plain_word(raw_tokens[i])):
+        if re.fullmatch(r"\$(?:\w+|\{[^}]*\}|[@*#?$!0-9-])", _plain_word(raw_tokens[i])):
             return ("unreadable", None)
         if any(c in raw_tokens[i] for c in "$`") and any(
                 len(t) > 1 and t[0] in "-+" and not t.startswith("--") and "c" in t

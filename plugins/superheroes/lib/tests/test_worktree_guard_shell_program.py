@@ -195,6 +195,29 @@ def test_expansion_hiding_a_discard_or_option_is_unreadable(command, dirty_repo)
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
 
 
+@pytest.mark.parametrize("command", [
+    "bash \"$@\" 'x'",
+    "bash \"$*\" 'x'",
+    "bash \"$1\" 'x'",
+])
+def test_special_or_positional_parameter_word_is_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+@pytest.mark.parametrize("command", [
+    "2>/dev/null bash -c 'git reset --hard'",
+    "bash 2>/dev/null -c 'git reset --hard'",
+    "> out.txt bash -c 'git reset --hard'",
+    "2> err.txt bash -c 'git reset --hard'",
+])
+def test_a_program_after_or_among_redirections_is_read(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", _RESET), command
+
+
+def test_a_harmless_program_with_a_trailing_redirection_is_allowed(dirty_repo):
+    assert wg.classify("bash -c 'echo hi' 2>/dev/null", dirty_repo) == ("allow", "")
+
+
 @pytest.mark.parametrize("shell", ["bash", "sh", "zsh"])
 def test_variable_script_path_without_c_remains_allowed(shell, dirty_repo, monkeypatch):
     with open(os.path.join(dirty_repo, "harmless.sh"), "w") as f:
