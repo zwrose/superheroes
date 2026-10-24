@@ -623,11 +623,15 @@ def test_an_interrupted_wait_kills_the_whole_process_group(tmp_path, monkeypatch
 
     monkeypatch.setattr(subprocess.Popen, "communicate", communicate)
     try:
+        started = time.monotonic()
         with pytest.raises(RuntimeError, match="boom"):
             RD._run_in_process_group(["bash", "-c", "sleep 30 & echo $! > %s; wait" % pid_file],
                                      **_GROUP_KWARGS)
+        elapsed = time.monotonic() - started
         pid = int(pid_file.read_text())
         assert _pid_gone(pid), "the background child %d outlived the interrupted wait" % pid
+        # without the group kill, cleanup would wait for the child's `sleep 30` to end on its own
+        assert elapsed < 15, "the call took %.1fs; the group was not killed on interruption" % elapsed
     finally:
         if pid is None and pid_file.exists() and pid_file.read_text().strip().isdigit():
             pid = int(pid_file.read_text())
@@ -653,12 +657,16 @@ def test_a_sigterm_to_the_driver_kills_the_whole_process_group(tmp_path):
     previous = signal.getsignal(signal.SIGTERM)
     try:
         sender.start()
+        started = time.monotonic()
         with pytest.raises(SystemExit) as caught:
             RD._run_in_process_group(["bash", "-c", "sleep 30 & echo $! > %s; wait" % pid_file],
                                      **_GROUP_KWARGS)
+        elapsed = time.monotonic() - started
         assert caught.value.code == 128 + signal.SIGTERM
         pid = int(pid_file.read_text())
         assert _pid_gone(pid), "the background child %d outlived the driver's SIGTERM" % pid
+        # without the group kill, cleanup would wait for the child's `sleep 30` to end on its own
+        assert elapsed < 15, "the call took %.1fs; the group was not killed on SIGTERM" % elapsed
         assert signal.getsignal(signal.SIGTERM) == previous, "the SIGTERM handler was not restored"
     finally:
         sender.join(timeout=15)
