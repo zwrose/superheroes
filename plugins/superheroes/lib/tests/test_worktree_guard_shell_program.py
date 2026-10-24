@@ -116,9 +116,32 @@ def test_a_program_behind_a_redirection_is_denied(name, dirty_repo):
     "timeout 5 bash -c 'echo hi'",
     "env bash -c 'echo hi'",
     "xargs sh -c 'echo hi'",
+    "env FOO=1 bash -c 'echo hi'",
+    "nohup bash -c 'echo hi'",
+    "xargs -0 sh -c 'echo hi'",
+    "2>\"/tmp/error log\" bash -c 'echo hi'",
 ])
 def test_a_wrapper_before_a_shell_c_is_refused_as_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message())
+
+
+@pytest.mark.parametrize("command", [
+    "bash script.sh -c value",
+    "rg bash -c notes.txt",
+    "find . -exec bash -c 'echo hi' \\;",
+    "bash -c 'exec git status'",
+])
+def test_the_backstop_fires_only_at_an_executable_command_position(command, dirty_repo):
+    assert wg.classify(command, dirty_repo)[0] == "allow"
+
+
+@pytest.mark.parametrize("command", [
+    "TOOL=git bash -c 'exec \"$TOOL\" reset --hard'",
+    "bash -c 'command \"$T\" reset --hard'",
+    "bash -c 'builtin \"$T\" reset --hard'",
+])
+def test_a_variable_command_word_behind_an_execution_builtin_is_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
 
 
 @pytest.mark.parametrize("command", ["grep -c bash notes.txt", "echo bash"])

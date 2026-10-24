@@ -452,6 +452,12 @@ def _strip_shell_prefixes(tokens):
     return tokens
 
 
+_EXECUTION_BUILTINS = frozenset({"exec", "command", "builtin"})
+
+_WRAPPER_WORDS = frozenset({
+    "timeout", "env", "nohup", "nice", "ionice", "sudo", "time", "stdbuf", "xargs", "setsid",
+})
+
 _REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|&>|&>>|>&|<&)\S*$")
 _REDIRECTION_OPERATOR = re.compile(r"^[0-9]*(?:<|>|>>|<<<|&>|&>>|>&|<&)$")
 
@@ -487,6 +493,8 @@ def _command_tokens(tokens):
             keys.append(key)
             start += 1
         rest = stripped[start:]
+        if rest and rest[0] in _EXECUTION_BUILTINS:
+            rest = rest[1:]
         if rest == tokens:
             return keys, tokens
         tokens = rest
@@ -865,11 +873,40 @@ def _shell_program(raw_tokens):
     return ("program", program)
 
 
+def _only_wrapper_words(before):
+    """Whether every raw token is a redirection, a `NAME=value` assignment, a shell prefix or
+    execution builtin, a known wrapper word, or an option/bare-number argument of one."""
+    i = 0
+    while i < len(before):
+        width = _redirection_width(before, i)
+        if width:
+            i += width
+            continue
+        # A quoted target with a space stays one token (`2>"/tmp/error log"`).
+        if re.match(r"^[0-9]*(?:<|>|&>|>&|<&)", before[i]):
+            i += 1
+            continue
+        plain = _plain_word(before[i])
+        if (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", plain)
+                or plain in _SHELL_PREFIXES or plain in _EXECUTION_BUILTINS
+                or os.path.basename(plain) in _WRAPPER_WORDS
+                or plain[:1] in ("-", "+") or plain.isdigit()):
+            i += 1
+            continue
+        return False
+    return True
+
+
 def _hidden_shell_c(raw_tokens):
     """Fail-closed backstop: a bare bash|sh|zsh word with a later short `-`/`+` cluster holding
-    `c`, in a segment `_shell_program` did not read (a wrapper or redirection in front)."""
+    `c`, in a segment `_shell_program` did not read. It fires only when the shell word is not
+    the segment's command word and everything before it is a redirection, an assignment, a
+    known wrapper word or an option/number argument of one (a wrapper in front)."""
+    command_index = len(raw_tokens) - len(_command_tokens(raw_tokens)[1])
     for k, raw in enumerate(raw_tokens):
         if "'" in raw or '"' in raw or os.path.basename(raw) not in ("bash", "sh", "zsh"):
+            continue
+        if k == command_index or not _only_wrapper_words(raw_tokens[:k]):
             continue
         for later in raw_tokens[k + 1:]:
             plain = _plain_word(later)
