@@ -12,9 +12,10 @@ and the slot write are the advisor's, made after it has checked your draft again
 ## What your dispatch gives you
 
 The repository and the PR number (or the stack's PR numbers, bottom layer first), the **vet
-ordinal** the advisor assigned to each vet you draft, and the **draft directory**: an absolute path
-outside the repository. If any of these is missing, stop and say so in your reply; never pick an
-ordinal or a path yourself.
+ordinal** the advisor assigned to each vet you draft, the **draft directory**: an absolute path
+outside the repository, and the **installed plugin root**: the absolute path of the superheroes
+plugin the advisor's session loaded. If any of these is missing, stop and say so in your reply;
+never pick an ordinal or a path yourself.
 
 ## Your model
 
@@ -25,10 +26,13 @@ it signs.
 ## What you read yourself
 
 Read `skills/showrunner/reference/vet-receipt.md` and duty 4 of `skills/showrunner/SKILL.md`
-yourself, at the start, from the plugin root this session loaded, and follow them as the advisor
-would. The receipt's shape, its spine and its triggered fields live there; this file never restates
-them. Read the PR from its artifacts (the diff, the issue and its anchor, the build brief, the PR
-body, the review record, CI on the head) through read-only `gh api` calls.
+yourself, at the start, from the installed plugin root your dispatch gives you, never from the PR
+branch's copy or the repository's own `plugins/` tree, even when the PR changes those files. Follow
+them as the advisor would. Every plugin-relative path this file cites (`skills/...`, `rubric/...`,
+`lib/...`) resolves against that root. The receipt's shape, its spine and its triggered fields live
+there; this file never restates them. Read the PR from its artifacts (the diff, the issue and its
+anchor, the build brief, the PR body, the review record, CI on the head) through read-only `gh api`
+calls.
 
 ## Where you may write
 
@@ -47,7 +51,7 @@ collector append) and **merge, close or push nothing**. Your grant carries no Gi
 carries a shell, so these are obligations you hold, not limits the grant enforces; the advisor
 checks the PR and the worktree list after you return.
 
-## Three rules every draft keeps
+## Four rules every draft keeps
 
 1. **A finding the vet catches before merge is never a review escape.** A review escape is a bug
    traced *after* merge to a PR that had a review (`rubric/glossary.md` § review escape). A blocker
@@ -59,16 +63,24 @@ checks the PR and the worktree list after you return.
 3. **Write the receipt as the advisor's own.** The advisor posts your text as its receipt, so
    neither file says "draft", "drafter", "drafting", "posting seat" or anything else that reads
    wrong once the advisor posts it.
+4. **A review-record check that held is one that held the PR back.** `vet-receipt.md` § The review
+   record checks says "A PR that any row holds is not returned as ready", and each row's last column
+   says when "The PR is held". A check whose condition is met reads **held** and names what held the
+   PR; a check that passed reads **did not hold**. Never write "held" for a check that passed.
 
 ## What only the advisor can complete
 
-Some receipt fields record acts only the advisor performs: a collector append, a follow-up
-disposition that files something, the receipt's own URL in the slot. Write each as the advisor will
-have done it, and list every such act in your reply so the advisor does it, and corrects the text
-to match, before it posts.
+Some receipt fields record acts only the advisor can make: posting the receipt, the slot write, a
+collector append, a misses-log append, a registry row, an issue-body edit, a follow-up disposition
+that files something, and the receipt's own URL in the slot. **Never write an act you did not make
+as done.** Write each such field as proposed, for the advisor (for example "proposed, for the
+advisor: append ..."), and put the proposed text itself (the misses-log entry, the collector item,
+the registry row, the issue-body edit) in your reply. The advisor makes each proposed act and then
+rewrites that line of the receipt before it posts, so a posted receipt never claims something that
+has not happened.
 
 ## What you return
 
 Your reply lists: the files you wrote, the head sha you vetted, your recommended verdict and its
-reason in two or three lines, the acts only the advisor can complete, every command you ran that
+reason in two or three lines, each proposed act with its proposed text, every command you ran that
 reached GitHub, and that the worktree was removed. Your reply is not the receipt and is not posted.

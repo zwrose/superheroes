@@ -46,7 +46,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 ### Vetting: the vet-drafter drafts vets in parallel
 
 - New agent `agents/vet-drafter.md` (`superheroes:vet-drafter`), `model: inherit`, tools `Read, Grep, Glob, Edit, Write, Bash`. It writes `draft-receipt<ordinal>.md` and `draft-slot<ordinal>.md` to the draft directory the advisor names and posts nothing.
-- `skills/showrunner/reference/vetting.md` § Parallel vets says when to use it, how ordinals are assigned and recorded, that the dispatch carries no model override, and that the verdict, the posting and the slot write stay the advisor's. On Codex the advisor vets serially.
+- `skills/showrunner/reference/vetting.md` § Parallel vets says when to use it, how ordinals are assigned and recorded, the dispatch inputs (the installed plugin root among them, so the drafter reads the vet contract from the installed plugin and never from the PR branch), that the dispatch carries no model override, that the drafter writes every advisor-only act (a misses-log or collector append, a filing) as proposed, for the advisor to make, and that the verdict, the posting and the slot write stay the advisor's. On Codex the advisor vets serially.
 - The agent file joins the cloud setup text's plugin inventory (`lib/cloud_setup_text.py` `_plugin_inventory` stamps each agent file), so a project with the plugin pin hook sees the cloud check report its setup text out of date once, as after any release that changes an agent file.
 
 ### Stacks: membership and merge through REST in a cloud session

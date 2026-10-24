@@ -72,6 +72,10 @@ per PR, and one per layer bottom-up for a stack — and write the highest assign
 memory beside the collector pointer, so a lost draft never lets a later vet reuse its number. Post
 in ordinal order. A draft you discard keeps its ordinal: vet that PR yourself under the same number.
 
+**Dispatch inputs.** Give the drafter the repository, the PR number (a stack's, bottom layer first),
+each vet's ordinal, the draft directory (absolute, outside the repository) and the installed plugin
+root (`${CLAUDE_PLUGIN_ROOT}` resolved to an absolute path), so it never reads the PR branch's copy.
+
 **No model override.** Dispatch the drafter with no model parameter. Its definition says
 `model: inherit`, so it runs on your own model, and the draft carries the judgment you will sign.
 Vet serially on a host that cannot honour that: one forcing a single model on every subagent
@@ -79,9 +83,10 @@ Vet serially on a host that cannot honour that: one forcing a single model on ev
 not dispatched there (Codex).
 
 **The verdict stays yours.** Check each draft against the PR before you post it, as your own vet:
-re-read the diff and the decisive artifacts, re-run any probe the verdict turns on, and do the acts
-the drafter listed as yours (a collector append, a follow-up filed), correcting the text to match.
-Then post the receipt and write the slot through `vet_slot.py write`, as duty 4 says.
+re-read the diff and the decisive artifacts, re-run any probe the verdict turns on, and make each
+act the drafter wrote as proposed (a collector append, a misses-log append, a follow-up filed), then
+correct that line of the receipt to record the act as made, before you post. Then post the receipt
+and write the slot through `vet_slot.py write`, as duty 4 says.
 
 **Check what the drafter left.** After each drafter returns, read the PR's comments and body for
 anything new since dispatch and run `git worktree list` and `git status` in your checkout. Its grant
