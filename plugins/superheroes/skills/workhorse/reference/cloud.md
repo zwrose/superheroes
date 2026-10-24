@@ -284,9 +284,9 @@ refuses.
   shows `dependency fill FAILED` (or no fill line for a project that should have one), run the
   launcher once from the builder's own shell before the first dispatch and disclose it in the build
   record. Even after a good fill, the claude write sandbox runs uv offline (`UV_OFFLINE=1`) and
-  cannot fetch a test runner it has not cached, so before the first implementer order warm the uv
-  cache with one pinned test run (one pytest run through the project's Python launcher) from the
-  builder's own shell.
+  cannot fetch a test runner it has not cached, so for a project whose Python launcher runs through
+  uv, warm the cache before the first implementer order with one run of the project's test command
+  through that launcher (for a pytest project, one pytest run) from the builder's own shell.
 - The write sandbox has no network. An implementer order inlines or cites only what is in the
   worktree.
 - The commit signer is not reachable from inside the write sandbox, so implementers never commit.
