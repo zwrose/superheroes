@@ -769,6 +769,20 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an
   owner-judgment `skip` and an audit-stall `accept-the-disclosed-risk`, both of which now accept an
   **optional `followUp` object**.
+- A finding an audit raised (a `discharged-but-new-issue` ruling's `newIssues`) is linked to the target
+  it came from in `state.auditSpawned` (`{child key: parent key}`), bound by compile anchor after the
+  compile (`_bind_audit_spawned`, `lib/round_driver.py`): a scoped-finder candidate never supplies a
+  link, and an anchor two different targets raised links nothing. When a later fix batch carries the
+  parent again, the child rides that round's audits as a target of its own (`spawnedFrom: <parent
+  key>`, the same row as a batch target) and is listed in every target's `roundFindings`, so the
+  parent's auditor can attribute the child's repair. A rider is skipped when it has a current
+  disposition, is merged, or is out of scope, and when the ledger cannot be read. A rider the auditor
+  discharged is `fixed` at the audits fold, like any audited fix; one ruled anything else
+  (`not-discharged`, no result, unauthenticated, no independent auditor, ambiguous) keeps no
+  disposition and is left to the settle below. A rider never joins the fix list, the audit-stall
+  breaker's outcomes or the `prBodyAudited` check. The round records `spawnedAudits`
+  (`{id, spawnedFrom, ruling}`), and a rider not discharged records a `spawned-audit-not-discharged`
+  decision in place of `not-discharged`.
 - `fixed` is also recorded when a later **complete** full panel (round 2 or later) does not raise
   again a finding a fixer round reported fixing: the fixer fold records the identity keys of the
   findings it was handed (`fixReportedKeys` on the round), the credit needs a non-escalated fix report
@@ -800,7 +814,9 @@ other docs link here.
   names the cap.
 - **Who keeps its disposition.** A finding that is fixed, or shown wrong (disposition `refuted`), keeps
   that disposition, as does a finding merged into another (it follows the other). A Nit the readout
-  cap collapsed is already `craft`, recorded when it was collapsed.
+  cap collapsed is already `craft`, recorded when it was collapsed. A finding an audit raised and a
+  later audit discharged under its own key (a rider, § Dispositions) is `fixed` and keeps it; one that
+  audit did not discharge has no disposition and is settled below like any other.
 - **Who is settled.** Every other finding the review took in — no disposition, a disposition older than
   the finding's last raise, or `out-of-scope` — is settled by `settle` (`lib/finding_outcomes.py`):
   1. A finding whose only consequence is code quality (`consequenceKind` `code-quality`) is `craft`.
