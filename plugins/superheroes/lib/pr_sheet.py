@@ -248,6 +248,9 @@ def _outside_comments(lines):
             if not inside and line.split("-->", 1)[1].strip():
                 kept.append((line, False))
             continue
+        spaced = line.expandtabs(4)
+        if line.strip() and len(spaced) - len(spaced.lstrip(" ")) < item_column and not _ITEM.match(line):
+            item_column = 0  # a non-blank line left of the item's content ends the item, comments included
         if _WHOLE_COMMENT.match(line):
             continue
         if line.lstrip(" ").startswith("<!--") and "-->" not in line and _closes(lines[n + 1:], level):

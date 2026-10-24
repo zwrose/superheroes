@@ -2564,6 +2564,13 @@ def test_two_targets_of_any_kind_are_refused_as_more_than_once():
         assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover or canon"), value
 
 
+# Bites on: an unindented HTML comment that ends a list leaving the list's content column set, so a later root fence is read as a list-item fence and ends early.
+def test_an_unindented_comment_ending_a_list_clears_its_content_column():
+    body = ("- Example\n\n<!-- separator -->\n\n  ```\n## What we're accepting\n\n## Example\n  ```\n\n"
+            "## What we're accepting\n\n- A breaking change\n")
+    assert pr_sheet.accepting_listed(body) == ["A breaking change"]
+
+
 def test_a_canon_entry_accounts_for_a_bullet_only_as_a_real_id_the_summary_cites():
     # Bites on: a canon target accepted with no id, a made-up id, a malformed one, or one the summary does not cite; or a canon bullet still needing an item.
     # Axis: G6: "" and an id absent from the summary and a malformed id that is cited are each one problem; with a well-formed id the summary cites the sheet builds the same 5 cards, its fold keeping 4 lines though no bullet names line 3.

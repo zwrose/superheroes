@@ -258,7 +258,7 @@ for the owner only when the build recorded that every covered PR body lists no a
 (`prSheet.nothingListed`). They say the sheet was checked and every acceptance is covered by a Canon
 ruling, naming the entry ids, only when the build recorded that the bodies list at least one acceptance
 and each one is accounted to a Canon ruling (`prSheet.canonAccounted`, the ids sorted and distinct, each
-cited in the summary). With neither record they say the sheet was not checked against the PR body. The
+appearing in the summary). With neither record they say the sheet was not checked against the PR body. The
 app bar follows the same rule for its count. With cards the app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
 block of `sheet-words.json`, the home of the words.
 

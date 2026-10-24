@@ -508,13 +508,10 @@
       }
     });
 
-    // Every Canon entry id the build says covers the acceptances is cited, as a whole id, in the summary: not preceded or followed by a
-    // letter or digit, so a longer id does not cite its prefix (the pattern is read from the schema's $defs.canonEntryId, the one home of the grammar).
+    // Every id in canonAccounted appears in the summary (a plain substring check; the Canon id grammar is read at build, from lib/canon.py).
     const summary = (isObject(sheet.prSheet) && isObject(sheet.prSheet.whatChanged) && typeof sheet.prSheet.whatChanged.summary === "string") ? sheet.prSheet.whatChanged.summary : "";
-    const idGrammar = (isObject(schema.$defs) && isObject(schema.$defs.canonEntryId) && typeof schema.$defs.canonEntryId.pattern === "string") ? schema.$defs.canonEntryId.pattern.slice(1, -1) : null;
-    const citedIds = new Set(idGrammar === null ? [] : Array.from(summary.matchAll(new RegExp("(?<![0-9A-Za-z])" + idGrammar + "(?![0-9A-Za-z])", "g")), (found) => found[0]));
     ((isObject(sheet.prSheet) && Array.isArray(sheet.prSheet.canonAccounted)) ? sheet.prSheet.canonAccounted : []).forEach((id) => {
-      if (!citedIds.has(id)) {
+      if (!summary.includes(id)) {
         problems.push('prSheet.canonAccounted names "' + id + '", which the summary does not cite.');
       }
     });

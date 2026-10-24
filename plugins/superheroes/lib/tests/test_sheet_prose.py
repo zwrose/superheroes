@@ -472,12 +472,13 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("canonAccounted cited in the summary", canon_accounted([canon_id, other_id], "Ruled in %s and %s." % (canon_id, other_id)), False),
         ("canonAccounted cited, with a sentence's full stop after it", canon_accounted([canon_id], "Ruled in %s." % canon_id), False),
         ("canonAccounted not cited in the summary", canon_accounted([canon_id, other_id], "Ruled in %s." % canon_id), True),
-        ("canonAccounted cited only as the prefix of a longer id", canon_accounted([canon_id], "Ruled in %s0." % canon_id), True),
-        ("canonAccounted cited only inside a longer word", canon_accounted([canon_id], "Ruled in x%s." % canon_id), True),
+        ("canonAccounted id that is the prefix of a longer id in the summary (a plain substring; the build refuses it)", canon_accounted([canon_id], "Ruled in %s0." % canon_id), False),
+        ("canonAccounted id inside a longer word in the summary (a plain substring; the build refuses it)", canon_accounted([canon_id], "Ruled in x%s." % canon_id), False),
         ("canonAccounted beside nothingListed", canon_accounted([canon_id], "Ruled in %s." % canon_id, {"nothingListed": True}), True),
         ("canonAccounted empty", canon_accounted([], "Ruled in %s." % canon_id), True),
         ("canonAccounted repeats an id", canon_accounted([canon_id, canon_id], "Ruled in %s." % canon_id), True),
-        ("canonAccounted holds a malformed id", canon_accounted(["2026-10-22-abc-1"], "Ruled in 2026-10-22-abc-1."), True),
+        ("canonAccounted holds a malformed id the summary contains (the build refuses it)", canon_accounted(["2026-10-22-abc-1"], "Ruled in 2026-10-22-abc-1."), False),
+        ("canonAccounted holds an empty id", canon_accounted([""], "Ruled in %s." % canon_id), True),
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -499,25 +500,6 @@ def test_the_page_names_the_rule_when_a_sheet_carries_both_nothing_listed_and_ca
     sheet["prSheet"].update(nothingListed=True, canonAccounted=[canon_id])
     assert _run_check_sheet([sheet]) == [rules]
     assert _load_prose_module().check_sheet(sheet) != []
-
-
-# Bites on: sheet_prose's copy of the cited-id pattern, or the schema's canonAccounted id pattern, drifting from lib/canon.py (the page's own copy is guarded by the parity fixtures above).
-def test_the_copied_canon_id_patterns_agree_with_canon():
-    import canon
-
-    ident = "2026-10-22-abcdefgh-1"
-    texts = [ident, ident + "0", ident + "a", ident + "-2", "x" + ident, "Ruled in 2026-10-22-abcdefgh-10 and 2026-10-22-abcdefgh-1.",
-             ident + " and 2026-10-23-ijklmnop-2", "2026-10-22-abc-1", ""]
-    cited = _load_prose_module()._cited_id_pattern(json.loads(SCHEMA_FILE.read_text(encoding="utf-8")))
-    for text in texts:
-        assert {m.group(0) for m in cited.finditer(text)} == canon.cited_entry_ids(text), repr(text)
-
-    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
-    pattern = re.compile(schema["$defs"]["canonEntryId"]["pattern"])
-    candidates = texts + ["2026-10-22-abcdefgh-3", "2026-10-22-abcdefgh-0", "2026-10-22-ABCDEFGH-1", "2026-10-22-abcdefg-1"]
-    accepted = {c for c in candidates if canon.is_entry_id(c)}
-    assert accepted and accepted != set(candidates)
-    assert {c for c in candidates if pattern.fullmatch(c)} == accepted
 
 
 SCHEMA_FILE = PLUGIN / "theme" / "sheet.schema.json"
