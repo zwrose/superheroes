@@ -353,6 +353,7 @@ def test_harmless_shapes_near_the_hiding_rules_stay_allowed(command, dirty_repo)
     ("command 2>/dev/null cd /other && git reset --hard", wg.indeterminate_message("reset-hard")),
     ("bash -c 'command -p cd /x && git reset --hard'", wg.indeterminate_message("reset-hard")),
     ("eval 'git reset --hard' 2>/dev/null", _RESET),
+    ("command -v cd && git reset --hard", wg.refusal_message("reset-hard", 1)),
 ])
 def test_wrapped_directory_change_and_redirected_eval_are_still_refused(command, message, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", message), command
