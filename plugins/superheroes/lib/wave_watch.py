@@ -1664,13 +1664,14 @@ def _read_cutoff(info):
     return info["reopenedAt"] if "reopenedAt" in info else _note_cutoff(info)
 
 
-def _in_window(info, created, close):
-    """Whether a comment created at `created` is in the lane's window: at or after a reopened lane's
-    reopenedAt, and not after its close (None when the lane has none)."""
+def _in_window(info, key, close):
+    """Whether a comment keyed `key` (created epoch, comment id) is in the lane's window: at or after a
+    reopened lane's reopenedAt, and not after its close key (None when the lane has none)."""
     # axis: a reopened lane's comments from before its fix order are not its own, so an old note or ending never re-fires — see bite-proof record wo_2148_fix_order.md
-    if "reopenedAt" in info and created < info["reopenedAt"]:
+    if "reopenedAt" in info and key[0] < info["reopenedAt"]:
         return False
-    return close is None or created <= close
+    # axis: the close is a (created, comment id) key, so a comment sharing the closing second but posted after it is outside the window — see bite-proof record wo_2148_fix_order.md
+    return close is None or key <= close
 
 
 def _comment_lane(comment, watched):
@@ -1721,7 +1722,7 @@ def _builder_note(comment, watched, answered, closes=None):
         return None
     lid, number, lane_created = lane
     info = watched[lid]
-    if not _in_window(info, lane_created, (closes or {}).get(lid)):
+    if not _in_window(info, (lane_created, comment_id), (closes or {}).get(lid)):
         return None
     return {
         "launchId": lid,
@@ -1802,12 +1803,12 @@ def _cloud_endings(comments, watched):
 
 
 def _cloud_closes(comments, watched):
-    """{launch id: created epoch of the close} for each reopened watched lane whose comments show one."""
+    """{launch id: (created epoch, comment id) of the close} for each reopened watched lane whose comments show one."""
     return {lid: close for lid, (close, _kind) in _cloud_close_kinds(comments, watched).items()}
 
 
 def _cloud_close_kinds(comments, watched):
-    """{launch id: (created epoch of the close, its ending kind)} for each reopened watched lane showing one.
+    """{launch id: ((created epoch, comment id) of the close, its ending kind)} for each reopened watched lane showing one.
 
     The close is the lane's first ending (handback, stop, park or handover) created at or after its
     reopenedAt that is not a superseded park, by the same rule `_cloud_terminals` applies. The kind
@@ -1825,11 +1826,11 @@ def _cloud_close_kinds(comments, watched):
         if lid in reopened and created >= watched[lid]["reopenedAt"]
     )
     closes = {}
-    for created, _comment_id, lid, kind in endings:
+    for created, comment_id, lid, kind in endings:
         # axis: the first ending that is not a superseded park closes a reopened lane, so a later note or ending is not its own — see bite-proof record wo_2148_fix_order.md
         if lid not in closes and not (
                 kind == "park" and _park_superseded(lid, created, progress, note_times)):
-            closes[lid] = (created, kind)
+            closes[lid] = ((created, comment_id), kind)
     return closes
 
 
@@ -1850,9 +1851,9 @@ def _cloud_terminals(comments, watched, answered, closes=None):
     newest = {}
     for lid, number, created, comment, kind in _cloud_endings(comments, watched):
         # axis: a reopened lane's ending from before its fix order, or after its close, is not the lane's, with no fallback to it — see bite-proof record wo_2148_fix_order.md
-        if not _in_window(watched[lid], created, closes.get(lid)):
-            continue
         key = (created, comment["id"])
+        if not _in_window(watched[lid], key, closes.get(lid)):
+            continue
         # bite-axis: NEWEST — the lane's newest ending comment decides, never an older one.
         if lid not in newest or key > newest[lid][0]:
             newest[lid] = (key, kind, comment, number)
@@ -2024,7 +2025,7 @@ def _evaluate_cloud_comments(
             if lid not in watched:
                 continue
             # axis: a cached park close that the comments a partial read observed show superseded is dropped from the cache, never kept to filter out the note that superseded it — see bite-proof record wo_2148_fix_order.md
-            if kind == "park" and _park_superseded(lid, close, progress, note_times):
+            if kind == "park" and _park_superseded(lid, close[0], progress, note_times):
                 del known_closes[lid]
                 continue
             closes[lid] = close

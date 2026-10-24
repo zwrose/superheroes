@@ -126,6 +126,16 @@ def test_row2_after_the_closing_handback_a_later_note_is_not_surfaced_and_the_la
     assert ww.run(repo, _BATCH, gh_run=gh)["event"] == ww.EVENT_TIMER
 
 
+def test_row2_comments_sharing_the_closing_second_are_ordered_by_comment_id(repo):
+    _reopened(repo, start_age=_LONG_AGO)
+    comments = [_later(5, _ending("handback"), secs=10), _comment(6, 101, cb.handover_text("a" * 40), age=-10),
+                _later(7, secs=10)]
+    for comment in comments:
+        comment["created_at"] = comments[0]["created_at"]
+    # The handback (5) closes the lane: the handover (6) and the note (7) of its second are after it.
+    assert _only_launch(ww.run(repo, _BATCH, gh_run=_ProgressGh(comments)))["commentId"] == 5
+
+
 def _closed_by_a_handback(repo_root):
     """A reopened lane whose closing handback (comment 5) is answered, and the comments that read it:
     the handback, and a future-dated progress comment that would read the lane stale at once if watched."""
