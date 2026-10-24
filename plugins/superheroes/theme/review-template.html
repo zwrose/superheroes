@@ -508,7 +508,7 @@
       }
     });
 
-    // Every id in canonAccounted appears in the summary (a plain substring check; the Canon id grammar is read at build, from lib/canon.py).
+    // Every id in canonAccounted appears in the summary (a plain substring check).
     const summary = (isObject(sheet.prSheet) && isObject(sheet.prSheet.whatChanged) && typeof sheet.prSheet.whatChanged.summary === "string") ? sheet.prSheet.whatChanged.summary : "";
     ((isObject(sheet.prSheet) && Array.isArray(sheet.prSheet.canonAccounted)) ? sheet.prSheet.canonAccounted : []).forEach((id) => {
       if (!summary.includes(id)) {

@@ -196,11 +196,6 @@
     }
   ],
   "$defs": {
-    "canonEntryId": {
-      "description": "A Canon entry id (YYYY-MM-DD-xxxxxxxx-N), the one home of the grammar, read by lib/canon.py.",
-      "type": "string",
-      "pattern": "^(\\d{4}-\\d{2}-\\d{2})-([0-9a-z]{8})-([1-9]\\d*)$"
-    },
     "index": {
       "description": "The list of PRs waiting on the owner: one row for each, which may be none.",
       "type": "object",
