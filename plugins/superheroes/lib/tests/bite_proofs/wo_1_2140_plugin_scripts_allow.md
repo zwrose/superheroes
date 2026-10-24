@@ -946,3 +946,45 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 ```
 No secrets, tokens, private URLs or PII; nothing redacted.
 
+---
+
+## WO-5 — deterministic ids under xdist
+
+**Guarded element:** none new. This order changes detector scaffolding in `plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py`, not a guard: the import-time `_FRESH` temp folder (a per-process random path inside parametrize values and ids) is replaced by the `{SESSION}` placeholder, filled at run time from a `fresh` fixture (a folder under `tmp_path`). Axis claimed: every collected node id is the same in every pytest-xdist worker. The proof is the parallel run itself.
+
+**Red (the orchestrator's capture of the unchanged file at `5318ea6e`, quoted from the work order; this implementer did not re-run it — the file was edited before any run):**
+```
+$ scripts/pinned-python -B ... -m pytest plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py -q -n 4 -p no:cacheprovider
+ERROR gw2 - Different tests were collected between gw0 and gw2. The differenc...
+ERROR gw1 - Different tests were collected between gw0 and gw1. The differenc...
+ERROR gw3 - Different tests were collected between gw0 and gw3. The differenc...
+3 errors in 0.62s
+```
+
+**Change (restore is not applicable — nothing was neutralized):** the file is the changed file.
+
+**Green (same command shape, run after the change, from `/home/user/wt-2140`):**
+`scripts/pinned-python -B -X pycache_prefix=/home/user/wt-2140/docs/pyc-wo5 -m pytest plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py -q --tb=line -n 4 -p no:cacheprovider`
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 41%]
+........................................................................ [ 83%]
+.............................                                            [100%]
+173 passed in 1.06s
+```
+
+**Serial run after the change (both test files):** `scripts/pinned-python -B -X pycache_prefix=/home/user/wt-2140/docs/pyc-wo5 -m pytest plugins/superheroes/lib/tests/test_plugin_scripts_allow_hook.py plugins/superheroes/lib/tests/test_hook_wiring.py -q --tb=line -p no:cacheprovider`
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+.......................................                                  [100%]
+183 passed in 1.53s
+```
+The count equals the committed baseline (`183 passed`), so no row was dropped.
+
+No secrets, tokens, private URLs or PII; nothing redacted.
+

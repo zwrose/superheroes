@@ -10,16 +10,13 @@ doubt, any internal error — prints nothing and exits 0.
 Two channels: `decide` / `plugin_roots` in-process (the truth table), and the real hook as a
 subprocess (the stdout and exit-code contract).
 """
-import atexit
 import hashlib
 import importlib.util
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 
 import pytest
 
@@ -35,10 +32,11 @@ DRIVER = os.path.join(LIB, "round_driver.py")
 GUARD = os.path.join(LIB, "dispatch_guard.py")
 
 _OTHER_ROOT_LIB = "/tmp/other/plugin/lib"
-# a real session folder with no state file yet: the fresh-session case the hook allows
-_FRESH = tempfile.mkdtemp(prefix="wo4-fresh-session-")
-atexit.register(shutil.rmtree, _FRESH, ignore_errors=True)
-_ALLOWED = f"python3 -B {DRIVER} next --session-dir {_FRESH}"
+# the fresh-session case the hook allows is a real session folder with no state file yet. It is made at
+# run time (the `fresh` fixture) and put in place of this placeholder inside each test, so no collected
+# parameter value or id depends on a per-process path (pytest-xdist workers must collect identical ids)
+_SESSION = "{SESSION}"
+_ALLOWED = f"python3 -B {DRIVER} next --session-dir {_SESSION}"
 _SEAT = '{"vendor":"codex","model":null,"effort":null,"role":"mechanical"}'
 
 _spec = importlib.util.spec_from_file_location("plugin_scripts_allow_test", _HOOK)
@@ -81,6 +79,28 @@ def _short(command):
     return command.replace(_PLUGIN, "<root>").replace("\n", "\\n").replace("\r", "\\r").replace("\0", "\\0")
 
 
+@pytest.fixture
+def fresh(tmp_path):
+    # a real session folder with no state file yet, made per test
+    d = tmp_path / "fresh-session"
+    d.mkdir()
+    return str(d)
+
+
+def _fill(text, fresh):
+    return text.replace(_SESSION, fresh)
+
+
+def _fill_deep(value, fresh):
+    if isinstance(value, str):
+        return _fill(value, fresh)
+    if isinstance(value, dict):
+        return {k: _fill_deep(v, fresh) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_fill_deep(v, fresh) for v in value]
+    return value
+
+
 def test_the_lists_are_pinned():
     # axis: the approved-script list, the driver verb list and the command-flag list are exactly the ruled ones
     assert hook.APPROVED_SCRIPTS == frozenset(_NINE_SCRIPTS)
@@ -89,27 +109,27 @@ def test_the_lists_are_pinned():
 
 
 @pytest.mark.parametrize("name", _NINE_SCRIPTS)
-def test_each_listed_script_at_the_plugin_root_is_allowed(name):
+def test_each_listed_script_at_the_plugin_root_is_allowed(name, fresh):
     # axis: each of the nine listed scripts at the plugin's own root is approved, `-B` and all
-    args = f"next --session-dir {_FRESH}" if name == "round_driver.py" else "check --x 1"
+    args = f"next --session-dir {fresh}" if name == "round_driver.py" else "check --x 1"
     command = f"python3 -B {os.path.join(LIB, name)} {args}"
     got = _decide(_payload(command))
     assert got is True, _short(command)
 
 
 @pytest.mark.parametrize("verb", _DRIVER_VERBS)
-def test_each_driver_verb_is_allowed(verb):
+def test_each_driver_verb_is_allowed(verb, fresh):
     # axis: each of the eight round_driver verbs is approved
-    command = f"python3 -B {DRIVER} {verb} --session-dir {_FRESH}"
+    command = f"python3 -B {DRIVER} {verb} --session-dir {fresh}"
     got = _decide(_payload(command))
     assert got is True, _short(command)
 
 
 _ALLOWED_ROWS = [
     # axis: the `-B` flag is optional
-    f"python3 {DRIVER} next --session-dir {_FRESH}",
+    f"python3 {DRIVER} next --session-dir {_SESSION}",
     # axis: a quoted script path is the same path
-    f'python3 -B "{DRIVER}" next --session-dir {_FRESH}',
+    f'python3 -B "{DRIVER}" next --session-dir {_SESSION}',
     # axis: a single-quoted JSON argument keeps its `{`, `}` and `*` out of the expansion scan
     f"python3 -B {GUARD} check --seat '{_SEAT}'",
     # axis: a single-quoted argument holding `{`, `}` and `*` is allowed
@@ -121,16 +141,17 @@ _ALLOWED_ROWS = [
     # axis: quote state is tracked — a double quote inside single quotes does not open a double quote
     f"python3 -B {GUARD} check --seat 'say \"hi\"'",
     # axis: a driver flag that is not a command flag is allowed (`--vendors` is not an abbreviation of either)
-    f"python3 -B {DRIVER} next --session-dir {_FRESH} --leg code --vendors '[\"claude\",\"codex\"]' --max-rounds 3",
+    f"python3 -B {DRIVER} next --session-dir {_SESSION} --leg code --vendors '[\"claude\",\"codex\"]' --max-rounds 3",
     # axis: `--flag=value` is allowed for a flag that is not a command flag
-    f"python3 -B {DRIVER} next --session-dir={_FRESH} --seat-map '{{\"a\":1}}'",
+    f"python3 -B {DRIVER} next --session-dir={_SESSION} --seat-map '{{\"a\":1}}'",
     # axis: a driver verb with a later `-`-prefixed value that is not a long option is allowed
-    f"python3 -B {DRIVER} attest --session-dir {_FRESH} --failure 3 --note -x",
+    f"python3 -B {DRIVER} attest --session-dir {_SESSION} --failure 3 --note -x",
 ]
 
 
 @pytest.mark.parametrize("command", _ALLOWED_ROWS, ids=_short)
-def test_allowed_rows(command):
+def test_allowed_rows(command, fresh):
+    command = _fill(command, fresh)
     got = _decide(_payload(command))
     assert got is True, _short(command)
 
@@ -287,7 +308,8 @@ _NO_DECISION_ROWS = [
 
 
 @pytest.mark.parametrize("command", _NO_DECISION_ROWS, ids=_short)
-def test_everything_else_gets_no_decision(command):
+def test_everything_else_gets_no_decision(command, fresh):
+    command = _fill(command, fresh)
     got = _decide(_payload(command))
     assert got is False, _short(command)
 
@@ -343,7 +365,8 @@ def test_each_expansion_character_is_refused_unquoted_and_allowed_quoted(char):
     {"tool_name": "Bash", "tool_input": {"command": ["python3"]}},
     {"tool_name": "Bash", "tool_input": {"command": 7}},
 ])
-def test_malformed_payload_gets_no_decision(payload):
+def test_malformed_payload_gets_no_decision(payload, fresh):
+    payload = _fill_deep(payload, fresh)
     got = _decide(payload)
     assert got is False, repr(payload)
 
@@ -421,12 +444,12 @@ def test_a_mirror_that_is_not_a_stamp_gets_no_decision(tmp_path, mirror_text):
     assert _decide(_payload(_submit("--session-dir", d))) is False
 
 
-def test_session_dir_given_twice_gets_no_decision(tmp_path):
+def test_session_dir_given_twice_gets_no_decision(tmp_path, fresh):
     # axis: `--session-dir` named twice gets no decision, in either spelling (E4)
     d = _driver_session(tmp_path, _STATE)
-    assert _decide(_payload(_submit("--session-dir", d, "--session-dir", _FRESH))) is False
-    assert _decide(_payload(_submit(f"--session-dir={d}", f"--session-dir={_FRESH}"))) is False
-    assert _decide(_payload(_submit("--session-dir", d, f"--session-dir={_FRESH}"))) is False
+    assert _decide(_payload(_submit("--session-dir", d, "--session-dir", fresh))) is False
+    assert _decide(_payload(_submit(f"--session-dir={d}", f"--session-dir={fresh}"))) is False
+    assert _decide(_payload(_submit("--session-dir", d, f"--session-dir={fresh}"))) is False
 
 
 def test_session_dir_missing_gets_no_decision():
@@ -437,11 +460,11 @@ def test_session_dir_missing_gets_no_decision():
 
 
 @pytest.mark.parametrize("abbrev", ["--s", "--se", "--session", "--session-d"])
-def test_an_abbreviated_session_dir_gets_no_decision(abbrev):
+def test_an_abbreviated_session_dir_gets_no_decision(abbrev, fresh):
     # axis: an argparse abbreviation of `--session-dir` gets no decision, alone or beside the full option (E6)
     assert _decide(_payload(_submit(abbrev, "/x"))) is False
-    assert _decide(_payload(_submit("--session-dir", _FRESH, abbrev, "/x"))) is False
-    assert _decide(_payload(_submit("--session-dir", _FRESH, f"{abbrev}=/x"))) is False
+    assert _decide(_payload(_submit("--session-dir", fresh, abbrev, "/x"))) is False
+    assert _decide(_payload(_submit("--session-dir", fresh, f"{abbrev}=/x"))) is False
 
 
 def test_a_relative_session_dir_with_no_cwd_gets_no_decision(tmp_path):
@@ -485,9 +508,9 @@ def test_an_unreadable_state_or_mirror_gets_no_decision(tmp_path):
     assert _decide(_payload(_submit("--session-dir", d))) is False
 
 
-def test_an_exception_in_the_session_check_gets_no_decision():
+def test_an_exception_in_the_session_check_gets_no_decision(fresh):
     # axis: an exception inside the session-state check is no decision, never allow (E8)
-    assert hook._session_state_is_drivers(["--session-dir", _FRESH], None) is True, "isolation guard"
+    assert hook._session_state_is_drivers(["--session-dir", fresh], None) is True, "isolation guard"
     assert hook._session_state_is_drivers([None], None) is False
     assert hook._session_state_is_drivers(["--session-dir", None], None) is False
 
@@ -511,10 +534,10 @@ def test_a_state_the_real_driver_wrote_is_allowed(tmp_path):
 
 # --- the worktree guard's deny still wins --------------------------------------
 
-def test_classifier_deny_wins_on_a_real_destructive_git_mention(monkeypatch):
+def test_classifier_deny_wins_on_a_real_destructive_git_mention(monkeypatch, fresh):
     # axis: step 8 — a destructive git mention in an approved call's arguments is `unaccounted` to the
     # real classifier on a calibrated project, which denies it; the hook then gives no decision
-    command = f"python3 -B {DRIVER} next --session-dir {_FRESH} git reset --hard"
+    command = f"python3 -B {DRIVER} next --session-dir {fresh} git reset --hard"
     monkeypatch.setattr(mode_registry, "calibration_state", lambda cwd: "uncalibrated")
     assert _decide(_payload(command)) is True, "isolation guard: allowed when the guard allows (uncalibrated)"
     monkeypatch.setattr(mode_registry, "calibration_state", lambda cwd: "calibrated")
@@ -522,52 +545,54 @@ def test_classifier_deny_wins_on_a_real_destructive_git_mention(monkeypatch):
     assert _decide(_payload(command, cwd="/tmp")) is False
 
 
-def test_classifier_deny_wins(monkeypatch):
+def test_classifier_deny_wins(monkeypatch, fresh):
     # axis: step 8 — an otherwise-allowed command is refused when the worktree guard says deny
-    assert _decide(_payload(_ALLOWED)) is True, "precondition: the command is allowed before the patch"
+    allowed = _fill(_ALLOWED, fresh)
+    assert _decide(_payload(allowed)) is True, "precondition: the command is allowed before the patch"
     monkeypatch.setattr(worktree_guard, "classify", lambda command, cwd: ("deny", "x"))
-    assert _decide(_payload(_ALLOWED)) is False
+    assert _decide(_payload(allowed)) is False
 
 
-def test_classifier_raise_gets_no_decision(monkeypatch):
+def test_classifier_raise_gets_no_decision(monkeypatch, fresh):
     # axis: step 8 — a classifier that raises is no decision, never allow (E5)
     def boom(command, cwd):
         raise RuntimeError("simulated")
 
     monkeypatch.setattr(worktree_guard, "classify", boom)
-    assert _decide(_payload(_ALLOWED)) is False
+    assert _decide(_payload(_fill(_ALLOWED, fresh))) is False
 
 
-def test_classifier_raise_through_main_prints_nothing_and_exits_zero(monkeypatch, capsys):
+def test_classifier_raise_through_main_prints_nothing_and_exits_zero(monkeypatch, capsys, fresh):
     # axis: the process contract — an internal error is silence and exit 0, not a traceback (E5, E9)
     def boom(command, cwd):
         raise RuntimeError("simulated")
 
     monkeypatch.setattr(worktree_guard, "classify", boom)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_payload(_ALLOWED))))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_payload(_fill(_ALLOWED, fresh)))))
     assert hook.main() == 0
     assert capsys.readouterr().out == ""
 
 
-def test_classifier_receives_command_and_cwd(monkeypatch):
+def test_classifier_receives_command_and_cwd(monkeypatch, fresh):
     # axis: step 8 consults the guard's own classifier with the payload's command and cwd
+    allowed = _fill(_ALLOWED, fresh)
     seen = []
     monkeypatch.setattr(worktree_guard, "classify", lambda command, cwd: seen.append((command, cwd)) or ("allow", ""))
-    assert _decide(_payload(_ALLOWED, cwd="/some/cwd")) is True
-    assert seen == [(_ALLOWED, "/some/cwd")]
+    assert _decide(_payload(allowed, cwd="/some/cwd")) is True
+    assert seen == [(allowed, "/some/cwd")]
 
 
 # --- the plugin root from the environment -------------------------------------
 
-def test_plugin_root_from_environment_is_allowed(tmp_path):
+def test_plugin_root_from_environment_is_allowed(tmp_path, fresh):
     # axis: an absolute CLAUDE_PLUGIN_ROOT adds its lib/<name>.py to the approved scripts
     d = str(tmp_path)
-    command = f"python3 -B {os.path.join(d, 'lib', 'round_driver.py')} next --session-dir {_FRESH}"
+    command = f"python3 -B {os.path.join(d, 'lib', 'round_driver.py')} next --session-dir {fresh}"
     assert _decide(_payload(command), {"CLAUDE_PLUGIN_ROOT": d}) is True
     # axis: the same path without the environment root is another root's script
     assert _decide(_payload(command), {}) is False
     # axis: the file-derived root still counts when the environment root is set
-    assert _decide(_payload(_ALLOWED), {"CLAUDE_PLUGIN_ROOT": d}) is True
+    assert _decide(_payload(_fill(_ALLOWED, fresh)), {"CLAUDE_PLUGIN_ROOT": d}) is True
     # axis: an unlisted name under the environment root is still refused
     other = f"python3 -B {os.path.join(d, 'lib', 'engine_dispatch.py')} check"
     assert _decide(_payload(other), {"CLAUDE_PLUGIN_ROOT": d}) is False
@@ -584,12 +609,12 @@ def test_relative_plugin_root_in_environment_is_ignored():
 # --- the real hook as a process ------------------------------------------------
 
 @pytest.mark.parametrize("name,args", [
-    ("round_driver.py", f"next --session-dir {_FRESH}"),
+    ("round_driver.py", f"next --session-dir {_SESSION}"),
     ("dispatch_guard.py", "check --x 1"),
 ])
-def test_process_allow_row_prints_one_allow_line(name, args):
+def test_process_allow_row_prints_one_allow_line(name, args, fresh):
     # axis: the contract — an allowed command prints exactly one allow line naming the real script, and exits 0
-    r = _run_hook(json.dumps(_payload(f"python3 -B {os.path.join(LIB, name)} {args}")))
+    r = _run_hook(json.dumps(_payload(_fill(f"python3 -B {os.path.join(LIB, name)} {args}", fresh))))
     assert r.returncode == 0
     assert r.stdout.count("\n") == 1
     assert json.loads(r.stdout) == _allow_out(name)
@@ -607,8 +632,8 @@ def test_process_allow_row_prints_one_allow_line(name, args):
     # axis: a command flag prints nothing
     f"{_ALLOWED} --verify-command none",
 ])
-def test_process_no_decision_row_prints_nothing(command):
-    r = _run_hook(json.dumps(_payload(command)))
+def test_process_no_decision_row_prints_nothing(command, fresh):
+    r = _run_hook(json.dumps(_payload(_fill(command, fresh))))
     assert r.returncode == 0
     assert r.stdout == ""
 
@@ -627,8 +652,8 @@ def test_process_no_decision_row_prints_nothing(command):
     # axis: a non-string command — silence, exit 0 (E3)
     json.dumps({"tool_name": "Bash", "tool_input": {"command": 7}}),
 ])
-def test_process_bad_stdin_prints_nothing_and_exits_zero(stdin_text):
-    r = _run_hook(stdin_text)
+def test_process_bad_stdin_prints_nothing_and_exits_zero(stdin_text, fresh):
+    r = _run_hook(_fill(stdin_text, fresh))
     assert r.returncode == 0
     assert r.stdout == ""
 
