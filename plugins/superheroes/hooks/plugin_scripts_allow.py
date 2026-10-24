@@ -38,6 +38,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from iphone_allow import _REFUSED_CHARS, _is_operator, plugin_roots  # noqa: E402
+from session_contract import MIRROR_FILE, STATE_FILE  # noqa: E402
 
 APPROVED_SCRIPTS = frozenset((
     "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py",
@@ -49,8 +50,6 @@ ROUND_DRIVER_VERBS = frozenset((
     "attest", "checkpoint",
 ))
 COMMAND_FLAGS = ("verify-command", "break-it-interpreter", "records-path")
-STATE_FILE = "loop-state.json"
-MIRROR_FILE = "loop-state.mirror.json"
 
 _EXPANSION_CHARS = frozenset("{}*?[]~")
 

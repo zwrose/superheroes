@@ -214,7 +214,7 @@ RULING_GUIDANCE_OMITTED = "ruling-guidance-omitted"
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
-MIRROR_FILE = "loop-state.mirror.json"
+MIRROR_FILE = session_contract.MIRROR_FILE
 MIRROR_SCHEMA = "loop-state-mirror/1"
 FULL_PANEL_NOT_RERAISED = session_contract.FULL_PANEL_NOT_RERAISED
 JOURNAL_FILE = session_contract.JOURNAL_FILE

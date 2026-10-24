@@ -515,12 +515,6 @@ def test_an_exception_in_the_session_check_gets_no_decision(fresh):
     assert hook._session_state_is_drivers(["--session-dir", None], None) is False
 
 
-def test_the_state_and_mirror_names_match_the_driver_s():
-    # axis: the hook's copies of the state and mirror file names equal the driver's own, so a rename there turns this red
-    assert hook.STATE_FILE == session_contract.STATE_FILE
-    assert hook.MIRROR_FILE == round_driver.MIRROR_FILE
-
-
 def test_a_state_the_real_driver_wrote_is_allowed(tmp_path):
     # axis: the stamp the driver itself writes (`_write_state_bytes`) is the stamp the hook accepts
     d = tmp_path / "session"
