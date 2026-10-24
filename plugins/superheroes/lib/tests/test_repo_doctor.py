@@ -239,7 +239,7 @@ def test_keyword_led_verify_command_with_absent_program_drifts(tmp_path, capsys)
     assert rc == 0
     assert "verify command no longer resolves: scripts/pinned-python" in res["drift"]
     profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
-                            verify="if [ -d src ]; then cd src && gonebin --run; fi")
+                            verify="if [ -d src ]; then test -f x || gonebin --run; fi")
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
     assert "verify command no longer resolves: gonebin" in res["drift"]
 
@@ -275,6 +275,25 @@ def test_command_and_exec_check_the_program_they_run(tmp_path, capsys, verify, p
     profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
     assert "verify command no longer resolves: %s" % program in res["drift"]
+
+
+@pytest.mark.parametrize("verify, unsure", [
+    ('true && OPTS="-q --gone-a --gone-b" verifybin --run', "quotes or escapes"),
+    ("test -d src && cd src && ./gonebin --run", "`cd` comes before it"),
+    ("true && PATH=src:$PATH gonebin --run", "an assignment comes before it"),
+    ("source env.sh && gonebin --run", "`source` comes before it"),
+])
+def test_unresolved_program_the_walk_cannot_be_sure_of_is_unchecked_not_stale(
+        tmp_path, capsys, verify, unsure):
+    """#2088 fail-safe (advisor ruling A): when the walk met anything that can change which
+    word is the program or where it resolves, an unresolved program reads unchecked."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert not any("no longer resolves" in d for d in res["drift"])
+    assert len(res["unchecked"]) == 1
+    assert "does not resolve here, but" in res["unchecked"][0]
+    assert unsure in res["unchecked"][0]
 
 
 def test_unchecked_note_shows_past_acknowledged_drift(tmp_path, capsys):

@@ -190,18 +190,25 @@ _PREFIX_OPTION_ARGS = {("exec", "-a"), ("time", "-o"), ("time", "-f")}
 # A program word that only the shell can read: an expansion, a glob, quoting or an escape.
 _SHELL_ONLY = set("*?$(){}[]|<>&;`~\"'\\")
 _SHELL_UNPARSED = {"case", "function", "coproc"}
+# Builtins that change where a later program resolves.
+_RESOLUTION_CHANGERS = {"cd", "pushd", "popd", "source", "."}
 _CONTROL_OPS = {";", "&&", "||", "|", "&", "(", ")", ";;", "|&", ";&"}
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _verify_program(verify_command):
-    """(program, unchecked) for the verify command (#2088). `program` is the first word in
-    command position that names a program, skipping shell keywords, builtins with their
+    """(program, unchecked, unsure) for the verify command (#2088). `program` is the first word
+    in command position that names a program, skipping shell keywords, builtins with their
     arguments, and `VAR=value` prefixes. `unchecked` is a reason when no such word can be read
-    (shell syntax this check does not parse, or a program only the shell can expand); the
-    caller reports it as unchecked, never as a command that no longer resolves."""
+    (shell syntax this check does not parse, or a program only the shell can expand). `unsure`
+    names what can change which word is the program or where it resolves — a quote or escape
+    anywhere, or an assignment or `cd`-like builtin before it — so an unresolved program reads
+    unchecked, never stale: the walk is a partial shell reader and must fail safe."""
     if not verify_command:
-        return None, None
+        return None, None, None
+    unsure = None
+    if any(c in verify_command for c in "\"'\\"):
+        unsure = "the command quotes or escapes a word"
     try:
         # Non-POSIX mode keeps quotes on their words, so a quoted `";"` is never an operator.
         lex = shlex.shlex(verify_command, posix=False, punctuation_chars=True)
@@ -209,7 +216,7 @@ def _verify_program(verify_command):
         lex.commenters = ""
         tokens = list(lex)
     except ValueError as exc:
-        return None, "unparseable (%s)" % exc
+        return None, "unparseable (%s)" % exc, None
     skipping = False
     i = 0
     while i < len(tokens):
@@ -220,13 +227,15 @@ def _verify_program(verify_command):
         elif skipping:
             continue
         elif tok in _SHELL_UNPARSED:
-            return None, "starts a `%s` construct" % tok
-        elif tok in _SHELL_KEYWORDS or _ASSIGNMENT.match(tok):
+            return None, "starts a `%s` construct" % tok, None
+        elif tok in _SHELL_KEYWORDS:
             continue
+        elif _ASSIGNMENT.match(tok):
+            unsure = unsure or "an assignment comes before it"
         elif tok == "[[":
             # `&&`/`||` inside `[[ … ]]` are operands, not control operators.
             if "]]" not in tokens[i:]:
-                return None, "an unclosed `[[`"
+                return None, "an unclosed `[[`", None
             i = tokens.index("]]", i) + 1
             skipping = True
         elif tok in _SHELL_PREFIXES:
@@ -235,15 +244,17 @@ def _verify_program(verify_command):
                 i += 2 if (tok, tokens[i]) in _PREFIX_OPTION_ARGS else 1
         elif tok in _SHELL_BUILTINS:
             skipping = True
+            if tok in _RESOLUTION_CHANGERS:
+                unsure = unsure or "`%s` comes before it" % tok
         elif tok.isdigit() and i < len(tokens) and tokens[i][:1] in ("<", ">"):
             continue  # the file descriptor of `2>file`
         elif tok[0] in "<>":
             i += 1  # a redirection and its target
         elif any(c in _SHELL_ONLY for c in tok):
-            return None, "program %r is read only by the shell" % tok
+            return None, "program %r is read only by the shell" % tok, None
         else:
-            return tok, None
-    return None, "no word names a program"
+            return tok, None, unsure
+    return None, "no word names a program", None
 
 
 # Shell metacharacters that make a token impossible to resolve statically
@@ -353,12 +364,14 @@ def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env, unchec
             drift.append("new top-level source dir: %s" % ", ".join(new_dirs))
 
     # 5. verify command no longer resolves.
-    binary, why = _verify_program(prof["verify-command"])
-    if why:
-        if unchecked is not None:
-            unchecked.append("verify command could not be checked: %s" % why)
-    elif not _binary_resolves(binary, root, env):
-        drift.append("verify command no longer resolves: %s" % binary)
+    binary, why, unsure = _verify_program(prof["verify-command"])
+    if not why and not _binary_resolves(binary, root, env):
+        if not unsure:
+            drift.append("verify command no longer resolves: %s" % binary)
+        else:
+            why = "%s does not resolve here, but %s" % (binary, unsure)
+    if why and unchecked is not None:
+        unchecked.append("verify command could not be checked: %s" % why)
 
     # 6. verify command names a concrete path that no longer exists.
     missing = _missing_verify_paths(prof["verify-command"], root)
