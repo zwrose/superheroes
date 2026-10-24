@@ -355,7 +355,9 @@ def degradations_listed(body):
     """(label, text) for each degradation a PR body lists after its degradations marker line, in order; [] for a body that
     is not a string, has no marker, or lists only the word None (as the one item or the one paragraph, any case, with or
     without a period). An item is a top-level list item with its continuation lines joined by one space, or a paragraph;
-    a list item indented to the open item's content column is part of that item.
+    a list item indented to the open item's content column is part of that item; a nested item that opens with a label
+    starts its own degradation; a line inside a code fence never ends the list or starts an item (it joins the open item,
+    or is skipped when none is open).
     The list ends at the next heading, a line starting `</details>` or another `<!-- superheroes:` marker; the `### Disclosed
     degradations` heading itself is skipped. label is "costly" or "harmless" when the text starts with that label
     (case-insensitive; the label and the spaces after it are dropped from text), else None."""
@@ -367,7 +369,13 @@ def degradations_listed(body):
     if start is None:
         return []
     entries, open_entry, blank, column = [], None, False, 0
-    for line in lines[start + 1:]:
+    for n in range(start + 1, len(lines)):
+        line = lines[n]
+        if inert[n]:
+            if open_entry is not None:
+                open_entry.append(line)
+                blank = False
+            continue
         stripped = line.strip()
         if not stripped:
             blank = True
@@ -377,7 +385,7 @@ def degradations_listed(body):
         if _HEADING.match(line) or stripped.startswith(("</details>", "<!-- superheroes:")):
             break
         item = _TOP_ITEM.match(line)
-        if item and open_entry is not None and len(item.group(1)) >= column:
+        if item and open_entry is not None and len(item.group(1)) >= column and not _LABEL.match(item.group(4)):
             item = None  # indented to the open item's content column: it nests in that item
         if item:
             gap = len(item.group(3))
@@ -410,13 +418,13 @@ def _line_key(text):
 def costly_unlisted(body):
     """The (label, text) degradations of a PR body (degradations_listed) that are labelled costly or carry no label and whose
     text appears in no line under What we're accepting (accepting_listed), compared by _line_key. A harmless one is never
-    returned."""
+    returned; an empty text after the label is never matched."""
     accepted = [_line_key(line) for line in accepting_listed(body)]
     missing = []
     for label, text in degradations_listed(body):
         key = _line_key(text)
-        # bite-axis: a costly or unlabelled deviation must have a line under What we're accepting
-        if label != "harmless" and not any(key in line for line in accepted):
+        # bite-axis: a costly or unlabelled deviation must have a line under What we're accepting, and an empty text is never carried
+        if label != "harmless" and (not key or not any(key in line for line in accepted)):
             missing.append((label, text))
     return missing
 

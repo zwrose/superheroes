@@ -2927,6 +2927,57 @@ def test_a_nested_bullet_under_a_harmless_deviation_is_part_of_it_and_needs_no_l
     assert sheet["prSheet"]["nothingListed"] is True and sheet["cards"] == []
 
 
+def test_a_fenced_comment_line_in_a_degradation_does_not_end_the_list():
+    # Bites on: a `# ` line inside a code fence in a degradation matching the heading test and ending the list, so a later costly bullet is never checked.
+    # Axis: a fenced line never ends the degradations list: the costly bullet after the fence is refused, exactly one problem naming the PR and the bullet.
+    body = (ACCEPTING + "None.\n\n" + BUILD_RECORD + DEGRADATIONS
+            + "- [harmless] The order rode a prompt file:\n\n  ```sh\n  # read the order from the file\n  cat order.md\n  ```\n\n- [costly] " + VERIFY_GATE + ".\n")
+    (problem,) = refused_with_bodies(SMALL, {211: body})
+    assert "PR #211's costly deviation" in problem and VERIFY_GATE in problem
+
+
+def test_a_fenced_list_line_in_a_degradation_is_not_a_deviation():
+    # Bites on: a `- example` line inside a code fence in a degradation starting its own unlabelled (costly) item, so the build refuses a valid body.
+    # Axis: a fenced line never starts an item: the build succeeds, lists nothing and makes no card, and the one degradation read is the harmless one.
+    body = ACCEPTING + "None.\n\n" + BUILD_RECORD + DEGRADATIONS + "- [harmless] The order rode a prompt file, for example:\n\n```md\n- example\n```\n"
+    sheet = with_bodies(SMALL, {211: body})
+    assert sheet["prSheet"]["nothingListed"] is True and a_cards(sheet) == [] and sheet["cards"] == []
+    listed = pr_sheet.degradations_listed(body)
+    assert len(listed) == 1 and listed[0][0] == "harmless"
+
+
+def test_a_labelled_nested_bullet_is_its_own_degradation():
+    # Bites on: a labelled nested bullet under a [harmless] bullet being joined onto it, so its costly text is never checked.
+    # Axis: a nested item that opens with a label starts its own degradation: read as harmless then costly, and the costly one is refused.
+    body = ACCEPTING + "None.\n\n" + BUILD_RECORD + DEGRADATIONS + "- [harmless] A classifier stop.\n  - [costly] " + VERIFY_GATE + ".\n"
+    (problem,) = refused_with_bodies(SMALL, {211: body})
+    assert "PR #211's costly deviation" in problem and VERIFY_GATE in problem
+    assert [label for label, _ in pr_sheet.degradations_listed(body)] == ["harmless", "costly"]
+
+
+def test_an_empty_costly_text_is_never_carried():
+    # Bites on: a bare `- [costly]` (empty text) matching any acceptance line, because the empty string is a substring of everything.
+    # Axis: an empty costly text is always returned by costly_unlisted: exactly one problem, naming the PR and the empty bullet.
+    body = ACCEPTING + "- " + VERIFY_GATE + ".\n\n" + BUILD_RECORD + DEGRADATIONS + "- [costly]\n"
+    ((bullet, _),) = pr_sheet.listed_bullets(211, body)
+
+    def edit(advisor):
+        advisor.setdefault("items", []).append({"id": "verify-gate", "kind": "Accept", "title": VERIFY_GATE, "ifLeft": "The last commit is unverified until CI runs.", "options": "none"})
+        advisor["accounting"] = {bullet: {"item": "verify-gate"}}
+    (problem,) = refused_with_bodies(SMALL, {211: body}, edit)
+    assert "PR #211's costly deviation (\"\")" in problem
+
+
+def test_a_stacks_later_layer_is_checked_for_costly_lines():
+    # Bites on: the build checking only the first covered PR's body for a costly deviation with no line.
+    # Axis: every covered PR's body is checked: a stack whose second PR carries the costly deviation is refused, exactly one problem, naming PR #242.
+    # NONE_BODY carries no build-record marker, so its text is followed by a newline and then BUILD_RECORD + DEGRADATIONS + the costly bullet.
+    none_text = NONE_BODY.read_text(encoding="utf-8")
+    costly = none_text + "\n" + BUILD_RECORD + DEGRADATIONS + "- [costly] " + VERIFY_GATE + ".\n"
+    (problem,) = refused_with_bodies(TWIN, {241: none_text, 242: costly})
+    assert problem.startswith("PR #242's costly deviation")
+
+
 def test_a_costly_deviation_carried_into_what_we_are_accepting_builds_whatever_the_emphasis_or_full_stop():
     # Bites on: the match being exact (emphasis or the trailing full stop breaking it), or the check adding a card or changing what the sheet records.
     # Axis: K5 and the cards edge: the text after the label found inside an accepting line builds; the acceptance's own item is the only card; no nothingListed.
