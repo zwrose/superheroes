@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.46.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.0...superheroes-v0.46.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **superheroes:** a PR with no review run gets no merge sheet; the owner merges it with their own click ([#2123](https://github.com/zwrose/superheroes/issues/2123)) ([a66b943](https://github.com/zwrose/superheroes/commit/a66b943ce3607f49774609d1d956b88c7d180813))
+* **superheroes:** cloud builds say credential-like text is redacted, and a review record flags a redacted field ([#2130](https://github.com/zwrose/superheroes/issues/2130)) ([5c17b9a](https://github.com/zwrose/superheroes/commit/5c17b9aad3e4a9120b9d343be41105ceb45092f8))
+* **superheroes:** every implementer order carries the file-write rule ([#2138](https://github.com/zwrose/superheroes/issues/2138)) ([e4a86e9](https://github.com/zwrose/superheroes/commit/e4a86e978a53700cef7c1ff1e7c18962e9b5a175))
+* **superheroes:** the advisor sends exactly the relay text it was shown, and the relay check blames only a step it can see ([#2135](https://github.com/zwrose/superheroes/issues/2135)) ([bfaaa65](https://github.com/zwrose/superheroes/commit/bfaaa65ef78402bb1ccc705b10c100dcc73548ea))
+
 ## [0.46.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.45.0...superheroes-v0.46.0) (2026-10-24)
 
 
