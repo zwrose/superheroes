@@ -716,8 +716,13 @@ pre-handback review (§10, always the full loop):
 | Delta since the last review | Re-review |
 |---|---|
 | docs / comments / mechanical | receipts only |
-| a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review |
+| a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review, ending with a review record written on the head it reviewed |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full `review-code` loop again |
+
+**The scoped pass writes a review record.** It ends with `review_record.py write` on the head it
+reviewed, as `skills/review-code/reference/review-record.md` says. The new record relists every
+finding the earlier record listed, with its outcome, plus the scoped pass's own. The vet reads only
+the latest record, so a scoped pass with no record of its own reaches its re-vet held on paperwork.
 
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous
