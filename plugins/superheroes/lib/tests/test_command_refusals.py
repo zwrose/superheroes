@@ -212,3 +212,55 @@ def test_census_implementer_md():
     ladder = body.index("Highest precedence first:")
     rung_one = body.index("1. **Never claim a run you did not make.**")
     assert ladder < body.index("**Refused or denied commands.**") < rung_one
+
+
+# --- the file-write rule (#2126): one home, every implementer and fixer order --------------
+
+
+def test_census_file_write_rule_write_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_path = _prompt(tmp_path, "Implement exactly the assigned work order.\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
+    assert res["ok"] is True
+    with open(os.path.join(str(tmp_path / "run"), ED.PROMPT_NAME), encoding="utf-8") as fh:
+        staged = fh.read()
+    # axis: the file-write rule reaches every implementer order — see bite-proof record wo_2126_file_write
+    assert staged.count(CR.FILE_WRITE_RULE) == 1
+    assert staged.index(CR.ORDER_TEXT) < staged.index(CR.FILE_WRITE_RULE)
+
+
+def test_census_file_write_rule_native_preamble(tmp_path, monkeypatch, capsys):
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _out = _open(capsys, r, deadline=600, items=["src/new.txt"])
+    assert code == 0
+    with open(os.path.join(os.path.realpath(r.run), "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    # axis: the file-write rule reaches every implementer order — see bite-proof record wo_2126_file_write
+    assert prompt.count(CR.FILE_WRITE_RULE) == 1
+    assert prompt.index(CR.FILE_WRITE_RULE) < prompt.index("The order follows, verbatim.")
+
+
+def test_census_file_write_rule_fixer_order():
+    for host_seat in (False, True):
+        text, reason = RO.render_order(RP.P_FIXER, "fixer", _fixer_context(host_seat=host_seat))
+        assert reason is None, reason
+        assert text.count(CR.FILE_WRITE_RULE) == 1
+
+
+def test_file_write_rule_has_one_home():
+    # A hand copy of the sentence anywhere in the shipped plugin outside its home is a second copy.
+    marker = "file-write and file-edit tools (Write and Edit on"
+    home = os.path.join(_PLUGIN_ROOT, "lib", "command_refusals.py")
+    copies = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                if marker in " ".join(fh.read().split()):
+                    copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+    assert copies == [os.path.relpath(home, _PLUGIN_ROOT)]
