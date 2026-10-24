@@ -36,6 +36,7 @@ import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import host_model  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import launch_place  # noqa: E402
@@ -2069,6 +2070,8 @@ def _spawn_attempt(
     if os.path.realpath(cwd) == os.path.realpath(repo_root):
         return {"ok": False, "reason": "spawn-cwd-is-repo-root", "proc": None}
     child_env = ll.scrub_env(env)
+    for name in host_model.SESSION_ENV_VARS:
+        child_env.pop(name, None)   # a child session derives its own host model; a parent's (or its transcript) must never stand in (#2110)
     child_env[hb.LAUNCH_ID_ENV] = launch_id
     if slot is not None and generation is not None:
         child_env[SLOT_REF_ENV] = pilot_slot.format_slot_ref(slot, generation)
@@ -2216,30 +2219,18 @@ def _lookup_stack_entry_pr(
         if remaining <= 0:
             return {"ok": False, "reason": "stack-read-unavailable"}
         pr_timeout = min(120, remaining)
-    try:
-        pr_proc = gh_run(
-            [
-                "gh", "pr", "list",
-                "--state", "open",
-                "--json", "number,headRefOid,state",
-                "--limit", "1000",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            env=scrubbed,
-            timeout=pr_timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    if pr_proc.returncode != 0:
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    try:
-        pr_list = json.loads(pr_proc.stdout or "")
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    if not isinstance(pr_list, list):
-        return {"ok": False, "reason": "stack-read-unavailable"}
+    pr_list, pr_refusal = stack_check.list_open_prs(
+        ("number", "headRefOid", "state"),
+        run=gh_run,
+        timeout=pr_timeout,
+        deadline_at=deadline,
+        run_kwargs=dict(cwd=repo_root, env=scrubbed),
+    )
+    if pr_refusal is not None:
+        out = {"ok": False, "reason": "stack-read-unavailable"}
+        if pr_refusal.get("detail"):
+            out["detail"] = pr_refusal["detail"]
+        return out
     candidates = []
     for pr in pr_list:
         if not isinstance(pr, dict):

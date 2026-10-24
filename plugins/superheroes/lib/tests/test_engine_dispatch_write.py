@@ -122,7 +122,7 @@ def _contracted_fed_prompt(base):
         order_part = order_part + "\n"
     prefix = order_part + ("\n" if order_part else "")
     return (prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + CR.ORDER_TEXT + "\n\n"
-            + EA.WRITE_REPORT_CONTRACT)
+            + CR.FILE_WRITE_RULE + "\n\n" + EA.WRITE_REPORT_CONTRACT)
 
 
 def _expected_staged_write_prompt(base, contract):
@@ -130,7 +130,8 @@ def _expected_staged_write_prompt(base, contract):
     if order_part and not order_part.endswith("\n"):
         order_part = order_part + "\n"
     prefix = order_part + ("\n" if order_part else "")
-    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + CR.ORDER_TEXT + "\n\n" + contract
+    return (prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + CR.ORDER_TEXT + "\n\n"
+            + CR.FILE_WRITE_RULE + "\n\n" + contract)
 
 
 _NO_PATTERN_KILL_RULE_LITERAL = (
