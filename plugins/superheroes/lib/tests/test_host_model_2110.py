@@ -110,18 +110,18 @@ def test_a_model_recorded_before_this_start_never_stands_in(capsys, tmp_path):
 
 
 def test_from_transcript_picks_the_last_main_chain_assistant_model(tmp_path):
-    # axis: sidechain, synthetic, non-assistant and malformed lines never stand in (bite-proof G3)
+    # axis: sidechain, synthetic, non-assistant and malformed lines never stand in (bite-proof G3);
+    # the latest qualifying turn wins over an earlier one (bite-proof G7)
     path = tmp_path / "t.jsonl"
     path.write_bytes(b"".join(line.encode() for line in (
+        json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n",
         _assistant("claude-haiku-5-5"),
+        _assistant("claude-opus-5-5"),
         _assistant("gpt-5.6-sol", sidechain=True),
         json.dumps({"type": "user", "message": {"model": "gpt-5.6-sol"}}) + "\n",
         "{not json\n")) + b"\xff\xfe\n" + b"".join(line.encode() for line in (
         json.dumps({"type": "assistant", "message": "claude-x"}) + "\n",
         json.dumps({"type": "assistant", "isSidechain": False}) + "\n",
-        _assistant("<synthetic>"),
-        _assistant("claude-opus-5-5"),
-        _assistant("gpt-5.6-sol", sidechain=True),
         _assistant("<synthetic>"))))
     assert HM.from_transcript(str(path), "0") == "claude-opus-5-5"
 

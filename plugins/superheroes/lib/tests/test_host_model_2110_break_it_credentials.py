@@ -31,7 +31,6 @@ def test_surrogate_transcript_path_does_not_bypass_pass_scrubbing(tmp_path, monk
     monkeypatch.setenv("SUPERHEROES_REVIEWER_PASS", encoded_pass)
 
     transcript = str(tmp_path / "session-") + chr(0xDCFF) + ".jsonl"
-    Path(transcript).write_bytes(b"")
     payload = {"source": "startup", "cwd": str(tmp_path), "transcript_path": transcript}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(sys, "argv", ["session_start.py"])
