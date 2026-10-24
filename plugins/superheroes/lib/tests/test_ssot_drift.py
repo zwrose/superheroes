@@ -1281,7 +1281,7 @@ def _assert_omission_floor_matches_home(copy_text, label, home):
 def test_omission_floor_matches_conventions_10_7():
     """§11: the omission floor and marker semantics in every copy-holder match CONVENTIONS §10.7."""
     home = _conventions_section_10_7()
-    # bite-axis: the home's omission-floor row 3 names the costly class (#2127).
+    # bite-axis: the home's omission-floor row 3 names the costly class.
     assert _anchor_whitespace_normalize(_SECTION_10_7_COSTLY_ROW) in _anchor_whitespace_normalize(home), (
         "CONVENTIONS §10.7 omission floor row 3 no longer reads %r" % _SECTION_10_7_COSTLY_ROW
     )

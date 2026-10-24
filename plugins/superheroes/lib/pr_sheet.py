@@ -252,7 +252,7 @@ def _outside_comments(lines):
             if not inside and line.split("-->", 1)[1].strip():
                 kept.append((line, False))
             continue
-        # bite-axis: build-record boundary — nothing at or below the marker is read as an acceptance (#2127).
+        # bite-axis: build-record boundary — nothing at or below the marker is read as an acceptance.
         if line.strip() == _BUILD_RECORD_MARKER:
             break
         spaced = line.expandtabs(4)
