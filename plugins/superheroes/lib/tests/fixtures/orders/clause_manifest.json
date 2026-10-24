@@ -38,7 +38,8 @@
     "Commit ALL changes in ONE commit",
     "Create and edit files only with the host's file-write and file-edit tools",
     "Never run a formatter, a linter's autofix, or anything else that rewrites a committed break-it test file",
-    "do NOT guess. Report it for owner escalation via the runner's native write-result contract"
+    "do NOT guess. Report it for owner escalation via the runner's native write-result contract",
+    "Leave `headDiff` and `headDiffPath` out of your result, on every ending"
   ],
   "dispatch-gap-sweep": [
     "You are the gap-sweep finder for a big-diff review round",

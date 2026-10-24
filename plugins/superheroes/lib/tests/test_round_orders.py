@@ -829,6 +829,19 @@ def test_fixer_order_host_seat_carries_write_edit_break_it_and_land_last():
     assert "A committed fix with no landing is read as an unlanded fix" in text
 
 
+@pytest.mark.parametrize("host_seat", [True, False])
+def test_fixer_order_says_to_leave_the_head_diff_keys_out(host_seat):
+    # #2109: a fixer that reported its own commit's diff ended a session head-diff-mismatch; both
+    # renders say to leave both keys out, and the keys named are the contract's own.
+    text = _fixer_render(host_seat=host_seat)
+    assert ("Leave `headDiff` and `headDiffPath` out of your result, on every ending." in text)
+    assert "not your commit alone" in text
+    assert "your own commit's diff included, stops the round as head-diff-mismatch" in text
+    contract, reason = RA.payload_contract(RP.P_FIXER)
+    assert reason is None, reason
+    assert {"headDiff", "headDiffPath"} <= set(contract["optional"])
+
+
 def test_fixer_order_engine_seat_lands_last_without_a_landing_file():
     text = _fixer_render(host_seat=False)
     assert _FIXER_WRITE_EDIT_ONLY in text
