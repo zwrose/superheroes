@@ -150,9 +150,9 @@ def test_compound_clean_probe_is_scoped_to_its_own_segment(tmp_path, monkeypatch
 
 def test_segment_accounting_mixed_command():
     """segment_accounting classifies each segment independently."""
-    records = wg.segment_accounting("nohup git reset --hard && git clean -n")
+    records = wg.segment_accounting("env git reset --hard && git clean -n")
     kinds = {record["segment"]: record["kind"] for record in records}
-    assert kinds["nohup git reset --hard"] == "unaccounted"
+    assert kinds["env git reset --hard"] == "unaccounted"
     assert kinds["git clean -n"] == "safe"
 
 
@@ -914,7 +914,7 @@ def test_census_ignored_only_reset_hard_allows(tmp_path, monkeypatch):
 def test_census_unparsed_deny_message(tmp_path, monkeypatch):
     _calibrated(monkeypatch)
     repo = _dirty_repo(tmp_path, monkeypatch)
-    decision, reason = wg.classify("nohup git reset --hard", repo)
+    decision, reason = wg.classify("env git reset --hard", repo)
     assert decision == "deny"
     assert reason == wg.unparsed_message()
 

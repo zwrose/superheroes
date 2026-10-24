@@ -989,14 +989,14 @@ def segment_accounting(command, cwd=None, _depth=0):
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
         _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
-        core = _skip_builtins(tokens)
-        parsed =_parse_git_invocation(core) if core and _is_git_token(core[0]) else None
-        mentions = _segment_mentions_destructive_git(segment)
+        parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
+        wrapped = (core := _skip_builtins(tokens)) != tokens and core and _is_git_token(core[0]) and _segment_mentions_destructive_git(" ".join(core))
+        mentions = wrapped or _segment_mentions_destructive_git(segment)
         # A raw word still holding < or > outside its quoted spans after the real redirections
         # went hides what Bash consumes.
         attached = (mentions or parsed is not None) and any(
             re.search("[<>]", re.sub(r"'[^']*'|\"[^\"]*\"", "", w)) for w in _drop_redirections(all_raw))
-        if _depth >= 1 and (attached or tokens and (
+        if _depth >= 1 and (attached or wrapped or tokens and (
                 any(c in tokens[0] for c in "$`\\")
                 or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
                     and any(c in tok for tok in tokens[1:] for c in "$`\\"))
@@ -1111,14 +1111,14 @@ def mentions_destructive_git(command):
     return any(_segment_mentions_destructive_git(seg) for seg in _split_segments(command))
 
 
-def _skip_builtins(tokens):
-    """Tokens after leading exec/command/builtin/env words and options; `command -v` runs nothing."""
-    while tokens and (tokens[0] in _EXECUTION_BUILTINS or tokens[0] == "env"):
-        builtin, tokens = tokens[0], _command_tokens(tokens[1:])[1]
+def _skip_builtins(tokens, wide=True):
+    """Detection only, never parsed: tokens past exec/command/builtin (wide: env too) words and options."""
+    while tokens and (tokens[0] in _EXECUTION_BUILTINS or wide and tokens[0] == "env"):
+        builtin, tokens = tokens[0], _command_tokens(tokens[1:])[1] if wide else tokens[1:]
         while tokens and tokens[0].startswith("-"):
             if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
                 return []
-            tokens = tokens[2:] if tokens[0] in ("-a", "-u") else tokens[1:]
+            tokens = tokens[2:] if wide and tokens[0] in ("-a", "-u") else tokens[1:]
     return tokens
 
 
@@ -1127,7 +1127,7 @@ def _segment_has_unresolvable_target(tokens):
     keys, tokens = _command_tokens(tokens)
     if "GIT_DIR" in keys or "GIT_WORK_TREE" in keys:
         return True
-    tokens = _skip_builtins(tokens)
+    tokens = _skip_builtins(tokens, wide=False)
     if tokens and tokens[0] in ("cd", "pushd"):
         return True
     if tokens and _is_git_token(tokens[0]):
