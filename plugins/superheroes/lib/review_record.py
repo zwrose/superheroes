@@ -860,6 +860,17 @@ def leftover_line(finding):
     return f"finding {_name(finding)} waits for the owner's decision"
 
 
+REVIEWED = "reviewed"
+NOT_REVIEWED = "not-reviewed"
+AWAITS_OWNER = "awaits-owner"
+STATUSES = (REVIEWED, NOT_REVIEWED, AWAITS_OWNER)
+
+
+def cleared(status):
+    """Only `reviewed` clears a gate; any other value, an unknown one included, does not."""
+    return status == REVIEWED
+
+
 def _finding_lines(findings):
     lines = []
     for f in findings:
@@ -913,7 +924,21 @@ def _status(rec, unread=(), finding_lines=()):
         lines.append("no planned reviewer ran")
     elif not any(v["coversFinalCommit"] for v in ran):
         lines.append(f"no planned reviewer's run covers the final commit {s7(fc['sha'])}")
-    return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
+    return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
+
+
+def _owner_only(rec, missing_lines):
+    """True when the record reads not-reviewed for nothing but findings left for the owner.
+
+    Whether any raw output was withheld is known only in `write`, which downgrades the status there."""
+    if rec["status"] != NOT_REVIEWED or rec["parked"] or rec["withheldFromReviewers"] != []:
+        return False
+    leftovers = {leftover_line(f) for f in rec["findings"] if f.get("outcome") == _LEFT_FOR_OWNER}
+    # axis: a record is awaits-owner only when every missing line is a leftover finding
+    if not missing_lines or not all(m in leftovers for m in missing_lines):
+        return False
+    # axis: a planned reviewer that ran on an earlier commit keeps the record not-reviewed
+    return all(v["coversFinalCommit"] for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run")
 
 
 def _ruling_hits(findings, key):
@@ -1139,6 +1164,8 @@ def build_record(account, readers, prior=None):
     rec["status"], rec["parked"], lines = _status(
         rec, [f"the raw output file {n} could not be read" for n in unread], _finding_lines(findings))
     rec["whatIsMissing"] = notes + lines
+    if _owner_only(rec, rec["whatIsMissing"]):
+        rec["status"] = AWAITS_OWNER
     return rec
 
 
@@ -1529,6 +1556,11 @@ def _summary(r, level):
         left_text = f"{_plural(len(missing), 'item', 'items')} {LISTED}" if missing else "nothing"
     else:
         left_text = "; ".join(missing) or "nothing"
+    if r["status"] == AWAITS_OWNER:
+        head = (f"reviewed; {_plural(len(left), 'finding', 'findings')} {'waits' if len(left) == 1 else 'wait'} for your decision "
+                + (LISTED if compact else "(" + ", ".join(left) + ")"))
+    else:
+        head = r["status"].replace("-", " ")
     reason = lane.get("reason")
     if compact and reason:
         reason = _clip(reason)
@@ -1545,7 +1577,7 @@ def _summary(r, level):
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     lines = [
-        f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
+        f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
         waits_text,
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
@@ -1902,6 +1934,9 @@ def write(account_path, repo_root, readers=None):
                 raise Refusal("review-record-gh-failed", f"the raw output comment for {name} could not be written")
             links.append({"file": name, "id": sent["id"], "url": sent.get("url"), "withheld": withheld})
         record.update(rawOutputs=links, previousRecord=previous)
+        # axis: a withheld raw output is known only here, so the owner-only status is taken back before the record renders
+        if record["status"] == AWAITS_OWNER and any(x["withheld"] for x in links):
+            record["status"] = NOT_REVIEWED
         plan = render_plan(record)
         # The parts go up before the head: a write that stops part-way leaves parts no head names, never a half record.
         part_ids = []
