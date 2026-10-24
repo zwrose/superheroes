@@ -11,6 +11,7 @@ import hashlib
 import itertools
 import math
 
+import host_model as host_model_lib
 import liveness_cache
 import model_registry
 from model_registry import family_for, is_allowed, matrix_config, vendors
@@ -1447,6 +1448,20 @@ def build_parser():
         help="JSON dict of seat pins passed to build(); overlays the seat pins in core.md per seat",
     )
     cc.add_argument(c, "--host-model", contract="free-text", default=None)
+    cc.add_argument(
+        c,
+        "--session-transcript",
+        contract="free-text",
+        default=None,
+        help="this session's transcript path; the host model is read from its latest main-chain turn when --host-model names none (#2110)",
+    )
+    cc.add_argument(
+        c,
+        "--session-transcript-from",
+        contract="free-text",
+        default=None,
+        help="byte offset of the session start in --session-transcript; only turns at or after it count (#2110)",
+    )
     cc.add_argument(c, "--implementation-engine", contract="free-text", default=None)
     cc.add_argument(
         c,
@@ -1616,11 +1631,12 @@ def main(argv):
         author_family = args.author_family
         narrative_family = args.narrative_family
         receipt_host_family = None
+        host_model, host_model_source = host_model_lib.resolve(
+            args.host_model or "", args.session_transcript or "", args.session_transcript_from or "")
         if args.implementation_engine is not None:
             if args.author_family is not None or args.narrative_family is not None:
                 print("family-flags-conflict", file=sys.stderr)
                 return 1
-            host_model = args.host_model if args.host_model is not None else ""
             host_fam = model_registry.host_family(host_model)
             receipt_host_family = host_fam
             impl_engine = args.implementation_engine
@@ -1632,7 +1648,8 @@ def main(argv):
             narrative_family = host_fam or claude_host_fam
             if host_fam is None:
                 reason = (
-                    "host model unknown — the narrative family fell back to the claude "
+                    "host model unknown — neither the start event nor the session transcript "
+                    "named a model; the narrative family fell back to the claude "
                     "host's family (%s); the author family is the %s implementation "
                     "engine's (%s)"
                     % (claude_host_fam, impl_engine, author_family)
@@ -1660,7 +1677,6 @@ def main(argv):
         extra_maker_families: frozenset[str] | None = None
         if args.implementation_engine is not None:
             impl_engine = args.implementation_engine
-            host_model = args.host_model if args.host_model is not None else ""
             host_fam_for_extra = model_registry.host_family(host_model)
             if (
                 impl_engine == "claude"
