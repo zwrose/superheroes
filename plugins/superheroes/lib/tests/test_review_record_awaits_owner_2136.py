@@ -168,9 +168,12 @@ def test_leftovers_ruled_through_owner_rulings_read_reviewed(tmp_path):
         return {**ruling.readers(**kw), "withheld_paths": lambda root, sha, paths: []}
 
     def made(rulings):
-        return rr.build_record({**ruling.account(rulings), "repoRoot": str(tmp_path)}, readers())
+        base = {**ruling.account(rulings), "lane": "full", "laneReason": "the change touches the review record",
+                "makers": [{"family": "anthropic"}], "reviewers": [reviewer("r1")]}
+        return rr.build_record({**base, "repoRoot": str(tmp_path)}, readers())
 
     unruled = made([])
+    assert unruled["whatIsMissing"] == ["finding f-1 waits for the owner's decision"]
     assert unruled["status"] == rr.AWAITS_OWNER and unruled["leftForOwner"] == ["f-1"]
     ruled = made([ruling.entry()])
     assert ruled["status"] == rr.REVIEWED and ruled["leftForOwner"] == [] and ruled["whatIsMissing"] == []
