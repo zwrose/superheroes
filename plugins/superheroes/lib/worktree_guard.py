@@ -458,8 +458,8 @@ _WRAPPER_WORDS = frozenset({
     "timeout", "env", "nohup", "nice", "ionice", "sudo", "time", "stdbuf", "xargs", "setsid",
 })
 
-_REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|&>|&>>|>&|<&)\S*$")
-_REDIRECTION_OPERATOR = re.compile(r"^[0-9]*(?:<|>|>>|<<<|&>|&>>|>&|<&)$")
+_REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)\S*$")
+_REDIRECTION_OPERATOR = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)$")
 
 
 def _redirection_width(tokens, i):
@@ -494,7 +494,13 @@ def _command_tokens(tokens):
             start += 1
         rest = stripped[start:]
         if rest and rest[0] in _EXECUTION_BUILTINS:
+            builtin = rest[0]
             rest = rest[1:]
+            while rest and rest[0].startswith("-"):
+                option = rest[0]
+                rest = rest[1:]
+                if builtin == "exec" and option == "-a" and rest:
+                    rest = rest[1:]
         if rest == tokens:
             return keys, tokens
         tokens = rest

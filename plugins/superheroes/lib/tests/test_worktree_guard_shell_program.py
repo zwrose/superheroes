@@ -139,9 +139,25 @@ def test_the_backstop_fires_only_at_an_executable_command_position(command, dirt
     "TOOL=git bash -c 'exec \"$TOOL\" reset --hard'",
     "bash -c 'command \"$T\" reset --hard'",
     "bash -c 'builtin \"$T\" reset --hard'",
+    "TOOL=git bash -c 'exec -- \"$TOOL\" reset --hard'",
+    "bash -c 'exec -a x \"$T\" reset --hard'",
+    "bash -c 'command -p \"$T\" reset --hard'",
+    "TOOL=git bash -c 'command -- \"$TOOL\" reset --hard'",
 ])
 def test_a_variable_command_word_behind_an_execution_builtin_is_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+def test_command_v_lookup_in_a_program_is_allowed(dirty_repo):
+    assert wg.classify("bash -c 'command -v git'", dirty_repo)[0] == "allow"
+
+
+def test_a_separated_heredoc_operator_consumes_its_delimiter(dirty_repo):
+    assert wg._redirection_width(["<<", "EOF"], 0) == 2
+    assert wg._redirection_width(["<<-", "EOF"], 0) == 2
+    assert wg._redirection_width(["<<EOF"], 0) == 1
+    verdict = wg.classify("bash << EOF -c 'git reset --hard'\nEOF", dirty_repo)
+    assert verdict[0] == "deny"
 
 
 @pytest.mark.parametrize("command", ["grep -c bash notes.txt", "echo bash"])
