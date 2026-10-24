@@ -457,7 +457,13 @@ above).
    "done" alone is not. A saved "Not yet", or no saved verdict, together with "done" is not the word.
    Where no "Merge" verdict can be saved on the PR's current sheet (the host cannot show the sheet,
    or the template does not offer a merge verdict), there is no word: the merge waits, and you tell
-   the owner why. A stack that
+   the owner why.
+   **A PR with no review run gets no sheet, and the owner merges it with their own click.** The
+   typical case is a dependency bump you vet directly in place of a review-crew run, where the
+   project allows that; whether it does stays that project's owner's call. Build no merge sheet for
+   such a PR and never hand-build a review record to make one. Post your vet receipt and owner half
+   on the PR, and tell the owner the PR is theirs to merge with their own click. You execute no
+   merge for it on a chat word. A stack that
    merges whole has one sheet and one verdict, which covers exactly the PRs the sheet lists. A spec
    PR's sheet carries its breakdown, and one verdict covers both (duty 1);
    [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § Merging a
