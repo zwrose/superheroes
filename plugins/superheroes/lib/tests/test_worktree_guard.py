@@ -652,6 +652,9 @@ _PROSE_ONLY_MENTIONS = (
     # same-delimiter quotes nested inside a command substitution: legal shell, but the scanner
     # toggles its outer quote state on the inner quotes and the prose reads as bare text
     'gh pr comment 1 --body "$(echo "never git reset --hard")"',
+    # a comment body quoting someone with a backslash-escaped quote of the enclosing kind; the
+    # scanner has no escape handling, so its quote state desynchronizes from the shell's
+    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt"',
 )
 
 # The prose shape #2054 moved out of the refused list: the heredoc body is data fed to `cat >`.
@@ -674,6 +677,9 @@ _PROSE_MENTIONS_STILL_ALLOWED = (
     "gh pr comment 1 --body 'the reviewer said \"never: git checkout -- f.txt\"'",
     # single-quoted, so the backticks are literal text the shell will not substitute
     "gh pr comment 1 --body 'revert with an inverse Edit, not `git reset --hard`'",
+    # opposite-delimiter quotes inside a substitution stay tracked; only same-delimiter quotes
+    # desynchronize the scanner, which is why the message says "of the same kind"
+    'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
     # a heredoc line is not categorically refused: the scanner is quote-aware within the
     # line, so a mention inside quotes stays allowed. The message says "bare lines" for this.
     "cat > /tmp/note.md <<'EOF'\n"
