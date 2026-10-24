@@ -145,6 +145,10 @@ def test_the_backstop_fires_only_at_an_executable_command_position(command, dirt
     "TOOL=git bash -c 'command -- \"$TOOL\" reset --hard'",
     "TOOL=git bash -c 'exec -ca x \"$TOOL\" reset --hard'",
     "TOOL=git bash -c 'exec -la x \"$TOOL\" reset --hard'",
+    "TOOL=git bash -c 'exec -ax \"$TOOL\" reset --hard'",
+    "TOOL=git bash -c 'exec -agit \"$TOOL\" reset --hard'",
+    "TOOL=git bash -c 'exec -aalt \"$TOOL\" reset --hard'",
+    "bash -c 'command -v \"$TOOL\"'",
     "TOOL=git bash -c 'env \"$TOOL\" reset --hard'",
     "TOOL=git bash -c 'timeout 5 \"$TOOL\" reset --hard'",
 ])
@@ -154,13 +158,21 @@ def test_a_variable_command_word_behind_an_execution_builtin_is_unreadable(comma
 
 @pytest.mark.parametrize("command", [
     "bash -c 'command -v git'",
-    "bash -c 'command -v \"$TOOL\"'",
     "bash -c 'command -V git'",
     "bash -c 'command -pv git'",
+    "bash -c 'exec git status'",
     "bash -c 'timeout 5 git status'",
 ])
 def test_command_v_lookup_and_plain_wrapped_commands_in_a_program_are_allowed(command, dirty_repo):
-    assert wg.classify(command, dirty_repo)[0] == "allow", command
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'exec git reset --hard'",
+    "exec git reset --hard",
+])
+def test_a_destructive_git_behind_a_bare_execution_builtin_is_still_denied(command, dirty_repo):
+    assert wg.classify(command, dirty_repo)[0] == "deny", command
 
 
 def test_a_separated_heredoc_operator_consumes_its_delimiter(dirty_repo):
