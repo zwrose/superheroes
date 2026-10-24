@@ -4,6 +4,8 @@ pieces at runtime, never written whole."""
 import json
 from pathlib import Path
 
+import pytest
+
 import review_record as rr
 from test_review_record import GOOD_RUN, Fake, account, build, finding, put, send
 from test_review_record_fit_c7l3 import SEATS, many_findings, panel_rows, parts_of
@@ -210,3 +212,31 @@ def test_edge_f_the_flag_matches_the_record_a_large_panel_posts(tmp_path):
     assert "observation" in rec["reviewerShed"]
     assert not any("telemetry" in (v.get("observation") or {}) for v in rec["reviewers"])
     assert rec["transitDamage"]["redactedFields"] == rr._redacted_paths(rec) == ["findings[0].body"]
+
+
+# --- the claim check and the transit line ---
+
+def with_forbidden_redacted_path():
+    """A built record whose first reviewer row's observation holds a redacted field under a key that is itself a
+    forbidden phrase, so the transit line names that phrase in a path."""
+    rec = build(account())
+    rec["reviewers"][0]["observation"]["telemetry"] = {"bug-free": "[REDACTED FIELD]"}
+    return rec
+
+
+def test_a_forbidden_phrase_in_a_redacted_fields_path_is_accepted_in_the_transit_line():
+    # axis: the transit line's literal record paths being checked for forbidden claims (the exemption removed)
+    assert "bug-free" in rr.FORBIDDEN_CLAIMS
+    body = rr.render(with_forbidden_redacted_path())
+    path = "reviewers[0].observation.telemetry.bug-free"
+    assert rr._parse_body(body)["transitDamage"] == {"redactedFields": [path]}
+    assert f"Transit damage: redacted text in 1 recorded field, so that text is lost: {path}." in summary_of(body)
+
+
+def test_a_forbidden_phrase_elsewhere_in_a_summary_with_a_transit_line_is_still_refused():
+    # axis: the claim check skipped for the whole summary whenever a transit line exists (the exemption broadened)
+    rec = with_forbidden_redacted_path()
+    rec["whatIsMissing"] = ["this change is bug-free"]
+    with pytest.raises(rr.Refusal) as refused:
+        rr.render(rec)
+    assert refused.value.reason == "review-record-forbidden-claim"
