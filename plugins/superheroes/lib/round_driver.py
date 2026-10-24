@@ -13012,6 +13012,29 @@ def _run_verify_open(session_dir):
             "claimPath": claim_path, "token": token, "stale": stale}
 
 
+def _run_in_process_group(argv, *, timeout=None, **kwargs):
+    """subprocess.run in its own process group; on timeout the whole group is killed, so a
+    compound verify command leaves no surviving descendants."""
+    kwargs.pop("start_new_session", None)
+    with subprocess.Popen(argv, start_new_session=True, **kwargs) as proc:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError:
+                proc.kill()
+            out, _ = proc.communicate()
+            raise subprocess.TimeoutExpired(argv, timeout, output=out)
+        except BaseException:
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError:
+                proc.kill()
+            raise
+        return subprocess.CompletedProcess(argv, proc.returncode, out, None)
+
+
 def _run_verify_execute(session_dir, claim, timeout, run):
     """Run the bound verify command outside the lock. Returns (payload, refusal)."""
     rnd, attempt = claim["slot"]
@@ -13120,7 +13143,7 @@ def cmd_run_verify(session_dir, timeout=3600, *, run=None, sleep=None, clock=Non
     The session lock is held to read the slot and take an exclusive claim, released while the
     command runs, and taken again — with a bounded retry — to publish; no state is mutated. A
     refusal answers `ok: false` and exits 0, like `advance`'s."""
-    run = run or subprocess.run
+    run = run or _run_in_process_group
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
     try:
