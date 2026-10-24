@@ -200,7 +200,7 @@ def test_ruling_that_empties_the_batch_drops_the_fixer_pending(tmp_path):
 
 def test_reshape_render_refusal_changes_nothing(tmp_path):
     """axis: a render refusal while re-emitting (aggregate guidance overflow) refuses `rule`, leaves
-    loop-state.json and fix-batch.json byte-identical and writes no K+1 manifest."""
+    loop-state.json byte-identical and writes no K+1 manifest."""
     f_a = _blocking_finding("cap A", 2)
     f_b = _blocking_finding("cap B", 3)
     f_b["severity"] = "Minor"
@@ -216,9 +216,6 @@ def test_reshape_render_refusal_changes_nothing(tmp_path):
         for i in range(6)]
     RD.save_state(session_dir, state)
     k = _state(session_dir)["pending"]["attempt"]
-    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, _state(session_dir))
-    with open(batch_path, "rb") as fh:
-        batch_before = fh.read()
     state_before = _state_bytes(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": _row_id(row_a), "ruling": "guidance", "reason": "cap",
@@ -227,8 +224,39 @@ def test_reshape_render_refusal_changes_nothing(tmp_path):
     assert out.get("reason") == "order-render-refused"
     assert "ruling-guidance-omitted" in str(out.get("detail", ""))
     assert _state_bytes(session_dir) == state_before
+    assert not os.path.exists(RD._orders_manifest_path(session_dir, rnd, P_FIXER, k + 1))
+
+
+def test_reshape_render_refusal_restores_the_rewritten_batch_file(tmp_path, monkeypatch):
+    """axis: the reshape re-slice rewrites fix-batch.json to the promoted row before the K+1 render;
+    when that render refuses, `rule` is refused and fix-batch.json is back to its pre-ruling bytes
+    with loop-state.json unchanged and no K+1 manifest."""
+    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
+    before = _state(session_dir)
+    k = before["pending"]["attempt"]
+    rnd = before["pending"]["round"]
+    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, before)
     with open(batch_path, "rb") as fh:
-        assert fh.read() == batch_before
+        batch_before = fh.read()
+    state_before = _state_bytes(session_dir)
+    seen = []
+
+    def _refusing_render(phase, seat_key, context):
+        with open(batch_path, "rb") as fh:
+            seen.append(fh.read())
+        return None, "probe-render-refusal"
+
+    monkeypatch.setattr(RD.round_orders, "render_order", _refusing_render)
+    out = _rule(session_dir, _oos(tmp_path, row_a), fixer_not_dispatched=True)
+    assert len(seen) == 1 and seen[0] != batch_before
+    assert _batch_keys(json.loads(seen[0])) == _batch_keys([row_b])
+    assert out.get("ok") is False
+    assert out.get("reason") == "order-render-refused", out
+    assert "probe-render-refusal" in str(out.get("detail", ""))
+    with open(batch_path, "rb") as fh:
+        restored = fh.read()
+    assert restored == batch_before
+    assert _state_bytes(session_dir) == state_before
     assert not os.path.exists(RD._orders_manifest_path(session_dir, rnd, P_FIXER, k + 1))
 
 
