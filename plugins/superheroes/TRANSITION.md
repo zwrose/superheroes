@@ -12,6 +12,19 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
+
+### Relay: the advisor sends exactly the text it was shown
+
+- `skills/showrunner/reference/wave-watch.md` § "Another account", steps 2 and 3: the answer text never carries a shell-evaluated value the advisor has not seen expanded (a `$(date -u …)` time inside a heredoc is run first and written in as text); the advisor prints the whole composed `relayMessage`, never a truncated view such as `head` or the message id alone, and sends exactly that text; a change after compose means writing a new answer file and composing a new message, never editing the composed one. Step 4 adds that `check` sees only the relay's send against the stored text, so a mismatch does not say which step changed it.
+- `cloud_relay.py check`'s `say` for `relay-text-mismatch` names only what it compares: "The relay's send of message `<id>` differs from the stored text (first difference at character `<n>`); this check sees only that send, so it cannot tell which step changed the text; it was not delivered." With `headerDropped: true` it reads "The relay's send of message `<id>` is the stored text with its header line dropped; it was not delivered." Verdicts, result keys and `firstDifference` are unchanged.
+
 ## 0.46.0
 
 ### Before you upgrade
