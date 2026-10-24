@@ -63,7 +63,8 @@ lane never refuses `terminal-child-live`, and `--await-exit` adds nothing.
 
 **After vetting a delivered lane, record the ruling** with
 `amend --kind vet --value ready|not-ready|parked-blocker --note "<one line>"`. A NOT-READY ruling,
-and a parked blocker inside a delivered PR, are friction the terminal tallies cannot see.
+and a parked blocker inside a delivered PR, are friction the terminal tallies cannot see. A
+NOT-READY goes back to a live original cloud builder, not to a new lane (§ Adoption mechanics).
 
 **A second `record-outcome` on a lane that started and then ended with an outcome is recorded, not
 refused.** A never-started lane is still refused with `outcome-without-started`. End one with
@@ -412,7 +413,7 @@ report one that is not confirmed as the cleanup's steps say.
 ## Adoption mechanics
 
 The recovery rules live in `rubric/launch-doctrine.md` § Recovery, and the charter keeps the
-advisor's calls. Five of those calls have mechanics beyond the charter:
+advisor's calls. Six of those calls have mechanics beyond the charter:
 
 Follow the doctrine rather than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
 
@@ -448,6 +449,31 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   `cloud_recover.py relaunch-refusal`, then launch its premise with `launcher.py launch --place cloud`.
   The version the cloud reported stands as the cloud's, so the build runs on the owner's machine
   and the launch report names both versions.
+- **Send a NOT-READY back to a live original builder.** A cloud builder can wake on PR activity
+  after its handback is recorded, so a recorded handback does not mean no builder. Before launching
+  a fix leg onto a cloud-built PR, read the original lane's session in the builders' account's
+  session listing. When that session is still listed live, the fix order goes to it and no new lane
+  launches: send the vet's NOT-READY findings as the fix order by message to the lane's
+  `cloudSessionName` (`SendMessage` on the same account, the relay (`ensure`, `compose --fix-order`,
+  `SendMessage`, `check`) on another), as `skills/showrunner/reference/wave-watch.md` § Answering a
+  builder note sends an answer. The builder fixes, pushes and hands back as usual. Launch a new fix
+  leg (a premise with `adoptsBranch`/`adoptsHead`) only when that session is archived, gone from the
+  listing (shown by a complete listing, as below), its status bucket reads failed,
+  or `cloud_recover.py assess` recorded it `stopped` on a handover. A lane whose builder refused at
+  intake built nothing and is outside this rule. An alive session that never answers the fix order
+  is resolved by the owner archiving it, which then reads `archived`. The launcher enforces this:
+  record the listing at launch time into a file and pass it with
+  `launch --cloud-sessions-file <file>`. The usual record is one `list_sessions` page read with no
+  cursor and a limit that holds every session (`has_more: false`); it is the only record that can
+  show a session is gone, and only when its rows run newest-created first and it holds a row of that lane's own cloud environment (`environment_id`) created at least 600 seconds after that lane started (the allowance covers clock skew between the two machines). A `get_session` result (or an array of them) works only for sessions it
+  returns: it covers an archived or failed session it shows, but never a session that is gone. On
+  another account a helper on that account reads it, as § Acting on the builders' account says.
+  `adopt-original-session-live` means an earlier cloud lane's session is still listed live;
+  `originalSessions` names each one, and the fix order goes to it. `adopt-original-session-unread`
+  means the listing could not be used, or a read it needs failed, or it is not a complete page, so
+  a missing session cannot count as gone; `failedRead` names the read. A lane whose builder refused
+  at intake, or that `assess` recorded `stopped` on a handover, needs no listing (a plain handback
+  is not a handover and still needs the listing).
 - **Adopt a layer that is behind its base.** Bring the adopted branch current with its base
   first: merge the base in and push, so the premise keeps its base (the usual route, standing
   craft). If that is not possible for an unstacked or bottom-layer adoption, set the premise's

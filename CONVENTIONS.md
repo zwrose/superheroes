@@ -899,7 +899,7 @@ PR-body markers from the retired execution spine survive independently of it:
 - **Disclosed degradations** (`<!-- superheroes:degradations -->`) — immediately followed
   by `### Disclosed degradations` and a list of bullets (one per degradation: what was
   promised, what was delivered instead, and why), or the single word **None** when there
-  are none. Ratification amendment F2: disclosed degradations are **prose** in every PR
+  are none. Every deviation, harmless or costly, is listed there with its label. Ratification amendment F2: disclosed degradations are **prose** in every PR
   examined, so without a marker the omission floor's third row would be a judgment call
   rather than a mechanism.
 - **Vet-receipt markers** — three markers ratified from #672, **written at vet, after handback** —
@@ -957,7 +957,7 @@ rows that must appear under `## What we're accepting`:
 1. every **deferred** DoD row;
 2. every **blocking or important** review finding that was **not fixed**, whatever its
    disposition is called;
-3. every **disclosed degradation**.
+3. every **costly disclosed degradation** (sorted in plugins/superheroes/skills/workhorse/reference/handback.md § Disclosed degradations; a harmless one stays in the build record only).
 
 A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing**
 `<!-- superheroes:degradations -->` section is **itself** a review finding — same

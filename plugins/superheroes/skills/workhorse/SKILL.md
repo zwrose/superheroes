@@ -656,7 +656,7 @@ on a very large PR.
   owner still carries after merging appears here, stated as a consequence.** The
   **omission floor** requires three rows here, keyed on **severity, not disposition label**: (1) every
   **deferred** DoD row; (2) every **blocking or important** review finding that was **not fixed**,
-  whatever its disposition is called; (3) every **disclosed degradation**. When there are genuinely none,
+  whatever its disposition is called; (3) every **costly disclosed degradation** (sorted in skills/workhorse/reference/handback.md § Disclosed degradations). When there are genuinely none,
   write exactly **None**, never **N/A**.
 - **`## How to see it`**, for **show it** cases only. On **say it** and **nothing to see**, write
   exactly **N/A** with a brief why. An honest entry point of `command`, `attended`, or `none` is a
@@ -716,8 +716,13 @@ pre-handback review (§10, always the full loop):
 | Delta since the last review | Re-review |
 |---|---|
 | docs / comments / mechanical | receipts only |
-| a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review |
+| a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review, ending with a review record written on the head it reviewed |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full `review-code` loop again |
+
+**The scoped pass writes a review record.** It ends with `review_record.py write` on the head it
+reviewed, as `skills/review-code/reference/review-record.md` says. The new record relists every
+finding the earlier record listed, with its outcome, plus the scoped pass's own. The vet reads only
+the latest record, so a scoped pass with no record of its own reaches its re-vet held on paperwork.
 
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous
