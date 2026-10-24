@@ -357,8 +357,9 @@ def test_spawn_attempt_drops_the_session_variables_from_the_child(tmp_path, monk
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
+    expected_names = (HM.HOST_MODEL_ENV, HM.TRANSCRIPT_ENV, HM.TRANSCRIPT_FROM_ENV)
     parent_env = {ll.LEDGER_ROOT_ENV: ledger_root}
-    parent_env.update({name: "parent-value" for name in HM.SESSION_ENV_VARS})
+    parent_env.update({name: "parent-value" for name in expected_names})
     result = L._spawn_attempt(
         repo, launch_id, 1, ["claude", "-p", "test"],
         os.path.join(log_dir, "out.log"), os.path.join(log_dir, "err.log"), 900000,
@@ -366,5 +367,6 @@ def test_spawn_attempt_drops_the_session_variables_from_the_child(tmp_path, monk
     )
     assert result["ok"] is True
     assert len(HM.SESSION_ENV_VARS) == 3
-    for name in HM.SESSION_ENV_VARS:
+    assert set(HM.SESSION_ENV_VARS) == set(expected_names)
+    for name in expected_names:
         assert name not in captured
