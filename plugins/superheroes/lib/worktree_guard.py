@@ -776,6 +776,8 @@ def _shell_program(raw_tokens):
         return None
     if raw_tokens[0] == "eval":
         args = raw_tokens[1:]
+        if args and _plain_word(args[0]) == "--":
+            args = args[1:]
         if not args or not all(re.fullmatch(_WORD, arg) for arg in args):
             return ("unreadable", None)
         return ("program", " ".join(_plain_word(arg) for arg in args))

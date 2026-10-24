@@ -70,6 +70,7 @@ def test_a_discard_inside_a_readable_program_is_denied_with_its_next_step(name, 
     'bash -c "echo hi"',
     'sh -c "git status"',
     'eval "echo hi"',
+    "eval -- 'git clean -n'",
     "bash script.sh",
 ])
 def test_a_harmless_program_or_script_is_allowed(command, dirty_repo):
@@ -134,6 +135,8 @@ def _program(text):
     ("bash -c", ("unreadable", None)),
     ("bash $OPT -c 'x'", ("unreadable", None)),
     ("eval", ("unreadable", None)),
+    ("eval -- 'git clean -n'", ("program", "git clean -n")),
+    ("eval --", ("unreadable", None)),
     ("git status", None),
 ])
 def test_shell_program_reads_the_program_shapes(text, expected):
