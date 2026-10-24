@@ -46,7 +46,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** A cloud advisor can now launch a build that depends on another pull request, and the wave watch can resolve its repository, where the cloud proxy refuses GraphQL. See [Cloud: the dependency gate and the watch's repository read work through REST](#cloud-the-dependency-gate-and-the-watchs-repository-read-work-through-rest)
 - **After switching.** **Nothing is owed.** Owners see fewer already-fixed leftover cards: a finding an audit raised, which the review then fixed and audited under its own key, is recorded fixed and no longer left for the owner. See [Review: a finding an audit raised is audited under its own key](#review-a-finding-an-audit-raised-is-audited-under-its-own-key).
 - **After switching.** **Nothing is owed.** An advisor with two or more PRs waiting can draft their vets in parallel with the new `vet-drafter` agent, which runs on the advisor's own model; the advisor still checks each draft, posts the receipt and writes the slot. See [Vetting: the vet-drafter drafts vets in parallel](#vetting-the-vet-drafter-drafts-vets-in-parallel).
-- **After switching.** **Advisors stop hand-building review records for PRs that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet).
+- **After switching.** **Advisors stop hand-building review records to get a merge sheet for a PR that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet).
 
 ### Review: a finding an audit raised is audited under its own key
 
@@ -228,7 +228,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 ### Showrunner: a PR with no review run gets no merge sheet
 
 - Duty 6 of the showrunner charter (`skills/showrunner/SKILL.md`, the merge policy's one home) gains one rule: a PR that had no review run, typically a dependency bump the advisor vets directly in place of a review-crew run where the project allows that, gets no merge sheet, and the advisor never hand-builds a review record to make one. The advisor posts its vet receipt and owner half on the PR and tells the owner the PR is theirs to merge with their own click; it executes no merge for such a PR on a chat word. `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics (batch 3) and `theme/review-template.md` (beside `pr_sheet.py build`'s `--record` requirement) point to it.
-- Review discipline is unchanged: whether a project's dependency PRs may skip review-crew stays that project's owner's call.
+- Review discipline is unchanged: whether a project's dependency PRs may skip review-crew stays that project's owner's call, and a review record the driver mandate owes for a disclosed skip is still written.
 - No command, result key or file shape changes.
 
 ## 0.46.0

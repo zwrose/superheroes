@@ -217,8 +217,7 @@ python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--reco
 
 Each `--pr-body` file holds one covered PR's body, read with `gh api repos/<o>/<r>/pulls/<n> --jq .body`.
 
-A PR that had no review run has no review record, so it gets no sheet; never hand-build a record to
-make one. The owner merges it with their own click, as the showrunner charter's duty 6 says
+A PR that had no review run gets no sheet; never hand-build a review record to make one. The owner merges it with their own click, as the showrunner charter's duty 6 says
 ([`skills/showrunner/SKILL.md`](../skills/showrunner/SKILL.md)).
 
 The shape of the advisor's input is defined in the docstring of `lib/pr_sheet.py`, and nowhere else.
