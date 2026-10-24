@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import review_record as rr
-from test_review_record import Fake, account, build, finding, put, send
+from test_review_record import GOOD_RUN, Fake, account, build, finding, put, send
 from test_review_record_fit_c7l3 import SEATS, many_findings, panel_rows, parts_of
 
 SECRET = "pass" + "word = " + "x" * 8
@@ -138,13 +138,20 @@ def test_the_compact_levels_give_the_count_with_the_listed_note_and_no_path():
 
 
 def test_a_parts_head_that_only_fits_compact_still_carries_the_line(tmp_path):
-    # axis: the parts head's summary reading the unflagged record
+    # axis: the compact summary level (the parts head's) reading the unflagged record, or naming the path instead of counting
     fake = Fake()
-    found = many_findings(78, 900)
-    found[0] = finding("f-000", body="see " + SECRET)
-    send(tmp_path, fake, findings=found)
-    [head] = fake.marked()
-    assert "Transit damage: redacted text in 1 recorded field" in summary_of(head["body"])
+    idx = 40
+    ids = [f"{i:03d}" + "x" * 897 for i in range(78)]
+    found = [finding(i, title=f"t{n}", outcome="left-for-owner", reason="waits") for n, i in enumerate(ids)]
+    found[idx] = dict(found[idx], body="see " + SECRET)
+    out = send(tmp_path, fake, findings=found)
+    head = fake.marked()[0]["body"]
+    assert out["parts"] >= 1
+    assert "Waiting for the owner: 78 findings left for the owner (listed in the full record)" in head
+    assert ("Transit damage: redacted text in 1 recorded field (listed in the full record), so that text is lost."
+            in summary_of(head))
+    assert f"findings[{idx}].body" not in head
+    assert rr.read(7, readers=fake.readers())["transitDamage"]["redactedFields"] == [f"findings[{idx}].body"]
 
 
 # --- the path walk and the fail-closed edges ---
@@ -191,9 +198,15 @@ def test_the_records_own_top_level_transit_damage_is_skipped_but_a_nested_one_is
 
 
 def test_edge_f_the_flag_matches_the_record_a_large_panel_posts(tmp_path):
-    # axis: the flag computed on a record other than the one posted (here a 132-row panel that outgrows one comment)
-    fake = Fake()
-    send(tmp_path, fake, findings=[finding(body="see " + SECRET)], reviewers=panel_rows(SEATS, 12))
+    # axis: the flag computed before shedding (here a 132-row panel whose first run's telemetry holds redacted text and is shed)
+    rows = panel_rows(SEATS, 12)
+    telemetry = {"note": "[REDACTED FIELD]", "padding": "x" * 70000}
+    big_run = ({**GOOD_RUN, "observation": {**GOOD_RUN["observation"], "telemetry": telemetry}}, None)
+    fake = Fake(runs={rows[0]["runDir"]: big_run})
+    out = send(tmp_path, fake, findings=[finding(body="see " + SECRET)], reviewers=rows)
+    assert out["parts"] == 0
     [comment] = fake.marked()
     rec = rr._parse_body(comment["body"], {c["id"]: c for c in fake.comments})
+    assert "observation" in rec["reviewerShed"]
+    assert not any("telemetry" in (v.get("observation") or {}) for v in rec["reviewers"])
     assert rec["transitDamage"]["redactedFields"] == rr._redacted_paths(rec) == ["findings[0].body"]
