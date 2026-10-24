@@ -21,6 +21,8 @@ Detector axes (bite-proof):
 - E11 test_every_git_call_* / test_neutral_git_* — containment: every git subprocess runs inside
   ``_neutral_git``, which sets and restores the neutral environment
 - E12 test_hostile_global_git_config_* — configuration: the owner's own git config never reaches a collection
+- E13 test_enroll_dependencies_* / test_close_*_dependency_link — preservation: enroll links the builder's
+  installed dependencies through the guarded helper and close never collects that link
 """
 import ast
 import calendar
@@ -104,8 +106,9 @@ class Repo:
     pass
 
 
-def _make_repo(tmp_path, block=None, prefs=None, a_text="alpha\n"):
-    """main (with a base commit holding core.md), B (builder), T and T2 (subagent candidates)."""
+def _make_repo(tmp_path, block=None, prefs=None, a_text="alpha\n", gitignore="*.log\n", tracked=None, links=None):
+    """main (with a base commit holding core.md), B (builder), T and T2 (subagent candidates).
+    ``tracked`` maps extra paths to file text and ``links`` maps paths to symlink targets, both in the base."""
     block = {"localSockets": True} if block is None else block
     root = os.path.realpath(str(tmp_path))
     r = Repo()
@@ -113,7 +116,11 @@ def _make_repo(tmp_path, block=None, prefs=None, a_text="alpha\n"):
     os.makedirs(r.main)
     _git(r.main, "init", "-q", "-b", "main")
     _write(os.path.join(r.main, "a.txt"), a_text)
-    _write(os.path.join(r.main, ".gitignore"), "*.log\n")
+    _write(os.path.join(r.main, ".gitignore"), gitignore)
+    for rel, text in (tracked or {}).items():
+        _write(os.path.join(r.main, rel), text)
+    for rel, target in (links or {}).items():
+        os.symlink(target, os.path.join(r.main, rel))
     _write(os.path.join(r.main, core_md.in_repo_core_rel_path()), _core_text(block, prefs))
     _git(r.main, "add", "-A")
     _git(r.main, "commit", "-q", "-m", "base")
@@ -430,7 +437,10 @@ def test_open_records_the_run_and_writes_the_prompt(tmp_path, monkeypatch, capsy
         "ok": True, "terminal": False, "runDir": run, "deadlineAt": out["deadlineAt"],
         "agent": {"subagent_type": "superheroes:implementer", "model": "sonnet",
                   "isolation": "worktree", "run_in_background": True,
-                  "promptPath": os.path.join(run, "agent-prompt.md")}}
+                  "promptPath": os.path.join(run, "agent-prompt.md"),
+                  "launchPrompt": "Read the file %s in full with the Read tool before doing anything else, "
+                                  "then follow it exactly: it is your whole work order."
+                                  % os.path.join(run, "agent-prompt.md")}}
     (rec,) = _records(r)
     assert rec["kind"] == "run-opened" and rec["engine"] == "native"
     assert rec["runKind"] == "write"
@@ -480,7 +490,7 @@ def test_enroll_pins_the_base_and_writes_nothing_to_the_journal(tmp_path, monkey
     before = _records(r)
     code, out = _enroll(capsys, monkeypatch, r, r.T)
     assert code == 0
-    assert out == {"ok": True, "head": r.base}
+    assert out == {"ok": True, "head": r.base, "dependencies": {"linked": [], "note": "none-installed"}}
     assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
     assert _records(r) == before
 
@@ -498,7 +508,7 @@ def test_enroll_checks_out_the_base_when_head_sits_ahead(tmp_path, monkeypatch, 
     _open(capsys, r)
     code, out = _enroll(capsys, monkeypatch, r, r.T)
     assert code == 0
-    assert out == {"ok": True, "head": r.base}
+    assert out == {"ok": True, "head": r.base, "dependencies": {"linked": [], "note": "none-installed"}}
     assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
 
 
@@ -519,9 +529,73 @@ def test_enroll_ignores_inherited_git_routing_variables(tmp_path, monkeypatch, c
     monkeypatch.delenv("GIT_DIR")
     monkeypatch.delenv("GIT_WORK_TREE")
     assert code == 0, out
-    assert out == {"ok": True, "head": r.base}
+    assert out == {"ok": True, "head": r.base, "dependencies": {"linked": [], "note": "none-installed"}}
     assert _git(r.T, "rev-parse", "HEAD").strip() == r.base
     assert _git(r.T2, "rev-parse", "HEAD").strip() == ahead
+
+
+def _install_hello(b):
+    """An untracked, populated node_modules in the builder's worktree ``b``: one package and a .bin link."""
+    modules = os.path.join(b, "node_modules")
+    _write(os.path.join(modules, "package.json"), '{"name": "deps"}\n')
+    _write(os.path.join(modules, "hello", "index.js"), "module.exports = 'hi';\n")
+    os.makedirs(os.path.join(modules, ".bin"))
+    os.symlink("../hello/index.js", os.path.join(modules, ".bin", "hello"))
+    return modules
+
+
+def test_enroll_dependencies_links_the_builders_installed_folder(tmp_path, monkeypatch, capsys):
+    # axis: preservation — an installed node_modules in B is linked into T, reachable from T
+    r = _make_repo(tmp_path, gitignore="node_modules/\n")
+    modules = _install_hello(r.B)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    assert out == {"ok": True, "head": r.base, "dependencies": {"linked": ["node_modules"]}}
+    link = os.path.join(r.T, "node_modules")
+    assert os.path.islink(link)
+    assert os.path.realpath(link) == os.path.realpath(modules)
+    with open(os.path.join(link, "hello", "index.js"), encoding="utf-8") as fh:
+        assert fh.read() == "module.exports = 'hi';\n"
+
+
+def test_enroll_dependencies_notes_none_installed(tmp_path, monkeypatch, capsys):
+    # axis: mapping — no node_modules in B links nothing and says why
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    _open(capsys, r)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    assert out["dependencies"] == {"linked": [], "note": "none-installed"}
+    assert not os.path.lexists(os.path.join(r.T, "node_modules"))
+
+
+def test_enroll_dependencies_keeps_a_folder_the_base_tracks(tmp_path, monkeypatch, capsys):
+    # axis: preservation — a node_modules the base tracks is already in T and is never replaced by a link
+    r = _make_repo(tmp_path, tracked={"node_modules/keep.txt": "kept\n"})
+    assert os.path.isfile(os.path.join(r.B, "node_modules", "keep.txt"))
+    _routed(monkeypatch)
+    _open(capsys, r)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    assert out["dependencies"] == {"linked": [], "note": "already-present"}
+    assert not os.path.islink(os.path.join(r.T, "node_modules"))
+    assert os.path.isfile(os.path.join(r.T, "node_modules", "keep.txt"))
+
+
+def test_enroll_dependencies_refuses_a_package_linking_into_tracked_files(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a package that links into B's tracked tree is never linked; enroll still succeeds
+    r = _make_repo(tmp_path, tracked={"packages/localpkg/index.js": "module.exports = 1;\n"})
+    modules = _install_hello(r.B)
+    os.symlink("../packages/localpkg", os.path.join(modules, "localpkg"))
+    _routed(monkeypatch)
+    _open(capsys, r)
+    code, out = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert out["dependencies"] == {"linked": [], "note": "dependency-link-unsafe"}
+    assert not os.path.lexists(os.path.join(r.T, "node_modules"))
 
 
 def test_enroll_refuses_a_dirty_worktree(tmp_path, monkeypatch, capsys):
@@ -994,6 +1068,46 @@ def test_close_success_lands_the_change_in_the_builders_index(tmp_path, monkeypa
             assert mine.read() == theirs.read()
     assert _git(r.B, "rev-parse", "HEAD").strip() == r.base
     assert _kinds(r) == ["run-opened", "native-enrolled", "native-collecting", "run-closed"]
+
+
+def test_close_strips_the_enrolled_dependency_link(tmp_path, monkeypatch, capsys):
+    # axis: preservation — enroll's untracked link is dropped before collection, even when .gitignore's
+    # trailing slash does not match a symlink; B keeps its real folder and its index holds only the edit
+    r = _make_repo(tmp_path, gitignore="node_modules/\n")
+    modules = _install_hello(r.B)
+    _routed(monkeypatch)
+    code, opened = _open(capsys, r)
+    assert code == 0, opened
+    code, enrolled = _enroll(capsys, monkeypatch, r, r.T)
+    assert code == 0 and enrolled["dependencies"] == {"linked": ["node_modules"]}
+    assert os.path.islink(os.path.join(r.T, "node_modules"))
+    _enrolled(r)
+    _write(os.path.join(r.T, "a.txt"), "alpha\nbeta\n")
+    _result(r)
+    _transcript(r)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["ok"] is True
+    assert out["collected"]["files"] == ["a.txt"]
+    assert os.path.isdir(modules) and not os.path.islink(modules)
+    assert os.path.isfile(os.path.join(modules, "hello", "index.js"))
+    assert _git(r.B, "diff", "--cached", "--name-only").split() == ["a.txt"]
+
+
+def test_close_keeps_a_tracked_dependency_link(tmp_path, monkeypatch, capsys):
+    # axis: refusal — a node_modules symlink the base tracks resolves the same in T and B, yet is never unlinked
+    outside = os.path.join(os.path.realpath(str(tmp_path)), "outside-deps")
+    os.makedirs(outside)
+    r = _make_repo(tmp_path, links={"node_modules": outside})
+    assert os.path.realpath(os.path.join(r.T, "node_modules")) == os.path.realpath(
+        os.path.join(r.B, "node_modules")) == outside
+    _ready(capsys, monkeypatch, r)
+    code, out = _close(capsys, r)
+    assert code == 0, out
+    assert out["collected"]["files"] == ["a.txt"]
+    assert "node_modules" not in out["collected"]["files"]
+    link = os.path.join(r.T, "node_modules")
+    assert os.path.islink(link) and os.readlink(link) == outside
 
 
 # --- E9 idempotence ------------------------------------------------------------------------

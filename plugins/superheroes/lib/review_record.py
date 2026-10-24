@@ -393,7 +393,10 @@ def _validate(a):
     chk(ne(a.get("sessionId")), "sessionId")
     for k in ("lane", "laneReason", "finalCommit", "ci"):
         chk(sn(a.get(k)), k)
-    chk(isinstance(a.get("reviewers"), list) and a["reviewers"], "reviewers")
+    ab = a.get("abandoned")
+    chk(ab is None or (isinstance(ab, dict) and isinstance(ab.get("reason"), str) and bool(ab["reason"].strip())), "abandoned")
+    # an abandoned session may have run no seat, so only its record may list no reviewer
+    chk(isinstance(a.get("reviewers"), list) and (a["reviewers"] or ab is not None), "reviewers")
     for i, r in enumerate(a["reviewers"]):
         chk(isinstance(r, dict), f"reviewers[{i}]")
         for k in ("name", "vendor", "model"):
@@ -924,6 +927,10 @@ def _status(rec, unread=(), finding_lines=()):
         lines.append("no planned reviewer ran")
     elif not any(v["coversFinalCommit"] for v in ran):
         lines.append(f"no planned reviewer's run covers the final commit {s7(fc['sha'])}")
+    # axis: an abandoned session's record never reads reviewed — see bite-proof record wo_b_2137_abandoned_record
+    if rec.get("abandoned"):
+        # fixed prose: no data enters
+        lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
     return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
@@ -1140,6 +1147,7 @@ def build_record(account, readers, prior=None):
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "withheldFromReviewers": withheld,
+        **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
         "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),

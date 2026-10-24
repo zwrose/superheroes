@@ -678,12 +678,14 @@ def _already_kept(copy, rel, sha):
 
 
 def _scan_entries(directory):
-    """The paths of every entry of ``directory`` and of each ``@``-prefixed scope directory beneath it."""
+    """The paths of every entry of ``directory`` and of each ``@``-prefixed scope directory and the ``.bin``
+    directory beneath it."""
     found = []
     for name in sorted(os.listdir(directory)):
         entry = os.path.join(directory, name)
         found.append(entry)
-        if name.startswith("@") and os.path.isdir(entry) and not os.path.islink(entry):
+        # axis: a ``.bin`` entry that links back into the reviewed checkout's tracked tree is scanned like a package link, so it is never linked
+        if (name.startswith("@") or name == ".bin") and os.path.isdir(entry) and not os.path.islink(entry):
             found.extend(os.path.join(entry, sub) for sub in sorted(os.listdir(entry)))
     return found
 
@@ -699,6 +701,9 @@ def _link_dependencies(repo_root, copy):
         if os.path.lexists(target) or not os.path.isdir(source):
             continue
         src_real = os.path.realpath(source)
+        # axis: a dependency folder that is itself a link into another part of the reviewed checkout is never linked, so a test cannot write a tracked file through it
+        if (src_real == root_real or src_real.startswith(root_real.rstrip(os.sep) + os.sep)) and src_real != os.path.join(root_real, name):
+            return REASON_DEPENDENCY_LINK_UNSAFE
         try:
             for entry in _scan_entries(source):
                 if not os.path.islink(entry):

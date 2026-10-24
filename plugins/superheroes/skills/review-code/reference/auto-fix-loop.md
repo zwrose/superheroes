@@ -582,6 +582,7 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 **Moved.** The fixer subagent prompt template now ships as data and is rendered per round by
 `round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
 emitted order file** — do not hand-compose from a fenced template.
+A native (host-seat) fixer is dispatched with a short prompt that points at the emitted order file, the same pointer sentence `native_engine.LAUNCH_PROMPT` holds ("Read the file `<order path>` in full with the Read tool before doing anything else, then follow it exactly: it is your whole work order."), never the order re-emitted inline.
 
 The fixer's verify budget is **scoped** — its target files' referencing tests plus the static
 validators — never the project's full verify command; the orchestrator's `run-verify` is the
