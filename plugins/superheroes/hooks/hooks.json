@@ -8,6 +8,7 @@
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree_guard_gate.py\" || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"superheroes worktree guard unavailable (fail-closed). Next step: the guard could not start, so check that `python3` runs and that the plugin file `hooks/worktree_guard_gate.py` exists, and report it. Bash stays blocked until the guard starts.\"}}'" },
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_timeout.py\" || true" },
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/iphone_allow.py\" || true" },
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py\" || true" },
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/implementer_fence.py\" || true" }
         ]
       },
