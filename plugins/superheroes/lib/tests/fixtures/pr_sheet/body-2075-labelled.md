@@ -1,0 +1,189 @@
+Closes #2071.
+
+## What's changing, and why
+
+A review seat could run programs on your machine. In a weekly-eats review, a codex auditor ran the lines of an owner-run script that reads the keychain. Review seats now run **no programs at all**. That is enforced where each seat runs, by naming what the seat may do, not by a list of forbidden commands:
+
+- **Codex review seats get a closed tool set.** Your codex config (MCP servers, plugins, hooks) is ignored for these seats, codex's own shell tools are off, and their one tool is a small read-only file server the plugin ships (read, list, search). This mattered beyond the shell: your codex config gives seats a `node_repl` server that ran a script through `child_process` even with the shell off. A live test against the real codex shows a seat asked to run a project script cannot, while it still reads files, including ones outside its copy.
+- **Claude review seats** already had no shell. They now also load no MCP servers.
+- **Every seat order says what the seat may run, in one positive sentence.** The order renderer adds it to every phase: finder, verifier, synthesis, gap sweep, auditor, scoped finder and fixer. The fixer's sentence names what its order lists (its tests, validators, the reads that inspect its inputs, staging and the commit), and nothing of the project's own beyond them.
+- **The driver refuses a result whose engine record shows an action outside the allowance.** The refusal is named `seat-ran-outside-allowance`, is final with no retry, and the whole record is read before the capture is trimmed. This covers codex records, and cursor records too: a cursor seat may read, search and list, and edit only its own result file.
+
+**Your two "fix before merge" sheet cards** were done in the previous leg: the unreadable-record forfeit message, and the non-ASCII path tests.
+
+**This leg fixes the two problems vet 615 found:**
+- **One read is now size-capped.** A single call to the seats' read tool returns at most 100,000 bytes, well under the 1 MiB record line the check accepts. A very long line is cut with a marker that says how to read the rest (`column=`). A long page stops early with its "read again at offset N" note, which always fits, and list and search are capped the same way. Before, reading one minified file could make a review seat drop out.
+- **The record now says how each review actually ran** (see the build record). The previous leg's reviews ran from the installed plugin, so their codex seats could still run shell commands. This leg's two review sessions ran from the build checkout. Their seats ran **0 shell commands across 39 attempts** and made 2,378 read-tool calls.
+
+The leg's reviews also found and fixed three smaller gaps:
+- Cursor edit paths are now checked against the seat's own working directory.
+- The fixer's allowance sentence now lets it read files and stage its commit.
+- A test now proves the page footer survives a full page.
+
+## What we're accepting
+
+- **One test is weak, and it's yours to decide (review leftover).** The test for the list and search size caps uses too little data to ever hit the cap, so it would still pass if those caps were removed. The read-file caps that caused the forfeit are properly tested. Leaving it means a later change could quietly remove the list/search cap and only be caught when a review drops out. Fixing it is a few test lines.
+- **Codex review seats no longer see your codex config.** A review that relied on a custom codex MCP server, plugin, hook or model-provider setting loses it. Model and effort are still passed explicitly, and sign-in still works.
+- **Cursor review seats can still run commands; they are caught afterwards, not stopped up front.** Cursor's no-edit "ask" mode would stop its seats delivering their result file, so cursor is checked from its record instead. A cursor seat that runs a command forfeits its review (falls back to another reviewer). The command will already have run, inside cursor's sandbox. Cursor is not live on this machine today. Follow-up FU1.
+- **A codex or cursor review attempt that dies mid-run now forfeits for good.** It used to be retried once. Its record can't be trusted, so the run fails closed. You may see a few more reviewer fallbacks to the host model when a seat crashes. Each one is disclosed.
+- **A seat whose record has a line over 1 MiB, or runs past 64 MiB, forfeits.** The read tool now caps one call at 100,000 bytes, so a normal review should not reach the line limit. If one does, the seat falls back and the fallback is disclosed.
+- **A line past 2,000 characters takes several reads.** The seat gets the first 2,000 characters and a note to read on with `column=`. Search hits show the first 300 characters of the line.
+- **The PR is larger than estimated:** 720 non-test lines against an estimate of 180–300. The 600 size bar was crossed earlier, and the advisor ruled to continue as one PR, for your veto (see the size row in the build record). This leg added about 87 non-test lines, mostly the read-tool caps.
+- **This leg's fixer broke one order rule once.** In round 1 of the fix session, the review fixer edited three source files with a shell script instead of the file-edit tools its order requires. The content was reviewed and audited like any other fix. Later fixers were told the rule explicitly and kept it.
+
+## How to see it
+
+N/A — say it: a changed rule for review seats with nothing to spot-check. The live end-to-end test (`SUPERHEROES_LIVE_ENGINE_TESTS=1`, `test_seat_allowance_live.py`) is the demonstration.
+
+## Advisor vet
+<!-- superheroes:advisor-vet -->
+
+**Verdict: READY** · 049519a241d6f0f2adac1ffff8911f9da262d588
+
+**What was checked.** Both problems from my last vet are fixed. The review seats' read tool now returns at most about 100 KB per read, so no review seat can trip the new record limit and drop out; I tried it with a 2 MB one-line file, a big file, a large folder and a big search, and every reply stayed small, with a way to page through the rest. The PR now says truthfully which reviews ran under the new no-programs rule; I recounted this round's reviews myself: 39 seat runs, zero shell commands. Your two original "fix before merge" items stay fixed. CI is green.
+
+**What accepting it means.** Codex review seats run no programs on your machine, only a read-only file tool, and the review rejects a seat whose record shows otherwise. Codex seats no longer see your own codex add-ons. Cursor seats are still only caught after the fact (cursor isn't in use for reviews).
+
+**What is yours to decide.** One card: a test for the list and search size caps doesn't reach the cap (the code itself works; I checked). My recommendation is to fix it in a follow-up. Then merge or not.
+
+Receipt: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6368956190
+
+<!-- superheroes:build-record -->
+<details><summary>Build record</summary>
+
+### Lane, brief, and intake
+- **Lane:** full, the advisor's call recorded on #2071. Declared via `build_lane.py`.
+- **Anchor:** receipt. Both links are live (weekly-eats-hq/weekly-eats#3092, PR weekly-eats-hq/weekly-eats#3107).
+- **Brief:** https://github.com/zwrose/superheroes/issues/2071#issuecomment-6340563895. Brief check: codex gpt-6.1-sol xhigh, 4 Important, all folded. Dispositions: https://github.com/zwrose/superheroes/issues/2071#issuecomment-6340687882
+- **Amended order** (from the advisor, mid-intake): the renderer emits the allowance into every seat order. Done in `round_orders.render_order`, and pinned by a golden test that runs once per phase.
+- **Preflight:** gh auth plus a real write (the brief comment); codex probe READY; dispatch vocab ok. Browser probe N/A: a plugin build, no running app. Test-pilot N/A for the same reason. Stand-in evidence: the re-run receipts and the review below.
+- **Second fix leg (vet 615, launch `launch-e60bc08a038203e6`, claude-three):** adopted at `801f97355`. Intake sweep: every local 2071 branch and worktree (`fix/2071-review-seat-allowance`, `fix/2071-sendback-leg`, `wo/2071-b`, `wo/2071-c`) is contained in the pushed head, and no tree was dirty. Nothing unpushed.
+
+### Design, measured before building (codex-cli 0.159.1)
+- **Shell and unified exec off:** nothing runs, but the seat cannot read its diff.
+- **`approval_policy="untrusted"`:** refused by this codex version.
+- **User config intact:** its `node_repl` MCP ran the script with the shell off.
+- **Closed tool set** (`--ignore-user-config` + shell tools off + our read server, pre-approved): the script did not run, and reads worked.
+- **cursor-agent:** default and `plan` mode ran shell. `--mode ask` ran none, but it cannot edit, and cursor review seats deliver results by editing a typed file (wo-d-2071 found this). So no ask mode; cursor gets the record check.
+
+### Review
+**How each session ran** (V615-1). Only sessions dispatched from the build checkout's plugin root ran their codex seats under the new closed tool set:
+
+| Session | Plugin root (`ROOT_DIR`) | Codex seats ran shell? |
+|---|---|---|
+| 1, 2 (first build) | build checkout | halted at the verify gate |
+| 3 (first build), `/tmp/review-pXRxcKF4` | build checkout `…/issue-2071-16a1ea6dd63ade6b/plugins/superheroes` | no: closed tool set |
+| A, B, C (send-back leg), `/tmp/review-8UOTGerO`, `/tmp/review-RaCggvMZ`, `/tmp/review-klITPL9y` | **installed plugin** `…/plugins/cache/superheroes/superheroes/0.45.0` | **yes**: `command_execution` in every attempt (the advisor counted 6/6, 19/19, and 26 `zsh -lc sed/rg/nl` on C's code reviewer). These were still real cross-vendor reviews. |
+| M (this leg), `/tmp/review-M4cD6zab` | build checkout `…/issue-2071-e60bc08a038203e6/plugins/superheroes` | **no**: 30 attempts, 0 `command_execution`, 1,890 `mcp_tool_call` |
+| D (this leg, final head), `/tmp/review-BsO8yFly` | build checkout (same) | **no**: 9 attempts, 0 `command_execution`, 488 `mcp_tool_call` |
+
+Every codex seat argv in M and D carries `--ignore-user-config --disable shell_tool --disable unified_exec` and `mcp_servers.superheroes_read` pointing at the build checkout's `lib/seat_read_tool.py`. M's later rounds therefore read through the read tool as each fix landed.
+
+- **Session 1** (`/tmp/review-rCUr6nxi`): halted on the verify gate (3 stale tests). Record: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6342926563
+- **Session 2** (`/tmp/review-znMauBcH`): halted on the verify gate (1 stale monkeypatch). Record: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6344365436
+- **Session 3** (`/tmp/review-pXRxcKF4`): **converged**. Shape `audited-chain`, independence `independent`, head `c0b521046`. Record: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6345243824
+- **Send-back leg (owner's sheet answers):** sessions A (superseded unfolded: `rule` cannot target a finding its session did not raise), B (converged in 4 rounds, `full-panel-confirmed`, both owner findings ruled `guidance` with `decidedBy: sheet-answer`) and C (fresh session on `801f97355`, converged in 1 round). Records: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6364099928, https://github.com/zwrose/superheroes/pull/2075#issuecomment-6364384954, https://github.com/zwrose/superheroes/pull/2075#issuecomment-6364658812
+- **Second fix leg (vet 615):**
+  - Brought current with main first (`6e6c5c934`, `--no-ff`; TRANSITION.md conflict kept both sides). The seat and engine-adapter test files passed on the merge (1237 passed, 1 skipped).
+  - **Session M** (`/tmp/review-M4cD6zab`), a fresh `review-code pr 2075` with a `--focus` note quoting V615-2. Both round-1 panel seats raised V615-2 on their own, and the verifier confirmed it. The finding's suggestion carried the advisor's fix shape (byte budget, marker, early stop, list and search too, a 2,000,000-character-line case, paging to every line), so no `rule` guidance was recorded. I also missed the rule-before-`next` step: the fixer order was emitted before I could rule. **Converged in 7 of 7 rounds: `full-panel-confirmed`, `independent`, base fetched, fixes through `c6f01a30f`.** Record: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6367951807. It reads not-reviewed because no CI ran on `c6f01a30f` (main had moved and the PR conflicted) and one Minor is left for the owner.
+  - Brought current with main again (`93b53a707`, both sides of TRANSITION.md kept). 11 overlap test files gave 2099 passed, 1 skipped, and the five validators exit 0.
+  - **Session D** (`/tmp/review-BsO8yFly`), fresh, on `93b53a707`. Its gap sweep found the fixer-allowance gap, fixed in `049519a24` and audited as discharged. **Converged in 2 rounds: `audited-chain`, `independent`, base fetched.** **Final record: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6368852415.** CI is green on `049519a24` and every reviewer ran. Status `not-reviewed` **only** because one Minor test finding (raised in M round 7 and in D round 1) waits for the owner.
+- **Panel:** code-reviewer and test-role at codex gpt-6.1-sol xhigh. The grounding seat is on the roster but runs only on the read-only path, so it stays under `seatsNotRun`. Makers: anthropic.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| Claude review argv assertion stale (s1 gap sweep) | Important | Fixed, `c5b4d16d3` (audited: discharged) |
+| Cursor reviewers unchecked (s1 gap sweep) | Important | Fixed, `c5b4d16d3`; made positive in WO-D/D2/D3 |
+| Cursor edit exception not limited to the result file (s2) | Important | Fixed, `6f7604a3e` (discharged) |
+| Payload-less cursor start judged before its completion (s3) | Important | Fixed, `c0b521046` (discharged) |
+| Non-BMP characters in TOML paths (s1) | Minor | Fixed, `8dd9e6bdc` |
+| No-write test guard misses nested calls (s1) | Minor | Fixed, `454302d03` |
+| Unreadable record described as misconduct in the forfeit text (s3) | Minor | Fixed in the send-back leg, `5a5b36a98` (owner guidance; discharged) |
+| Test expectations assume ASCII paths (s3) | Minor | Fixed in the send-back leg, `5a5b36a98` (owner guidance; discharged) |
+| Allowance scan decodes uncapped engine output (send-back B) | Important | Fixed, `5a5b36a98` (discharged) |
+| An attempt that died unrecorded skipped the allowance check (send-back B) | Important | Fixed, `f7c55b3e2` (discharged) |
+| **V615-2: one read can return over 1 MiB** (M r1 panel, both seats) | Important | **Fixed, `b85a77414`**: 100,000-byte response budget, 2,000-character line cap with a marker, early page stop, list and search budgeted (discharged-but-new-issue → next row) |
+| Cursor edit targets resolved against the scanner's directory, not the seat's (M r1 gap sweep) | Important | **Fixed, `b85a77414`**: `seat_cwd` is threaded through `scan_stream` (discharged) |
+| The 2,000-character cap hid the rest of single-line review inputs (M r2, both auditors) | Important | **Fixed, `4fb6b9ac1`**: `read_file` takes `column`, and the marker names the next `offset` and `column` (discharged) |
+| Literal copies of the allowance sentences in a test (M r3 scoped finder) | Important | **Fixed, `c3e295713`** (discharged) |
+| Continuation footer not reserved inside the byte budget (M r5 panel, both seats) | Important | **Fixed, `c6f01a30f`**: 128-byte footer reserve, plus a full-page test (discharged) |
+| Fixer allowance did not permit inspection reads or staging (D r1 gap sweep) | Important | **Fixed, `049519a24`**: the sentence names both, and still no program (discharged) |
+| List/search budget test never reaches the budget (M r7 + D r1 test-role) | Minor | **Left for the owner** (see What we're accepting). Carried check `applies` at `049519a24` |
+| Allowance prose copied in exact-string tests; nested-write test shape; axis lines | Minor (code-quality) | Craft, settled at convergence |
+
+### Receipts (re-run by the builder)
+- **Calibrated verify** (the five validators): green at the merged heads `6e6c5c934`, `93b53a707` and `049519a24`.
+- **Verify gate** (validators plus touched tests), each round of this leg on the post-fix head: 6900 (`b85a77414`), 6901 (`4fb6b9ac1`), 6901 (`c3e295713`), 6902 (`c6f01a30f`) and 6989 (`049519a24`) passed, 1 skipped each, exit 0.
+- **CI:** final head `049519a24` **green** (https://github.com/zwrose/superheroes/actions/runs/39979486681; pr-title pass). `6e6c5c934` green (run 39955242936). No run on `c6f01a30f`: the PR conflicted with main.
+- **Earlier legs:** 6822 passed at `c0b521046`, 6826 at `5a5b36a98`/`f7c55b3e2`, CI green on `801f97355` (run 39948558125).
+- **Live end-to-end** (`test_seat_allowance_live.py`, real codex): green, 85 s, first build. **Red** with the closed tool set removed from the argv: the seat ran `/bin/zsh -lc ./run_me.sh`. Not re-run in this leg; the argv the live test pins is unchanged.
+
+### Bite-proofs (builder re-run)
+| Detector | Red | Green |
+|---|---|---|
+| Closed tool set (live e2e) | argv without the set: `command_execution: /bin/zsh -lc ./run_me.sh` | 1 passed |
+| Allowance block in every order (golden) | block removed: 7 failed | 7 passed |
+| Driver refusal helper | helper returns None: 8 failed | 16 passed |
+| `scan_stream` mid-read fails closed | returns ok: 2 failed | 2 passed |
+| Positive cursor rule | membership bypassed: 6 failed | 79 passed |
+| **2,000,000-character line stays scannable, paging reaches the tail** | pre-leg read tool (`6e6c5c934`), this leg's test: 1 failed | `c6f01a30f`: 1 passed |
+| **Many medium lines stop early and page through every line** | `6e6c5c934`: 1 failed | 1 passed |
+| **Full page keeps its continuation marker** | pre-fix (`c3e295713`): 1 failed | `c6f01a30f`: 1 passed |
+| `column` pages a long single line | passes on `6e6c5c934` too: that code returned the whole line, so the test guards the round-2 cap, not the original defect. **Accepted.** | 1 passed |
+| List/search budget | **passes on `6e6c5c934` too: does not bite.** Rejected, and left for the owner | 1 passed |
+
+Red runs ran in detached worktrees under the session scratchpad, with the later test file copied onto the earlier commit. The worktree guard refused a `git checkout <sha> -- <path>` inside a probe worktree, so each red ran on its own detached checkout instead.
+
+### Dispatch provenance
+| Dispatch | Engine / model (gate-validated) | Result | Rework | Lint (det. / semantic) | Refusals |
+|---|---|---|---|---|---|
+| Brief check | codex gpt-6.1-sol xhigh | 4 findings | — | — | none |
+| WO-A … WO-E (first build) | claude sonnet-5.5 high | see the first build's rows: WO-A needs_context, WO-A2 ok, WO-B ok, WO-C needs_context, WO-C2 ok, WO-D plan_wrong, WO-D2 needs_context, WO-D3/D4/E ok | seat_allowance reworks 1–2 | clean / folded | 3 (held heredoc, foreground sleep, heredoc edit) |
+| order-linter (×10) | claude haiku-4.5 medium | as above | — | — | none |
+| Review seats, sessions 1–3 and A–C | codex gpt-6.1-sol (xhigh/high) | see records; A–C ran from the installed plugin (above) | — | — | — |
+| Review fixers, first build and send-back (×5) | claude sonnet (native) | `c5b4d16d3`, `6f7604a3e`, `c0b521046`, `5a5b36a98`, `f7c55b3e2` | in-loop | driver-rendered | none |
+| **This leg, session M seats:** panel ×6 (r1, r5, r7), verifiers ×7, synthesis ×6, gap sweeps ×3, auditors ×5, scoped finders ×3 | codex gpt-6.1-sol; panel, gap sweep and scoped finder xhigh (reviewer-deep); verifier, synthesis, auditor high (registry cells). **The 2 round-2 auditors ran at xhigh under role `reviewer-deep`, not the registry `auditor` cell (high).** Same model, higher effort; corrected from round 3 on. | converged | — | — | — |
+| **This leg, session D seats:** panel ×2, verifiers ×2, synthesis ×2, gap sweep, auditor, scoped finder | codex gpt-6.1-sol (same cells) | converged | — | — | — |
+| **This leg, review fixers (×5)** | claude sonnet (native `general-purpose`, `code-fixer` tier) | `b85a77414` (2), `4fb6b9ac1` (1), `c3e295713` (1), `c6f01a30f` (1), `049519a24` (1) | in-loop | driver-rendered | none reported; `refusalCheck: unobserved` (this branch's driver takes no `--fixer-transcript` on `record-result`) |
+
+- **Orchestrator integration:** TRANSITION.md conflicts with main were resolved mechanically, both sides kept: `0e5441d8b`, `801f97355`, `6e6c5c934` and `93b53a707`.
+- **Blocking-finding attribution (this leg):** V615-2 came from the original design (no byte bound). The 2,000-character cap, the missing footer reserve and the fixer-sentence gap were review-fixer execution, each caught by the next audit or panel.
+
+<!-- superheroes:degradations -->
+### Disclosed degradations
+- [harmless] **Cursor review seats are checked from their record, not enforced at dispatch.** Promised: a seat cannot run a program outside its allowance. Delivered for codex, and for claude by its restricted mode. Cursor's only no-run mode (`ask`) blocks the result-file edit its seats need.
+- [harmless] **The live end-to-end test needs the real codex and a model call.** It is opt-in (`SUPERHEROES_LIVE_ENGINE_TESTS=1`) and skipped in CI. It ran red and green in the first build and was not re-run in this leg.
+- [harmless] **The grounding seat did not run** in any session; it runs only on the read-only path. No review seat checked this PR body's claims against the repo.
+- [harmless] **The send-back leg's reviews (A, B, C) ran from the installed plugin**, so their codex seats ran shell commands (V615-1). This leg's sessions M and D did not.
+- [harmless] **One review fixer broke its order's edit rule.** Session M round 1's fixer edited `seat_read_tool.py`, `seat_allowance.py` and `engine_dispatch.py` through a shell heredoc script, not the Write/Edit tools its order requires (self-reported). The commit was audited like any fix.
+- [harmless] **Fixer refusal cross-check unobserved.** This branch's `record-result` takes no `--fixer-transcript`, so every fixer row reads `refusalCheck: unobserved`.
+- [harmless] **Round-2 auditors in session M ran at xhigh under role `reviewer-deep`** instead of the registry `auditor` cell (gpt-6.1-sol high).
+- [harmless] **No CI run on `c6f01a30f`** (session M's final commit): the PR conflicted with main. The final head `049519a24` is green.
+- [harmless] **Size:** the 600 bar was crossed, and the 300-bar report and the tripwire message were missed at the review fixer commits. Disclosed on the issue; the advisor ruled continue.
+
+### Size tripwire
+crossed at 6f7604a3e (607); messaged the advisor 2026-10-22 (https://github.com/zwrose/superheroes/issues/2071#issuecomment-6345258605); bar 600 crossed at c0b521046 (612); advisor ruled continue (https://github.com/zwrose/superheroes/issues/2071#issuecomment-6345266990); missed: the 300-bar report and the tripwire message at the review fixer commits, disclosed late; deleted files: none; send-back leg: +29/-8 non-test lines (633 total); second fix leg: `size_count.py count --base 9464afc15` reads tripwire 720, bar 696 (about +87 non-test lines, mostly `seat_read_tool.py`), under the advisor's continue ruling
+
+### Follow-ups for the advisor
+Follow-ups: 1 (1 owner-call). The review leftover (list/search budget test) is under What we're accepting and on the record, not a follow-up.
+- FU1 [owner-call] Cursor review seats can run commands; they are only caught afterwards. Options:
+  - a cursor tool policy (if cursor-agent grows one);
+  - confining the edit tool to the result path at dispatch;
+  - or dropping cursor as a review vendor.
+<!-- superheroes:followups FU1 -->
+
+<!-- superheroes:dod-table -->
+### DoD dispositions
+| DoD bullet | Disposition | Evidence |
+|---|---|---|
+| A codex review seat cannot execute a program outside its allowance; e2e test against the real engine argv and policy | done | `lib/tests/test_seat_allowance_live.py`. Builder ran it green, and red without the closed set. Sessions M and D: 0 shell commands in 39 real seat attempts. |
+| Allowance stated positively in each review seat order (golden), and no denylist in order or policy (test) | done | `lib/tests/test_seat_allowance_orders.py`: golden per phase, preamble, no-denylist guard over the sentences and the codex argv; `test_allowance_module_names_no_program` held the reworded fixer sentence to no program names |
+| A seat record showing a command outside the allowance reads a named refusal at the driver (test) | done | `lib/tests/test_seat_allowance_driver.py`: `seat-ran-outside-allowance`, no retry, full-stream scan. Codex and cursor records carry commands. Claude seats have no command tools and their record is not scanned. |
+| review-code reference says it in one sentence; TRANSITION under `## Unreleased` | done | `skills/review-code/reference/auto-fix-loop.md` (the "The seat reads, lists and searches files" sentence); `TRANSITION.md` § Review seats: a closed tool set |
+| Vet 615 V615-2: one read is byte-bounded; a 2,000,000-character line and a file of long lines each return under the budget, and paging reaches every line | done | `lib/seat_read_tool.py` (`RESPONSE_BYTE_BUDGET` 100,000, `READ_LINE_CHAR_CAP`, `column`, `READ_FOOTER_RESERVE`); tests in `lib/tests/test_seat_allowance.py`, bite-proofs above |
+| Vet 615 V615-1: the record says which sessions ran under the closed tool set | done | § Review, "How each session ran" |
+
+</details>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+

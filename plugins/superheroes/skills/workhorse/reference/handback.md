@@ -28,9 +28,9 @@ The owner half is the close line, then three fixed headings in this order, then 
 
 - **`## What's changing, and why`.** Present on every PR, whether or not the change is perceivable.
 - **`## What we're accepting`.** The risks and trades merging commits the owner to: parked residual
-  risks, disclosed degradations, deferred DoD rows, and any direct question the builder has for the
-  owner. The omission floor's three rows are keyed on severity, not on the disposition label. When
-  there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
+  risks, costly disclosed degradations (§ Disclosed degradations sorts them), deferred DoD rows, and
+  any direct question the builder has for the owner. The omission floor's three rows are keyed on
+  severity, not on the disposition label. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
 - **`## How to see it`.** On a show-it PR, read the project's `## Show-it surface` declaration in
   `core.md` for the level and shape, then carry the concrete instance here. An absent declaration
   means level `none`, disclosed. The section carries the entry point (the URL or the command) and
@@ -39,10 +39,11 @@ The owner half is the close line, then three fixed headings in this order, then 
   on the branch, named by the one command that runs it (§ Commands the owner runs).
 
 An honest entry point of `command`, `attended`, or `none`, or a `core.md` with no `## Show-it
-surface`, is a disclosed degradation. It gets one bullet under the degradations marker and a
-matching consequence under `## What we're accepting`, never a silent **None** on the floor's third
-row. The ranked entry-point levels and the presentation standard live in
-`rubric/review-discipline.md` § Presentation standard (show it / say it / nothing to see).
+surface`, is a disclosed degradation. It sorts **costly**, because the owner loses the promised
+direct look. It gets one bullet under the degradations marker and a matching consequence under
+`## What we're accepting`, never a silent **None** on the floor's third row. The ranked entry-point
+levels and the presentation standard live in `rubric/review-discipline.md` § Presentation standard
+(show it / say it / nothing to see).
 
 ## Commands the owner runs
 
@@ -193,8 +194,30 @@ deferred, or dropped. It is the honesty marker the review seat verifies (CONVENT
 Inside the build record, `<!-- superheroes:degradations -->` is immediately followed by
 `### Disclosed degradations`. Under it goes one bullet per degradation, saying what was promised,
 what was delivered instead, and why, or the single word **None**. The list gives the omission
-floor's third row a mechanism instead of a judgment call: the review seat enumerates the
-degradations and checks that each has a consequence line in the owner half.
+floor's third row a mechanism instead of a judgment call.
+
+Every deviation, harmless or costly, keeps its bullet under `### Disclosed degradations`, and each
+bullet opens with `[costly]` or `[harmless]`. A bullet with no label reads costly. Sort each one by
+this rule, in this order:
+
+1. The grounding seat not running sorts **harmless**, as named.
+2. Every other deviation is **costly** when a promised check did not run, or work bypassed its owner
+   engine (work the builder typed instead of an implementer is one), whatever caused it, a named
+   harmless cause below included.
+3. Otherwise it is **harmless**. The named harmless causes are the prompt-file pointer, the cloud
+   fixer route, an unreadable host model, a classifier stop, and cloud platform limits; each sorts
+   harmless only when step 2 does not apply. Cloud platform limits are the cloud session's own
+   channel limits (no session messages, no comment deletion, no GraphQL reads), never a build check
+   that could not run there.
+4. Doubt sorts costly.
+
+Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet. On the PR body, a
+harmless one stays only in the build record: it is never a body acceptance, so the merge sheet's
+accounting never counts it. On the merge sheet, the advisor may mention a harmless one as a line of
+the sheet's routine "What you're accepting" fold item; such a fold line is sheet-side, is not a body
+acceptance, and needs no accounting entry. A costly one keeps its line, and so its sheet card, until
+its fix lands. The review seat checks that each **costly** bullet has a consequence line in the owner
+half.
 
 ## Issue linking
 
