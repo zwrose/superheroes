@@ -67,10 +67,6 @@ _SPELLING_ALLOWLIST = {
     ("liveness_cache.py", "SCHEMA_VERSION = 3"): {
         "reason": "liveness-cache snapshot schema, not the driver state/receipt version",
     },
-    ("loop_plan_common.py", '"schemaVersion": 1'): {
-        "reason": "loop-plan common manifest schema, not the driver state/receipt version",
-        "max_count": 5,
-    },
     ("mode_registry.py", "SCHEMA_VERSION = 1"): {
         "reason": "mode-registry meta schema, not the driver state/receipt version",
     },
