@@ -101,7 +101,23 @@ Contract:
   comments per tick (a 304 re-uses the stored list) surfaces an unanswered note on a live
   started cloud lane's issue, created at or after that lane's start, as builder-note. It
   keeps surfacing until `note-answered` records its comment id; a read that could not be
-  made records builder-note-unavailable and the lane is neither noted nor clean.
+  made records builder-note-unavailable and the lane is neither noted nor clean. When the comments
+  read was partial, every watched lane's issue may hold an unread comment, so the result
+  names them under `unreadIssues` ([{launchId, issue}], present only when non-empty; across an arm
+  or a loop a lane named once stays named).
+- Fix orders: a terminal, started cloud lane is watched again, exactly like a live cloud lane, from
+  the moment it is sent a fix order until its next ending. Openers: a `vet not-ready` amendment, or a
+  fix-order relay record (cloud_relay.fix_orders, composed with --fix-order) whose check read delivered
+  or may-hold-text, for the lane's session, opening at the message's compose time (`sentAfter`), never
+  at the check. Closers: a `reoutcome` amendment, or a vet `ready` or
+  `parked-blocker`; the newest opener must be later than the newest closer. The window is
+  [reopenedAt, close): the close is the first handback, stop or park created at or after reopenedAt that
+  is not a superseded park (a handover also closes, and surfaces nothing). Endings and notes before
+  reopenedAt, or after the close, are not the lane's; the closing ending fires lane-terminal and the
+  lane is never stale once closed. A comments read that made no request or was partial knows no close,
+  so the lane stays watched. Staleness floors at reopenedAt. Cloud lanes only, never a refused or
+  never-started lane, and a lane in ignore-launch is not re-added. An unreadable relay state records
+  fix-order-unavailable and only the ledger's openers count.
 - Cloud endings: the same comments read surfaces, per live started cloud lane, the newest
   comment opening with a `cloud_builder.TERMINAL_HEADERS` header (handback, stop, park),
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
@@ -146,6 +162,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_builder as cb  # noqa: E402
+import cloud_relay as cr  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import stack_check as sc  # noqa: E402
@@ -310,6 +327,7 @@ DEGRADATION_TRANSCRIPT_UNRESOLVED = "transcript-unresolved"
 DEGRADATION_STACK_SIGNAL_UNAVAILABLE = "stack-signal-unavailable"
 DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE = "cloud-activity-unavailable"
 DEGRADATION_BUILDER_NOTE_UNAVAILABLE = "builder-note-unavailable"
+DEGRADATION_FIX_ORDER_UNAVAILABLE = "fix-order-unavailable"
 
 STACK_STATE_COMPLETE = "stack-complete"
 STACK_STATE_INCOMPLETE = "stack-incomplete"
@@ -332,6 +350,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_STACK_SIGNAL_UNAVAILABLE,
     DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE,
     DEGRADATION_BUILDER_NOTE_UNAVAILABLE,
+    DEGRADATION_FIX_ORDER_UNAVAILABLE,
 })
 
 EVENT_PRECEDENCE = (
@@ -556,11 +575,81 @@ def _derive_batch_lanes(
         for lid, info in all_lanes.items()
         if not info.get("terminal") and lid not in ignore
     }
+    terminal = {
+        lid: info for lid, info in all_lanes.items() if info.get("terminal") and lid not in ignore
+    }
+    relay_times = {}
+    if any(_is_cloud_lane(info) and info.get("started") for info in terminal.values()):
+        relay_times = _fix_order_times(repo_root, env, degraded)
+    for lid, info in terminal.items():
+        name = info.get("cloudSessionName")
+        reopened = _reopen_candidate(
+            info, relay_times.get(name, ()) if isinstance(name, str) and name else (),
+        )
+        if reopened is not None:
+            live_lanes[lid] = {**info, "reopenedAt": reopened[0], "reopenedBy": reopened[1]}
     return all_lanes, live_lanes, True
 
 
 def _is_cloud_lane(info):
     return info.get("place") == ll.PLACE_CLOUD
+
+
+_RELAY_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+_CLOSING_VETS = ("ready", "parked-blocker")
+
+
+def _fix_order_times(repo_root, env, degraded):
+    """{session name: [epoch of each fix-order relay that may have reached it]}; {} when unreadable.
+
+    An unreadable relay state records fix-order-unavailable: the ledger's openers still count.
+    A record whose session or stamp cannot be read is skipped. Never raises.
+    """
+    try:
+        read = cr.fix_orders(repo_root, env=env)
+    except Exception:
+        read = {"ok": False}
+    if read.get("ok") is not True:
+        degraded.add(DEGRADATION_FIX_ORDER_UNAVAILABLE)  # axis: an unreadable relay state is disclosed, never a silent "no fix order" — see bite-proof record wo_2148_fix_order.md
+        return {}
+    times = {}
+    for record in read.get("records", ()):
+        at = record.get("at") if isinstance(record, dict) else None
+        try:
+            epoch = datetime.strptime(at, _RELAY_TIME_FORMAT).replace(tzinfo=timezone.utc).timestamp()
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        if isinstance(record.get("session"), str):
+            times.setdefault(record["session"], []).append(epoch)
+    return times
+
+
+def _reopen_candidate(info, relay_times):
+    """(reopenedAt epoch, reopenedBy) for a terminal cloud lane sent a fix order after its newest closer, else None.
+
+    Openers: a `vet not-ready` amendment, or a fix-order relay time. Closers: a `reoutcome` amendment, or a
+    vet `ready` or `parked-blocker`. A malformed amendment is skipped. The comments decide the close, not this.
+    """
+    # axis: only a started, outcome-terminal cloud lane can reopen — a local lane re-added would fire builder-exited at once — see bite-proof record wo_2148_fix_order.md
+    if not (info.get("place") == ll.PLACE_CLOUD and info.get("started") and info.get("terminal")
+            and info.get("terminalKind") == "outcome"):
+        return None
+    opener, closed_at = None, float("-inf")
+    for amendment in info.get("amendments") or ():
+        if not isinstance(amendment, dict) or not _finite_number(amendment.get("ts")):
+            continue
+        kind, value, ts = amendment.get("kind"), amendment.get("value"), amendment["ts"]
+        # axis: a reoutcome, or a vet ready or parked-blocker, closes the fix order before it — see bite-proof record wo_2148_fix_order.md
+        if kind == "reoutcome" or (kind == "vet" and value in _CLOSING_VETS):
+            closed_at = max(closed_at, ts)
+        # axis: a vet not-ready amendment is a fix order — see bite-proof record wo_2148_fix_order.md
+        elif kind == "vet" and value == "not-ready" and (opener is None or ts > opener[0]):
+            opener = (ts, "vet-not-ready")
+    # axis: a fix-order relay delivered, or that may have reached the builder, is a fix order — see bite-proof record wo_2148_fix_order.md
+    for ts in (t for t in relay_times if _finite_number(t)):
+        if opener is None or ts > opener[0]:
+            opener = (ts, "fix-order-relay")
+    return opener if opener is not None and opener[0] > closed_at else None
 
 
 def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
@@ -1365,15 +1454,12 @@ def _fetch_cloud_activity(
 
 
 def _cloud_activity_age(info, activity_time, now):
-    """Seconds since a cloud lane's last activity; its start counts when later."""
+    """Seconds since a cloud lane's last activity; its start, or a fix order's time, counts when later."""
     reference = activity_time
-    started_ts = info.get("startedTs")
-    if (
-        isinstance(started_ts, (int, float))
-        and not isinstance(started_ts, bool)
-        and math.isfinite(started_ts)
-    ):
-        reference = max(reference, started_ts)
+    # axis: a reopened lane's quiet is measured from its fix order, never from the activity before it — see bite-proof record wo_2148_fix_order.md
+    for key in ("startedTs", "reopenedAt"):
+        if _finite_number(info.get(key)):
+            reference = max(reference, info[key])
     return now - reference
 
 
@@ -1573,6 +1659,21 @@ def _note_cutoff(info):
     return None
 
 
+def _read_cutoff(info):
+    """The earliest comment the read needs for a lane: a reopened lane's fix order, else its note cutoff."""
+    return info["reopenedAt"] if "reopenedAt" in info else _note_cutoff(info)
+
+
+def _in_window(info, key, close):
+    """Whether a comment keyed `key` (created epoch, comment id) is in the lane's window: at or after a
+    reopened lane's reopenedAt, and not after its close key (None when the lane has none)."""
+    # axis: a reopened lane's comments from before its fix order are not its own, so an old note or ending never re-fires — see bite-proof record wo_2148_fix_order.md
+    if "reopenedAt" in info and key[0] < info["reopenedAt"]:
+        return False
+    # axis: the close is a (created, comment id) key, so a comment sharing the closing second but posted after it is outside the window — see bite-proof record wo_2148_fix_order.md
+    return close is None or key <= close
+
+
 def _comment_lane(comment, watched):
     """(launch id, issue number, created epoch) of the watched lane a comment is for, else None.
 
@@ -1597,8 +1698,10 @@ def _comment_lane(comment, watched):
     return lid, number, created
 
 
-def _builder_note(comment, watched, answered):
-    """The note a comment is for one watched lane, else None. A malformed element is skipped."""
+def _builder_note(comment, watched, answered, closes=None):
+    """The note a comment is for one watched lane, else None. A malformed element is skipped.
+
+    A reopened lane's note is in its window `[reopenedAt, close]`, `closes` being `_cloud_closes`."""
     if not isinstance(comment, dict):
         return None
     comment_id = comment.get("id")
@@ -1617,8 +1720,10 @@ def _builder_note(comment, watched, answered):
     lane = _comment_lane(comment, watched)
     if lane is None:
         return None
-    lid, number, _created = lane
+    lid, number, lane_created = lane
     info = watched[lid]
+    if not _in_window(info, (lane_created, comment_id), (closes or {}).get(lid)):
+        return None
     return {
         "launchId": lid,
         "issue": number,
@@ -1665,17 +1770,22 @@ def _phase_reads_resumed(phase):
     )
 
 
-def _cloud_terminals(comments, watched, answered):
-    """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
+def _park_superseded(lid, parked_at, progress, note_times):
+    """Whether a lane's park created at `parked_at` is superseded by the lane's later builder activity."""
+    progress_at = progress[lid]["updatedEpoch"] if lid in progress else None
+    if (progress_at is not None
+            and progress_at - parked_at > PARK_SUPERSESSION_GRACE_SECONDS
+            and _phase_reads_resumed(progress[lid]["phase"])):
+        return True
+    return lid in note_times and note_times[lid] > parked_at
 
-    A park the same lane's later builder note, or progress edit, supersedes surfaces nothing. A note
-    supersedes when created strictly after the park. A progress edit supersedes only when it is more
-    than PARK_SUPERSESSION_GRACE_SECONDS after the park and its phase reads resumed (no word beginning
-    park or stop, unless a word begins resum). Never raises on a malformed element. Sorted by launch id.
+
+def _cloud_endings(comments, watched):
+    """(launch id, issue, created epoch, comment, kind) of each ending comment on a watched lane.
+
+    An ending is a comment whose first line is a terminal header, or the handover wording; any other
+    comment is free-form. Never raises on a malformed element.
     """
-    progress = _cloud_progress(comments, watched)
-    note_times = _cloud_note_times(comments, watched)
-    newest = {}
     for comment in comments:
         if not isinstance(comment, dict):
             continue
@@ -1688,10 +1798,62 @@ def _cloud_terminals(comments, watched, answered):
         if kind is None:
             continue
         lane = _comment_lane(comment, watched)
-        if lane is None:
+        if lane is not None:
+            yield (*lane, comment, kind)
+
+
+def _cloud_closes(comments, watched):
+    """{launch id: (created epoch, comment id) of the close} for each reopened watched lane whose comments show one."""
+    return {lid: close for lid, (close, _kind) in _cloud_close_kinds(comments, watched).items()}
+
+
+def _cloud_close_kinds(comments, watched):
+    """{launch id: ((created epoch, comment id) of the close, its ending kind)} for each reopened watched lane showing one.
+
+    The close is the lane's first ending (handback, stop, park or handover) created at or after its
+    reopenedAt that is not a superseded park, by the same rule `_cloud_terminals` applies. The kind
+    travels with the close so a later partial read can tell a park close, which later activity can
+    supersede, from a handback, stop or handover close, which stays.
+    """
+    reopened = {lid for lid, info in watched.items() if "reopenedAt" in info}
+    if not reopened:
+        return {}
+    progress = _cloud_progress(comments, watched)
+    note_times = _cloud_note_times(comments, watched)
+    endings = sorted(
+        (created, comment["id"], lid, kind)
+        for lid, _number, created, comment, kind in _cloud_endings(comments, watched)
+        if lid in reopened and created >= watched[lid]["reopenedAt"]
+    )
+    closes = {}
+    for created, comment_id, lid, kind in endings:
+        # axis: the first ending that is not a superseded park closes a reopened lane, so a later note or ending is not its own — see bite-proof record wo_2148_fix_order.md
+        if lid not in closes and not (
+                kind == "park" and _park_superseded(lid, created, progress, note_times)):
+            closes[lid] = ((created, comment_id), kind)
+    return closes
+
+
+def _cloud_terminals(comments, watched, answered, closes=None):
+    """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
+
+    A park the same lane's later builder note, or progress edit, supersedes surfaces nothing. A note
+    supersedes when created strictly after the park. A progress edit supersedes only when it is more
+    than PARK_SUPERSESSION_GRACE_SECONDS after the park and its phase reads resumed (no word beginning
+    park or stop, unless a word begins resum). A reopened lane's endings are those in its window
+    `[reopenedAt, close]` (`closes` defaults to `_cloud_closes`). Never raises on a malformed element.
+    Sorted by launch id.
+    """
+    progress = _cloud_progress(comments, watched)
+    note_times = _cloud_note_times(comments, watched)
+    if closes is None:
+        closes = _cloud_closes(comments, watched)
+    newest = {}
+    for lid, number, created, comment, kind in _cloud_endings(comments, watched):
+        # axis: a reopened lane's ending from before its fix order, or after its close, is not the lane's, with no fallback to it — see bite-proof record wo_2148_fix_order.md
+        key = (created, comment["id"])
+        if not _in_window(watched[lid], key, closes.get(lid)):
             continue
-        lid, number, created = lane
-        key = (created, comment_id)
         # bite-axis: NEWEST — the lane's newest ending comment decides, never an older one.
         if lid not in newest or key > newest[lid][0]:
             newest[lid] = (key, kind, comment, number)
@@ -1709,15 +1871,8 @@ def _cloud_terminals(comments, watched, answered):
         # whose phase reads resumed (a builder edits its progress seconds after a park, with a parked
         # phase: not a resume); no older ending is read in its place; a handback or stop is never
         # superseded, and a tie, or exactly the window, keeps the park.
-        if kind == "park":
-            parked_at = key[0]
-            progress_at = progress[lid]["updatedEpoch"] if lid in progress else None
-            if (progress_at is not None
-                    and progress_at - parked_at > PARK_SUPERSESSION_GRACE_SECONDS
-                    and _phase_reads_resumed(progress[lid]["phase"])):
-                continue
-            if lid in note_times and note_times[lid] > parked_at:
-                continue
+        if kind == "park" and _park_superseded(lid, key[0], progress, note_times):
+            continue
         info = watched[lid]
         entries.append({
             "launchId": lid,
@@ -1788,7 +1943,11 @@ def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now):
     stale = [entry for entry in stale_cloud_launches if entry["launchId"] not in decided]
     for lid in sorted(decided):
         entry = progress[lid]
-        age = now - entry["updatedEpoch"]
+        updated = entry["updatedEpoch"]
+        # axis: a reopened lane's progress comment ages from its fix order, not from its last edit before it — see bite-proof record wo_2148_fix_order.md
+        if _finite_number(decided[lid].get("reopenedAt")):
+            updated = max(updated, decided[lid]["reopenedAt"])
+        age = now - updated
         if age < 0 or age > entry["expectedSeconds"] + LIVENESS_QUIET_WINDOW_SECONDS:
             stale.append({
                 "launchId": lid,
@@ -1806,7 +1965,8 @@ def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now):
 
 def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
-    note_state, known_slug=None, slug_cell=None, progress_out=None,
+    note_state, known_slug=None, slug_cell=None, progress_out=None, closed_out=None, unread_out=None,
+    known_closes=None,
 ):
     """(notes, cloud_terminals) on live started cloud lanes' issues, from one comments read.
 
@@ -1814,7 +1974,13 @@ def _evaluate_cloud_comments(
     ending comment is a handback, stop or park not recorded answered. `progress_out` is a one-slot
     list: when a request was made (complete or partial) its slot is set to `_cloud_progress` over what
     was observed, possibly `{}`; on every return where no request was made the slot is left as the
-    caller set it.
+    caller set it. `closed_out` is a one-slot list set to the closes of the reopened lanes the complete read
+    shows closed ({launch id: created epoch}, `_cloud_closes`); a read that made no request or was partial
+    shows none, so the slot is left as the caller set it. `known_closes` is the closes an earlier complete
+    read showed for the lanes' current reopening ({launch id: (close epoch, ending kind)}): a partial read
+    filters notes and endings by them, after dropping from it (in place) each park close the observed
+    comments show superseded. `unread_out` is a dict that gains {launch id: issue} for each watched
+    lane when a request was made and came back partial: any watched issue may hold a comment on an unread page.
     """
     watched = {
         lid: info for lid, info in live_lanes.items()
@@ -1828,7 +1994,7 @@ def _evaluate_cloud_comments(
         note_state = [None]
     try:
         since = datetime.fromtimestamp(
-            min(_note_cutoff(info) for info in watched.values()), tz=timezone.utc,
+            min(_read_cutoff(info) for info in watched.values()), tz=timezone.utc,
         ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
     except (ValueError, OverflowError, OSError):
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
@@ -1843,16 +2009,48 @@ def _evaluate_cloud_comments(
     if not state:
         # Disclose the incomplete read, but still evaluate whatever was observed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+        # axis: only a request that came back partial names the issues it left unread, never a tick that made none — see bite-proof record wo_2148_fix_order.md
+        _record_unread(unread_out, watched)
     if isinstance(progress_out, list) and progress_out:
         progress_out[0] = _cloud_progress(comments, watched)
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
-    notes = [_builder_note(comment, watched, answered) for comment in comments]
+    # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
+    close_kinds = _cloud_close_kinds(comments, watched) if state else {}
+    closes = {lid: close for lid, (close, _kind) in close_kinds.items()}
+    if not state and known_closes:
+        progress = _cloud_progress(comments, watched)
+        note_times = _cloud_note_times(comments, watched)
+        for lid, (close, kind) in list(known_closes.items()):
+            if lid not in watched:
+                continue
+            # axis: a cached park close that the comments a partial read observed show superseded is dropped from the cache, never kept to filter out the note that superseded it — see bite-proof record wo_2148_fix_order.md
+            if kind == "park" and _park_superseded(lid, close[0], progress, note_times):
+                del known_closes[lid]
+                continue
+            closes[lid] = close
+    # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
+    if state and isinstance(closed_out, list) and closed_out:
+        closed_out[0] = dict(close_kinds)
+    notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
         (note for note in notes if note is not None),
         key=lambda note: note["commentId"],
     )
-    return notes, _cloud_terminals(comments, watched, answered)
+    return notes, _cloud_terminals(comments, watched, answered, closes)
+
+
+def _record_unread(unread_out, watched):
+    # axis: a comments read that did not complete names every watched issue it may have left unread — see bite-proof record wo_2148_fix_order.md
+    if unread_out is not None:
+        unread_out.update({lid: info["issue"] for lid, info in watched.items()})
+
+
+def _unread_payload(unread):
+    """The `unreadIssues` result key: [{launchId, issue}] by launch id; {} when no issue went unread."""
+    return {"unreadIssues": [
+        {"launchId": lid, "issue": issue} for lid, issue in sorted(unread.items())
+    ]} if unread else {}
 
 
 def _evaluate_builder_notes(*args, **kwargs):
@@ -1904,7 +2102,8 @@ def _cloud_lanes_payload(live_lanes, cloud_state=None, progress_state=None):
 
     A lane whose activity was read carries `activityAgeSeconds`; a failed read leaves it out. A
     started lane with a progress comment carries `phase`, `progressAgeSeconds` and
-    `progressExpectedSeconds`; one without carries none of the three.
+    `progressExpectedSeconds`; one without carries none of the three. A reopened lane (a terminal lane
+    sent a fix order) carries `reopenedAt` (UTC ISO) and `reopenedBy`.
     """
     cached = cloud_state[0][1] if cloud_state and cloud_state[0] else {}
     progress = progress_state[0] if progress_state and progress_state[0] else {}
@@ -1919,6 +2118,13 @@ def _cloud_lanes_payload(live_lanes, cloud_state=None, progress_state=None):
             "cloudSessionName": info.get("cloudSessionName"),
             "cloudSessionId": info.get("cloudSessionId"),
         }
+        if _finite_number(info.get("reopenedAt")):
+            try:
+                entry["reopenedAt"] = datetime.fromtimestamp(
+                    info["reopenedAt"], tz=timezone.utc).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
+            except (ValueError, OverflowError, OSError):
+                pass
+            entry["reopenedBy"] = info.get("reopenedBy")
         activity_time = (
             cached.get(info.get("issue")) if _valid_issue_number(info.get("issue")) else None
         )
@@ -2610,7 +2816,9 @@ def _evaluate_tick(
     cloud_payload_out=None,
     note_state=None,
     progress_state=None,
+    closed_state=None,
     ignore_notes=frozenset(),
+    unread_out=None,
 ):
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
@@ -2714,10 +2922,21 @@ def _evaluate_tick(
                 cloud_deadline, activity_deadline + _MIN_PR_POLL_SECONDS,
             )
         progress_out = [None]
+        closed_out = [None]
+        # Stored closes ({launch id: (the reopenedAt it was closed at, its close epoch, its ending kind)})
+        # hold only for the reopening they were read at: a newer fix order starts a new window.
+        stored_closes = closed_state[0] if closed_state is not None else None
+        known_closes = {
+            lid: (triple[1], triple[2])
+            for lid, triple in (stored_closes if isinstance(stored_closes, dict) else {}).items()
+            if lid in live_lanes and live_lanes[lid].get("reopenedAt") == triple[0]
+        }
+        closes_before = set(known_closes)
         builder_notes, cloud_terminals = _evaluate_cloud_comments(
             repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
             known_slug=repo_slug, slug_cell=slug_cell, progress_out=progress_out,
+            closed_out=closed_out, unread_out=unread_out, known_closes=known_closes,
         )
         # bite-axis: NOTE IGNORE — a note named by launch id and comment id is dropped here, before
         # the event context is built; every other note, and every other event, is untouched.
@@ -2740,6 +2959,28 @@ def _evaluate_tick(
         stale_cloud_launches = _apply_cloud_progress(
             stale_cloud_launches, live_lanes, progress, time.time(),
         )
+        # A complete read replaces the stored closes ({launch id: (the reopenedAt it was closed at, the
+        # close's created epoch, its ending kind)}); a tick without one keeps those whose lane has not
+        # been sent a newer fix order since, less each park close a partial read showed superseded.
+        if closed_out[0] is not None:
+            closed = set(closed_out[0])
+            if closed_state is not None:
+                closed_state[0] = {
+                    lid: (live_lanes[lid].get("reopenedAt"), close, kind)
+                    for lid, (close, kind) in closed_out[0].items()
+                }
+        else:
+            # axis: a stored close is kept on a tick with no complete read, only for the reopenedAt it was read at — see bite-proof record wo_2148_fix_order.md
+            closed = set(known_closes)
+            dropped = closes_before - closed
+            if dropped and closed_state is not None and isinstance(closed_state[0], dict):
+                closed_state[0] = {
+                    lid: triple for lid, triple in closed_state[0].items() if lid not in dropped
+                }
+        # A reopened lane its comments show closed is no longer watched: never stale, whichever rule said so.
+        stale_cloud_launches = [
+            entry for entry in stale_cloud_launches if entry["launchId"] not in closed
+        ]
         stale_live_launches = stale_live_launches + stale_cloud_launches
         # bite-axis: CLOUD ENDING — a cloud lane's ending comment joins the lane-terminal
         # set before the event is built, so it is reported and seen by alsoObserved.
@@ -2780,7 +3021,7 @@ def _evaluate_tick(
         if payload is not None:
             return _event_result(
                 event, batch_id, degraded,
-                **payload, **cloud_payload
+                **payload, **cloud_payload, **_unread_payload(unread_out or {}),
             )
     return None
 
@@ -2796,6 +3037,7 @@ def _timer_at_deadline(
     add_window_degradations,
     cloud_state=None,
     progress_state=None,
+    unread=None,
 ):
     _batch_lanes, live_lanes, deadline_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded,
@@ -2810,7 +3052,8 @@ def _timer_at_deadline(
             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
     return _event_result(
         EVENT_TIMER, batch_id, degraded,
-        **_cloud_lanes_payload(live_lanes, cloud_state, progress_state)
+        **_cloud_lanes_payload(live_lanes, cloud_state, progress_state),
+        **_unread_payload(unread or {}),
     )
 
 
@@ -2864,6 +3107,7 @@ def _ceiling_timer_result(
     passed_over,
     passed_over_count,
     cloud_lanes=None,
+    unread=None,
 ):
     final = _event_result(
         EVENT_TIMER,
@@ -2872,6 +3116,7 @@ def _ceiling_timer_result(
     )
     if cloud_lanes:
         final["cloudLanes"] = cloud_lanes
+    final.update(_unread_payload(unread or {}))
     return _loop_attach_passed_over(final, passed_over, passed_over_count)
 
 
@@ -2894,6 +3139,7 @@ def watch_arm(
     cloud_state=None,
     note_state=None,
     progress_state=None,
+    closed_state=None,
 ):
     """Windowed watch — one arm until the first event or arm deadline."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -2942,11 +3188,14 @@ def watch_arm(
             note_state = [None]
         if progress_state is None:
             progress_state = [None]
+        if closed_state is None:
+            closed_state = [None]
 
         start = monotonic()
         deadline = start + max_seconds
         tick = 0
         degraded = set()
+        unread = {}
         first_tick = [True]
         ignore_set = _ignore_events_set(ignore_events)
         ignore_notes = _ignored_notes_set(ignore_events)
@@ -2970,7 +3219,9 @@ def watch_arm(
                 cloud_state=cloud_state,
                 note_state=note_state,
                 progress_state=progress_state,
+                closed_state=closed_state,
                 ignore_notes=ignore_notes,
+                unread_out=unread,
             )
             if tick_result is not None:
                 return _with_ignored_notes(
@@ -2988,6 +3239,7 @@ def watch_arm(
                     add_window_degradations=True,
                     cloud_state=cloud_state,
                     progress_state=progress_state,
+                    unread=unread,
                 ), resolved_ledger_path), ignore_events)
 
             tick = max(
@@ -3049,11 +3301,13 @@ def run(
         pr_sampled = [False]
         cloud_state = [None]
         progress_state = [None]
+        closed_state = [None]
         cloud_payload = {}
 
         start = monotonic()
         deadline = start + RUN_READ_BUDGET_SECONDS
         degraded = set()
+        unread = {}
         first_tick = [True]
         ignore_set = _ignore_events_set(ignore_events)
         ignore_notes = _ignored_notes_set(ignore_events)
@@ -3077,7 +3331,9 @@ def run(
             cloud_payload_out=cloud_payload,
             note_state=[None],
             progress_state=progress_state,
+            closed_state=closed_state,
             ignore_notes=ignore_notes,
+            unread_out=unread,
         )
         if tick_result is not None:
             return _with_ignored_notes(
@@ -3088,7 +3344,8 @@ def run(
             EVENT_TIMER,
             batch_id,
             degraded,
-            **cloud_payload
+            **cloud_payload,
+            **_unread_payload(unread),
         ), ignore_events)
     except Exception as exc:
         result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal)
@@ -3182,7 +3439,9 @@ def loop(
         cloud_state = [None]
         note_state = [None]
         progress_state = [None]
+        closed_state = [None]
         last_cloud_lanes = [None]
+        loop_unread = {}
         total_start = monotonic()
         total_deadline = (
             total_start + max_total_seconds
@@ -3206,6 +3465,7 @@ def loop(
                         passed_over,
                         passed_over_count,
                         last_cloud_lanes[0],
+                        loop_unread,
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
@@ -3242,15 +3502,20 @@ def loop(
                 cloud_state=cloud_state,
                 note_state=note_state,
                 progress_state=progress_state,
+                closed_state=closed_state,
             )
 
             result_degraded = set(result.get("degraded", []))
             loop_degraded.update(result_degraded)
             last_cloud_lanes[0] = result.get("cloudLanes")
+            loop_unread.update({
+                entry["launchId"]: entry["issue"] for entry in result.get("unreadIssues", ())
+            })
 
             if _loop_exits_on(result):
                 final = dict(result)
                 final["arms"] = arms
+                final.update(_unread_payload(loop_unread))
                 final_degraded = set(final.get("degraded", []))
                 final_degraded.update(loop_degraded)
                 final["degraded"] = sorted(final_degraded)
@@ -3296,6 +3561,7 @@ def loop(
                         passed_over,
                         passed_over_count,
                         last_cloud_lanes[0],
+                        loop_unread,
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
