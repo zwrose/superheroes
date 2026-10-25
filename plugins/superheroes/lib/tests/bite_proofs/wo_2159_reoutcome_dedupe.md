@@ -191,6 +191,31 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
   revision of `launch_ledger.py` was made in this dispatch.
 - **E6 (other kinds unchanged with `dedupe_identical=True`)** is today's behaviour: `fix_order_ts` is only set
   for `kind == "reoutcome"`, so other kinds never reach the filter. T7 pins it; no neutralization owed.
-- T8 (non-finite opener ignored) is also not given its own neutralization by this order; it is pinned by the
-  `math.isfinite(ets)` test in the opener loop (`launch_ledger.py:2686`), which this order did not list as a
-  guarded element, so T8's bite is **unproven** here.
+- T8 (non-finite opener ignored) was not in WO-2159-2's declared set; the orchestrator proved it as E7 below.
+
+## E7. Non-finite opener ignored (`amend`, `launch_ledger.py`, the opener loop) — orchestrator-run
+
+- **Axis:** a `vet not-ready` amendment with a non-finite ts is no fix order for the dedupe, so the dedupe stays
+  whole-history (the reader skips the same amendment).
+- **Neutralization** (orchestrator, Edit tool, in a detached probe worktree at `77c0cb67`):
+  `and math.isfinite(ets) and (fix_order_ts is None or ets > fix_order_ts)):` became
+  `and (fix_order_ts is None or ets > fix_order_ts)):`. Restored by the inverse Edit; `git status --porcelain`
+  in the probe worktree was empty afterwards.
+- **Raw red** (whole file, `-q -rf`, filtered by the orchestrator to the summary lines):
+
+```
+E       AssertionError: assert 'amendment' == 'amendment-existing'
+FAILED plugins/superheroes/lib/tests/test_launch_ledger_reoutcome_dedupe_2159.py::test_t8_a_vet_not_ready_with_a_non_finite_ts_is_ignored_as_a_fix_order
+1 failed, 8 passed in 2.69s
+```
+
+- **Raw green** after the restore: `9 passed in 2.78s`.
+
+## Orchestrator re-run of E1–E4
+
+The orchestrator re-ran every element above in its own detached probe worktree at `77c0cb67`, the same
+neutralizations made by Edit and undone by the inverse Edit, whole test file each time (`-q -rf`):
+E1 → 4 failed (T1, T3 "dedupe resumes", T5, T6), 5 passed; E2 → 2 failed (T4, T6), 7 passed; E3 → 1 failed (T5),
+8 passed; E4 → 1 failed (T6, `assert 1792902665.0664358 == 1792903665.0664358`), 8 passed; restored → 9 passed.
+Each red is on its element's axis; the extra reds under E1 and E2 are tests whose fixtures also lay a pre-fix
+identical `reoutcome` or a tie through the stepped clock.
