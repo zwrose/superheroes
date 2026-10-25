@@ -33,14 +33,13 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** A review's staleness check no longer reports a verify command that opens with a shell keyword (`if [ -x … ]; then …`) as "no longer resolves: if"; it checks the first word that names a program, and reports a command it cannot read as not checked rather than stale. See [Review: the verify-command check skips shell keywords](#review-the-verify-command-check-skips-shell-keywords).
 - **After switching.** **Nothing is owed.** A builder's scoped single-reviewer pass after a handback now ends with a review record written on the head it reviewed. See [Workhorse: a scoped pass after a handback writes a review record](#workhorse-a-scoped-pass-after-a-handback-writes-a-review-record).
 - **After switching.** **Nothing is owed, except that a project whose test files must carry a directive comment in a longer form keeps that rule written where the test lens reads it: CLAUDE.md, the calibration, or a check in the repository.** See [Review: a break-it test is written in the project's own directive form](#review-a-break-it-test-is-written-in-the-projects-own-directive-form).
+- **After switching.** **Nothing is owed.** The worktree guard now checks the program inside `bash -c`, `sh -c`, `zsh -c` and `eval` as commands, one level in, and refuses one it cannot read. See [Worktree guard: a quoted shell program is read as commands](#worktree-guard-a-quoted-shell-program-is-read-as-commands).
 
 ### Review: a break-it test is written in the project's own directive form
 
 - A break-it test the test lens supplied in JavaScript or TypeScript with a bare directive comment (a marker the project requires to carry more, such as a reason) was extended to the project's required form when the fixer committed it. The committed file then differed from the one the loop ran, the kept check read `changed`, and the review ended `cannot-certify`.
 - `break_it.CONTENT_RULES` now states the rule once: the fixer commits the content byte for byte, the review keeps the test only when it is unchanged, so every marker or directive comment the project's own rules require on a test file (in CLAUDE.md, the calibration, or a check the project runs over its tests) is written in its full required form. The test role's panel order renders it after the run rules, and the paragraph added to `agents/test-role.md` § Break-it tests says the same.
 - The keep check is unchanged: kept still means byte-unchanged, or for Python, JavaScript and TypeScript the body match. No command, result key or file shape changes.
-
-- **After switching.** **Nothing is owed.** The worktree guard now checks the program inside `bash -c`, `sh -c`, `zsh -c` and `eval` as commands, one level in, and refuses one it cannot read. See [Worktree guard: a quoted shell program is read as commands](#worktree-guard-a-quoted-shell-program-is-read-as-commands).
 
 ### Workhorse: a scoped pass after a handback writes a review record
 
