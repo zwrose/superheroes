@@ -2793,6 +2793,231 @@ def _adopted_head_refusal(repo_root, stamped, env):
     return refusal("undecidable")
 
 
+_ADOPT_ORIGINAL_SESSION_LIVE = "adopt-original-session-live"
+_ADOPT_ORIGINAL_SESSION_UNREAD = "adopt-original-session-unread"
+_ADOPT_ORIGINAL_REMEDY_LIVE = (
+    "The adopted branch's original cloud builder is still live. Send the fix order to that "
+    "session (through the relay when it runs on another account) instead of launching a new "
+    "lane. Launch a new fix leg only once that session is archived or gone from the listing, "
+    "its status bucket reads failed, or cloud_recover assess has recorded it stopped on a "
+    "handover."
+)
+_ADOPT_ORIGINAL_REMEDY_UNREAD = (
+    "Record the builders' account's cloud session listing at launch time (one list_sessions "
+    "page read with no cursor and has_more false; a get_session result covers only a session it "
+    "returns, never one that is gone) and pass it with --cloud-sessions-file; a listing that "
+    "cannot be read, or that does not cover every earlier session, refuses."
+)
+_LISTING_STRING_FIELDS = ("title", "session_status", "status_bucket", "environment_id")
+# The owner machine clock that stamped startedTs and the host clock that stamped created_at can disagree.
+_ADOPT_ABSENCE_SKEW_SECONDS = 600
+
+
+def _listing_value(text):
+    """The JSON value in *text*; ``ValueError`` on bad JSON or a duplicate key at any depth."""
+
+    def _reject_dupes(pairs):
+        seen = {}
+        for key, value in pairs:
+            if key in seen:
+                raise ValueError("json-duplicate-key")
+            seen[key] = value
+        return seen
+
+    try:
+        return json.loads(text, object_pairs_hook=_reject_dupes)
+    except (TypeError, RecursionError) as exc:
+        raise ValueError("json-unreadable") from exc
+
+
+def _listing_row_ok(row):
+    if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+        return False
+    if any(k in row and not isinstance(row[k], str) for k in _LISTING_STRING_FIELDS):
+        return False
+    return "archived" not in row or isinstance(row["archived"], bool)
+
+
+def _listing_rows(parsed):
+    """``(rows, pages, result_count)`` of a parsed listing, or ``None`` when its shape is not a recorded host shape.
+
+    A JSON array is a list of results, anything else is one result; a result that is only a
+    ``ccr`` wrapper is unwrapped. A result is a list page (``data`` list, ``has_more`` a bool when
+    present) or a session object. ``pages`` are the list-page results, ``rows`` every session row,
+    ``result_count`` the number of results the listing held.
+    """
+    results = parsed if isinstance(parsed, list) else [parsed]
+    if not results:
+        return None
+    rows = []
+    pages = []
+    for result in results:
+        if isinstance(result, dict) and set(result) == {"ccr"}:
+            result = result["ccr"]
+        if not isinstance(result, dict):
+            return None
+        if "data" in result:
+            if not isinstance(result["data"], list):
+                return None
+            if "has_more" in result and not isinstance(result["has_more"], bool):
+                return None
+            pages.append(result)
+            found = result["data"]
+        else:
+            found = [result]
+        if not all(_listing_row_ok(row) for row in found):
+            return None
+        rows.extend(found)
+    return rows, pages, len(results)
+
+
+def _listing_created_ts(row):
+    """Epoch seconds of a row's ISO-8601 UTC ``created_at``, or ``None`` when absent or not that."""
+    raw = row.get("created_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith("Z") else raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None or stamp.utcoffset() != timedelta(0):
+        return None
+    return stamp.timestamp()
+
+
+def _page_created_by_environment(pages):
+    """``{environment_id: newest created epoch}`` of the one complete page when its rows prove the page's span, else ``None``.
+
+    Every row needs a parseable UTC ``created_at`` and the rows must run newest-created first
+    (non-increasing); an empty page, an unparseable stamp or a page out of order proves nothing.
+    A row with no ``environment_id`` is left out of the map, so it never proves a lane's absence.
+    """
+    rows = pages[0]["data"]
+    stamps = [_listing_created_ts(row) for row in rows]
+    if not stamps or any(t is None for t in stamps):
+        return None
+    if any(later > earlier for earlier, later in zip(stamps, stamps[1:])):
+        return None
+    newest = {}
+    for row, stamp in zip(rows, stamps):
+        env_id = row.get("environment_id")
+        if isinstance(env_id, str) and stamp > newest.get(env_id, float("-inf")):
+            newest[env_id] = stamp
+    return newest
+
+
+def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
+    """None, or ``(reason, detail)``: an adoption must not launch beside a live original builder.
+
+    A premise that carries ``adoptsBranch`` is checked against the cloud lanes the ledger holds for
+    the issue that started a session. A lane is exempt when its latest outcome is ``refusal`` (it
+    built nothing) or ``cloud_recover assess`` recorded it stopped on a handover. For the others the
+    recorded host listing (``sessions_file``) must show the lane's session archived, failed or
+    gone: a row that is none of those is live, and a listing that cannot be read, or that does not
+    cover a session it does not show, refuses ``adopt-original-session-unread``.
+    """
+    if "adoptsBranch" not in stamped:
+        return None
+
+    def unread(failed, **more):
+        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(
+            more, failedRead=failed, remedy=_ADOPT_ORIGINAL_REMEDY_UNREAD,
+        )
+
+    got = ll.read(repo_root, env=env)
+    folded = ll.fold(got["records"]) if got["state"] in ("ok", "missing") else None
+    # axis: a ledger that cannot be read or folded refuses unread, since the earlier lanes are unknown — see bite-proof record i2119_original_session
+    if folded is None or not folded.get("ok"):
+        return unread("ledger")
+    import cloud_recover
+
+    candidates = {
+        launch_id: info for launch_id, info in folded["launches"].items()
+        if info["place"] == ll.PLACE_CLOUD and str(info["issue"]) == str(issue)
+        and info.get("cloudSessionName") is not None
+        and cloud_recover._latest_outcome(info) != "refusal"
+    }
+    if candidates:
+        stopped, readable = cloud_recover.handover_stopped_ids(repo_root, env)
+        # axis: a recover state that cannot be read refuses unread while a lane still needs it — see bite-proof record i2119_original_session
+        if not readable:
+            return unread("recover-state")
+        candidates = {
+            launch_id: info for launch_id, info in candidates.items() if launch_id not in stopped
+        }
+    if not candidates:
+        return None
+    # axis: an adoption over a lane that started a session with no listing given refuses unread — see bite-proof record i2119_original_session
+    if sessions_file is None:
+        return unread("listing-not-given")
+    try:
+        with open(sessions_file, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return unread("listing-file")
+    except UnicodeDecodeError:
+        return unread("listing-json")
+    try:
+        parsed = _listing_value(text)
+    except ValueError:
+        return unread("listing-json")
+    listing = _listing_rows(parsed)
+    # axis: a listing that is not a recorded host shape refuses unread — see bite-proof record i2119_original_session
+    if listing is None:
+        return unread("listing-shape")
+    rows, pages, result_count = listing
+    complete = result_count == 1 and len(pages) == 1 and pages[0].get("has_more") is False
+    # axis: a has_more-false page proves absence only when its rows are ordered and parseable, so a cursor-read last page cannot pass — see bite-proof record i2119_original_session
+    created_by_env = _page_created_by_environment(pages) if complete else None
+    live = []
+    unproven = []
+    for launch_id, info in candidates.items():
+        if info.get("cloudSessionId") is not None:
+            matched = [row for row in rows if row["id"] == info["cloudSessionId"]]
+        else:
+            matched = [row for row in rows if row.get("title") == info["cloudSessionName"]]
+        if not matched:
+            started_ts = info.get("startedTs")
+            lane_env = info.get("cloudEnvironment")
+            newest = (
+                created_by_env.get(lane_env)
+                if created_by_env is not None and isinstance(lane_env, str) else None
+            )
+            # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing, and a lane whose session id was never confirmed is matched by title only, so absence never proves it gone — see bite-proof record i2119_original_session
+            if (
+                newest is None or not isinstance(started_ts, (int, float))
+                or isinstance(started_ts, bool)
+                or newest < started_ts + _ADOPT_ABSENCE_SKEW_SECONDS
+                or info.get("cloudSessionId") is None
+            ):
+                unproven.append(launch_id)
+            continue
+        # a row is not live only when it is archived or failed; any other row, an unknown status included, is live
+        showing = [
+            row for row in matched
+            if row.get("archived") is not True
+            and "ARCHIVED" not in row.get("session_status", "")
+            and "FAILED" not in row.get("status_bucket", "")
+        ]
+        if showing:
+            live.append({
+                "launchId": launch_id,
+                "cloudSessionName": info["cloudSessionName"],
+                "cloudSessionId": info.get("cloudSessionId"),
+                "sessionStatus": showing[0].get("session_status"),
+                "statusBucket": showing[0].get("status_bucket"),
+            })
+    # axis: a candidate whose session the listing shows live refuses, and one it shows archived or failed does not — see bite-proof record i2119_original_session
+    if live:
+        return _ADOPT_ORIGINAL_SESSION_LIVE, {
+            "originalSessions": live, "remedy": _ADOPT_ORIGINAL_REMEDY_LIVE,
+        }
+    # axis: a candidate absent from a listing that is not one complete page spanning its start is unproven, never gone — see bite-proof record i2119_original_session
+    if unproven:
+        return unread("listing-incomplete", launchIds=unproven)
+    return None
+
+
 def _refuse_unreserved(
     ctx, reason, stage, premise, preflight_result, compose_result=None, **extra
 ):
@@ -2844,11 +3069,13 @@ def _check_premises(
     pr_lookup,
     membership_reader,
     run,
+    cloud_sessions_file=None,
 ):
     """Validate every premise a launch rests on, before anything is reserved or made.
 
     Walks preflight, validates the premise, applies the dependency and stack gates, checks that an
-    adopted head descends from the base, composes the launch, resolves any named phone sizes
+    adopted head descends from the base and that no earlier cloud builder of an adopted branch is
+    still live (`cloud_sessions_file` is the recorded session listing), composes the launch, resolves any named phone sizes
     through `run`, and checks the cloud base (cloud) or the worktree path (local), in that order.
     Returns `{"refusal": <accounted failure>}` on the first
     refusal, else `{"refusal": None}` with the `preflight`, `premise` (stamped), `compose`,
@@ -2941,6 +3168,17 @@ def _check_premises(
         reason, detail = refusal
         return {"refusal": _refuse_unreserved(
             ctx, reason, "premise", stamped_premise, preflight_result, **detail,
+        )}
+
+    # An adoption never launches beside an earlier cloud builder of the issue that is still live,
+    # nor when the recorded session listing cannot say; local and cloud launches alike.
+    refusal = _original_session_refusal(
+        repo_root, ctx["issue"], stamped_premise, cloud_sessions_file, env,
+    )
+    if refusal is not None:
+        reason, detail = refusal
+        return {"refusal": _refuse_unreserved(
+            ctx, reason, "original-session", stamped_premise, preflight_result, **detail,
         )}
 
     compose_cloud = (
@@ -3206,6 +3444,7 @@ def launch_build(
     cloud_environment=None,
     cloud_spawn_fn=None,
     cloud_spawn_timeout=None,
+    cloud_sessions_file=None,
     _launch_id=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry.
@@ -3215,6 +3454,7 @@ def launch_build(
     returns. No worktree is made, no local child is left, and nothing is pushed.
 
     Every premise the launch rests on is checked by `_check_premises` before anything is made.
+    `cloud_sessions_file` is the recorded host session listing an adoption launch is checked against.
     """
     settle_seconds, max_attempts, backoff_seconds, total_deadline_seconds, poll_seconds = (
         _launch_timing(
@@ -3296,7 +3536,7 @@ def launch_build(
         gate_place=gate_place, cloud=cloud, cloud_environment=cloud_environment,
         cloud_session_name=cloud_session_name, worktree_path=worktree_path,
         deadline=deadline, pr_vet_reader=pr_vet_reader, pr_lookup=pr_lookup,
-        membership_reader=membership_reader, run=run,
+        membership_reader=membership_reader, run=run, cloud_sessions_file=cloud_sessions_file,
     )
     if checked["refusal"] is not None:
         return checked["refusal"]
@@ -4025,6 +4265,7 @@ def _cli_launch(args):
             model=args.model,
             effort=args.effort,
             allow_foreign_instance=args.allow_foreign_instance,
+            cloud_sessions_file=getattr(args, "cloud_sessions_file", None),
             **where,
         )
 
@@ -4167,6 +4408,12 @@ def main(argv=None):
     la.add_argument(
         "--cloud-environment", default=None,
         help="refused on launch: the environment comes from the cloud setup record",
+    )
+    la.add_argument(
+        "--cloud-sessions-file", default=None,
+        help=("the builders' account's cloud session listing (a list_sessions or get_session "
+              "result, or a JSON array of them), read at launch time; an adoption launch needs "
+              "it when an earlier cloud lane for the issue started a session"),
     )
     la.add_argument(
         "--allow-foreign-instance",

@@ -546,10 +546,11 @@ def test_check_runs_are_read_across_every_page_and_a_failed_page_is_unavailable(
     assert rr._check_data(HEAD, "o/r") is None
 
 
-def test_left_for_owner_finding_is_not_reviewed_until_decided():
+def test_left_for_owner_finding_reads_awaits_owner_until_decided():
     # axis: left-for-owner; an undecided owner finding counted as reviewed
     rec = build(account(findings=[finding("f1", outcome="left-for-owner", reason="needs owner")]))
-    assert rec["status"] == "not-reviewed" and "finding f1 waits for the owner's decision" in rec["whatIsMissing"]
+    assert rec["status"] == "awaits-owner" and not rr.cleared(rec["status"])
+    assert "finding f1 waits for the owner's decision" in rec["whatIsMissing"]
     assert rec["leftForOwner"] == ["f1"]
 
 

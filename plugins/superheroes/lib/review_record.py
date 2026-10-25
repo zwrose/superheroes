@@ -863,6 +863,17 @@ def leftover_line(finding):
     return f"finding {_name(finding)} waits for the owner's decision"
 
 
+REVIEWED = "reviewed"
+NOT_REVIEWED = "not-reviewed"
+AWAITS_OWNER = "awaits-owner"
+STATUSES = (REVIEWED, NOT_REVIEWED, AWAITS_OWNER)
+
+
+def cleared(status):
+    """Only `reviewed` clears a gate; any other value, an unknown one included, does not."""
+    return status == REVIEWED
+
+
 def _finding_lines(findings):
     lines = []
     for f in findings:
@@ -920,7 +931,18 @@ def _status(rec, unread=(), finding_lines=()):
     if rec.get("abandoned"):
         # fixed prose: no data enters
         lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
-    return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
+    return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
+
+
+def _owner_only(rec, missing_lines):
+    """True when the record reads not-reviewed, is not parked, and every missing line is a leftover line: with its leftovers it reads awaits-owner exactly when the same record without them reads reviewed."""
+    if rec["status"] != NOT_REVIEWED or rec["parked"]:
+        return False
+    leftovers = {leftover_line(f) for f in rec["findings"] if f.get("outcome") == _LEFT_FOR_OWNER}
+    # axis: a record is awaits-owner only when every missing line is a leftover finding
+    if not missing_lines or not all(m in leftovers for m in missing_lines):
+        return False
+    return True
 
 
 def _ruling_hits(findings, key):
@@ -1147,6 +1169,8 @@ def build_record(account, readers, prior=None):
     rec["status"], rec["parked"], lines = _status(
         rec, [f"the raw output file {n} could not be read" for n in unread], _finding_lines(findings))
     rec["whatIsMissing"] = notes + lines
+    if _owner_only(rec, rec["whatIsMissing"]):
+        rec["status"] = AWAITS_OWNER
     return rec
 
 
@@ -1549,6 +1573,11 @@ def _summary(r, level):
         left_text = f"{_plural(len(missing), 'item', 'items')} {LISTED}" if missing else "nothing"
     else:
         left_text = "; ".join(missing) or "nothing"
+    if r["status"] == AWAITS_OWNER:
+        head = (f"reviewed; {_plural(len(left), 'finding', 'findings')} {'waits' if len(left) == 1 else 'wait'} for your decision "
+                + (LISTED if compact else "(" + ", ".join(left) + ")"))
+    else:
+        head = r["status"].replace("-", " ")
     reason = lane.get("reason")
     if compact and reason:
         reason = _clip(reason)
@@ -1566,7 +1595,7 @@ def _summary(r, level):
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     lines = [
-        f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
+        f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
         waits_text,
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
