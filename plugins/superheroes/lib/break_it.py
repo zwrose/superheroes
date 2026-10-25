@@ -87,6 +87,14 @@ RUN_RULES = (
     "`<launcher> -m pytest`), runs under the project's own interpreter launcher: the "
     "`breakItInterpreter` calibration when set, else the one its verify command uses. It is not run "
     "when that launcher cannot be found.")
+CONTENT_RULES = (
+    "The fixer writes the content byte for byte and commits it, and the review keeps the test only "
+    "when the committed file is unchanged (a Python, JavaScript or TypeScript test may differ only in "
+    "formatting and title, and a JavaScript or TypeScript comment counts). So the content must "
+    "already be the file the project's own rules accept: every marker or directive comment those "
+    "rules require on a test file (in CLAUDE.md, the calibration, or a check the project runs over "
+    "its tests, which you can read in the repository copy) is written in its full required form, "
+    "never as a bare marker the project would then have to extend.")
 
 _TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
 _HEADER = _TEMPLATE_LINES[0]

@@ -10121,11 +10121,12 @@ def _risk_areas_text(seat_key, repo_root, base, head):
 
 def _break_it_grammar_text(seat_key):
     """The test role's break-it block grammar: the fenced `break_it.BLOCK_TEMPLATE` and the rules for
-    its `run` line, built only from the two `break_it` constants. Empty for any other seat."""
+    its `run` line and the rules its content must meet, built only from the three `break_it` constants.
+    Empty for any other seat."""
     # axis: only the test role's order carries the grammar; every other seat's order stays free of it
     if seat_key != "test-role":
         return ""
-    return "```\n%s\n```\n\n%s" % (break_it.BLOCK_TEMPLATE, break_it.RUN_RULES)
+    return "```\n%s\n```\n\n%s\n\n%s" % (break_it.BLOCK_TEMPLATE, break_it.RUN_RULES, break_it.CONTENT_RULES)
 
 
 def _normalize_focus_notes(value):
