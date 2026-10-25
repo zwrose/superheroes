@@ -50,19 +50,25 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the c
 
 **Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
+Write each call as one line with the real paths — `SKILL.md` § Auto-Fix Loop. Run each `python3 -B <plugin root>/lib/…` line as its own command, then put the value it printed in the single-quoted literal on the line after its comment.
+
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) || { echo "calibration_resolve resolve exited non-zero (exit $?); halting rather than assuming uncalibrated" >&2; exit 1; }
+python3 -B <plugin root>/lib/calibration_resolve.py resolve
+# A non-zero exit halts here: stop the review rather than assuming uncalibrated.
+CAL='<the JSON the resolve call printed>'
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
 PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
 LOCATION=$(printf '%s' "$CAL" | jq -r .location)
 EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
-DRES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
-  || DRES='{"path":null}'
+python3 -B <plugin root>/lib/review_store.py resolve --kind decisions
+# A non-zero exit means no decisions file: use DRES='{"path":null}'.
+DRES='<the JSON the decisions resolve call printed>'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+python3 -B <plugin root>/lib/mode_reconcile.py signals
+# A non-zero exit or empty output means no nudge: use NUDGE_MSG=''.
+NUDGE_MSG=$(printf '%s' '<the JSON the signals call printed>' | jq -r 'if . == null then empty else .message end' 2>/dev/null)   # the output of the mode_reconcile.py signals call above
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
@@ -134,17 +140,22 @@ Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superhero
 
 <!-- decision-point: id=review-code-setup-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-code-meta -->
 
+The storage steps run only when `$LOCATION` is `none` (the `[ "$LOCATION" = "none" ]` case); each call is its own command and its printed value goes into the literal after it:
+
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-if [ "$LOCATION" = "none" ]; then
-  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
-  LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
-  SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
-  PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
-  PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
-  DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
-fi
+python3 -B <plugin root>/lib/review_store.py decide-location
+# A non-zero exit halts here: stop rather than taking an undisclosed storage default.
+DEC='<the JSON the decide-location call printed>'
+LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
+PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
+[ -n "$LOC" ] && [ -n "$PROVISIONAL" ] && [ -n "$SOURCE" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+python3 -B <plugin root>/lib/review_store.py create --kind profile --location <in-repo or global, the LOC value>
+# A non-zero exit halts here: stop rather than continuing without a profile path.
+PROFILE='<the path the create call printed>'
+python3 -B <plugin root>/lib/review_store.py create --kind decisions --location <in-repo or global, the LOC value>
+# A non-zero exit halts here: stop rather than continuing without a decisions path.
+DECISIONS='<the path the create call printed>'
 ```
 
 **Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from: `env` (environment override `REVIEW_CREW_STORAGE` for this run only; never recorded), `registry` (a mode the owner recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence and then recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, re-taken next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into `$SESSION_DIR/meta.json` when that file is written (`storageMode`, `storageSource`, `storageProvisional` from `$LOC`, `$SOURCE`, `$PROVISIONAL`) — the durable session record review-code's setup path owns — and repeat the same facts in the **dispatch summary** for visibility. When `.provisional` is `true`, also state that it is a provisional default rather than an owner choice and will be re-taken on the next run when not recorded, and that `/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.

@@ -117,8 +117,7 @@ def test_orchestrator_fulfilled_sink_binds_order_anchor(tmp_path, adapters, monk
     _AT_RUN_VERIFY(tmp_path, d)
     pend = _PENDING(d)
     skey = RR.storage_key("verify")
-    path = RR.bare_payload_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
-    RR.atomic_write_json(path, {"result": "pass"})
+    _TCH._land_verify_via_verb(d)
     out = _ADVANCE(d, tmp_path)
     assert out["ok"], out
     store_path = RR.store_path(d, pend["round"], RD.P_VERIFY, skey, pend["attempt"])

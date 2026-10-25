@@ -92,6 +92,7 @@ _EXPECTED_CMD_NAMES = (
     "cmd_record_missing",
     "cmd_record_result",
     "cmd_rule",  # session state + journal; no durable seat records
+    "cmd_run_verify",  # lands the run-verify bare payload + its journal row in one round_commit; no durable seat records
     "cmd_submit",
 )
 

@@ -12,6 +12,7 @@ from finding_identity import clamp_title, finding_identity, finding_label, norma
 
 __all__ = (
     "STATE_FILE",
+    "MIRROR_FILE",
     "JOURNAL_FILE",
     "JOURNAL_FAULT_FILE",
     "META_FILE",
@@ -180,6 +181,7 @@ RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
 STATE_FILE = "loop-state.json"
+MIRROR_FILE = "loop-state.mirror.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RULE_CMD = "rule"

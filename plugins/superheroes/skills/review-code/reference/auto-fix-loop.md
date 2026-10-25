@@ -654,7 +654,7 @@ Report it under "escalated" with the id and why.
 - checkOutput: <tail of the verify command, only if CHECK_FAILED>
 ```
 
-The loop's fixers commit without the builder's size count, so the builder recounts the non-test lines after each fixer round (the size rule's count, `lib/size_count.py count --base <build base>`) and reports a crossing of the size rule's lines as it would for its own commit. The rule is in [review-discipline § Size](../../../rubric/review-discipline.md#size).
+The loop's fixers commit without the builder's size count, so the builder recounts the non-test lines after each fixer round (the size rule's count, `python3 -B <plugin root>/lib/size_count.py count --base <build base>`) and reports a crossing of the size rule's lines as it would for its own commit. The rule is in [review-discipline § Size](../../../rubric/review-discipline.md#size).
 
 ### A ruling that arrives during a fix
 

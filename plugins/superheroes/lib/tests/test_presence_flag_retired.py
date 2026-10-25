@@ -66,6 +66,18 @@ def _census_excluded(path):
 
 _DECIDE_LOCATION_INVOCATION = re.compile(r"decide-location\)")
 
+# The decide-location call comes in two shapes. Shell-capture: `DEC=$(python … decide-location)`,
+# halted by `decide-location) || {`. Plain-call (#2158): the call is its own line, its printed
+# JSON goes into a literal `DEC='…'` on a later line, and the halt is a `#` comment on the next
+# line. The plain call has no closing parenthesis, so it gets its own pattern rather than a
+# widened _DECIDE_LOCATION_INVOCATION.
+_PLAIN_DECIDE_LOCATION_CALL = re.compile(
+    r"^[ \t]*python3(?:[ \t]+-B)?[ \t]+<plugin root>/lib/review_store\.py[ \t]+decide-location"
+    r"[ \t]*$",
+    re.MULTILINE,
+)
+_DEC_LITERAL_ASSIGNMENT = re.compile(r"^[ \t]*DEC='", re.MULTILINE)
+
 # Conversation-driven surfaces disclose in the run transcript, not a durable file artifact (R-2).
 _CONVERSATION_DRIVEN_DISCLOSURE_SURFACES = frozenset({
     "skills/configure/reference/set-up.md",
@@ -219,8 +231,47 @@ def _walk_text_files(root):
             yield os.path.join(dirpath, name)
 
 
+def _is_decide_location_surface(text):
+    """True for a surface running decide-location in either shape: shell-capture or plain-call."""
+    if "DEC=$(python" in text and _DECIDE_LOCATION_INVOCATION.search(text):
+        return True
+    return bool(_PLAIN_DECIDE_LOCATION_CALL.search(text) and _DEC_LITERAL_ASSIGNMENT.search(text))
+
+
+def _plain_call_halts(bash_block):
+    """True when a plain decide-location call line is immediately followed by a halting comment.
+
+    The next line must be a `#` comment naming a non-zero exit and a halt (case-insensitive).
+    """
+    lines = bash_block.splitlines()
+    for idx, line in enumerate(lines[:-1]):
+        if not _PLAIN_DECIDE_LOCATION_CALL.fullmatch(line):
+            continue
+        comment = lines[idx + 1].strip()
+        if comment.startswith("#"):
+            folded = comment.casefold()
+            if "non-zero exit" in folded and "halt" in folded:
+                return True
+    return False
+
+
+def _nonzero_exit_guard_present(bash_block):
+    """The non-zero-exit guard for whichever shape the bash block uses.
+
+    A shell-capture block keeps the byte pin `decide-location) || {`; a plain-call block needs the
+    halting comment on the line after the call.
+    """
+    if "DEC=$(python" in bash_block:
+        return _NONZERO_EXIT_GUARD in bash_block
+    return _plain_call_halts(bash_block)
+
+
 def _discover_decide_location_surfaces():
-    """Walk skills/ for decide-location CLI invocations — census is derived, not hand-maintained."""
+    """Walk skills/ for decide-location CLI invocations — census is derived, not hand-maintained.
+
+    Admits both shapes (shell-capture and plain-call); a surface in neither is not admitted, so the
+    cardinality floor still catches a removed surface.
+    """
     surfaces = set()
     for path in _walk_text_files(_SKILLS_ROOT):
         try:
@@ -228,7 +279,7 @@ def _discover_decide_location_surfaces():
                 text = fh.read()
         except (UnicodeDecodeError, OSError):
             continue
-        if "DEC=$(python" not in text or not _DECIDE_LOCATION_INVOCATION.search(text):
+        if not _is_decide_location_surface(text):
             continue
         surfaces.add(os.path.relpath(path, _PLUGIN_ROOT))
     return frozenset(surfaces)
@@ -445,7 +496,8 @@ def test_bootstrap_surface_reads_provisional_and_discloses(surface_rel):
 
 
 @pytest.mark.parametrize("surface_rel", _BOOTSTRAP_SURFACES)
-# axis: bootstrap safety guards — non-zero exit, usable JSON fields, no reconcile --mode (R-1).
+# axis: bootstrap safety guards — non-zero exit (shell-capture `) || {` pin, or the plain call's
+# next-line halting comment), usable JSON fields, no reconcile --mode (R-1).
 def test_bootstrap_surface_safety_guards(surface_rel):
     """Bootstrap must halt on decide-location failure and must not reconcile during bootstrap."""
     text = _read_plugin_rel(surface_rel)
@@ -456,7 +508,7 @@ def test_bootstrap_surface_safety_guards(surface_rel):
     bash_close = window.find("```", 3)
     assert bash_close > 0, "%s bootstrap window has no fenced bash block (#1136)" % surface_rel
     bash_block = window[:bash_close + 3]
-    assert _NONZERO_EXIT_GUARD in bash_block, (
+    assert _nonzero_exit_guard_present(bash_block), (
         "%s bootstrap is missing the non-zero-exit guard on decide-location (#1136)" % surface_rel
     )
     assert _USABLE_VALUE_GUARD in bash_block, (
@@ -466,3 +518,50 @@ def test_bootstrap_surface_safety_guards(surface_rel):
         "%s bootstrap still contains reconcile --mode — bootstrap reconciliation is retired "
         "(#1136)" % surface_rel
     )
+
+
+_PLAIN_CALL_SURFACE_TEXT = (
+    "Storage steps.\n\n"
+    "```bash\n"
+    "python3 -B <plugin root>/lib/review_store.py decide-location\n"
+    "# A non-zero exit halts here: stop rather than taking an undisclosed storage default.\n"
+    "DEC='<the JSON the decide-location call printed>'\n"
+    "LOC=$(printf '%s' \"$DEC\" | jq -r '.mode')\n"
+    "```\n"
+)
+
+
+def _bash_block_of(text):
+    window = _bootstrap_disclosure_window(text)
+    assert window is not None
+    return window[:window.find("```", 3) + 3]
+
+
+# axis: a plain decide-location call is discovered as a surface (so its guards are checked) — and
+# a text in neither shape is not.
+def test_plain_call_surface_text_is_discovered():
+    assert _is_decide_location_surface(_PLAIN_CALL_SURFACE_TEXT)
+    no_assignment = _PLAIN_CALL_SURFACE_TEXT.replace("DEC='", "OTHER='")
+    assert not _is_decide_location_surface(no_assignment)
+    assert not _is_decide_location_surface("prose naming decide-location only\n")
+
+
+# axis: the plain-call halting rule — call line immediately followed by a `#` comment with
+# `non-zero exit` and `halt`.
+def test_plain_call_with_halting_comment_passes_guard():
+    assert _nonzero_exit_guard_present(_bash_block_of(_PLAIN_CALL_SURFACE_TEXT))
+    shouted = _PLAIN_CALL_SURFACE_TEXT.replace("non-zero exit halts", "NON-ZERO EXIT HALTS")
+    assert _nonzero_exit_guard_present(_bash_block_of(shouted))
+
+
+def test_plain_call_without_halting_comment_fails_guard():
+    no_comment = _PLAIN_CALL_SURFACE_TEXT.replace(
+        "# A non-zero exit halts here: stop rather than taking an undisclosed storage default.\n", ""
+    )
+    assert not _nonzero_exit_guard_present(_bash_block_of(no_comment))
+    no_halt = _PLAIN_CALL_SURFACE_TEXT.replace("halts here", "stops here")
+    assert not _nonzero_exit_guard_present(_bash_block_of(no_halt))
+    not_adjacent = _PLAIN_CALL_SURFACE_TEXT.replace(
+        "decide-location\n#", "decide-location\necho x\n#", 1
+    )
+    assert not _nonzero_exit_guard_present(_bash_block_of(not_adjacent))
