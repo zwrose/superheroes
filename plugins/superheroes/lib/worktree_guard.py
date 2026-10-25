@@ -62,7 +62,9 @@ _INDETERMINATE_TEMPLATE = (
     + _NEXT_STEP_COMMIT_OR_STASH
     + " it as a plain `git ...` command from inside the "
     "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
-    "`GIT_DIR`/`GIT_WORK_TREE`). "
+    "`GIT_DIR`/`GIT_WORK_TREE`). A lone `git checkout` sent to another repository "
+    "can instead be written `git -C <dir> switch <branch>` or "
+    "`git -C <dir> switch --detach <commit>`. "
     + _DURING_A_MERGE
 )
 
@@ -605,7 +607,7 @@ _CHECKOUT_OPTS = {
     "--recurse-submodules": 0, "--no-recurse-submodules": 0,
     "--progress": 0, "--no-progress": 0, "--overlay": 0, "--no-overlay": 0,
     "--ignore-skip-worktree-bits": 0,
-    "--orphan": 1, "--conflict": 1,
+    "--orphan": 1, "--conflict": 1, "--detach": 0,
 }
 
 _CLEAN_OPTS = {
@@ -659,6 +661,8 @@ def _single_checkout_operand(args):
     """Return the lone operand for `git checkout <one>`, or None."""
     pre, has_sep, post = _args_before_separator(args)
     if has_sep or post:
+        return None
+    if _flag_present(args, (), ("--detach",), _CHECKOUT_OPTS):  # git takes no path after --detach
         return None
     if _flag_present(args, ("-b", "-B", "-f"), ("--force",), _CHECKOUT_OPTS):
         if _flag_present(args, ("-f",), ("--force",), _CHECKOUT_OPTS):

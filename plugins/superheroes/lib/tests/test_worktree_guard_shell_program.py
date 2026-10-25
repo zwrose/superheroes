@@ -519,6 +519,8 @@ def test_angle_brackets_inside_quoted_git_arguments_stay_allowed(command, dirty_
     "bash -c 'GIT_DIR=/other/.git git checkout main'",
     "eval 'git --work-tree=/x checkout f.txt'",
     "if true; then GIT_DIR=/other/.git git checkout main; fi",
+    "GIT_WORK_TREE=/x git checkout main",
+    "git --work-tree=/x checkout main",
 ])
 def test_a_lone_checkout_sent_to_another_repository_is_refused(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == (
@@ -535,7 +537,21 @@ def test_a_lone_checkout_sent_to_another_repository_is_refused(command, dirty_re
     "git -C ../other checkout -b feature",
     "bash -c 'git -C . checkout main'",
     "bash -c 'git -C ../other log'",
+    "git -C ./ checkout main",
+    "git -C ../other checkout --detach main",
+    "git -C ../other checkout -q --detach 0123abcd",
+    "git -C ../other checkout --detach f.txt",
+    "git -C ../other switch --detach main",
+    "git checkout --detach f.txt",
+    "bash -c 'git -C ../other checkout --detach main'",
 ])
 def test_a_checkout_in_this_repository_or_a_harmless_other_repository_command_stays_allowed(
         command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
+def test_the_refusal_for_another_repository_names_an_exact_route():
+    message = wg.indeterminate_message("checkout-path")
+    assert "git -C <dir> switch <branch>" in message
+    assert "git -C <dir> switch --detach <commit>" in message
+    assert "Next step:" in message
