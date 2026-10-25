@@ -44,7 +44,7 @@ ALL_TRUE = {name: True for name in CR.CONDITION_ORDER}
 ALL_FALSE = {name: False for name in CR.CONDITION_ORDER}
 RESULT_KEYS = {"ready", "reason", "conditions", "setting", "account", "environment",
                "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck",
-               "pluginPin"}
+               "pluginPin", "dependencyHookGap"}
 NO_PIN = {"state": "absent", "reason": None, "version": None}
 
 

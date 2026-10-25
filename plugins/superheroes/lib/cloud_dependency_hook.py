@@ -220,8 +220,8 @@ GAP_TEXT = {
         _REWRITE_FIX),
     "adopted-inputs-differ": (
         "a setup file the build adopts changed since the hook ran",
-        "bring the adopted branch's dependency-file change into the branch the build starts from "
-        "first"),
+        "the build adopts a branch that changed a dependency file, so bring that change into the "
+        "branch the build starts from first"),
     "adopted-input-not-a-file": (
         "a setup file the build adopts is a link or sits under a linked folder, so it cannot be "
         "compared",

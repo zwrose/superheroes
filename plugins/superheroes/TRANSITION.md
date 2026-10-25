@@ -12,6 +12,27 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **A project with the dependency hook (item 19) on runs the cloud check again; if the committed hook is not the one configure writes, the check now fails on the `hook` part with the gap and its fix step (set item 17, 18 or 19 again, then commit and push the hook files).** A project with the hook off, or a matching hook, passes as before. See [Cloud check: the dependency hook on the launch branch](#cloud-check-the-dependency-hook-on-the-launch-branch).
+
+### Cloud check: the dependency hook on the launch branch
+
+- `cloud_check.judge` now runs `cloud_setup_text.branch_hook_gap` on this machine's `HEAD`, the commit a launch starts from. When it finds a gap, the check fails on a new part, `hook`, placed after `pin` and before `calibration`. The failure names the gap token, a plain sentence about it and the fix step.
+- A project with the dependency hook (item 19) off, or one whose committed hook is the one configure writes, passes as before. A checked part that reads no gap leaves `results.dependencyHookMatches` true.
+- `cloud_check.judge` results gain `results.dependencyHookMatches` (None when the report was unread) and a top-level `dependencyHookGap` (the gap token, or None).
+- A commit or repository that cannot be read gives `commit-unreadable`. Hook settings that cannot be read give a new token, `settings-unreadable`. Any other unexpected failure in the test reads as `commit-unreadable`, so the check fails closed.
+- The failed-check marker carries the `hook` part, and it forces only readiness's `dependencyHook` condition to false. A marker written by an earlier plugin's reader forces `setup` instead, which is the fail-closed direction.
+- `cloud_ready.readiness` gains the result key `dependencyHookGap`, the gap token its hook test found, or None.
+- The place call (`launch_place.route`) gains `hookGap`, the gap token for a `dependency-hook` placement and None for every other reason.
+- The launch report's words and fix step for `dependency-hook` name the gap when the call carries one. A call without one, such as a record from an earlier launch's ledger, keeps the generic words. Lanes whose gaps differ each print their own fix step; lanes that share a gap print it once.
+- A failed `hook` part ends the fix step with "check again", so the owner re-runs the check once the hook files are committed and pushed.
+- The words for each gap have one home, `cloud_dependency_hook.GAP_TEXT`, which the check's message and the launch report both read.
+
 ## 0.46.1
 
 ### Before you upgrade

@@ -158,11 +158,13 @@ def render_report(lanes):
             code = cloud_ready.REASON_FOR[name]
             shared = [lane["placeCall"] for lane in local if lane["placeCall"].get("reason") == code]
             if shared:
-                # the recheck-carrying call first, then the rest: lanes whose fixes differ (two hook
-                # gaps) each print theirs, and lanes that share one print it once
-                first = _recheck_first(shared)
-                for call in [first] + [c for c in shared if c is not first]:
-                    line = _fix_line(code, call)
+                # one fix line per (reason, hook gap) pair, the recheck-carrying call's: every call
+                # but a dependency-hook one has no hook gap, so those reasons print one line each
+                groups = {}
+                for call in shared:
+                    groups.setdefault(call.get("hookGap"), []).append(call)
+                for group in groups.values():
+                    line = _fix_line(code, _recheck_first(group))
                     if line not in fixes:
                         fixes.append(line)
         return "\n".join(out + fixes)

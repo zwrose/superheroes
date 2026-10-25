@@ -98,7 +98,7 @@ def _call(place="local", pointed=True, reason=None, by="setting", need=None, clo
 
 
 PLACE_KEYS = {"place", "pointedAtCloud", "by", "reason", "need", "cloudVersion",
-              "advisorVersion", "environment", "reported", "failedCheck"}
+              "advisorVersion", "environment", "reported", "failedCheck", "hookGap"}
 
 
 # ---------------------------------------------------------------- fixtures: stores and worlds

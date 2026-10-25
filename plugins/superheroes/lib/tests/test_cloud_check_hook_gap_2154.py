@@ -25,6 +25,7 @@ import launch_place  # noqa: E402
 import launch_report  # noqa: E402
 import store_core  # noqa: E402
 import test_cloud_branch_hook_2021 as T  # noqa: E402
+import test_launch_report as TLR  # noqa: E402
 
 ENV_ID = "env_01ABCdef"
 NONCE = "abcd1234efgh"
@@ -297,3 +298,14 @@ def test_two_lanes_with_one_gap_print_the_fix_once():
     fix = launch_place.fix_text(_hook_call(hookGap="script-missing"))
     assert report.count(fix) == 1
     assert "`script-missing`" in report
+
+
+def test_a_plain_and_a_failed_lane_with_one_reason_print_only_the_recheck_fix():
+    plain = TLR._call(reason="calibration")
+    failed = dict(TLR._call(reason="calibration", by="word"), failedCheck=["calibration"])
+    third = TLR._call(reason="no-setup", pointed=True)
+    recheck = TLR.SETUP_TEXT_FIX + " " + CHECK_AGAIN
+    report = launch_report.render_report([TLR._lane(1, plain), TLR._lane(2, third),
+                                          TLR._lane(3, failed)])
+    assert report.endswith(recheck)
+    assert report.count(TLR.SETUP_TEXT_FIX) == 1
