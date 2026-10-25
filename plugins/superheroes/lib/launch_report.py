@@ -100,8 +100,13 @@ def _fix_line(code, call):
 
 def _recheck_first(calls):
     """The call that carries the failed check when any of these does, else the first: the fix for
-    a reason must keep the recheck step whichever call came first."""
-    return next((c for c in calls if c.get("failedCheck") is not None), calls[0])
+    a reason must keep the recheck step whichever call came first. A failed check that left no
+    recheck words (a calibration part on a dependency-hook call) does not count: a later call
+    whose fix asks for the check again wins."""
+    def asks(c):
+        return "check again" in (fix_text(c) or "")
+    failed = [c for c in calls if c.get("failedCheck") is not None]
+    return next((c for c in failed if asks(c)), failed[0] if failed else calls[0])
 
 
 def _summary(lanes):

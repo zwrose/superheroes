@@ -326,6 +326,20 @@ def test_one_gap_with_a_failed_hook_part_prints_only_the_recheck_fix():
     assert report.count(plain) == 1
 
 
+def test_a_later_failed_hook_lane_still_carries_the_recheck_fix():
+    first = _hook_call(hookGap="script-differs", failedCheck=["calibration"])
+    second = _hook_call(hookGap="script-differs", failedCheck=["hook"])
+    lanes = [
+        {"issue": 1, "title": "a", "placeCall": first},
+        {"issue": 2, "title": "b", "placeCall": second},
+        TLR._lane(3, TLR._call("cloud")),
+    ]
+    report = launch_report.render_report(lanes)
+    assert launch_place.fix_text(second).endswith(CHECK_AGAIN)
+    assert report.endswith(launch_place.fix_text(second))
+    assert report.endswith(CHECK_AGAIN)
+
+
 def test_a_ledger_gap_that_is_not_a_string_still_renders_the_report():
     lanes = [
         {"issue": 1, "title": "a", "placeCall": _hook_call(hookGap=["script-missing"])},
