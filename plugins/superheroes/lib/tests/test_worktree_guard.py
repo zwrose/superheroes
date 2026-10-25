@@ -193,7 +193,9 @@ def test_indeterminate_message_verbatim():
         "Next step: commit the work (`git add <path>` then `git commit`) or run "
         "`git stash push -u`, then re-run it as a plain `git ...` command from inside the "
         "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
-        "`GIT_DIR`/`GIT_WORK_TREE`). During a merge: `git checkout --theirs <path>` or "
+        "`GIT_DIR`/`GIT_WORK_TREE`). A lone `git checkout` sent to another repository "
+        "can instead be written `git -C <dir> switch <branch>` or "
+        "`git -C <dir> switch --detach <commit>`. During a merge: `git checkout --theirs <path>` or "
         "`git checkout --ours <path>` takes one side of a conflicted path you have not "
         "edited since the merge; a path you have edited is finished with the Edit tool and "
         "then `git add <path>`."
@@ -652,6 +654,9 @@ _PROSE_ONLY_MENTIONS = (
     # same-delimiter quotes nested inside a command substitution: legal shell, but the scanner
     # toggles its outer quote state on the inner quotes and the prose reads as bare text
     'gh pr comment 1 --body "$(echo "never git reset --hard")"',
+    # a comment body quoting someone with a backslash-escaped quote of the enclosing kind; the
+    # scanner has no escape handling, so its quote state desynchronizes from the shell's
+    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt"',
 )
 
 # The prose shape #2054 moved out of the refused list: the heredoc body is data fed to `cat >`.
@@ -674,6 +679,9 @@ _PROSE_MENTIONS_STILL_ALLOWED = (
     "gh pr comment 1 --body 'the reviewer said \"never: git checkout -- f.txt\"'",
     # single-quoted, so the backticks are literal text the shell will not substitute
     "gh pr comment 1 --body 'revert with an inverse Edit, not `git reset --hard`'",
+    # opposite-delimiter quotes inside a substitution stay tracked; only same-delimiter quotes
+    # desynchronize the scanner, which is why the message says "of the same kind"
+    'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
     # a heredoc line is not categorically refused: the scanner is quote-aware within the
     # line, so a mention inside quotes stays allowed. The message says "bare lines" for this.
     "cat > /tmp/note.md <<'EOF'\n"

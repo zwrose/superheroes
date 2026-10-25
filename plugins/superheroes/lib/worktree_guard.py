@@ -25,7 +25,7 @@ _DESTRUCTIVE_SUBCOMMANDS = frozenset({
 })
 
 _SHELL_PREFIXES = frozenset({
-    "!", "then", "do", "else", "elif", "(", ";;",
+    "!", "then", "do", "else", "elif", "if", "while", "until", "(", ";;",
 })
 
 # Sentences carried word for word by more than one template below; no braces, so each
@@ -62,7 +62,9 @@ _INDETERMINATE_TEMPLATE = (
     + _NEXT_STEP_COMMIT_OR_STASH
     + " it as a plain `git ...` command from inside the "
     "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
-    "`GIT_DIR`/`GIT_WORK_TREE`). "
+    "`GIT_DIR`/`GIT_WORK_TREE`). A lone `git checkout` sent to another repository "
+    "can instead be written `git -C <dir> switch <branch>` or "
+    "`git -C <dir> switch --detach <commit>`. "
     + _DURING_A_MERGE
 )
 
@@ -89,6 +91,17 @@ _UNPARSED_TEMPLATE = (
     "holds, so committing or stashing alone will not clear it. Keep the work you care "
     "about by committing or `git stash push -u` first, and revert a probe edit with an "
     "inverse Edit rather than a git discard."
+)
+
+_UNREADABLE_PROGRAM_TEMPLATE = (
+    "superheroes worktree guard: this command runs a `bash`/`sh`/`zsh -c` or `eval` program "
+    "this guard cannot read — the program holds a variable, a substitution, an escape, a "
+    "nested quote, or a second level of `-c`/`eval` — so it is refused (fail-closed) "
+    "whatever your tree holds. The guard reads such a program as commands only when it is "
+    "one plain quoted string, one level in. "
+    "Next step: run the program's commands as plain commands, or pass the program as one "
+    "single-quoted string with no variable, substitution or nested shell. To keep work you "
+    "care about, commit it or run `git stash push -u` first."
 )
 
 _GIT_TIMEOUT = 5
@@ -181,6 +194,12 @@ def _words(text):
 
 def _split_segments(command):
     """Split a command string into segments at unquoted boundaries."""
+    return [segment for segment, _ in _split_segments_with_ends(command)]
+
+
+def _split_segments_with_ends(command):
+    """Split into (segment, end) pairs; end is the unquoted boundary character that flushed the
+    segment (`;`, newline, `(`, `)`, backtick, `|`, `&`), or "" at the end of the text."""
     command = _mask_data_heredoc(command)
     segments = []
     current = []
@@ -189,10 +208,10 @@ def _split_segments(command):
     in_single = False
     in_double = False
 
-    def flush():
+    def flush(end=""):
         seg = "".join(current).strip()
         if seg:
-            segments.append(seg)
+            segments.append((seg, end))
         current.clear()
 
     while i < n:
@@ -223,39 +242,47 @@ def _split_segments(command):
             i += 2
             continue
         if ch == ";":
-            flush()
+            flush(";")
             i += 1
             continue
         if ch == "\n":
-            flush()
+            flush("\n")
             i += 1
             continue
         if ch == "(":
-            flush()
+            flush("(")
             i += 1
             continue
         if ch == ")":
-            flush()
+            flush(")")
             i += 1
             continue
         if ch == "`":
-            flush()
+            flush("`")
             i += 1
             continue
         if ch == "|":
             if i + 1 < n and command[i + 1] == "|":
-                flush()
+                flush("|")
                 i += 2
                 continue
-            flush()
+            flush("|")
             i += 1
             continue
         if ch == "&":
             if i + 1 < n and command[i + 1] == "&":
-                flush()
+                flush("&")
                 i += 2
                 continue
-            flush()
+            # An `&` that belongs to a redirection (`>&`, `<&`, `2>&1`, `&>`, `&>>`) is no boundary.
+            if (i > 0 and command[i - 1] in "<>" and (i < 2 or command[i - 2] != "\\")) or (i + 1 < n and command[i + 1] == ">"):
+                if (i + 1 < n and command[i + 1] == ">" and current
+                        and not current[-1].isspace() and command[i - 1] not in "<>"):
+                    current.append(" ")  # `&>` starts its own word, never glues to a flag
+                current.append(ch)
+                i += 1
+                continue
+            flush("&")
             i += 1
             continue
         current.append(ch)
@@ -264,8 +291,9 @@ def _split_segments(command):
     return segments
 
 
-def _tokenize_segment(segment):
-    """Tokenize one segment, respecting quotes; strip surrounding quotes from tokens."""
+def _tokenize_segment(segment, keep_quotes=False):
+    """Tokenize one segment, respecting quotes; strip surrounding quotes from tokens unless
+    keep_quotes, which returns each token raw."""
     tokens = []
     current = []
     i = 0
@@ -276,7 +304,7 @@ def _tokenize_segment(segment):
     def flush():
         if current:
             tok = "".join(current)
-            if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"":
+            if not keep_quotes and len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"":
                 tok = tok[1:-1]
             tokens.append(tok)
             current.clear()
@@ -429,6 +457,68 @@ def _strip_shell_prefixes(tokens):
     return tokens
 
 
+_EXECUTION_BUILTINS = frozenset({"exec", "command", "builtin"})
+
+_WRAPPER_WORDS = frozenset({
+    "timeout", "env", "nohup", "nice", "ionice", "sudo", "time", "stdbuf", "xargs", "setsid",
+})
+
+_REDIRECTION_WORD = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)")  # a quoted target with a space stays one raw token (`2>"/tmp/error log"`)
+_REDIRECTION_OPERATOR = re.compile(r"^[0-9]*(?:<|>|>>|<<<|<<-?|&>|&>>|>&|<&)$")
+
+
+def _redirection_width(tokens, i):
+    """How many tokens a redirection at tokens[i] spans (0 when it is not one): the word
+    itself, plus the next word when the operator has no attached target."""
+    if i >= len(tokens) or not _REDIRECTION_WORD.match(tokens[i]):
+        return 0
+    if _REDIRECTION_OPERATOR.match(tokens[i]) and i + 1 < len(tokens):
+        return 2
+    return 1
+
+
+def _drop_redirections(tokens, raw=None):
+    """The tokens with every redirection word (and its detached target) removed. With `raw`
+    (the index-aligned quote-keeping tokens) the decision is made on those, so a quoted
+    `'>notes'` operand is kept."""
+    raw = tokens if raw is None or len(raw) != len(tokens) else raw
+    kept, i = [], 0
+    while i < len(tokens):
+        width = _redirection_width(raw, i)
+        if width:
+            i += width
+            continue
+        kept.append(tokens[i])
+        i += 1
+    return kept
+
+
+def _command_tokens(tokens):
+    """The shared normalizer: (assignment_keys, tokens) once leading shell prefixes,
+    redirection words and `NAME=value` assignments are stripped, alternating until none moves
+    (so `then LC_ALL=C bash -c ...` and `2>/dev/null bash -c ...` reach `bash`)."""
+    keys = []
+    while True:
+        stripped = _strip_shell_prefixes(tokens)
+        start = 0
+        while start < len(stripped):
+            width = _redirection_width(stripped, start)
+            if width:
+                start += width
+                continue
+            if not ("=" in stripped[start] and not stripped[start].startswith("=")):
+                break
+            key = stripped[start].split("=", 1)[0]
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                break
+            keys.append(key)
+            start += 1
+        rest = stripped[start:]
+        if rest == tokens:
+            return keys, tokens
+        tokens = rest
+
+
 def _iter_git_segments(command):
     """Yield parsed git invocations from each command-position segment."""
     if not isinstance(command, str):
@@ -437,14 +527,7 @@ def _iter_git_segments(command):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        start = 0
-        while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
-            key = tokens[start].split("=", 1)[0]
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-                start += 1
-                continue
-            break
-        tokens = _strip_shell_prefixes(tokens[start:])
+        _, tokens = _command_tokens(_drop_redirections(tokens, _tokenize_segment(segment, keep_quotes=True)))
         if tokens and _is_git_token(tokens[0]):
             parsed = _parse_git_invocation(tokens)
             if parsed is not None:
@@ -524,7 +607,7 @@ _CHECKOUT_OPTS = {
     "--recurse-submodules": 0, "--no-recurse-submodules": 0,
     "--progress": 0, "--no-progress": 0, "--overlay": 0, "--no-overlay": 0,
     "--ignore-skip-worktree-bits": 0,
-    "--orphan": 1, "--conflict": 1,
+    "--orphan": 1, "--conflict": 1, "--detach": 0,
 }
 
 _CLEAN_OPTS = {
@@ -578,6 +661,8 @@ def _single_checkout_operand(args):
     """Return the lone operand for `git checkout <one>`, or None."""
     pre, has_sep, post = _args_before_separator(args)
     if has_sep or post:
+        return None
+    if _flag_present(args, (), ("--detach",), _CHECKOUT_OPTS):  # git takes no path after --detach
         return None
     if _flag_present(args, ("-b", "-B", "-f"), ("--force",), _CHECKOUT_OPTS):
         if _flag_present(args, ("-f",), ("--force",), _CHECKOUT_OPTS):
@@ -712,6 +797,17 @@ def _resolve_single_operand_checkout(cwd, operand):
     return None
 
 
+_OTHER_REPO_OPTS = ("--git-dir", "--work-tree")
+
+
+def _targets_other_repo(keys, tokens):
+    """True when a git segment names another repository or work tree (no cwd resolves it)."""
+    opts = tokens[1:_skip_git_globals(tokens) or 1]
+    return "GIT_DIR" in keys or "GIT_WORK_TREE" in keys or any(
+        o.split("=", 1)[0] in _OTHER_REPO_OPTS or o == "-C" and v not in (".", "./")
+        for o, v in zip(opts, opts[1:] + [None]))
+
+
 def _segment_destructive_action(parsed, cwd=None):
     """Resolve one parsed git invocation to a destructive action, or None if safe."""
     action = _segment_action(parsed)
@@ -730,12 +826,157 @@ def _segment_destructive_action(parsed, cwd=None):
     return action
 
 
-def segment_accounting(command, cwd=None):
+def _plain_word(raw):
+    """A raw token without its surrounding quotes."""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        return raw[1:-1]
+    return raw
+
+
+# Axis: a quoted bash|sh|zsh -c or eval program is checked as commands one level in; an unreadable one is refused.
+def _shell_program(raw_tokens):
+    """The `bash|sh|zsh -c` or `eval` program in normalized raw tokens: None when the segment is
+    not a program shape, ("unreadable", None), or ("program", <text>)."""
+    if not raw_tokens:
+        return None
+    if _plain_word(raw_tokens[0]) == "eval":
+        args = _drop_redirections(raw_tokens[1:])
+        if args and _plain_word(args[0]) == "--":
+            args = args[1:]
+        if not args or not all(re.fullmatch(_WORD, arg) for arg in args):
+            return ("unreadable", None)
+        joined = " ".join(_plain_word(arg) for arg in args)
+        if "`" in joined or "$(" in joined or "\\" in joined:
+            return ("unreadable", None)
+        return ("program", joined)
+    if os.path.basename(_plain_word(raw_tokens[0])) not in ("bash", "sh", "zsh"):
+        return None
+    saw_c = False
+    ended_options = False
+    i = 1
+    while i < len(raw_tokens):
+        width = _redirection_width(raw_tokens, i)
+        if width:
+            i += width
+            continue
+        tok = _plain_word(raw_tokens[i])
+        if tok == "--":
+            ended_options = True
+            i += 1
+            break
+        takes_value = tok in ("--rcfile", "--init-file") or (
+            len(tok) > 1 and tok[0] in "-+" and tok[1] != "-" and ("o" in tok or "O" in tok))
+        if takes_value and i + 1 < len(raw_tokens) and (
+                not re.fullmatch(_WORD, raw_tokens[i + 1]) or "$" in raw_tokens[i + 1]):
+            return ("unreadable", None)
+        if tok in ("--rcfile", "--init-file"):
+            i += 2
+            continue
+        if tok.startswith("--"):
+            i += 1
+            continue
+        if len(tok) > 1 and tok[0] in "-+":
+            # An expansion, redirection or attached `-o` value inside an option word hides `-c`.
+            if not re.fullmatch(r"[-+][A-Za-z]+", tok) or re.search("[oO].", tok):
+                return ("unreadable", None)
+            saw_c = saw_c or "c" in tok
+            i += 2 if ("o" in tok or "O" in tok) else 1
+            continue
+        break
+    if i >= len(raw_tokens):
+        return ("unreadable", None) if saw_c else None
+    if not saw_c:
+        # `--` ends options, so what follows is a script path, never `-c`.
+        if ended_options:
+            return None
+        # A script-file operand is not read; a bare leading expansion could itself be `-c`,
+        # and an unreadable word followed by a `c` cluster could hide where `-c` sits.
+        if raw_tokens[i][:1] in ("$", "`"):
+            return ("unreadable", None)
+        # A quoted word that is exactly one expansion (`"$OPT"`) is just as able to be `-c`.
+        if re.fullmatch(r"\$(?:\w+|\{[^}]*\}|[@*#?$!0-9-])", _plain_word(raw_tokens[i])):
+            return ("unreadable", None)
+        if any(c in raw_tokens[i] for c in "$`") and any(
+                len(t) > 1 and t[0] in "-+" and not t.startswith("--") and "c" in t
+                for t in (_plain_word(r) for r in raw_tokens[i + 1:])):
+            return ("unreadable", None)
+        return None
+    if not re.fullmatch(_WORD, raw_tokens[i]):
+        return ("unreadable", None)
+    program = _plain_word(raw_tokens[i])
+    # Operands after the program are its positional parameters: `exec "$@"` would run them.
+    if i + 1 < len(raw_tokens) and "$" in program:
+        return ("unreadable", None)
+    # A substitution inside the program hides the command it produces from the one-level read.
+    if "`" in program or "$(" in program or "\\" in program:
+        return ("unreadable", None)
+    return ("program", program)
+
+
+def _only_wrapper_words(before):
+    """Whether every raw token is a redirection, a `NAME=value` assignment, a shell prefix or
+    execution builtin, a known wrapper word, or an option/bare-number argument of one."""
+    i = 0
+    while i < len(before):
+        width = _redirection_width(before, i)
+        if width:
+            i += width
+            continue
+        plain = _plain_word(before[i])
+        # A wrapper or execution builtin owns every later word up to the shell word (option
+        # operands such as `env -u FOO` or `exec -a name`), so the rest is its argument.
+        if (not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", plain) and plain not in _SHELL_PREFIXES
+                and (plain in _EXECUTION_BUILTINS
+                     or os.path.basename(plain) in _WRAPPER_WORDS)):
+            return True
+        if (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", plain)
+                or plain in _SHELL_PREFIXES
+                or plain[:1] in ("-", "+") or plain.isdigit()):
+            i += 1
+            continue
+        return False
+    return True
+
+
+def _hidden_shell_c(raw_tokens):
+    """Fail-closed backstop: a bare bash|sh|zsh word with a later short `-`/`+` cluster holding
+    `c`, in a segment `_shell_program` did not read. It fires only when the shell word is not
+    the segment's command word and everything before it is a redirection, an assignment, a
+    known wrapper word or an option/number argument of one (a wrapper in front)."""
+    command_index = len(raw_tokens) - len(_command_tokens(raw_tokens)[1])
+    for k, raw in enumerate(raw_tokens):
+        if os.path.basename(_plain_word(raw)) not in ("bash", "sh", "zsh", "eval"):
+            continue
+        if k == command_index or not _only_wrapper_words(raw_tokens[:k]):
+            continue
+        if _shell_program(raw_tokens[k:]) is not None:
+            return True
+    return False
+
+
+def _inner_git_unreadable(tokens, parsed):
+    """Whether a git segment inside a program hides its action: an expansion or escape in the
+    subcommand word, or in any word once the subcommand is destructive (or unparsed)."""
+    hidden = "$`\\"
+    if parsed is None or parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
+        return any(c in tok for tok in tokens[1:] for c in hidden)
+    return any(c in parsed["subcommand"] for c in hidden)
+
+
+def segment_accounting(command, cwd=None, _depth=0):
     """Account for every command-position segment. Returns one record per segment:
 
-    {"segment": <the segment text>, "kind": "safe"|"destructive"|"unaccounted", "action": <str|None>}
+    {"segment": <the segment text>, "kind": "safe"|"destructive"|"unaccounted"|"unreadable-program",
+     "action": <str|None>}
+
+    A `bash|sh|zsh -c` or `eval` program is accounted one level in (its records replace the
+    segment's), via _depth.
 
     kind is:
+      "unreadable-program" — the segment runs a `-c`/`eval` program the guard cannot read (a
+                       variable, substitution, escape, nested quote, a second level, or a cut
+                       at a substitution boundary). "action" is None. FAIL-CLOSED, like
+                       "unaccounted".
       "destructive"  — parsed as a git invocation whose subcommand is destructive AND whose
                        resolved action is not None. "action" carries that action name.
       "unaccounted"  — the crude scanner sees a destructive git mention in this segment, but the
@@ -746,22 +987,40 @@ def segment_accounting(command, cwd=None):
     if not isinstance(command, str):
         return []
     records = []
-    for segment in _split_segments(command):
+    for segment, end in _split_segments_with_ends(command):
         tokens = _tokenize_segment(segment)
         if not tokens:
             continue
-        start = 0
-        while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
-            key = tokens[start].split("=", 1)[0]
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-                start += 1
-                continue
-            break
-        tokens = _strip_shell_prefixes(tokens[start:])
-        parsed = _parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
-        mentions = _segment_mentions_destructive_git(segment)
-        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS:
-            action = _segment_destructive_action(parsed, cwd)
+        all_raw = _tokenize_segment(segment, keep_quotes=True)
+        _, raw_tokens = _command_tokens(all_raw)
+        shape = _shell_program(raw_tokens)
+        if shape is None and _depth <= 1 and _hidden_shell_c(all_raw):
+            shape = ("unreadable", None)
+        if shape is not None:
+            if (shape[0] == "unreadable" or end in ("`", "(") or _depth >= 1
+                    or any("$(" in raw or "`" in raw for raw in all_raw)):
+                records.append({"segment": segment, "kind": "unreadable-program", "action": None})
+            else:
+                records.extend(segment_accounting(shape[1], cwd, _depth + 1))
+            continue
+        keys, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
+        parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
+        wrapped = (core := _skip_builtins(tokens)) != tokens and core and _is_git_token(core[0]) and (_parse_git_invocation(core) or {}).get("subcommand") in _DESTRUCTIVE_SUBCOMMANDS
+        mentions = wrapped or _segment_mentions_destructive_git(segment)
+        # A raw word still holding < or > outside its quoted spans after the real redirections
+        # went hides what Bash consumes.
+        attached = (mentions or parsed is not None) and (any(
+            len(re.findall("[<>]+", re.sub(r"'[^']*'|\"[^\"]*\"", "", w))) > 1 for w in all_raw) or any(
+            re.search("[<>]", re.sub(r"'[^']*'|\"[^\"]*\"", "", w)) for w in _drop_redirections(all_raw)))
+        if _depth >= 1 and (attached or wrapped or tokens and (
+                any(c in tokens[0] for c in "$`\\")
+                or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
+                    and any(c in tok for tok in tokens[1:] for c in "$`\\"))
+                or (_is_git_token(tokens[0]) and _inner_git_unreadable(tokens, parsed)))):
+            records.append({"segment": segment, "kind": "unreadable-program", "action": None})
+            continue
+        if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS and not attached:
+            action = _segment_destructive_action(parsed, None if _targets_other_repo(keys, tokens) else cwd)
             if action is not None:
                 records.append({
                     "segment": segment,
@@ -770,7 +1029,7 @@ def segment_accounting(command, cwd=None):
                 })
             else:
                 records.append({"segment": segment, "kind": "safe", "action": None})
-        elif mentions:
+        elif mentions or attached:
             records.append({"segment": segment, "kind": "unaccounted", "action": None})
         else:
             records.append({"segment": segment, "kind": "safe", "action": None})
@@ -868,23 +1127,29 @@ def mentions_destructive_git(command):
     return any(_segment_mentions_destructive_git(seg) for seg in _split_segments(command))
 
 
+def _skip_builtins(tokens, wide=True):
+    """Detection only: past exec/command/builtin (wide: env) words; wide never parses an option's value, returns the first later git suffix naming a discard."""
+    while tokens and (tokens[0] in _EXECUTION_BUILTINS or wide and tokens[0] == "env"):
+        builtin, tokens = tokens[0], _command_tokens(tokens[1:])[1] if wide else tokens[1:]
+        while tokens and tokens[0].startswith("-"):
+            if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
+                return []
+            if wide:  # an option's value is never parsed: a later git word naming a discard is the command
+                gits = [tokens[i:] for i in range(1, len(tokens)) if _is_git_token(tokens[i])]
+                return next((g for g in gits if (_parse_git_invocation(g) or {}).get("subcommand")
+                             in _DESTRUCTIVE_SUBCOMMANDS), tokens[1:])
+            tokens = tokens[1:]
+    return tokens
+
+
 def _segment_has_unresolvable_target(tokens):
     """True when segment may act outside payload cwd."""
-    if not tokens:
-        return False
-    start = 0
-    while start < len(tokens) and "=" in tokens[start] and not tokens[start].startswith("="):
-        key, _, val = tokens[start].partition("=")
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-            if key in ("GIT_DIR", "GIT_WORK_TREE"):
-                return True
-            start += 1
-            continue
-        break
-    if start < len(tokens) and tokens[start] in ("cd", "pushd"):
+    keys, tokens = _command_tokens(tokens)
+    if "GIT_DIR" in keys or "GIT_WORK_TREE" in keys:
         return True
-    tokens = tokens[start:]
-    tokens = _strip_shell_prefixes(tokens)
+    tokens = _skip_builtins(tokens, wide=False)
+    if tokens and tokens[0] in ("cd", "pushd"):
+        return True
     if tokens and _is_git_token(tokens[0]):
         i = 1
         while i < len(tokens):
@@ -907,12 +1172,19 @@ def _segment_has_unresolvable_target(tokens):
     return False
 
 
-def target_is_resolvable(command):
-    """False when the command may act on a worktree other than the payload cwd."""
+def target_is_resolvable(command, _depth=0):
+    """False when the command may act on a worktree other than the payload cwd; a readable
+    `bash|sh|zsh -c` or `eval` program is read one level in."""
     if not isinstance(command, str):
         return True
-    for segment in _split_segments(command):
-        tokens = _tokenize_segment(segment)
+    for segment, end in _split_segments_with_ends(command):
+        _, raw_tokens = _command_tokens(_tokenize_segment(segment, keep_quotes=True))
+        shape = _shell_program(raw_tokens)
+        if (shape is not None and shape[0] == "program" and _depth < 1
+                and end not in ("`", "(")
+                and not target_is_resolvable(shape[1], _depth + 1)):
+            return False
+        tokens = _drop_redirections(_tokenize_segment(segment), _tokenize_segment(segment, keep_quotes=True))
         if _segment_has_unresolvable_target(tokens):
             return False
     return True
@@ -1555,6 +1827,11 @@ def unparsed_message():
     return _UNPARSED_TEMPLATE
 
 
+def unreadable_program_message():
+    """Verbatim fail-closed refusal when a `-c`/`eval` program could not be read."""
+    return _UNREADABLE_PROGRAM_TEMPLATE
+
+
 def classify(command, cwd):
     """('deny'|'allow', reason) for a candidate Bash command. Fails closed on errors."""
     try:
@@ -1567,6 +1844,8 @@ def classify(command, cwd):
             return ("allow", "")
 
         records = segment_accounting(command, cwd)
+        if any(record["kind"] == "unreadable-program" for record in records):
+            return ("deny", unreadable_program_message())
         if any(record["kind"] == "unaccounted" for record in records):
             return ("deny", unparsed_message())
         actions = [record["action"] for record in records if record["kind"] == "destructive"]
