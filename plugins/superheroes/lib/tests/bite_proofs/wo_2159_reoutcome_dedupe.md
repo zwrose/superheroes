@@ -1,6 +1,6 @@
 # Bite-proof record: WO-2159-2 (#2159) the scoped `reoutcome` dedupe
 
-Detector under proof: `plugins/superheroes/lib/tests/test_launch_ledger_reoutcome_dedupe_2159.py` (9 tests).
+Detector under proof: `plugins/superheroes/lib/tests/test_launch_ledger_reoutcome_dedupe_2159.py` (10 tests).
 Guarded code: `plugins/superheroes/lib/launch_ledger.py`, `amend()` (production edit committed at `6fe7b68d`,
 base `ed3b7b34baf209dcc7e84b59b3b7d44e5bc2b2de`). Declared guarded-element set: E1, E2, E3, E4 (neutralized below);
 E5 and E6 are pinned behaviour (see the end). Every neutralization was a targeted edit made with the Edit tool,
@@ -210,6 +210,56 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger_reoutcome_dedupe_2159.py
 ```
 
 - **Raw green** after the restore: `9 passed in 2.78s`.
+
+## E8. Newest of two fix orders (`amend`, `launch_ledger.py`, the opener loop)
+
+- **Axis:** with two finite `vet not-ready` amendments and an identical `reoutcome` between them, the dedupe is
+  scoped to the newer fix order: the repeat is written and closes the reopening the reader reports at the newer
+  fix order's ts. Added by WO-2159-5 (review session 2 round 1), which found that no test laid two finite fix
+  orders, so the newest-selection was not bitten (flipping it left the file at `9 passed`).
+- **Neutralization** (Edit tool, at `11fcce2d`): `and math.isfinite(ets) and (fix_order_ts is None or ets > fix_order_ts)):`
+  became `and math.isfinite(ets) and (fix_order_ts is None or ets < fix_order_ts)):` (the loop keeps the oldest
+  fix order instead of the newest).
+- **Raw red** (`-k test_t9`). T9 reddens: the oldest fix order scopes the dedupe, so the `reoutcome` between the
+  two fix orders counts as a duplicate:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_t9_the_newest_of_two_fix_orders_scopes_the_dedupe ____________
+
+repo = '/tmp/claude-0/pytest-of-root/pytest-12/test_t9_the_newest_of_two_fix_0/repo'
+
+    def test_t9_the_newest_of_two_fix_orders_scopes_the_dedupe(repo):
+        _handed_back(repo)
+        now = time.time()
+        _amend_at(repo, _LAUNCH, "vet", "not-ready", now - 300)
+        _amend_at(repo, _LAUNCH, "reoutcome", "handback", now - 200, note=_EVIDENCE)
+        _amend_at(repo, _LAUNCH, "vet", "not-ready", now - 100)
+        assert ww._reopen_candidate(_info(repo), []) == (now - 100, "vet-not-ready")
+>       assert _record(repo) == "amendment"
+E       AssertionError: assert 'amendment-existing' == 'amendment'
+E         
+E         - amendment
+E         + amendment-existing
+
+/home/user/wt-2159/plugins/superheroes/lib/tests/test_launch_ledger_reoutcome_dedupe_2159.py:173: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_ledger_reoutcome_dedupe_2159.py::test_t9_the_newest_of_two_fix_orders_scopes_the_dedupe
+1 failed, 9 deselected in 4.63s
+```
+
+- **Restore:** inverse Edit. **Restore receipt:** the restored text, `and math.isfinite(ets) and (fix_order_ts is None or ets > fix_order_ts)):`
+  (`launch_ledger.py:2686`); `git diff --stat -- plugins/superheroes/lib/launch_ledger.py` prints nothing, so the
+  file equals `11fcce2d`.
+- **Raw green** (same selector):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 9 deselected in 0.82s
+```
 
 ## Orchestrator re-run of E1–E4
 

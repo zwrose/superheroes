@@ -161,6 +161,19 @@ def test_t8_a_vet_not_ready_with_a_non_finite_ts_is_ignored_as_a_fix_order(repo)
     assert _record_count(repo) == count
 
 
+# axis: E8 newest opener — with two finite fix orders and an identical reoutcome between them, the dedupe is
+# scoped to the newer fix order, so the repeat is written and closes the reopening reported at its ts
+def test_t9_the_newest_of_two_fix_orders_scopes_the_dedupe(repo):
+    _handed_back(repo)
+    now = time.time()
+    _amend_at(repo, _LAUNCH, "vet", "not-ready", now - 300)
+    _amend_at(repo, _LAUNCH, "reoutcome", "handback", now - 200, note=_EVIDENCE)
+    _amend_at(repo, _LAUNCH, "vet", "not-ready", now - 100)
+    assert ww._reopen_candidate(_info(repo), []) == (now - 100, "vet-not-ready")
+    assert _record(repo) == "amendment"
+    assert ww._reopen_candidate(_info(repo), []) is None
+
+
 # axis: E6 other kinds — only a reoutcome is scoped to the fix order; an evidence amendment still dedupes
 # against its whole history
 def test_t7_other_amendment_kinds_still_dedupe_against_the_whole_history(repo):
