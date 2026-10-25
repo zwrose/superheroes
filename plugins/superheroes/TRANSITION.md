@@ -32,6 +32,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed.** In a cloud session on Linux whose calibration turns on `localSockets`, the review's host-seat fixer runs as a native fixer subagent in the build worktree. See [Review fixer: the cloud localSockets route](#review-fixer-the-cloud-localsockets-route).
 - **After switching.** **Nothing is owed.** A review's staleness check no longer reports a verify command that opens with a shell keyword (`if [ -x … ]; then …`) as "no longer resolves: if"; it checks the first word that names a program, and reports a command it cannot read as not checked rather than stale. See [Review: the verify-command check skips shell keywords](#review-the-verify-command-check-skips-shell-keywords).
 - **After switching.** **Nothing is owed.** The wave watch now watches a terminal cloud lane again once the advisor sends it a fix order (`vet not-ready`, or a relayed fix order composed with `--fix-order`), until the lane's next ending; and a partial comments read names the issues it could not read. See [Wave watch: a cloud lane sent a fix order is watched again](#wave-watch-a-cloud-lane-sent-a-fix-order-is-watched-again).
+- **After switching.** **Nothing is owed.** A cloud lane's repeat handback or park after a fix order is recorded in the launch ledger even when it reads exactly like the lane's earlier one, so the ledger alone closes the watch the fix order re-opened. See [Launch ledger: a repeat outcome after a fix order is recorded](#launch-ledger-a-repeat-outcome-after-a-fix-order-is-recorded).
 - **After switching.** **Nothing is owed.** A builder's scoped single-reviewer pass after a handback now ends with a review record written on the head it reviewed. See [Workhorse: a scoped pass after a handback writes a review record](#workhorse-a-scoped-pass-after-a-handback-writes-a-review-record).
 - **After switching.** **Nothing is owed, except that a project whose test files must carry a directive comment in a longer form keeps that rule written where the test lens reads it: CLAUDE.md, the calibration, or a check in the repository.** See [Review: a break-it test is written in the project's own directive form](#review-a-break-it-test-is-written-in-the-projects-own-directive-form).
 
@@ -139,6 +140,12 @@ A deviation is costly when a promised check did not run, or work bypassed its ow
 - A comments read that was partial adds a result key, `unreadIssues` (`[{"launchId", "issue"}]`, absent when nothing went unread), on `run`, `watch_arm` and `loop` results.
 - A not-ready lane whose fix goes to a fresh launch is now passed `--ignore-launch` (or its vet recorded `ready` or `parked-blocker` when done), or the watch keeps waiting on the old lane.
 - No ledger record kind changes; `cloud-relay.json` gains one optional key, `fixOrder`.
+
+### Launch ledger: a repeat outcome after a fix order is recorded
+
+- `launch_ledger.record_outcome` on a terminal lane still records a repeat outcome as a `reoutcome` amendment, and still skips one identical (same outcome and evidence) to an amendment already recorded (`recorded: "amendment-existing"`). When the lane holds a `vet not-ready` amendment, only amendments at or after the newest one (by `ts`, ties included) count for that check, so a repeat that answers a fix order is written (`recorded: "amendment"`) and closes the reopening the wave watch reads from the ledger.
+- That `reoutcome` is stamped no earlier than the `vet not-ready` it answers, so a clock stepped back cannot record a closer older than the fix order. An amendment whose `ts` is not a finite number is neither a fix order nor a match for this check.
+- A lane with no `vet not-ready` amendment, and every other amendment kind, keeps the whole-history check. No key, flag or refusal reason changed.
 
 ## 0.46.0
 
