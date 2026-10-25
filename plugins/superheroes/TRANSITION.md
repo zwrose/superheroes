@@ -12,6 +12,21 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed, except that a consumer that reads a seat map's degradations with a closed set of constraints must accept `liveness-timeout`.** A review on a busy day no longer starts with an empty panel because a vendor's liveness probe ran past its timeout. See [Seat map: a timed-out liveness probe seats the vendor and says so](#seat-map-a-timed-out-liveness-probe-seats-the-vendor-and-says-so).
+
+### Seat map: a timed-out liveness probe seats the vendor and says so
+
+- The composition liveness probe behind the seat map's live-vendor set (`lib/preflight_probe.py`) still runs each cell's no-op with a 120-second timeout, now named `PROBE_TIMEOUT_SECONDS`. A cell whose probe runs past it is no longer read as dead: it counts live, carries `timedOut: true` in its `cells` entry, and its detail reads `probe timed out after 120s; not proven live`. A loaded vendor serving long dispatches therefore still fills its seats instead of leaving the panel empty until someone composes it by hand with `--live-vendors`.
+- Every such cell adds one seat-map degradation with the new constraint `liveness-timeout` (home: `liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT`), naming the vendor, model and effort and saying the seat rests on a timed-out probe, not proven live. If the vendor really is down, the seat's own dispatch fails and the review's retry ladder handles it as for any seat.
+- A liveness receipt holding a timed-out cell is never cached, so the next compose probes again rather than replaying the guess for the receipt's TTL.
+- A probe that fails outright (a non-zero exit, or the CLI failing to start) still reads not live, with its `liveness-cell` note, exactly as before. `probe_command` results gain an optional `timedOut: true` key on a timeout; the `run` preflight's go/no-go is unchanged and still fails a timed-out probe.
+
 ## 0.46.1
 
 ### Before you upgrade
