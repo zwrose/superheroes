@@ -217,7 +217,8 @@ GAP_TEXT = {
         "edited by hand)", _REWRITE_FIX),
     "settings-not-registered": (
         "its settings file does not register the dependency hook to run at session start",
-        _REWRITE_FIX),
+        "if the committed settings file is not valid JSON or sets disableAllHooks, fix that by hand "
+        "first; then " + _REWRITE_FIX),
     "adopted-inputs-differ": (
         "a setup file the build adopts changed since the hook ran",
         "the build adopts a branch that changed a dependency file, so bring that change into the "
