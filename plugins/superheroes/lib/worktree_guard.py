@@ -793,11 +793,14 @@ def _resolve_single_operand_checkout(cwd, operand):
     return None
 
 
+_OTHER_REPO_OPTS = ("--git-dir", "--work-tree")
+
+
 def _targets_other_repo(keys, tokens):
     """True when a git segment names another repository or work tree (no cwd resolves it)."""
     opts = tokens[1:_skip_git_globals(tokens) or 1]
     return "GIT_DIR" in keys or "GIT_WORK_TREE" in keys or any(
-        o.split("=", 1)[0] in ("--git-dir", "--work-tree") or o == "-C" and v not in (".", "./")
+        o.split("=", 1)[0] in _OTHER_REPO_OPTS or o == "-C" and v not in (".", "./")
         for o, v in zip(opts, opts[1:] + [None]))
 
 
