@@ -258,23 +258,39 @@ def _logical_shell_lines(text):
     return logical
 
 
+def _halting_comment(line):
+    """True when the logical line is a `#` comment naming a non-zero exit and a halt (#2158)."""
+    stripped = line.strip().lower()
+    return stripped.startswith("#") and "non-zero exit" in stripped and "halt" in stripped
+
+
 def _scan_shell_text_violations(rel, text):
-    """Per-file shell census: each calibration_resolve.py invocation must have a halting || handler."""
+    """Per-file shell census: each calibration_resolve.py invocation must have a halting handler.
+
+    The handler is a `||` clause on the invocation's own logical line, or, for the one-plain-line
+    call form the plugin's approval hook accepts (which refuses `||`, #2158), a `#` comment on the
+    NEXT logical line that says a non-zero exit halts. The fall-open regexes apply to whichever
+    handler text was found.
+    """
     violations = []
     invocation_count = 0
     handled_count = 0
-    for line in _logical_shell_lines(text):
+    lines = _logical_shell_lines(text)
+    for idx, line in enumerate(lines):
         for match in _CALIBRATION_RESOLVE_INVOCATION.finditer(line):
             invocation_count += 1
             rest = line[match.end():]
             or_pos = rest.find("||")
-            if or_pos < 0:
+            if or_pos >= 0:
+                handler = rest[or_pos:]
+            elif idx + 1 < len(lines) and _halting_comment(lines[idx + 1]):
+                handler = lines[idx + 1]
+            else:
                 violations.append(
                     "%s: missing handler on calibration_resolve.py invocation" % rel
                 )
                 continue
             handled_count += 1
-            handler = rest[or_pos:]
             if (
                 _HANDLER_FALL_OPEN_EXISTS_FALSE.search(handler)
                 or _HANDLER_FALL_OPEN_LOCATION_NONE.search(handler)
@@ -361,7 +377,8 @@ def test_shell_census_no_fall_open_on_calibration_resolve():
     if violations:
         raise AssertionError(
             "INVARIANT: every calibration_resolve.py shell invocation must have a halting "
-            "|| handler that does not yield uncalibrated-looking output; violations: %s"
+            "|| handler (or a next-line `# … non-zero exit … halt …` comment) that does not "
+            "yield uncalibrated-looking output; violations: %s"
             % ", ".join(violations)
         )
 
@@ -391,6 +408,55 @@ def test_shell_census_fall_open_handler_violation():
     text = (
         "CAL=$(python3 -B \"$ROOT_DIR/lib/calibration_resolve.py\" resolve) "
         "|| CAL='{\"location\":\"none\",\"exists\":false}'\n"
+    )
+    violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert invocations == 1
+    assert handled == 1
+    assert violations == [
+        "fake.md: fall-open handler on calibration_resolve.py invocation"
+    ]
+
+
+def test_shell_census_next_line_halting_comment_clean():
+    text = (
+        "python3 -B <plugin root>/lib/calibration_resolve.py resolve\n"
+        "# A non-zero exit halts here: stop rather than assuming uncalibrated.\n"
+    )
+    violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert invocations == 1
+    assert handled == 1
+    assert violations == []
+
+
+def test_shell_census_plain_call_without_halting_comment_violation():
+    text = (
+        "python3 -B <plugin root>/lib/calibration_resolve.py resolve\n"
+        "CAL='<the JSON the resolve call printed>'\n"
+    )
+    violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert invocations == 1
+    assert handled == 0
+    assert violations == [
+        "fake.md: missing handler on calibration_resolve.py invocation"
+    ]
+
+
+def test_shell_census_comment_without_halt_is_not_a_handler():
+    text = (
+        "python3 -B <plugin root>/lib/calibration_resolve.py resolve\n"
+        "# A non-zero exit carries on with defaults.\n"
+    )
+    violations, _invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert handled == 0
+    assert violations == [
+        "fake.md: missing handler on calibration_resolve.py invocation"
+    ]
+
+
+def test_shell_census_fall_open_comment_violation():
+    text = (
+        "python3 -B <plugin root>/lib/calibration_resolve.py resolve\n"
+        '# A non-zero exit halts nothing: use {"location":"none","exists":false} instead.\n'
     )
     violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
     assert invocations == 1
