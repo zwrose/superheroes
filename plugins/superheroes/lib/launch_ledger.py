@@ -2675,8 +2675,24 @@ def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAU
             if not info.get("terminal"):
                 return _amend_response(False, reason="amend-not-terminal")
 
+            # A reoutcome only dedupes against one recorded at or after the lane's newest fix order (a
+            # `vet not-ready` with a finite ts), and is stamped no earlier than it, so it closes the reopening.
+            fix_order_ts = None
+            if kind == "reoutcome":
+                for existing in info.get("amendments") or []:
+                    ets = existing.get("ts")
+                    if (existing.get("kind") == "vet" and existing.get("value") == "not-ready"
+                            and isinstance(ets, (int, float)) and not isinstance(ets, bool)
+                            and math.isfinite(ets) and (fix_order_ts is None or ets > fix_order_ts)):
+                        fix_order_ts = ets
+
             if dedupe_identical:
                 for existing in info.get("amendments") or []:
+                    ets = existing.get("ts")
+                    if fix_order_ts is not None and not (
+                            isinstance(ets, (int, float)) and not isinstance(ets, bool)
+                            and math.isfinite(ets) and ets >= fix_order_ts):
+                        continue
                     if (existing.get("kind") == kind
                             and existing.get("value") == value
                             and existing.get("note") == note):
@@ -2690,7 +2706,7 @@ def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAU
             record = {
                 "event": AMENDMENT_EVENT,
                 "launchId": launch_id,
-                "ts": time.time(),
+                "ts": time.time() if fix_order_ts is None else max(time.time(), fix_order_ts),
                 "schema": SCHEMA,
                 "kind": kind,
                 "value": value,
