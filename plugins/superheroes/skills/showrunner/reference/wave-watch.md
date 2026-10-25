@@ -430,6 +430,21 @@ It reads the same issue-comments request as the builder note, so it costs no ext
 local lane's `lane-terminal`, `lane-blocked` or `builder-exited` is already due, the cloud reads are
 skipped that tick, so a cloud ending in the same tick surfaces on the next arm.
 
+A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
+moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the
+lane's session (`compose --fix-order`) once its `check` read delivered or a may-hold-text verdict; the relay opens the window at the
+message's own compose time (`sentAfter`), never at the check, so a re-check moves nothing. A
+`reoutcome` amendment, or a vet `ready` or `parked-blocker`, closes it; the newest opener must be later
+than the newest closer. When the fix order is also sent by message, record the vet `not-ready`
+before the message goes out: the window opens at the newest fix order, so a builder note or handback
+posted between a send and a later `not-ready` is not surfaced.
+The window runs from the fix order to the lane's first ending (handback, stop
+or park, a superseded park not counting): endings and notes from before the fix order are not
+re-reported, the closing ending fires `lane-terminal`, and nothing about the lane surfaces after it.
+A refused or never-started lane, and a local lane, are never re-opened. A not-ready lane whose fix
+goes to a fresh launch instead is passed `--ignore-launch`, or its vet is recorded `ready` or
+`parked-blocker` when done, so the old lane is not watched for an ending that will never come.
+
 What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
 unrepaired. On a **park**, answer it or route it; a parked lane is **never recovered**
@@ -470,7 +485,8 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; when the read was partial, the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only then) names the issues it left unread, and across an arm or a loop a lane named once stays named
+- `fix-order-unavailable` — the relay's state file could not be read, so a fix order relayed to a terminal cloud lane may go unseen; only `vet not-ready` amendments re-open lanes meanwhile
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
@@ -494,7 +510,9 @@ relay on that account can start.
 reading `success: true`.
 
 **Another account.** The answer goes through a relay, a background session on that account
-(`lib/cloud_relay.py`; `skills/workhorse/reference/cloud.md` has the builder's side). In order:
+(`lib/cloud_relay.py`; `skills/workhorse/reference/cloud.md` has the builder's side). A vet's fix
+order relayed to the lane's session is composed with `--fix-order`, and it re-opens the watch only once
+`check` reads delivered (or a may-hold-text verdict). In order:
 
 1. `python3 -B <plugin root>/lib/cloud_relay.py ensure --repo-root <root> --config-dir <configDir>`,
    before every relayed answer. It starts the relay if none is listed, which keeps it alive and
