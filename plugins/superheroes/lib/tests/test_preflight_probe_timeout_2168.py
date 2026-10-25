@@ -108,6 +108,33 @@ def test_timeout_keeps_vendor_live_discloses_it_and_is_never_cached(tmp_path):
     assert not os.path.exists(cache)
 
 
+def test_timeout_confined_to_the_nonpanel_set_is_disclosed_once():
+    panel_cell = _CODEX_CELL
+    extra_cell = next(c for c in MR.ladder("codex") if c[0] != panel_cell[0])
+
+    def _reply(argv, kwargs):
+        if argv[argv.index("-m") + 1] == extra_cell[0]:
+            return _timeout(argv, kwargs)
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    report = {}
+    live, _cells, _liv, notes, _src, _prov = pp.live_vendors_for_composition(
+        ["codex"], run=_run_answering(_reply),
+        needed_override={"codex": [panel_cell]},
+        extra_needed={"codex": [panel_cell, extra_cell]},
+        extra_report=report)
+    assert "codex" in live
+    assert ["codex", *extra_cell] in report["liveCells"]
+    timeout_notes = [n for n in notes if n.get("constraint") == liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT]
+    assert [(n["model"], n["effort"]) for n in timeout_notes] == [tuple(extra_cell)]
+
+    shared = pp.live_vendors_for_composition(
+        ["codex"], run=_run_answering(_timeout),
+        needed_override={"codex": [panel_cell]},
+        extra_needed={"codex": [panel_cell]})[3]
+    assert len([n for n in shared if n.get("constraint") == liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT]) == 1
+
+
 def test_outright_failure_still_excludes_vendor_and_caches(tmp_path):
     cache = str(tmp_path / "composition-liveness.json")
     live, _cells, _liv, notes, _src, _prov = pp.live_vendors_for_composition(

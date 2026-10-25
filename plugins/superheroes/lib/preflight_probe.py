@@ -715,6 +715,16 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
+    # A non-panel cell seated on a timed-out probe is disclosed like a panel one, once per cell;
+    # the extra set's other notes stay unsurfaced. (Only a fresh probe can time out: such a
+    # receipt is never cached.)
+    disclosed = {(n.get("vendor"), n.get("model"), n.get("effort")) for n in dead_notes
+                 if n.get("constraint") == liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT}
+    for note in liveness_cache.live_from(liveness, extra)[2]:
+        key = (note.get("vendor"), note.get("model"), note.get("effort"))
+        if note.get("constraint") == liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT and key not in disclosed:
+            disclosed.add(key)
+            notes.append(note)
     # A Codex floor refusal already marks every Codex cell dead in `liveness`; the other vendors'
     # successfully probed cells stay live evidence, so the refusal is not threaded in here.
     _fill_extra_report(extra_report, liveness, extra)
