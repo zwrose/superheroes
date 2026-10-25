@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.46.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.0...superheroes-v0.46.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **superheroes:** a fix leg never launches onto a cloud PR whose original builder is still alive ([#2131](https://github.com/zwrose/superheroes/issues/2131)) ([510b787](https://github.com/zwrose/superheroes/commit/510b78781d3c06c840a762d5fd1a5ada43a1745d))
+* **superheroes:** a late ruling re-renders a fixer order nobody has picked up, and an abandoned review session writes its own record ([#2145](https://github.com/zwrose/superheroes/issues/2145)) ([741fd2d](https://github.com/zwrose/superheroes/commit/741fd2daffe1e2470a8def5f8a6bd78e61e2fa7f))
+* **superheroes:** a PR with no review run gets no merge sheet; the owner merges it with their own click ([#2123](https://github.com/zwrose/superheroes/issues/2123)) ([a66b943](https://github.com/zwrose/superheroes/commit/a66b943ce3607f49774609d1d956b88c7d180813))
+* **superheroes:** a review record whose only open lines wait for the owner says so, instead of reading not reviewed ([#2143](https://github.com/zwrose/superheroes/issues/2143)) ([c038b2e](https://github.com/zwrose/superheroes/commit/c038b2ebf0285e88b8b14e5e9401f0ffa0645ca3))
+* **superheroes:** a scoped review after a handback writes a review record ([#2152](https://github.com/zwrose/superheroes/issues/2152)) ([c1ab7ff](https://github.com/zwrose/superheroes/commit/c1ab7ffcb23f37e259e9da9d7a7010727a4eb647))
+* **superheroes:** a supplied break-it test is written in the project's own directive form ([#2155](https://github.com/zwrose/superheroes/issues/2155)) ([45d9e21](https://github.com/zwrose/superheroes/commit/45d9e21b8570c6e06689f25c03894156f5a799f1))
+* **superheroes:** cloud builds say credential-like text is redacted, and a review record flags a redacted field ([#2130](https://github.com/zwrose/superheroes/issues/2130)) ([5c17b9a](https://github.com/zwrose/superheroes/commit/5c17b9aad3e4a9120b9d343be41105ceb45092f8))
+* **superheroes:** every implementer order carries the file-write rule ([#2138](https://github.com/zwrose/superheroes/issues/2138)) ([e4a86e9](https://github.com/zwrose/superheroes/commit/e4a86e978a53700cef7c1ff1e7c18962e9b5a175))
+* **superheroes:** harmless build deviations stay off the merge sheet, and costly ones keep a card ([#2141](https://github.com/zwrose/superheroes/issues/2141)) ([6776258](https://github.com/zwrose/superheroes/commit/67762589a09a6fd3b46919febcd71f29e63a6a7d))
+* **superheroes:** native implementers in a cloud build get the build worktree's installed dependencies ([#2139](https://github.com/zwrose/superheroes/issues/2139)) ([5348054](https://github.com/zwrose/superheroes/commit/53480542a835e7a73a468ac8e075732cc9d15fa6))
+* **superheroes:** record a lane's repeat outcome after a fix order in the launch ledger ([#2160](https://github.com/zwrose/superheroes/issues/2160)) ([27a9c5a](https://github.com/zwrose/superheroes/commit/27a9c5a2e0ed8ea63c997102c56f238ed2432b74))
+* **superheroes:** repo_doctor stops reading a shell keyword as the verify command's program ([#2134](https://github.com/zwrose/superheroes/issues/2134)) ([b69aaa7](https://github.com/zwrose/superheroes/commit/b69aaa79c7aca6c9dea1e6df9940394382e0a5ef))
+* **superheroes:** the advisor sends exactly the relay text it was shown, and the relay check blames only a step it can see ([#2135](https://github.com/zwrose/superheroes/issues/2135)) ([bfaaa65](https://github.com/zwrose/superheroes/commit/bfaaa65ef78402bb1ccc705b10c100dcc73548ea))
+* **superheroes:** the plugin approves its own review-loop and build helper scripts through a PreToolUse hook ([#2151](https://github.com/zwrose/superheroes/issues/2151)) ([25213cb](https://github.com/zwrose/superheroes/commit/25213cbda840159df2a8758167d5fe0c5e76d012))
+* **superheroes:** the review driver runs the verify gate and lands its own result, so a hand-written pass is refused ([#2144](https://github.com/zwrose/superheroes/issues/2144)) ([9bc329a](https://github.com/zwrose/superheroes/commit/9bc329a31956c1e4b132e6abeb52a99aea6b22e2))
+* **superheroes:** the s7 merge-word grader checks behaviour, not wording ([#2142](https://github.com/zwrose/superheroes/issues/2142)) ([c3eb800](https://github.com/zwrose/superheroes/commit/c3eb800625cfeb8b13bb277184f9d4a9a5a111a4))
+* **superheroes:** the skills call the hook-approved helper scripts in the one form the hook approves ([#2162](https://github.com/zwrose/superheroes/issues/2162)) ([ad87e0d](https://github.com/zwrose/superheroes/commit/ad87e0d84b255803c71b3a98c53c5a630e3108c5))
+* **superheroes:** the t9 break-it tests skip in the write sandbox, and the fixer-order timing sentence is exact ([#2128](https://github.com/zwrose/superheroes/issues/2128)) ([8eb4ced](https://github.com/zwrose/superheroes/commit/8eb4ced1fa0794a0082db4160612f89805d0dc95))
+* **superheroes:** the wave watch keeps watching a cloud lane sent a fix order ([#2153](https://github.com/zwrose/superheroes/issues/2153)) ([87df707](https://github.com/zwrose/superheroes/commit/87df7079c964ce691446df251d8f8b0abf5c424c))
+* **superheroes:** the worktree guard checks a bash -c or eval program as commands ([#2129](https://github.com/zwrose/superheroes/issues/2129)) ([76ea263](https://github.com/zwrose/superheroes/commit/76ea263e89a7c86ce9f4234fd6aa39b0cda3f1f1))
+
 ## [0.46.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.45.0...superheroes-v0.46.0) (2026-10-24)
 
 
