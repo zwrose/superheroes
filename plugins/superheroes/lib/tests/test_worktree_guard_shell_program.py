@@ -502,3 +502,46 @@ def test_quoted_redirection_target_attached_to_a_destructive_word_is_unreadable(
 ])
 def test_angle_brackets_inside_quoted_git_arguments_stay_allowed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
+# --- a lone checkout sent to another repository is never resolved against this one ---
+
+@pytest.mark.parametrize("command", [
+    "git -C ../other checkout main",
+    "git -C /other checkout main",
+    "GIT_DIR=/other/.git git checkout main",
+    "GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main",
+    "git --git-dir=/other/.git checkout main",
+    "git --git-dir /other/.git checkout main",
+    "git --work-tree=/x checkout f.txt",
+    "git -C . -C ../other checkout main",
+    "bash -c 'git -C ../other checkout f.txt'",
+    "bash -c 'GIT_DIR=/other/.git git checkout main'",
+    "eval 'git --work-tree=/x checkout f.txt'",
+    "if true; then GIT_DIR=/other/.git git checkout main; fi",
+])
+def test_a_lone_checkout_sent_to_another_repository_is_refused(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == (
+        "deny", wg.indeterminate_message("checkout-path")), command
+
+
+@pytest.mark.parametrize("command", [
+    "git -C . checkout main",
+    "git checkout main",
+    "git checkout -b feature",
+    "git switch main",
+    "git -C ../other status",
+    "git -C ../other switch main",
+    "git -C ../other checkout -b feature",
+    "bash -c 'git -C . checkout main'",
+    "bash -c 'git -C ../other log'",
+])
+def test_a_checkout_in_this_repository_or_a_harmless_other_repository_command_stays_allowed(
+        command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command
+
+
+def test_the_refusal_for_another_repository_names_switch():
+    message = wg.indeterminate_message("checkout-path")
+    assert "git -C <dir> switch <branch>" in message
+    assert "Next step:" in message

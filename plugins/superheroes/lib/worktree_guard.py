@@ -63,6 +63,8 @@ _INDETERMINATE_TEMPLATE = (
     + " it as a plain `git ...` command from inside the "
     "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
     "`GIT_DIR`/`GIT_WORK_TREE`). "
+    "A lone `git checkout <branch>` sent to another repository can be written "
+    "`git -C <dir> switch <branch>` instead. "
     + _DURING_A_MERGE
 )
 
@@ -793,6 +795,14 @@ def _resolve_single_operand_checkout(cwd, operand):
     return None
 
 
+def _targets_other_repo(keys, tokens):
+    """True when a git segment names another repository or work tree (no cwd resolves it)."""
+    opts = tokens[1:_skip_git_globals(tokens) or 1]
+    return "GIT_DIR" in keys or "GIT_WORK_TREE" in keys or any(
+        o.split("=", 1)[0] in ("--git-dir", "--work-tree") or o == "-C" and v not in (".", "./")
+        for o, v in zip(opts, opts[1:] + [None]))
+
+
 def _segment_destructive_action(parsed, cwd=None):
     """Resolve one parsed git invocation to a destructive action, or None if safe."""
     action = _segment_action(parsed)
@@ -988,7 +998,7 @@ def segment_accounting(command, cwd=None, _depth=0):
             else:
                 records.extend(segment_accounting(shape[1], cwd, _depth + 1))
             continue
-        _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
+        keys, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
         wrapped = (core := _skip_builtins(tokens)) != tokens and core and _is_git_token(core[0]) and (_parse_git_invocation(core) or {}).get("subcommand") in _DESTRUCTIVE_SUBCOMMANDS
         mentions = wrapped or _segment_mentions_destructive_git(segment)
@@ -1005,7 +1015,7 @@ def segment_accounting(command, cwd=None, _depth=0):
             records.append({"segment": segment, "kind": "unreadable-program", "action": None})
             continue
         if parsed is not None and parsed["subcommand"] in _DESTRUCTIVE_SUBCOMMANDS and not attached:
-            action = _segment_destructive_action(parsed, cwd)
+            action = _segment_destructive_action(parsed, None if _targets_other_repo(keys, tokens) else cwd)
             if action is not None:
                 records.append({
                     "segment": segment,

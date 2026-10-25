@@ -137,6 +137,7 @@ A deviation is costly when a promised check did not run, or work bypassed its ow
 - Inside a program, an `exec`, `command` or `builtin` with any word holding `$`, a backtick or a backslash is refused the same way, `command -v "$TOOL"` included; `command -v git` stays allowed.
 - Leading shell words and environment assignments are skipped in any order (`then LC_ALL=C bash -c ...`) before the guard reads the command word.
 - A known wrapper (`timeout`, `env`, `nohup`, `nice`, `sudo`, `xargs` and the like) before a `bash`/`sh`/`zsh` `-c` is refused as an unreadable program. `find -exec`, another interpreter's `-c` and a script file are not read.
+- A lone `git checkout <x>` sent to another repository (`git -C <dir>`, `--git-dir`, `--work-tree`, or a `GIT_DIR`/`GIT_WORK_TREE` assignment) is refused, at top level and inside a program, because the guard cannot tell whether `<x>` is a path there. `git -C . checkout main` is allowed. The refusal names the next step: run it from inside that repository, or write `git -C <dir> switch <branch>`.
 
 ## 0.46.0
 
