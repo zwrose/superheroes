@@ -1666,6 +1666,34 @@ def _write_verify_payload(session_dir, payload, attempt=None):
     return path
 
 
+def _verb_run(exit_code=0, output=b"verify output\n", calls=None):
+    """The `run` seam of `RD.cmd_run_verify`: a finished process with this exit status and output."""
+    def run(argv, **kw):
+        if calls is not None:
+            calls.append((argv, kw))
+        return subprocess.CompletedProcess(argv, exit_code, stdout=output)
+    return run
+
+
+def _land_verify_via_verb(session_dir, command="make test", exit_code=0, output=b"verify output\n",
+                          as_record=False):
+    """Land the pending `run-verify` slot the way production does (#2133): the driver runs the bound
+    verify command — the `run` seam stands in for the process — and writes the landing and its
+    journal row itself. Returns the landed payload. With `as_record` the same payload rides a durable
+    seat record instead of the bare file (the seat-record route)."""
+    state = _state(session_dir)
+    state["config"]["verifyCommand"] = command
+    RD.save_state(session_dir, state)
+    out = RD.cmd_run_verify(session_dir, run=_verb_run(exit_code, output))
+    assert out["ok"] is True, out
+    payload, err = RR.read_json(out["landingPath"])
+    assert err is None, err
+    if as_record:
+        os.remove(out["landingPath"])
+        _land_and_record(session_dir, "verify", payload=payload)
+    return payload
+
+
 # --- orchestrator-fulfilled phases (#960) ------------------------------------
 
 
@@ -1704,7 +1732,7 @@ def test_advance_folds_run_verify_from_host_payload_without_manifest(tmp_path, a
     assert _advance(d, tmp_path)["ok"] is True
     _pending_at_run_verify(d)
     assert not os.path.exists(RD._orders_manifest_path(d, 1, RD.P_VERIFY, 0))
-    _write_verify_payload(d, {"result": "pass"})
+    _land_verify_via_verb(d)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out["folded"] == {"phase": RD.P_VERIFY, "round": 1, "attempt": 0}
@@ -1769,7 +1797,7 @@ def test_advance_folds_run_verify_from_seat_record_without_bare_payload(tmp_path
     _record_all_panel_seats(d)
     assert _advance(d, tmp_path)["ok"] is True
     _pending_at_run_verify(d)
-    _land_and_record(d, "verify", payload={"result": "pass", "command": "none", "exit": 0})
+    _land_verify_via_verb(d, as_record=True)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out["folded"] == {"phase": RD.P_VERIFY, "round": 1, "attempt": 0}
@@ -1814,7 +1842,7 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
     assert not os.path.exists(_verify_store_path(d))                              # A/B
-    _write_verify_payload(d, {"result": "pass"})
+    landed = _land_verify_via_verb(d)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert _state(d)["rounds"]["1"]["verifyResult"] == "pass"
@@ -1827,8 +1855,8 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
     assert record["schema"] == expected_schema
     assert record["phase"] == RD.P_VERIFY and record["seat"] == "verify"
     assert record["round"] == 1 and record["attempt"] == 0 and record["occurrence"] == 0
-    assert record["payload"] == {"result": "pass"}
-    assert record["payloadSha256"] == RR.payload_sha256({"result": "pass"})
+    assert record["payload"] == landed
+    assert record["payloadSha256"] == RR.payload_sha256(landed)
     # No orders manifest and no anchor exist for an orchestrator-fulfilled phase, so the record may
     # only carry the `not-emitted` literal — the one claim `_anchor_check` accepts unanchored.
     assert record["orderSha256"] == RR.NOT_EMITTED
@@ -1844,7 +1872,7 @@ def test_orchestrator_fulfilled_recorded_journal_carries_stored_envelope_revisio
     complete revision identity — provenance and execution-evidence markers — not the triple alone."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
+    _land_verify_via_verb(d)
     assert _advance(d, tmp_path)["ok"]
     recorded = [e for e in _outcomes(d, "recorded") if e.get("seat") == "verify"]
     assert recorded
@@ -1861,14 +1889,15 @@ def test_orchestrator_fulfilled_fold_writes_record_and_receipt_on_a_terminal_ver
     """A verify `fail` folds to a terminal halt: `round-receipt.json` AND the seat record land."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "fail"})
+    landed = _land_verify_via_verb(d, exit_code=3)
+    assert landed["result"] == "fail"
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("terminal") == "halted", out
     assert os.path.exists(os.path.join(d, RD.RECEIPT_FILE))
     record, err = RR.read_json(_verify_store_path(d))
     assert err is None, err
-    assert record["payload"] == {"result": "fail"}
+    assert record["payload"] == landed
 
 
 def test_orchestrator_fulfilled_record_and_journal_reconcile_clean(tmp_path, adapters):
@@ -1881,7 +1910,7 @@ def test_orchestrator_fulfilled_record_and_journal_reconcile_clean(tmp_path, ada
     the fold builds rather than its aftermath."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
+    _land_verify_via_verb(d)
     assert _advance(d, tmp_path)["ok"] is True
     rec = RR.reconcile(d, 1, RD.P_VERIFY, RD._journal_record_identities(d, 1, RD.P_VERIFY))
     assert rec["reappend"] == []
@@ -1910,7 +1939,7 @@ def test_durable_record_rides_the_folds_own_commit_intent(tmp_path, adapters, mo
     monkeypatch.setattr(RD.round_commit, "begin", spy)
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
+    _land_verify_via_verb(d)
     seen.clear()          # drop setup's own commits — only the verify fold is under inspection
     assert _advance(d, tmp_path)["ok"] is True
 
@@ -1932,7 +1961,7 @@ def test_orchestrator_fold_refuses_to_write_a_record_with_no_session_id(tmp_path
     path does not route through that validation, so it owes its own check."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
+    _land_verify_via_verb(d)
     meta = os.path.join(d, RR.META_FILE)
     with open(meta, encoding="utf-8") as fh:
         saved = fh.read()
@@ -2007,7 +2036,7 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     )
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
+    landed = _land_verify_via_verb(d)
     assert _advance(d, tmp_path)["ok"] is True                       # A/B: the fold itself works
     folded = _state(d)
     folded["step"] = RD.P_VERIFY
@@ -2021,7 +2050,7 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
                if e.get("outcome") == "recorded" and e.get("phase") == RD.P_VERIFY]
     assert len(records) == 1, records
     stored, err = RR.read_json(_verify_store_path(d))
-    assert err is None and stored["payload"] == {"result": "pass"}
+    assert err is None and stored["payload"] == landed
 
 
 def test_advance_refuses_landing_ambiguous_when_payload_and_record_both_present(tmp_path, adapters):
@@ -2045,14 +2074,13 @@ def test_landing_ambiguous_ab_each_artifact_alone_still_folds(tmp_path, adapters
     """The A/B halves of the refusal above: record alone folds; bare payload alone folds."""
     record_only = _session(tmp_path, name="record-only")
     _at_run_verify(tmp_path, record_only)
-    _land_and_record(record_only, "verify",
-                     payload={"result": "pass", "command": "none", "exit": 0})
+    _land_verify_via_verb(record_only, as_record=True)
     assert _advance(record_only, tmp_path)["ok"] is True
     assert _state(record_only)["rounds"]["1"]["verifyResult"] == "pass"
 
     payload_only = _session(tmp_path, name="payload-only")
     _at_run_verify(tmp_path, payload_only)
-    _write_verify_payload(payload_only, {"result": "pass"})
+    _land_verify_via_verb(payload_only)
     assert _advance(payload_only, tmp_path)["ok"] is True
     assert _state(payload_only)["rounds"]["1"]["verifyResult"] == "pass"
 
@@ -3960,7 +3988,7 @@ def _above_ceiling_orchestrator_session(tmp_path, adapters,
     state["pending"] = {"action": RD.P_VERIFY, "round": reached_round, "phase": RD.P_VERIFY,
                         "attempt": 0, "payload": {"command": "none"}}
     RD.save_state(d, state)
-    _write_verify_payload(d, {"result": "pass"})
+    _land_verify_via_verb(d)
     return d
 
 

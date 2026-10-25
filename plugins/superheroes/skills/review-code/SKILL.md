@@ -385,7 +385,7 @@ In PR mode, end the review by writing the review record per `${CLAUDE_PLUGIN_ROO
 
 ## The verify command
 
-The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both run the project's own verify command, read from the resolved profile (`$PROFILE`)'s `## Verify` section during Setup. There are three branches:
+The orchestrator's verify gate (loop step 12, run through `round_driver.py run-verify`, which runs the command and lands the result itself) and the fixer (prompt step 3) both run the project's own verify command, read from the resolved profile (`$PROFILE`)'s `## Verify` section during Setup. There are three branches:
 
 - **`command: <cmd>` →** `VERIFY_CMD="<cmd>"`. Both the orchestrator's gate and the fixer run `VERIFY_CMD` from the user's own working tree (never the PR head), non-interactively, with a timeout. A non-zero exit is a **HALT / `CHECK_FAILED`** — the orchestrator surfaces the failing output and does not re-review on a broken tree.
 - **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer to skip checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
