@@ -191,10 +191,34 @@ def test_a_destructive_git_behind_a_bare_execution_builtin_is_still_denied(comma
     "exec git -c \"user.name=Some Name\" clean -fx",
     "git clean -fd 2>&1> --dry-run",
     "git restore . 2>&1> --staged",
+    "exec -aextra \"git\" reset --hard",
+    "exec -ca alt \"git\" reset --hard",
+    "exec -a git \"git\" reset --hard",
+    "env -u FOO \"git\" reset --hard",
+    "env -iu FOO \"git\" reset --hard",
 ])
 def test_a_wrapped_destructive_git_is_refused_as_unaccounted_never_parsed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unparsed_message()), command
     assert [r["kind"] for r in wg.segment_accounting(command)] == ["unaccounted"], command
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'exec -aextra \"git\" reset --hard'",
+    "bash -c 'exec -a git \"git\" reset --hard'",
+    "bash -c 'env -u FOO \"git\" clean -fd'",
+])
+def test_an_option_after_an_execution_builtin_in_a_program_is_unreadable(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command
+
+
+@pytest.mark.parametrize("command", [
+    "env -i git status",
+    "exec -a alt git status",
+    "env -u FOO git diff",
+    "bash -c 'env -i git status'",
+])
+def test_an_option_before_a_harmless_wrapped_git_stays_allowed(command, dirty_repo):
+    assert wg.classify(command, dirty_repo) == ("allow", ""), command
 
 
 def test_a_separated_heredoc_operator_consumes_its_delimiter(dirty_repo):

@@ -1113,13 +1113,17 @@ def mentions_destructive_git(command):
 
 
 def _skip_builtins(tokens, wide=True):
-    """Detection only, never parsed: tokens past exec/command/builtin (wide: env too) words and options."""
+    """Detection only: past exec/command/builtin (wide: env) words; wide never parses an option's value, returns the first later git suffix naming a discard."""
     while tokens and (tokens[0] in _EXECUTION_BUILTINS or wide and tokens[0] == "env"):
         builtin, tokens = tokens[0], _command_tokens(tokens[1:])[1] if wide else tokens[1:]
         while tokens and tokens[0].startswith("-"):
             if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
                 return []
-            tokens = tokens[2:] if wide and tokens[0][1:2] != "-" and tokens[0].endswith(("a", "u")) else tokens[1:]
+            if wide:  # an option's value is never parsed: a later git word naming a discard is the command
+                gits = [tokens[i:] for i in range(1, len(tokens)) if _is_git_token(tokens[i])]
+                return next((g for g in gits if (_parse_git_invocation(g) or {}).get("subcommand")
+                             in _DESTRUCTIVE_SUBCOMMANDS), tokens[1:])
+            tokens = tokens[1:]
     return tokens
 
 
