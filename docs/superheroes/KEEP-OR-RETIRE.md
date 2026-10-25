@@ -819,9 +819,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   and `_archive_departures` (every departure lands in the ledger); the refusal surfaced as the
   certification writer's (retired) "finding has no disposition recorded".
 - **Start date.** 2026-09-26.
-- **Condition.** Citation-based, 45 days: vet, review or incident receipts citing the staging or
-  departure-archive refusal as the thing that stopped a finding escaping the record. On firing, a
-  proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days: vet, review or incident receipts citing the staging seed
+  or the departure archive as the thing that kept a finding in the ledger when it would otherwise
+  have left the record. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -953,8 +953,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-18.
 - **Condition.** Usage-based, 60 days: the signal is CLI/advance invocations that write
   `round-receipt-interim.json` against review sessions run in the same window — a zero count means
-  the interim path is unused. (Reworded at gardening pass 5: terminal certifications no longer
-  exist, so the old denominator was always zero.) On
+  the interim path is unused. (Reworded at gardening pass 5: the old denominator counted
+  certifications from the certification writer, which is retired.) On
   firing, a retirement proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
@@ -965,7 +965,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
 
 - **Component.** `test_receipt_disclosures_home.py` — by-construction identity assertions over each
-  leaf module's own `__all__`: every name the driver re-exports must be
+  leaf module's own `__all__`: every name the driver or `round_records` re-exports must be
   the same function object as the leaf defines, so a re-introduced mirror copy fails instead of
   drifting quietly; it costs two import walks per suite run.
 - **Start date.** 2026-09-18.
@@ -978,8 +978,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `declared_disclosures` in the writer).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — one home per shared vocabulary is a property of how the driver's re-export
-  boundary is built; the test's export list is the coverage, not a hand-maintained duplicate list.
+- **Notes.** structural — one home per shared vocabulary is a property of how the driver's and
+  `round_records`' re-export boundaries are built; the test's export list is the coverage, not a hand-maintained duplicate list.
   No engine family applies: it guards import identity, not model behaviour.
 
 #### D25 — Certification fixture generator drift test
@@ -1691,8 +1691,8 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 
 #### J2 — The merge sheet
 
-- **Component.** `pr_sheet.py`, `sheet_prose.py`, `sheet_title.py` and the review template, about
-  2,300 lines: the page every merge word is given on. It costs the plugin's most complex function
+- **Component.** `pr_sheet.py`, `sheet_prose.py` and `sheet_title.py` (about 2,300 lines) and the
+  review template (about 3,400 more): the page every merge word is given on. It costs the plugin's most complex function
   (`pr_sheet.build`, 151 branches at guardian sweep e8ff9189).
 - **Start date.** 2026-10-25.
 - **Condition.** Usage-based, 60 days: sheets published for merges over the window. On firing, a
@@ -1711,16 +1711,18 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Start date.** 2026-10-25.
 - **Condition.** Usage-based, 60 days: stack merges executed over the window. On firing, a proposal
   to the owner at a gardening pass.
-- **Last demonstrated benefit.** Stack #2156 merged whole on 2026-10-25.
+- **Last demonstrated benefit.** The native stack numbered 2156 on GitHub merged whole on
+  2026-10-25.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** harness-limit — it works around GitHub's stack tooling being a preview; a stable host
-  feature would retire most of it.
+- **Notes.** harness-limit — it works around a cloud session's proxy refusing GitHub's GraphQL API
+  (`stack_check.py` falls back to REST on that refusal); a host that lets cloud sessions reach stacks
+  directly would retire most of it.
 
 #### J4 — The break-it runner
 
 - **Component.** The break-it runner and its doctrine (`lib/break_it.py` and the test role's
-  break-it tests), about 2,700 lines.
+  break-it tests); `break_it.py` alone is about 1,250 lines.
 - **Start date.** 2026-10-25.
 - **Condition.** Catch-based, 45 days: break-it tests credited with a real catch (a fix the review
   record ties to a break-it test) over the window. On firing (no catch), a proposal to the owner at a
