@@ -922,6 +922,7 @@ def test_compose_refusals(world):
 
 
 def test_compose_refuses_a_session_id_and_names_where_to_read_the_name(world):
+    # axis: refusal — a `session_` id refuses `session-id-not-name` with the name shape and where to read it, writing no state — see bite-proof record wo_2166_session_id.md (G1)
     out = cr.compose(world.repo, world.config, "session_01AbCdEf", "x", env=world.env)
     assert out["ok"] is False and out["reason"] == "session-id-not-name"
     assert out["session"] == "session_01AbCdEf"
@@ -931,6 +932,7 @@ def test_compose_refuses_a_session_id_and_names_where_to_read_the_name(world):
 
 @pytest.mark.parametrize("session", ["issue-2166-3fa9c1d2", SESSION, "Session_x", "my-session_1", "session"])
 def test_compose_still_accepts_a_name_and_every_other_value(world, session):
+    # axis: boundary — only the exact case-sensitive leading `session_` is refused; another case, an embedded `session_` or a bare `session` composes — see bite-proof record wo_2166_session_id.md (G2, G3)
     out = _compose(world, session=session)
     assert out["relayMessage"].startswith("RELAY to %s (id " % session)
 

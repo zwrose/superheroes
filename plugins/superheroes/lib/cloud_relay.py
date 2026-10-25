@@ -221,6 +221,7 @@ def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
         return _refuse("config-dir-invalid")
     if not isinstance(session, str) or not session or "\n" in session:
         return _refuse("session-name-invalid")
+    # axis: a value opening with the exact, case-sensitive `session_` is refused before any state write; every other value composes — see bite-proof record wo_2166_session_id.md
     if session.startswith(SESSION_ID_PREFIX):
         return _refuse("session-id-not-name", session=session, message=SESSION_ID_NOT_NAME_MESSAGE)
     body = text.rstrip() if isinstance(text, str) else ""
