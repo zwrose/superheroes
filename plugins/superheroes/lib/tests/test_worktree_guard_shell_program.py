@@ -149,6 +149,7 @@ def test_the_backstop_fires_only_at_an_executable_command_position(command, dirt
     "TOOL=git bash -c 'exec -ax \"$TOOL\" reset --hard'",
     "TOOL=git bash -c 'exec -agit \"$TOOL\" reset --hard'",
     "TOOL=git bash -c 'exec -aalt \"$TOOL\" reset --hard'",
+    "bash -c 'exec -ca alt \"git\" reset --hard'",
     "bash -c 'command -v \"$TOOL\"'",
     "TOOL=git bash -c 'env \"$TOOL\" reset --hard'",
     "TOOL=git bash -c 'timeout 5 \"$TOOL\" reset --hard'",
@@ -185,6 +186,7 @@ def test_a_destructive_git_behind_a_bare_execution_builtin_is_still_denied(comma
 @pytest.mark.parametrize("command", [
     "env GIT_DIR=/other/.git GIT_WORK_TREE=/other git reset --hard",
     "exec git clean -fx",
+    "exec -ca alt git reset --hard",
     "command git restore --source=other draft.txt",
     "exec git -c \"user.name=Some Name\" clean -fx",
     "git clean -fd 2>&1> --dry-run",

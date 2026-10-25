@@ -1119,7 +1119,7 @@ def _skip_builtins(tokens, wide=True):
         while tokens and tokens[0].startswith("-"):
             if builtin == "command" and ("v" in tokens[0] or "V" in tokens[0]):
                 return []
-            tokens = tokens[2:] if wide and tokens[0] in ("-a", "-u") else tokens[1:]
+            tokens = tokens[2:] if wide and tokens[0][1:2] != "-" and tokens[0].endswith(("a", "u")) else tokens[1:]
     return tokens
 
 
