@@ -12,11 +12,11 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.46.1
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.46.1. Each step names the note it comes from.
 
 - **After switching.** **An advisor launching an adoption (a premise with `adoptsBranch`) on an issue with an earlier cloud lane that started a session passes the builders' account's session listing with `--cloud-sessions-file`; without it the launch refuses `adopt-original-session-unread`, unless every such lane ended as a refusal or was recorded stopped on a handover. Nothing else is owed.** See [Launcher: an adoption onto a live original cloud builder is refused](#launcher-an-adoption-onto-a-live-original-cloud-builder-is-refused).
 - **After switching.** **An advisor building a PR or stack sheet for an open PR whose body lists a `[costly]` or unlabelled deviation with no line under What we're accepting gets a refusal naming each one; the PR's builder labels it or carries its text into What we're accepting, then the sheet builds.** A harmless build deviation stays in the PR body's build record and no longer gets its own merge-sheet card; a costly one keeps its card until its fix lands, and doubt sorts costly. See [Build deviations: only costly ones are accepted on the merge sheet](#build-deviations-only-costly-ones-are-accepted-on-the-merge-sheet).
