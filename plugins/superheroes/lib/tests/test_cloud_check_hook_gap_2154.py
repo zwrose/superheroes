@@ -305,7 +305,32 @@ def test_a_plain_and_a_failed_lane_with_one_reason_print_only_the_recheck_fix():
     failed = dict(TLR._call(reason="calibration", by="word"), failedCheck=["calibration"])
     third = TLR._call(reason="no-setup", pointed=True)
     recheck = TLR.SETUP_TEXT_FIX + " " + CHECK_AGAIN
-    report = launch_report.render_report([TLR._lane(1, plain), TLR._lane(2, third),
-                                          TLR._lane(3, failed)])
+    report = launch_report.render_report([TLR._lane(1, failed), TLR._lane(2, third),
+                                          TLR._lane(3, plain)])
     assert report.endswith(recheck)
     assert report.count(TLR.SETUP_TEXT_FIX) == 1
+
+
+def test_one_gap_with_a_failed_hook_part_prints_only_the_recheck_fix():
+    lanes = [
+        {"issue": 1, "title": "a",
+         "placeCall": _hook_call(hookGap="script-differs", failedCheck=["hook"])},
+        {"issue": 2, "title": "b", "placeCall": _hook_call(hookGap="script-differs")},
+        TLR._lane(3, TLR._call("cloud")),
+    ]
+    report = launch_report.render_report(lanes)
+    recheck = launch_place.fix_text(_hook_call(hookGap="script-differs", failedCheck=["hook"]))
+    plain = launch_place.fix_text(_hook_call(hookGap="script-differs"))
+    assert recheck.endswith(CHECK_AGAIN)
+    assert report.endswith(recheck)
+    assert report.count(plain) == 1
+
+
+def test_a_ledger_gap_that_is_not_a_string_still_renders_the_report():
+    lanes = [
+        {"issue": 1, "title": "a", "placeCall": _hook_call(hookGap=["script-missing"])},
+        TLR._lane(2, TLR._call("cloud")),
+    ]
+    report = launch_report.render_report(lanes)
+    assert isinstance(report, str)
+    assert launch_place.REASONS["dependency-hook"]["fix"] in report
