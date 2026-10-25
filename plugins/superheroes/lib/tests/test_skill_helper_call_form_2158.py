@@ -45,9 +45,10 @@ POPULATION_FLOOR = 33
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
-# A documentation placeholder opens with `<` and closes with `>` hugging non-space text; a shell
-# redirect (`< file >`) has whitespace inside the operators and is never erased.
-_PLACEHOLDER = re.compile(r"<(?=\S)[^<>]*(?<=\S)>")
+# A documentation placeholder is `<` + a word-led phrase of letters, digits, spaces and light
+# punctuation + `>`. It never holds `/`, `\`, `|`, `&`, `;`, `$` or a quote, so a shell redirect
+# (`< f >`, `</tmp/in>/tmp/out`) is never erased and the leftover angle bracket is refused.
+_PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9 ,.'…_-]*>")
 _INLINE_SPAN = re.compile(r"`([^`\n]+)`")
 _FORBIDDEN_ROOT_DIR = re.compile(
     r"\$(?:\{ROOT_DIR\}|ROOT_DIR)/lib/(?:%s)\.py" % _NINE_ALT
@@ -75,10 +76,19 @@ def _call_forms_in_text(rel, text):
     in_fence = False
     pending = []  # physical lines of a fenced command continued with a trailing backslash
     pending_start = 0
+
+    def flush():
+        # A pending command is collected whenever it ends: a closing fence and EOF end it too.
+        nonlocal pending
+        joined = "\n".join(pending)
+        pending = []
+        if joined and _is_call_text(joined):
+            forms.append(Form(rel, pending_start, 0, joined))
+
     for lineno, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("```"):
+            flush()
             in_fence = not in_fence
-            pending = []
             continue
         if in_fence:
             if not pending:
@@ -86,16 +96,14 @@ def _call_forms_in_text(rel, text):
             pending.append(line.strip())
             if line.rstrip().endswith("\\"):
                 continue
-            joined = "\n".join(pending)
-            pending = []
-            if _is_call_text(joined):
-                forms.append(Form(rel, pending_start, 0, joined))
+            flush()
             continue
         nth = 0
         for match in _INLINE_SPAN.finditer(line):
             if _is_call_text(match.group(1)):
                 forms.append(Form(rel, lineno, nth, match.group(1).strip()))
                 nth += 1
+    flush()
     return forms
 
 
@@ -314,8 +322,17 @@ def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
     session, repo = scene
     base = "python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>"
     assert _judge(base, _PLUGIN, session, repo) is None
-    miss = _judge(base + " < /tmp/input > /tmp/output", _PLUGIN, session, repo)
-    assert miss is not None, miss
+    for redirect in (" < /tmp/input > /tmp/output", " </tmp/input>/tmp/output", " </tmp/in >/tmp/out"):
+        miss = _judge(base + redirect, _PLUGIN, session, repo)
+        assert miss is not None and "unreplaced placeholder" in miss, (redirect, miss)
+
+
+@pytest.mark.parametrize("boundary", ["\\\n```\n", "\\\n"])
+def test_a_trailing_backslash_at_a_fence_or_eof_boundary_is_collected_and_flagged(boundary):
+    text = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir> " + boundary
+    forms = _call_forms_in_text("fake.md", text)
+    assert len(forms) == 1, forms
+    assert "ends in a backslash continuation" in _shape_problems(forms[0].text)
 
 
 def test_population_check_fails_an_empty_population(tmp_path):
