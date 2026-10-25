@@ -186,6 +186,9 @@ def test_a_destructive_git_behind_a_bare_execution_builtin_is_still_denied(comma
     "env GIT_DIR=/other/.git GIT_WORK_TREE=/other git reset --hard",
     "exec git clean -fx",
     "command git restore --source=other draft.txt",
+    "exec git -c \"user.name=Some Name\" clean -fx",
+    "git clean -fd 2>&1> --dry-run",
+    "git restore . 2>&1> --staged",
 ])
 def test_a_wrapped_destructive_git_is_refused_as_unaccounted_never_parsed(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unparsed_message()), command
@@ -426,6 +429,9 @@ def test_a_real_redirection_after_a_harmless_checkout_is_dropped(dirty_repo):
     "sh -c> /tmp/x 'git reset --hard'",
     "zsh -oerrexit -c 'git reset --hard'",
     "bash -c 'exec \"git\" reset --hard'",
+    "bash -c 'exec \"git\" -c \"user.name=Jane Doe\" reset --hard'",
+    "bash -c 'exec \"git\" -c \"core.editor=echo hi\" reset --hard'",
+    "bash -c 'git restore . 2>&1> --staged'",
 ])
 def test_eval_behind_a_wrapper_and_an_expandable_option_value_are_unreadable(command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("deny", wg.unreadable_program_message()), command

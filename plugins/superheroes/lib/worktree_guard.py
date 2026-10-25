@@ -990,12 +990,13 @@ def segment_accounting(command, cwd=None, _depth=0):
             continue
         _, tokens = _command_tokens(_drop_redirections(tokens, all_raw))
         parsed =_parse_git_invocation(tokens) if tokens and _is_git_token(tokens[0]) else None
-        wrapped = (core := _skip_builtins(tokens)) != tokens and core and _is_git_token(core[0]) and _segment_mentions_destructive_git(" ".join(core))
+        wrapped = (core := _skip_builtins(tokens)) != tokens and core and _is_git_token(core[0]) and (_parse_git_invocation(core) or {}).get("subcommand") in _DESTRUCTIVE_SUBCOMMANDS
         mentions = wrapped or _segment_mentions_destructive_git(segment)
         # A raw word still holding < or > outside its quoted spans after the real redirections
         # went hides what Bash consumes.
-        attached = (mentions or parsed is not None) and any(
-            re.search("[<>]", re.sub(r"'[^']*'|\"[^\"]*\"", "", w)) for w in _drop_redirections(all_raw))
+        attached = (mentions or parsed is not None) and (any(
+            len(re.findall("[<>]+", re.sub(r"'[^']*'|\"[^\"]*\"", "", w))) > 1 for w in all_raw) or any(
+            re.search("[<>]", re.sub(r"'[^']*'|\"[^\"]*\"", "", w)) for w in _drop_redirections(all_raw)))
         if _depth >= 1 and (attached or wrapped or tokens and (
                 any(c in tokens[0] for c in "$`\\")
                 or (os.path.basename(tokens[0]) in _WRAPPER_WORDS | _EXECUTION_BUILTINS
