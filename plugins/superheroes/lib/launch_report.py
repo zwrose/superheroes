@@ -159,10 +159,12 @@ def render_report(lanes):
             shared = [lane["placeCall"] for lane in local if lane["placeCall"].get("reason") == code]
             if shared:
                 # one fix line per (reason, hook gap) pair, the recheck-carrying call's: every call
-                # but a dependency-hook one has no hook gap, so those reasons print one line each
+                # but a dependency-hook one has no hook gap, so those reasons print one line each;
+                # a gap read back from a ledger record that is not a string groups as no gap
                 groups = {}
                 for call in shared:
-                    groups.setdefault(call.get("hookGap"), []).append(call)
+                    gap = call.get("hookGap")
+                    groups.setdefault(gap if isinstance(gap, str) else None, []).append(call)
                 for group in groups.values():
                     line = _fix_line(code, _recheck_first(group))
                     if line not in fixes:
