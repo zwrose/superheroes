@@ -18,6 +18,7 @@ from test_wave_watch_cloud import repo  # noqa: F401
 
 _LAUNCH = "cloud-a"
 _EVIDENCE = "re-handed back after the narrow fix"
+_FIRST_EVIDENCE = "built and gated"
 
 
 class _SteppedTime:
@@ -35,7 +36,7 @@ class _SteppedTime:
 
 def _handed_back(repo_root, launch_id=_LAUNCH, issue=101):
     _cloud_lane(repo_root, launch_id, issue)
-    assert ll.record_outcome(repo_root, launch_id, "handback", "built and gated")["ok"] is True
+    assert ll.record_outcome(repo_root, launch_id, "handback", _FIRST_EVIDENCE)["ok"] is True
 
 
 def _fix_order(repo_root, launch_id=_LAUNCH):
@@ -84,7 +85,7 @@ def test_t2_the_issues_row_outcome_then_fix_order_then_repeat_outcome_closes_the
     _handed_back(repo)
     _fix_order(repo)
     assert ww._reopen_candidate(_info(repo), []) is not None
-    assert _record(repo) == "amendment"
+    assert _record(repo, evidence=_FIRST_EVIDENCE) == "amendment"
     assert ww._reopen_candidate(_info(repo), []) is None
 
 
