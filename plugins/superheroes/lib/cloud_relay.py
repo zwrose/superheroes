@@ -7,7 +7,7 @@ relay's own session record, matches the advisor's text exactly.
 
   cloud_relay.py ensure --repo-root R --config-dir D
                         the relay for account D is alive, or is started
-  cloud_relay.py compose --repo-root R --config-dir D --session NAME --text-file F
+  cloud_relay.py compose --repo-root R --config-dir D --session NAME --text-file F [--fix-order]
                         the message to send to the relay, and the pending record of it
   cloud_relay.py check --repo-root R --msg-id X [--wait S] [--interval I]
                         whether message X was delivered, waiting up to S seconds
@@ -207,8 +207,9 @@ def ensure(repo_root, config_dir, *, env=None, run=None):
             "started": started}
 
 
-def compose(repo_root, config_dir, session, text, *, env=None):
-    """The message to send to the relay, and the pending record of it."""
+def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
+    """The message to send to the relay, and the pending record of it. `fix_order` marks the message as
+    a fix order to the builder: the record then carries `fixOrder: true`, and the wave watch reads it."""
     name = relay_name(config_dir) if isinstance(config_dir, str) and config_dir else None
     if name is None:
         return _refuse("config-dir-invalid")
@@ -225,11 +226,38 @@ def compose(repo_root, config_dir, session, text, *, env=None):
     state["pending"][msg_id] = {"msgId": msg_id, "session": session, "forward": forward,
                                 "configDir": config_dir, "relay": name, "sentAfter": _now_iso(),
                                 "decision": None}
+    if fix_order:
+        state["pending"][msg_id]["fixOrder"] = True
     if not _save(path, state):
         return _refuse("relay-state-unwritable")
     return {"ok": True, "msgId": msg_id, "relay": name,
             "relayMessage": "RELAY to %s (id %s):\n%s" % (session, msg_id, forward),
             "forward": forward}
+
+
+# The verdicts after which the text may have reached the builder: a send that was made, or that no result
+# contradicts. `relay-send-failed` is absent: nothing reached the builder.
+_MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfirmed")
+
+
+def fix_orders(repo_root, *, env=None):
+    """{"ok": True, "records": [...]} of the fix orders whose text may have reached the builder, else
+    {"ok": False, "reason": ...}. A record is `msgId`, `session`, `configDir` and `at` (the message's `sentAfter`, written once at
+    compose: a stable send boundary that a later check or re-check never moves). A fix order never checked
+    (a draft) or whose send failed is left out; the decision only decides eligibility. Reads only; never writes."""
+    _path, state, refusal = _open_state(repo_root, env)
+    if refusal:
+        return refusal
+    records = []
+    for msg_id, entry in sorted(state["pending"].items()):
+        decision = entry.get("decision") if isinstance(entry, dict) else None
+        # axis: only a fix order the check decided delivered, or may have reached the builder, opens the watch — see bite-proof record wo_2148_fix_order.md
+        if (isinstance(entry, dict) and entry.get("fixOrder") is True and isinstance(decision, dict)
+                and (decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)):
+            # axis: the window opens at the message's own sentAfter, never at the decision's check time, which a later check moves — see bite-proof record wo_2148_fix_order.md
+            records.append({"msgId": msg_id, "session": entry.get("session"),
+                            "configDir": entry.get("configDir"), "at": entry.get("sentAfter")})
+    return {"ok": True, "records": records}
 
 
 def _time(stamp):
@@ -461,6 +489,8 @@ def _build_parser():
         if name == "check":
             sub.add_argument("--wait", default="60")
             sub.add_argument("--interval", default="2")
+        if name == "compose":
+            sub.add_argument("--fix-order", action="store_true")
     return parser
 
 
@@ -474,7 +504,7 @@ def _dispatch(args):
             text = fh.read()
     except (OSError, ValueError):
         return _refuse("text-unreadable")
-    return compose(args.repo_root, args.config_dir, args.session, text)
+    return compose(args.repo_root, args.config_dir, args.session, text, fix_order=args.fix_order)
 
 
 def main(argv=None):
