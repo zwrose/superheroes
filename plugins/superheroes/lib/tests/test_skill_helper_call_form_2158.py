@@ -32,10 +32,7 @@ _spec = importlib.util.spec_from_file_location("plugin_scripts_allow_2158", _HOO
 hook = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hook)
 
-_NINE = (
-    "round_driver", "break_it", "review_store", "grounding_stage", "mode_reconcile",
-    "calibration_resolve", "size_count", "order_lint", "dispatch_guard",
-)
+_NINE = tuple(sorted(name[: -len(".py")] for name in hook.APPROVED_SCRIPTS))
 _NINE_ALT = "|".join(_NINE)
 _ROOTS = (
     os.path.join(_PLUGIN, "skills", "review-code"),
@@ -48,7 +45,9 @@ POPULATION_FLOOR = 33
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
-_PLACEHOLDER = re.compile(r"<[^<>]*>")
+# A documentation placeholder opens with `<` and closes with `>` hugging non-space text; a shell
+# redirect (`< file >`) has whitespace inside the operators and is never erased.
+_PLACEHOLDER = re.compile(r"<(?=\S)[^<>]*(?<=\S)>")
 _INLINE_SPAN = re.compile(r"`([^`\n]+)`")
 _FORBIDDEN_ROOT_DIR = re.compile(
     r"\$(?:\{ROOT_DIR\}|ROOT_DIR)/lib/(?:%s)\.py" % _NINE_ALT
@@ -74,13 +73,23 @@ def _call_forms_in_text(rel, text):
     `python3` and `lib/<one of the nine>.py`."""
     forms = []
     in_fence = False
+    pending = []  # physical lines of a fenced command continued with a trailing backslash
+    pending_start = 0
     for lineno, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("```"):
             in_fence = not in_fence
+            pending = []
             continue
         if in_fence:
-            if _is_call_text(line):
-                forms.append(Form(rel, lineno, 0, line.strip()))
+            if not pending:
+                pending_start = lineno
+            pending.append(line.strip())
+            if line.rstrip().endswith("\\"):
+                continue
+            joined = "\n".join(pending)
+            pending = []
+            if _is_call_text(joined):
+                forms.append(Form(rel, pending_start, 0, joined))
             continue
         nth = 0
         for match in _INLINE_SPAN.finditer(line):
@@ -144,6 +153,8 @@ def _shape_problems(text):
     problems = []
     if "$" in text:
         problems.append("contains $")
+    if "\n" in text:
+        problems.append("spans more than one physical line")
     if text.rstrip().endswith("\\"):
         problems.append("ends in a backslash continuation")
     if _FORM_HEAD.match(text) is None:
@@ -277,6 +288,34 @@ def test_forbidden_form_check_flags_a_reintroduced_multiline_block():
     assert any("fake.md:2: hook-approved script with --session-dir" in h for h in hits), hits
     assert _forbidden_hits("fake.md", "run `python3 -B <plugin root>/lib/round_driver.py next --session-dir <session dir>`\n") == []
     assert _forbidden_hits("fake.md", 'python3 -B "$ROOT_DIR/lib/review_record_session.py" write --session-dir "$SESSION_DIR"\n') == []
+
+
+def test_every_approved_script_is_matched_by_the_census():
+    assert _NINE
+    assert all(_SCRIPT_IN_FORM.search("lib/" + name) for name in hook.APPROVED_SCRIPTS)
+
+
+def test_census_collects_and_flags_a_command_split_before_the_script_path():
+    split = (
+        "```bash\n"
+        "python3 -B \\\n"
+        "  <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n"
+        "```\n"
+    )
+    forms = _call_forms_in_text("fake.md", split)
+    assert len(forms) == 1, forms
+    assert "spans more than one physical line" in _shape_problems(forms[0].text)
+    single = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n```\n"
+    one = _call_forms_in_text("fake.md", single)
+    assert len(one) == 1 and _shape_problems(one[0].text) == []
+
+
+def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
+    session, repo = scene
+    base = "python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>"
+    assert _judge(base, _PLUGIN, session, repo) is None
+    miss = _judge(base + " < /tmp/input > /tmp/output", _PLUGIN, session, repo)
+    assert miss is not None, miss
 
 
 def test_population_check_fails_an_empty_population(tmp_path):
