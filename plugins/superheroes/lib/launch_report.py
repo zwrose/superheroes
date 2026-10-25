@@ -20,7 +20,7 @@ if _LIB_DIR not in sys.path:
 import cloud_ready  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import launch_ledger as ll  # noqa: E402
-from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text  # noqa: E402
+from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text, wasnt_text  # noqa: E402
 
 _STILL_HEADER = "Still on your machine"
 STILL_LEDGER_UNREADABLE = "still-ledger-unreadable"
@@ -116,7 +116,7 @@ def _summary(lanes):
         return None
     first = _recheck_first(calls)
     code = first["reason"]
-    wasnt = _fill(REASONS[code]["wasnt"], first.get("cloudVersion"), first.get("advisorVersion"))
+    wasnt = wasnt_text(first)
     return "%s, all on your machine. The cloud wasn't ready: %s\n%s" % (
         _count(lanes), wasnt, _fix_line(code, first))
 
@@ -158,9 +158,13 @@ def render_report(lanes):
             code = cloud_ready.REASON_FOR[name]
             shared = [lane["placeCall"] for lane in local if lane["placeCall"].get("reason") == code]
             if shared:
-                line = _fix_line(code, _recheck_first(shared))
-                if line not in fixes:
-                    fixes.append(line)
+                # the recheck-carrying call first, then the rest: lanes whose fixes differ (two hook
+                # gaps) each print theirs, and lanes that share one print it once
+                first = _recheck_first(shared)
+                for call in [first] + [c for c in shared if c is not first]:
+                    line = _fix_line(code, call)
+                    if line not in fixes:
+                        fixes.append(line)
         return "\n".join(out + fixes)
     except Exception:
         return None

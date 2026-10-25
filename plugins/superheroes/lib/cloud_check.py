@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 
+import cloud_dependency_hook
 import cloud_pass
 import cloud_plugin_pin
 import cloud_setup
@@ -137,6 +138,10 @@ _PARTS = (
      "command and paste the block into that environment"),
     ("version", "The cloud's plugin is {cloud} and mine is {mine}.", _SAME_FIX),
     ("pin", _PIN_MISMATCH, _PIN_FIX),
+    # `%s` slots (not `.format` braces) are filled in `_failed_message` from `GAP_TEXT`: the gap
+    # token and sentence in the first, the gap's fix in the second
+    ("hook",
+     "The dependency hook on the branch builds start from failed its check (`%s`): %s.", "%s"),
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
      "paste a fresh pass into the environment"),
@@ -453,8 +458,24 @@ def _pin_facts(cwd):
         return {"state": "absent", "reason": None, "pin": None}
 
 
+def _hook_gap(cwd, root, commit=None, adopted=None):
+    """The dependency hook's branch gap token at `commit` (the checkout's HEAD when None), or None
+    when the hook is off or the commit carries it. Never raises: a repository root that cannot be
+    found or any unexpected failure is `commit-unreadable`, and settings that cannot be read are
+    `settings-unreadable`, so nothing unreadable passes."""
+    try:
+        return cloud_setup_text.branch_hook_gap(cwd, root, commit, adopted)
+    except store_core.RepoRootUnavailable:
+        return "commit-unreadable"  # axis: a repository root that cannot be found cannot show the commit carries the hook
+    except cloud_setup_text._Refused:
+        return "settings-unreadable"  # axis: setup settings that cannot be read are not the hook being off
+    except Exception:
+        return "commit-unreadable"  # axis: any other failure in the hook test is never read as a pass
+
+
 def _judge_parts(obj, environment, cwd, root, today):
-    """(results, local placed stamp or None, the pin hook's reader result)."""
+    """(results, local placed stamp or None, the pin hook's reader result, the hook gap token or
+    None)."""
     local_version = _or_none(cloud_setup_text._plugin_version)
     local_placed = _or_none(_placed_stamp, cwd, root)
     local_repo = _or_none(repo_calibration_stamp, cwd)
@@ -486,14 +507,17 @@ def _judge_parts(obj, environment, cwd, root, today):
         pin_ok = (isinstance(obj.get("pluginCommit"), str)
                   and obj["pluginCommit"] == pin["pin"]["commit"]
                   and pin["pin"]["version"] == local_version)
+    # axis: the commit a launch starts from (the checkout's HEAD) must carry the dependency hook when the project has it on
+    gap = _hook_gap(cwd, root)
     return {
         "versionMatches": version_ok,
         "pinMatches": pin_ok,
+        "dependencyHookMatches": gap is None,
         "calibrationMatches": computed and placed_ok and file_ok and repo_ok,
         "reviewerAnswered": reviewer,
         "environmentMatches": environment_ok,
         "identityPresent": identity_ok,
-    }, local_placed, pin
+    }, local_placed, pin, gap
 
 
 def _switch_off(cwd, account, root, project_name, set_fn):
@@ -596,7 +620,10 @@ def _short_commit(commit):
 
 
 def _failed_message(parts, switched, cloud_version, local_version, identity=None,
-                    identity_reported=True, pin=None, cloud_commit=None):
+                    identity_reported=True, pin=None, cloud_commit=None, hook_gap=None):
+    # a hook part with no known gap token still reads as the fail-closed one, never as a blank
+    gap_sentence, gap_fix = cloud_dependency_hook.GAP_TEXT[
+        hook_gap if hook_gap in cloud_dependency_hook.GAP_TEXT else "commit-unreadable"]
     pinned = (pin or {}).get("pin") or {}
     pin_values = {
         "cloud": "unknown" if cloud_version is None else cloud_version,
@@ -616,6 +643,10 @@ def _failed_message(parts, switched, cloud_version, local_version, identity=None
         if name == "pin" and (pin or {}).get("state") == "broken":
             sentences.append(_PIN_BROKEN.format(reason=pin["reason"]))
             continue
+        if name == "hook":
+            sentences.append(sentence % (hook_gap if hook_gap in cloud_dependency_hook.GAP_TEXT
+                                         else "commit-unreadable", gap_sentence))
+            continue
         sentences.append(sentence.format(
             **dict({"cloud": "not installed" if cloud_version is None else cloud_version,
                     "mine": "unknown" if local_version is None else local_version},
@@ -631,6 +662,8 @@ def _failed_message(parts, switched, cloud_version, local_version, identity=None
                 fix = fix.format(
                     name="your name" if identity is None else "`%s`" % identity[0],
                     email="your email" if identity is None else "`%s`" % identity[1])
+        if name == "hook":
+            fix = fix % gap_fix
         if name in parts and fix is not None and fix not in fixes:
             fixes.append(fix)
     # axis: the message never says cloud builds are off when the switch-off failed
@@ -666,19 +699,22 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment,
                                            ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
-                    ("versionMatches", "pinMatches", "calibrationMatches", "reviewerAnswered",
-                     "environmentMatches", "identityPresent")),
+                    ("versionMatches", "pinMatches", "dependencyHookMatches",
+                     "calibrationMatches", "reviewerAnswered", "environmentMatches",
+                     "identityPresent")),
+                "dependencyHookGap": None,
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": off,
                 "markerWritten": marked,
                 "message": (_UNREAD_STILL_ON if "setting" in failed
                             else _UNREAD.format(switched=_SWITCHED_OFF if off else ""))}
 
-    results, local_placed, pin = _judge_parts(obj, environment, cwd, root, today)
+    results, local_placed, pin, gap = _judge_parts(obj, environment, cwd, root, today)
     identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
     # axis: a valid pin hook's pin part replaces the version part
     failed = [part for part, key in (("environment", "environmentMatches"),
                                      ("version", "versionMatches"),
                                      ("pin", "pinMatches"),
+                                     ("hook", "dependencyHookMatches"),
                                      ("calibration", "calibrationMatches"),
                                      ("reviewer", "reviewerAnswered"),
                                      ("identity", "identityPresent"))
@@ -713,18 +749,19 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         # axis: the marker is persisted before the setting changes, so an interruption leaves it
         # axis: a failed check leaves a marker a later reader can see, and never touches the record
         off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment, failed, now)
-        return {"action": "failed", "results": results, "failedParts": failed,
-                "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
+        return {"action": "failed", "results": results, "dependencyHookGap": gap,
+                "failedParts": failed, "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
                 "message": _failed_message(
                     failed, off, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
                     identity_reported=identity_reported, pin=pin,
-                    cloud_commit=obj.get("pluginCommit"),
+                    cloud_commit=obj.get("pluginCommit"), hook_gap=gap,
                     # axis: an identity the session never reported is not a missing one
                     **({"identity": _local_identity(cwd)}
                        if "identity" in failed and identity_reported else {}))}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
-    return {"action": "passed", "results": results, "failedParts": [], "recordWritten": True,
+    return {"action": "passed", "results": results, "dependencyHookGap": None,
+            "failedParts": [], "recordWritten": True,
             "settingSwitchedOff": False, "markerWritten": False,
             "message": _PASSED.format(version=obj["pluginVersion"]) + ending}
 

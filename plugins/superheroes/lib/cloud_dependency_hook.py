@@ -202,6 +202,37 @@ def branch_gap(repo_root, commit, commands, inputs, adopted=None):
     return None
 
 
+_REWRITE_FIX = ("set configure's item 17, 18 or 19 again (any set rewrites the hook files), then commit "
+                "and push the settings file and the hook script on the branch builds start from")
+# gap token -> (sentence, fix), lowercase fragments with no trailing period: the one home of the
+# owner-facing words for a `branch_gap` token, plus `settings-unreadable`, which only callers give
+GAP_TEXT = {
+    "commit-unreadable": (
+        "its commit could not be read on this machine, so it cannot be shown to carry the hook",
+        "make sure this machine's checkout of the project can read that branch's commit (fetch it if "
+        "it is missing)"),
+    "script-missing": ("it has no dependency hook script", _REWRITE_FIX),
+    "script-differs": (
+        "its dependency hook script is not the one configure writes now (an older plugin's, or "
+        "edited by hand)", _REWRITE_FIX),
+    "settings-not-registered": (
+        "its settings file does not register the dependency hook to run at session start",
+        _REWRITE_FIX),
+    "adopted-inputs-differ": (
+        "a setup file the build adopts changed since the hook ran",
+        "bring the adopted branch's dependency-file change into the branch the build starts from "
+        "first"),
+    "adopted-input-not-a-file": (
+        "a setup file the build adopts is a link or sits under a linked folder, so it cannot be "
+        "compared",
+        "point both the setup command and configure's setup inputs at the regular file itself, with "
+        "no link in between"),
+    "settings-unreadable": (
+        "this project's setup settings (configure items 17 to 19) could not be read",
+        "set configure's items 17 to 19 again so they can be read"),
+}
+
+
 # a settings `env` key that names a credential, and the one value that is allowed there: a bare
 # `$NAME` / `${NAME}` reference
 _CREDENTIAL_ENV_KEYS = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
