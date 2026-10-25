@@ -72,7 +72,28 @@ def test_iphone_allow_hook_is_wired_fail_soft_after_worktree_guard():
         "iphone_allow must be listed after the worktree guard on the Bash matcher"
 
 
-def test_bash_pretooluse_chain_is_exactly_guard_timeout_iphone_then_fence():
+_PLUGIN_SCRIPTS_ALLOW_COMMAND = 'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/plugin_scripts_allow.py" || true'
+
+
+def test_plugin_scripts_allow_hook_is_wired_fail_soft_after_worktree_guard():
+    cfg = json.load(open(_HOOKS))
+    bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert bash, "no Bash PreToolUse matcher"
+    cmds = [h["command"] for entry in bash for h in entry["hooks"]]
+
+    approver = [c for c in cmds if "plugin_scripts_allow.py" in c]
+    assert approver, "hooks.json must wire plugin_scripts_allow.py on the Bash matcher"
+    # axis: the whole own-scripts approver invocation is pinned — the interpreter, the plugin-root path and fail-soft
+    assert approver == [_PLUGIN_SCRIPTS_ALLOW_COMMAND]
+
+    guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
+    approver_idx = next(i for i, c in enumerate(cmds) if "plugin_scripts_allow.py" in c)
+    # axis: the own-scripts approver is listed after the worktree guard on the Bash matcher
+    assert guard_idx < approver_idx, \
+        "plugin_scripts_allow must be listed after the worktree guard on the Bash matcher"
+
+
+def test_bash_pretooluse_chain_is_exactly_guard_timeout_iphone_scripts_then_fence():
     """The Bash PreToolUse chain is pinned: adding a hook requires changing this test deliberately."""
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -83,14 +104,15 @@ def test_bash_pretooluse_chain_is_exactly_guard_timeout_iphone_then_fence():
         "worktree_guard_gate.py",
         "bash_timeout.py",
         "iphone_allow.py",
+        "plugin_scripts_allow.py",
         "implementer_fence.py",
     ]
-    # axis: the Bash PreToolUse chain is exactly four hooks — the worktree guard, bash_timeout, the iPhone approver, then the native fence
+    # axis: the Bash PreToolUse chain is exactly five hooks — the worktree guard, bash_timeout, the iPhone approver, the own-scripts approver, then the native fence
     assert len(cmds) == len(expected), (
         f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
     )
     for i, name in enumerate(expected):
-        # axis: hook order and identity pinned to the three-hook chain
+        # axis: hook order and identity pinned to the five-hook chain
         assert name in cmds[i], f"hook {i} must be {name}, got {cmds[i]!r}"
 
 
