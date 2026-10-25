@@ -946,3 +946,75 @@ def test_cli_prints_one_json_object_and_exits_1_on_refusal(world, capsys, monkey
     assert code == 0 and json.loads(capsys.readouterr().out)["ok"] is True
     code = cr.main(["check", "--repo-root", world.repo, "--msg-id", "nope"])
     assert code == 1 and json.loads(capsys.readouterr().out)["reason"] == "message-unknown"
+
+
+# ---- fix orders (#2148) ---------------------------------------------------------------------
+
+def _decide(world, msg_id, decision):
+    path = _state_file(world)
+    state = json.load(open(path))
+    state["pending"][msg_id]["decision"] = decision
+    json.dump(state, open(path, "w"))
+
+
+def test_compose_records_fix_order_true_only_when_asked(world):
+    plain = _compose(world)
+    flagged = cr.compose(world.repo, world.config, SESSION, "fix it", env=world.env, fix_order=True)
+    pending = json.load(open(_state_file(world)))["pending"]
+    assert "fixOrder" not in pending[plain["msgId"]]
+    assert pending[flagged["msgId"]]["fixOrder"] is True
+
+
+def test_fix_orders_lists_only_flagged_records_whose_text_may_have_reached_the_builder(world):
+    def flagged(decision, **kwargs):
+        out = cr.compose(world.repo, world.config, SESSION, "fix it", env=world.env,
+                         fix_order=kwargs.get("fix_order", True))
+        _decide(world, out["msgId"], decision)
+        return out["msgId"]
+
+    stamp = "2099-10-24T01:02:03.456Z"  # the check's stamp: long after every compose below
+    listed = {
+        flagged({"delivered": True, "reason": None, "at": stamp}),
+        flagged({"delivered": False, "reason": "relay-silent", "at": stamp}),
+        flagged({"delivered": False, "reason": "relay-text-mismatch", "at": stamp}),
+        flagged({"delivered": False, "reason": "relay-send-unconfirmed", "at": stamp}),
+    }
+    flagged({"delivered": False, "reason": "relay-send-failed", "at": stamp})
+    flagged({"delivered": False, "reason": "wait-invalid", "at": stamp})
+    flagged({"delivered": True, "reason": None, "at": stamp}, fix_order=False)
+    flagged("delivered")
+    draft = cr.compose(world.repo, world.config, SESSION, "fix it", env=world.env, fix_order=True)
+    before = open(_state_file(world)).read()
+    out = cr.fix_orders(world.repo, env=world.env)
+    assert out["ok"] is True and draft["msgId"] not in {r["msgId"] for r in out["records"]}
+    assert {r["msgId"] for r in out["records"]} == listed
+    # axis: the exported `at` is the message's own sentAfter, which a decision stamped later does not move — see bite-proof record wo_2148_fix_order.md
+    sent = {m: e["sentAfter"] for m, e in json.load(open(_state_file(world)))["pending"].items()}
+    assert all(r == {"msgId": r["msgId"], "session": SESSION, "configDir": world.config,
+                     "at": sent[r["msgId"]]} for r in out["records"])
+    assert all(r["at"] != stamp for r in out["records"])
+    assert open(_state_file(world)).read() == before
+
+
+def test_fix_orders_reads_a_missing_state_as_empty_and_an_unreadable_one_as_a_refusal(world):
+    path = _state_file(world)
+    assert cr.fix_orders(world.repo, env=world.env) == {"ok": True, "records": []}
+    assert not os.path.exists(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write("{not json")
+    assert cr.fix_orders(world.repo, env=world.env) == {"ok": False, "reason": "relay-state-unreadable"}
+    assert open(path).read() == "{not json"
+
+
+def test_cli_compose_fix_order_flag_passes_through(world, monkeypatch):
+    for key, value in world.env.items():
+        monkeypatch.setenv(key, value)
+    tf = os.path.join(world.config, "t.txt")
+    open(tf, "w").write("hi\n")
+    base = ["compose", "--repo-root", world.repo, "--config-dir", world.config,
+            "--session", SESSION, "--text-file", tf]
+    assert cr.main(base + ["--fix-order"]) == 0
+    assert cr.main(base) == 0
+    pending = json.load(open(_state_file(world)))["pending"].values()
+    assert sorted("fixOrder" in entry for entry in pending) == [False, True]
