@@ -45,10 +45,24 @@ POPULATION_FLOOR = 33
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
-# A documentation placeholder is `<` + a word-led phrase of letters, digits, spaces and light
-# punctuation + `>`. It never holds `/`, `\`, `|`, `&`, `;`, `$` or a quote, so a shell redirect
-# (`< f >`, `</tmp/in>/tmp/out`) is never erased and the leftover angle bracket is refused.
-_PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9 ,.'…_-]*>")
+# Only these named documentation placeholders (besides `<plugin root>` and `<session dir>`) are
+# replaced by an argument. Any other `<…>` is left in place and refused, so a shell redirect pair
+# (`< f >`, `<input.txt>output.txt`) is never erased. Syntax alone cannot tell the two apart.
+_PLACEHOLDER_NAMES = frozenset((
+    "phase", "N", "phase from next", "verify command, or none", "engine or native",
+    "attempt from next", "expectedStateHash from next", "vendor", "id",
+    "in-repo or global, the LOC value", "vendors JSON list", "implementation engine", "attempt",
+    "expectedStateHash", "build base", "path from table above", "tripwire, park or held", "seat",
+    "round from next", "rulings file", "who", "effort or null", "sha",
+    "the brief-check seat JSON, written out", "claude or codex", "the order file",
+    "the build worktree", "the build worktree's plugin root, in this repository",
+    "each declared item", "str-or-null", "role", "value", "records file",
+))
+_PLACEHOLDER = re.compile(r"<([^<>]*)>")
+
+
+def _erase_placeholder(match):
+    return "x" if match.group(1) in _PLACEHOLDER_NAMES else match.group(0)
 _INLINE_SPAN = re.compile(r"`([^`\n]+)`")
 _FORBIDDEN_ROOT_DIR = re.compile(
     r"\$(?:\{ROOT_DIR\}|ROOT_DIR)/lib/(?:%s)\.py" % _NINE_ALT
@@ -202,7 +216,7 @@ def _expected_approved(text):
 
 def _render(text, plugin_root, session_dir):
     rendered = text.replace("<plugin root>", plugin_root).replace("<session dir>", session_dir)
-    return _PLACEHOLDER.sub("x", rendered)
+    return _PLACEHOLDER.sub(_erase_placeholder, rendered)
 
 
 def _judge(form_text, plugin_root, session_dir, cwd, decide=None):
@@ -322,7 +336,8 @@ def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
     session, repo = scene
     base = "python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>"
     assert _judge(base, _PLUGIN, session, repo) is None
-    for redirect in (" < /tmp/input > /tmp/output", " </tmp/input>/tmp/output", " </tmp/in >/tmp/out"):
+    for redirect in (" < /tmp/input > /tmp/output", " </tmp/input>/tmp/output", " </tmp/in >/tmp/out",
+                     " <input.txt>output.txt", " <input.txt> output.txt", " <in>out"):
         miss = _judge(base + redirect, _PLUGIN, session, repo)
         assert miss is not None and "unreplaced placeholder" in miss, (redirect, miss)
 
