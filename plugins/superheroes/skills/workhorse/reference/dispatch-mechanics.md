@@ -620,8 +620,9 @@ BRIEF_SEAT='{"vendor":"'"$BRIEF_ENGINE"'","model":"'"$BRIEF_ENGINE_MODEL"'","eff
 # $BRIEF_PATH is reviewer instructions + the brief — it is fed verbatim as the whole prompt, so
 # the standing lens below must be inside it (see "The standing lens", after this recipe)
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
-# Gate first — four-key seat carries role inside --seat
-python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check --seat "$BRIEF_SEAT"
+# Gate first — four-key seat carries role inside --seat; the gate runs as its own call with the seat JSON written out (the BRIEF_SEAT value above), not a shell variable
+# Write this call as one line with the real paths — review-code `SKILL.md` § Auto-Fix Loop.
+python3 -B <plugin root>/lib/dispatch_guard.py check --seat '<the brief-check seat JSON, written out>'
 # LAUNCH — fresh --run-dir outside the repo; no --diff-base
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
@@ -1077,8 +1078,8 @@ is `agents/check-runner.md`.
 1. **Author the command list.** Write the exact commands, with a byte ceiling per command and an
    order-wide ceiling. Nothing else bounds the sum. For each command, name the paths outside the
    repository where the seat writes its stdout, stderr, and exit code.
-2. **Resolve the model.** Run `lib/dispatch_guard.py check` with this seat bundle:
-   `--seat '{"vendor":"<claude|codex>","model":null,"effort":null,"role":"mechanical"}'`. The
+2. **Resolve the model.** Run this call with the seat bundle written out:
+   `python3 -B <plugin root>/lib/dispatch_guard.py check --seat '{"vendor":"<claude or codex>","model":null,"effort":null,"role":"mechanical"}'`. The
    `effort` key is required and may be null; a seat without it is refused (`effort-key-absent`).
    The vendor is the registry vendor token, `claude` on the Claude host and `codex` on Codex, never
    a model family name. The call is a query that resolves the seat default

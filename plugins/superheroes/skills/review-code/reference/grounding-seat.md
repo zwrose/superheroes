@@ -44,11 +44,12 @@ Branch mode has no PR body — skip staging and both grounding legs.
 | `$SESSION_DIR/grounding/pr-body.md` | `grounding_stage.py stage` | Nonce-fenced PR body the seat reads |
 | `$SESSION_DIR/grounding/stage.json` | `grounding_stage.py stage` | Manifest: stage token, claim enumeration, region map, source-body hash |
 
+Write each call as one line with the real paths — `SKILL.md` § Auto-Fix Loop.
+
 The `stage` command:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-python3 -B "$ROOT_DIR/lib/grounding_stage.py" stage --session-dir "$SESSION_DIR"
+python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>
 ```
 
 ## Vendor paths and reachability
@@ -88,8 +89,7 @@ as clean.
 `check`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-python3 -B "$ROOT_DIR/lib/grounding_stage.py" check --session-dir "$SESSION_DIR" --vendor-path <engine|native>
+python3 -B <plugin root>/lib/grounding_stage.py check --session-dir <session dir> --vendor-path <engine or native>
 ```
 
 `attest`:
@@ -105,11 +105,7 @@ exactly one `id = "stage-token:<token>"` row with `verdict: "CONFIRMED"`.
 | **Engine** (`codex`/`cursor`) | After fold, extract `payload` from the `seat-result/1` envelope at `$SESSION_DIR/round-<N>/landing/<phase>/grounding-seat.a<K>.json` and write it to a session-local path (for example `$SESSION_DIR/grounding/attest-result.json`) before calling `attest`. The envelope nests verdicts under `payload`; `attest` refuses when `verdicts` is not at the root. |
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-python3 -B "$ROOT_DIR/lib/grounding_stage.py" attest \
-  --session-dir "$SESSION_DIR" \
-  --vendor-path <engine|native> \
-  --result-path <path from table above>
+python3 -B <plugin root>/lib/grounding_stage.py attest --session-dir <session dir> --vendor-path <engine or native> --result-path <path from table above>
 ```
 
 The folded seat result must land under the session directory — write the attest input there

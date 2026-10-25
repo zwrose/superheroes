@@ -269,7 +269,9 @@ Order findings: Critical → Important → Minor → Nit, then by file path, the
 
 ## Auto-Fix Loop (default path)
 
-Runs when `--review-only` is not set and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is `python3 -B "$ROOT_DIR/lib/round_driver.py" next|submit` — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
+Runs when `--review-only` is not set and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is a `round_driver.py` call, `python3 -B <plugin root>/lib/round_driver.py next --session-dir <session dir>` or `python3 -B <plugin root>/lib/round_driver.py submit --session-dir <session dir>` (plus the fold flags shown below) — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
+
+**Call form.** Call `round_driver.py`, `break_it.py`, `review_store.py`, `grounding_stage.py`, `mode_reconcile.py`, `calibration_resolve.py`, `size_count.py`, `order_lint.py` and `dispatch_guard.py` as one plain line, `python3 -B <plugin root>/lib/<script>.py <verb> <args>`, with the resolved plugin root (the session bootstrap prints it as "Plugin root (absolute)") and the literal session folder written out. Substitute the real paths; never set shell variables that feed these calls (`ROOT_DIR=…`, `SESSION_DIR=…`) or continue the call over lines (assignments that only parse a call's printed output, as in `reference/setup.md`, are not covered). The plugin's approval hook approves only that one form and sends every other form to the normal permission check.
 
 **If context was compacted mid-loop**, re-read `$SESSION_DIR/meta.json`, `$SESSION_DIR/loop-state.json`, and `$SESSION_DIR/driver-journal.jsonl`. Resume by calling `next` — a pending step is returned again idempotently.
 
@@ -277,30 +279,13 @@ When any driver command answers `session-from-earlier-version`, the session was 
 
 **Bootstrap.** `mkdir -p $SESSION_DIR/round-1`. Regenerate the diff **with the guarded per-round command from Setup** — the same `git diff "$BASE_REF"...HEAD` plus its failed-diff and empty-diff halts, never a bare copy; if `$BASE_REF` is not in this shell, restore and re-validate it first (Setup, "If `$BASE_REF` is not in scope"). Size it with `wc -l` only. First `next` seeds state. Pass **`--vendors`** — the live reviewer/fixer vendors, either a JSON list (`["codex","cursor"]`) or a comma-separated string (`codex,cursor`) — so the driver can seat a **different** auditor vendor for each fix (independent audit). Also pass **`--fixer-vendor`** — the **actual** fix-implementer vendor (`$IMPL_ENGINE` from the calibration / engine resolution) — so the auditor is seated as a **different** vendor than the one that fixed; omitting it leaves the fixer identity **unknown**, which now fails toward a disclosed **degraded** audit (never silently mislabeled independent) — so always pass it when a real fixer vendor is known. An unparseable value, an unknown vendor, or either flag on non-fresh state **fails loud** (nonzero exit + `{"ok": false, "reason": ...}`) — never a silent default. **Omitting `--vendors` degrades every run to the single vendor `["claude"]`:** the audit still runs but independence is **lost** and every terminal is stamped `-degraded` (e.g. `audited-chain-degraded`) — reserve that only for an environment that genuinely has one usable vendor. In PR mode also pass **`--prior-comments`** (the author-justification post-filter reads it; ignored when the file is absent):
 
+Take the vendors list from the seat map's `liveVendors`, sorted (family-aware; #510) — the pool the driver seats independent fix-auditors from — and fall back to the reviewer and implementation engines when the seat map is unreadable. Write the seat map to `<session dir>/seat-map.json` only when `$SEAT_MAP` is a non-empty JSON object, and append `--seat-map <session dir>/seat-map.json` to the line below only then. Append `--break-it-interpreter=<value>` only when calibration sets `breakItInterpreter` (Setup's `BREAK_IT_ARGS`), shell-quoting the value so it stays one argument (a multiword launcher is written `--break-it-interpreter='uv run python'`; an empty configured value is `--break-it-interpreter=''`). This first `next` carries `--verify-command`, so the hook leaves it to the normal permission check by design:
+
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-# Live vendors from the seat map (family-aware; #510) — the pool the driver seats independent
-# fix-auditors from; falls back to the reviewer+impl engines if the seat map is unreadable.
-VENDORS=$(echo "$SEAT_MAP" | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d.get("liveVendors") or [])))' 2>/dev/null || python3 -B -c 'import json,sys; print(json.dumps(sorted({v for v in sys.argv[1:] if v})))' "$REVIEWER_ENGINE" "$IMPL_ENGINE")
-SEAT_MAP_ARGS=()
-if [ -n "$SEAT_MAP" ] && echo "$SEAT_MAP" | python3 -B -c 'import json,sys
-d=json.load(sys.stdin)
-sys.exit(0 if isinstance(d, dict) else 1)' 2>/dev/null; then
-  printf '%s' "$SEAT_MAP" > "$SESSION_DIR/seat-map.json"
-  SEAT_MAP_ARGS=(--seat-map "$SESSION_DIR/seat-map.json")
-fi
-python3 -B "$ROOT_DIR/lib/round_driver.py" next \
-  --session-dir "$SESSION_DIR" \
-  --diff-path "$SESSION_DIR/round-1/diff.txt" \
-  --verify-command "${VERIFY_CMD:-none}" \
-  --vendors "$VENDORS" \
-  --fixer-vendor "$IMPL_ENGINE" \
-  --prior-comments "$SESSION_DIR/prior-comments.json" \
-  --max-rounds 7 \
-  "${BREAK_IT_ARGS[@]}" "${SEAT_MAP_ARGS[@]}"
+python3 -B <plugin root>/lib/round_driver.py next --session-dir <session dir> --diff-path <session dir>/round-1/diff.txt --verify-command '<verify command, or none>' --vendors '<vendors JSON list>' --fixer-vendor <implementation engine> --prior-comments <session dir>/prior-comments.json --max-rounds 7
 ```
 
-Round 1 is the round that dispatches the panel, and without the seat map no round-1 seat's vendor resolves, so every seat falls back to the safe stdout contract and the orchestrator must land each payload itself; passing the map keeps native seats on the direct-write path and records real vendor provenance (#1035). The guard above only passes `--seat-map` when `$SEAT_MAP` is non-empty and parses as a JSON object, so a genuinely empty/unset `$SEAT_MAP` never gets written to a file and handed to the driver.
+Round 1 is the round that dispatches the panel, and without the seat map no round-1 seat's vendor resolves, so every seat falls back to the safe stdout contract and the orchestrator must land each payload itself; passing the map keeps native seats on the direct-write path and records real vendor provenance (#1035). `--seat-map` is passed only when `$SEAT_MAP` is non-empty and parses as a JSON object, so a genuinely empty/unset `$SEAT_MAP` never gets written to a file and handed to the driver.
 
 **The loop.** Until `action` is `terminal`:
 
@@ -316,11 +301,7 @@ Round 1 is the round that dispatches the panel, and without the seat map no roun
 5. On `terminal`, read `payload.certification` and `round-receipt.json`; map `verdict` to `$ACTION`/`$REASON` for `--result-file` (`converged` → `exit_clean`; `halted`/`held`/`stalled`/`capped-with-open-critical` → `halt`).
 
 ```bash
-python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
-  --session-dir "$SESSION_DIR" \
-  --phase "<phase>" --attempt <attempt> \
-  --state-hash "<expectedStateHash>" \
-  --artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
+python3 -B <plugin root>/lib/round_driver.py submit --session-dir <session dir> --phase "<phase>" --attempt <attempt> --state-hash "<expectedStateHash>" --artifact "<session dir>/round-<N>/<phase>-artifact.json"
 ```
 
 **Terminals to surface honestly:** scoped certifying finish (`audited-chain` / `audited-chain-degraded` — say so, never imply a pristine fresh pass); one invisible self-recovery on audit-stall (journaled, not offered to the owner); the audit-stall stall menu; owner-skipped judgment blockers (ridden on the exit disclosure — a product-choice tradeoff shipped un-fixed, cited by its owner reason); `capped-with-open-critical` park when confirmation budget is exhausted with a Critical still owed.
