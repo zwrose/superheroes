@@ -43,8 +43,8 @@ shell-command checker or an auto-mode classifier) stopped, or one held for an ap
 answers; record those last two kinds with refusedBy permission. A command that ran and failed is
 not a refusal, and the failure rules cover it. Each refusals entry carries command (the command
 exactly as you wrote it), refusedBy (permission, hook or sandbox), hook (the hook's name when the
-refusal gave one, else null), route (the route a hook's own refusal message named and you took, else
-null), and next (what you did next). An empty list means you met none.
+refusal gave one, else null), route (the route a hook's or the sandbox's own refusal message named
+and you took, else null), and next (what you did next). An empty list means you met none.
 This dominates every rung below: a refused or denied command is never a command you "could not run"
 under rung 3 or rung 4 — you stop and report.
 

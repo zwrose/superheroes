@@ -40,6 +40,13 @@ def _without(key):
     return entry
 
 
+# the weekly-eats PR 3356 shape (#2167): the cloud sandbox's own refusal message named its step
+_SANDBOX_ROUTE_ENTRY = {
+    "command": "cd app && npm test", "refusedBy": "sandbox", "hook": None,
+    "route": "split into plain commands", "next": "ran cd and npm test as plain commands",
+}
+
+
 # --- refusals_fault -----------------------------------------------------------------------
 
 
@@ -53,6 +60,7 @@ def _without(key):
     [_entry(route=None)],
     [_entry(refusedBy="permission", hook=None, route=None), _entry(refusedBy="sandbox", route=None)],
     [_entry(hook=None, route="gh pr view 5")],
+    [_SANDBOX_ROUTE_ENTRY],
 ])
 def test_refusals_fault_accepts_valid_lists(value):
     # axis: acceptance of valid refusals — see bite-proof record wo1_2011_stop_rule
@@ -85,8 +93,14 @@ def test_refusals_fault_accepts_valid_lists(value):
     ([_entry(route=5)], "refusals[0].route"),
     ([_entry(route=["git status"])], "refusals[0].route"),
     ([_entry(refusedBy="permission", route="")], "refusals[0].route"),
-    ([_entry(refusedBy="permission", hook=None, route="git status")], "refusals[0].route needs refusedBy hook"),
-    ([_entry(), _entry(refusedBy="sandbox", route="git status")], "refusals[1].route needs refusedBy hook"),
+    ([_entry(refusedBy="permission", hook=None, route="git status")],
+     "refusals[0].route needs refusedBy hook or sandbox"),
+    ([_entry(), _entry(refusedBy="permission", route="git status")],
+     "refusals[1].route needs refusedBy hook or sandbox"),
+    ([dict(_SANDBOX_ROUTE_ENTRY, route="  ")], "refusals[0].route"),
+    ([dict(_SANDBOX_ROUTE_ENTRY, route=["split"])], "refusals[0].route"),
+    ([dict(_SANDBOX_ROUTE_ENTRY, next="")], "refusals[0].next blank"),
+    ([dict(_SANDBOX_ROUTE_ENTRY, refusedBy="cloud-sandbox")], "refusals[0].refusedBy"),
 ])
 def test_refusals_fault_names_the_fault(value, reason):
     # axis: malformed-entry diagnostics — see bite-proof record wo1_2011_stop_rule
@@ -99,6 +113,16 @@ _EXCEPTION_SENTENCE = (
     "(an exact command or tool to use instead), you may take exactly that route, once, and record "
     "it as that entry's route; every other form, and every auto-mode classifier denial, stays a stop."
 )
+
+
+def test_a_route_is_valid_from_a_hook_or_the_sandbox_only():
+    # axis: a route is read from the refusers whose own message can name one, never from a permission denial (#2167)
+    assert CR.ROUTE_REFUSED_BY == ("hook", "sandbox")
+    assert set(CR.ROUTE_REFUSED_BY) < set(CR.REFUSED_BY)
+    assert CR.refusals_fault([_SANDBOX_ROUTE_ENTRY]) is None
+    assert CR.refusals_fault([_entry(route="git checkout --theirs f.txt")]) is None
+    assert CR.refusals_fault([dict(_SANDBOX_ROUTE_ENTRY, refusedBy="permission")]) == (
+        "refusals[0].route needs refusedBy hook or sandbox")
 
 
 def test_stop_rule_ends_with_the_one_exception():

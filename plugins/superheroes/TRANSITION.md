@@ -12,6 +12,20 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed, except that a consumer that checks a refusals entry itself must accept a `route` on a `sandbox` entry.** A native implementer that records the route a cloud sandbox's refusal named no longer forfeits its run. See [Refusals: a sandbox-named route](#refusals-a-sandbox-named-route).
+
+### Refusals: a sandbox-named route
+
+- A refusals entry's non-null `route` is now valid with `refusedBy: sandbox` as well as `refusedBy: hook` (`lib/command_refusals.py`, `ROUTE_REFUSED_BY`). The cloud sandbox's own refusal message names a step ("split into plain commands"); an implementer that recorded it as that entry's `route` lost its whole run (`native-result-invalid` on the native implementer, `native-result-refusals-invalid` on native write admission), and the work order had to be collected by hand.
+- A non-null `route` on a `permission` entry is still refused, now with `refusals[i].route needs refusedBy hook or sandbox` (was `refusals[i].route needs refusedBy hook`): an auto-mode classifier denial stays a stop. Every other refusals check is unchanged.
+- The entry shape every implementer and fixer order carries (`ENTRY_SHAPE`, and its copy in `agents/implementer.md`) now says `route` is the route a hook's or the sandbox's own refusal message named. The stop rule's one exception is unchanged.
+
 ## 0.46.1
 
 ### Before you upgrade
