@@ -539,9 +539,3 @@ def test_a_lone_checkout_sent_to_another_repository_is_refused(command, dirty_re
 def test_a_checkout_in_this_repository_or_a_harmless_other_repository_command_stays_allowed(
         command, dirty_repo):
     assert wg.classify(command, dirty_repo) == ("allow", ""), command
-
-
-def test_the_refusal_for_another_repository_names_switch():
-    message = wg.indeterminate_message("checkout-path")
-    assert "git -C <dir> switch <branch>" in message
-    assert "Next step:" in message

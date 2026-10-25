@@ -63,8 +63,6 @@ _INDETERMINATE_TEMPLATE = (
     + " it as a plain `git ...` command from inside the "
     "worktree it targets (no `-C`, `--git-dir`, `--work-tree`, `cd`, or "
     "`GIT_DIR`/`GIT_WORK_TREE`). "
-    "A lone `git checkout <branch>` sent to another repository can be written "
-    "`git -C <dir> switch <branch>` instead. "
     + _DURING_A_MERGE
 )
 
