@@ -96,6 +96,7 @@ INVALID = [
     ("superseded-without-sections", _doc(DELIVERED + _superseded(sections=()))),
     ("superseded-without-ruling", _doc(DELIVERED + _superseded(ruling=""))),
     ("superseded-bad-date", _doc(DELIVERED + _superseded(date="March"))),
+    ("superseded-empty-list", _doc(DELIVERED + "supersededInPart: []\n")),
 ]
 
 
@@ -125,6 +126,16 @@ def test_lives_in_must_exist_under_root(tmp_path):
     assert any("does not exist" in e for e in DD.lifecycle_errors(text, root=str(tmp_path)))
 
 
+def test_lives_in_must_stay_under_root(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (tmp_path / "outside.md").write_text("x", encoding="utf-8")
+    for escape in ("../outside.md", str(tmp_path / "outside.md")):
+        text = _doc(DELIVERED.replace("plugins/superheroes/lib/definition_doc.py", escape))
+        assert any("outside the repository" in e
+                   for e in DD.lifecycle_errors(text, root=str(root))), escape
+
+
 # --- the anchor check ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("section,covered", [
@@ -136,6 +147,18 @@ def test_superseding_ruling_covers_named_sections_only(section, covered):
     assert (entry is not None) is covered
     if covered:
         assert entry["ruling"] == "owner's ruling 9 a"
+
+
+def test_superseding_ruling_names_the_latest_covering_ruling():
+    entries = [
+        {"date": "2026-04-01", "sections": ["FR-6"], "ruling": "newest"},
+        {"date": "2026-03-01", "sections": ["FR-6", "UFR-1"], "ruling": "older"},
+        {"date": "2026-04-01", "sections": ["UFR-1"], "ruling": "same day, written later"},
+        {"date": "2026-03-15", "sections": ["UFR-1"], "ruling": "middle"},
+    ]
+    text = _doc(DELIVERED + "supersededInPart: %s\n" % json.dumps(entries))
+    assert DD.superseding_ruling(text, "FR-6")["ruling"] == "newest"
+    assert DD.superseding_ruling(text, "UFR-1")["ruling"] == "same day, written later"
 
 
 def test_superseding_ruling_fails_closed_on_invalid_fields():

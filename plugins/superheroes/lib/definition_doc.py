@@ -722,13 +722,17 @@ def lifecycle_errors(text, path="spec", root=None):
         errors.append("a delivered spec needs livesIn, a non-empty list of where its "
                       "behavior now lives")
     elif root is not None:
+        top = os.path.realpath(root)
         for p in lives_in:
             rel = p.split(" § ", 1)[0].strip()
-            if not os.path.exists(os.path.join(root, rel)):
+            target = os.path.realpath(os.path.join(top, rel))
+            if os.path.isabs(rel) or os.path.commonpath([top, target]) != top:
+                errors.append("livesIn path is outside the repository: %s" % rel)
+            elif not os.path.exists(target):
                 errors.append("livesIn path does not exist: %s" % rel)
     entries = values.get("supersededInPart", [])
-    if not isinstance(entries, list):
-        errors.append("supersededInPart must be a list")
+    if not isinstance(entries, list) or ("supersededInPart" in values and not entries):
+        errors.append("supersededInPart must be a non-empty list")
         entries = []
     for n, entry in enumerate(entries, 1):
         if not isinstance(entry, dict) or set(entry) != {"date", "sections", "ruling"}:
@@ -754,9 +758,10 @@ def _norm_section(text):
 
 
 def superseding_ruling(text, section, path="spec"):
-    """Return the superseded-in-part entry that covers `section`, or None.
+    """Return the latest superseded-in-part entry that covers `section`, or None.
 
-    A section is covered when it names an entry's section exactly (ignoring `§`, spacing and
+    The latest is the newest date, and the later-written entry on a tie, so a ruling that
+    replaced an earlier one is the one named. A section is covered when it names an entry's section exactly (ignoring `§`, spacing and
     case), or contains it as a whole token, so an anchor on `Part A (FR-6)` is covered by an
     entry naming `FR-6` while `FR-60` and `UFR-6` are not. Refuses (ValueError) a spec whose
     lifecycle fields are invalid: a leg that cannot be read never resolves an anchor.
@@ -768,12 +773,14 @@ def superseding_ruling(text, section, path="spec"):
     if "supersededInPart" not in found:
         return None
     wanted = _norm_section(section)
-    for entry in json.loads(found["supersededInPart"][1]):
+    covering = []
+    for n, entry in enumerate(json.loads(found["supersededInPart"][1])):
         for s in entry["sections"]:
             s = _norm_section(s)
             if s == wanted or re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(s), wanted):
-                return entry
-    return None
+                covering.append((entry["date"], n, entry))
+                break
+    return max(covering, key=lambda c: c[:2])[2] if covering else None
 
 
 # --- CLI -------------------------------------------------------------------
