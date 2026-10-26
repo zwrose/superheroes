@@ -20,6 +20,7 @@ for _path in (_HERE, _LIB):
 import cloud_check as CC  # noqa: E402
 import cloud_dependency_hook as hook  # noqa: E402
 import cloud_pass  # noqa: E402
+import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import launch_place  # noqa: E402
 import launch_report  # noqa: E402
@@ -112,6 +113,29 @@ def test_judge_fails_on_the_hook_part_with_the_gap_and_its_fix(tmp_path, monkeyp
     assert "(`%s`): %s." % (gap, sentence) in result["message"]
     assert fix in result["message"]
     assert result["message"].endswith('and say "check again".')
+
+
+def test_judge_failing_on_the_hook_part_pauses_the_account_and_never_writes_the_setting(
+        tmp_path, monkeypatch):
+    import core_md
+    import project_config
+    w, bare, with_hook = T._hooked(tmp_path)
+    line = _report_line(w)
+    assert core_md.write_project_config_item(
+        w.cwd, project_config.CLOUD_BUILDS_SLUG, True, root=w.root) == {"action": "written"}
+    calls = []
+    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(core_md, "write_project_config_item", lambda *a, **k: calls.append(a))
+    T._drop_hook_files(w)
+    result = _judge(w, line)
+    assert result["action"] == "failed" and "hook" in result["failedParts"]
+    assert calls == [] and result["settingSwitchedOff"] is False
+    assert cloud_setup.read(w.cwd, T.ACCOUNT, w.root)["setting"] is True
+    assert result["markerWritten"] is True
+    assert "hook" in CC.read_failed_check(w.cwd, T.ACCOUNT, w.root)["failedParts"]
+    assert "paused" in result["message"] and "resume by themselves" in result["message"]
+    for switched in ("switched them off", "stay off", "switch them off"):
+        assert switched not in result["message"]
 
 
 def test_judge_failure_leaves_a_marker_carrying_the_hook_part(tmp_path, monkeypatch):
@@ -307,7 +331,8 @@ def test_a_plain_and_a_failed_lane_with_one_reason_print_only_the_recheck_fix():
     recheck = TLR.SETUP_TEXT_FIX + " " + CHECK_AGAIN
     report = launch_report.render_report([TLR._lane(1, failed), TLR._lane(2, third),
                                           TLR._lane(3, plain)])
-    assert report.endswith(recheck)
+    # the recheck fix, then the one paused line (the failed lane was pointed by the word)
+    assert report.split("\n")[-2:] == [recheck, cloud_setup.PAUSED_LINE_WORD]
     assert report.count(TLR.SETUP_TEXT_FIX) == 1
 
 
@@ -322,7 +347,7 @@ def test_one_gap_with_a_failed_hook_part_prints_only_the_recheck_fix():
     recheck = launch_place.fix_text(_hook_call(hookGap="script-differs", failedCheck=["hook"]))
     plain = launch_place.fix_text(_hook_call(hookGap="script-differs"))
     assert recheck.endswith(CHECK_AGAIN)
-    assert report.endswith(recheck)
+    assert report.split("\n")[-2:] == [recheck, cloud_setup.PAUSED_LINE_WORD]
     assert report.count(plain) == 1
 
 
@@ -336,8 +361,8 @@ def test_a_later_failed_hook_lane_still_carries_the_recheck_fix():
     ]
     report = launch_report.render_report(lanes)
     assert launch_place.fix_text(second).endswith(CHECK_AGAIN)
-    assert report.endswith(launch_place.fix_text(second))
-    assert report.endswith(CHECK_AGAIN)
+    assert report.split("\n")[-2:] == [launch_place.fix_text(second), cloud_setup.PAUSED_LINE_WORD]
+    assert launch_place.fix_text(second).endswith(CHECK_AGAIN)
 
 
 def test_a_ledger_gap_that_is_not_a_string_still_renders_the_report():

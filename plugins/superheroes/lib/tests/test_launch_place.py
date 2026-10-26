@@ -299,9 +299,6 @@ def test_reason_text_renders_each_code_and_fills_unknown_versions():
     assert LP.reason_text(_call(reason="needs", need=None)) == _needs_text("something")
 
 
-CHECK_AGAIN_ONLY = 'Say "check again" and I\'ll run the check again.'
-
-
 def test_fix_text_is_the_tables_fix_when_no_check_failed():
     for code in LP.REASON_CODES:
         assert LP.fix_text(_call(reason=code)) == LP.REASONS[code]["fix"]
@@ -325,8 +322,12 @@ def test_E10_fix_text_without_a_reason_or_a_fix_is_none():
 
 def test_fix_text_after_a_failed_check_asks_for_the_check_again():
     # axis: after a failed check the fix ends by asking for the check to be run again
-    assert LP.fix_text(_call(reason="no-setup", failed=[])) == CHECK_AGAIN_ONLY
-    assert LP.fix_text(_call(reason="no-setup", failed=["record"])) == CHECK_AGAIN_ONLY
+    # a no-setup that came from a failed check says what the check failed on, in the paused wording
+    assert LP.fix_text(_call(reason="no-setup", failed=[])) == (
+        'Fix what it named, then say "check again".')
+    assert LP.fix_text(_call(reason="no-setup", failed=["record"])) == (
+        'To fix it, tell me so I can look at the store, then say "check again".')
+    assert LP.fix_text(_call(reason="no-setup", failed=None)) == LP.REASONS["no-setup"]["fix"]
     assert LP.fix_text(_call(reason="version", failed=["version"])) == (
         SETUP_TEXT_FIX + ' Then say "check again".')
     assert LP.fix_text(_call(reason="calibration", failed=["calibration"])) == (
@@ -678,12 +679,60 @@ def test_the_place_call_carries_the_failed_check_from_readiness(tmp_path):
     assert LP.fix_text(call) == SETUP_TEXT_FIX + ' Then say "check again".'
 
 
-def test_a_failed_check_with_no_known_part_gives_no_setup_and_check_again(tmp_path):
+def test_a_failed_check_with_no_fix_to_name_gives_no_setup_in_the_paused_words(tmp_path):
     repo, store, env = _on(tmp_path)
     _fail_the_check(repo, store, ["unread"])
     call = _route(repo, store, env)
     assert call["reason"] == "no-setup" and call["failedCheck"] == ["unread"]
-    assert LP.fix_text(call) == CHECK_AGAIN_ONLY
+    assert LP.reason_text(call) == "This account's last setup check failed on reporting back."
+    assert LP.wasnt_text(call) == "this account's last setup check failed on reporting back."
+    assert LP.fix_text(call) == 'Say "check again" and I\'ll run it once more.'
+
+
+def test_route_reads_the_marker_of_an_account_with_no_setup_record(tmp_path):
+    repo, store, env = _on(tmp_path)
+    os.unlink(CS.record_path(repo, ACCOUNT, store))
+    plain = _route(repo, store, env)
+    assert plain["reason"] == "no-setup" and plain["failedCheck"] is None
+    _fail_the_check(repo, store, ["version"])
+    call = _route(repo, store, env)
+    assert set(call) == PLACE_KEYS
+    assert call["place"] == "local" and call["reason"] == "no-setup"
+    assert call["failedCheck"] == ["version"]
+    assert LP.reason_text(call) == "This account's last setup check failed on the plugin version."
+    # a build the owner kept local gives its own reason, and the marker is not read into the call
+    local_word = _route(repo, store, env, word="local")
+    assert local_word["reason"] == "local-word" and local_word["failedCheck"] is None
+    # a marker that cannot be read counts as a damaged one: the empty list
+    with open(cloud_check.failed_check_path(repo, ACCOUNT, store), "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    damaged = _route(repo, store, env)
+    assert damaged["reason"] == "no-setup" and damaged["failedCheck"] == []
+    assert LP.reason_text(damaged) == "This account's last setup check failed."
+    # setting off and no word: the build was never pointed at the cloud, so the marker is not read
+    assert PC.set_item(repo, "cloudBuilds", False, root=store)["action"] == "written"
+    quiet = _route(repo, store, env)
+    assert quiet["pointedAtCloud"] is False and quiet["failedCheck"] is None
+
+
+def test_the_paused_words_are_built_from_the_marker_and_never_say_no_cloud_setup():
+    for parts, failed, fix in (
+            (["reviewer"], "last setup check failed on the reviewer pass.",
+             'To fix it, paste a fresh pass into the environment, then say "check again".'),
+            ([], "last setup check failed.", 'Fix what it named, then say "check again".'),
+            (["unread", "nonsense"], "last setup check failed on reporting back.",
+             'Say "check again" and I\'ll run it once more.')):
+        call = _call(reason="no-setup", failed=parts)
+        assert LP.reason_text(call) == "This account's " + failed
+        assert LP.wasnt_text(call) == "this account's " + failed
+        assert LP.fix_text(call) == fix
+        assert "no cloud setup" not in LP.reason_text(call)
+    # without a failed check the no-setup words are the table's, unchanged
+    plain = _call(reason="no-setup", failed=None)
+    assert LP.reason_text(plain) == "This project has no cloud setup on this Claude account."
+    # any other reason keeps its own words with a failed check beside it
+    assert LP.reason_text(_call(reason="pass-lapsed", failed=["reviewer"])) == (
+        "The reviewer pass has lapsed.")
 
 
 def test_failed_check_is_on_every_path_and_none_when_not_known():

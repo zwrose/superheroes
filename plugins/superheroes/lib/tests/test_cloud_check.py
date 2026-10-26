@@ -6,6 +6,7 @@ fakes wherever a test needs to see or force a call; the real record writer and r
 the fixture store wherever a test asserts that a record was or was not written. No test starts a
 cloud session, runs the reviewer tool or touches the network.
 """
+import functools
 import json
 import os
 import re
@@ -23,10 +24,13 @@ if _LIB not in sys.path:
 import cloud_check as CC  # noqa: E402
 import cloud_pass  # noqa: E402
 import cloud_plugin_pin  # noqa: E402
+import cloud_ready as CR  # noqa: E402
 import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import core_md  # noqa: E402
 import engine_adapter  # noqa: E402
+import launch_place as LP  # noqa: E402
+import launch_report as LR  # noqa: E402
 import mode_registry  # noqa: E402
 import model_registry  # noqa: E402
 import project_config  # noqa: E402
@@ -48,6 +52,12 @@ FACTS = {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "sin
          "patterns": "- x: a.ts:1"}
 FIRST_UNREAD = "**The check did not report back.** I could not read a result from the check session."
 OTHER_STAMP = "sha256:" + "0" * 64
+PAUSED_STANDING = ("Cloud builds are paused for this account until the check passes. "
+                   "They resume by themselves once the check passes.")
+NOT_PAUSED = ("I could not save the failed check on this machine, so cloud launches on this "
+              "account are not paused. Say \"turn cloud builds off\" until the check passes.")
+EARLIER_MARKER_STANDS = ("I could not record this check's own result, so the earlier failed "
+                         "check's marker is the one that stands.")
 
 
 # --- fixtures ------------------------------------------------------------------------------
@@ -653,74 +663,44 @@ def test_judge_edge8_the_record_write_gets_the_fields_of_the_report(tmp_path):
         "pass_lapses": FAR, "checked_at": TODAY, "root": local.root})]
 
 
-def test_judge_edge9_a_failure_switches_an_on_setting_off(tmp_path):
+def test_judge_edge9_a_failure_leaves_an_on_setting_on_and_pauses_the_account(tmp_path):
     local, cloud = _pair(tmp_path)
     _turn_on(local)
-    # axis: a failed check leaves cloud builds off
+    # axis: a failed check writes the marker and never the setting
     result = _judge(local, _cloud_report(cloud, confirmation=_confirm(answered=False)(None)))
     assert result["action"] == "failed" and result["failedParts"] == ["reviewer"]
-    assert result["settingSwitchedOff"] is True and result["recordWritten"] is False
-    assert _setting(local) is False and _record_state(local) == "none"
+    assert result["settingSwitchedOff"] is False and result["recordWritten"] is False
+    assert _setting(local) is True and _record_state(local) == "none"
+    assert result["markerWritten"] is True
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["reviewer"]
     assert result["message"] == (
         "**The check failed on one part.** The reviewer did not answer, so the pass is missing or "
-        "was pasted wrong.\n\nCloud builds stay off. They were on for this project, so I've "
-        "switched them off. To fix it, paste a fresh pass into the environment and say \"check "
-        "again\".")
+        "was pasted wrong.\n\nCloud builds are paused for this account until the check passes. "
+        "They resume by themselves once the check passes. To fix it, paste a fresh pass into the "
+        "environment and say \"check again\".")
 
 
-def test_judge_edge9_the_switch_off_goes_through_the_settings_write_path(tmp_path):
+def test_judge_edge9_no_failed_or_unread_result_writes_the_setting_through_any_path(
+        tmp_path, monkeypatch):
     local, cloud = _pair(tmp_path)
     _turn_on(local)
     calls = []
-    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"),
-                    set_fn=lambda *a, **k: calls.append((a, k)) or {"action": "written"})
-    assert result["settingSwitchedOff"] is True and result["failedParts"] == ["version"]
-    assert calls == [((local.cwd, project_config.CLOUD_BUILDS_SLUG, False),
-                      {"root": local.root, "project_name": "demo"})]
+    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: calls.append(("set_item", a)))
+    monkeypatch.setattr(core_md, "write_project_config_item",
+                        lambda *a, **k: calls.append(("core_md", a)))
+    failed = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    unread = _judge(local, "no report here")
+    passed = _judge(local, _ok_report(cloud), now=LATER)
+    assert (failed["action"], unread["action"], passed["action"]) == ("failed", "unread", "passed")
+    assert calls == []
+    assert failed["failedParts"] == ["version"] and unread["failedParts"] == ["unread"]
+    assert _setting(local) is True
 
 
-def test_judge_edge9_a_refused_or_raising_switch_off_adds_the_setting_part(tmp_path):
+def test_judge_takes_no_setting_writer(tmp_path):
     local, cloud = _pair(tmp_path)
-    _turn_on(local)
-
-    def raising(*a, **k):
-        raise OSError("locked")
-
-    for fake in (lambda *a, **k: {"action": "refused", "reason": "profile-absent"}, raising,
-                 lambda *a, **k: None):
-        result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=fake)
-        assert result["action"] == "failed" and result["failedParts"] == ["version", "setting"]
-        assert result["settingSwitchedOff"] is False and result["recordWritten"] is False
-        assert _setting(local) is True
-        assert result["message"].split("\n\n")[0].startswith("**The check failed on 2 parts.**")
-        assert "I could not switch cloud builds off." in _first(result)
-        # axis: a failed switch-off is never answered with the builds being off
-        assert "Cloud builds are still on." in result["message"]
-        assert "Cloud builds stay off" not in result["message"]
-        assert "switched them off" not in result["message"]
-        assert result["message"].endswith("paste the new setup text into the environment, then "
-                                          "switch them off in configure and say \"check again\".")
-
-
-def test_judge_edge9_an_unread_report_with_a_refused_or_raising_switch_off_says_so(tmp_path):
-    # axis: an unread report whose switch-off did not happen says the builds are still on — see bite-proof record c8a_wo1.md
-    local, cloud = _pair(tmp_path)
-    _turn_on(local)
-
-    def raising(*a, **k):
-        raise OSError("locked")
-
-    for fake in (lambda *a, **k: {"action": "refused", "reason": "profile-absent"},
-                 lambda *a, **k: {"action": "deferred", "reason": "lock-contended"}, raising,
-                 lambda *a, **k: None):
-        result = _judge(local, "no report here", set_fn=fake)
-        assert result["action"] == "unread" and result["failedParts"] == ["unread", "setting"]
-        assert result["settingSwitchedOff"] is False and _setting(local) is True
-        assert result["message"] == (
-            "**The check did not report back.** I could not read a result from the check "
-            "session.\n\nCloud builds are still on: I could not switch them off. Switch them off "
-            "in configure, then say \"check again\" and I'll run it once more.")
-        assert "stay off" not in result["message"]
+    with pytest.raises(TypeError):
+        _judge(local, _ok_report(cloud), set_fn=lambda *a, **k: {"action": "written"})
 
 
 def test_judge_a_report_altered_after_it_was_made_is_unread(tmp_path):
@@ -745,26 +725,27 @@ def test_judge_a_report_altered_after_it_was_made_is_unread(tmp_path):
 
 def test_judge_edge9_a_failure_with_the_setting_off_does_not_touch_it(tmp_path):
     local, cloud = _pair(tmp_path)
-    calls = []
-    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"),
-                    set_fn=lambda *a, **k: calls.append(a) or {"action": "written"})
-    assert calls == [] and result["settingSwitchedOff"] is False
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert result["settingSwitchedOff"] is False and _setting(local) is False
     assert "switched them off" not in result["message"]
 
 
-def test_judge_edge10_a_passed_check_never_changes_the_setting(tmp_path):
+def test_judge_edge10_a_passed_check_never_changes_the_setting(tmp_path, monkeypatch):
+    pairs = {}
     for turn_on in (False, True):
-        local, cloud = _pair(tmp_path / ("on" if turn_on else "off"))
+        pairs[turn_on] = _pair(tmp_path / ("on" if turn_on else "off"))
         if turn_on:
-            _turn_on(local)
-        calls = []
-        result = _judge(local, _ok_report(cloud),
-                        set_fn=lambda *a, **k: calls.append(a) or {"action": "written"})
+            _turn_on(pairs[turn_on][0])
+    calls = []
+    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(core_md, "write_project_config_item", lambda *a, **k: calls.append(a))
+    for turn_on, (local, cloud) in pairs.items():
+        result = _judge(local, _ok_report(cloud))
         assert result["action"] == "passed" and result["settingSwitchedOff"] is False
         assert calls == [] and _setting(local) is turn_on
 
 
-def test_judge_edge11_a_malformed_environment_is_unread_and_still_switches_off(tmp_path):
+def test_judge_edge11_a_malformed_environment_is_unread_and_leaves_the_setting_on(tmp_path):
     local, cloud = _pair(tmp_path)
     for bad in ("env-01ABCdef", "", None, "env_", "env_01 ABC", "env_01ABCdef\n", 7):
         result = _judge(local, _ok_report(cloud), environment=bad)
@@ -775,12 +756,12 @@ def test_judge_edge11_a_malformed_environment_is_unread_and_still_switches_off(t
         assert result["action"] == "unread" and _record_state(local) == "none", bad
     _turn_on(local)
     result = _judge(local, _ok_report(cloud), environment="env-01ABCdef")
-    assert result["action"] == "unread" and result["settingSwitchedOff"] is True
-    assert _setting(local) is False and _record_state(local) == "none"
+    assert result["action"] == "unread" and result["settingSwitchedOff"] is False
+    assert _setting(local) is True and _record_state(local) == "none"
     assert result["message"] == (
         "**The check did not report back.** I could not read a result from the check session.\n\n"
-        "Cloud builds stay off. They were on for this project, so I've switched them off. Say "
-        "\"check again\" and I'll run it once more.")
+        "Cloud builds are paused for this account until the check passes. They resume by "
+        "themselves once the check passes. Say \"check again\" and I'll run it once more.")
 
 
 def test_judge_reads_nothing_from_a_non_report(tmp_path):
@@ -898,7 +879,7 @@ def test_judge_reviewer_failure_message_is_the_approved_words(tmp_path):
     result = _judge(local, _cloud_report(cloud, confirmation=_confirm(answered=False)(None)))
     assert result["message"] == (
         "**The check failed on one part.** The reviewer did not answer, so the pass is missing or "
-        "was pasted wrong.\n\nCloud builds stay off. To fix it, paste a fresh pass into the "
+        "was pasted wrong.\n\n" + PAUSED_STANDING + " To fix it, paste a fresh pass into the "
         "environment and say \"check again\".")
 
 
@@ -926,7 +907,8 @@ def test_judge_passed_message_when_already_on(tmp_path):
         "- Its calibration matches this machine's.\n"
         "- The reviewer answered.\n"
         "- It has a git identity to commit with.\n\n"
-        "Cloud builds are ready for demo, and they're already on." % VERSION)
+        "Cloud builds are ready for demo and on, so builds run in the cloud again from the next "
+        "launch." % VERSION)
 
 
 def test_judge_version_mismatch_names_both_versions_and_its_fix(tmp_path):
@@ -934,8 +916,8 @@ def test_judge_version_mismatch_names_both_versions_and_its_fix(tmp_path):
     result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
     assert result["message"] == (
         "**The check failed on one part.** The cloud's plugin is 0.0.1 and mine is %s.\n\n"
-        "Cloud builds stay off. To fix it, paste the new setup text into the environment and say "
-        "\"check again\"." % VERSION)
+        % VERSION + PAUSED_STANDING + " To fix it, paste the new setup text into the environment "
+        "and say \"check again\".")
     missing = _judge(local, _cloud_report(cloud, pluginVersion=None))
     assert _first(missing) == ("**The check failed on one part.** The cloud's plugin is not "
                                "installed and mine is %s." % VERSION)
@@ -946,8 +928,8 @@ def test_judge_calibration_mismatch_names_its_fix(tmp_path):
     result = _judge(local, _cloud_report(cloud, placedStamp=OTHER_STAMP))
     assert result["message"] == (
         "**The check failed on one part.** The cloud's calibration doesn't match this machine's."
-        "\n\nCloud builds stay off. To fix it, paste the new setup text into the environment and "
-        "say \"check again\".")
+        "\n\n" + PAUSED_STANDING + " To fix it, paste the new setup text into the environment "
+        "and say \"check again\".")
 
 
 def test_judge_two_failed_parts_joins_fixes_once(tmp_path):
@@ -956,8 +938,8 @@ def test_judge_two_failed_parts_joins_fixes_once(tmp_path):
     assert same_fix["failedParts"] == ["version", "calibration"]
     assert same_fix["message"] == (
         "**The check failed on 2 parts.** The cloud's plugin is 0.0.1 and mine is %s. The cloud's "
-        "calibration doesn't match this machine's.\n\nCloud builds stay off. To fix it, paste the "
-        "new setup text into the environment and say \"check again\"." % VERSION)
+        "calibration doesn't match this machine's.\n\n" % VERSION + PAUSED_STANDING
+        + " To fix it, paste the new setup text into the environment and say \"check again\".")
     different = _judge(local, _cloud_report(
         cloud, environment=None, confirmation=_confirm(answered=False)(None)))
     assert different["failedParts"] == ["environment", "reviewer"]
@@ -974,7 +956,7 @@ def test_judge_unread_message(tmp_path):
     assert result["action"] == "unread" and result["settingSwitchedOff"] is False
     assert result["message"] == (
         "**The check did not report back.** I could not read a result from the check session.\n\n"
-        "Cloud builds stay off. Say \"check again\" and I'll run it once more.")
+        + PAUSED_STANDING + " Say \"check again\" and I'll run it once more.")
 
 
 # --- the failed-check marker ---------------------------------------------------------------
@@ -1038,56 +1020,117 @@ def test_an_unread_report_writes_the_marker(tmp_path):
     assert _record_state(local) == "none"
 
 
-def test_a_marker_lists_the_setting_part_after_a_switch_off_that_failed(tmp_path):
+def test_a_failed_check_marks_once_and_never_adds_a_setting_part(tmp_path, monkeypatch):
     local, cloud = _pair(tmp_path)
     _turn_on(local)
-    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"),
-                    set_fn=lambda *a, **k: {"action": "refused", "reason": "profile-absent"})
-    assert result["failedParts"] == ["version", "setting"]
-    # detector: a marker written before the switch-off settled its parts goes red here
-    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == [
-        "version", "setting"]
-
-
-def test_the_marker_exists_when_the_switch_off_is_attempted(tmp_path):
-    local, cloud = _pair(tmp_path)
-    _turn_on(local)
-    seen = []
-
-    def set_fn(*a, **k):
-        seen.append(CC.read_failed_check(local.cwd, ACCOUNT, local.root))
-        return {"action": "written"}
-
-    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=set_fn)
-    # detector: a switch-off attempted before the marker is on disk goes red here
-    assert len(seen) == 1 and seen[0]["failedParts"] == ["version"]
-    assert result["markerWritten"] is True and result["failedParts"] == ["version"]
-    seen.clear()
-    unread = _judge(local, "no report here", set_fn=set_fn)
-    assert len(seen) == 1 and seen[0]["failedParts"] == ["unread"]
-    assert unread["markerWritten"] is True
-
-
-def test_a_failed_switch_off_rewrites_the_marker_and_a_failed_rewrite_keeps_the_first(
-        tmp_path, monkeypatch):
-    local, cloud = _pair(tmp_path)
-    _turn_on(local)
-    refuse = lambda *a, **k: {"action": "refused", "reason": "profile-absent"}  # noqa: E731
     real_replace = os.replace
     writes = []
 
     def replace(src, dst, *a, **k):
         if str(dst).endswith(CC.FAILED_CHECK_SUFFIX):
             writes.append(1)
-            if len(writes) > 1:
-                raise OSError("disk")
         return real_replace(src, dst, *a, **k)
 
     monkeypatch.setattr(os, "replace", replace)
-    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=refuse)
-    # detector: markerWritten true while the disk marker lacks the final parts goes red here
-    assert result["failedParts"] == ["version", "setting"] and result["markerWritten"] is False
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    # detector: a marker rewritten with a setting part after a switch-off that no longer exists goes red here
+    assert result["failedParts"] == ["version"] and result["markerWritten"] is True
+    assert writes == [1]
     assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["version"]
+
+
+class _Lock:
+    """A `mode_registry.config_lock` stand-in that is held (yields False) for its first `held`
+    acquisitions, then free; `calls` counts every acquisition."""
+
+    def __init__(self, held, real):
+        self.held, self.real, self.calls = held, real, 0
+
+    def __call__(self, cwd, root=None):
+        import contextlib
+        self.calls += 1
+        if self.calls <= self.held:
+            @contextlib.contextmanager
+            def held():
+                yield False
+            return held()
+        return self.real(cwd, root)
+
+
+@pytest.fixture
+def lock_spy(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(CC, "_sleep", sleeps.append)
+    real = mode_registry.config_lock
+
+    def install(held):
+        spy = _Lock(held, real)
+        monkeypatch.setattr(mode_registry, "config_lock", spy)
+        return spy
+
+    install.sleeps = sleeps
+    return install
+
+
+def test_a_marker_that_cannot_be_saved_for_a_held_lock_is_tried_five_times_then_not_paused(
+        tmp_path, lock_spy):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    spy = lock_spy(held=10 ** 6)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    # detector: a marker write that gives up on the first held lock goes red here
+    assert spy.calls == 5 and lock_spy.sleeps == [0.2] * 4
+    assert CC._MARKER_ATTEMPTS == 5 and CC._MARKER_WAIT == 0.2
+    assert result["action"] == "failed" and result["markerWritten"] is False
+    assert NOT_PAUSED in result["message"] and PAUSED_STANDING not in result["message"]
+    assert "paused for this account until" not in result["message"]
+    assert not os.path.exists(_marker_path(local)) and _setting(local) is True
+    unread = _judge(local, "no report here")
+    assert unread["markerWritten"] is False and NOT_PAUSED in unread["message"]
+    assert PAUSED_STANDING not in unread["message"]
+
+
+def test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused(tmp_path, lock_spy):
+    local, cloud = _pair(tmp_path)
+    first = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert first["markerWritten"] is True and os.path.exists(_marker_path(local))
+    lock_spy(held=10 ** 6)
+    result = _judge(local, _cloud_report(cloud, confirmation=_confirm(answered=False)(None)))
+    # detector: a not-paused sentence chosen on this judgment's write alone goes red here
+    assert result["action"] == "failed" and result["markerWritten"] is False
+    assert PAUSED_STANDING in result["message"] and EARLIER_MARKER_STANDS in result["message"]
+    assert NOT_PAUSED not in result["message"]
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["version"]
+    unread = _judge(local, "no report here")
+    # detector: the unread result's standing sentence, chosen on the write alone, goes red here
+    assert unread["action"] == "unread" and unread["markerWritten"] is False
+    assert PAUSED_STANDING in unread["message"] and EARLIER_MARKER_STANDS in unread["message"]
+    assert NOT_PAUSED not in unread["message"]
+
+
+def test_a_marker_write_that_finds_the_lock_free_on_a_later_try_is_written(tmp_path, lock_spy):
+    local, cloud = _pair(tmp_path)
+    spy = lock_spy(held=2)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert spy.calls == 3 and lock_spy.sleeps == [0.2, 0.2]
+    assert result["markerWritten"] is True and PAUSED_STANDING in result["message"]
+    assert NOT_PAUSED not in result["message"]
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["version"]
+
+
+def test_a_marker_write_that_hits_an_oserror_is_tried_once_and_not_paused(
+        tmp_path, monkeypatch, lock_spy):
+    local, cloud = _pair(tmp_path)
+    spy = lock_spy(held=0)
+
+    def replace(src, dst, *a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(os, "replace", replace)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert spy.calls == 1 and lock_spy.sleeps == []
+    assert result["markerWritten"] is False
+    assert NOT_PAUSED in result["message"] and PAUSED_STANDING not in result["message"]
 
 
 def test_a_passing_check_removes_the_marker_and_writes_the_record(tmp_path):
@@ -1248,9 +1291,12 @@ def test_a_marker_write_that_fails_changes_nothing_else(tmp_path, monkeypatch):
     assert base["markerWritten"] is True and results["base-marker"] is True
     # detector: a marker write that fails but is reported written goes red here
     assert fault["markerWritten"] is False and results["fault-marker"] is False
-    assert dict(fault, markerWritten=True) == base
-    assert fault["settingSwitchedOff"] is True
-    assert results["fault-setting"] is False and results["base-setting"] is False
+    # the two runs differ only in the marker and in the standing sentence: paused, or not paused
+    assert dict(fault, markerWritten=True, message=None) == dict(base, message=None)
+    assert PAUSED_STANDING in base["message"] and NOT_PAUSED in fault["message"]
+    assert PAUSED_STANDING not in fault["message"] and NOT_PAUSED not in base["message"]
+    assert fault["settingSwitchedOff"] is False
+    assert results["fault-setting"] is True and results["base-setting"] is True
 
 
 def test_an_unresolved_account_writes_no_marker(tmp_path):
@@ -1829,3 +1875,206 @@ def test_the_fallback_line_still_judges_as_failed_for_a_pin_project_and_one_with
         assert result["action"] == "failed", name
         assert "reviewer" in result["failedParts"] and result["recordWritten"] is False
         assert ("pin" in result["failedParts"]) is (name == "pin")
+
+
+# --- a failed check pauses the account and never writes the setting ------------------------------
+
+# The words about the owner's own setting being off are the two named exemptions: the passed-off
+# message ("still switched off") and gardening's setting-off line ("cloud builds stay off until a check passes").
+T9_PATTERN = re.compile(
+    r"(?i)switched (them |cloud builds )?off|switch them off|switching cloud builds off|stay off"
+    r"|still on: I could not")
+OTHER_ACCOUNT = "acct-fixture-two"
+CHECK_DAY = datetime(2026, 10, 10).date()
+
+
+def _no_needs(cwd, premise, root=None):
+    return []
+
+
+def _account_env(local, account):
+    config = os.path.join(os.path.dirname(local.env["CLAUDE_CONFIG_DIR"]), "claude-" + account)
+    os.makedirs(config, exist_ok=True)
+    with open(os.path.join(config, ".claude.json"), "w", encoding="utf-8") as fh:
+        json.dump({"oauthAccount": {"accountUuid": account}}, fh)
+    return dict(local.env, CLAUDE_CONFIG_DIR=config)
+
+
+def _place(local, env, word=None):
+    """The real place call: real store, real readiness, no needs."""
+    ready = functools.partial(CR.readiness, advisor_version=VERSION, today=CHECK_DAY,
+                              stamp_fn=lambda cwd, root: local.stamp)
+    return LP.route(local.cwd, {}, word, readiness_fn=ready, needs_fn=_no_needs, root=local.root,
+                    env=env)
+
+
+def _lane(call):
+    return {"issue": 1, "title": "Build", "placeCall": call}
+
+
+def _identity_none(cloud):
+    obj = _cloud_report(cloud)
+    obj[CC.IDENTITY_FIELD] = {"author": False, "committer": False}
+    return obj
+
+
+# every failed part `judge` can produce from the plain pair, and the unread result: how to make it
+T1_CASES = {
+    "environment": (lambda cloud: _cloud_report(cloud, environment=None), {}),
+    "version": (lambda cloud: _cloud_report(cloud, pluginVersion="0.0.1"), {}),
+    "calibration": (lambda cloud: _cloud_report(cloud, placedStamp=OTHER_STAMP), {}),
+    "reviewer": (lambda cloud: _cloud_report(cloud, confirmation=_confirm(answered=False)(None)), {}),
+    "identity": (_identity_none, {}),
+    "record": (_ok_report, {"record_fn": lambda *a, **k: {"action": "refused", "reason": "store-locked"}}),
+    "unread": (lambda cloud: "no report here", {}),
+}
+
+
+def _paused_not_switched_off(local, result, part):
+    assert part in result["failedParts"], result
+    assert result["settingSwitchedOff"] is False and _setting(local) is True
+    assert result["markerWritten"] is True
+    marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
+    assert marker is not None and part in marker["failedParts"]
+    assert "paused" in result["message"] and "resume by themselves" in result["message"]
+    assert not T9_PATTERN.search(result["message"]), result["message"]
+
+
+# axis: every failed part and the unread result pause the account and leave the owner's setting on; a judgment that wrote the setting off or skipped the marker fails the setting, marker or paused-words assertions
+@pytest.mark.parametrize("part", list(T1_CASES))
+def test_T1_a_failed_or_unread_check_leaves_the_setting_on_and_pauses_the_account(tmp_path, part):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    make, extra = T1_CASES[part]
+    result = _judge(local, make(cloud), **extra)
+    assert result["action"] == ("unread" if part == "unread" else "failed")
+    _paused_not_switched_off(local, result, part)
+
+
+# axis: a failed pin part pauses the account the same way and leaves the setting on; a pin failure that switched the setting off or wrote no marker fails the same assertions
+def test_T1_a_pin_failure_leaves_the_setting_on_and_pauses_the_account(tmp_path):
+    local, cloud = _pin_pair(tmp_path)
+    _turn_on(local)
+    result = _judge(local, _cloud_report(cloud, pluginCommit=OTHER_COMMIT))
+    assert result["action"] == "failed" and result["failedParts"] == ["pin"]
+    _paused_not_switched_off(local, result, "pin")
+
+
+def _passed_with_the_setting_on(tmp_path, account=ACCOUNT):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _ok_report(cloud), account=account)["action"] == "passed"
+    _turn_on(local)
+    return local, cloud
+
+
+# axis: a failed check pauses cloud placement and a later pass resumes it with no owner step, no setting write ever; a pause that outlives the pass, or a check that writes the setting, fails the place-call and writes assertions
+def test_T2_fail_then_pass_pauses_then_resumes_with_no_owner_step(tmp_path, monkeypatch):
+    local, cloud = _passed_with_the_setting_on(tmp_path)
+    env = _account_env(local, ACCOUNT)
+    assert _place(local, env)["place"] == "cloud"
+    writes = []
+    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: writes.append(("set", a)))
+    monkeypatch.setattr(core_md, "write_project_config_item", lambda *a, **k: writes.append(("core", a)))
+    failed = _judge(local, _cloud_report(cloud, confirmation=_confirm(answered=False)(None)))
+    assert failed["action"] == "failed"
+    paused = _place(local, env)
+    assert paused["place"] == "local" and paused["by"] == "setting" and paused["pointedAtCloud"] is True
+    assert paused["reason"] == "no-pass" and paused["failedCheck"] == ["reviewer"]
+    report = LR.render_report([_lane(paused)])
+    assert report.endswith(cloud_setup.PAUSED_LINE_ON)
+    assert "switched" not in report.lower() and "switch them off" not in report.lower()
+    passed = _judge(local, _ok_report(cloud), now=LATER)
+    assert passed["action"] == "passed"
+    assert not os.path.exists(_marker_path(local))
+    # the setting was never written by any check, and still reads on
+    assert writes == [] and _setting(local) is True
+    resumed = _place(local, env)
+    assert resumed["place"] == "cloud" and resumed["reason"] is None and resumed["failedCheck"] is None
+
+
+# axis: the failed-check marker is per account; a marker or pause that reached another account's place call or marker fails the unchanged-call and absent-marker assertions
+def test_T3_one_accounts_failed_check_leaves_another_accounts_place_call_unchanged(tmp_path):
+    local, cloud = _passed_with_the_setting_on(tmp_path)
+    recorded = cloud_setup.record_check(
+        local.cwd, root=local.root, account=OTHER_ACCOUNT, environment=ENV_ID, plugin_version=VERSION,
+        picks_up_version=False, calibration_stamp=local.stamp, calibration_date=TODAY,
+        pass_lapses=FAR, checked_at=TODAY)
+    assert recorded["action"] == "written", recorded
+    env_a, env_b = _account_env(local, ACCOUNT), _account_env(local, OTHER_ACCOUNT)
+    before = _place(local, env_b)
+    assert before["place"] == "cloud" and _place(local, env_a)["place"] == "cloud"
+    failed = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert failed["action"] == "failed" and failed["markerWritten"] is True
+    a_after = _place(local, env_a)
+    assert a_after["place"] == "local" and a_after["failedCheck"] == ["version"]
+    assert a_after["reason"] == "version"
+    assert _place(local, env_b) == before
+    assert CC.read_failed_check(local.cwd, OTHER_ACCOUNT, local.root) is None
+
+
+# axis: an account whose first check fails reads as paused on the failed part, not as having no cloud setup; the no-setup words or a missing paused line fail the reason, fix and report assertions
+def test_T6_an_accounts_first_check_failing_reads_paused_not_no_cloud_setup(tmp_path):
+    local, cloud = _passed_with_the_setting_on(tmp_path)
+    env_a, env_b = _account_env(local, ACCOUNT), _account_env(local, OTHER_ACCOUNT)
+    failed = _judge(local, _cloud_report(cloud, confirmation=_confirm(answered=False)(None)),
+                    account=OTHER_ACCOUNT)
+    assert failed["action"] == "failed" and failed["markerWritten"] is True
+    assert cloud_setup.read(local.cwd, OTHER_ACCOUNT, local.root)["state"] == "none"
+    call = _place(local, env_b)
+    assert call["place"] == "local" and call["pointedAtCloud"] is True and call["by"] == "setting"
+    assert call["reason"] == "no-setup" and call["failedCheck"] == ["reviewer"]
+    words = LP.reason_text(call)
+    assert words == "This account's last setup check failed on the reviewer pass."
+    assert "no cloud setup" not in words
+    assert LP.fix_text(call) == (
+        'To fix it, paste a fresh pass into the environment, then say "check again".')
+    assert LR.render_report([_lane(call)]).endswith(cloud_setup.PAUSED_LINE_ON)
+    # the first account, which passed, is untouched by the second one's failure
+    assert _place(local, env_a)["place"] == "cloud"
+
+
+# axis: no check message, fix, gardening line or report says cloud builds were switched off, bar the two named exemptions; a message that claims the setting was switched off matches the pattern and fails
+def test_T9_no_check_message_says_cloud_builds_were_switched_off(tmp_path):
+    exempt = {"_PASSED_OFF"}
+    for name in dir(CC):
+        value = getattr(CC, name)
+        if name.startswith("_") and isinstance(value, str) and name not in exempt:
+            assert not T9_PATTERN.search(value), (name, value)
+    assert T9_PATTERN.search(CC._PASSED_OFF) and "still switched off" in CC._PASSED_OFF
+    for _name, sentence, fix in CC._PARTS:
+        for text in (sentence, fix):
+            assert not T9_PATTERN.search(text or ""), text
+    texts = [CC._PAUSED_STANDING, CC._NOT_PAUSED, cloud_setup.PAUSED_LINE_ON,
+             cloud_setup.PAUSED_LINE_WORD, cloud_setup.PAUSED_RESUME]
+    for kind in ("on", "off", "refused"):
+        texts.append(cloud_setup.switch_message(kind, "demo"))
+    for parts in (None, [], ["unread"], list(cloud_setup.PAUSED_PARTS)):
+        texts.append(cloud_setup.switch_message("on-paused", "demo", parts=parts))
+        texts.append(cloud_setup.paused_failure(parts))
+    # gardening's setting-off line is about the owner's own setting: excluded by name, whole
+    gardening_exempt = re.compile(re.escape(cloud_setup._CHECK_AGAIN), re.IGNORECASE)
+    for turn_on in (True, False):
+        for part, (make, extra) in T1_CASES.items():
+            local, cloud = _pair(tmp_path / ("%s-%s" % (turn_on, part)))
+            assert _judge(local, _ok_report(cloud))["action"] == "passed"
+            if turn_on:
+                _turn_on(local)
+            result = _judge(local, make(cloud), now=LATER, **extra)
+            texts.append(result["message"])
+            for line in cloud_setup.gardening_lines(local.cwd, 7, today=CHECK_DAY, root=local.root):
+                text = line["line"]
+                assert bool(gardening_exempt.search(text)) is (not turn_on), (turn_on, part, text)
+                texts.append(gardening_exempt.sub("", text))
+            ready = _place(local, _account_env(local, ACCOUNT), word="cloud")
+            report = LR.render_report([_lane(ready)])
+            if report is not None:
+                texts.append(report)
+            if turn_on:
+                texts.append(project_config.set_item(
+                    local.cwd, project_config.CLOUD_BUILDS_SLUG, True, root=local.root,
+                    account=ACCOUNT, project_name="demo").get("message", ""))
+    passed_local, passed_cloud = _pair(tmp_path / "passed")
+    off = _judge(passed_local, _ok_report(passed_cloud))
+    assert T9_PATTERN.search(off["message"]) and "still switched off" in off["message"]
+    for text in texts:
+        assert not T9_PATTERN.search(text), text

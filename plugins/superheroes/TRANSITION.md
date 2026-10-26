@@ -19,6 +19,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **An advisor relaying to a cloud builder passes `compose --session` the lane's session name (`cloudSessionName`, `issue-<n>-<hash>`), never its session id (the value that opens with `session` and an underscore); an id is now refused at compose with `session-id-not-name`.** See [Relay: compose refuses a session id where it needs the session name](#relay-compose-refuses-a-session-id-where-it-needs-the-session-name).
+- **After switching.** **Nothing is owed by a consuming project, except: a project a check already switched off stays off until the owner says "turn cloud builds on" once.** A failed or unread cloud check no longer switches cloud builds off; it pauses cloud launches on that account until a check passes. See [Cloud setup check: a failed check pauses the account instead of switching cloud builds off](#cloud-setup-check-a-failed-check-pauses-the-account-instead-of-switching-cloud-builds-off).
 
 ### Relay: compose refuses a session id where it needs the session name
 
@@ -67,6 +68,17 @@ Check these in a consuming project when it adopts this release. Each step names 
 - The launch report's words and fix step for `dependency-hook` name the gap when the call carries one. A call without one, such as a record from an earlier launch's ledger, keeps the generic words. Lanes whose gaps differ each print their own fix step; lanes that share a gap print it once.
 - A failed `hook` part ends the fix step with "check again", so the owner re-runs the check once the hook files are committed and pushed.
 - The words for each gap have one home, `cloud_dependency_hook.GAP_TEXT`, which the check's message and the launch report both read.
+
+### Cloud setup check: a failed check pauses the account instead of switching cloud builds off
+
+- **For an owner.** A failed or unread cloud check no longer switches cloud builds off. The cloud-builds setting (item 15) is the owner's intent and only the owner's switch writes it. The failed check leaves its failed-check marker, and that marker pauses cloud launches on that Claude account only, until a check passes; other accounts are unaffected. The check's message and the launch report say cloud builds are paused for the account and resume by themselves once a check passes, and the "Still on your machine" line names what the check failed on in the same words. A passing check clears the marker and builds go back to the cloud from the next launch, with no word from the owner.
+- **For an advisor.** `cloud_check.judge` no longer takes `set_fn`, and its result's `settingSwitchedOff` is always `False` (the key stays). The `setting` failed part is no longer produced; a marker an earlier plugin wrote with it is still read, and its part is named as an older check step. `cloud_check._switch_off`, `_SWITCHED_OFF` and `_UNREAD_STILL_ON` are gone.
+- `cloud_setup.switch_message` loses the kind `check-failed` and gains `on-paused`. `cloud_setup.REASON_CHECK_FAILED`, `SWITCH_OFF_FIX` and `STILL_ON_REPAIR` are removed. The paused wording has one home in `cloud_setup`: `PAUSED_PARTS`, `PAUSED_RESUME`, `paused_failure`, `paused_parts`, `PAUSED_LINE_ON` and `PAUSED_LINE_WORD`; the check, the settings write, the place call and the launch report all read it from there.
+- Switching cloud builds on while the account's last check failed now succeeds. `project_config.set_item` returns the `on-paused` message, which names what the check failed on (or says only that it failed, for a damaged marker). A missing setup record still refuses with `cloud-setup-missing`.
+- `launch_place.route` reads the failed-check marker for an account with no setup record when the build was pointed at the cloud, so an account whose first check failed carries `failedCheck` and reads "This account's last setup check failed on ...", not "no cloud setup". `cloud_ready.readiness` is unchanged.
+- The launch report ends with one paused line when a build the cloud was meant for fell back because of a failed check. The "Still on your machine" line for such a build clears once a passing check has cleared the marker, on the same day too.
+- The marker write retries when the store lock is held: five tries, 0.2 seconds apart. A marker that still cannot be saved is reported as "not paused": `markerWritten` is false and the message says cloud launches on this account are not paused, and to say "turn cloud builds off" until the check passes.
+- A project a check already switched off stays off until the owner says "turn cloud builds on" once.
 
 ## 0.46.1
 

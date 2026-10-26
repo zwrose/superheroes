@@ -12,8 +12,9 @@ the judgment of that check on the owner's machine.
 owner gave. `report` runs inside the cloud session and prints one marked line saying what that session holds.
 `judge` runs on the owner's machine, reads that line out of whatever text carries it, and writes
 the setup record only when every part of the report agrees with this machine. Any other result
-writes no record, and a project whose cloud-builds setting is on has it switched off through the
-setting's one write path. A passed check never changes the setting.
+writes no record and leaves the account's failed-check marker, which pauses cloud launches on that
+account until a check passes. The cloud-builds setting is the owner's intent and is written only by
+the owner's switch: no check, passed, failed or unread, ever writes it.
 
 Standard library plus the plugin's own lib modules. Every public function returns a plain dict and
 never raises for an expected failure; an expected failure is a refusal with a `reason` token and one
@@ -42,7 +43,6 @@ import engine_adapter
 import launch_doctrine
 import mode_registry
 import model_registry
-import project_config
 import store_core
 
 PASS_LIFETIME_DAYS = 10
@@ -122,7 +122,7 @@ _EXPIRY_KNOWN = "it stops working on {date}"
 _EXPIRY_UNKNOWN = "it stops working after {days} days; the exact date isn't known yet"
 _SIGN_IN_IN_PLACE = "The separate reviewer sign-in is in place."
 
-_SAME_FIX = "paste the new setup text into the environment"
+_SAME_FIX = cloud_setup.FIX_PASTE_SETUP
 _PIN_FIX = ("run cloud_plugin_pin.py write on this machine, commit and push the files it names, then "
             "start a new check; if the pin already names my plugin, the cloud could not install it, "
             "and the hook's one-line message in the cloud session says why")
@@ -144,18 +144,28 @@ _PARTS = (
      "The dependency hook on the branch builds start from failed its check (`%s`): %s.", "%s"),
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
-     "paste a fresh pass into the environment"),
+     cloud_setup.FIX_FRESH_PASS),
     ("identity",
      "The cloud session has no git identity to commit with, so a build there would stop at its "
      "first commit.",
      "set GIT_AUTHOR_NAME and GIT_COMMITTER_NAME to {name}, and GIT_AUTHOR_EMAIL and "
      "GIT_COMMITTER_EMAIL to {email}, in the environment's variables"),
     ("record", "The check passed, but I could not finish saving the result on this machine.",
-     "tell me so I can look at the store"),
-    ("setting", "I could not switch cloud builds off.", cloud_setup.SWITCH_OFF_FIX),
+     cloud_setup.FIX_RECORD),
 )
 _IDENTITY_UNREPORTED = "The cloud session did not report its git identity."
-_SWITCHED_OFF = " They were on for this project, so I've switched them off."
+# The standing sentence of every check message: the failed-check marker is the paused state.
+_PAUSED_STANDING = ("Cloud builds are paused for this account until the check passes. "
+                    + cloud_setup.PAUSED_RESUME)
+_NOT_PAUSED = ("I could not save the failed check on this machine, so cloud launches on this "
+               "account are not paused. Say \"turn cloud builds off\" until the check passes.")
+# said after the paused standing when this judgment's marker write failed but an earlier marker stays
+_EARLIER_MARKER_STANDS = ("I could not record this check's own result, so the earlier failed "
+                          "check's marker is the one that stands.")
+# how many times the marker write tries a held store lock, and how long it waits between tries
+_MARKER_ATTEMPTS = 5
+_MARKER_WAIT = 0.2
+_sleep = time.sleep
 
 _PASSED = (
     "**The check passed.**\n"
@@ -168,17 +178,13 @@ _PASSED = (
 )
 _PASSED_OFF = "Cloud builds are ready for {project} and still switched off. " \
               "Say \"turn cloud builds on\" when you want them."
-_PASSED_ON = "Cloud builds are ready for {project}, and they're already on."
+_PASSED_ON = ("Cloud builds are ready for {project} and on, so builds run in the cloud again from "
+              "the next launch.")
 
 _UNREAD = (
     "**The check did not report back.** I could not read a result from the check session.\n"
     "\n"
-    "Cloud builds stay off.{switched} Say \"check again\" and I'll run it once more."
-)
-_UNREAD_STILL_ON = (
-    "**The check did not report back.** I could not read a result from the check session.\n"
-    "\n"
-    + cloud_setup.STILL_ON_REPAIR + ", then say \"check again\" and I'll run it once more."
+    "{standing} Say \"check again\" and I'll run it once more."
 )
 
 _CHECK_SESSION_PREFIX = "cloud-check-"
@@ -520,31 +526,16 @@ def _judge_parts(obj, environment, cwd, root, today):
     }, local_placed, pin, gap
 
 
-def _switch_off(cwd, account, root, project_name, set_fn):
-    """(was on, switched off). A refused or raising write is not switched off."""
-    if cloud_setup.read(cwd, account, root)["setting"] is not True:
-        return False, False
-    set_fn = project_config.set_item if set_fn is None else set_fn
-    try:
-        got = set_fn(cwd, project_config.CLOUD_BUILDS_SLUG, False, root=root,
-                     project_name=project_name)
-    except Exception:
-        return True, False
-    return True, isinstance(got, dict) and got.get("action") in ("written", "noop")
-
-
-def _fail_closed(cwd, who, root, name, set_fn, environment, failed, now):
-    """(switched off, failed parts, marker written). The marker goes down before the setting is
-    touched, carrying the parts known so far; a switch-off that then fails adds `setting` and the
-    marker is rewritten once with the final parts. The marker is reported written only when the one
-    on disk carries the final parts; a failed rewrite leaves the first marker in place."""
+def _fail_closed(cwd, who, root, environment, failed, now, identity_reported=True):
+    """(failed parts, marker written). The failed-check marker is the paused state; this writes it
+    and nothing else, and never touches the cloud-builds setting. The parts returned are the ones
+    given; the marker records an identity the session never reported as `identity-unreported`."""
     failed = list(failed)
-    marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
-    was_on, off = _switch_off(cwd, who, root, name, set_fn)
-    if was_on and not off:
-        failed.append("setting")
-        marked = marked and _write_failed_check(cwd, who, root, environment, failed, now)
-    return off, failed, marked
+    # axis: the marker records an identity the session never reported as identity-unreported, so the paused wording gives the setup-text fix and not the identity-variables one
+    recorded = [("identity-unreported" if part == "identity" and not identity_reported else part)
+                for part in failed]
+    marked = who is not None and _write_failed_check(cwd, who, root, environment, recorded, now)
+    return failed, marked
 
 
 def _utc_stamp(now):
@@ -558,11 +549,25 @@ def _parse_stamp(stamp):
 
 
 def _write_failed_check(cwd, account, root, environment, failed_parts, now):
-    """True only when the marker was written. A lock not acquired or an OSError is False."""
+    """True only when the marker was written. A store lock held by another writer is tried again,
+    `_MARKER_ATTEMPTS` times in all with `_MARKER_WAIT` seconds between; an OSError or any other
+    exception is not retried and is False."""
+    for attempt in range(_MARKER_ATTEMPTS):
+        outcome = _write_failed_check_once(cwd, account, root, environment, failed_parts, now)
+        if outcome is not None:
+            return outcome
+        # axis: a store lock held by another writer is waited out a few times before the marker is given up
+        if attempt + 1 < _MARKER_ATTEMPTS:
+            _sleep(_MARKER_WAIT)
+    return False
+
+
+def _write_failed_check_once(cwd, account, root, environment, failed_parts, now):
+    """One try: True when written, None when the store lock was held, False on any failure."""
     try:
         with mode_registry.config_lock(cwd, root) as got:
             if not got:
-                return False
+                return None
             marker = {"schema": FAILED_CHECK_SCHEMA, "account": account, "environment": environment,
                       "failedAt": _utc_stamp(now),
                       "failedParts": list(failed_parts)}
@@ -619,7 +624,21 @@ def _short_commit(commit):
     return commit[:12] if isinstance(commit, str) and _COMMIT_RE.fullmatch(commit) else "unknown"
 
 
-def _failed_message(parts, switched, cloud_version, local_version, identity=None,
+def _standing(cwd, who, root, marked):
+    """The standing sentence of a failed or unread message, decided once per judgment from what is
+    on disk after it: paused when this judgment's marker landed, paused with the earlier marker
+    named when the write failed but a marker for the account remains, else not paused. A read that
+    raises, or no account, counts as no marker."""
+    if marked:
+        return _PAUSED_STANDING
+    try:
+        remains = who is not None and read_failed_check(cwd, who, root) is not None
+    except Exception:
+        remains = False
+    return _PAUSED_STANDING + " " + _EARLIER_MARKER_STANDS if remains else _NOT_PAUSED
+
+
+def _failed_message(parts, standing, cloud_version, local_version, identity=None,
                     identity_reported=True, pin=None, cloud_commit=None, hook_gap=None):
     # a hook part with no known gap token still reads as the fail-closed one, never as a blank
     gap_sentence, gap_fix = cloud_dependency_hook.GAP_TEXT[
@@ -666,24 +685,23 @@ def _failed_message(parts, switched, cloud_version, local_version, identity=None
             fix = fix % gap_fix
         if name in parts and fix is not None and fix not in fixes:
             fixes.append(fix)
-    # axis: the message never says cloud builds are off when the switch-off failed
-    standing = ("Cloud builds are still on." if "setting" in parts else
-                "Cloud builds stay off.%s" % (_SWITCHED_OFF if switched else ""))
     return ("**The check failed on %s.** %s\n\n%s To fix it, %s and say \"check again\"."
             % (count, " ".join(sentences), standing, ", then ".join(fixes)))
 
 
 def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, now=None,
-          project_name=None, set_fn=None, record_fn=None):
+          project_name=None, record_fn=None):
     """Read the report line out of `line` and decide. The setup record is written only when the
     environment, the plugin version, the calibration and the reviewer's answer all agree with this
     machine; for a project that commits the plugin pin hook the plugin version is judged as the pin:
     the cloud's reported commit must equal the pin's commit and the pin's version this machine's,
-    and a broken hook fails the check. Every other result writes none, switches an on cloud-builds setting off, and leaves a
-    failed-check marker beside the record (a passing check writes the record first, then removes
-    the marker; a marker that cannot be removed fails the check as `record` with `recordWritten`
-    true and stays). The record is never touched
-    by a failed or unread result."""
+    and a broken hook fails the check. Every other result writes no record and leaves a
+    failed-check marker beside the record, which pauses cloud launches on this account (a passing
+    check writes the record first, then removes the marker; a marker that cannot be removed fails
+    the check as `record` with `recordWritten` true and stays). The cloud-builds setting is the
+    owner's intent and is written only by the owner's switch: no result here writes it, so
+    `settingSwitchedOff` is always False. The record is never touched by a failed or unread
+    result."""
     name = _project(cwd, project_name)
     started = _utc_stamp(now)  # the judgment's start moment, taken once, whole seconds UTC
     today = cloud_setup_text._utc_date(now)
@@ -694,19 +712,18 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         found = _find_report(line, nonce)
         obj = found if _readable(found, nonce) else None
     if obj is None:
-        # axis: the marker is persisted before the setting changes, so an interruption leaves it
+        # axis: an unread report writes the marker and never the setting
         # axis: an unread report leaves a marker a later reader can see, and never touches the record
-        off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment,
-                                           ["unread"], now)
+        failed, marked = _fail_closed(cwd, who, root, environment, ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
                     ("versionMatches", "pinMatches", "dependencyHookMatches",
                      "calibrationMatches", "reviewerAnswered", "environmentMatches",
                      "identityPresent")),
                 "dependencyHookGap": None,
-                "failedParts": failed, "recordWritten": False, "settingSwitchedOff": off,
+                "failedParts": failed, "recordWritten": False, "settingSwitchedOff": False,
                 "markerWritten": marked,
-                "message": (_UNREAD_STILL_ON if "setting" in failed
-                            else _UNREAD.format(switched=_SWITCHED_OFF if off else ""))}
+                # axis: the unread message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, never the not-paused sentence beside a marker that still pauses
+                "message": _UNREAD.format(standing=_standing(cwd, who, root, marked))}
 
     results, local_placed, pin, gap = _judge_parts(obj, environment, cwd, root, today)
     identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
@@ -745,14 +762,16 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
             failed.append("record")
 
     if failed:
-        # axis: a failed check leaves cloud builds off
-        # axis: the marker is persisted before the setting changes, so an interruption leaves it
+        # axis: a failed check writes the marker and never the setting
         # axis: a failed check leaves a marker a later reader can see, and never touches the record
-        off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment, failed, now)
+        failed, marked = _fail_closed(cwd, who, root, environment, failed, now, identity_reported)
+        # axis: the message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, and the not-paused sentence only when none is, never both
+        standing = _standing(cwd, who, root, marked)
         return {"action": "failed", "results": results, "dependencyHookGap": gap,
-                "failedParts": failed, "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
+                "failedParts": failed, "recordWritten": written, "settingSwitchedOff": False,
+                "markerWritten": marked,
                 "message": _failed_message(
-                    failed, off, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
+                    failed, standing, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
                     identity_reported=identity_reported, pin=pin,
                     cloud_commit=obj.get("pluginCommit"), hook_gap=gap,
                     # axis: an identity the session never reported is not a missing one
