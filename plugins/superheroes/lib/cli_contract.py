@@ -249,16 +249,3 @@ def census_undeclared(parser: argparse.ArgumentParser) -> list[tuple[tuple[str, 
             opts = ",".join(action.option_strings) or action.dest
             missing.append((path, opts, action.dest))
     return missing
-
-
-def census_unvalidated(parser: argparse.ArgumentParser) -> list[tuple[tuple[str, ...], str, str, str]]:
-    """Return declared-but-unvalidated arguments as (path, option_strings, dest, contract)."""
-    unvalidated = []
-    for path, action in iter_caller_supplied_actions(parser):
-        contract = contract_for_action(action)
-        if contract is None:
-            continue
-        if not getattr(action, VALIDATED_CONTRACT_ATTR, contract_is_validated(action)):
-            opts = ",".join(action.option_strings) or action.dest
-            unvalidated.append((path, opts, action.dest, contract))
-    return unvalidated
