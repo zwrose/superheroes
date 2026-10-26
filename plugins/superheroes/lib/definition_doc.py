@@ -726,7 +726,7 @@ def lifecycle_errors(text, path="spec", root=None):
         errors.append("a delivered spec needs deliveryReceipt, the closure receipt's link")
     lives_in = values.get("livesIn")
     if not (isinstance(lives_in, list) and lives_in
-            and all(isinstance(p, str) and p.strip() for p in lives_in)):
+            and all(isinstance(p, str) and p.split(" § ", 1)[0].strip() for p in lives_in)):
         errors.append("a delivered spec needs livesIn, a non-empty list of where its "
                       "behavior now lives")
     elif root is not None:

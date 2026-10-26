@@ -119,6 +119,8 @@ def test_invalid_lifecycle_fails_library_and_schema(name, text):
 
 def test_library_only_rules():
     # Ordering and JSON-shape rules the schema cannot see; each is its own refusal.
+    assert DD.lifecycle_errors(_doc(DELIVERED.replace(
+        '["plugins/superheroes/lib/definition_doc.py"]', '[" § FR-6"]')))
     assert DD.lifecycle_errors(_doc(DELIVERED.replace("2026-02-01", "2025-12-31")))
     assert DD.lifecycle_errors(_doc(DELIVERED + _superseded(date="2026-01-15")))
     assert DD.lifecycle_errors(_doc(DELIVERED.replace('"2026-02-01"', "2026-02-01 x")))
