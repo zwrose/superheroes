@@ -35,6 +35,8 @@ FAILED_PART_CONDITION = {
     "version": "version",
     # axis: the pin part forces the plugin-pin condition false
     "pin": "pluginPin",
+    # axis: the hook part forces the dependency-hook condition false
+    "hook": "dependencyHook",
     # axis: the calibration part forces the calibration condition false — see bite-proof record wo_c_place_call
     "calibration": "calibration",
 }
@@ -64,7 +66,7 @@ _NO_PIN = {"state": None, "reason": None, "version": None}
 
 def _result(conditions, *, setting=False, account=None, environment=None, cloud_version=None,
             advisor_version=None, picks_up=None, checked_at=None, failed_check=None,
-            plugin_pin=None):
+            plugin_pin=None, hook_gap=None):
     # axis: the reason is the first false condition in the fixed order — see bite-proof record wo_a_place_call
     reason = next((REASON_FOR[name] for name in CONDITION_ORDER if not conditions[name]), None)
     return {
@@ -80,6 +82,7 @@ def _result(conditions, *, setting=False, account=None, environment=None, cloud_
         "checkedAt": checked_at,
         "failedCheck": failed_check,
         "pluginPin": dict(_NO_PIN if plugin_pin is None else plugin_pin),
+        "dependencyHookGap": hook_gap,
     }
 
 
@@ -187,12 +190,9 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
         # axis: a failed version check leaves the old record in place, so its version is not the cloud's current one — see bite-proof record wo_d_place_call
         if failed is not None and "version" in failed:
             cloud_version = None
-    try:
-        # axis: with the hook on, the commit the session starts on must carry it; unreadable is not ready
-        conditions["dependencyHook"] = cloud_setup_text.branch_hook_gap(
-            cwd, root, commit, adopted) is None
-    except Exception:
-        conditions["dependencyHook"] = False
+    # axis: with the hook on, the commit the session starts on must carry it; unreadable is not ready
+    hook_gap = cloud_check._hook_gap(cwd, root, commit, adopted)
+    conditions["dependencyHook"] = hook_gap is None
     try:
         # axis: the calibration matches only when the placed stamp equals the recorded one — see bite-proof record wo_a_place_call
         conditions["calibration"] = (stamp_fn or cloud_check._placed_stamp)(cwd, root) == record.get(
@@ -207,7 +207,8 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
         cloud_version=cloud_version, advisor_version=advisor,
         picks_up=record.get("picksUpVersion"), checked_at=record.get("checkedAt"),
         failed_check=failed,
-        plugin_pin={"state": pin_state, "reason": pin["reason"], "version": pin_version})
+        plugin_pin={"state": pin_state, "reason": pin["reason"], "version": pin_version},
+        hook_gap=hook_gap)
 
 
 def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=None,
@@ -217,7 +218,9 @@ def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=N
     Never raises; any unexpected failure reads as not ready.
 
     The result's keys are ready, reason, conditions, setting, account, environment, cloudVersion,
-    advisorVersion, picksUpVersion, checkedAt, failedCheck and pluginPin. `pluginPin` is the plugin
+    advisorVersion, picksUpVersion, checkedAt, failedCheck, pluginPin and dependencyHookGap.
+    `dependencyHookGap` is the dependency hook's gap token on the start commit (None when the hook
+    is off, the commit carries it, or the reader returned before reading it). `pluginPin` is the plugin
     pin hook's state on the start commit (absent, valid or broken, with the reason a broken one
     gives and the version a valid pin names; all None where the reader returned before reading it).
     A version the cloud reported always decides the version condition and keeps the pin from
@@ -228,7 +231,8 @@ def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=N
     setup is on record and the latest check for the account failed; then it is the failed parts
     the check left (an empty list when that note cannot be read). A failed check forces its parts'
     conditions false: the reviewer part the pass, the version part the version, the pin part the
-    plugin pin, the calibration part the calibration, and any other part, or a marker that cannot
+    plugin pin, the hook part the dependency hook, the calibration part the calibration, and any
+    other part, or a marker that cannot
     be read, the setup.
 
     `commit` is the commit the cloud session starts on (the checkout's HEAD when None); with the

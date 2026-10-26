@@ -20,7 +20,7 @@ if _LIB_DIR not in sys.path:
 import cloud_ready  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import launch_ledger as ll  # noqa: E402
-from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text  # noqa: E402
+from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text, wasnt_text  # noqa: E402
 
 _STILL_HEADER = "Still on your machine"
 STILL_LEDGER_UNREADABLE = "still-ledger-unreadable"
@@ -100,8 +100,13 @@ def _fix_line(code, call):
 
 def _recheck_first(calls):
     """The call that carries the failed check when any of these does, else the first: the fix for
-    a reason must keep the recheck step whichever call came first."""
-    return next((c for c in calls if c.get("failedCheck") is not None), calls[0])
+    a reason must keep the recheck step whichever call came first. A failed check that left no
+    recheck words (a calibration part on a dependency-hook call) does not count: a later call
+    whose fix asks for the check again wins."""
+    def asks(c):
+        return "check again" in (fix_text(c) or "")
+    failed = [c for c in calls if c.get("failedCheck") is not None]
+    return next((c for c in failed if asks(c)), failed[0] if failed else calls[0])
 
 
 def _summary(lanes):
@@ -116,7 +121,7 @@ def _summary(lanes):
         return None
     first = _recheck_first(calls)
     code = first["reason"]
-    wasnt = _fill(REASONS[code]["wasnt"], first.get("cloudVersion"), first.get("advisorVersion"))
+    wasnt = wasnt_text(first)
     return "%s, all on your machine. The cloud wasn't ready: %s\n%s" % (
         _count(lanes), wasnt, _fix_line(code, first))
 
@@ -158,9 +163,17 @@ def render_report(lanes):
             code = cloud_ready.REASON_FOR[name]
             shared = [lane["placeCall"] for lane in local if lane["placeCall"].get("reason") == code]
             if shared:
-                line = _fix_line(code, _recheck_first(shared))
-                if line not in fixes:
-                    fixes.append(line)
+                # one fix line per (reason, hook gap) pair, the recheck-carrying call's: every call
+                # but a dependency-hook one has no hook gap, so those reasons print one line each;
+                # a gap read back from a ledger record that is not a string groups as no gap
+                groups = {}
+                for call in shared:
+                    gap = call.get("hookGap")
+                    groups.setdefault(gap if isinstance(gap, str) else None, []).append(call)
+                for group in groups.values():
+                    line = _fix_line(code, _recheck_first(group))
+                    if line not in fixes:
+                        fixes.append(line)
         return "\n".join(out + fixes)
     except Exception:
         return None

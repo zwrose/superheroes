@@ -44,7 +44,7 @@ ALL_TRUE = {name: True for name in CR.CONDITION_ORDER}
 ALL_FALSE = {name: False for name in CR.CONDITION_ORDER}
 RESULT_KEYS = {"ready", "reason", "conditions", "setting", "account", "environment",
                "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck",
-               "pluginPin"}
+               "pluginPin", "dependencyHookGap"}
 NO_PIN = {"state": "absent", "reason": None, "version": None}
 
 
@@ -134,7 +134,7 @@ def test_ready_when_all_six_hold_and_every_key_is_present(tmp_path):
         "ready": True, "reason": None, "conditions": ALL_TRUE, "setting": False,
         "account": ACCOUNT, "environment": ENVIRONMENT, "cloudVersion": ADVISOR,
         "advisorVersion": ADVISOR, "picksUpVersion": False, "checkedAt": "2026-10-09",
-        "failedCheck": None, "pluginPin": NO_PIN}
+        "failedCheck": None, "pluginPin": NO_PIN, "dependencyHookGap": None}
 
 
 def test_setting_comes_from_the_one_reader(tmp_path):

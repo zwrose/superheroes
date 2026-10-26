@@ -15,6 +15,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import architect_config  # noqa: E402
+import cloud_dependency_hook  # noqa: E402
 import cloud_ready  # noqa: E402
 import definition_doc  # noqa: E402
 import mode_registry  # noqa: E402
@@ -202,10 +203,11 @@ def _join_needs(needs):
 
 
 def _placement(place, pointed, by, reason, need, cloud_version, advisor_version, environment,
-               reported, failed_check=None):
+               reported, failed_check=None, hook_gap=None):
     return {"place": place, "pointedAtCloud": pointed, "by": by, "reason": reason, "need": need,
             "cloudVersion": cloud_version, "advisorVersion": advisor_version,
-            "environment": environment, "reported": reported, "failedCheck": failed_check}
+            "environment": environment, "reported": reported, "failedCheck": failed_check,
+            "hookGap": hook_gap}
 
 
 def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, root=None,
@@ -217,7 +219,7 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
     reported = None
     pointed = False
     by = None
-    cloud_version = advisor_version = failed_check = None
+    cloud_version = advisor_version = failed_check = hook_gap = None
     try:
         reported = premise.get("reportedCloud")
         if readiness_fn is not None:
@@ -234,6 +236,7 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
         cloud_version = now.get("cloudVersion")
         advisor_version = now.get("advisorVersion")
         failed_check = now.get("failedCheck")
+        hook_gap = now.get("dependencyHookGap")
         if launch_word == CLOUD_WORD:
             by = "word"
         elif launch_word is None and setting:
@@ -243,7 +246,7 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
         def local(reason, need=None):
             return _placement(
                 "local", pointed, by, reason, need, cloud_version, advisor_version, None, reported,
-                failed_check)
+                failed_check, hook_gap if reason == "dependency-hook" else None)
 
         wants = needs_fn or machine_needs
         # axis: a launch word of local wins over a need, so the owner's word is the reason given — see bite-proof record wo_a_place_call
@@ -288,12 +291,28 @@ def _words(code, cloud_version, advisor_version, need=None):
     return _fill(REASONS[code]["words"], cloud_version, advisor_version, need)
 
 
+def _hook_gap_text(place_call):
+    """(gap token, sentence, fix) for a dependency-hook placement that names a known gap, else None."""
+    if place_call.get("reason") != "dependency-hook":
+        return None
+    gap = place_call.get("hookGap")
+    if not isinstance(gap, str) or gap not in cloud_dependency_hook.GAP_TEXT:
+        return None
+    sentence, fix = cloud_dependency_hook.GAP_TEXT[gap]
+    return gap, sentence, fix
+
+
 def reason_text(place_call):
     """The board's words for the reason on this placement, or None when it has none."""
     try:
         code = place_call.get("reason")
         if code not in REASONS:
             return None
+        found = _hook_gap_text(place_call)
+        if found is not None:
+            return ("The dependency hook on the branch this build starts from failed its check "
+                    "(`%s`): %s, so the cloud could build it with out-of-date dependencies."
+                    % (found[0], found[1]))
         return _words(code, place_call.get("cloudVersion"), place_call.get("advisorVersion"),
                       place_call.get("need"))
     except Exception:
@@ -308,6 +327,13 @@ def fix_text(place_call):
         if code not in REASONS:
             return None
         fix = REASONS[code]["fix"]
+        if code == "dependency-hook":
+            found = _hook_gap_text(place_call)
+            if found is not None:
+                fix = "To fix it, %s. Then launch again." % found[2]
+            failed = place_call.get("failedCheck")
+            # axis: after a failed hook part the fix ends by asking for the check to be run again
+            return fix + _CHECK_AGAIN_SUFFIX if isinstance(failed, list) and "hook" in failed else fix
         if fix is None or place_call.get("failedCheck") is None:
             return fix
         # axis: after a failed check the fix ends by asking for the check to be run again — see bite-proof record wo_c_place_call
@@ -316,5 +342,22 @@ def fix_text(place_call):
         if code in ("version", "plugin-pin", "calibration", "no-pass"):
             return fix if _CHECK_AGAIN in fix else fix + _CHECK_AGAIN_SUFFIX
         return fix
+    except Exception:
+        return None
+
+
+def wasnt_text(place_call):
+    """The "the cloud wasn't ready: ..." clause for this placement's reason, or None when the
+    reason is not one in the table."""
+    try:
+        code = place_call.get("reason")
+        if code not in REASONS:
+            return None
+        found = _hook_gap_text(place_call)
+        if found is not None:
+            return ("the dependency hook on the branch it starts from failed its check (`%s`): %s."
+                    % (found[0], found[1]))
+        return _fill(REASONS[code]["wasnt"], place_call.get("cloudVersion"),
+                     place_call.get("advisorVersion"))
     except Exception:
         return None
