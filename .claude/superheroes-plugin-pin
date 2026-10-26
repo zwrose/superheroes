@@ -1,0 +1,5 @@
+# The superheroes plugin the cloud sessions of this project install. Written by superheroes; a release moves it with one commit.
+source=https://github.com/zwrose/superheroes.git
+commit=830cfb7763b5cd38c6d2344cceac8b532811efbf
+subdir=plugins/superheroes
+version=0.46.1
