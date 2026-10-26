@@ -26,6 +26,7 @@ PKG = "{pkg}"
 OTHER = "{other}"
 CLONE = "{clone}"
 FILL = "{fill}"
+STORE = "{store}"
 
 
 def _clone_dir():
@@ -45,8 +46,16 @@ def _fill_lines():
     return [FILL]
 
 
-def _view_for():
-    return _pin_view() + _fill_lines()
+def _view_for(files):
+    return files + _pin_view() + _fill_lines()
+
+
+def _store_files():
+    return [STORE]
+
+
+def stamped_files():
+    return _view_for(_store_files())
 
 
 def _elsewhere():
@@ -56,7 +65,7 @@ def _elsewhere():
 
 def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
           hooks='{"hooks": {}}', pkg="tool", other="x", doc="Steps.", clone="c", helper="d",
-          fill="f", stamp="sha256", setup=True):
+          fill="f", stamp="sha256", store="s", setup=True):
     root = cache / ver
     (root / "skills" / "a").mkdir(parents=True)
     (root / "skills" / "a" / "SKILL.md").write_text("---\nname: a\n%s\n---\n\n%s\n" % (front, body))
@@ -70,7 +79,7 @@ def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
         'def calibration_stamp(files):\n    return "%s"\n' % stamp)
     if setup:
         (root / "lib" / "cloud_setup_text.py").write_text(
-            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc, clone=clone, fill=fill))
+            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc, clone=clone, fill=fill, store=store))
     (root / "TRANSITION.md").write_text("## %s\n" % ver)
     (root / "CHANGELOG.md").write_text("## %s\n" % ver)
     return root
@@ -142,6 +151,15 @@ def test_the_fill_step_and_the_stamp_hash_count(capsys, tmp_path):
     _tree(cache, "0.3.0", fill="g", stamp="sha512")
     data = _plan(capsys, cache, "0.1.0", "0.3.0")
     assert [e["setupSteps"] for e in data["cloudStart"]] == [True, True]
+
+
+def test_a_calibration_store_change_counts(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0")
+    _tree(cache, "0.2.0", store="normalized")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0")
+    assert data["cloudStart"][0]["setupSteps"] is True
+    assert data["cloudStartChanged"] is True
 
 
 def test_unreadable_setup_steps_read_as_changed(capsys, tmp_path):

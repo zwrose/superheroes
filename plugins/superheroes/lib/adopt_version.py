@@ -201,12 +201,12 @@ def _start_loaded(root):
 
 def _setup_steps(root):
     """The code behind the setup text's stamp, in one version tree, in a form two trees compare by:
-    `_view_for` in lib/cloud_setup_text.py (the setup steps, the fill step and the start-loaded
-    inventory a pin hook adds, among the rest of the view) and `calibration_stamp` in
-    lib/cloud_setup.py, with every top-level definition they reach in the plugin's lib modules,
+    the two functions the cloud check hashes, `stamped_files` in lib/cloud_setup_text.py and
+    `calibration_stamp` in lib/cloud_setup.py, with every top-level definition they reach in the
+    plugin's lib modules,
     docstrings aside, as the parser sees them. Read, never run; None when it cannot be read."""
     lib, mods, seen, out = os.path.join(root, "lib"), {}, set(), []
-    starts = [("cloud_setup_text", "_view_for"), ("cloud_setup", "calibration_stamp")]
+    starts = [("cloud_setup_text", "stamped_files"), ("cloud_setup", "calibration_stamp")]
     pending = list(starts)
     while pending:
         key = pending.pop()
