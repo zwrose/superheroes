@@ -1664,7 +1664,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   the owner at a gardening pass, removing the function and its test together.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #2164, 2026-10-26 (owner ruling "385 a",
+  [ruling record](https://github.com/zwrose/superheroes/issues/695#issuecomment-6405678577),
+  gardening pass 5). The condition fired: every consuming project runs 0.43.0 or later, and
+  weekly-eats has no review session from before 0.43.0. The function and its test were removed
+  together. **Retired — condition fired.**
 - **Notes.** structural — upgrade compatibility for journals written before 0.43.0, retired by its
   version condition rather than by model strength.
 
