@@ -26,6 +26,16 @@ Check these in a consuming project when it adopts this release. Each step names 
 - Before, such a value composed, and the relay's send to it failed late as `relay-send-failed` ("no agent reachable"), which read as a dead relay.
 - Every other value accepted before still composes: an `issue-<n>-<hash>` name, and any other non-empty single-line value. `session-name-invalid` is unchanged.
 
+- **After switching.** **Nothing is owed.** Advisors follow four practice lines that had lived only in one advisor's memory: a degraded builder-note read is read by hand at once, a layer is never brought current while its review is open, a pattern-check DoD says "best effort", and the post-adoption cloud check is the advisor's own step. See [Showrunner: four practice lines from the field](#showrunner-four-practice-lines-from-the-field).
+
+### Showrunner: four practice lines from the field
+
+- **A degraded builder-note read.** `skills/showrunner/reference/wave-watch.md`: on `builder-note-unavailable` the advisor reads the comments of the issues the event names (`unreadIssues`, or every watched cloud lane's issue when it names none) by hand at once, and answers any builder note inside the builder's 15-minute reply window, because a note may be waiting unseen.
+- **No bring-current while a review is open.** `rubric/native-stacks.md` widens "a layer is not rebased while its review loop is open" to "not brought current, by merge or rebase", and `skills/showrunner/reference/merge-train.md`'s bring-current step says the same: a merge mid-review breaks the review session with `view-head-anchor-mismatch`.
+- **"Best effort" for pattern checks.** `skills/showrunner/reference/issue-contract.md` § The DoD bar: a DoD bullet that asks a pattern check to refuse open-ended input says "best effort" and names the scan at filing, so a review does not chase completeness to its round ceiling.
+- **The cloud check is the advisor's.** `skills/adopt-version/SKILL.md` step 4: re-running the cloud check (`lib/cloud_check.py` `start` and `judge`) after an adoption is the advisor's own item, never owner input; only pasting new setup text needs the owner.
+- No command, result key or file shape changes.
+
 ## 0.46.1
 
 ### Before you upgrade

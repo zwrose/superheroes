@@ -150,6 +150,11 @@ skipped. When any `before-switching` checklist item is owner input, stop after s
 the owner at step 8 with those items as numbered decisions, and do not run steps 5–7 until
 each is resolved; then resume adoption from step 5.
 
+**The cloud check is the advisor's.** On a project that builds in the cloud, re-running the
+cloud check after an adoption (`lib/cloud_check.py` `start`, then `judge` on the session's
+`report`) is an item you run yourself, never owner input. Only pasting new setup text into the
+cloud environment needs the owner.
+
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
 (why), deferred (which lane), owner input, or owed (after switching).
 
