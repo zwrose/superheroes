@@ -22,6 +22,11 @@ _NOTE_BODY = "%s\n\nShould the migration keep the old column?\n\n%s" % (
 _CONFIG_DIR = "/home/advisor/.claude-two"
 
 
+def _evaluate_builder_notes(*args, **kwargs):
+    """The notes half of `ww._evaluate_cloud_comments`, for the tests that read only notes."""
+    return ww._evaluate_cloud_comments(*args, **kwargs)[0]
+
+
 def _cloud_lane(
     repo_root, launch_id, issue, *, start_age=_QUIET, config_dir=_CONFIG_DIR, reserve_lead=1,
 ):
@@ -230,7 +235,7 @@ def test_a_lane_with_no_numeric_started_ts_is_not_watched_and_the_rest_still_cou
         "cloud-y": {**cloud, "issue": 6, "startedTs": time.time() - 3600},
     }
     degraded = set()
-    notes = ww._evaluate_builder_notes(
+    notes = _evaluate_builder_notes(
         "/", lanes, deadline=100.0, env={}, gh_run=gh, monotonic=lambda: 0.0,
         degraded=degraded, note_state=[None], known_slug=_SLUG,
     )
@@ -460,7 +465,7 @@ def test_e10_a_spent_time_budget_makes_no_request_and_discloses_it():
         "place": ll.PLACE_CLOUD, "started": True, "issue": 5, "startedTs": time.time() - 60,
     }}
     degraded = set()
-    notes = ww._evaluate_builder_notes(
+    notes = _evaluate_builder_notes(
         "/", lanes, deadline=10.0, env={}, gh_run=gh, monotonic=lambda: 10.0,
         degraded=degraded, note_state=[None], known_slug=_SLUG,
     )
@@ -618,7 +623,7 @@ def test_the_note_read_on_an_absent_ledger_root_creates_no_directory(repo, tmp_p
         "place": ll.PLACE_CLOUD, "started": True, "issue": 5, "startedTs": time.time() - 3600,
     }}
     degraded = set()
-    notes = ww._evaluate_builder_notes(
+    notes = _evaluate_builder_notes(
         repo, lanes, deadline=100.0, env=None, gh_run=gh, monotonic=lambda: 0.0,
         degraded=degraded, note_state=[None], known_slug=_SLUG,
     )

@@ -387,8 +387,9 @@ def test_report_line_round_trips_through_judge(tmp_path):
     result = _judge(local, line)
     assert result["action"] == "passed" and result["failedParts"] == []
     assert result["results"] == {"versionMatches": True, "pinMatches": None,
-                                 "calibrationMatches": True, "reviewerAnswered": True,
-                                 "environmentMatches": True, "identityPresent": True}
+                                 "dependencyHookMatches": True, "calibrationMatches": True,
+                                 "reviewerAnswered": True, "environmentMatches": True,
+                                 "identityPresent": True}
     assert result["recordWritten"] is True and result["settingSwitchedOff"] is False
     state = cloud_setup.read(local.cwd, ACCOUNT, local.root)
     assert state["ready"] is True
@@ -1757,8 +1758,9 @@ def test_judge_passes_a_pin_project_when_the_commit_and_version_match(tmp_path):
     result = _judge(local, _cloud_report(cloud, pluginCommit=COMMIT))
     assert result["action"] == "passed" and result["failedParts"] == []
     assert result["results"] == {"versionMatches": True, "pinMatches": True,
-                                 "calibrationMatches": True, "reviewerAnswered": True,
-                                 "environmentMatches": True, "identityPresent": True}
+                                 "dependencyHookMatches": True, "calibrationMatches": True,
+                                 "reviewerAnswered": True, "environmentMatches": True,
+                                 "identityPresent": True}
     assert result["recordWritten"] is True
     assert cloud_setup.read(local.cwd, ACCOUNT, local.root)["state"] == "ready"
 

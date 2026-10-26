@@ -39,6 +39,8 @@ LIVE_CELLS_SOURCES = (
 # One home for the liveness-read-error constraint token; seat_map.UNPROVEN_LIVENESS_CONSTRAINTS
 # consumes it when deciding a crashed liveness read cannot prove an alternative family absent.
 LIVENESS_READ_ERROR_CONSTRAINT = "liveness-read-error"
+# A cell whose probe timed out: counted live (a loaded vendor, #2168) and disclosed as unproven.
+LIVENESS_TIMEOUT_CONSTRAINT = "liveness-timeout"
 
 
 def ttl_seconds():
@@ -367,6 +369,31 @@ def _dead_cell_note(vendor, model, effort, detail):
     }
 
 
+def _timed_out_cell_note(vendor, model, effort, detail):
+    return {
+        "constraint": LIVENESS_TIMEOUT_CONSTRAINT,
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "reason": "%s/%s (%s) seated on a timed-out liveness probe, not proven live: %s"
+        % (vendor, model, effort, _bounded_reason(detail)),
+    }
+
+
+def has_timed_out_cell(liveness):
+    """True when any vendor's cells carry `timedOut: True`. Never raises."""
+    try:
+        if not isinstance(liveness, dict):
+            return False
+        for info in liveness.values():
+            for cell in _cells_by_key(info).values():
+                if cell.get("timedOut") is True:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def _liveness_read_error_note(detail, stage=None):
     if stage == "cell-evidence":
         prefix = "liveness read failed during cell-evidence scan"
@@ -532,6 +559,7 @@ def live_from(liveness, needed):
 
     loop_error = None
     reconcile_error = None
+    timed_out_seen = set()
     try:
         for vendor, slots in inventory.items():
             if slots is None:
@@ -544,6 +572,11 @@ def live_from(liveness, needed):
                 if _cell_is_live(cells_by_key, key):
                     model, effort = key
                     live_cells.append([vendor, model, effort])
+                    if (cells_by_key[key].get("timedOut") is True
+                            and (vendor, key) not in timed_out_seen):
+                        timed_out_seen.add((vendor, key))
+                        dead_notes.append(_timed_out_cell_note(
+                            vendor, model, effort, _cell_detail(cells_by_key, key)))
     except Exception as exc:
         loop_error = exc
     if loop_error is not None:

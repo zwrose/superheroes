@@ -12,6 +12,62 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **An advisor relaying to a cloud builder passes `compose --session` the lane's session name (`cloudSessionName`, `issue-<n>-<hash>`), never its session id (the value that opens with `session` and an underscore); an id is now refused at compose with `session-id-not-name`.** See [Relay: compose refuses a session id where it needs the session name](#relay-compose-refuses-a-session-id-where-it-needs-the-session-name).
+
+### Relay: compose refuses a session id where it needs the session name
+
+- `cloud_relay.py compose --session <value>` refuses a session id, a value that starts with exactly `session` followed by an underscore (case-sensitive), with the new token `session-id-not-name` (exit 1). The result carries `session` (the value given) and `message`, which says the relay addresses a cloud session by its name, `issue-<n>-<hash>`, and to read the name from the lane's `cloudSessionName` in the launch ledger. Nothing is written to the relay's state file.
+- Before, such a value composed, and the relay's send to it failed late as `relay-send-failed` ("no agent reachable"), which read as a dead relay.
+- Every other value accepted before still composes: an `issue-<n>-<hash>` name, and any other non-empty single-line value. `session-name-invalid` is unchanged.
+
+- **After switching.** **Nothing is owed.** Advisors follow four practice lines that had lived only in one advisor's memory: a degraded builder-note read is read by hand at once, a layer is never brought current while its review is open, a pattern-check DoD says "best effort", and the post-adoption cloud check is the advisor's own step. See [Showrunner: four practice lines from the field](#showrunner-four-practice-lines-from-the-field).
+
+### Showrunner: four practice lines from the field
+
+- **A degraded builder-note read.** `skills/showrunner/reference/wave-watch.md`: on `builder-note-unavailable` the advisor reads the comments of the issues the event names (`unreadIssues`, or every watched cloud lane's issue when it names none) by hand at once, and answers any builder note inside the builder's 15-minute reply window, because a note may be waiting unseen.
+- **No bring-current while a review is open.** `rubric/native-stacks.md` widens "a layer is not rebased while its review loop is open" to "not brought current, by merge or rebase", and `skills/showrunner/reference/merge-train.md`'s bring-current step says the same: a merge mid-review breaks the review session with `view-head-anchor-mismatch`.
+- **"Best effort" for pattern checks.** `skills/showrunner/reference/issue-contract.md` § The DoD bar: a DoD bullet that asks a pattern check to refuse open-ended input says "best effort" and names the scan at filing, so a review does not chase completeness to its round ceiling.
+- **The cloud check is the advisor's.** `skills/adopt-version/SKILL.md` step 4: re-running the cloud check (`lib/cloud_check.py` `start` and `judge`) after an adoption is the advisor's own item, never owner input; only pasting new setup text needs the owner.
+- No command, result key or file shape changes.
+
+- **After switching.** **Nothing is owed, except that a consumer that checks a refusals entry itself must accept a `route` on a `sandbox` entry.** A native implementer that records the route a cloud sandbox's refusal named no longer forfeits its run. See [Refusals: a sandbox-named route](#refusals-a-sandbox-named-route).
+
+### Refusals: a sandbox-named route
+
+- A refusals entry's non-null `route` is now valid with `refusedBy: sandbox` as well as `refusedBy: hook` (`lib/command_refusals.py`, `ROUTE_REFUSED_BY`). The cloud sandbox's own refusal message names a step ("split into plain commands"); an implementer that recorded it as that entry's `route` lost its whole run (`native-result-invalid` on the native implementer, `native-result-refusals-invalid` on native write admission), and the work order had to be collected by hand.
+- A non-null `route` on a `permission` entry is still refused, now with `refusals[i].route needs refusedBy hook or sandbox` (was `refusals[i].route needs refusedBy hook`): an auto-mode classifier denial stays a stop. Every other refusals check is unchanged.
+- The entry shape every implementer and fixer order carries (`ENTRY_SHAPE`, and its copy in `agents/implementer.md`) now says `route` is the route a hook's or the sandbox's own refusal message named. The stop rule's one exception is unchanged.
+
+- **After switching.** **Nothing is owed, except that a consumer that reads a seat map's degradations with a closed set of constraints must accept `liveness-timeout`.** A review on a busy day no longer starts with an empty panel because a vendor's liveness probe ran past its timeout. See [Seat map: a timed-out liveness probe seats the vendor and says so](#seat-map-a-timed-out-liveness-probe-seats-the-vendor-and-says-so).
+
+### Seat map: a timed-out liveness probe seats the vendor and says so
+
+- The composition liveness probe behind the seat map's live-vendor set (`lib/preflight_probe.py`) still runs each cell's no-op with a 120-second timeout, now named `PROBE_TIMEOUT_SECONDS`. A cell whose probe runs past it is no longer read as dead: it counts live, carries `timedOut: true` in its `cells` entry, and its detail reads `probe timed out after 120s; not proven live`. A loaded vendor serving long dispatches therefore still fills its seats instead of leaving the panel empty until someone composes it by hand with `--live-vendors`.
+- Every such cell, panel or non-panel (`nonPanelLiveCells`), adds one seat-map degradation with the new constraint `liveness-timeout` (home: `liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT`), naming the vendor, model and effort and saying the seat rests on a timed-out probe, not proven live. If the vendor really is down, the seat's own dispatch fails and the review's retry ladder handles it as for any seat.
+- A liveness receipt holding a timed-out cell is never cached, so the next compose probes again rather than replaying the guess for the receipt's TTL.
+- A probe that fails outright (a non-zero exit, or the CLI failing to start) still reads not live, with its `liveness-cell` note, exactly as before. `probe_command` results gain an optional `timedOut: true` key on a timeout; the `run` preflight's go/no-go is unchanged and still fails a timed-out probe.
+
+- **After switching.** **A project with the dependency hook (item 19) on runs the cloud check again; if the committed hook is not the one configure writes, the check now fails on the `hook` part with the gap and its fix step (set item 17, 18 or 19 again, then commit and push the hook files).** A project with the hook off, or a matching hook, passes as before. See [Cloud check: the dependency hook on the launch branch](#cloud-check-the-dependency-hook-on-the-launch-branch).
+
+### Cloud check: the dependency hook on the launch branch
+
+- `cloud_check.judge` now runs `cloud_setup_text.branch_hook_gap` on this machine's `HEAD`, the commit a launch starts from. When it finds a gap, the check fails on a new part, `hook`, placed after `pin` and before `calibration`. The failure names the gap token, a plain sentence about it and the fix step.
+- A project with the dependency hook (item 19) off, or one whose committed hook is the one configure writes, passes as before. A checked part that reads no gap leaves `results.dependencyHookMatches` true.
+- `cloud_check.judge` results gain `results.dependencyHookMatches` (None when the report was unread) and a top-level `dependencyHookGap` (the gap token, or None).
+- A commit or repository that cannot be read gives `commit-unreadable`. Hook settings that cannot be read give a new token, `settings-unreadable`. Any other unexpected failure in the test reads as `commit-unreadable`, so the check fails closed.
+- The failed-check marker carries the `hook` part, and it forces only readiness's `dependencyHook` condition to false. A marker written by an earlier plugin's reader forces `setup` instead, which is the fail-closed direction.
+- `cloud_ready.readiness` gains the result key `dependencyHookGap`, the gap token its hook test found, or None.
+- The place call (`launch_place.route`) gains `hookGap`, the gap token for a `dependency-hook` placement and None for every other reason.
+- The launch report's words and fix step for `dependency-hook` name the gap when the call carries one. A call without one, such as a record from an earlier launch's ledger, keeps the generic words. Lanes whose gaps differ each print their own fix step; lanes that share a gap print it once.
+- A failed `hook` part ends the fix step with "check again", so the owner re-runs the check once the hook files are committed and pushed.
+- The words for each gap have one home, `cloud_dependency_hook.GAP_TEXT`, which the check's message and the launch report both read.
+
 ## 0.46.1
 
 ### Before you upgrade

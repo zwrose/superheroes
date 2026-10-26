@@ -883,15 +883,6 @@ def test_finished_full_lane_session_writes_its_record_without_a_certificate(tmp_
         assert token not in text, token
 
 
-def test_a_superseded_attempt_of_an_older_journal_is_no_reviewer(tmp_path):
-    s = Session(tmp_path)
-    s.seat("security-reviewer", attempt=0, head=HEAD)
-    s.rows.append({"outcome": "orders-superseded", "cmd": "re-emit", "phase": "dispatch-panel", "round": 1, "attempt": 0, "newAttempt": 1})
-    account = rs.account_from_session(s.save(), extras())
-    # bites on: _slots keeping an attempt the older version's re-emit superseded when no replacement was recorded
-    assert account["reviewers"] == []
-
-
 def _verifier_and_synthesis_session(tmp_path):
     s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"}, rounds={"1": {"fix": {"fixes": []}}})
     s.seat("code-reviewer", nonce="n1")

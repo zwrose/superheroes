@@ -2053,11 +2053,6 @@ def _unread_payload(unread):
     ]} if unread else {}
 
 
-def _evaluate_builder_notes(*args, **kwargs):
-    """The notes half of `_evaluate_cloud_comments`, for callers that read only notes."""
-    return _evaluate_cloud_comments(*args, **kwargs)[0]
-
-
 def _parse_comment_id(value):
     if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
         value = int(value)

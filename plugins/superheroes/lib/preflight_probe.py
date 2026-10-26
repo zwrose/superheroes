@@ -43,6 +43,7 @@ DEFAULT_GH_ARGV = ("gh", "auth", "status")
 CLOUD_GH_REST_ARGV = ("gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name")
 
 PROBE_ASK = "Reply with the single word READY and nothing else.\n"
+PROBE_TIMEOUT_SECONDS = 120
 
 
 def probe_prompt():
@@ -83,13 +84,14 @@ def cross_vendor_no_op_argv(engine):
 
 def probe_command(tool, argv, run=None, *, stdin_text=None, cwd=None):
     """Run `argv` via `run` (default: `subprocess.run`, capturing stdout+stderr as text with a
-    120s timeout) and return `{"tool", "ok", "exit", "detail"}`. `ok` is exactly (exit code ==
-    0). ANY exception from `run` (OSError, TimeoutExpired, anything at all) is caught here —
-    ok=False, exit=None, detail=the exception string. Never raises."""
+    PROBE_TIMEOUT_SECONDS timeout) and return `{"tool", "ok", "exit", "detail"}`. `ok` is exactly
+    (exit code == 0). ANY exception from `run` (OSError, TimeoutExpired, anything at all) is caught
+    here — ok=False, exit=None, detail=the exception string; a TimeoutExpired also sets
+    `timedOut: True`, so a caller can tell a slow tool from a failed one. Never raises."""
     if run is None:
         run = subprocess.run
     try:
-        run_kw = {"capture_output": True, "text": True, "timeout": 120,
+        run_kw = {"capture_output": True, "text": True, "timeout": PROBE_TIMEOUT_SECONDS,
                   "input": stdin_text or ""}
         if cwd is not None:
             run_kw["cwd"] = cwd
@@ -99,6 +101,8 @@ def probe_command(tool, argv, run=None, *, stdin_text=None, cwd=None):
         stderr = getattr(proc, "stderr", "") or ""
         return {"tool": tool, "ok": (exit_code == 0), "exit": exit_code,
                 "detail": (stdout + stderr).strip()}
+    except subprocess.TimeoutExpired as exc:
+        return {"tool": tool, "ok": False, "exit": None, "detail": str(exc), "timedOut": True}
     except Exception as exc:
         return {"tool": tool, "ok": False, "exit": None, "detail": str(exc)}
 
@@ -577,6 +581,17 @@ def composition_liveness(needed_configs, run=None, codex_floor_refusal=_UNSET):
                 r_ok = r["ok"]
                 r_detail = _redact_absolute_paths_in_text(r["detail"])
                 cell_entry = {"model": model, "effort": effort, "ok": r_ok, "detail": r_detail}
+                if r.get("timedOut") is True:
+                    # A probe that outran its timeout is a loaded vendor, not a dead one (#2168):
+                    # a busy Codex serving 450-760 s dispatches timed out three times and emptied
+                    # the panel. The cell counts live but carries `timedOut`, so live_from
+                    # discloses it as not proven live and the receipt is never cached. A vendor
+                    # that answers with a failure, or fails to start, still reads dead.
+                    r_ok = True
+                    r_detail = ("probe timed out after %ds; not proven live"
+                                % PROBE_TIMEOUT_SECONDS)
+                    cell_entry = {"model": model, "effort": effort, "ok": True,
+                                  "detail": r_detail, "timedOut": True}
                 cells.append(cell_entry)
                 entry = {"ok": r_ok, "detail": r_detail}
                 existing = models.get(model)
@@ -684,7 +699,11 @@ def live_vendors_for_composition(
     liveness = composition_liveness(
         {**probed_needed, "claude": []}, run, codex_floor_refusal=codex_floor_refusal,
     )
-    if codex_floor_refusal is None and cache_path is not None and now is not None:
+    # A timed-out cell is live but unproven; caching it would replay that guess for the whole
+    # TTL, so a receipt holding one is never written and the next compose probes again.
+    timed_out = liveness_cache.has_timed_out_cell(liveness)
+    if (codex_floor_refusal is None and cache_path is not None and now is not None
+            and not timed_out):
         wrote = liveness_cache.write(liveness, probed_needed, path=cache_path, now=now)
         if not wrote:
             notes.append({
@@ -696,6 +715,16 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
+    # A non-panel cell seated on a timed-out probe is disclosed like a panel one, once per cell;
+    # the extra set's other notes stay unsurfaced. (Only a fresh probe can time out: such a
+    # receipt is never cached.)
+    disclosed = {(n.get("vendor"), n.get("model"), n.get("effort")) for n in dead_notes
+                 if n.get("constraint") == liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT}
+    for note in liveness_cache.live_from(liveness, extra)[2]:
+        key = (note.get("vendor"), note.get("model"), note.get("effort"))
+        if note.get("constraint") == liveness_cache.LIVENESS_TIMEOUT_CONSTRAINT and key not in disclosed:
+            disclosed.add(key)
+            notes.append(note)
     # A Codex floor refusal already marks every Codex cell dead in `liveness`; the other vendors'
     # successfully probed cells stay live evidence, so the refusal is not threaded in here.
     _fill_extra_report(extra_report, liveness, extra)

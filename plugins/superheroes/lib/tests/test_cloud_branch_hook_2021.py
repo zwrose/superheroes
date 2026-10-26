@@ -208,17 +208,15 @@ def test_dod1_routing_a_base_commit_without_the_hook_runs_locally_with_the_new_w
     call = _account_route(w, {"baseCommit": bare})
     assert call["place"] == "local" and call["reason"] == "dependency-hook"
     assert launch_place.reason_text(call) == (
-        "The branch this build starts from doesn't carry the dependency hook, or a setup file "
-        "the build adopts can't be shown unchanged since the hook ran (it changed, or it is a "
-        "link), so the cloud could build it with out-of-date dependencies.")
+        "The dependency hook on the branch this build starts from failed its check "
+        "(`script-missing`): it has no dependency hook script, so the cloud could build it "
+        "with out-of-date dependencies.")
     assert launch_place.fix_text(call) == (
-        "To fix it, commit and push the dependency hook files configure wrote (the settings file "
-        "and the hook script) on the branch the build starts from; if the build adopts a branch "
-        "that changed a dependency file, bring that change into the branch it starts from first. "
-        "A listed setup file that is a link or sits under a linked folder cannot be compared, so "
-        "point both the setup command and configure's setup inputs at the regular file itself, "
-        "with no link in between. Then launch again.")
-    assert "at the regular file itself, with no link in between" in launch_place.fix_text(call)
+        "To fix it, set configure's item 17, 18 or 19 again (any set rewrites the hook files), "
+        "then commit and push the settings file and the hook script on the branch builds start "
+        "from. Then launch again.")
+    assert "at the regular file itself, with no link in between" in (
+        launch_place.REASONS["dependency-hook"]["fix"])
     assert launch_place.REASONS["dependency-hook"]["short"] == (
         "Bring the dependency hook and any adopted setup-file change onto the starting branch, "
         "and list setup files as regular files, to fix it.")

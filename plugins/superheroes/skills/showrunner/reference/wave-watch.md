@@ -491,6 +491,12 @@ Notes beyond the token name:
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
 
+**On `builder-note-unavailable`, read the issues by hand at once.** A degraded comments read means a
+builder note may be waiting unseen, so read the comments of every issue the event names
+(`unreadIssues`; when the event names none, every watched cloud lane's issue) through REST
+yourself, now, and answer any builder note there inside the builder's 15-minute reply window
+(`rubric/review-discipline.md` § Size). Never wait for the next tick to read them.
+
 ## Answering a builder note
 
 Each note names the session to answer (`cloudSessionName`) and the account it runs on (`configDir`).

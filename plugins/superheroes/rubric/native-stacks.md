@@ -330,8 +330,10 @@ change is mechanically non-semantic: whitespace, pure formatting, a comment, or 
 leaves the rule unchanged. A changed hunk takes the merge train's existing union-fix floor whenever
 it changes **behavior-bearing content**: product code; a test's assertions or fixtures' expected
 values; or any prose that states a rule a session or a gate follows. When it is **not clear** which
-side a hunk falls on, it takes the reviewer floor. A layer is not rebased while its review loop is
-open. The tax it removes is per-layer re-review on bring-currents whose content did not change.
+side a hunk falls on, it takes the reviewer floor. A layer is not brought current, by merge or
+rebase, while its review loop is open: a merge mid-review moves the head the review session
+anchored, and the session breaks with `view-head-anchor-mismatch`. Bring it current once the loop
+ends. The tax it removes is per-layer re-review on bring-currents whose content did not change.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under
