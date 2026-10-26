@@ -528,6 +528,12 @@ def test_two_sessions_installing_at_once_each_fetch_their_own_tree(tmp_path):
     assert _leftovers(sc) == []
 
 
+def _rename_onto(mv):
+    """Shell text that renames "$2" onto the link "$3" itself with the host's own mv, whichever of the
+    two no-follow forms the host accepts (GNU -T, BSD -h)."""
+    return '%s -Tf "$2" "$3" 2>/dev/null || %s -fh "$2" "$3"; exit ;;\n' % (mv, mv)
+
+
 def _bsd_mv_and_ln(tmp_path, sc):
     """mv and ln as a BSD system has them: mv knows -h and no -T; ln -f unlinks the old link before
     creating the new one, and here the creation fails, as an interruption between the two would."""
@@ -535,9 +541,9 @@ def _bsd_mv_and_ln(tmp_path, sc):
     return _fake_bin(tmp_path, {
         "mv": ('case "$1" in\n'
                '  --version|-Tf) echo "mv: illegal option" >&2; exit 64 ;;\n'
-               '  -fh) exec %s -Tf "$2" "$3" ;;\n'
+               '  -fh) ' + _rename_onto(mv) +
                'esac\n'
-               'exec %s "$@"\n' % (mv, mv)),
+               'exec %s "$@"\n' % mv),
         "ln": ('if [ "${@: -1}" = %s ]; then rm -f "${@: -1}"; exit 1; fi\n'
                'exec %s "$@"\n' % (str(sc.link), ln)),
     })
@@ -548,6 +554,25 @@ def test_the_script_never_leaves_the_session_without_a_link_on_a_bsd_system(tmp_
     done = _run_script(sc, bin_dir=_bsd_mv_and_ln(tmp_path, sc))
     assert done.returncode == 0, done.stderr
     assert os.path.lexists(str(sc.link)), "the session was left with no plugin link"
+    assert done.stdout == "superheroes: plugin 9.9.9 installed at the pinned commit %s.\n" % sc.sha_b[:12]
+    [fetched] = _fetched(sc)
+    assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
+    assert _leftovers(sc) == []
+
+
+def test_the_script_renames_with_a_gnu_compatible_mv_that_is_not_gnu(tmp_path):
+    # uutils coreutils: takes -T, rejects -h, and does not call itself GNU coreutils
+    sc = _scene(tmp_path)
+    mv = shutil.which("mv")
+    bin_dir = _fake_bin(tmp_path, {"mv": (
+        'case "$1" in\n'
+        '  --version) echo "mv (uutils coreutils) 0.2.2" ; exit 0 ;;\n'
+        '  -fh) echo "error: unexpected argument \'-h\' found" >&2; exit 1 ;;\n'
+        '  -Tf) ' + _rename_onto(mv) +
+        'esac\n'
+        'exec %s "$@"\n' % mv)})
+    done = _run_script(sc, bin_dir=bin_dir)
+    assert done.returncode == 0, done.stderr
     assert done.stdout == "superheroes: plugin 9.9.9 installed at the pinned commit %s.\n" % sc.sha_b[:12]
     [fetched] = _fetched(sc)
     assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
