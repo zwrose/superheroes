@@ -1631,7 +1631,7 @@ def main(argv):
         author_family = args.author_family
         narrative_family = args.narrative_family
         receipt_host_family = None
-        host_model, host_model_source = host_model_lib.resolve(
+        host_model, _ = host_model_lib.resolve(
             args.host_model or "", args.session_transcript or "", args.session_transcript_from or "")
         if args.implementation_engine is not None:
             if args.author_family is not None or args.narrative_family is not None:

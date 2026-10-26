@@ -25,13 +25,17 @@ REFUSAL_MEANING = (
 )
 
 REFUSED_BY = ("permission", "hook", "sandbox")
+# The refusers whose own message may name a route (#2167): a hook, or the sandbox ("split into
+# plain commands"). A permission entry never carries one: an auto-mode classifier denial stays a stop.
+ROUTE_REFUSED_BY = ("hook", "sandbox")
 ENTRY_REQUIRED = ("command", "refusedBy", "next")
 ENTRY_OPTIONAL = ("hook", "route")
 
 ENTRY_SHAPE = (
     "Each refusals entry carries command (the command exactly as you wrote it), refusedBy "
     "(permission, hook or sandbox), hook (the hook's name when the refusal gave one, else null), "
-    "route (the route a hook's own refusal message named and you took, else null), and next "
+    "route (the route a hook's or the sandbox's own refusal message named and you took, else "
+    "null), and next "
     "(what you did next). An empty list means you met none."
 )
 
@@ -75,8 +79,8 @@ def refusals_fault(value):
             if "route" in entry and entry["route"] is not None:
                 if _blank(entry["route"]):
                     return where + ".route"
-                if by != "hook":
-                    return where + ".route needs refusedBy hook"
+                if by not in ROUTE_REFUSED_BY:
+                    return where + ".route needs refusedBy hook or sandbox"
         return None
     except Exception as exc:  # noqa: BLE001 — a validator must never raise
         return "refusals-check-error:%s" % type(exc).__name__
