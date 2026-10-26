@@ -160,10 +160,11 @@ installed release in range, each naming the parts a cloud session loads at start
 sums them, and a null in either counts as changed. The owed step, one per environment:
 
 - **The setup-text paste** when the pin hook's `state` is not `valid`, `cloudStartChanged` is true,
-  or the record's version is older than **from** (`cloudStart` does not cover that span):
+  or the record's version is older than **from** or newer than **to** (`cloudStart` covers only
+  the span between):
   `owed: paste new setup text into cloud environment <environment> (account <account>) (<to>)`.
 - **The pin commit** only when none of those holds: the pin hook is `valid`, `cloudStartChanged`
-  is false, and the record's version is **from** or newer. `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
+  is false, and the record's version is **from** or newer and older than **to**. `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
   running `lib/cloud_plugin_pin.py` `write --cwd <project>` from the new root, then committing and
   pushing the files it names.
 

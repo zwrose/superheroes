@@ -200,12 +200,14 @@ def _start_loaded(root):
     return out
 
 def _setup_steps(root):
-    """The code behind the stamp entries a pin hook adds, in one version tree, in a form two trees
-    compare by: `_pin_view` in lib/cloud_setup_text.py (the setup text's fixed steps and the
-    start-loaded inventory) and every top-level definition it reaches in the plugin's lib modules,
+    """The code behind the setup text's stamp, in one version tree, in a form two trees compare by:
+    `_view_for` in lib/cloud_setup_text.py (the setup steps, the fill step and the start-loaded
+    inventory a pin hook adds, among the rest of the view) and `calibration_stamp` in
+    lib/cloud_setup.py, with every top-level definition they reach in the plugin's lib modules,
     docstrings aside, as the parser sees them. Read, never run; None when it cannot be read."""
     lib, mods, seen, out = os.path.join(root, "lib"), {}, set(), []
-    pending = [("cloud_setup_text", "_pin_view")]
+    starts = [("cloud_setup_text", "_view_for"), ("cloud_setup", "calibration_stamp")]
+    pending = list(starts)
     while pending:
         key = pending.pop()
         if key in seen:
@@ -219,7 +221,7 @@ def _setup_steps(root):
         defs, modules, names = mods[mod]
         node = defs.get(name)
         if node is None:
-            if not out:
+            if key in starts:
                 return None
             continue  # a builtin, a parameter or a local, not a module definition
         out.append("%s.%s %s" % (mod, name, ast.dump(node)))
