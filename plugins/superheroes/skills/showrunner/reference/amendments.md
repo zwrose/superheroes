@@ -14,6 +14,11 @@ This file is the one home for **post-approval spec amendments** — how a change
 what the Amendments log entry must carry, which ceremony each class owes, and how the change
 reaches work already in flight. The showrunner charter points here; this file carries the detail.
 
+This path covers a spec that is approved and not yet delivered, and a partial delivery's deferred
+items while they remain open. A delivered spec is frozen: a later ruling that changes its delivered
+behavior adds a superseded-in-part line instead
+(`skills/architect-spec/reference/spec-content.md` § The spec lifecycle).
+
 ## What an amendment is, and when this fires
 
 A **spec amendment** is a change to a spec **after owner approval**. The spec body is **edited in
