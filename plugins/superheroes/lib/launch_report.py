@@ -190,8 +190,10 @@ def render_report(lanes):
                     gap = call.get("hookGap")
                     key = gap if isinstance(gap, str) else None
                     # axis: lanes paused on different failed parts each keep their own fix line
+                    # a list with a non-string element is a malformed marker and groups as damaged
                     if code == cloud_ready.REASON_FOR["setup"] and isinstance(call.get("failedCheck"), list):
-                        key = (key, tuple(call["failedCheck"]))
+                        failed = call["failedCheck"]
+                        key = (key, tuple(failed) if all(isinstance(p, str) for p in failed) else ())
                     groups.setdefault(key, []).append(call)
                 for group in groups.values():
                     line = _fix_line(code, _recheck_first(group))

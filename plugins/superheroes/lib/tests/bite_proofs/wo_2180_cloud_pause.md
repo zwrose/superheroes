@@ -392,3 +392,41 @@ FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_two_lanes_pause
 ```
 
 WO-2180-B closing: 6 bite-proof runs (3 red, 3 green), one plain command each; every red landed on its own axis. The `(failedCheck, same parts share one line)` half of the B3 node is not neutralized separately; it passes under the neutralization (the neutralized key groups everything), so it carries no bite of its own.
+
+## WO-2180-C
+
+Detector: `plugins/superheroes/lib/tests/test_launch_report.py::test_a_malformed_failed_parts_list_never_makes_the_report_vanish` (one node).
+Guarded element (declared by WO-2180-C): (1) the all-strings guard on the grouping key in `render_report`.
+Neutralized by a targeted edit in production code only, the detector run alone as one test node id, then restored by the inverse edit (an edit, never a checkout/restore/reset/stash). The red was produced with the detector unedited.
+Run command, each time: `timeout 900 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest '<node>' -q -p no:cacheprovider --tb=short`. Only the `UV_NATIVE_TLS` deprecation line that heads every run is dropped from the captures. Redaction: none needed.
+
+### C1. A malformed failed-parts list never makes the report vanish
+
+Axis: a failed-parts list holding a non-string groups as a damaged marker, so the report is still returned (axis comment at `launch_report.py:193`). The red is on axis: with the guard dropped the grouping key holds an unhashable `{}`, `groups.setdefault` raises, the outer `except Exception` returns `None`, and the report is gone.
+
+- Neutralization (`launch_report.py:196`, `render_report`): `key = (key, tuple(failed) if all(isinstance(p, str) for p in failed) else ())` became `key = (key, tuple(failed))`.
+- Node: `plugins/superheroes/lib/tests/test_launch_report.py::test_a_malformed_failed_parts_list_never_makes_the_report_vanish`.
+- Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_a_malformed_failed_parts_list_never_makes_the_report_vanish _______
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_launch_report.py:399: in test_a_malformed_failed_parts_list_never_makes_the_report_vanish
+    assert isinstance(report, str) and CS.PAUSED_LINE_ON in report
+E   assert (False)
+E    +  where False = isinstance(None, str)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_a_malformed_failed_parts_list_never_makes_the_report_vanish
+1 failed in 0.34s
+```
+
+- Restore: the inverse edit. Restored text, `launch_report.py:196`: `                        key = (key, tuple(failed) if all(isinstance(p, str) for p in failed) else ())`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 0.29s
+```
+
+WO-2180-C closing: 2 bite-proof runs (1 red, 1 green), one plain command each; the red landed on its own axis.

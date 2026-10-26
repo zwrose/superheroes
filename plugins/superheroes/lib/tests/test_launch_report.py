@@ -392,6 +392,13 @@ def test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line():
     assert same.count(version_fix) == 1 and same.count(CS.PAUSED_LINE_ON) == 1
 
 
+def test_a_malformed_failed_parts_list_never_makes_the_report_vanish():
+    damaged = dict(_call(reason="no-setup"), failedCheck=[{}])
+    report = LR.render_report([_lane(1, damaged), _lane(2, _call("cloud"))])
+    # detector: a grouping key built from a non-string part raises, and the whole report goes None
+    assert isinstance(report, str) and CS.PAUSED_LINE_ON in report
+
+
 @pytest.mark.parametrize("reason,reported", [
     ("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
     ("version", {"pluginVersion": "0.41.0"}),
