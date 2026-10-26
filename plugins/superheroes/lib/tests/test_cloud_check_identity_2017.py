@@ -246,8 +246,9 @@ def test_an_unreported_identity_alone_says_it_was_not_reported(tmp_path):
     assert result["failedParts"] == ["identity"]
     assert result["message"] == (
         "**The check failed on one part.** The cloud session did not report its git identity.\n\n"
-        "Cloud builds stay off. To fix it, paste the new setup text into the environment and say "
-        "\"check again\".")
+        "Cloud builds are paused for this account until the check passes. They resume by "
+        "themselves once the check passes. To fix it, paste the new setup text into the "
+        "environment and say \"check again\".")
 
 
 def test_an_unreported_identity_spawns_no_local_identity_read(tmp_path, monkeypatch):

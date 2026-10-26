@@ -79,6 +79,7 @@ For every launch, the launcher decides where each build runs.
 
 - The project's cloud builds setting sets the default.
 - The owner's [launch word](../../../rubric/glossary.md#launch-word) for one build overrides that default. "This one local" keeps the build on the owner's machine, and a word naming the cloud sends it to the cloud. The word reaches the launcher as `--place local` or `--place cloud`.
+- A failed setup check pauses cloud launches for that Claude account only: its failed-check marker is the paused state. The cloud builds setting stays on, other accounts are unaffected, and launches go back to the cloud by themselves once a check passes.
 - A build pointed at the cloud runs on the owner's machine when it needs something only that machine has, or when the cloud is not ready. A build is never held and never dropped. The one exception is a cloud launch whose checkout is off its base: it stops with a `launch-cloud-checkout-*` refusal for the owner rather than moving to the owner's machine (see `orchestration.md`).
 
 ### The needs you check for
@@ -104,6 +105,7 @@ Once every launch in the batch has returned, run `lib/launcher.py report --repo-
 
 - It lists every launched build under "In the cloud" or "On your machine".
 - Each build that the setting or a launch word pointed at the cloud, but that ran on the owner's machine, carries its reason and its fix. The fix is printed once per reason.
+- A build the cloud was meant for that fell back because of a failed check carries the paused line: cloud builds are paused for this account until its setup check passes, and resume by themselves once it does.
 
 ### Until the cloud is fixed: the "Still on your machine" line
 
@@ -114,6 +116,7 @@ How it knows the reason is fixed:
 - A reason that came from the cloud builds setting stops once the setting reads switched off. A reason that came from a launch word follows the rules below.
 - A reason this machine can read again stops once that condition reads true again. These are no cloud setup, a lapsed reviewer pass, a calibration mismatch, and a version mismatch read from the setup record.
 - Any other reason stops only once a check made on a later day has passed and the cloud reads ready. These are no reviewer pass, an unreachable cloud, and a version a builder reported.
+- A reason that came from a failed check stops once a passing check clears the marker.
 - It also clears once any build in a later launch goes to the cloud.
 
 ## The owner-involvement taxonomy

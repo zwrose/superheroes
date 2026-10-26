@@ -48,6 +48,8 @@ from test_launch_report import (  # noqa: E402
     _route,
 )
 
+import test_cloud_check as TCC  # noqa: E402
+
 BATCH = "b-report"
 PHONE = "the phone simulator"
 DAY = datetime.date(2026, 10, 11)
@@ -760,6 +762,59 @@ def test_the_line_for_an_unreproduced_version_uses_the_launchs_own_versions(worl
     assert _line(repo, ready=False, reason="version", cloud="9.9.9", advisor="8.8.8") == (
         "Still on your machine\nThe cloud's plugin is unknown and mine is 0.42.0. "
         "Paste the new setup text to fix it.")
+
+
+def _judged_world(tmp_path, monkeypatch, passed_first):
+    """A real project the real check ran on, with a ledger beside it and cloud builds switched on:
+    (local, cloud, a readiness reader that works as the line's own does)."""
+    local, cloud = TCC._pair(tmp_path)
+    _ledger_env(tmp_path, monkeypatch)
+    assert _declare(local.cwd, BATCH, 4)["ok"]
+    if passed_first:
+        assert TCC._judge(local, TCC._ok_report(cloud))["action"] == "passed"
+    TCC._turn_on(local)
+    env = TCC._account_env(local, TCC.ACCOUNT)
+    ready = functools.partial(CR.readiness, advisor_version=TCC.VERSION, today=TCC.CHECK_DAY,
+                              stamp_fn=lambda cwd, root: local.stamp, env=env)
+    return local, cloud, env, ready
+
+
+def _reviewer_fails(cloud):
+    return TCC._cloud_report(cloud, confirmation=TCC._confirm(answered=False)(None))
+
+
+def test_T8_a_same_day_passing_check_clears_the_still_line_after_a_reviewer_failure(
+        tmp_path, monkeypatch):
+    local, cloud, env, ready = _judged_world(tmp_path, monkeypatch, passed_first=True)
+    assert TCC._judge(local, _reviewer_fails(cloud))["action"] == "failed"
+    call = TCC._place(local, env)
+    assert call["place"] == "local" and call["reason"] == "no-pass"
+    assert call["failedCheck"] == ["reviewer"]
+    # the launch started on the same UTC day the passing check below runs on
+    _day_launch(local.cwd, "a", 11, TCC.CHECK_DAY, call)
+    standing = LR.still_line(local.cwd, root=local.root, readiness_fn=ready)
+    assert standing.startswith("Still on your machine\n") and 'say "check again"' in standing
+    # a check that failed again leaves the marker, so the line stands
+    assert TCC._judge(local, _reviewer_fails(cloud), now=TCC.LATER)["action"] == "failed"
+    assert LR.still_line(local.cwd, root=local.root, readiness_fn=ready) == standing
+    # axis: a fallback that came from a failed check is fixed once a passing check has cleared the marker and its condition reads true now, on the same day too
+    passed = TCC._judge(local, TCC._ok_report(cloud), now=TCC.LATER + 60)
+    assert passed["action"] == "passed" and passed["markerWritten"] is False
+    assert LR.still_line(local.cwd, root=local.root, readiness_fn=ready) is None
+
+
+def test_T8_an_account_whose_first_check_failed_reads_paused_and_clears_on_a_same_day_pass(
+        tmp_path, monkeypatch):
+    local, cloud, env, ready = _judged_world(tmp_path, monkeypatch, passed_first=False)
+    assert TCC._judge(local, _reviewer_fails(cloud))["action"] == "failed"
+    call = TCC._place(local, env)
+    assert call["reason"] == "no-setup" and call["failedCheck"] == ["reviewer"]
+    _day_launch(local.cwd, "a", 11, TCC.CHECK_DAY, call)
+    assert LR.still_line(local.cwd, root=local.root, readiness_fn=ready) == (
+        "Still on your machine\nThis account's last setup check failed on the reviewer pass. "
+        'To fix it, paste a fresh pass into the environment, then say "check again".')
+    assert TCC._judge(local, TCC._ok_report(cloud), now=TCC.LATER)["action"] == "passed"
+    assert LR.still_line(local.cwd, root=local.root, readiness_fn=ready) is None
 
 
 def test_E5_a_readiness_that_raises_leaves_the_line_standing(world):
