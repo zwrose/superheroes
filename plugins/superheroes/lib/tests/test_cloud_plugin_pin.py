@@ -488,6 +488,22 @@ def test_the_script_does_not_link_a_tree_whose_version_disagrees_with_the_pin(tm
     assert _fetched(sc) == []
 
 
+def test_the_script_does_not_link_a_fetched_tree_at_another_commit(tmp_path):
+    sc = _scene(tmp_path)
+    before = _linked(sc)
+    git = shutil.which("git")
+    bin_dir = _fake_bin(tmp_path, {"git": (
+        '%s "$@" || exit\n'
+        'if [ "$1 $2" = "checkout -q" ]; then\n'
+        '  %s -c user.name=t -c user.email=t@t commit -q --allow-empty -m elsewhere\n'
+        'fi\n' % (git, git))})
+    done = _run_script(sc, bin_dir=bin_dir)
+    assert done.returncode == 0
+    assert "plugin pin not applied: the fetched plugin is not at the pinned commit;" in done.stdout
+    assert _linked(sc) == before
+    assert _fetched(sc) == []
+
+
 def test_the_script_never_deletes_a_tree_another_session_is_publishing(tmp_path):
     # Another session's tree at the destination the script before #2178 shared, caught before its
     # version file landed: that script removed it and published its own in its place.
