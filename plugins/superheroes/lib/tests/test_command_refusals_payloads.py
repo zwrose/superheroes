@@ -51,6 +51,10 @@ def _without(key):
 _ROUTE_ENTRY = {"command": "git checkout --theirs f.txt", "refusedBy": "hook", "hook": "worktree-guard",
                 "route": "git checkout --theirs f.txt", "next": "took the route the guard named"}
 
+# the weekly-eats PR 3356 shape (#2167): the cloud sandbox's own refusal message named its step
+_SANDBOX_ROUTE_ENTRY = {"command": "cd app && npm test", "refusedBy": "sandbox", "hook": None,
+                        "route": "split into plain commands", "next": "ran cd and npm test as plain commands"}
+
 VALID_LISTS = [
     [],
     [_entry()],
@@ -60,6 +64,7 @@ VALID_LISTS = [
     [_entry(refusedBy="permission", hook=None), _entry(refusedBy="sandbox")],
     [_entry(route="git checkout --theirs f.txt")],
     [_ROUTE_ENTRY],
+    [_SANDBOX_ROUTE_ENTRY],
 ]
 
 # the valid lists the strict write schema accepts: it needs `hook` and `route` on every entry, null when unused
@@ -67,7 +72,7 @@ SCHEMA_VALID_LISTS = [v for v in VALID_LISTS if all("hook" in e and "route" in e
 
 # every malformed case `refusals_fault` refuses: not a list, a non-dict element, an unknown key, a
 # refusedBy outside the enum, a missing key, a blank command / next / hook / route, a route that is not
-# a string, a route on a refusal that is not a hook's
+# a string, a route on a permission refusal
 MALFORMED_LISTS = [
     "not-a-list",
     {"command": "x"},
@@ -86,7 +91,7 @@ MALFORMED_LISTS = [
     [_entry(route="  ")],
     [_entry(route=5)],
     [_entry(refusedBy="permission", hook=None, route="git status")],
-    [_entry(refusedBy="sandbox", route="git status")],
+    [dict(_SANDBOX_ROUTE_ENTRY, route="  ")],
 ]
 
 # the cases the native write schema refuses itself: shape and enum, never a blank string
@@ -104,8 +109,8 @@ SCHEMA_REFUSED_LISTS = [
     [_entry(route=5)],
 ]
 
-# the cases only the admission check refuses: well-shaped but blank strings, and a route on a refusal
-# that is not a hook's
+# the cases only the admission check refuses: well-shaped but blank strings, and a route on a
+# permission refusal
 BLANK_LISTS = [
     [_entry(command="")],
     [_entry(command="   ")],
@@ -165,13 +170,17 @@ def test_fixer_payload_accepts_a_taken_route():
     assert PC.payload_fault(PC.P_FIXER, payload, PC.SEAT_FIXER) is None
 
 
-# axis: a route on a refusal that is not a hook's is refused at the fixer payload contract — see bite-proof record wo_a_2054_route
-@pytest.mark.parametrize("by", ["permission", "sandbox"])
-def test_fixer_payload_refuses_a_route_on_a_refusal_that_is_not_a_hooks(by):
-    entry = dict(_ROUTE_ENTRY, refusedBy=by, hook=None)
+def test_fixer_payload_accepts_a_sandbox_named_route():
+    payload = {"fixes": [], "refusals": [_SANDBOX_ROUTE_ENTRY]}
+    assert PC.payload_fault(PC.P_FIXER, payload, PC.SEAT_FIXER) is None
+
+
+# axis: a route on a permission refusal is refused at the fixer payload contract — see bite-proof record wo_a_2054_route (#2167 narrowed it from every non-hook refusal)
+def test_fixer_payload_refuses_a_route_on_a_permission_refusal():
+    entry = dict(_ROUTE_ENTRY, refusedBy="permission", hook=None)
     fault = PC.payload_fault(PC.P_FIXER, {"fixes": [], "refusals": [entry]}, PC.SEAT_FIXER)
     assert fault is not None
-    assert "route needs refusedBy hook" in fault
+    assert "route needs refusedBy hook or sandbox" in fault
 
 
 # --- the native write schema and the report grader -----------------------------------------
@@ -353,6 +362,14 @@ def test_dispatch_write_undelivered_items_forfeit_carries_admitted_refusals(tmp_
     assert res["refusals"] == refusals
 
 
+# axis: a native write result carrying the 3356 sandbox-route entry is admitted, not forfeited (#2167)
+def test_native_write_admits_a_sandbox_named_route(tmp_path):
+    run_dir, state = _native_write_grade_state(tmp_path, _write_obj(refusals=[_SANDBOX_ROUTE_ENTRY]))
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is not True, grade
+    assert grade.get("detail") != "native-result-refusals-invalid"
+
+
 def test_write_result_digest_content_leaves_refusals_out():
     content = ED._write_result_digest_content({
         "ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True},
@@ -402,6 +419,12 @@ def _result_file(tmp_path, body):
 @pytest.mark.parametrize("refusals", VALID_LISTS)
 def test_read_result_accepts_a_valid_refusals_list(tmp_path, refusals):
     body = {"status": "done", "summary": "s", "refusals": refusals}
+    assert NE._read_result(_result_file(tmp_path, body)) == body
+
+
+# axis: the native implementer result built from the 3356 shape reads valid, not native-result-invalid (#2167)
+def test_read_result_accepts_the_sandbox_named_route(tmp_path):
+    body = {"status": "done", "summary": "s", "refusals": [_SANDBOX_ROUTE_ENTRY]}
     assert NE._read_result(_result_file(tmp_path, body)) == body
 
 
