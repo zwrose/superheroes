@@ -162,8 +162,8 @@ sums them, and a null in either counts as changed. The owed step, one per enviro
 - **The setup-text paste** when the pin hook's `state` is not `valid`, `cloudStartChanged` is true,
   or the record's version is older than **from** (`cloudStart` does not cover that span):
   `owed: paste new setup text into cloud environment <environment> (account <account>) (<to>)`.
-- **The pin commit** when the pin hook is `valid` and `cloudStartChanged` is false:
-  `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
+- **The pin commit** only when none of those holds: the pin hook is `valid`, `cloudStartChanged`
+  is false, and the record's version is **from** or newer. `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
   running `lib/cloud_plugin_pin.py` `write --cwd <project>` from the new root, then committing and
   pushing the files it names.
 

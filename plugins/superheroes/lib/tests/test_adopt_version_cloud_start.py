@@ -20,13 +20,24 @@ if _LIB not in sys.path:
 import adopt_version as av  # noqa: E402
 
 _SETUP_TEXT = '''\
+import helper
+
 PKG = "{pkg}"
 OTHER = "{other}"
+CLONE = "{clone}"
 
 
-def _steps(source):
+def _clone_dir():
+    return CLONE
+
+
+def _steps(source, clone):
     """{doc}"""
-    return ["install " + PKG, source]
+    return ["install " + PKG, source, clone, helper.DIR]
+
+
+def _pin_view():
+    return _steps("src", _clone_dir())
 
 
 def _elsewhere():
@@ -35,7 +46,8 @@ def _elsewhere():
 
 
 def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
-          hooks='{"hooks": {}}', pkg="tool", other="x", doc="Steps.", setup=True):
+          hooks='{"hooks": {}}', pkg="tool", other="x", doc="Steps.", clone="c", helper="d",
+          setup=True):
     root = cache / ver
     (root / "skills" / "a").mkdir(parents=True)
     (root / "skills" / "a" / "SKILL.md").write_text("---\nname: a\n%s\n---\n\n%s\n" % (front, body))
@@ -44,9 +56,10 @@ def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
     (root / "hooks").mkdir()
     (root / "hooks" / "hooks.json").write_text(hooks)
     (root / "lib").mkdir()
+    (root / "lib" / "helper.py").write_text('DIR = "%s"\n' % helper)
     if setup:
         (root / "lib" / "cloud_setup_text.py").write_text(
-            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc))
+            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc, clone=clone))
     (root / "TRANSITION.md").write_text("## %s\n" % ver)
     (root / "CHANGELOG.md").write_text("## %s\n" % ver)
     return root
@@ -98,6 +111,16 @@ def test_setup_steps_change_counts(capsys, tmp_path):
     data = _plan(capsys, cache, "0.1.0", "0.2.0")
     assert data["cloudStart"][0]["setupSteps"] is True
     assert data["cloudStart"][0]["startLoaded"] == []
+    assert data["cloudStartChanged"] is True
+
+
+def test_a_step_input_reached_through_the_pin_view_counts(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0")
+    _tree(cache, "0.2.0", clone="other-clone")
+    _tree(cache, "0.3.0", clone="other-clone", helper="elsewhere")
+    data = _plan(capsys, cache, "0.1.0", "0.3.0")
+    assert [e["setupSteps"] for e in data["cloudStart"]] == [True, True]
     assert data["cloudStartChanged"] is True
 
 
@@ -161,7 +184,8 @@ def test_skill_owes_the_pin_commit_with_a_valid_hook_and_no_start_change():
     step4 = _step(_skill(), 4)
     pin = _bullet(step4, "The pin commit")
     assert "`owed: pin commit for cloud environment <environment> (account <account>) (<to>)`" in pin
-    assert "pin hook is `valid` and `cloudStartChanged` is false" in pin
+    assert "only when none of those holds" in pin
+    assert "the pin hook is `valid`, `cloudStartChanged` is false, and the record's version is **from** or newer" in pin
     assert "`lib/cloud_plugin_pin.py` `write" in pin
     assert "paste" not in pin
 

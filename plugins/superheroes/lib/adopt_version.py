@@ -200,25 +200,66 @@ def _start_loaded(root):
     return out
 
 def _setup_steps(root):
-    """The setup text's fixed steps in one version tree, in a form two trees compare by: the
-    `_steps` function of its lib/cloud_setup_text.py, docstring aside, and the module assignments
-    that function reads, as the parser sees them. Read, never run; None when it cannot be read."""
+    """The code behind the stamp entries a pin hook adds, in one version tree, in a form two trees
+    compare by: `_pin_view` in lib/cloud_setup_text.py (the setup text's fixed steps and the
+    start-loaded inventory) and every top-level definition it reaches in the plugin's lib modules,
+    docstrings aside, as the parser sees them. Read, never run; None when it cannot be read."""
+    lib, mods, seen, out = os.path.join(root, "lib"), {}, set(), []
+    pending = [("cloud_setup_text", "_pin_view")]
+    while pending:
+        key = pending.pop()
+        if key in seen:
+            continue
+        seen.add(key)
+        mod, name = key
+        if mod not in mods:
+            mods[mod] = _module_defs(lib, mod)
+        if mods[mod] is None:
+            return None
+        defs, modules, names = mods[mod]
+        node = defs.get(name)
+        if node is None:
+            if not out:
+                return None
+            continue  # a builtin, a parameter or a local, not a module definition
+        out.append("%s.%s %s" % (mod, name, ast.dump(node)))
+        for n in ast.walk(node):
+            if isinstance(n, ast.Name):
+                pending.append(names.get(n.id, (mod, n.id)))
+            elif isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) \
+                    and n.value.id in modules:
+                pending.append((modules[n.value.id], n.attr))
+    return "\n".join(sorted(out))
+
+def _module_defs(lib, mod):
+    """(top-level definitions by name, docstrings stripped; `import m` aliases; `from m import n`
+    names) for one plugin lib module, following only modules that exist in `lib`. None when the
+    module cannot be read."""
     try:
-        with open(os.path.join(root, "lib", "cloud_setup_text.py"), encoding="utf-8") as fh:
+        with open(os.path.join(lib, mod + ".py"), encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
     except (OSError, UnicodeError, SyntaxError, ValueError):
         return None
-    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_steps"), None)
-    if fn is None:
-        return None
-    body = fn.body
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
-            and isinstance(body[0].value.value, str):
-        body = body[1:]
-    used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
-    reads = [ast.dump(n) for n in tree.body if isinstance(n, ast.Assign)
-             and any(isinstance(t, ast.Name) and t.id in used for t in n.targets)]
-    return "\n".join([ast.dump(fn.args)] + [ast.dump(n) for n in body] + reads)
+    local = lambda m: os.path.isfile(os.path.join(lib, m + ".py"))
+    defs, modules, names = {}, {}, {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                node.body = body[1:]
+            defs[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                for t in ast.walk(target):
+                    if isinstance(t, ast.Name):
+                        defs[t.id] = node
+        elif isinstance(node, ast.Import):
+            modules.update({a.asname or a.name: a.name for a in node.names if local(a.name)})
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level \
+                and local(node.module):
+            names.update({a.asname or a.name: (node.module, a.name) for a in node.names})
+    return defs, modules, names
 
 def _cloud_start(cache, inst, from_v, to_v):
     """One entry per installed release in range, against the installed release before it: which
