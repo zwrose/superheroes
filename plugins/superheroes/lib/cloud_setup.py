@@ -72,16 +72,21 @@ _MESSAGES = {
     ),
 }
 
+# The repair actions the paused wording and the check's own messages (cloud_check) share; one home.
+FIX_PASTE_SETUP = "paste the new setup text into the environment"
+FIX_FRESH_PASS = "paste a fresh pass into the environment"
+FIX_RECORD = "tell me so I can look at the store"
+
 # part -> (what the check failed on, the short fix), for the paused wording; one home
 PAUSED_PARTS = {
     "environment": ("the cloud environment", "pick this project's environment again with /remote-env and paste the pass block into it"),
-    "version": ("the plugin version", "paste the new setup text into the environment"),
+    "version": ("the plugin version", FIX_PASTE_SETUP),
     "pin": ("the plugin pin", "commit a current plugin pin on the branch builds start from"),
     "hook": ("the dependency hook", "commit the dependency hook files on the branch builds start from"),
-    "calibration": ("the calibration", "paste the new setup text into the environment"),
-    "reviewer": ("the reviewer pass", "paste a fresh pass into the environment"),
+    "calibration": ("the calibration", FIX_PASTE_SETUP),
+    "reviewer": ("the reviewer pass", FIX_FRESH_PASS),
     "identity": ("the git identity", "set the git identity variables in the environment"),
-    "record": ("saving the result on this machine", "tell me so I can look at the store"),
+    "record": ("saving the result on this machine", FIX_RECORD),
     "unread": ("reporting back", None),
     "setting": ("an older check step", None),  # legacy part, written only by earlier plugin versions
 }

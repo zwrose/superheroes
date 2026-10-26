@@ -122,7 +122,7 @@ _EXPIRY_KNOWN = "it stops working on {date}"
 _EXPIRY_UNKNOWN = "it stops working after {days} days; the exact date isn't known yet"
 _SIGN_IN_IN_PLACE = "The separate reviewer sign-in is in place."
 
-_SAME_FIX = "paste the new setup text into the environment"
+_SAME_FIX = cloud_setup.FIX_PASTE_SETUP
 _PIN_FIX = ("run cloud_plugin_pin.py write on this machine, commit and push the files it names, then "
             "start a new check; if the pin already names my plugin, the cloud could not install it, "
             "and the hook's one-line message in the cloud session says why")
@@ -144,14 +144,14 @@ _PARTS = (
      "The dependency hook on the branch builds start from failed its check (`%s`): %s.", "%s"),
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
-     "paste a fresh pass into the environment"),
+     cloud_setup.FIX_FRESH_PASS),
     ("identity",
      "The cloud session has no git identity to commit with, so a build there would stop at its "
      "first commit.",
      "set GIT_AUTHOR_NAME and GIT_COMMITTER_NAME to {name}, and GIT_AUTHOR_EMAIL and "
      "GIT_COMMITTER_EMAIL to {email}, in the environment's variables"),
     ("record", "The check passed, but I could not finish saving the result on this machine.",
-     "tell me so I can look at the store"),
+     cloud_setup.FIX_RECORD),
 )
 _IDENTITY_UNREPORTED = "The cloud session did not report its git identity."
 # The standing sentence of every check message: the failed-check marker is the paused state.
