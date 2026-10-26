@@ -301,6 +301,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
   at the front door while the silent-death class it targets still recurs in field evidence. Its loop
   passes over benign wakes and refuses a second live loop on the same batch; both ride this entry's
   condition.
+- **Shrink — test-only wrapper.** `wave_watch._evaluate_builder_notes`, which only tests called,
+  moved into `test_wave_watch_builder_note.py`. Receipt: issue #2164.
 
 #### B3 — Heartbeat
 
@@ -552,6 +554,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   not a single vendor.
 - **Shrink — dead helper.** Removed `panel_tally.blocking_findings_from_dimension_results` (no
   callers). Receipt: issue #2073.
+- **Shrink — unread binding.** `seat_map.py` no longer keeps the source label it unpacked from
+  `host_model.resolve` and never read. Receipt: issue #2164.
 
 #### D3 — Loop plan/state/memory
 
@@ -572,6 +576,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Shrink — dead helpers.** Removed `loop_plan_common._full_deep_executed` and
   `_surfaced_severities` (confirmation-panel economics, #174, no callers) and
   `review_memory.load_records` (`load_records_state` is the live reader). Receipt: issue #2073.
+- **Shrink — dead scheduler-state helpers.** Removed `loop_plan_common`'s seven uncalled
+  scheduler-state and carry-forward helpers (`load_state`, `save_state`, `_state_path`,
+  `_round_entry`, `_subjects`, `_previous_dims`, `_carry_forward`) and the `STATE_FILE` constant
+  only they read; the round driver keeps its own state I/O. Receipt: issue #2164.
 
 #### D4 — Grounding seat/stage
 
@@ -1423,8 +1431,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   hostinfo helpers, so a proposal on it is a shrink or split, not row deletion. The identifiers.py
   content_hash half is retired (#2050: `content_hash`, `STABLE_FIELDS` and `_normalize_body`
   removed, `work_item_slug` kept), as is `model_registry.escalate()`'s unreached cross-vendor step
-  (#2050: the top of a ladder returns None). The cli_contract census pair is still slated to retire
-  (K4, sitting ruling).
+  (#2050: the top of a ladder returns None). Of the cli_contract census pair (K4, sitting ruling),
+  `census_unvalidated` and its tests are retired (#2164); `census_undeclared` stays, because
+  `dispatch_entry_doc.py` calls it.
 - **Start date.** 2026-09-15.
 - **Condition.** Usage-based, 60 days: live imports of the retiring members (cli_contract census
   helpers) after their retirement lands. On firing, a shrink proposal to chase stragglers at a
@@ -1434,7 +1443,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — core_md is structural substrate; the census pair is capability-gap machinery
-  scheduled for deletion (the content_hash vestige was deleted in #2050).
+  (the content_hash vestige was deleted in #2050, `census_unvalidated` in #2164).
 
 ### G. CI validators & the test estate
 
@@ -1660,7 +1669,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   the owner at a gardening pass, removing the function and its test together.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #2164, 2026-10-26 (owner ruling "385 a",
+  [ruling record](https://github.com/zwrose/superheroes/issues/695#issuecomment-6405678577),
+  gardening pass 5). The condition fired: every consuming project runs 0.43.0 or later, and
+  weekly-eats has no review session from before 0.43.0. The function and its test were removed
+  together. **Retired — condition fired.**
 - **Notes.** structural — upgrade compatibility for journals written before 0.43.0, retired by its
   version condition rather than by model strength.
 

@@ -5,7 +5,6 @@ when either is missing the text and its stamp are what they were.
 Every fixture project is a real git repository under tmp_path, as in test_cloud_setup_text.
 """
 import os
-import re
 import subprocess
 
 import pytest
@@ -16,7 +15,6 @@ from test_cloud_setup_text import (CS, _GOLDEN_KW, _compose, _edit_core_block, _
 import cloud_setup  # noqa: E402
 import mode_registry  # noqa: E402
 
-FILL_LINE = re.compile(r"^dependency fill", re.M)
 MODES = ["outside", "inside"]
 
 
