@@ -507,6 +507,12 @@ finding against the issue**.
 The bad bullet names work to do; the good bullet names what a vet can verify without re-running
 the build or asking anyone.
 
+**A pattern check on open-ended input is best effort, and its bullet says so.** When a DoD bullet
+asks a pattern check (a regex, a token scan, a detector) to refuse input whose shapes cannot all be
+listed, the bullet says **best effort** and names the scan at filing: what it reads and which
+shapes it catches. Without that, each review round finds one more shape the scan misses, and the
+loop chases completeness to its round ceiling.
+
 ## Currency
 
 The advisor keeps every issue body current. The **spot-check** has **both halves** — a reader

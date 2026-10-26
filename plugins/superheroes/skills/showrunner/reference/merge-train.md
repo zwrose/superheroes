@@ -138,7 +138,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 5. **A stack is brought current by merge, bottom-up** — merge the layer below into each affected
    layer locally with `--no-ff` and push that merge plainly, starting just above the change, which
    keeps every layer's own commits (`rubric/native-stacks.md` § *How a stack stays current*, the home
-   of the mechanism). Do not use `gh pr update-branch`. The REST endpoint behind it was **observed**
+   of the mechanism). Never bring current a layer whose review loop is still open: the merge breaks
+   that review session with `view-head-anchor-mismatch`, so wait for the loop to end. Do not use `gh pr update-branch`. The REST endpoint behind it was **observed**
    to refuse a stacked pull request with a **403**, which is a field observation on a public-preview
    feature rather than a documented GitHub rule.
 

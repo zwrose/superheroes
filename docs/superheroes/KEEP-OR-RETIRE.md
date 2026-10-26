@@ -301,6 +301,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
   at the front door while the silent-death class it targets still recurs in field evidence. Its loop
   passes over benign wakes and refuses a second live loop on the same batch; both ride this entry's
   condition.
+- **Shrink — test-only wrapper.** `wave_watch._evaluate_builder_notes`, which only tests called,
+  moved into `test_wave_watch_builder_note.py`. Receipt: issue #2164.
 
 #### B3 — Heartbeat
 
@@ -552,6 +554,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   not a single vendor.
 - **Shrink — dead helper.** Removed `panel_tally.blocking_findings_from_dimension_results` (no
   callers). Receipt: issue #2073.
+- **Shrink — unread binding.** `seat_map.py` no longer keeps the source label it unpacked from
+  `host_model.resolve` and never read. Receipt: issue #2164.
 
 #### D3 — Loop plan/state/memory
 
@@ -572,6 +576,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Shrink — dead helpers.** Removed `loop_plan_common._full_deep_executed` and
   `_surfaced_severities` (confirmation-panel economics, #174, no callers) and
   `review_memory.load_records` (`load_records_state` is the live reader). Receipt: issue #2073.
+- **Shrink — dead scheduler-state helpers.** Removed `loop_plan_common`'s seven uncalled
+  scheduler-state and carry-forward helpers (`load_state`, `save_state`, `_state_path`,
+  `_round_entry`, `_subjects`, `_previous_dims`, `_carry_forward`) and the `STATE_FILE` constant
+  only they read; the round driver keeps its own state I/O. Receipt: issue #2164.
 
 #### D4 — Grounding seat/stage
 
@@ -819,7 +827,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   and `_archive_departures` (every departure lands in the ledger); the refusal surfaced as the
   certification writer's (retired) "finding has no disposition recorded".
 - **Start date.** 2026-09-26.
-- **Condition.** Citation-based, 45 days.
+- **Condition.** Citation-based, 45 days: vet, review or incident receipts citing the staging seed
+  or the departure archive as the thing that kept a finding in the ledger when it would otherwise
+  have left the record. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -832,7 +842,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `session_contract.evidence_digest_subject` equal to `engine_adapter.review_payload_carried` for
   every result kind (the certification writer, retired, could not import the adapter).
 - **Start date.** 2026-09-26.
-- **Condition.** Citation-based, 45 days.
+- **Condition.** Citation-based, 45 days: vet, review or CI receipts citing
+  `test_evidence_digest_subject_1272.py` as the thing that caught the two rules drifting apart. On
+  firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -948,8 +960,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   driver) never happened, so nothing else retires it.
 - **Start date.** 2026-09-18.
 - **Condition.** Usage-based, 60 days: the signal is CLI/advance invocations that write
-  `round-receipt-interim.json` against terminal certifications written in the same window — a zero
-  count means the interim path is unused, not that certification absorbed progress reporting. On
+  `round-receipt-interim.json` against review sessions run in the same window — a zero count means
+  the interim path is unused. (Reworded at gardening pass 5: the old denominator counted
+  certifications from the certification writer, which is retired.) On
   firing, a retirement proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
@@ -960,7 +973,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
 
 - **Component.** `test_receipt_disclosures_home.py` — by-construction identity assertions over each
-  leaf module's own `__all__`: every name the driver re-exports must be
+  leaf module's own `__all__`: every name the driver or `round_records` re-exports must be
   the same function object as the leaf defines, so a re-introduced mirror copy fails instead of
   drifting quietly; it costs two import walks per suite run.
 - **Start date.** 2026-09-18.
@@ -973,8 +986,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `declared_disclosures` in the writer).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — one home per shared vocabulary is a property of how the certification
-  boundary is built; the test's export list is the coverage, not a hand-maintained duplicate list.
+- **Notes.** structural — one home per shared vocabulary is a property of how the driver's and
+  `round_records`' re-export boundaries are built; the test's export list is the coverage, not a hand-maintained duplicate list.
   No engine family applies: it guards import identity, not model behaviour.
 
 #### D25 — Certification fixture generator drift test
@@ -1418,8 +1431,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   hostinfo helpers, so a proposal on it is a shrink or split, not row deletion. The identifiers.py
   content_hash half is retired (#2050: `content_hash`, `STABLE_FIELDS` and `_normalize_body`
   removed, `work_item_slug` kept), as is `model_registry.escalate()`'s unreached cross-vendor step
-  (#2050: the top of a ladder returns None). The cli_contract census pair is still slated to retire
-  (K4, sitting ruling).
+  (#2050: the top of a ladder returns None). Of the cli_contract census pair (K4, sitting ruling),
+  `census_unvalidated` and its tests are retired (#2164); `census_undeclared` stays, because
+  `dispatch_entry_doc.py` calls it.
 - **Start date.** 2026-09-15.
 - **Condition.** Usage-based, 60 days: live imports of the retiring members (cli_contract census
   helpers) after their retirement lands. On firing, a shrink proposal to chase stragglers at a
@@ -1429,7 +1443,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — core_md is structural substrate; the census pair is capability-gap machinery
-  scheduled for deletion (the content_hash vestige was deleted in #2050).
+  (the content_hash vestige was deleted in #2050, `census_unvalidated` in #2164).
 
 ### G. CI validators & the test estate
 
@@ -1655,9 +1669,106 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   the owner at a gardening pass, removing the function and its test together.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — issue #2164, 2026-10-26 (owner ruling "385 a",
+  [ruling record](https://github.com/zwrose/superheroes/issues/695#issuecomment-6405678577),
+  gardening pass 5). The condition fired: every consuming project runs 0.43.0 or later, and
+  weekly-eats has no review session from before 0.43.0. The function and its test were removed
+  together. **Retired — condition fired.**
 - **Notes.** structural — upgrade compatibility for journals written before 0.43.0, retired by its
   version condition rather than by model strength.
+
+### J. Shipped families with no earlier entry
+
+Coarse family entries added at gardening pass 5 (2026-10-25), one per family, because these shipped
+without their birth-duty entries and so no pass could propose retiring any part of them. A family
+entry may later split when a pass needs a finer reading; "fewer and coarser" is the instrument rule.
+
+#### J1 — Cloud builders
+
+- **Component.** The cloud-build family: the `cloud_*` modules in `lib/` (setup text, the cloud check,
+  the reviewer pass, the relay, cleanup, recovery, dependency hooks) and the launcher's cloud place
+  call, about 7,600 lines. It costs the largest single surface added since 0.42.0, plus a reviewer
+  pass the owner renews by hand each week.
+- **Start date.** 2026-10-25.
+- **Condition.** Usage-based, 60 days: cloud launches recorded in the launch ledger over the window.
+  On firing (no cloud launch in the window), a proposal to the owner at a gardening pass to shrink
+  or retire the family.
+- **Last demonstrated benefit.** 89 cloud launches between 2026-10-17 and 2026-10-25 (gardening
+  record 5, sweep A).
+- **Consumer evidence.** weekly-eats reports on the consumer-report issue (#1914), unmapped per
+  report until a pass maps them.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the setup, check and placement rules are structural (builds run where the owner
+  is not); the relay and the hand-renewed reviewer pass are harness-limit (the host offers no
+  cross-account session control and no lasting sign-in for a cloud reviewer).
+
+#### J2 — The merge sheet
+
+- **Component.** `pr_sheet.py`, `sheet_prose.py` and `sheet_title.py` (about 2,300 lines) and the
+  review template (about 3,400 more): the page every merge word is given on. It costs the plugin's most complex function
+  (`pr_sheet.build`, 151 branches at guardian sweep e8ff9189).
+- **Start date.** 2026-10-25.
+- **Condition.** Usage-based, 60 days: sheets published for merges over the window. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** Every merge in the window rode a saved verdict on a sheet (for
+  example PR #2163's, merged 2026-10-25).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the owner's merge word needs a surface that holds it; the hub redesign
+  (#1734) may replace the surface, and its build is the natural moment to re-read this entry.
+
+#### J3 — Native stacks tooling
+
+- **Component.** `stack_check.py` and `stack_merge.py`, about 2,100 lines: reading a stack's
+  membership and merging it whole.
+- **Start date.** 2026-10-25.
+- **Condition.** Usage-based, 60 days: stack merges executed over the window. On firing, a proposal
+  to the owner at a gardening pass.
+- **Last demonstrated benefit.** The native stack numbered 2156 on GitHub merged whole on
+  2026-10-25.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — it works around a cloud session's proxy refusing GitHub's GraphQL API
+  (`stack_check.py` falls back to REST on that refusal); a host that lets cloud sessions reach stacks
+  directly would retire most of it.
+
+#### J4 — The break-it runner
+
+- **Component.** The break-it runner and its doctrine (`lib/break_it.py` and the test role's
+  break-it tests); `break_it.py` alone is about 1,250 lines.
+- **Start date.** 2026-10-25.
+- **Condition.** Catch-based, 45 days: break-it tests credited with a real catch (a fix the review
+  record ties to a break-it test) over the window. On firing (no catch), a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — it compensates for tests a model writes that would pass whether or not
+  the code is right; evidence observed on the codex review seats.
+
+#### J5 — The iPhone check
+
+- **Component.** The iPhone check (`lib/iphone_check.py` and its hook and doctrine), about 1,000
+  lines: a simulated iPhone a lane drives for evidence.
+- **Start date.** 2026-10-25.
+- **Condition.** Usage-based, 60 days: lanes that ran an iPhone check over the window. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — the host gives a lane no phone of its own.
+
+#### J6 — Canon
+
+- **Component.** `canon.py` and the Canon contract, 552 lines of code: the one home of the owner's
+  rulings.
+- **Start date.** 2026-10-25.
+- **Condition.** Citation-based, 45 days: vets, orders or sheets citing a Canon entry id over the
+  window. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the owner's rulings need one durable home whatever the host or model.
 
 ### Supplemental entries
 

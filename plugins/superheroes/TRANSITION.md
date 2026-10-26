@@ -18,6 +18,24 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **An advisor relaying to a cloud builder passes `compose --session` the lane's session name (`cloudSessionName`, `issue-<n>-<hash>`), never its session id (the value that opens with `session` and an underscore); an id is now refused at compose with `session-id-not-name`.** See [Relay: compose refuses a session id where it needs the session name](#relay-compose-refuses-a-session-id-where-it-needs-the-session-name).
+
+### Relay: compose refuses a session id where it needs the session name
+
+- `cloud_relay.py compose --session <value>` refuses a session id, a value that starts with exactly `session` followed by an underscore (case-sensitive), with the new token `session-id-not-name` (exit 1). The result carries `session` (the value given) and `message`, which says the relay addresses a cloud session by its name, `issue-<n>-<hash>`, and to read the name from the lane's `cloudSessionName` in the launch ledger. Nothing is written to the relay's state file.
+- Before, such a value composed, and the relay's send to it failed late as `relay-send-failed` ("no agent reachable"), which read as a dead relay.
+- Every other value accepted before still composes: an `issue-<n>-<hash>` name, and any other non-empty single-line value. `session-name-invalid` is unchanged.
+
+- **After switching.** **Nothing is owed.** Advisors follow four practice lines that had lived only in one advisor's memory: a degraded builder-note read is read by hand at once, a layer is never brought current while its review is open, a pattern-check DoD says "best effort", and the post-adoption cloud check is the advisor's own step. See [Showrunner: four practice lines from the field](#showrunner-four-practice-lines-from-the-field).
+
+### Showrunner: four practice lines from the field
+
+- **A degraded builder-note read.** `skills/showrunner/reference/wave-watch.md`: on `builder-note-unavailable` the advisor reads the comments of the issues the event names (`unreadIssues`, or every watched cloud lane's issue when it names none) by hand at once, and answers any builder note inside the builder's 15-minute reply window, because a note may be waiting unseen.
+- **No bring-current while a review is open.** `rubric/native-stacks.md` widens "a layer is not rebased while its review loop is open" to "not brought current, by merge or rebase", and `skills/showrunner/reference/merge-train.md`'s bring-current step says the same: a merge mid-review breaks the review session with `view-head-anchor-mismatch`.
+- **"Best effort" for pattern checks.** `skills/showrunner/reference/issue-contract.md` § The DoD bar: a DoD bullet that asks a pattern check to refuse open-ended input says "best effort" and names the scan at filing, so a review does not chase completeness to its round ceiling.
+- **The cloud check is the advisor's.** `skills/adopt-version/SKILL.md` step 4: re-running the cloud check (`lib/cloud_check.py` `start` and `judge`) after an adoption is the advisor's own item, never owner input; only pasting new setup text needs the owner.
+- No command, result key or file shape changes.
+
 - **After switching.** **Nothing is owed, except that a consumer that checks a refusals entry itself must accept a `route` on a `sandbox` entry.** A native implementer that records the route a cloud sandbox's refusal named no longer forfeits its run. See [Refusals: a sandbox-named route](#refusals-a-sandbox-named-route).
 
 ### Refusals: a sandbox-named route
