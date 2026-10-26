@@ -18,6 +18,14 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **An advisor relaying to a cloud builder passes `compose --session` the lane's session name (`cloudSessionName`, `issue-<n>-<hash>`), never its session id (the value that opens with `session` and an underscore); an id is now refused at compose with `session-id-not-name`.** See [Relay: compose refuses a session id where it needs the session name](#relay-compose-refuses-a-session-id-where-it-needs-the-session-name).
+
+### Relay: compose refuses a session id where it needs the session name
+
+- `cloud_relay.py compose --session <value>` refuses a session id, a value that starts with exactly `session` followed by an underscore (case-sensitive), with the new token `session-id-not-name` (exit 1). The result carries `session` (the value given) and `message`, which says the relay addresses a cloud session by its name, `issue-<n>-<hash>`, and to read the name from the lane's `cloudSessionName` in the launch ledger. Nothing is written to the relay's state file.
+- Before, such a value composed, and the relay's send to it failed late as `relay-send-failed` ("no agent reachable"), which read as a dead relay.
+- Every other value accepted before still composes: an `issue-<n>-<hash>` name, and any other non-empty single-line value. `session-name-invalid` is unchanged.
+
 - **After switching.** **Nothing is owed.** Advisors follow four practice lines that had lived only in one advisor's memory: a degraded builder-note read is read by hand at once, a layer is never brought current while its review is open, a pattern-check DoD says "best effort", and the post-adoption cloud check is the advisor's own step. See [Showrunner: four practice lines from the field](#showrunner-four-practice-lines-from-the-field).
 
 ### Showrunner: four practice lines from the field
