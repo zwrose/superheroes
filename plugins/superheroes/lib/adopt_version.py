@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only planner for adopting a newer installed plugin cache version."""
 import argparse
+import ast
 import filecmp
 import json
 import os
@@ -8,6 +9,7 @@ import re
 import sys
 
 import charter_detect
+import cloud_setup_text
 
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
@@ -163,6 +165,79 @@ def _gap_keys(from_v, to_v, installed, trans, changelog_versions):
     changelog_sections = sorted([v for v in crossed if v in changelog_versions], key=_vt)
     return gaps, changelog_sections
 
+def _start_loaded(root):
+    """{path: bytes} for the parts a cloud session loads at its start in one version tree, as the
+    setup text's stamp counts them (cloud_setup_text._plugin_inventory): each skill's frontmatter,
+    each agent file, the hooks file and the hook modules it loads. None when a part is unreadable."""
+    out = {}
+    try:
+        for name in sorted(os.listdir(os.path.join(root, "skills"))):
+            path = os.path.join(root, "skills", name, "SKILL.md")
+            if os.path.isfile(path):
+                out["skills/%s/SKILL.md" % name] = cloud_setup_text._frontmatter(
+                    cloud_setup_text._inventory_file(path))
+    except FileNotFoundError:
+        pass
+    except (OSError, cloud_setup_text._Refused):
+        return None
+    try:
+        agents = sorted(n for n in os.listdir(os.path.join(root, "agents")) if n.endswith(".md"))
+        for name in agents:
+            out["agents/" + name] = cloud_setup_text._inventory_file(os.path.join(root, "agents", name))
+    except FileNotFoundError:
+        pass
+    except (OSError, cloud_setup_text._Refused):
+        return None
+    hooks_dir = os.path.join(root, "hooks")
+    hooks = os.path.join(hooks_dir, "hooks.json")
+    try:
+        if os.path.isfile(hooks):
+            out["hooks/hooks.json"] = cloud_setup_text._inventory_file(hooks)
+        for rel, data in cloud_setup_text._hook_modules(hooks_dir, hooks):
+            out["hooks/" + rel.replace(os.sep, "/")] = data
+    except cloud_setup_text._Refused:
+        return None
+    return out
+
+def _setup_steps(root):
+    """The setup text's fixed steps in one version tree, in a form two trees compare by: the
+    `_steps` function of its lib/cloud_setup_text.py, docstring aside, and the module assignments
+    that function reads, as the parser sees them. Read, never run; None when it cannot be read."""
+    try:
+        with open(os.path.join(root, "lib", "cloud_setup_text.py"), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+    except (OSError, UnicodeError, SyntaxError, ValueError):
+        return None
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_steps"), None)
+    if fn is None:
+        return None
+    body = fn.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        body = body[1:]
+    used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    reads = [ast.dump(n) for n in tree.body if isinstance(n, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id in used for t in n.targets)]
+    return "\n".join([ast.dump(fn.args)] + [ast.dump(n) for n in body] + reads)
+
+def _cloud_start(cache, inst, from_v, to_v):
+    """One entry per installed release in range, against the installed release before it: which
+    start-loaded parts changed (None when unreadable) and whether the setup text's steps changed
+    (None when unreadable). A release that is not installed falls inside the next entry's span."""
+    span = [v for v in inst if _vt(from_v) <= _vt(v) <= _vt(to_v)]
+    entries = []
+    for since, ver in zip(span, span[1:]):
+        a, b = os.path.join(cache, since), os.path.join(cache, ver)
+        la, lb = _start_loaded(a), _start_loaded(b)
+        parts = None if la is None or lb is None else sorted(
+            k for k in set(la) | set(lb) if la.get(k) != lb.get(k))
+        sa, sb = _setup_steps(a), _setup_steps(b)
+        entries.append({"version": ver, "since": since, "startLoaded": parts,
+                        "setupSteps": None if sa is None or sb is None else sa != sb})
+    changed = any(e["startLoaded"] is None or e["startLoaded"] or e["setupSteps"] is not False
+                  for e in entries)
+    return entries, changed
+
 def _plan(role, cache, from_v, to_v):
     if not os.path.isdir(cache):
         return _refuse("cache-dir-missing", "cache dir missing or not a directory")
@@ -179,6 +254,7 @@ def _plan(role, cache, from_v, to_v):
                for k in ("charter", "covenantHooks", "libs", "other")}
     up, trans, miss = from_v == to_v, [], []
     gaps, changelog_secs = [], []
+    cloud_start, cloud_changed = _cloud_start(cache, inst, from_v, to_v)
     if not up:
         parsed = _parse_transition(os.path.join(tr, "TRANSITION.md"), from_v, to_v, inst)
         if parsed is None:
@@ -206,7 +282,8 @@ def _plan(role, cache, from_v, to_v):
     payload = {"ok": True, "role": role, "cacheDir": cache, "from": from_v, "to": to_v, "fromRoot": fr,
                "toRoot": tr, "installed": inst, "upToDate": up, "transitionSections": trans,
                "missingTransitionSections": miss, "unresolvedGaps": gaps, "changelogSections": changelog_secs,
-               "buckets": buckets, "counts": counts}
+               "buckets": buckets, "counts": counts,
+               "cloudStart": cloud_start, "cloudStartChanged": cloud_changed}
     sys.stdout.write(json.dumps(payload) + "\n")
     return 0
 
