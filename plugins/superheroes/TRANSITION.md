@@ -18,6 +18,16 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **A project that commits the plugin pin hook runs `cloud_plugin_pin.py write --cwd .` again, then commits and pushes the rewritten `.claude/hooks/superheroes-plugin-pin.sh`.** Until then `cloud_plugin_pin.py status`, the cloud check and readiness read the hook as broken (`script-differs`). A project without the hook owes nothing. See [Cloud setup: a hardened plugin pin hook](#cloud-setup-a-hardened-plugin-pin-hook).
+
+### Cloud setup: a hardened plugin pin hook
+
+- The script `lib/cloud_plugin_pin.py` writes (`script_text()`) changes in four ways. Its log, pin file and settings entry are unchanged.
+- **The plugin link is never absent.** The new link replaces the old one only by a rename onto it: `mv -T` (GNU and GNU-compatible `mv`, uutils included), else `mv -h` (BSD `mv`), tried by what the `mv` accepts rather than by its name. Before, a system without GNU `mv` removed the link and then made it again, so an interruption left no plugin link. A `mv` with neither flag now keeps the old link and says the link could not be replaced.
+- **Two sessions installing at once no longer delete each other's tree.** Each fetch goes into a new directory of its own (`<source dir>-<commit>.<random>`), and the script deletes only a directory it made itself and never linked. Before, every session fetched into the one `<source dir>-<commit>` directory and removed it before publishing its own copy. A tree is no longer reused from an earlier run: when the link is not at the pin, the script fetches again.
+- **The fast path checks the version too.** A session whose plugin is at the pinned commit but whose `version.txt` differs from the pin now fetches again. Before, matching the commit was enough.
+- **The checkout is bounded like the fetch** (`timeout 120` each, where `timeout` exists), and the script's comments say what it does: command output goes to the log, the session sees one-line notices, and a hook that cannot start or that the hook timeout cancels is reported by the session.
+
 - **After switching.** **An advisor relaying to a cloud builder passes `compose --session` the lane's session name (`cloudSessionName`, `issue-<n>-<hash>`), never its session id (the value that opens with `session` and an underscore); an id is now refused at compose with `session-id-not-name`.** See [Relay: compose refuses a session id where it needs the session name](#relay-compose-refuses-a-session-id-where-it-needs-the-session-name).
 - **After switching.** **Nothing is owed by a consuming project, except: a project a check already switched off stays off until the owner says "turn cloud builds on" once.** A failed or unread cloud check no longer switches cloud builds off; it pauses cloud launches on that account until a check passes. See [Cloud setup check: a failed check pauses the account instead of switching cloud builds off](#cloud-setup-check-a-failed-check-pauses-the-account-instead-of-switching-cloud-builds-off).
 
