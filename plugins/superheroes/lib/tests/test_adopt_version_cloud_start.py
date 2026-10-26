@@ -1,8 +1,9 @@
-"""adopt_version plan's cloudStart field and the adopt-version skill's owed cloud step (issue #2177).
+"""adopt_version plan's cloudStart field and the adopt-version skill's owed cloud steps (issue #2177).
 
 `cloudStart` says, per installed release in range, whether a part a cloud session loads at start
-changed or the setup text's own steps changed; the skill turns that and the pin hook's state into
-one owed setup-text paste or pin commit per cloud environment.
+changed and whether the project's setup stamp, computed by each release's own code, differs; the
+skill turns that and the pin hook's state into the owed pin commit and setup-text paste per cloud
+environment.
 """
 import json
 import os
@@ -19,53 +20,53 @@ if _LIB not in sys.path:
 
 import adopt_version as av  # noqa: E402
 
+# A stand-in for a release's own setup-text code: `stamped_files` reads the project's calibration,
+# builds the setup steps and reaches a store root through an import made inside a function.
 _SETUP_TEXT = '''\
+import os
+
 import helper
 
 PKG = "{pkg}"
 OTHER = "{other}"
-CLONE = "{clone}"
-FILL = "{fill}"
-STORE = "{store}"
 
 
-def _clone_dir():
-    return CLONE
+def _store_files(cwd):
+    with open(os.path.join(cwd, "calibration.md"), encoding="utf-8") as fh:
+        return fh.read(){store}
 
 
-def _steps(source, clone):
+def _steps():
     """{doc}"""
-    return ["install " + PKG, source, clone, helper.DIR]
+    return ["install " + PKG, "fetch " + helper.SOURCE]
 
 
-def _pin_view():
-    return _steps("src", _clone_dir())
+def _root():
+    import store
+    return store.store_root()
 
 
-def _fill_lines():
-    return [FILL]
-
-
-def _view_for(files):
-    return files + _pin_view() + _fill_lines()
-
-
-def _store_files():
-    return [STORE]
-
-
-def stamped_files():
-    return _view_for(_store_files())
+def stamped_files(cwd, root):
+    return {{"files": _store_files(cwd), "steps": _steps(), "root": _root()}}
 
 
 def _elsewhere():
     return OTHER
 '''
 
+_CLOUD_SETUP = '''\
+import hashlib
+import json
+
+
+def calibration_stamp(files):
+    return "sha256:" + hashlib.{algo}(json.dumps(files, sort_keys=True).encode()).hexdigest()
+'''
+
 
 def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
-          hooks='{"hooks": {}}', pkg="tool", other="x", doc="Steps.", clone="c", helper="d",
-          fill="f", stamp="sha256", store="s", setup=True):
+          hooks='{"hooks": {}}', pkg="tool", other="x", doc="Steps.", source="git",
+          store="", algo="sha256", store_root="/store", setup=True):
     root = cache / ver
     (root / "skills" / "a").mkdir(parents=True)
     (root / "skills" / "a" / "SKILL.md").write_text("---\nname: a\n%s\n---\n\n%s\n" % (front, body))
@@ -74,40 +75,121 @@ def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
     (root / "hooks").mkdir()
     (root / "hooks" / "hooks.json").write_text(hooks)
     (root / "lib").mkdir()
-    (root / "lib" / "helper.py").write_text('DIR = "%s"\n' % helper)
-    (root / "lib" / "cloud_setup.py").write_text(
-        'def calibration_stamp(files):\n    return "%s"\n' % stamp)
+    (root / "lib" / "helper.py").write_text('SOURCE = "%s"\n' % source)
+    (root / "lib" / "store.py").write_text('def store_root():\n    return "%s"\n' % store_root)
+    (root / "lib" / "cloud_setup.py").write_text(_CLOUD_SETUP.format(algo=algo))
     if setup:
         (root / "lib" / "cloud_setup_text.py").write_text(
-            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc, clone=clone, fill=fill, store=store))
+            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc, store=store))
     (root / "TRANSITION.md").write_text("## %s\n" % ver)
     (root / "CHANGELOG.md").write_text("## %s\n" % ver)
     return root
 
 
-def _plan(capsys, cache, frm, to):
-    code = av.main(["plan", "--role", "showrunner", "--from", frm, "--to", to,
-                    "--cache-dir", str(cache)])
+def _project(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir(exist_ok=True)
+    (project / "calibration.md").write_text("  calibration  \n")
+    return project
+
+
+def _snapshot(directory):
+    out = {}
+    for dp, _, fns in os.walk(directory):
+        for fn in fns:
+            path = os.path.join(dp, fn)
+            st = os.stat(path)
+            with open(path, "rb") as fh:
+                out[path] = (st.st_mtime_ns, fh.read())
+    return out
+
+
+def _plan(capsys, cache, frm, to, project=None):
+    argv = ["plan", "--role", "showrunner", "--from", frm, "--to", to, "--cache-dir", str(cache)]
+    if project is not None:
+        argv += ["--project", str(project)]
+    code = av.main(argv)
     out = capsys.readouterr().out.strip()
     assert code == 0, out
     return json.loads(out)
 
 
-def test_nothing_start_loaded_changed(capsys, tmp_path):
+def _steps_changed(capsys, tmp_path, **changed):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", body="a changed skill body", other="y", doc="Other words.")
-    data = _plan(capsys, cache, "0.1.0", "0.2.0")
+    _tree(cache, "0.2.0", **changed)
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    assert data["cloudStart"][0]["startLoaded"] == []
+    return data
+
+
+def test_an_unchanged_stamp_reads_false(capsys, tmp_path):
+    data = _steps_changed(capsys, tmp_path, body="a changed skill body", other="y",
+                          doc="Other words.")
     assert data["cloudStart"] == [
         {"version": "0.2.0", "since": "0.1.0", "startLoaded": [], "setupSteps": False}]
     assert data["cloudStartChanged"] is False
+
+
+def test_a_change_behind_stamped_files_counts(capsys, tmp_path):
+    data = _steps_changed(capsys, tmp_path, pkg="tool@2")
+    assert data["cloudStart"][0]["setupSteps"] is True
+    assert data["cloudStartChanged"] is True
+
+
+def test_a_change_behind_calibration_stamp_counts(capsys, tmp_path):
+    data = _steps_changed(capsys, tmp_path, algo="sha512")
+    assert data["cloudStart"][0]["setupSteps"] is True
+
+
+def test_a_calibration_store_change_counts(capsys, tmp_path):
+    data = _steps_changed(capsys, tmp_path, store=".strip()")
+    assert data["cloudStart"][0]["setupSteps"] is True
+
+
+def test_a_setup_step_fetch_change_counts(capsys, tmp_path):
+    data = _steps_changed(capsys, tmp_path, source="git --depth 1")
+    assert data["cloudStart"][0]["setupSteps"] is True
+
+
+def test_a_change_behind_an_import_inside_a_function_counts(capsys, tmp_path):
+    data = _steps_changed(capsys, tmp_path, store_root="/other-store")
+    assert data["cloudStart"][0]["setupSteps"] is True
+
+
+def test_computing_the_stamp_writes_nothing_to_the_project(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0")
+    _tree(cache, "0.2.0", pkg="tool@2")
+    project = _project(tmp_path)
+    before = _snapshot(project)
+    _plan(capsys, cache, "0.1.0", "0.2.0", project)
+    assert _snapshot(project) == before
+
+
+def test_an_uncomputable_stamp_reads_as_changed(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0", setup=False)
+    _tree(cache, "0.2.0")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    assert data["cloudStart"][0]["setupSteps"] is None
+    assert data["cloudStartChanged"] is True
+
+
+def test_no_project_reads_as_changed(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0")
+    _tree(cache, "0.2.0")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0")
+    assert data["cloudStart"][0]["setupSteps"] is None
+    assert data["cloudStartChanged"] is True
 
 
 def test_start_loaded_parts_name_each_change(capsys, tmp_path):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
     _tree(cache, "0.2.0", front="description: b", agent="agent two", hooks='{"hooks": {"a": 1}}')
-    data = _plan(capsys, cache, "0.1.0", "0.2.0")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
     entry = data["cloudStart"][0]
     assert entry["startLoaded"] == ["agents/x.md", "hooks/hooks.json", "skills/a/SKILL.md"]
     assert entry["setupSteps"] is False
@@ -119,55 +201,8 @@ def test_added_agent_counts(capsys, tmp_path):
     _tree(cache, "0.1.0")
     _tree(cache, "0.2.0")
     (cache / "0.2.0" / "agents" / "y.md").write_text("new")
-    data = _plan(capsys, cache, "0.1.0", "0.2.0")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
     assert data["cloudStart"][0]["startLoaded"] == ["agents/y.md"]
-    assert data["cloudStartChanged"] is True
-
-
-def test_setup_steps_change_counts(capsys, tmp_path):
-    cache = tmp_path / "cache"
-    _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", pkg="tool@2")
-    data = _plan(capsys, cache, "0.1.0", "0.2.0")
-    assert data["cloudStart"][0]["setupSteps"] is True
-    assert data["cloudStart"][0]["startLoaded"] == []
-    assert data["cloudStartChanged"] is True
-
-
-def test_a_step_input_reached_through_the_pin_view_counts(capsys, tmp_path):
-    cache = tmp_path / "cache"
-    _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", clone="other-clone")
-    _tree(cache, "0.3.0", clone="other-clone", helper="elsewhere")
-    data = _plan(capsys, cache, "0.1.0", "0.3.0")
-    assert [e["setupSteps"] for e in data["cloudStart"]] == [True, True]
-    assert data["cloudStartChanged"] is True
-
-
-def test_the_fill_step_and_the_stamp_hash_count(capsys, tmp_path):
-    cache = tmp_path / "cache"
-    _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", fill="g")
-    _tree(cache, "0.3.0", fill="g", stamp="sha512")
-    data = _plan(capsys, cache, "0.1.0", "0.3.0")
-    assert [e["setupSteps"] for e in data["cloudStart"]] == [True, True]
-
-
-def test_a_calibration_store_change_counts(capsys, tmp_path):
-    cache = tmp_path / "cache"
-    _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", store="normalized")
-    data = _plan(capsys, cache, "0.1.0", "0.2.0")
-    assert data["cloudStart"][0]["setupSteps"] is True
-    assert data["cloudStartChanged"] is True
-
-
-def test_unreadable_setup_steps_read_as_changed(capsys, tmp_path):
-    cache = tmp_path / "cache"
-    _tree(cache, "0.1.0", setup=False)
-    _tree(cache, "0.2.0")
-    data = _plan(capsys, cache, "0.1.0", "0.2.0")
-    assert data["cloudStart"][0]["setupSteps"] is None
     assert data["cloudStartChanged"] is True
 
 
@@ -175,17 +210,18 @@ def test_one_entry_per_installed_release(capsys, tmp_path):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
     _tree(cache, "0.2.0", agent="agent two")
-    _tree(cache, "0.3.0", agent="agent two")
-    data = _plan(capsys, cache, "0.1.0", "0.3.0")
-    assert [(e["since"], e["version"], e["startLoaded"]) for e in data["cloudStart"]] == [
-        ("0.1.0", "0.2.0", ["agents/x.md"]), ("0.2.0", "0.3.0", [])]
+    _tree(cache, "0.3.0", agent="agent two", pkg="tool@3")
+    data = _plan(capsys, cache, "0.1.0", "0.3.0", _project(tmp_path))
+    assert [(e["since"], e["version"], e["startLoaded"], e["setupSteps"])
+            for e in data["cloudStart"]] == [
+        ("0.1.0", "0.2.0", ["agents/x.md"], False), ("0.2.0", "0.3.0", [], True)]
     assert data["cloudStartChanged"] is True
 
 
 def test_up_to_date_has_no_entries(capsys, tmp_path):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
-    data = _plan(capsys, cache, "0.1.0", "0.1.0")
+    data = _plan(capsys, cache, "0.1.0", "0.1.0", _project(tmp_path))
     assert data["cloudStart"] == []
     assert data["cloudStartChanged"] is False
 
@@ -218,13 +254,20 @@ def test_skill_owes_the_setup_text_paste_per_environment():
     assert "older than **from** or newer than **to**" in paste
 
 
-def test_skill_owes_the_pin_commit_whenever_the_hook_is_valid():
+def _condition(bullet):
+    """A bullet's condition: its text up to the colon that opens its owed line."""
+    return bullet[:bullet.index(": `owed:")]
+
+
+def test_skill_owes_the_pin_commit_whenever_the_project_has_the_hook():
     step4 = _step(_skill(), 4)
     pin = _bullet(step4, "The pin commit")
+    assert _condition(pin) == (
+        "whenever the pin hook's `state` is `valid` or `broken` (the project has the hook)")
     assert "`owed: pin commit for cloud environment <environment> (account <account>) (<to>)`" in pin
-    assert "whenever the pin hook's `state` is `valid`" in pin
     assert "`lib/cloud_plugin_pin.py` `write" in pin
-    assert "cloudStartChanged" not in pin and "paste" not in pin
+    assert ("A hook a release left `broken` (`script-differs`) is rewritten by that same write, "
+            "before the paste.") in pin
 
 
 def test_skill_owes_both_with_a_valid_old_pin_and_a_start_change_pin_first():
@@ -234,7 +277,7 @@ def test_skill_owes_both_with_a_valid_old_pin_and_a_start_change_pin_first():
     assert ("When both are owed, the order is the pin commit (write, commit, push), then the paste, "
             "then the cloud check.") in step4
     # a valid hook owes the pin commit unconditionally, and a start change owes the paste as well
-    assert "valid" in _bullet(_step(_skill(), 4), "The pin commit")
+    assert "`valid` or `broken`" in _condition(_bullet(_step(_skill(), 4), "The pin commit"))
     assert "`cloudStartChanged` is true" in _bullet(_step(_skill(), 4), "The setup-text paste")
     assert step4.index("**The pin commit**") < step4.index("**The setup-text paste**")
 

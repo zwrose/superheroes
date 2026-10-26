@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Read-only planner for adopting a newer installed plugin cache version."""
 import argparse
-import ast
 import filecmp
 import json
 import os
 import re
+import subprocess
 import sys
 
 import charter_detect
@@ -199,89 +199,47 @@ def _start_loaded(root):
         return None
     return out
 
-def _setup_steps(root):
-    """The code behind the setup text's stamp, in one version tree, in a form two trees compare by:
-    the two functions the cloud check hashes, `stamped_files` in lib/cloud_setup_text.py and
-    `calibration_stamp` in lib/cloud_setup.py, with every top-level definition they reach in the
-    plugin's lib modules,
-    docstrings aside, as the parser sees them. Read, never run; None when it cannot be read."""
-    lib, mods, seen, out = os.path.join(root, "lib"), {}, set(), []
-    starts = [("cloud_setup_text", "stamped_files"), ("cloud_setup", "calibration_stamp")]
-    pending = list(starts)
-    while pending:
-        key = pending.pop()
-        if key in seen:
-            continue
-        seen.add(key)
-        mod, name = key
-        if mod not in mods:
-            mods[mod] = _module_defs(lib, mod)
-        if mods[mod] is None:
-            return None
-        defs, modules, names = mods[mod]
-        node = defs.get(name)
-        if node is None:
-            if key in starts:
-                return None
-            continue  # a builtin, a parameter or a local, not a module definition
-        out.append("%s.%s %s" % (mod, name, ast.dump(node)))
-        for n in ast.walk(node):
-            if isinstance(n, ast.Name):
-                pending.append(names.get(n.id, (mod, n.id)))
-            elif isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) \
-                    and n.value.id in modules:
-                pending.append((modules[n.value.id], n.attr))
-    return "\n".join(sorted(out))
+# Each tree's own code computes the stamp the cloud check compares, in its own process, read-only.
+_STAMP_CODE = (
+    "import json, sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import cloud_setup, cloud_setup_text\n"
+    "print(json.dumps(cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(sys.argv[2], None))))\n")
+STAMP_TIMEOUT_SECONDS = 120
 
-def _module_defs(lib, mod):
-    """(top-level definitions by name, docstrings stripped; `import m` aliases; `from m import n`
-    names) for one plugin lib module, following only modules that exist in `lib`. None when the
-    module cannot be read."""
+def _placed_stamp(root, project):
+    """The setup stamp `project` gets under one version tree, computed by that tree's own
+    cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(project, None)) in a separate
+    process with the tree's lib first on its path. None when it cannot be computed."""
     try:
-        with open(os.path.join(lib, mod + ".py"), encoding="utf-8") as fh:
-            tree = ast.parse(fh.read())
-    except (OSError, UnicodeError, SyntaxError, ValueError):
+        done = subprocess.run([sys.executable, "-B", "-c", _STAMP_CODE, os.path.join(root, "lib"),
+                               project], cwd=project, capture_output=True, text=True,
+                              timeout=STAMP_TIMEOUT_SECONDS)
+        stamp = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    local = lambda m: os.path.isfile(os.path.join(lib, m + ".py"))
-    defs, modules, names = {}, {}, {}
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            body = node.body
-            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
-                    and isinstance(body[0].value.value, str):
-                node.body = body[1:]
-            defs[node.name] = node
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
-                for t in ast.walk(target):
-                    if isinstance(t, ast.Name):
-                        defs[t.id] = node
-        elif isinstance(node, ast.Import):
-            modules.update({a.asname or a.name: a.name for a in node.names if local(a.name)})
-        elif isinstance(node, ast.ImportFrom) and node.module and not node.level \
-                and local(node.module):
-            names.update({a.asname or a.name: (node.module, a.name) for a in node.names})
-    return defs, modules, names
+    return stamp if isinstance(stamp, str) and stamp else None
 
-def _cloud_start(cache, inst, from_v, to_v):
+def _cloud_start(cache, inst, from_v, to_v, project):
     """One entry per installed release in range, against the installed release before it: which
-    start-loaded parts changed (None when unreadable) and whether the setup text's steps changed
-    (None when unreadable). A release that is not installed falls inside the next entry's span."""
+    start-loaded parts changed (None when unreadable) and whether `project`'s setup stamp differs
+    between the two trees (None when either cannot be computed, or no project was named). A release
+    that is not installed falls inside the next entry's span."""
     span = [v for v in inst if _vt(from_v) <= _vt(v) <= _vt(to_v)]
+    stamps = {v: _placed_stamp(os.path.join(cache, v), project) for v in span} if project else {}
     entries = []
     for since, ver in zip(span, span[1:]):
-        a, b = os.path.join(cache, since), os.path.join(cache, ver)
-        la, lb = _start_loaded(a), _start_loaded(b)
+        la, lb = _start_loaded(os.path.join(cache, since)), _start_loaded(os.path.join(cache, ver))
         parts = None if la is None or lb is None else sorted(
             k for k in set(la) | set(lb) if la.get(k) != lb.get(k))
-        sa, sb = _setup_steps(a), _setup_steps(b)
+        sa, sb = stamps.get(since), stamps.get(ver)
         entries.append({"version": ver, "since": since, "startLoaded": parts,
                         "setupSteps": None if sa is None or sb is None else sa != sb})
     changed = any(e["startLoaded"] is None or e["startLoaded"] or e["setupSteps"] is not False
                   for e in entries)
     return entries, changed
 
-def _plan(role, cache, from_v, to_v):
+def _plan(role, cache, from_v, to_v, project=None):
     if not os.path.isdir(cache):
         return _refuse("cache-dir-missing", "cache dir missing or not a directory")
     cache = os.path.abspath(cache)
@@ -297,7 +255,7 @@ def _plan(role, cache, from_v, to_v):
                for k in ("charter", "covenantHooks", "libs", "other")}
     up, trans, miss = from_v == to_v, [], []
     gaps, changelog_secs = [], []
-    cloud_start, cloud_changed = _cloud_start(cache, inst, from_v, to_v)
+    cloud_start, cloud_changed = _cloud_start(cache, inst, from_v, to_v, project)
     if not up:
         parsed = _parse_transition(os.path.join(tr, "TRANSITION.md"), from_v, to_v, inst)
         if parsed is None:
@@ -339,6 +297,7 @@ def main(argv=None):
     g.add_argument("--from", dest="from_ver")
     p.add_argument("--to")
     p.add_argument("--cache-dir")
+    p.add_argument("--project", help="a project whose cloud setup stamp each release is computed for")
     args = ap.parse_args(argv)
     if args.from_root:
         fr = os.path.abspath(args.from_root)
@@ -349,7 +308,8 @@ def main(argv=None):
             p.error("--cache-dir is required with --from")
         cache = os.path.abspath(args.cache_dir)
     inst = _installed(cache) if os.path.isdir(cache) else []
-    return _plan(args.role, cache, from_v, args.to or (inst[-1] if inst else from_v))
+    return _plan(args.role, cache, from_v, args.to or (inst[-1] if inst else from_v),
+                 os.path.abspath(args.project) if args.project else None)
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -154,17 +154,19 @@ each is resolved; then resume adoption from step 5.
 record from the new root: `lib/cloud_setup.py` `read --cwd <project>` for the launching account, and
 `--account <id>` for each other account its cloud builds run under. A project with no ready record
 owes nothing here. Where a record's `pluginVersion` is not **to**, read the project's plugin pin
-hook (`lib/cloud_plugin_pin.py` `status --cwd <project>`) and `plan`'s `cloudStart` entries, one per
-installed release in range, each naming the parts a cloud session loads at start that changed
-(`startLoaded`) and whether the setup text's own steps changed (`setupSteps`); `cloudStartChanged`
-sums them, and a null in either counts as changed. The two owed steps add up, as the after-release
+hook (`lib/cloud_plugin_pin.py` `status --cwd <project>`) and run `plan` again with
+`--project <project>`. Its `cloudStart` entries, one per installed release in range, each name the
+parts a cloud session loads at start that changed (`startLoaded`) and whether the project's setup
+stamp, computed by each release's own code, differs (`setupSteps`); `cloudStartChanged` sums them,
+and a null in either counts as changed. The two owed steps add up, as the after-release
 rule in `skills/configure/reference/set-up.md` ("The plugin pin hook", *When a pin commit is
 enough, and when a paste is still needed*) says; that page is the rule's home. Per environment:
 
-- **The pin commit** whenever the pin hook's `state` is `valid`:
-  `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
+- **The pin commit** whenever the pin hook's `state` is `valid` or `broken` (the project has the
+  hook): `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
   running `lib/cloud_plugin_pin.py` `write --cwd <project>` from the new root, then committing and
-  pushing the files it names.
+  pushing the files it names. A hook a release left `broken` (`script-differs`) is rewritten by that
+  same write, before the paste.
 - **The setup-text paste** when the pin hook's `state` is not `valid`, `cloudStartChanged` is true,
   or the record's version is older than **from** or newer than **to** (`cloudStart` covers only
   the span between):
