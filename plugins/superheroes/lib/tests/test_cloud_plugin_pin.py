@@ -531,6 +531,7 @@ def test_the_script_never_leaves_the_session_without_a_link_on_a_bsd_system(tmp_
     sc = _scene(tmp_path)
     done = _run_script(sc, bin_dir=_bsd_mv_and_ln(tmp_path, sc))
     assert done.returncode == 0, done.stderr
+    assert os.path.lexists(str(sc.link)), "the session was left with no plugin link"
     assert done.stdout == "superheroes: plugin 9.9.9 installed at the pinned commit %s.\n" % sc.sha_b[:12]
     [fetched] = _fetched(sc)
     assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
