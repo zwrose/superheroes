@@ -193,6 +193,24 @@ def test_switch_on_goes_ahead_when_the_last_check_failed_and_says_paused(tmp_pat
     assert os.path.lexists(CC.failed_check_path(repo, ACCOUNT, store))
 
 
+def test_switch_on_after_a_check_that_never_got_the_identity_report_does_not_ask_for_the_variables(tmp_path):
+    from test_cloud_check import _cloud_report, _judge, _pair
+    local, cloud = _pair(tmp_path)
+    assert CS.record_check(local.cwd, root=local.root, **_fixture())["action"] == "written"
+    obj = _cloud_report(cloud)
+    del obj[CC.IDENTITY_FIELD]
+    result = _judge(local, obj)
+    assert result["action"] == "failed" and result["failedParts"] == ["identity"]
+    got = PC.set_item(local.cwd, "cloudBuilds", True, root=local.root, account=ACCOUNT,
+                      project_name="fixture")
+    # axis: a marker written for an identity the session never reported makes the on-paused message
+    # give the setup-text fix and not the identity-variables one
+    assert got["action"] == "written"
+    assert got["message"] == CS.switch_message("on-paused", "fixture", parts=["identity-unreported"])
+    assert CS.FIX_PASTE_SETUP in got["message"]
+    assert "set the git identity variables" not in got["message"]
+
+
 def test_switch_on_with_a_damaged_failed_check_marker_says_paused_without_a_part(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _check(repo, store)
@@ -576,6 +594,18 @@ def test_paused_failure_names_three_parts_in_table_order_with_and():
         "its last setup check failed on the plugin version and the reviewer pass. ")
 
 
+def test_paused_failure_gives_an_unreported_identity_the_setup_text_fix():
+    # axis: the identity-unreported part gives the setup-text fix and never the identity-variables one
+    got = CS.paused_failure(["identity-unreported"])
+    assert CS.FIX_PASTE_SETUP in got
+    assert "set the git identity variables" not in got
+    assert "the cloud session's git identity report" in got
+    # the reported-missing identity keeps the identity-variables fix
+    reported = CS.paused_failure(["identity"])
+    assert "set the git identity variables in the environment" in reported
+    assert CS.FIX_PASTE_SETUP not in reported
+
+
 def test_paused_failure_names_a_shared_fix_once():
     got = CS.paused_failure(["version", "calibration"])
     assert got == (
@@ -616,7 +646,8 @@ def test_paused_failure_names_the_legacy_setting_part_without_a_fix():
 
 def test_every_paused_part_is_named_and_the_resume_rule_is_stated_once():
     assert list(CS.PAUSED_PARTS) == ["environment", "version", "pin", "hook", "calibration",
-                                     "reviewer", "identity", "record", "unread", "setting"]
+                                     "reviewer", "identity", "identity-unreported", "record",
+                                     "unread", "setting"]
     for part, (what, fix) in CS.PAUSED_PARTS.items():
         assert what in CS.paused_failure([part]), part
     assert CS.PAUSED_RESUME == "They resume by themselves once the check passes."

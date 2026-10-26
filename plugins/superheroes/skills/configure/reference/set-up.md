@@ -711,8 +711,8 @@ launching machine's.
    Say judge's `message`. A passed check has written the setup record for this account and changed no
    setting. A failed or unread check leaves its failed-check marker, which pauses cloud launches on
    this account until a check passes; it never changes the cloud-builds setting, and the next passing
-   check resumes them with no word from the owner. When `markerWritten` is false the message says the
-   account is not paused; relay it as is. Never write the setup record any other way, and never tell the owner a check passed without a
+   check resumes them with no word from the owner. When `markerWritten` is false and no earlier failed-check marker remains, the message says the
+   account is not paused; when an earlier marker remains, it says the account stays paused under that marker. Relay the message as it is in both cases. Never write the setup record any other way, and never tell the owner a check passed without a
    `passed` result.
 8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the environment now in use (the id step 3
    returned or the record's, the one the latest recovery pick returned, or the one the latest

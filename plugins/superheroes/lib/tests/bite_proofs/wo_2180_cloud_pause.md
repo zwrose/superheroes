@@ -430,3 +430,103 @@ FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_a_malformed_fai
 ```
 
 WO-2180-C closing: 2 bite-proof runs (1 red, 1 green), one plain command each; the red landed on its own axis.
+
+## WO-2180-D
+
+Detectors: `plugins/superheroes/lib/tests/test_cloud_check_identity_2017.py::test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported`, `plugins/superheroes/lib/tests/test_cloud_setup.py::test_paused_failure_gives_an_unreported_identity_the_setup_text_fix`, `plugins/superheroes/lib/tests/test_cloud_setup_gardening.py::test_cloud_checks_paused_wording_is_read_from_cloud_setup` (one node each).
+Guarded elements (declared by WO-2180-D): (D1) the marker records `identity-unreported` for an unreported identity; (D2) `PAUSED_PARTS["identity-unreported"]` gives the setup-text fix; (D3) the FU3 assertion reads the shipped clause.
+Each was neutralized by a targeted edit in production code only, the detector run alone as one test node id, then restored by the inverse edit (an edit, never a checkout/restore/reset/stash). Every red was produced with the detector unedited.
+Run command, each time: `timeout 900 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest '<node>' -q -p no:cacheprovider --tb=short`. Only the `UV_NATIVE_TLS` deprecation line that heads every run is dropped from the captures. Redaction: none needed.
+
+### D1. The marker records `identity-unreported` for an unreported identity
+
+Axis: a marker written for an identity the session never reported carries `identity-unreported` in place of `identity`, while `judge`'s returned `failedParts` keep `identity` (axis line in `_fail_closed`, `cloud_check.py:534`). The red is on axis: the marker holds `identity` at the index where `identity-unreported` is expected.
+
+- Neutralization (`cloud_check.py:535-536`, `_fail_closed`): the two lines `recorded = [("identity-unreported" if part == "identity" and not identity_reported else part)` / `for part in failed]` became `recorded = list(failed)`.
+- Node: `plugins/superheroes/lib/tests/test_cloud_check_identity_2017.py::test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported`.
+- Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported __
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_cloud_check_identity_2017.py:271: in test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported
+    assert marker["failedParts"] == ["version", "identity-unreported"]
+E   AssertionError: assert ['version', 'identity'] == ['version', '...y-unreported']
+E     
+E     At index 1 diff: 'identity' != 'identity-unreported'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_check_identity_2017.py::test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported
+1 failed in 1.64s
+```
+
+- Restore: the inverse edit, `recorded = list(failed)` back to the two-line comprehension. Restored text, `cloud_check.py:535-536`: `    recorded = [("identity-unreported" if part == "identity" and not identity_reported else part)` / `                for part in failed]`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 1.45s
+```
+
+- Supplementary (not a proof run of its own): the same D1 neutralization was applied once more and the switch-on node `plugins/superheroes/lib/tests/test_cloud_setup.py::test_switch_on_after_a_check_that_never_got_the_identity_report_does_not_ask_for_the_variables` run alone, to show it fails on the head behaviour (marker says `identity`). It failed on its message assertion: the expected `on-paused` text for `identity-unreported` carried "paste the new setup text into the environment", the actual one "set the git identity variables in the environment". The comprehension was then restored by the inverse edit; that node's green is in the eight-file run below.
+
+### D2. `PAUSED_PARTS["identity-unreported"]` gives the setup-text fix
+
+Axis: the `identity-unreported` row names the setup-text fix (`FIX_PASTE_SETUP`) and never the identity-variables fix (`cloud_setup.py:90`). The red is on axis: the paused wording for `["identity-unreported"]` carries the identity-variables fix instead of the setup text.
+
+- Neutralization (`cloud_setup.py:90`): the row's fix `FIX_PASTE_SETUP` became the literal `"set the git identity variables in the environment"`.
+- Node: `plugins/superheroes/lib/tests/test_cloud_setup.py::test_paused_failure_gives_an_unreported_identity_the_setup_text_fix`.
+- Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_paused_failure_gives_an_unreported_identity_the_setup_text_fix ______
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_cloud_setup.py:600: in test_paused_failure_gives_an_unreported_identity_the_setup_text_fix
+    assert CS.FIX_PASTE_SETUP in got
+E   assert 'paste the new setup text into the environment' in 'its last setup check failed on the cloud session\'s git identity report. To fix it, set the git identity variables in the environment, then say "check again".'
+E    +  where 'paste the new setup text into the environment' = CS.FIX_PASTE_SETUP
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup.py::test_paused_failure_gives_an_unreported_identity_the_setup_text_fix
+1 failed in 0.61s
+```
+
+- Restore: the inverse edit. Restored text, `cloud_setup.py:90`: `    "identity-unreported": ("the cloud session's git identity report", FIX_PASTE_SETUP),`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```
+
+### D3. The FU3 assertion reads the shipped clause
+
+Axis: the gardening test checks the shipped `cloud_setup._PAUSED_ON` for the resume clause and checks that `_check_again(True)[0]` is that same string, so the clause cannot be dropped from the shipped wording while a test-local copy keeps the test green. The red is on axis: with the clause gone from `_PAUSED_ON`, the assertion on `CS._PAUSED_ON` fails (it passed before the change, because it read the test-local `PAUSED_ON`).
+
+- Neutralization (`cloud_setup.py:439-440`, `_PAUSED_ON`, two string literals): `("cloud builds are paused for this account until a check passes, and resume by "` / `"themselves once one does. Run the setup check again.")` became `("cloud builds are paused for this account until a check passes. "` / `"Run the setup check again.")`.
+- Node: `plugins/superheroes/lib/tests/test_cloud_setup_gardening.py::test_cloud_checks_paused_wording_is_read_from_cloud_setup`.
+- Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_cloud_checks_paused_wording_is_read_from_cloud_setup ___________
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:487: in test_cloud_checks_paused_wording_is_read_from_cloud_setup
+    assert "resume by themselves once one does" in CS._PAUSED_ON
+E   AssertionError: assert 'resume by themselves once one does' in 'cloud builds are paused for this account until a check passes. Run the setup check again.'
+E    +  where 'cloud builds are paused for this account until a check passes. Run the setup check again.' = CS._PAUSED_ON
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup_gardening.py::test_cloud_checks_paused_wording_is_read_from_cloud_setup
+1 failed in 0.29s
+```
+
+- Restore: the inverse edit, both literals. Restored text, `cloud_setup.py:439-440`: `_PAUSED_ON = ("cloud builds are paused for this account until a check passes, and resume by "` / `              "themselves once one does. Run the setup check again.")`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 0.30s
+```
+
+WO-2180-D closing: 6 bite-proof runs (3 red, 3 green), one plain command each, plus one supplementary red run of the switch-on node under D1's neutralization; every red landed on its own axis. The second assertion of the D3 node (`CS._check_again(True)[0] == CS._PAUSED_ON`) is not neutralized separately: it is not reached under this neutralization and passes before and after it, so it carries no bite of its own.

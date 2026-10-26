@@ -526,11 +526,15 @@ def _judge_parts(obj, environment, cwd, root, today):
     }, local_placed, pin, gap
 
 
-def _fail_closed(cwd, who, root, environment, failed, now):
+def _fail_closed(cwd, who, root, environment, failed, now, identity_reported=True):
     """(failed parts, marker written). The failed-check marker is the paused state; this writes it
-    and nothing else, and never touches the cloud-builds setting."""
+    and nothing else, and never touches the cloud-builds setting. The parts returned are the ones
+    given; the marker records an identity the session never reported as `identity-unreported`."""
     failed = list(failed)
-    marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+    # axis: the marker records an identity the session never reported as identity-unreported, so the paused wording gives the setup-text fix and not the identity-variables one
+    recorded = [("identity-unreported" if part == "identity" and not identity_reported else part)
+                for part in failed]
+    marked = who is not None and _write_failed_check(cwd, who, root, environment, recorded, now)
     return failed, marked
 
 
@@ -760,7 +764,7 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
     if failed:
         # axis: a failed check writes the marker and never the setting
         # axis: a failed check leaves a marker a later reader can see, and never touches the record
-        failed, marked = _fail_closed(cwd, who, root, environment, failed, now)
+        failed, marked = _fail_closed(cwd, who, root, environment, failed, now, identity_reported)
         # axis: the message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, and the not-paused sentence only when none is, never both
         standing = _standing(cwd, who, root, marked)
         return {"action": "failed", "results": results, "dependencyHookGap": gap,

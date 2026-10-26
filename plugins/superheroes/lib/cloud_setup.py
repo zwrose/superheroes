@@ -86,6 +86,8 @@ PAUSED_PARTS = {
     "calibration": ("the calibration", FIX_PASTE_SETUP),
     "reviewer": ("the reviewer pass", FIX_FRESH_PASS),
     "identity": ("the git identity", "set the git identity variables in the environment"),
+    # the marker records this part when the cloud session never reported its identity
+    "identity-unreported": ("the cloud session's git identity report", FIX_PASTE_SETUP),
     "record": ("saving the result on this machine", FIX_RECORD),
     "unread": ("reporting back", None),
     "setting": ("an older check step", None),  # legacy part, written only by earlier plugin versions

@@ -261,6 +261,28 @@ def test_an_unreported_identity_spawns_no_local_identity_read(tmp_path, monkeypa
     assert calls == []
 
 
+def test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported(tmp_path):
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _unreported(cloud, pluginVersion="0.0.1"))
+    # axis: the marker records an identity the session never reported as identity-unreported, while
+    # the result's own failedParts and message keep `identity`
+    assert result["failedParts"] == ["version", "identity"]
+    marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
+    assert marker["failedParts"] == ["version", "identity-unreported"]
+    alone = _judge(local, _unreported(cloud))
+    assert alone["failedParts"] == ["identity"]
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == [
+        "identity-unreported"]
+
+
+def test_a_reported_but_missing_identity_is_written_to_the_marker_as_identity(tmp_path):
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _with_identity(cloud, NEITHER))
+    # axis: an identity the session reported as missing stays `identity` in the marker
+    _failed_on_identity(result)
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["identity"]
+
+
 # --- the fix line carries the owner's own name and email, only in the message ----------------
 
 def _files_under(*directories):

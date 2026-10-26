@@ -484,7 +484,8 @@ def test_cloud_checks_paused_wording_is_read_from_cloud_setup():
     import cloud_check
     assert CS.PAUSED_RESUME in cloud_check._PAUSED_STANDING
     # the gardening line carries the same rule in its own clause
-    assert "resume by themselves once one does" in PAUSED_ON
+    assert "resume by themselves once one does" in CS._PAUSED_ON
+    assert CS._check_again(True)[0] == CS._PAUSED_ON
     assert "setting" not in [name for name, _s, _fix in cloud_check._PARTS]
     for gone in ("_UNREAD_STILL_ON", "_SWITCHED_OFF", "_switch_off"):
         assert not hasattr(cloud_check, gone), gone
