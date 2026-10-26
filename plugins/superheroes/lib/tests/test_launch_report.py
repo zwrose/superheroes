@@ -377,6 +377,21 @@ def test_a_no_setup_placement_from_a_failed_check_reads_in_the_paused_words_in_t
     assert "no cloud setup" not in report
 
 
+def test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line():
+    version = dict(_call(reason="no-setup"), failedCheck=["version"])
+    identity = dict(_call(reason="no-setup"), failedCheck=["identity"])
+    version_fix, identity_fix = LP.fix_text(version), LP.fix_text(identity)
+    assert version_fix and identity_fix and version_fix != identity_fix
+    report = LR.render_report([_lane(1, version), _lane(2, identity)])
+    # detector: a grouping that ignores the failed parts drops one lane's fix line and goes red here
+    lines = report.split("\n")
+    assert lines.count(version_fix) == 1 and lines.count(identity_fix) == 1
+    assert report.count(CS.PAUSED_LINE_ON) == 1 and report.endswith(CS.PAUSED_LINE_ON)
+    # two lanes paused on the same parts share one fix line
+    same = LR.render_report([_lane(1, version), _lane(2, dict(version))])
+    assert same.count(version_fix) == 1 and same.count(CS.PAUSED_LINE_ON) == 1
+
+
 @pytest.mark.parametrize("reason,reported", [
     ("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
     ("version", {"pluginVersion": "0.41.0"}),

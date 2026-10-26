@@ -159,6 +159,9 @@ _PAUSED_STANDING = ("Cloud builds are paused for this account until the check pa
                     + cloud_setup.PAUSED_RESUME)
 _NOT_PAUSED = ("I could not save the failed check on this machine, so cloud launches on this "
                "account are not paused. Say \"turn cloud builds off\" until the check passes.")
+# said after the paused standing when this judgment's marker write failed but an earlier marker stays
+_EARLIER_MARKER_STANDS = ("I could not record this check's own result, so the earlier failed "
+                          "check's marker is the one that stands.")
 # how many times the marker write tries a held store lock, and how long it waits between tries
 _MARKER_ATTEMPTS = 5
 _MARKER_WAIT = 0.2
@@ -617,7 +620,21 @@ def _short_commit(commit):
     return commit[:12] if isinstance(commit, str) and _COMMIT_RE.fullmatch(commit) else "unknown"
 
 
-def _failed_message(parts, marked, cloud_version, local_version, identity=None,
+def _standing(cwd, who, root, marked):
+    """The standing sentence of a failed or unread message, decided once per judgment from what is
+    on disk after it: paused when this judgment's marker landed, paused with the earlier marker
+    named when the write failed but a marker for the account remains, else not paused. A read that
+    raises, or no account, counts as no marker."""
+    if marked:
+        return _PAUSED_STANDING
+    try:
+        remains = who is not None and read_failed_check(cwd, who, root) is not None
+    except Exception:
+        remains = False
+    return _PAUSED_STANDING + " " + _EARLIER_MARKER_STANDS if remains else _NOT_PAUSED
+
+
+def _failed_message(parts, standing, cloud_version, local_version, identity=None,
                     identity_reported=True, pin=None, cloud_commit=None, hook_gap=None):
     # a hook part with no known gap token still reads as the fail-closed one, never as a blank
     gap_sentence, gap_fix = cloud_dependency_hook.GAP_TEXT[
@@ -664,8 +681,6 @@ def _failed_message(parts, marked, cloud_version, local_version, identity=None,
             fix = fix % gap_fix
         if name in parts and fix is not None and fix not in fixes:
             fixes.append(fix)
-    # axis: the message says the account is paused only when the marker was written, and the not-paused sentence instead of it when it was not, never both
-    standing = _PAUSED_STANDING if marked else _NOT_PAUSED
     return ("**The check failed on %s.** %s\n\n%s To fix it, %s and say \"check again\"."
             % (count, " ".join(sentences), standing, ", then ".join(fixes)))
 
@@ -703,7 +718,8 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                 "dependencyHookGap": None,
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": False,
                 "markerWritten": marked,
-                "message": _UNREAD.format(standing=_PAUSED_STANDING if marked else _NOT_PAUSED)}
+                # axis: the unread message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, never the not-paused sentence beside a marker that still pauses
+                "message": _UNREAD.format(standing=_standing(cwd, who, root, marked))}
 
     results, local_placed, pin, gap = _judge_parts(obj, environment, cwd, root, today)
     identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
@@ -745,11 +761,13 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         # axis: a failed check writes the marker and never the setting
         # axis: a failed check leaves a marker a later reader can see, and never touches the record
         failed, marked = _fail_closed(cwd, who, root, environment, failed, now)
+        # axis: the message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, and the not-paused sentence only when none is, never both
+        standing = _standing(cwd, who, root, marked)
         return {"action": "failed", "results": results, "dependencyHookGap": gap,
                 "failedParts": failed, "recordWritten": written, "settingSwitchedOff": False,
                 "markerWritten": marked,
                 "message": _failed_message(
-                    failed, marked, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
+                    failed, standing, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
                     identity_reported=identity_reported, pin=pin,
                     cloud_commit=obj.get("pluginCommit"), hook_gap=gap,
                     # axis: an identity the session never reported is not a missing one

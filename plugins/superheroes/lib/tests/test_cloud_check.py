@@ -56,6 +56,8 @@ PAUSED_STANDING = ("Cloud builds are paused for this account until the check pas
                    "They resume by themselves once the check passes.")
 NOT_PAUSED = ("I could not save the failed check on this machine, so cloud launches on this "
               "account are not paused. Say \"turn cloud builds off\" until the check passes.")
+EARLIER_MARKER_STANDS = ("I could not record this check's own result, so the earlier failed "
+                         "check's marker is the one that stands.")
 
 
 # --- fixtures ------------------------------------------------------------------------------
@@ -1088,6 +1090,24 @@ def test_a_marker_that_cannot_be_saved_for_a_held_lock_is_tried_five_times_then_
     assert PAUSED_STANDING not in unread["message"]
 
 
+def test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused(tmp_path, lock_spy):
+    local, cloud = _pair(tmp_path)
+    first = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert first["markerWritten"] is True and os.path.exists(_marker_path(local))
+    lock_spy(held=10 ** 6)
+    result = _judge(local, _cloud_report(cloud, confirmation=_confirm(answered=False)(None)))
+    # detector: a not-paused sentence chosen on this judgment's write alone goes red here
+    assert result["action"] == "failed" and result["markerWritten"] is False
+    assert PAUSED_STANDING in result["message"] and EARLIER_MARKER_STANDS in result["message"]
+    assert NOT_PAUSED not in result["message"]
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["version"]
+    unread = _judge(local, "no report here")
+    # detector: the unread result's standing sentence, chosen on the write alone, goes red here
+    assert unread["action"] == "unread" and unread["markerWritten"] is False
+    assert PAUSED_STANDING in unread["message"] and EARLIER_MARKER_STANDS in unread["message"]
+    assert NOT_PAUSED not in unread["message"]
+
+
 def test_a_marker_write_that_finds_the_lock_free_on_a_later_try_is_written(tmp_path, lock_spy):
     local, cloud = _pair(tmp_path)
     spy = lock_spy(held=2)
@@ -1920,6 +1940,7 @@ def _paused_not_switched_off(local, result, part):
     assert not T9_PATTERN.search(result["message"]), result["message"]
 
 
+# axis: every failed part and the unread result pause the account and leave the owner's setting on; a judgment that wrote the setting off or skipped the marker fails the setting, marker or paused-words assertions
 @pytest.mark.parametrize("part", list(T1_CASES))
 def test_T1_a_failed_or_unread_check_leaves_the_setting_on_and_pauses_the_account(tmp_path, part):
     local, cloud = _pair(tmp_path)
@@ -1930,6 +1951,7 @@ def test_T1_a_failed_or_unread_check_leaves_the_setting_on_and_pauses_the_accoun
     _paused_not_switched_off(local, result, part)
 
 
+# axis: a failed pin part pauses the account the same way and leaves the setting on; a pin failure that switched the setting off or wrote no marker fails the same assertions
 def test_T1_a_pin_failure_leaves_the_setting_on_and_pauses_the_account(tmp_path):
     local, cloud = _pin_pair(tmp_path)
     _turn_on(local)
@@ -1945,6 +1967,7 @@ def _passed_with_the_setting_on(tmp_path, account=ACCOUNT):
     return local, cloud
 
 
+# axis: a failed check pauses cloud placement and a later pass resumes it with no owner step, no setting write ever; a pause that outlives the pass, or a check that writes the setting, fails the place-call and writes assertions
 def test_T2_fail_then_pass_pauses_then_resumes_with_no_owner_step(tmp_path, monkeypatch):
     local, cloud = _passed_with_the_setting_on(tmp_path)
     env = _account_env(local, ACCOUNT)
@@ -1969,6 +1992,7 @@ def test_T2_fail_then_pass_pauses_then_resumes_with_no_owner_step(tmp_path, monk
     assert resumed["place"] == "cloud" and resumed["reason"] is None and resumed["failedCheck"] is None
 
 
+# axis: the failed-check marker is per account; a marker or pause that reached another account's place call or marker fails the unchanged-call and absent-marker assertions
 def test_T3_one_accounts_failed_check_leaves_another_accounts_place_call_unchanged(tmp_path):
     local, cloud = _passed_with_the_setting_on(tmp_path)
     recorded = cloud_setup.record_check(
@@ -1988,6 +2012,7 @@ def test_T3_one_accounts_failed_check_leaves_another_accounts_place_call_unchang
     assert CC.read_failed_check(local.cwd, OTHER_ACCOUNT, local.root) is None
 
 
+# axis: an account whose first check fails reads as paused on the failed part, not as having no cloud setup; the no-setup words or a missing paused line fail the reason, fix and report assertions
 def test_T6_an_accounts_first_check_failing_reads_paused_not_no_cloud_setup(tmp_path):
     local, cloud = _passed_with_the_setting_on(tmp_path)
     env_a, env_b = _account_env(local, ACCOUNT), _account_env(local, OTHER_ACCOUNT)
@@ -2008,6 +2033,7 @@ def test_T6_an_accounts_first_check_failing_reads_paused_not_no_cloud_setup(tmp_
     assert _place(local, env_a)["place"] == "cloud"
 
 
+# axis: no check message, fix, gardening line or report says cloud builds were switched off, bar the two named exemptions; a message that claims the setting was switched off matches the pattern and fails
 def test_T9_no_check_message_says_cloud_builds_were_switched_off(tmp_path):
     exempt = {"_PASSED_OFF"}
     for name in dir(CC):

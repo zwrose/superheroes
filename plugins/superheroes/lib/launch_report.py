@@ -182,11 +182,17 @@ def render_report(lanes):
             if shared:
                 # one fix line per (reason, hook gap) pair, the recheck-carrying call's: every call
                 # but a dependency-hook one has no hook gap, so those reasons print one line each;
-                # a gap read back from a ledger record that is not a string groups as no gap
+                # a gap read back from a ledger record that is not a string groups as no gap. A
+                # no-setup call's fix depends on the parts that failed, so those calls group by
+                # (hook gap, failed parts) and a lane paused on other parts keeps its own fix line
                 groups = {}
                 for call in shared:
                     gap = call.get("hookGap")
-                    groups.setdefault(gap if isinstance(gap, str) else None, []).append(call)
+                    key = gap if isinstance(gap, str) else None
+                    # axis: lanes paused on different failed parts each keep their own fix line
+                    if code == cloud_ready.REASON_FOR["setup"] and isinstance(call.get("failedCheck"), list):
+                        key = (key, tuple(call["failedCheck"]))
+                    groups.setdefault(key, []).append(call)
                 for group in groups.values():
                     line = _fix_line(code, _recheck_first(group))
                     if line not in fixes:

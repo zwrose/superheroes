@@ -295,3 +295,100 @@ FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_T9_no_check_messa
 - No output was filtered beyond dropping the `UV_NATIVE_TLS` deprecation line.
 - Redaction: none needed.
 - Every row bit: no node stayed green under its neutralization, and no red landed on another axis. Row 3's red lands at the marker-cleared assertion, upstream of the node's final routing assertion (stated in that entry).
+
+## WO-2180-B
+
+Detectors: `plugins/superheroes/lib/tests/test_cloud_check.py::test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused` (one node, a failed leg then an unread leg), `plugins/superheroes/lib/tests/test_launch_report.py::test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line`.
+Guarded elements (declared by WO-2180-B): (1) F1's marker-still-present branch for a failed result; (2) the same for an unread result; (3) F2's grouping of fix lines by failed parts.
+Each was neutralized by a targeted edit in production code only, the detector run alone as one test node id, then restored by the inverse edit (an edit, never a checkout/restore/reset/stash). Every red was produced with the detector unedited.
+Run command, each time: `timeout 900 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest '<node>' -q -p no:cacheprovider --tb=short`. Only the `UV_NATIVE_TLS` deprecation line that heads every run is dropped from the captures. Redaction: none needed.
+
+### B1. A failed result with an earlier marker still on disk reads as paused
+
+Axis: the failed message says the account is paused exactly when a marker for it is on disk after the judgment, and the not-paused sentence only when none is (axis line above `standing = _standing(...)` in `judge`'s failed branch, `cloud_check.py:764`). The red is on axis: with this judgment's marker write failing under a held lock and the earlier marker still present, the message lacks the paused standing and carries the not-paused sentence.
+
+- Neutralization (`cloud_check.py:765`, `judge`, failed branch): `standing = _standing(cwd, who, root, marked)` became `standing = _PAUSED_STANDING if marked else _NOT_PAUSED`.
+- Node: `plugins/superheroes/lib/tests/test_cloud_check.py::test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused`.
+- Red (the failed leg's assertion fails; the unread leg is not reached):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused ___
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_cloud_check.py:1101: in test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused
+    assert PAUSED_STANDING in result["message"] and EARLIER_MARKER_STANDS in result["message"]
+E   assert ('Cloud builds are paused for this account until the check passes. They resume by themselves once the check passes.' in '**The check failed on one part.** The reviewer did not answer, so the pass is missing or was pasted wrong.\n\nI could...rn cloud builds off" until the check passes. To fix it, paste a fresh pass into the environment and say "check again".')
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused
+1 failed in 1.86s
+```
+
+- Restore: the inverse edit. Restored text, `cloud_check.py:765`: `        standing = _standing(cwd, who, root, marked)`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 1.53s
+```
+
+### B2. An unread result with an earlier marker still on disk reads as paused
+
+Axis: the unread message says the account is paused exactly when a marker for it is on disk after the judgment (axis line above the `_UNREAD.format(...)` return in `judge`, `cloud_check.py:721`). The red is on axis: the unread leg, with the marker write failing and the earlier marker present, shows the not-paused sentence. The failed branch was in its restored state for this run, so the failed leg passed and the red lands on the unread leg.
+
+- Neutralization (`cloud_check.py:722`, `judge`, unread return): `standing=_standing(cwd, who, root, marked)` became `standing=_PAUSED_STANDING if marked else _NOT_PAUSED`.
+- Node: the same node as B1.
+- Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused ___
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_cloud_check.py:1107: in test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused
+    assert PAUSED_STANDING in unread["message"] and EARLIER_MARKER_STANDS in unread["message"]
+E   assert ('Cloud builds are paused for this account until the check passes. They resume by themselves once the check passes.' in '**The check did not report back.** I could not read a result from the check session.\n\nI could not save the failed c...ount are not paused. Say "turn cloud builds off" until the check passes. Say "check again" and I\'ll run it once more.')
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_a_failed_marker_write_beside_an_earlier_marker_still_reads_as_paused
+1 failed in 2.35s
+```
+
+- Restore: the inverse edit. Restored text, `cloud_check.py:722`: `                "message": _UNREAD.format(standing=_standing(cwd, who, root, marked))}`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 1.54s
+```
+
+### B3. Lanes paused on different failed parts each keep their own fix line
+
+Axis: the launch report's fix grouping for a `no-setup` call with a `failedCheck` list keys on the failed parts, so each distinct fix line appears once (axis line at `launch_report.py:192`). The red is on axis: with the parts dropped from the key, the second lane's identity fix line is missing from the report.
+
+- Neutralization (`launch_report.py:194`, `render_report`): `key = (key, tuple(call["failedCheck"]))` became `key = (key, ())`.
+- Node: `plugins/superheroes/lib/tests/test_launch_report.py::test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line`.
+- Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line _____
+/home/user/wt-2180/plugins/superheroes/lib/tests/test_launch_report.py:388: in test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line
+    assert lines.count(version_fix) == 1 and lines.count(identity_fix) == 1
+E   assert (1 == 1 and 0 == 1)
+E    +  where 1 = <built-in method count of list object at 0x7f398524cc80>('To fix it, paste the new setup text into the environment, then say "check again".')
+E    +    where <built-in method count of list object at 0x7f398524cc80> = ['Launched 2 builds.', 'On your machine:', "- #1 Build 1. This account's last setup check failed on the plugin version...lds are on but paused for this account until its setup check passes. They resume by themselves once the check passes.'].count
+E    +  and   0 = <built-in method count of list object at 0x7f398524cc80>('To fix it, set the git identity variables in the environment, then say "check again".')
+E    +    where <built-in method count of list object at 0x7f398524cc80> = ['Launched 2 builds.', 'On your machine:', "- #1 Build 1. This account's last setup check failed on the plugin version...lds are on but paused for this account until its setup check passes. They resume by themselves once the check passes.'].count
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line
+1 failed in 0.34s
+```
+
+- Restore: the inverse edit. Restored text, `launch_report.py:194`: `                        key = (key, tuple(call["failedCheck"]))`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```
+
+WO-2180-B closing: 6 bite-proof runs (3 red, 3 green), one plain command each; every red landed on its own axis. The `(failedCheck, same parts share one line)` half of the B3 node is not neutralized separately; it passes under the neutralization (the neutralized key groups everything), so it carries no bite of its own.
