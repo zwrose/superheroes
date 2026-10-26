@@ -39,6 +39,12 @@ _WINDOW = 20
 STATE_NAME = "cloud-relay.json"
 NAME_PREFIX = "superheroes-relay-"
 _NAME_HASH_LENGTH = 8
+# A session id opens with this; the relay sends by name, so a send to an id finds no agent and fails late.
+SESSION_ID_PREFIX = "session_"
+SESSION_ID_NOT_NAME_MESSAGE = (
+    "The relay addresses a cloud session by its name, issue-<n>-<hash>, not its session_... id. "
+    "Read the name from the lane's cloudSessionName in the launch ledger (the launch result or the "
+    "lane's started record carries it).")
 # The header every forwarded message opens with; `compose` sends it and `_decide` attributes by it.
 FORWARD_HEADER = "Message from the superheroes advisor (id %s):"
 RELAY_PROMPT = """\
@@ -215,6 +221,9 @@ def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
         return _refuse("config-dir-invalid")
     if not isinstance(session, str) or not session or "\n" in session:
         return _refuse("session-name-invalid")
+    # axis: a value opening with the exact, case-sensitive `session_` is refused before any state write; every other value composes — see bite-proof record wo_2166_session_id.md
+    if session.startswith(SESSION_ID_PREFIX):
+        return _refuse("session-id-not-name", session=session, message=SESSION_ID_NOT_NAME_MESSAGE)
     body = text.rstrip() if isinstance(text, str) else ""
     if not body:
         return _refuse("text-empty")
