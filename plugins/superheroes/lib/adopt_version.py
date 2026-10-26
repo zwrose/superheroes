@@ -212,8 +212,8 @@ def _placed_stamp(root, project):
     cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(project, None)) in a separate
     process with the tree's lib first on its path. None when it cannot be computed."""
     try:
-        done = subprocess.run([sys.executable, "-B", "-c", _STAMP_CODE, os.path.join(root, "lib"),
-                               project], cwd=project, capture_output=True, text=True,
+        done = subprocess.run([sys.executable, "-B", "-I", "-c", _STAMP_CODE,
+                               os.path.join(root, "lib"), project], cwd=project, capture_output=True, text=True,
                               timeout=STAMP_TIMEOUT_SECONDS)
         stamp = json.loads(done.stdout) if done.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):

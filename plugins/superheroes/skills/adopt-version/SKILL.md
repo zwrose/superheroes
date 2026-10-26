@@ -179,8 +179,8 @@ cloud check. Each is an **owed** item (after switching): step 6 writes its line 
 cloud, re-running the cloud check (`lib/cloud_check.py` `start`, then `judge` on the session's
 `report`) is an item you run yourself, never owner input, but only after that project's owed paste
 or pin commit has landed. Never run it in steps 1–7: it fails on the version mismatch the owed step
-repairs, and a failed check switches the project's cloud builds off. Only pasting new setup text
-into the cloud environment needs the owner.
+repairs, and a failed check pauses cloud launches for that Claude account until a check passes.
+Only pasting new setup text into the cloud environment needs the owner.
 
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
 (why), deferred (which lane), owner input, or owed (after switching), and the owed pin commit,
