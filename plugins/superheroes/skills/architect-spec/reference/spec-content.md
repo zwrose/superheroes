@@ -122,7 +122,7 @@ accepted; the shipped docs and references it points at own the behavior from the
   deferred items keep the amendment path while they remain open.
 - **Superseded in part.** When a later owner ruling changes behavior a delivered spec describes, the
   advisor adds one dated `supersededInPart` entry naming the sections it covers and the ruling
-  (`definition_doc.py mark-superseded`). The entry is metadata, not an amendment: it carries no
+  (a hand edit of the front matter, checked with `definition_doc.py lifecycle-check`). The entry is metadata, not an amendment: it carries no
   owner stamp, because the ruling is already the decision. A `spec-section` anchor on a covered
   section no longer resolves, and the issue anchors on the superseding ruling instead
   (`../../showrunner/reference/issue-contract.md` § Anchor resolution).

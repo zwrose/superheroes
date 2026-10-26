@@ -122,10 +122,11 @@ the acceptance is the owner's.
 **On the owner's acceptance, full or partial, the advisor marks the spec delivered.** A spec is
 amended in place while it is approved and its work is building, freezes when the owner accepts its
 delivery, and after that takes only superseded-in-part lines: a later owner ruling that changes
-delivered behavior is marked on the spec, never amended into its body. The mark is
-`definition_doc.py mark-delivered` with the acceptance date, the closure receipt's link and
-`--lives-in` for each shipped doc or reference that now owns the delivered behavior (CONVENTIONS
-§3.1). A partial delivery's deferred items keep the amendment path while they remain open. The
+delivered behavior is marked on the spec, never amended into its body. The mark is three
+front-matter lines the advisor adds by hand: `delivered` (the acceptance date), `deliveryReceipt`
+(the closure receipt's link) and `livesIn` (each shipped doc or reference that now owns the
+delivered behavior), checked with `definition_doc.py lifecycle-check --path <spec> --root <repo>`
+before the edit is committed (CONVENTIONS §3.1). A partial delivery's deferred items keep the amendment path while they remain open. The
 lifecycle's home is `skills/architect-spec/reference/spec-content.md` § The spec lifecycle.
 
 ## When the validation run fails

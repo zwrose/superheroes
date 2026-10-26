@@ -599,9 +599,6 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
     if expected_hash != "current" and content_hash(text) != expected_hash:
         return {"ok": False, "reason": "stale"}
     lines, end = _frontmatter_bounds(text, path)
-    if any(re.match(r"^delivered:", ln) for ln in lines[1:end]):
-        # A delivered spec is frozen (§3.1): its review gate no longer moves.
-        return {"ok": False, "reason": "delivered-spec-frozen"}
     status = _STATUS_FOR_REVIEW[review]
     today = datetime.date.today().isoformat()
     found = False
@@ -779,57 +776,6 @@ def superseding_ruling(text, section, path="spec"):
     return None
 
 
-def _write_lifecycle(path, updates):
-    """Write lifecycle fields in place (at the end of the frontmatter), refusing a result that
-    would not validate; nothing is written on a refusal."""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError as exc:
-        return {"ok": False, "reason": "unreadable", "detail": str(exc)}
-    lines, end, found, _ = _lifecycle_lines(text, path)
-    for key in LIFECYCLE_FIELDS:
-        if key not in updates:
-            continue
-        line = "%s: %s" % (key, json.dumps(updates[key], ensure_ascii=False))
-        if key in found:
-            lines[found[key][0]] = line
-        else:
-            lines.insert(end, line)
-            end += 1
-    prospective = "\n".join(lines)
-    errors = lifecycle_errors(prospective, path)
-    if errors:
-        return {"ok": False, "reason": "lifecycle-invalid", "errors": errors}
-    result = _atomic_replace(path, prospective)
-    return {"ok": True, **updates} if result.get("ok") else result
-
-
-def mark_delivered(path, date, receipt, lives_in):
-    """Record a spec's delivery (closure, the owner's delivery decision). Refuses a second mark."""
-    with open(path, encoding="utf-8") as fh:
-        _, _, found, _ = _lifecycle_lines(fh.read(), path)
-    if "delivered" in found:
-        return {"ok": False, "reason": "already-delivered"}
-    return _write_lifecycle(
-        path, {"delivered": date, "deliveryReceipt": receipt, "livesIn": list(lives_in)})
-
-
-def add_superseded(path, date, sections, ruling):
-    """Append one superseded-in-part entry to a delivered spec."""
-    with open(path, encoding="utf-8") as fh:
-        _, _, found, _ = _lifecycle_lines(fh.read(), path)
-    if "delivered" not in found:
-        return {"ok": False, "reason": "not-delivered"}
-    try:
-        entries = json.loads(found["supersededInPart"][1]) if "supersededInPart" in found else []
-    except ValueError:
-        return {"ok": False, "reason": "lifecycle-invalid",
-                "errors": ["supersededInPart is not written as JSON"]}
-    entries.append({"date": date, "sections": list(sections), "ruling": ruling})
-    return _write_lifecycle(path, {"supersededInPart": entries})
-
-
 # --- CLI -------------------------------------------------------------------
 
 def _build_parser():
@@ -896,19 +842,6 @@ def _build_parser():
                         help="name the superseded-in-part entry covering a spec section")
     an.add_argument("--path", required=True)
     an.add_argument("--section", required=True)
-
-    md = sub.add_parser("mark-delivered", help="record a spec's delivery at closure")
-    md.add_argument("--path", required=True)
-    md.add_argument("--date", required=True)
-    md.add_argument("--receipt", required=True)
-    md.add_argument("--lives-in", required=True, action="append")
-
-    ms = sub.add_parser("mark-superseded",
-                        help="add a superseded-in-part entry to a delivered spec")
-    ms.add_argument("--path", required=True)
-    ms.add_argument("--date", required=True)
-    ms.add_argument("--section", required=True, action="append")
-    ms.add_argument("--ruling", required=True)
 
     gb = sub.add_parser("grounding-base",
                         help="fetch the default branch and add a detached worktree at its tip")
@@ -977,13 +910,6 @@ def main(argv):
         sys.stdout.write(json.dumps({"ok": True, "covered": entry is not None,
                                      "entry": entry}) + "\n")
         return 0
-    if args.cmd in ("mark-delivered", "mark-superseded"):
-        if args.cmd == "mark-delivered":
-            result = mark_delivered(args.path, args.date, args.receipt, args.lives_in)
-        else:
-            result = add_superseded(args.path, args.date, args.section, args.ruling)
-        sys.stdout.write(json.dumps(result) + "\n")
-        return 0 if result.get("ok") else 1
     if args.cmd == "grounding-base":
         try:
             result = grounding_base(root=args.root, dest=args.dest)

@@ -2,7 +2,7 @@
 
 A spec freezes when its work is delivered: `delivered`, `deliveryReceipt` and `livesIn` are
 recorded together, and a later ruling that changes delivered behavior adds a `supersededInPart`
-entry. These tests pin the validator, the writers, the anchor check, the doctrine's one shared
+entry. These tests pin the validator, the anchor check, the doctrine's one shared
 sentence, and every committed spec in this repository.
 """
 import glob
@@ -159,44 +159,6 @@ def test_cli_anchor_superseded_names_the_ruling(tmp_path):
     p.write_text(_doc(_superseded()), encoding="utf-8")
     out = _cli("anchor-superseded", "--path", str(p), "--section", "FR-6")
     assert out.returncode == 1 and json.loads(out.stdout)["reason"] == "lifecycle-invalid"
-
-
-# --- the writers ---------------------------------------------------------------------------
-
-def test_mark_delivered_then_superseded_round_trips(tmp_path):
-    p = tmp_path / "spec.md"
-    p.write_text(_doc(), encoding="utf-8")
-    assert DD.add_superseded(str(p), "2026-03-01", ["FR-6"], "r")["reason"] == "not-delivered"
-    r = DD.mark_delivered(str(p), "2026-02-01", RECEIPT, ["lib/x.py"])
-    assert r["ok"] is True
-    assert DD.mark_delivered(str(p), "2026-02-01", RECEIPT, ["lib/x.py"])["reason"] == \
-        "already-delivered"
-    assert DD.add_superseded(str(p), "2026-03-01", ["FR-6"], "ruling one")["ok"] is True
-    assert DD.add_superseded(str(p), "2026-03-02", ["UFR-1"], "ruling two")["ok"] is True
-    text = p.read_text(encoding="utf-8")
-    assert DD.lifecycle_errors(text) == [] and _schema_ok(text)
-    assert DD.superseding_ruling(text, "UFR-1")["ruling"] == "ruling two"
-    assert text.endswith(_doc().split("---\n", 2)[2])   # the body is untouched
-
-
-def test_writers_refuse_invalid_results_without_writing(tmp_path):
-    p = tmp_path / "spec.md"
-    p.write_text(_doc(approved=False), encoding="utf-8")
-    before = p.read_bytes()
-    r = DD.mark_delivered(str(p), "2026-02-01", RECEIPT, ["lib/x.py"])
-    assert r["reason"] == "lifecycle-invalid" and p.read_bytes() == before
-    p.write_text(_doc(), encoding="utf-8")
-    assert DD.mark_delivered(str(p), "2026-02-01", "not a link", ["x"])["ok"] is False
-    assert DD.mark_delivered(str(p), "2026-02-01", RECEIPT, [])["ok"] is False
-
-
-def test_set_gate_refuses_a_delivered_spec(tmp_path):
-    p = tmp_path / "spec.md"
-    p.write_text(_doc(DELIVERED), encoding="utf-8")
-    before = p.read_bytes()
-    r = DD.set_gate(str(p), "pending", expected_hash="current", run_id="r1")
-    assert r == {"ok": False, "reason": "delivered-spec-frozen"}
-    assert p.read_bytes() == before
 
 
 # --- the committed specs ---------------------------------------------------------------------
