@@ -12,11 +12,11 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.46.2
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.46.2. Each step names the note it comes from.
 
 - **After switching.** **A project that commits the plugin pin hook runs `cloud_plugin_pin.py write --cwd .` again, then commits and pushes the rewritten `.claude/hooks/superheroes-plugin-pin.sh`.** Until then `cloud_plugin_pin.py status`, the cloud check and readiness read the hook as broken (`script-differs`). A project without the hook owes nothing. See [Cloud setup: a hardened plugin pin hook](#cloud-setup-a-hardened-plugin-pin-hook).
 - **After switching.** **Nothing is owed for this release itself. From now on, an adoption that leaves a project's cloud environment on an older plugin version ends with its owed lines per environment: the pin commit whenever the project has the plugin pin hook (its state `valid` or `broken`; a hook a release left broken is rewritten by that write), and the setup-text paste (the owner's, naming the environment and its account) when the project has no valid hook or a release changed what a cloud session loads at start. When both are owed, the pin commit comes first, then the paste. The cloud check waits until they land.** See [Adopt-version: the cloud environments' setup text is an owed step](#adopt-version-the-cloud-environments-setup-text-is-an-owed-step).
