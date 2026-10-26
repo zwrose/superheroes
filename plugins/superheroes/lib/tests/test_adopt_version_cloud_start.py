@@ -294,9 +294,12 @@ def test_skill_brief_names_the_owed_cloud_step():
 
 
 def test_transition_unreleased_says_what_the_advisor_now_sees():
+    # The release checklist renames "## Unreleased" to the version at each cut,
+    # so find the note's own release section rather than a fixed heading.
     with open(_TRANSITION, encoding="utf-8") as fh:
         text = fh.read()
-    start = text.index("## Unreleased\n")
-    unreleased = text[start:text.index("\n## ", start + 1)]
-    assert "### Adopt-version: the cloud environments' setup text is an owed step" in unreleased
-    assert "`cloudStart`" in unreleased and "`cloudStartChanged`" in unreleased
+    note = text.index("\n### Adopt-version: the cloud environments' setup text is an owed step\n")
+    start = text.rindex("\n## ", 0, note)
+    end = text.find("\n## ", note)
+    section = text[start:end if end != -1 else len(text)]
+    assert "`cloudStart`" in section and "`cloudStartChanged`" in section
