@@ -8,6 +8,7 @@ network, the real home directory or the real /opt/superheroes. Fixture git confi
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -30,6 +31,7 @@ CANON = pin_mod.pin_text(PIN)
 SCRIPT_PATH = ".claude/hooks/superheroes-plugin-pin.sh"
 PIN_PATH = ".claude/superheroes-plugin-pin"
 SETTINGS_PATH = ".claude/settings.json"
+OLD_SCRIPT = os.path.join(_HERE, "fixtures", "plugin_pin_hook_before_2178.sh")
 
 
 def _env(remote=None):
@@ -392,16 +394,37 @@ def _scene(tmp_path, installed="a", pin_version="9.9.9", pin_body=None):
         plugin_dir=str(sc.link), source_dir=str(tmp_path / "src")))
     pin = {**PIN, "commit": sc.sha_b, "version": pin_version}
     _write(sc.project, PIN_PATH, pin_mod.pin_text(pin) if pin_body is None else pin_body)
-    sc.dest = tmp_path / ("src-" + sc.sha_b)
+    sc.shared = tmp_path / ("src-" + sc.sha_b)  # the one destination the script before #2178 used
     return sc
 
 
-def _run_script(sc, remote="true", source=None):
+def _script_env(sc, remote="true", source=None, bin_dir=None):
     env = _env(remote)
     env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_VALUE_0=URL,
                GIT_CONFIG_KEY_0="url.file://%s.insteadOf" % (source or sc.src))
-    return subprocess.run(["bash", str(sc.script)], env=env, capture_output=True, text=True,
-                          timeout=120)
+    if bin_dir is not None:
+        env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+    return env
+
+
+def _run_script(sc, remote="true", source=None, bin_dir=None):
+    return subprocess.run(["bash", str(sc.script)], env=_script_env(sc, remote, source, bin_dir),
+                          capture_output=True, text=True, timeout=120)
+
+
+def _fetched(sc):
+    """The plugin trees the script fetched: every src-<pinned sha>.* directory."""
+    return sorted(n for n in os.listdir(str(sc.root)) if n.startswith("src-%s." % sc.sha_b))
+
+
+def _fake_bin(tmp_path, scripts):
+    """A directory of stand-in commands, put first on the script's PATH."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in scripts.items():
+        _write(bin_dir, name, "#!/bin/bash\n" + body)
+        os.chmod(str(bin_dir / name), 0o755)
+    return bin_dir
 
 
 def _linked(sc):
@@ -417,7 +440,8 @@ def test_the_script_installs_a_different_commit(tmp_path):
     done = _run_script(sc)
     assert done.returncode == 0, done.stderr
     assert done.stdout == "superheroes: plugin 9.9.9 installed at the pinned commit %s.\n" % sc.sha_b[:12]
-    assert _linked(sc) == os.path.realpath(str(sc.dest / SUBDIR))
+    [fetched] = _fetched(sc)
+    assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
     assert (sc.link / "version.txt").read_text().strip() == "9.9.9"
     assert _git(sc.link, "rev-parse", "HEAD") == sc.sha_b
     assert _leftovers(sc) == []
@@ -429,7 +453,18 @@ def test_the_script_at_the_pinned_commit_fetches_nothing_and_says_nothing(tmp_pa
     done = _run_script(sc, source=tmp_path / "does-not-exist")
     assert (done.returncode, done.stdout) == (0, "")
     assert _linked(sc) == before
-    assert not sc.dest.exists()
+    assert _fetched(sc) == []
+
+
+def test_the_script_at_the_pinned_commit_with_another_version_fetches_again(tmp_path):
+    sc = _scene(tmp_path, installed="b")
+    (sc.link / "version.txt").write_text("6.6.6\n")  # a modified installed copy at the pinned commit
+    done = _run_script(sc)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "superheroes: plugin 9.9.9 installed at the pinned commit %s.\n" % sc.sha_b[:12]
+    [fetched] = _fetched(sc)
+    assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
+    assert (sc.link / "version.txt").read_text() == "9.9.9\n"
 
 
 def test_the_script_fetch_failure_leaves_the_link_and_says_so(tmp_path):
@@ -440,7 +475,7 @@ def test_the_script_fetch_failure_leaves_the_link_and_says_so(tmp_path):
     assert done.stdout == ("superheroes: plugin pin not applied: the pinned commit could not be "
                            "fetched; this session runs the plugin already installed (%s).\n" % sc.sha_a)
     assert _linked(sc) == before
-    assert _leftovers(sc) == []
+    assert _leftovers(sc) == [] and _fetched(sc) == []
 
 
 def test_the_script_does_not_link_a_tree_whose_version_disagrees_with_the_pin(tmp_path):
@@ -450,20 +485,85 @@ def test_the_script_does_not_link_a_tree_whose_version_disagrees_with_the_pin(tm
     assert done.returncode == 0
     assert "plugin pin not applied: the fetched plugin is version 9.9.9, not the pinned 8.8.8" in done.stdout
     assert _linked(sc) == before
+    assert _fetched(sc) == []
 
 
-def test_the_script_does_not_link_a_cached_tree_at_another_commit(tmp_path):
+def test_the_script_never_deletes_a_tree_another_session_is_publishing(tmp_path):
+    # Another session's tree at the destination the script before #2178 shared, caught before its
+    # version file landed: that script removed it and published its own in its place.
     sc = _scene(tmp_path)
-    _git(tmp_path, "clone", "-q", str(sc.src), str(sc.dest))
-    _git(sc.dest, "checkout", "-q", "--detach", sc.sha_b)
-    _git(sc.dest, "commit", "-q", "--allow-empty", "-m", "elsewhere")
-    assert _git(sc.dest, "rev-parse", "HEAD") != sc.sha_b
-    assert (sc.dest / SUBDIR / "version.txt").read_text().strip() == "9.9.9"
-    before = _linked(sc)
+    _write(sc.shared, "another-session", "x\n")
     done = _run_script(sc)
+    assert done.returncode == 0, done.stderr
+    assert (sc.shared / "another-session").read_text() == "x\n"
+    assert not (sc.shared / SUBDIR).exists()
+    [fetched] = _fetched(sc)
+    assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
+
+
+def test_two_sessions_installing_at_once_each_fetch_their_own_tree(tmp_path):
+    sc = _scene(tmp_path)
+    runs = [subprocess.Popen(["bash", str(sc.script)], env=_script_env(sc), stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True) for _ in range(2)]
+    outs = [run.communicate(timeout=120) for run in runs]
+    assert [run.returncode for run in runs] == [0, 0], outs
+    assert len(_fetched(sc)) == 2
+    assert (sc.link / "version.txt").read_text() == "9.9.9\n"
+    assert _leftovers(sc) == []
+
+
+def _bsd_mv_and_ln(tmp_path, sc):
+    """mv and ln as a BSD system has them: mv knows -h and no -T; ln -f unlinks the old link before
+    creating the new one, and here the creation fails, as an interruption between the two would."""
+    mv, ln = shutil.which("mv"), shutil.which("ln")
+    return _fake_bin(tmp_path, {
+        "mv": ('case "$1" in\n'
+               '  --version|-Tf) echo "mv: illegal option" >&2; exit 64 ;;\n'
+               '  -fh) exec %s -Tf "$2" "$3" ;;\n'
+               'esac\n'
+               'exec %s "$@"\n' % (mv, mv)),
+        "ln": ('if [ "${@: -1}" = %s ]; then rm -f "${@: -1}"; exit 1; fi\n'
+               'exec %s "$@"\n' % (str(sc.link), ln)),
+    })
+
+
+def test_the_script_never_leaves_the_session_without_a_link_on_a_bsd_system(tmp_path):
+    sc = _scene(tmp_path)
+    done = _run_script(sc, bin_dir=_bsd_mv_and_ln(tmp_path, sc))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "superheroes: plugin 9.9.9 installed at the pinned commit %s.\n" % sc.sha_b[:12]
+    [fetched] = _fetched(sc)
+    assert _linked(sc) == os.path.realpath(str(tmp_path / fetched / SUBDIR))
+    assert _leftovers(sc) == []
+
+
+def test_the_script_keeps_the_old_link_when_mv_cannot_rename_onto_it(tmp_path):
+    sc = _scene(tmp_path)
+    before = _linked(sc)
+    bin_dir = _fake_bin(tmp_path, {"mv": 'echo "mv: illegal option" >&2; exit 64\n'})
+    done = _run_script(sc, bin_dir=bin_dir)
     assert done.returncode == 0
-    assert "plugin pin not applied: the fetched plugin is not at the pinned commit;" in done.stdout
+    assert done.stdout.startswith("superheroes: plugin pin not applied: the plugin link could not be "
+                                  "replaced;")
     assert _linked(sc) == before
+    assert _leftovers(sc) == [] and _fetched(sc) == []
+
+
+def test_the_script_bounds_the_checkout_as_well_as_the_fetch(tmp_path):
+    sc = _scene(tmp_path)
+    calls = tmp_path / "timeout-calls"
+    bin_dir = _fake_bin(tmp_path, {"timeout": 'echo "$*" >> %s\nshift\nexec "$@"\n' % calls})
+    done = _run_script(sc, bin_dir=bin_dir)
+    assert done.returncode == 0, done.stderr
+    bounded = [line.split()[:3] for line in calls.read_text().splitlines()]
+    assert ["120", "git", "fetch"] in bounded and ["120", "git", "checkout"] in bounded
+
+
+def test_the_script_comments_claim_only_what_it_does():
+    text = pin_mod.script_text()
+    for overstated in ("never to the session", "It never fails the session"):
+        assert overstated not in text
+    assert "is reported by the session itself" in text
 
 
 def test_the_script_leaves_the_link_for_a_malformed_pin(tmp_path):
@@ -475,7 +575,7 @@ def test_the_script_leaves_the_link_for_a_malformed_pin(tmp_path):
                            "lowercase sha; this session runs the plugin already installed (%s).\n"
                            % sc.sha_a)
     assert _linked(sc) == before
-    assert not sc.dest.exists()
+    assert _fetched(sc) == []
 
 
 @pytest.mark.parametrize("body,why", [
@@ -499,7 +599,7 @@ def test_the_script_does_nothing_outside_a_cloud_session(tmp_path):
         done = _run_script(sc, remote=remote)
         assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     assert _linked(sc) == before
-    assert not sc.dest.exists()
+    assert _fetched(sc) == []
 
 
 def test_the_script_without_a_pin_file_says_so(tmp_path):
@@ -518,6 +618,19 @@ def test_nothing_sync_writes_carries_a_secret_shape(tmp_path):
     for text in texts:
         assert cloud_setup_text._scan(text) is None
         assert cloud_pass.PASS_ENV not in text
+
+
+def test_status_reads_a_repository_written_by_the_script_before_2178_as_needing_a_rewrite(
+        tmp_path, capsys):
+    root = _repo(tmp_path / "p", {})
+    assert pin_mod.sync(str(root), PIN)["action"] == "written"
+    with open(OLD_SCRIPT, "rb") as old:
+        _write(root, SCRIPT_PATH, old.read())
+    _commit_all(root)
+    assert _state(pin_mod.at_commit(str(root), "HEAD")) == ("broken", "script-differs")
+    assert pin_mod.main(["status", "--cwd", str(root)]) == 0
+    assert json.loads(capsys.readouterr().out)["reason"] == "script-differs"
+    assert pin_mod.sync(str(root), PIN)["changed"] == [SCRIPT_PATH]
 
 
 def test_the_cli_status_remove_and_write(tmp_path, monkeypatch, capsys):
