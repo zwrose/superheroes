@@ -1130,6 +1130,7 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
     if facts.get("behind"):
         return {"action": "behind", "record": facts}
 
+    paused, paused_parts = False, None
     if slug == CLOUD_BUILDS_SLUG:
         import cloud_setup
 
@@ -1143,18 +1144,18 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
                     "reason": cloud_setup.REASON_MISSING,
                     "message": cloud_setup.switch_message("refused", project_name),
                 }
+            # axis: a failed-check marker never refuses the switch-on: the setting is the owner's intent, the marker only pauses the account, and the message says so
             try:
-                # axis: a failed-check marker that is present, or damaged, or cannot be read keeps cloud builds from switching on — see bite-proof record wo_d_place_call
-                check_failed = cloud_setup.read_failed_check(cwd, account, root=root) is not None
+                marker = cloud_setup.read_failed_check(cwd, account, root=root)
+                if marker is not None:
+                    paused = True
+                    parts = marker.get("failedParts")
+                    if (not marker.get("damaged") and isinstance(parts, list)
+                            and all(isinstance(p, str) for p in parts)):
+                        paused_parts = parts
             except Exception:
-                # axis: a marker read that raises refuses the switch-on, never proceeds — see bite-proof record wo_d_place_call
-                check_failed = True
-            if check_failed:
-                return {
-                    "action": "refused",
-                    "reason": cloud_setup.REASON_CHECK_FAILED,
-                    "message": cloud_setup.switch_message("check-failed", project_name),
-                }
+                # axis: a marker read that raises counts as a damaged marker, so the switch-on says paused, never plain on
+                paused, paused_parts = True, None
 
     plan = None
     if slug in _DEPENDENCY_HOOK_SLUGS:
@@ -1204,6 +1205,9 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
         # a failed fill never refuses the set: item 17's result carries `inputsFillFailed`
         return _finish_dependency_hook(cwd, root, plan, write_result)
     if slug == CLOUD_BUILDS_SLUG:
+        if value and paused:
+            return {**write_result, "message": cloud_setup.switch_message(
+                "on-paused", project_name, parts=paused_parts)}
         kind = "on" if value else "off"
         return {**write_result, "message": cloud_setup.switch_message(kind, project_name)}
     return write_result

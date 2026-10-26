@@ -40,7 +40,6 @@ REASON_SECRET_SHAPED = "secret-shaped-value"
 REASON_STORE_LOCKED = "store-locked"
 REASON_WRITE_FAILED = "write-failed"
 REASON_ENVIRONMENT_MISMATCH = "environment-mismatch"
-REASON_CHECK_FAILED = "cloud-check-failed"
 
 FAILED_CHECK_SCHEMA = "cloud-check-failed/1"
 FAILED_CHECK_SUFFIX = ".failed-check.json"
@@ -71,16 +70,79 @@ _MESSAGES = {
         "Cloud builds can't be switched on yet. This project has no cloud setup on this "
         'Claude account. Say "set up cloud builds" and I\'ll walk you through it.'
     ),
-    "check-failed": (
-        "Cloud builds can't be switched on yet: the last check of this project's cloud setup "
-        'failed. Fix what it named, then say "check again".'
-    ),
 }
 
+# The repair actions the paused wording and the check's own messages (cloud_check) share; one home.
+FIX_PASTE_SETUP = "paste the new setup text into the environment"
+FIX_FRESH_PASS = "paste a fresh pass into the environment"
+FIX_RECORD = "tell me so I can look at the store"
 
-def switch_message(kind, project_name):
-    """The approved words for switching cloud builds ``on``, ``off``, the ``refused`` switch-on, or the
-    ``check-failed`` switch-on refused because the last check of the setup failed."""
+# part -> (what the check failed on, the short fix), for the paused wording; one home
+PAUSED_PARTS = {
+    "environment": ("the cloud environment", "pick this project's environment again with /remote-env and paste the pass block into it"),
+    "version": ("the plugin version", FIX_PASTE_SETUP),
+    "pin": ("the plugin pin", "commit a current plugin pin on the branch builds start from"),
+    "hook": ("the dependency hook", "commit the dependency hook files on the branch builds start from"),
+    "calibration": ("the calibration", FIX_PASTE_SETUP),
+    "reviewer": ("the reviewer pass", FIX_FRESH_PASS),
+    "identity": ("the git identity", "set the git identity variables in the environment"),
+    # the marker records this part when the cloud session never reported its identity
+    "identity-unreported": ("the cloud session's git identity report", FIX_PASTE_SETUP),
+    "record": ("saving the result on this machine", FIX_RECORD),
+    "unread": ("reporting back", None),
+    "setting": ("an older check step", None),  # legacy part, written only by earlier plugin versions
+}
+PAUSED_RESUME = "They resume by themselves once the check passes."
+# The report lines a launch that fell back because of a failed check ends with.
+PAUSED_LINE_ON = ("Cloud builds are on but paused for this account until its setup check passes. "
+                  + PAUSED_RESUME)
+PAUSED_LINE_WORD = ("Cloud launches on this account are paused until its setup check passes. "
+                    + PAUSED_RESUME)
+_PAUSED_DAMAGED = ("last setup check failed.", 'Fix what it named, then say "check again".')
+_PAUSED_NO_FIX = 'Say "check again" and I\'ll run it once more.'
+
+
+def _named(names):
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def paused_parts(parts):
+    """``(failed, fix)``: the failed-check sentence without its leading ``its ``, and the fix sentence,
+    for a marker's ``failedParts`` (``[]`` or None for a damaged or unreadable marker). Known parts
+    are named in ``PAUSED_PARTS`` order, unknown strings are skipped. Never raises."""
+    try:
+        given = [p for p in parts if isinstance(p, str)] if isinstance(parts, (list, tuple)) else []
+        known = [p for p in PAUSED_PARTS if p in given]
+        if not known:
+            return _PAUSED_DAMAGED
+        fixes = []
+        for part in known:
+            fix = PAUSED_PARTS[part][1]
+            if fix is not None and fix not in fixes:
+                fixes.append(fix)
+        failed = "last setup check failed on %s." % _named([PAUSED_PARTS[p][0] for p in known])
+        if not fixes:
+            return failed, _PAUSED_NO_FIX
+        return failed, "To fix it, %s, then say \"check again\"." % ", then ".join(fixes)
+    except Exception:
+        return _PAUSED_DAMAGED
+
+
+def paused_failure(parts):
+    """The clause naming what a failed check failed on and its fix, as one string. Never raises."""
+    failed, fix = paused_parts(parts)
+    return "its " + failed + " " + fix
+
+
+def switch_message(kind, project_name, parts=None):
+    """The approved words for switching cloud builds ``on``, ``off``, the ``refused`` switch-on, or
+    ``on-paused``: switched on while this account's last setup check failed (``parts`` is the marker's
+    failed parts, or None for a damaged one)."""
+    if kind == "on-paused":
+        return ("Cloud builds are on for %s, but paused for this account: " % project_name
+                + paused_failure(parts) + " " + PAUSED_RESUME)
     if kind not in _MESSAGES:
         raise ValueError("unknown message kind: %r" % (kind,))
     return _MESSAGES[kind].format(project=project_name)
@@ -374,10 +436,8 @@ def confirm_pass(cwd, account, lapses, *, environment=None, root=None):
 
 
 _CHECK_AGAIN = "cloud builds stay off until a check passes. Run the setup check again."
-# The wording for a switch-off that failed, read by the check's own messages too (cloud_check).
-SWITCH_OFF_FIX = "switch them off in configure"
-STILL_ON_REPAIR = ("Cloud builds are still on: I could not switch them off. "
-                   + SWITCH_OFF_FIX[0].upper() + SWITCH_OFF_FIX[1:])
+_PAUSED_ON = ("cloud builds are paused for this account until a check passes, and resume by "
+              "themselves once one does. Run the setup check again.")
 _SETTING_UNREAD = "I could not read whether cloud builds are on. Run the setup check again."
 _RENEW = ("Run the pass command and paste the new pass into the environment. "
           "Sign the reviewer in again if the date does not move.")
@@ -428,11 +488,11 @@ def _cloud_builds_setting(cwd, root):
 
 def _check_again(setting):
     """(sentence, joins with "so") saying what the owner does next, true to the current setting."""
-    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed
+    # axis: the line says cloud builds stay off only while the owner's setting is off; with the setting on it says the account is paused and resumes by itself
     if setting is False:
         return _CHECK_AGAIN, True
     if setting is True:
-        return STILL_ON_REPAIR + ", then run the setup check again.", False
+        return _PAUSED_ON, True
     return _SETTING_UNREAD, False
 
 

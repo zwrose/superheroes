@@ -246,8 +246,9 @@ def test_an_unreported_identity_alone_says_it_was_not_reported(tmp_path):
     assert result["failedParts"] == ["identity"]
     assert result["message"] == (
         "**The check failed on one part.** The cloud session did not report its git identity.\n\n"
-        "Cloud builds stay off. To fix it, paste the new setup text into the environment and say "
-        "\"check again\".")
+        "Cloud builds are paused for this account until the check passes. They resume by "
+        "themselves once the check passes. To fix it, paste the new setup text into the "
+        "environment and say \"check again\".")
 
 
 def test_an_unreported_identity_spawns_no_local_identity_read(tmp_path, monkeypatch):
@@ -258,6 +259,28 @@ def test_an_unreported_identity_spawns_no_local_identity_read(tmp_path, monkeypa
     # axis: an identity the session never reported spawns no git process on the owner's machine
     assert result["failedParts"] == ["identity"]
     assert calls == []
+
+
+def test_an_unreported_identity_is_written_to_the_marker_as_identity_unreported(tmp_path):
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _unreported(cloud, pluginVersion="0.0.1"))
+    # axis: the marker records an identity the session never reported as identity-unreported, while
+    # the result's own failedParts and message keep `identity`
+    assert result["failedParts"] == ["version", "identity"]
+    marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
+    assert marker["failedParts"] == ["version", "identity-unreported"]
+    alone = _judge(local, _unreported(cloud))
+    assert alone["failedParts"] == ["identity"]
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == [
+        "identity-unreported"]
+
+
+def test_a_reported_but_missing_identity_is_written_to_the_marker_as_identity(tmp_path):
+    local, cloud = _pair(tmp_path)
+    result = _judge(local, _with_identity(cloud, NEITHER))
+    # axis: an identity the session reported as missing stays `identity` in the marker
+    _failed_on_identity(result)
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["identity"]
 
 
 # --- the fix line carries the owner's own name and email, only in the message ----------------

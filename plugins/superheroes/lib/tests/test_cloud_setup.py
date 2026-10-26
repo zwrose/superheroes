@@ -169,35 +169,66 @@ def test_switch_on_refused_without_account(tmp_path):
     assert _stored(repo, store)["raw"] is None
 
 
-def _refused_for_a_failed_check(repo, store, monkeypatch):
+def _switched_on_paused(repo, store, parts):
     got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
-    assert got == {
-        "action": "refused",
-        "reason": CS.REASON_CHECK_FAILED,
-        "message": CS.switch_message("check-failed", "fixture"),
-    }
-    stored = _stored(repo, store)
-    assert stored["raw"] is None
-    assert stored["effective"] is False
+    assert got["action"] == "written"
+    assert got["message"] == CS.switch_message("on-paused", "fixture", parts=parts)
+    assert got["message"].startswith("Cloud builds are on for fixture, but paused for this account: ")
+    assert got["message"].endswith(CS.PAUSED_RESUME)
+    assert _stored(repo, store)["raw"] is True
+    return got
 
 
-def test_switch_on_refused_when_the_last_check_failed_and_stores_nothing(tmp_path, monkeypatch):
-    # axis: a failed-check marker that is present keeps cloud builds from switching on — see bite-proof record wo_d_place_call
+def test_switch_on_goes_ahead_when_the_last_check_failed_and_says_paused(tmp_path, monkeypatch):
+    # axis: a failed-check marker never refuses the switch-on: the setting is the owner's intent, the marker only pauses the account, and the message says so
     repo, store = _setup_repo(tmp_path)
     _check(repo, store)
     assert CC._write_failed_check(repo, ACCOUNT, store, ENVIRONMENT, ["version"], 0) is True
-    assert CS.REASON_CHECK_FAILED == "cloud-check-failed"
-    _refused_for_a_failed_check(repo, store, monkeypatch)
+    got = _switched_on_paused(repo, store, ["version"])
+    assert got["message"] == (
+        "Cloud builds are on for fixture, but paused for this account: its last setup check "
+        "failed on the plugin version. To fix it, paste the new setup text into the environment, "
+        'then say "check again". They resume by themselves once the check passes.')
+    # the marker is the paused state and stays; the switch never clears it
+    assert os.path.lexists(CC.failed_check_path(repo, ACCOUNT, store))
 
 
-def test_switch_on_refused_when_the_failed_check_marker_is_damaged(tmp_path, monkeypatch):
+def test_switch_on_after_a_check_that_never_got_the_identity_report_does_not_ask_for_the_variables(tmp_path):
+    from test_cloud_check import _cloud_report, _judge, _pair
+    local, cloud = _pair(tmp_path)
+    assert CS.record_check(local.cwd, root=local.root, **_fixture())["action"] == "written"
+    obj = _cloud_report(cloud)
+    del obj[CC.IDENTITY_FIELD]
+    result = _judge(local, obj)
+    assert result["action"] == "failed" and result["failedParts"] == ["identity"]
+    got = PC.set_item(local.cwd, "cloudBuilds", True, root=local.root, account=ACCOUNT,
+                      project_name="fixture")
+    # axis: a marker written for an identity the session never reported makes the on-paused message
+    # give the setup-text fix and not the identity-variables one
+    assert got["action"] == "written"
+    assert got["message"] == CS.switch_message("on-paused", "fixture", parts=["identity-unreported"])
+    assert CS.FIX_PASTE_SETUP in got["message"]
+    assert "set the git identity variables" not in got["message"]
+
+
+def test_switch_on_with_a_damaged_failed_check_marker_says_paused_without_a_part(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _check(repo, store)
     path = CC.failed_check_path(repo, ACCOUNT, store)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("{not json")
-    _refused_for_a_failed_check(repo, store, monkeypatch)
+    got = _switched_on_paused(repo, store, None)
+    assert "its last setup check failed. Fix what it named" in got["message"]
+
+
+def test_switch_on_without_a_setup_record_is_still_refused_with_a_marker_present(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    assert CC._write_failed_check(repo, ACCOUNT, store, ENVIRONMENT, ["version"], 0) is True
+    got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
+    assert got == {"action": "refused", "reason": "cloud-setup-missing",
+                   "message": CS.switch_message("refused", "fixture")}
+    assert _stored(repo, store)["raw"] is None
 
 
 def test_switch_on_goes_ahead_with_a_ready_record_and_no_failed_check_marker(tmp_path, monkeypatch):
@@ -210,8 +241,9 @@ def test_switch_on_goes_ahead_with_a_ready_record_and_no_failed_check_marker(tmp
     assert _stored(repo, store)["raw"] is True
 
 
-def test_switch_on_refused_when_the_failed_check_marker_cannot_be_read(tmp_path, monkeypatch):
-    # axis: a marker read that raises refuses the switch-on, never proceeds — see bite-proof record wo_d_place_call
+def test_switch_on_when_the_failed_check_marker_cannot_be_read_says_paused_without_a_part(
+        tmp_path, monkeypatch):
+    # axis: a marker read that raises counts as a damaged marker, so the switch-on says paused, never plain on
     repo, store = _setup_repo(tmp_path)
     _check(repo, store)
 
@@ -220,7 +252,8 @@ def test_switch_on_refused_when_the_failed_check_marker_cannot_be_read(tmp_path,
 
     monkeypatch.setitem(sys.modules, "cloud_setup", CS)
     monkeypatch.setattr(CS, "read_failed_check", _boom)
-    _refused_for_a_failed_check(repo, store, monkeypatch)
+    got = _switched_on_paused(repo, store, None)
+    assert "its last setup check failed. Fix what it named" in got["message"]
 
 
 def test_project_config_does_not_import_cloud_check():
@@ -516,12 +549,111 @@ def test_switch_messages_are_the_approved_words():
         "Cloud builds can't be switched on yet. This project has no cloud setup on this "
         'Claude account. Say "set up cloud builds" and I\'ll walk you through it.'
     )
-    assert CS.switch_message("check-failed", "demo") == (
-        "Cloud builds can't be switched on yet: the last check of this project's cloud setup "
-        'failed. Fix what it named, then say "check again".'
+    assert CS.switch_message("on-paused", "demo", parts=["reviewer"]) == (
+        "Cloud builds are on for demo, but paused for this account: its last setup check failed "
+        "on the reviewer pass. To fix it, paste a fresh pass into the environment, then say "
+        '"check again". They resume by themselves once the check passes.'
+    )
+    assert CS.switch_message("on-paused", "demo") == (
+        "Cloud builds are on for demo, but paused for this account: its last setup check failed. "
+        'Fix what it named, then say "check again". They resume by themselves once the check '
+        "passes."
     )
     with pytest.raises(ValueError):
+        CS.switch_message("check-failed", "demo")
+    with pytest.raises(ValueError):
         CS.switch_message("maybe", "demo")
+    for gone in ("REASON_CHECK_FAILED", "SWITCH_OFF_FIX", "STILL_ON_REPAIR"):
+        assert not hasattr(CS, gone), gone
+
+
+# --- paused_failure / paused_parts: the one home of the paused wording ---------------------
+
+_DAMAGED_FIRST = "last setup check failed."
+_DAMAGED_FIX = 'Fix what it named, then say "check again".'
+
+
+def test_paused_failure_names_one_part_and_its_fix():
+    assert CS.paused_failure(["reviewer"]) == (
+        'its last setup check failed on the reviewer pass. To fix it, paste a fresh pass into the '
+        'environment, then say "check again".')
+    assert CS.paused_parts(["reviewer"]) == (
+        "last setup check failed on the reviewer pass.",
+        'To fix it, paste a fresh pass into the environment, then say "check again".')
+
+
+def test_paused_failure_names_three_parts_in_table_order_with_and():
+    # the order is the table's, not the marker's
+    got = CS.paused_failure(["reviewer", "identity", "version"])
+    assert got == (
+        "its last setup check failed on the plugin version, the reviewer pass and the git identity. "
+        "To fix it, paste the new setup text into the environment, then paste a fresh pass into "
+        'the environment, then set the git identity variables in the environment, then say '
+        '"check again".')
+    assert CS.paused_failure(["version", "reviewer"]).startswith(
+        "its last setup check failed on the plugin version and the reviewer pass. ")
+
+
+def test_paused_failure_gives_an_unreported_identity_the_setup_text_fix():
+    # axis: the identity-unreported part gives the setup-text fix and never the identity-variables one
+    got = CS.paused_failure(["identity-unreported"])
+    assert CS.FIX_PASTE_SETUP in got
+    assert "set the git identity variables" not in got
+    assert "the cloud session's git identity report" in got
+    # the reported-missing identity keeps the identity-variables fix
+    reported = CS.paused_failure(["identity"])
+    assert "set the git identity variables in the environment" in reported
+    assert CS.FIX_PASTE_SETUP not in reported
+
+
+def test_paused_failure_names_a_shared_fix_once():
+    got = CS.paused_failure(["version", "calibration"])
+    assert got == (
+        "its last setup check failed on the plugin version and the calibration. To fix it, paste "
+        'the new setup text into the environment, then say "check again".')
+    assert got.count("paste the new setup text into the environment") == 1
+
+
+def test_paused_failure_for_unread_alone_has_no_fix_to_name():
+    assert CS.paused_failure(["unread"]) == (
+        'its last setup check failed on reporting back. Say "check again" and I\'ll run it once more.')
+    assert CS.paused_parts(["unread"])[1] == 'Say "check again" and I\'ll run it once more.'
+    # a no-fix part beside a fix part adds its name and no fix
+    assert CS.paused_failure(["unread", "reviewer"]) == (
+        "its last setup check failed on the reviewer pass and reporting back. To fix it, paste a "
+        'fresh pass into the environment, then say "check again".')
+
+
+@pytest.mark.parametrize("parts", [[], None, ["nonsense"], ["nonsense", 3, None], "reviewer", 7, {}])
+def test_paused_failure_for_a_damaged_empty_or_unknown_marker_names_no_part(parts):
+    assert CS.paused_parts(parts) == (_DAMAGED_FIRST, _DAMAGED_FIX)
+    assert CS.paused_failure(parts) == "its " + _DAMAGED_FIRST + " " + _DAMAGED_FIX
+
+
+def test_paused_failure_skips_unknown_parts_beside_known_ones():
+    assert CS.paused_failure(["nonsense", "pin", 5]) == (
+        "its last setup check failed on the plugin pin. To fix it, commit a current plugin pin on "
+        'the branch builds start from, then say "check again".')
+
+
+def test_paused_failure_names_the_legacy_setting_part_without_a_fix():
+    assert CS.paused_failure(["setting"]) == (
+        'its last setup check failed on an older check step. Say "check again" and I\'ll run it '
+        "once more.")
+    assert CS.paused_failure(["version", "setting"]).startswith(
+        "its last setup check failed on the plugin version and an older check step. ")
+
+
+def test_every_paused_part_is_named_and_the_resume_rule_is_stated_once():
+    assert list(CS.PAUSED_PARTS) == ["environment", "version", "pin", "hook", "calibration",
+                                     "reviewer", "identity", "identity-unreported", "record",
+                                     "unread", "setting"]
+    for part, (what, fix) in CS.PAUSED_PARTS.items():
+        assert what in CS.paused_failure([part]), part
+    assert CS.PAUSED_RESUME == "They resume by themselves once the check passes."
+    assert CS.PAUSED_LINE_ON.endswith(CS.PAUSED_RESUME)
+    assert CS.PAUSED_LINE_WORD.endswith(CS.PAUSED_RESUME)
+    assert CS.PAUSED_LINE_ON != CS.PAUSED_LINE_WORD
 
 
 def _run(main, argv, capsys, stdin=None, monkeypatch=None):

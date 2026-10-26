@@ -124,8 +124,11 @@ action that owns it, leaving the rest of the calibration untouched:
 
   Read the result the same way as the `stackingTool` write above. On `written` or `noop`, say the
   result's `message` to the owner word for word. The message names the project by its folder name;
-  when the project goes by another name, say that name in its place when repeating the message. A
-  refusal with the reason `cloud-setup-missing`
+  when the project goes by another name, say that name in its place when repeating the message.
+  Switching on while this account's last setup check failed succeeds too: the setting is the
+  owner's, and the failed check only pauses this account. The message then says cloud builds are
+  on but paused for this account until the check passes, and that they resume by themselves once it
+  does; say it as it is. A refusal with the reason `cloud-setup-missing`
   carries the `message` to say instead: cloud builds can't be switched on yet, and the owner starts
   the setup by saying "set up cloud builds". Never switch the item on any other way. Switching off
   keeps the cloud setup, so switching back on needs no new setup. To see what the setup record
