@@ -218,14 +218,25 @@ def test_skill_owes_the_setup_text_paste_per_environment():
     assert "older than **from** or newer than **to**" in paste
 
 
-def test_skill_owes_the_pin_commit_with_a_valid_hook_and_no_start_change():
+def test_skill_owes_the_pin_commit_whenever_the_hook_is_valid():
     step4 = _step(_skill(), 4)
     pin = _bullet(step4, "The pin commit")
     assert "`owed: pin commit for cloud environment <environment> (account <account>) (<to>)`" in pin
-    assert "only when none of those holds" in pin
-    assert "the pin hook is `valid`, `cloudStartChanged` is false, and the record's version is **from** or newer and older than **to**" in pin
+    assert "whenever the pin hook's `state` is `valid`" in pin
     assert "`lib/cloud_plugin_pin.py` `write" in pin
-    assert "paste" not in pin
+    assert "cloudStartChanged" not in pin and "paste" not in pin
+
+
+def test_skill_owes_both_with_a_valid_old_pin_and_a_start_change_pin_first():
+    step4 = " ".join(_step(_skill(), 4).split())
+    assert "The two owed steps add up" in step4
+    assert "skills/configure/reference/set-up.md" in step4
+    assert ("When both are owed, the order is the pin commit (write, commit, push), then the paste, "
+            "then the cloud check.") in step4
+    # a valid hook owes the pin commit unconditionally, and a start change owes the paste as well
+    assert "valid" in _bullet(_step(_skill(), 4), "The pin commit")
+    assert "`cloudStartChanged` is true" in _bullet(_step(_skill(), 4), "The setup-text paste")
+    assert step4.index("**The pin commit**") < step4.index("**The setup-text paste**")
 
 
 def test_skill_keeps_the_cloud_check_out_of_adoption():

@@ -157,18 +157,21 @@ owes nothing here. Where a record's `pluginVersion` is not **to**, read the proj
 hook (`lib/cloud_plugin_pin.py` `status --cwd <project>`) and `plan`'s `cloudStart` entries, one per
 installed release in range, each naming the parts a cloud session loads at start that changed
 (`startLoaded`) and whether the setup text's own steps changed (`setupSteps`); `cloudStartChanged`
-sums them, and a null in either counts as changed. The owed step, one per environment:
+sums them, and a null in either counts as changed. The two owed steps add up, as the after-release
+rule in `skills/configure/reference/set-up.md` ("The plugin pin hook", *When a pin commit is
+enough, and when a paste is still needed*) says; that page is the rule's home. Per environment:
 
+- **The pin commit** whenever the pin hook's `state` is `valid`:
+  `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
+  running `lib/cloud_plugin_pin.py` `write --cwd <project>` from the new root, then committing and
+  pushing the files it names.
 - **The setup-text paste** when the pin hook's `state` is not `valid`, `cloudStartChanged` is true,
   or the record's version is older than **from** or newer than **to** (`cloudStart` covers only
   the span between):
   `owed: paste new setup text into cloud environment <environment> (account <account>) (<to>)`.
-- **The pin commit** only when none of those holds: the pin hook is `valid`, `cloudStartChanged`
-  is false, and the record's version is **from** or newer and older than **to**. `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
-  running `lib/cloud_plugin_pin.py` `write --cwd <project>` from the new root, then committing and
-  pushing the files it names.
 
-Either is an **owed** item (after switching): step 6 writes its line and step 8 names it.
+When both are owed, the order is the pin commit (write, commit, push), then the paste, then the
+cloud check. Each is an **owed** item (after switching): step 6 writes its line and step 8 names it.
 
 **The cloud check is the advisor's, and never part of adoption.** On a project that builds in the
 cloud, re-running the cloud check (`lib/cloud_check.py` `start`, then `judge` on the session's
@@ -178,8 +181,8 @@ repairs, and a failed check switches the project's cloud builds off. Only pastin
 into the cloud environment needs the owner.
 
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
-(why), deferred (which lane), owner input, or owed (after switching), and one owed setup-text
-paste or pin commit per cloud environment behind the new version.
+(why), deferred (which lane), owner input, or owed (after switching), and the owed pin commit,
+setup-text paste, or both, per cloud environment behind the new version.
 
 ## Step 5 — Switch the plugin root
 
