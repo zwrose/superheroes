@@ -17,6 +17,7 @@ if _LIB_DIR not in sys.path:
 import architect_config  # noqa: E402
 import cloud_dependency_hook  # noqa: E402
 import cloud_ready  # noqa: E402
+import cloud_setup  # noqa: E402
 import definition_doc  # noqa: E402
 import mode_registry  # noqa: E402
 import store_core  # noqa: E402
@@ -267,7 +268,13 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
                 "cloud", pointed, by, None, None, cloud_version, advisor_version,
                 now.get("environment"), reported, failed_check)
         reason = now.get("reason")
-        return local(reason if reason in NOT_READY_CODES else "no-setup")
+        reason = reason if reason in NOT_READY_CODES else "no-setup"
+        account = now.get("account")
+        if reason == "no-setup" and failed_check is None and isinstance(account, str):
+            # an account whose first check failed has a marker and no setup record: readiness
+            # returns before it reads the marker, so the marker is read here
+            failed_check = cloud_ready._failed_check(cwd, account, root)
+        return local(reason)
     except Exception:
         return _placement(
             "local", pointed, by, "no-setup" if pointed else None, None, cloud_version,
@@ -302,12 +309,24 @@ def _hook_gap_text(place_call):
     return gap, sentence, fix
 
 
+def _paused_no_setup(place_call):
+    """(failed, fix) from the one paused wording when this is a no-setup placement whose account has
+    a failed-check marker (`failedCheck` a list), else None."""
+    failed = place_call.get("failedCheck")
+    if place_call.get("reason") == "no-setup" and isinstance(failed, list):
+        return cloud_setup.paused_parts(failed)
+    return None
+
+
 def reason_text(place_call):
     """The board's words for the reason on this placement, or None when it has none."""
     try:
         code = place_call.get("reason")
         if code not in REASONS:
             return None
+        paused = _paused_no_setup(place_call)
+        if paused is not None:
+            return "This account's " + paused[0]
         found = _hook_gap_text(place_call)
         if found is not None:
             return ("The dependency hook on the branch this build starts from failed its check "
@@ -326,6 +345,9 @@ def fix_text(place_call):
         code = place_call.get("reason")
         if code not in REASONS:
             return None
+        paused = _paused_no_setup(place_call)
+        if paused is not None:
+            return paused[1]
         fix = REASONS[code]["fix"]
         if code == "dependency-hook":
             found = _hook_gap_text(place_call)
@@ -353,6 +375,9 @@ def wasnt_text(place_call):
         code = place_call.get("reason")
         if code not in REASONS:
             return None
+        paused = _paused_no_setup(place_call)
+        if paused is not None:
+            return "this account's " + paused[0]
         found = _hook_gap_text(place_call)
         if found is not None:
             return ("the dependency hook on the branch it starts from failed its check (`%s`): %s."

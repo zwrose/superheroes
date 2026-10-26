@@ -15,6 +15,7 @@ _LIB = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import cloud_check as CC  # noqa: E402
 import cloud_ready as CR  # noqa: E402
 import cloud_setup as CS  # noqa: E402
 import core_md as CM  # noqa: E402
@@ -316,24 +317,86 @@ def test_R_eight_every_line_of_a_report_is_scaffolding_or_a_table_fragment(tmp_p
 # ---------------------------------------------------------------- the recheck step in the report
 
 
+def _ends_with_fix_then(report, fix, status):
+    """The fix line, then the status line, are the last two lines of the report."""
+    assert report.split("\n")[-2:] == [fix, status], report
+
+
 def test_a_failed_check_keeps_its_recheck_step_in_the_report():
     call = dict(_call(reason="calibration"), failedCheck=["calibration"])
-    assert LR.render_report([_lane(1, call)]).endswith(SETUP_TEXT_FIX + ' Then say "check again".')
-    assert LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]).endswith(
-        SETUP_TEXT_FIX + ' Then say "check again".')
+    recheck = SETUP_TEXT_FIX + ' Then say "check again".'
+    _ends_with_fix_then(LR.render_report([_lane(1, call)]), recheck, CS.PAUSED_LINE_ON)
+    _ends_with_fix_then(LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]), recheck,
+                        CS.PAUSED_LINE_ON)
 
 
 def test_a_failed_check_after_an_ordinary_fallback_keeps_its_recheck_step():
     plain = _call(reason="calibration")
     failed = dict(_call(reason="calibration", by="word"), failedCheck=["calibration"])
     recheck = SETUP_TEXT_FIX + ' Then say "check again".'
-    assert LR.render_report([_lane(1, plain), _lane(2, failed)]).endswith(recheck)
+    _ends_with_fix_then(LR.render_report([_lane(1, plain), _lane(2, failed)]), recheck,
+                        CS.PAUSED_LINE_WORD)
     assert LR.render_report([_lane(1, plain), _lane(2, plain)]).endswith(SETUP_TEXT_FIX)
     third = _call(reason="no-setup", pointed=True)
-    assert LR.render_report([_lane(1, plain), _lane(2, third), _lane(3, failed)]).endswith(recheck)
+    _ends_with_fix_then(LR.render_report([_lane(1, plain), _lane(2, third), _lane(3, failed)]),
+                        recheck, CS.PAUSED_LINE_WORD)
     same = _call(reason="calibration")
-    assert LR.render_report([_lane(1, same), _lane(2, dict(same, failedCheck=["calibration"]))]
-                            ).endswith(recheck)
+    _ends_with_fix_then(
+        LR.render_report([_lane(1, same), _lane(2, dict(same, failedCheck=["calibration"]))]),
+        recheck, CS.PAUSED_LINE_ON)
+
+
+def test_the_paused_line_is_appended_once_in_both_forms_and_never_when_nothing_was_paused():
+    failed = dict(_call(reason="calibration"), failedCheck=["calibration"])
+    summary = LR.render_report([_lane(1, failed), _lane(2, failed)])
+    listed = LR.render_report([_lane(1, failed), _lane(2, _call("cloud"))])
+    for report in (summary, listed):
+        assert report.count(CS.PAUSED_LINE_ON) == 1 and report.endswith(CS.PAUSED_LINE_ON)
+        assert "switched" not in report and CS.PAUSED_RESUME in report
+    assert summary.startswith("Launched 2 builds, all on your machine. The cloud wasn't ready: ")
+    # a fallback that did not come from a failed check carries no paused line
+    assert "paused" not in LR.render_report([_lane(1, _call(reason="calibration")),
+                                             _lane(2, _call("cloud"))])
+    # a failed check beside a build the cloud was not meant for adds nothing
+    unpointed = dict(_call(pointed=False, by=None, reason=None), failedCheck=["calibration"])
+    assert "paused" not in LR.render_report([_lane(1, unpointed), _lane(2, _call("cloud"))])
+    # the setting line when any paused call was pointed by the setting, else the word line
+    by_word = dict(_call(reason="calibration", by="word"), failedCheck=["calibration"])
+    assert LR.render_report([_lane(1, by_word)]).endswith(CS.PAUSED_LINE_WORD)
+    assert LR.render_report([_lane(1, by_word), _lane(2, failed)]).endswith(CS.PAUSED_LINE_ON)
+
+
+def test_a_no_setup_placement_from_a_failed_check_reads_in_the_paused_words_in_the_report():
+    call = dict(_call(reason="no-setup"), failedCheck=["reviewer"])
+    report = LR.render_report([_lane(1, call)])
+    assert report == (
+        "Launched 1 build, all on your machine. The cloud wasn't ready: this account's last "
+        "setup check failed on the reviewer pass.\n"
+        'To fix it, paste a fresh pass into the environment, then say "check again".\n'
+        + CS.PAUSED_LINE_ON)
+    assert "no cloud setup" not in report
+
+
+def test_two_lanes_paused_on_different_parts_each_keep_their_own_fix_line():
+    version = dict(_call(reason="no-setup"), failedCheck=["version"])
+    identity = dict(_call(reason="no-setup"), failedCheck=["identity"])
+    version_fix, identity_fix = LP.fix_text(version), LP.fix_text(identity)
+    assert version_fix and identity_fix and version_fix != identity_fix
+    report = LR.render_report([_lane(1, version), _lane(2, identity)])
+    # detector: a grouping that ignores the failed parts drops one lane's fix line and goes red here
+    lines = report.split("\n")
+    assert lines.count(version_fix) == 1 and lines.count(identity_fix) == 1
+    assert report.count(CS.PAUSED_LINE_ON) == 1 and report.endswith(CS.PAUSED_LINE_ON)
+    # two lanes paused on the same parts share one fix line
+    same = LR.render_report([_lane(1, version), _lane(2, dict(version))])
+    assert same.count(version_fix) == 1 and same.count(CS.PAUSED_LINE_ON) == 1
+
+
+def test_a_malformed_failed_parts_list_never_makes_the_report_vanish():
+    damaged = dict(_call(reason="no-setup"), failedCheck=[{}])
+    report = LR.render_report([_lane(1, damaged), _lane(2, _call("cloud"))])
+    # detector: a grouping key built from a non-string part raises, and the whole report goes None
+    assert isinstance(report, str) and CS.PAUSED_LINE_ON in report
 
 
 @pytest.mark.parametrize("reason,reported", [
@@ -369,9 +432,10 @@ def test_the_plugin_pin_reason_renders_its_words_its_wasnt_and_its_fix():
 
 def test_after_a_failed_check_the_plugin_pin_fix_in_the_report_asks_for_the_check_again():
     call = dict(_call(reason="plugin-pin"), failedCheck=["pin"])
-    assert LR.render_report([_lane(1, call)]).endswith(PIN_FIX + ' Then say "check again".')
-    assert LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]).endswith(
-        PIN_FIX + ' Then say "check again".')
+    _ends_with_fix_then(LR.render_report([_lane(1, call)]), PIN_FIX + ' Then say "check again".',
+                        CS.PAUSED_LINE_ON)
+    _ends_with_fix_then(LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]),
+                        PIN_FIX + ' Then say "check again".', CS.PAUSED_LINE_ON)
 
 
 def test_a_plugin_pin_fallback_clears_when_readiness_reads_the_pin_current_again():
@@ -395,3 +459,66 @@ def test_a_report_renders_the_need_a_routing_result_carries():
     assert "- #415 Phone checkout layout. It needs the phone simulator, which only your machine has." in lines
     assert ("- #416 Build 416. It needs this project's Canon and specs, "
             "which only your machine has.") in lines
+
+
+# ---------------------------------------------------------------- a failed check pauses the account
+
+
+def _fail_the_check(repo, store, parts):
+    marker = {"schema": CC.FAILED_CHECK_SCHEMA, "account": ACCOUNT, "environment": ENVIRONMENT,
+              "failedAt": "2026-10-10T00:00:00Z", "failedParts": parts}
+    path = CC.failed_check_path(repo, ACCOUNT, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(marker, fh)
+
+
+def test_T7_a_cloud_word_beside_a_failed_check_carries_the_word_line_with_the_setting_on(tmp_path):
+    repo, store, env = _on(tmp_path)
+    _fail_the_check(repo, store, ["reviewer"])
+    call = _route(repo, store, env, word="cloud")
+    assert call["place"] == "local" and call["by"] == "word" and call["failedCheck"] == ["reviewer"]
+    report = LR.render_report([_lane(1, call)])
+    assert report.endswith(CS.PAUSED_LINE_WORD) and CS.PAUSED_LINE_ON not in report
+    assert "switched" not in report
+
+
+def test_T7_a_cloud_word_beside_a_failed_check_carries_the_word_line_with_the_setting_off(tmp_path):
+    repo, store, env = _on(tmp_path)
+    assert PC.set_item(repo, "cloudBuilds", False, root=store)["action"] == "written"
+    _fail_the_check(repo, store, ["reviewer"])
+    call = _route(repo, store, env, word="cloud")
+    assert call["place"] == "local" and call["by"] == "word" and call["failedCheck"] == ["reviewer"]
+    report = LR.render_report([_lane(1, call)])
+    assert report.endswith(CS.PAUSED_LINE_WORD) and CS.PAUSED_LINE_ON not in report
+    # the setting off and no cloud word: the build was never pointed at the cloud, so no report
+    quiet = _route(repo, store, env)
+    assert quiet["pointedAtCloud"] is False and LR.render_report([_lane(1, quiet)]) is None
+
+
+def test_T7_the_setting_on_with_no_word_carries_the_on_line(tmp_path):
+    repo, store, env = _on(tmp_path)
+    _fail_the_check(repo, store, ["reviewer"])
+    call = _route(repo, store, env)
+    assert call["by"] == "setting"
+    report = LR.render_report([_lane(1, call)])
+    assert report.endswith(CS.PAUSED_LINE_ON) and CS.PAUSED_LINE_WORD not in report
+
+
+def test_a_failed_check_fallback_clears_once_the_marker_is_gone_and_its_condition_reads_true():
+    candidate = {"reason": "no-pass", "by": "setting", "cloudVersion": None, "advisorVersion": None,
+                 "reported": None, "failedCheck": ["reviewer"], "observedOn": "2026-10-11"}
+    passed_same_day = _now(ready=True, checked="2026-10-11")
+    passed_same_day["failedCheck"] = None
+    # axis: a fallback that came from a failed check is fixed once a passing check has cleared the marker and its condition reads true now, on the same day too
+    assert LR._fixed(candidate, passed_same_day) is True
+    # the marker still there: not fixed, whatever else reads true
+    still = dict(passed_same_day, failedCheck=["reviewer"])
+    assert LR._fixed(candidate, still) is False
+    # the marker gone but the condition still false: not fixed
+    broken = _now(ready=False, reason="no-pass", checked="2026-10-11")
+    broken["failedCheck"] = None
+    assert LR._fixed(candidate, broken) is False
+    # a candidate with no failed check keeps the later-day rule: the same day does not fix it
+    plain = dict(candidate, failedCheck=None, reported={"noPass": True})
+    assert LR._fixed(plain, passed_same_day) is False

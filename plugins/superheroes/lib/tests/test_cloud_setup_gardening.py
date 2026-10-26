@@ -219,7 +219,8 @@ def test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsin
 
 # ---- the gardening line reads only what it validates, and reports the real setting ---------------
 
-STILL_ON = CS.STILL_ON_REPAIR + ", then run the setup check again."
+PAUSED_ON = ("cloud builds are paused for this account until a check passes, and resume by "
+             "themselves once one does. Run the setup check again.")
 STAY_OFF = CS._CHECK_AGAIN
 SETTING_UNREAD = CS._SETTING_UNREAD
 
@@ -339,37 +340,37 @@ def test_a_list_of_strings_without_reviewer_is_a_repair_line_and_with_reviewer_i
     assert got["mark"] == "Renew now" and "last reviewer check failed" in got["line"]
 
 
-def test_with_the_setting_on_a_repair_line_says_cloud_builds_are_still_on(w):
-    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed — see bite-proof record c8c_wo_a.md
+def test_with_the_setting_on_a_repair_line_says_the_account_is_paused_and_resumes(w):
+    # axis: the line says cloud builds stay off only while the owner's setting is off; with the setting on it says the account is paused and resumes by itself
     _record(w, ACCOUNT, "2026-10-25")
     _setting_on(w)
     _marker(w, ["version"])
     [got] = _lines(w)
     assert got["mark"] is None
-    assert got["line"] == "Cloud reviewer pass: the last cloud check failed on version. " + STILL_ON
-    assert "stay off" not in got["line"]
+    assert got["line"] == ("Cloud reviewer pass: the last cloud check failed on version, so "
+                           + PAUSED_ON)
+    assert "stay off" not in got["line"] and "switched" not in got["line"]
 
 
-def test_with_the_setting_on_a_renew_line_says_cloud_builds_are_still_on(w):
-    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed — see bite-proof record c8c_wo_a.md
+def test_with_the_setting_on_a_renew_line_says_the_account_is_paused_and_resumes(w):
+    # axis: the line says cloud builds stay off only while the owner's setting is off; with the setting on it says the account is paused and resumes by itself
     _record(w, ACCOUNT, "2026-10-25")
     _setting_on(w)
     _marker(w, ["reviewer"])
     [got] = _lines(w)
     assert got["mark"] == "Renew now"
-    assert got["line"].endswith(RENEW + " " + STILL_ON)
+    assert got["line"].endswith(RENEW + " " + PAUSED_ON[0].upper() + PAUSED_ON[1:])
     assert "stay off" not in got["line"]
 
 
-def test_a_setting_still_on_beside_a_marker_that_lost_its_setting_part_is_not_called_off(w):
-    # the shape a refused switch-off plus a failed marker rewrite leaves: setting on, marker `["version"]` only
-    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed — see bite-proof record c8c_wo_a.md
+def test_a_setting_on_beside_a_marker_is_paused_never_called_off(w):
+    # axis: the line says cloud builds stay off only while the owner's setting is off; with the setting on it says the account is paused and resumes by itself
     _record(w, ACCOUNT, _lapsing_in(3))
     _setting_on(w)
     _marker(w, ["version"])
     [got] = _lines(w)
     assert got["mark"] == "Renew now"
-    assert "failed on version" in got["line"] and STILL_ON in got["line"]
+    assert "failed on version" in got["line"] and PAUSED_ON in got["line"]
     assert "stay off" not in got["line"] and "3 days left" in got["line"]
 
 
@@ -479,7 +480,12 @@ def test_the_presence_check_writes_nothing(w, monkeypatch):
     assert seen == [{"persist_backfill": False}]
 
 
-def test_cloud_checks_still_on_wording_is_read_from_cloud_setup():
+def test_cloud_checks_paused_wording_is_read_from_cloud_setup():
     import cloud_check
-    assert CS.STILL_ON_REPAIR in cloud_check._UNREAD_STILL_ON
-    assert CS.SWITCH_OFF_FIX in [fix for _n, _s, fix in cloud_check._PARTS]
+    assert CS.PAUSED_RESUME in cloud_check._PAUSED_STANDING
+    # the gardening line carries the same rule in its own clause
+    assert "resume by themselves once one does" in CS._PAUSED_ON
+    assert CS._check_again(True)[0] == CS._PAUSED_ON
+    assert "setting" not in [name for name, _s, _fix in cloud_check._PARTS]
+    for gone in ("_UNREAD_STILL_ON", "_SWITCHED_OFF", "_switch_off"):
+        assert not hasattr(cloud_check, gone), gone

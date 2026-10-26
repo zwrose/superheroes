@@ -18,9 +18,10 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_ready  # noqa: E402
+import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import launch_ledger as ll  # noqa: E402
-from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text, wasnt_text  # noqa: E402
+from launch_place import NOT_READY_CODES, REASONS, _fill, fix_text, reason_text, wasnt_text  # noqa: E402
 
 _STILL_HEADER = "Still on your machine"
 STILL_LEDGER_UNREADABLE = "still-ledger-unreadable"
@@ -136,18 +137,34 @@ def yields_report(calls):
         return False
 
 
+def _paused_line(lanes):
+    """The one status line for a build the cloud was meant for that fell back because its account's
+    setup check failed, or None. The reason and fix lines name the failed part; this says only that
+    the account is paused: `PAUSED_LINE_ON` when the setting pointed it, else `PAUSED_LINE_WORD`."""
+    paused = [lane["placeCall"] for lane in lanes
+              if lane["placeCall"]["place"] != ll.PLACE_CLOUD
+              and lane["placeCall"].get("pointedAtCloud") is True
+              and lane["placeCall"].get("failedCheck") is not None]
+    if not paused:
+        return None
+    return (cloud_setup.PAUSED_LINE_ON if any(c.get("by") == "setting" for c in paused)
+            else cloud_setup.PAUSED_LINE_WORD)
+
+
 def render_report(lanes):
     """The launch report for these lanes, in launch order; None when cloud builds were neither on
-    nor used. Never names a reason that is not in the table."""
+    nor used. Never names a reason that is not in the table. A build the cloud was meant for that
+    fell back because of a failed check ends the report with the paused line."""
     try:
         if not lanes:
             return None
         calls = [lane["placeCall"] for lane in lanes]
         if not yields_report(calls):
             return None
+        paused = _paused_line(lanes)
         summary = _summary(lanes)
         if summary is not None:
-            return summary
+            return summary if paused is None else summary + "\n" + paused
         out = ["%s." % _count(lanes)]
         cloud = [_label(lane) for lane in lanes if lane["placeCall"]["place"] == ll.PLACE_CLOUD]
         local = [lane for lane in lanes if lane["placeCall"]["place"] != ll.PLACE_CLOUD]
@@ -165,16 +182,24 @@ def render_report(lanes):
             if shared:
                 # one fix line per (reason, hook gap) pair, the recheck-carrying call's: every call
                 # but a dependency-hook one has no hook gap, so those reasons print one line each;
-                # a gap read back from a ledger record that is not a string groups as no gap
+                # a gap read back from a ledger record that is not a string groups as no gap. A
+                # no-setup call's fix depends on the parts that failed, so those calls group by
+                # (hook gap, failed parts) and a lane paused on other parts keeps its own fix line
                 groups = {}
                 for call in shared:
                     gap = call.get("hookGap")
-                    groups.setdefault(gap if isinstance(gap, str) else None, []).append(call)
+                    key = gap if isinstance(gap, str) else None
+                    # axis: lanes paused on different failed parts each keep their own fix line
+                    # a list with a non-string element is a malformed marker and groups as damaged
+                    if code == cloud_ready.REASON_FOR["setup"] and isinstance(call.get("failedCheck"), list):
+                        failed = call["failedCheck"]
+                        key = (key, tuple(failed) if all(isinstance(p, str) for p in failed) else ())
+                    groups.setdefault(key, []).append(call)
                 for group in groups.values():
                     line = _fix_line(code, _recheck_first(group))
                     if line not in fixes:
                         fixes.append(line)
-        return "\n".join(out + fixes)
+        return "\n".join(out + fixes + ([] if paused is None else [paused]))
     except Exception:
         return None
 
@@ -233,6 +258,9 @@ def _fixed(candidate, now, cwd=None, root=None):
         return conditions.get(_CONDITION_FOR[reason]) is True
     if reason == _VERSION_REASON and reported.get("pluginVersion") is None:
         return conditions.get(_CONDITION_FOR[reason]) is True
+    if candidate.get("failedCheck") is not None:
+        # axis: a fallback that came from a failed check is fixed once a passing check has cleared the marker and its condition reads true now, on the same day too
+        return now.get("failedCheck") is None and conditions.get(_CONDITION_FOR[reason]) is True
     checked = now.get("checkedAt")
     observed = candidate.get("observedOn")
     # a launch with no start date has no day for a later check to follow
@@ -338,8 +366,10 @@ def still_check(repo_root, *, root=None, readiness_fn=None):
         # step, then the latest started (the list runs oldest first, so it is walked from the end)
         shown = min(reversed(standing), key=lambda c: (_RANK[c["reason"]], c["failedCheck"] is None))
         code = shown["reason"]
-        words = _words(code, shown["cloudVersion"], shown["advisorVersion"])
         failed = shown["failedCheck"]
+        words = reason_text({"reason": code, "failedCheck": failed,
+                             "cloudVersion": shown["cloudVersion"],
+                             "advisorVersion": shown["advisorVersion"]})
         # after a failed check the line carries the recheck step, as the launch report does
         fix = REASONS[code]["short"] if failed is None else fix_text(
             {"reason": code, "failedCheck": failed})

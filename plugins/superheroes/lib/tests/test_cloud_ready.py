@@ -490,6 +490,17 @@ def test_any_other_part_forces_the_setup_condition_false(tmp_path, part):
     assert got["failedCheck"] == [part]
 
 
+def test_an_unreported_identity_part_forces_the_setup_condition_false(tmp_path):
+    # axis: the identity-unreported part is unknown to FAILED_PART_CONDITION, so it forces the setup condition false as identity does
+    assert "identity-unreported" not in CR.FAILED_PART_CONDITION
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["identity-unreported"])
+    got = _read(repo, store)
+    assert got["ready"] is False and got["reason"] == "no-setup"
+    assert got["conditions"] == ALL_FALSE
+    assert got["failedCheck"] == ["identity-unreported"]
+
+
 def test_E3_a_marker_of_unknown_parts_only_is_no_setup(tmp_path):
     repo, store = _ready(tmp_path)
     _mark(repo, store, ["unread", "environment"])
