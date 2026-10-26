@@ -310,16 +310,20 @@ supersededInPart: [{"date": "<date>", "sections": ["<section>", …], "ruling": 
   is what makes the date machine-produced and therefore trustworthy to anything that
   resolves against it.
 - **The delivery lifecycle fields** record that a spec's work is delivered. A spec freezes when
-  the owner accepts its delivery: at closure the advisor adds `delivered` (the date),
+  the owner accepts its delivery: the closure step writes `delivered` (the date),
   `deliveryReceipt` (the closure receipt's link) and `livesIn` (the shipped docs or code that now
   own the behavior, the normative pointer) together, and after that the body is never rewritten.
   When a later owner ruling changes behavior the spec describes, the advisor appends one
-  `supersededInPart` entry naming its date, the sections it covers, and the ruling; the entry is
-  metadata, written without the owner's stamp, and is not an amendment. `status` stays derived
-  from `gates.review`: a delivered spec stays `approved`. Each value is JSON on its one line,
-  written by hand, and every hand edit is checked with `definition_doc.py lifecycle-check` (a
-  delivered spec lacking its date, receipt or pointer fails, as does an entry predating
-  delivery); `anchor-superseded` names the entry covering an anchored section
+  `supersededInPart` entry naming its date, the sections it covers (at the granularity anchors
+  cite, each occurring in the body as a whole token), and the ruling; the entry is
+  metadata, written without the owner's stamp, and is not an amendment. A `livesIn` path that
+  moves is updated in place in the same PR that moves it; that too is metadata, not an amendment. `status` stays derived
+  from `gates.review`: a delivered spec stays `approved`, and `set_gate` refuses every change to
+  its gate (`delivered-spec-frozen`). Each value is JSON on its one line. `definition_doc.py
+  lifecycle-check` validates them (a delivered spec lacking its date, receipt or pointer fails,
+  as does an entry predating delivery), `mark-delivered` and `mark-superseded` are their writers
+  and refuse any mark it would reject,
+  and `anchor-superseded` names the entry covering an anchored section
   (`skills/showrunner/reference/issue-contract.md` § Anchor resolution). The lifecycle's doctrine
   home is `skills/architect-spec/reference/spec-content.md` § The spec lifecycle.
 - There is no `parent` field: v1's `plan`→`spec`/`tasks`→`plan` chain existed to link

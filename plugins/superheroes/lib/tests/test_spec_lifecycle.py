@@ -2,7 +2,7 @@
 
 A spec freezes when its work is delivered: `delivered`, `deliveryReceipt` and `livesIn` are
 recorded together, and a later ruling that changes delivered behavior adds a `supersededInPart`
-entry. These tests pin the validator, the anchor check, the doctrine's one shared
+entry. These tests pin the validator, the writers, the anchor check, the doctrine's one shared
 sentence, and every committed spec in this repository.
 """
 import glob
@@ -45,7 +45,7 @@ BASE = (
     'updated: "2026-01-02"\n'
     "%s"
     "---\n"
-    "# Sample\n\n## FR-6\n\n## Amendments\n\n_No amendments since the last full approval._\n"
+    "# Sample\n\n## UFR-1\n\n## FR-6\n\n## Amendments\n\n_No amendments since the last full approval._\n"
 )
 
 
@@ -127,6 +127,14 @@ def test_library_only_rules():
     assert DD.lifecycle_errors(_doc(DELIVERED + 'delivered: "2026-02-02"\n'))
 
 
+@pytest.mark.parametrize("section", ["FR6", "FR-60", "R-6", "Purpose"])
+def test_superseded_section_must_occur_in_the_body(section):
+    # A typo the body never names would leave the real section's anchor uncovered.
+    errors = DD.lifecycle_errors(_doc(DELIVERED + _superseded(sections=("FR-6", section))))
+    assert any("does not contain" in e and repr(section) in e for e in errors), errors
+    assert DD.lifecycle_errors(_doc(DELIVERED + _superseded(sections=("§ fr-6",)))) == []
+
+
 @pytest.mark.parametrize("spelling", ['"supersededInPart": ', "supersededInPart : ",
                                       "'supersededInPart': "])
 def test_noncanonical_key_spelling_is_refused_not_skipped(spelling):
@@ -203,6 +211,94 @@ def test_cli_anchor_superseded_names_the_ruling(tmp_path):
     assert out.returncode == 1 and json.loads(out.stdout)["reason"] == "lifecycle-invalid"
 
 
+# --- the writers ---------------------------------------------------------------------------
+
+def test_mark_delivered_then_superseded_round_trips(tmp_path):
+    p = tmp_path / "spec.md"
+    p.write_text(_doc(), encoding="utf-8")
+    assert DD.add_superseded(str(p), "2026-03-01", ["FR-6"], "r")["reason"] == "not-delivered"
+    r = DD.mark_delivered(str(p), "2026-02-01", RECEIPT, ["lib/x.py"])
+    assert r["ok"] is True
+    assert DD.mark_delivered(str(p), "2026-02-01", RECEIPT, ["lib/x.py"])["reason"] == \
+        "already-delivered"
+    assert DD.add_superseded(str(p), "2026-03-01", ["FR-6"], "ruling one")["ok"] is True
+    assert DD.add_superseded(str(p), "2026-03-02", ["UFR-1"], "ruling two")["ok"] is True
+    text = p.read_text(encoding="utf-8")
+    assert DD.lifecycle_errors(text) == [] and _schema_ok(text)
+    assert DD.superseding_ruling(text, "UFR-1")["ruling"] == "ruling two"
+    assert text.endswith(_doc().split("---\n", 2)[2])   # the body is untouched
+
+
+@pytest.mark.parametrize("doc,args", [
+    (_doc(approved=False), ("2026-02-01", RECEIPT, ["lib/x.py"])),
+    (_doc(), ("2026-02-01", "not a link", ["x"])),
+    (_doc(), ("2026-02-01", RECEIPT, [])),
+    (_doc(), ("2025-12-31", RECEIPT, ["x"])),
+    (_doc(), ("2026-2-1", RECEIPT, ["x"])),
+], ids=["not-approved", "receipt-not-a-link", "no-pointer", "before-approval", "bad-date"])
+def test_mark_delivered_refuses_what_lifecycle_check_rejects(tmp_path, doc, args):
+    p = tmp_path / "spec.md"
+    p.write_text(doc, encoding="utf-8")
+    before = p.read_bytes()
+    r = DD.mark_delivered(str(p), *args)
+    assert r["reason"] == "lifecycle-invalid" and r["errors"]
+    assert p.read_bytes() == before
+
+
+@pytest.mark.parametrize("args", [
+    ("2026-01-15", ["FR-6"], "r"), ("March", ["FR-6"], "r"), ("2026-03-01", [], "r"),
+    ("2026-03-01", ["FR6"], "r"), ("2026-03-01", ["FR-6"], " "),
+], ids=["predates-delivery", "bad-date", "no-sections", "section-not-in-body", "blank-ruling"])
+def test_mark_superseded_refuses_what_lifecycle_check_rejects(tmp_path, args):
+    p = tmp_path / "spec.md"
+    p.write_text(_doc(DELIVERED + _superseded()), encoding="utf-8")
+    before = p.read_bytes()
+    r = DD.add_superseded(str(p), *args)
+    assert r["reason"] == "lifecycle-invalid" and r["errors"]
+    assert p.read_bytes() == before
+
+
+def test_cli_writers_check_lives_in_under_root(tmp_path):
+    # The CLI writer and `lifecycle-check --root` reject the same missing pointer.
+    p = tmp_path / "spec.md"
+    p.write_text(_doc(), encoding="utf-8")
+    before = p.read_bytes()
+    out = _cli("mark-delivered", "--path", str(p), "--date", "2026-02-01", "--receipt", RECEIPT,
+               "--lives-in", "no/such/file.md", "--root", _REPO_ROOT)
+    assert out.returncode == 1 and json.loads(out.stdout)["reason"] == "lifecycle-invalid"
+    assert p.read_bytes() == before
+    out = _cli("mark-delivered", "--path", str(p), "--date", "2026-02-01", "--receipt", RECEIPT,
+               "--lives-in", "plugins/superheroes/lib/definition_doc.py § Lifecycle",
+               "--root", _REPO_ROOT)
+    assert out.returncode == 0, out.stdout
+    out = _cli("mark-superseded", "--path", str(p), "--date", "2026-03-01",
+               "--section", "FR-6", "--ruling", "owner's ruling 9 a", "--root", _REPO_ROOT)
+    assert out.returncode == 0, out.stdout
+    assert _cli("lifecycle-check", "--path", str(p), "--root", _REPO_ROOT).returncode == 0
+
+
+def test_set_gate_refuses_a_delivered_spec(tmp_path):
+    p = tmp_path / "spec.md"
+    p.write_text(_doc(DELIVERED), encoding="utf-8")
+    before = p.read_bytes()
+    r = DD.set_gate(str(p), "pending", expected_hash="current", run_id="r1")
+    assert r == {"ok": False, "reason": "delivered-spec-frozen"}
+    assert p.read_bytes() == before
+
+
+def test_set_gate_refuses_a_delivered_specs_reapproval_cycle(tmp_path):
+    # passed -> changes-requested -> passed would re-date `approved` past `delivered` and leave
+    # the spec invalid with no sanctioned repair; every step of the cycle is refused.
+    p = tmp_path / "spec.md"
+    p.write_text(_doc(DELIVERED), encoding="utf-8")
+    before = p.read_bytes()
+    for review in ("changes-requested", "passed"):
+        r = DD.set_gate(str(p), review, expected_hash="current", run_id="r1")
+        assert r == {"ok": False, "reason": "delivered-spec-frozen"}, review
+        assert p.read_bytes() == before
+    assert DD.lifecycle_errors(p.read_text(encoding="utf-8")) == []
+
+
 # --- the committed specs ---------------------------------------------------------------------
 
 def test_every_committed_spec_lifecycle_is_valid():
@@ -257,3 +353,16 @@ def test_conventions_states_the_lifecycle_fields():
     section = text[text.index("### 3.1 Shared frontmatter"):text.index("### 3.2 Body")]
     for field in DD.LIFECYCLE_FIELDS:
         assert field in section, field
+
+
+@pytest.mark.parametrize("rel,verb", [
+    ("skills/showrunner/reference/closure.md", "mark-delivered"),
+    ("skills/architect-spec/reference/spec-content.md", "mark-superseded"),
+    ("skills/showrunner/reference/amendments.md", "mark-superseded"),
+    ("TRANSITION.md", "mark-delivered"),
+    ("TRANSITION.md", "mark-superseded"),
+])
+def test_doctrine_names_the_writer_verbs(rel, verb):
+    text = _read(rel)
+    assert verb in text
+    assert "a hand edit of the front matter" not in text and "by hand, and checks" not in text
