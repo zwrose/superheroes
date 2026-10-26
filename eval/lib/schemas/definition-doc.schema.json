@@ -32,7 +32,7 @@
     "updated": { "type": "string" },
     "delivered": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
     "deliveryReceipt": { "type": "string", "pattern": "^https?://\\S+$" },
-    "livesIn": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "livesIn": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "\\S" } },
     "supersededInPart": {
       "type": "array",
       "minItems": 1,
@@ -42,8 +42,8 @@
         "required": ["date", "sections", "ruling"],
         "properties": {
           "date": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-          "sections": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
-          "ruling": { "type": "string", "minLength": 1 }
+          "sections": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "[^\\s§]" } },
+          "ruling": { "type": "string", "pattern": "\\S" }
         }
       }
     }

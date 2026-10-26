@@ -97,6 +97,11 @@ INVALID = [
     ("superseded-without-ruling", _doc(DELIVERED + _superseded(ruling=""))),
     ("superseded-bad-date", _doc(DELIVERED + _superseded(date="March"))),
     ("superseded-empty-list", _doc(DELIVERED + "supersededInPart: []\n")),
+    ("superseded-blank-ruling", _doc(DELIVERED + _superseded(ruling="  "))),
+    ("superseded-section-sign-only", _doc(DELIVERED + _superseded(sections=("§",)))),
+    ("superseded-blank-section", _doc(DELIVERED + _superseded(sections=(" ",)))),
+    ("delivered-blank-pointer", _doc(DELIVERED.replace(
+        '["plugins/superheroes/lib/definition_doc.py"]', '[" "]'))),
 ]
 
 
@@ -118,6 +123,18 @@ def test_library_only_rules():
     assert DD.lifecycle_errors(_doc(DELIVERED + _superseded(date="2026-01-15")))
     assert DD.lifecycle_errors(_doc(DELIVERED.replace('"2026-02-01"', "2026-02-01 x")))
     assert DD.lifecycle_errors(_doc(DELIVERED + 'delivered: "2026-02-02"\n'))
+
+
+@pytest.mark.parametrize("spelling", ['"supersededInPart": ', "supersededInPart : ",
+                                      "'supersededInPart': "])
+def test_noncanonical_key_spelling_is_refused_not_skipped(spelling):
+    # YAML reads each of these as the key, so a line scan that skipped it would let the anchor
+    # check miss a recorded supersession.
+    line = _superseded().replace("supersededInPart: ", spelling)
+    text = _doc(DELIVERED + line)
+    assert any("non-canonical spelling" in e for e in DD.lifecycle_errors(text))
+    with pytest.raises(ValueError):
+        DD.superseding_ruling(text, "FR-6")
 
 
 def test_lives_in_must_exist_under_root(tmp_path):

@@ -651,6 +651,10 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
 
 LIFECYCLE_FIELDS = ("delivered", "deliveryReceipt", "livesIn", "supersededInPart")
 _LIFECYCLE_KEY_RE = re.compile(r"^(%s):[ \t]*(.*)$" % "|".join(LIFECYCLE_FIELDS))
+# Any top-level spelling of a lifecycle key (quoted, or spaced before the colon), so one the
+# canonical form misses is refused rather than silently skipped.
+_LIFECYCLE_ANY_KEY_RE = re.compile(
+    r"^[\"']?(%s)[\"']?[ \t]*:" % "|".join(LIFECYCLE_FIELDS))
 
 
 def _iso_date(value):
@@ -664,16 +668,20 @@ def _iso_date(value):
 
 
 def _lifecycle_lines(text, path):
-    """Return (lines, end, {field: (index, raw)}, duplicate_fields) for the lifecycle keys."""
+    """Return (lines, end, {field: (index, raw)}, problems) for the lifecycle keys, where
+    problems names each repeated key and each key written in a non-canonical spelling."""
     lines, end = _frontmatter_bounds(text, path)
-    found, dupes = {}, []
+    found, problems = {}, []
     for i in range(1, end):
         m = _LIFECYCLE_KEY_RE.match(lines[i])
         if m:
             if m.group(1) in found:
-                dupes.append(m.group(1))
+                problems.append("%s appears more than once" % m.group(1))
             found[m.group(1)] = (i, m.group(2).strip())
-    return lines, end, found, dupes
+        elif _LIFECYCLE_ANY_KEY_RE.match(lines[i]):
+            problems.append("line %d writes a lifecycle key in a non-canonical spelling: %s"
+                            % (i + 1, lines[i].split(":", 1)[0]))
+    return lines, end, found, problems
 
 
 def lifecycle_errors(text, path="spec", root=None):
@@ -683,10 +691,10 @@ def lifecycle_errors(text, path="spec", root=None):
     under it, so a normative pointer that names nothing fails.
     """
     try:
-        lines, end, found, dupes = _lifecycle_lines(text, path)
+        lines, end, found, problems = _lifecycle_lines(text, path)
     except ValueError as exc:
         return [str(exc)]
-    errors = ["%s appears more than once" % k for k in dupes]
+    errors = list(problems)
     values = {}
     for key, (_, raw) in found.items():
         try:
@@ -746,7 +754,7 @@ def lifecycle_errors(text, path="spec", root=None):
             errors.append("supersededInPart entry %d predates delivery" % n)
         sections = entry["sections"]
         if not (isinstance(sections, list) and sections
-                and all(isinstance(s, str) and s.strip() for s in sections)):
+                and all(isinstance(s, str) and _norm_section(s) for s in sections)):
             errors.append("supersededInPart entry %d must name its sections" % n)
         if not (isinstance(entry["ruling"], str) and entry["ruling"].strip()):
             errors.append("supersededInPart entry %d must name its ruling" % n)
