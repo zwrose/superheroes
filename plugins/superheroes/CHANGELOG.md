@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.46.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.1...superheroes-v0.46.2) (2026-10-26)
+
+
+### Bug Fixes
+
+* **superheroes:** a failed cloud check pauses cloud builds for that account and a passing check resumes them ([#2181](https://github.com/zwrose/superheroes/issues/2181)) ([9d9f655](https://github.com/zwrose/superheroes/commit/9d9f6551c4d5147dade3d925918e9a763f1178c1))
+* **superheroes:** a sandbox refusal that names a route no longer forfeits a native run ([#2173](https://github.com/zwrose/superheroes/issues/2173)) ([0377077](https://github.com/zwrose/superheroes/commit/03770776244006e8b47e93b73cc6cbd4cbc0067a))
+* **superheroes:** a slow liveness probe no longer reads as a dead review vendor ([#2174](https://github.com/zwrose/superheroes/issues/2174)) ([9ab54fb](https://github.com/zwrose/superheroes/commit/9ab54fb829245e08c3a35d04b4043d19d3b8d288))
+* **superheroes:** adopting a release accounts for the cloud environments' setup text ([#2184](https://github.com/zwrose/superheroes/issues/2184)) ([0f04e23](https://github.com/zwrose/superheroes/commit/0f04e23af2fcb11b6ef5aa85cec209a6d58e7d08))
+* **superheroes:** harden the generated plugin pin hook's link swap and install ([#2183](https://github.com/zwrose/superheroes/issues/2183)) ([e13c053](https://github.com/zwrose/superheroes/commit/e13c0535b249ffbe5bc6c8bba1b24092f6883696))
+* **superheroes:** the cloud check fails on a stale committed dependency hook ([#2175](https://github.com/zwrose/superheroes/issues/2175)) ([8c3073f](https://github.com/zwrose/superheroes/commit/8c3073f577c5a7cb57da1c97d8e0516c6b773ca4))
+* **superheroes:** the relay refuses a session id where it needs the session name ([#2170](https://github.com/zwrose/superheroes/issues/2170)) ([762c61e](https://github.com/zwrose/superheroes/commit/762c61ef3b1825b58f8de43c08a154e32b66d16d))
+
+
+### Chores
+
+* **superheroes:** remove code nothing calls ([#2171](https://github.com/zwrose/superheroes/issues/2171)) ([d5f9ce4](https://github.com/zwrose/superheroes/commit/d5f9ce40c8f61af4a70d2bebe6263a78b7c07232))
+
 ## [0.46.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.0...superheroes-v0.46.1) (2026-10-25)
 
 

@@ -150,13 +150,41 @@ skipped. When any `before-switching` checklist item is owner input, stop after s
 the owner at step 8 with those items as numbered decisions, and do not run steps 5–7 until
 each is resolved; then resume adoption from step 5.
 
-**The cloud check is the advisor's.** On a project that builds in the cloud, re-running the
-cloud check after an adoption (`lib/cloud_check.py` `start`, then `judge` on the session's
-`report`) is an item you run yourself, never owner input. Only pasting new setup text into the
-cloud environment needs the owner.
+**The cloud environments' setup text.** For each project this seat runs, read its cloud setup
+record from the new root: `lib/cloud_setup.py` `read --cwd <project>` for the launching account, and
+`--account <id>` for each other account its cloud builds run under. A project with no ready record
+owes nothing here. Where a record's `pluginVersion` is not **to**, read the project's plugin pin
+hook (`lib/cloud_plugin_pin.py` `status --cwd <project>`) and run `plan` again with
+`--project <project>`. Its `cloudStart` entries, one per installed release in range, each name the
+parts a cloud session loads at start that changed (`startLoaded`) and whether the project's setup
+stamp, computed by each release's own code, differs (`setupSteps`); `cloudStartChanged` sums them,
+and a null in either counts as changed. The two owed steps add up, as the after-release
+rule in `skills/configure/reference/set-up.md` ("The plugin pin hook", *When a pin commit is
+enough, and when a paste is still needed*) says; that page is the rule's home. Per environment:
+
+- **The pin commit** whenever the pin hook's `state` is `valid` or `broken` (the project has the
+  hook): `owed: pin commit for cloud environment <environment> (account <account>) (<to>)`, done by
+  running `lib/cloud_plugin_pin.py` `write --cwd <project>` from the new root, then committing and
+  pushing the files it names. A hook a release left `broken` (`script-differs`) is rewritten by that
+  same write, before the paste.
+- **The setup-text paste** when the pin hook's `state` is not `valid`, `cloudStartChanged` is true,
+  or the record's version is older than **from** or newer than **to** (`cloudStart` covers only
+  the span between):
+  `owed: paste new setup text into cloud environment <environment> (account <account>) (<to>)`.
+
+When both are owed, the order is the pin commit (write, commit, push), then the paste, then the
+cloud check. Each is an **owed** item (after switching): step 6 writes its line and step 8 names it.
+
+**The cloud check is the advisor's, and never part of adoption.** On a project that builds in the
+cloud, re-running the cloud check (`lib/cloud_check.py` `start`, then `judge` on the session's
+`report`) is an item you run yourself, never owner input, but only after that project's owed paste
+or pin commit has landed. Never run it in steps 1–7: it fails on the version mismatch the owed step
+repairs, and a failed check pauses cloud launches for that Claude account until a check passes.
+Only pasting new setup text into the cloud environment needs the owner.
 
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
-(why), deferred (which lane), owner input, or owed (after switching).
+(why), deferred (which lane), owner input, or owed (after switching), and the owed pin commit,
+setup-text paste, or both, per cloud environment behind the new version.
 
 ## Step 5 — Switch the plugin root
 
@@ -246,7 +274,9 @@ its context, options, consequences, and a recommendation per
 `skills/showrunner/reference/owner-decisions.md` (read that page; do not restate its spine);
 **owed** — each after-switching item from step 4, the owner's ones as numbered decisions in
 that same shape, stating that the seat already runs the new version when step 6 wrote the
-taken-up line, and otherwise that each comes due once adoption completes; and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
+taken-up line, and otherwise that each comes due once adoption completes — a setup-text paste
+is the owner's and names each cloud environment and its account, a pin commit is this seat's
+own, and each project's cloud check follows its owed step; and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
 TRANSITION gaps from step 1, and any **no TRANSITION section (no consumer-visible change
 recorded)** entries named for awareness).
 
