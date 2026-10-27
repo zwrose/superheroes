@@ -16,8 +16,8 @@ reaches work already in flight. The showrunner charter points here; this file ca
 
 This path covers a spec that is approved and not yet delivered, and a partial delivery's deferred
 items while they remain open. A delivered spec is frozen: a later ruling that changes its delivered
-behavior adds a superseded-in-part line instead
-(`skills/architect-spec/reference/spec-content.md` § The spec lifecycle).
+behavior adds a superseded-in-part line instead (`definition_doc.py mark-superseded`;
+`skills/architect-spec/reference/spec-content.md` § The spec lifecycle).
 
 ## What an amendment is, and when this fires
 

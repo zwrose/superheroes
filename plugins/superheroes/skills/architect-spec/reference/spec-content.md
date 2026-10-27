@@ -119,10 +119,14 @@ accepted; the shipped docs and references it points at own the behavior from the
   the closure receipt's link, and `livesIn`, the shipped docs or references that now own the
   delivered behavior (`../../showrunner/reference/closure.md` § The owner's delivery decision;
   the fields are CONVENTIONS §3.1). The body is never rewritten after that. A partial delivery's
-  deferred items keep the amendment path while they remain open.
+  deferred items keep the amendment path while they remain open. When a `livesIn` path moves,
+  the PR that moves it updates the pointer in place, checked with `definition_doc.py
+  lifecycle-check`: the pointer is metadata, not an amendment.
 - **Superseded in part.** When a later owner ruling changes behavior a delivered spec describes, the
   advisor adds one dated `supersededInPart` entry naming the sections it covers and the ruling
-  (a hand edit of the front matter, checked with `definition_doc.py lifecycle-check`). The entry is metadata, not an amendment: it carries no
+  (`definition_doc.py mark-superseded`). Each section is named at the granularity anchors cite
+  and must occur in the spec body as a whole token, so a typo is refused rather than leaving an
+  anchor uncovered. The entry is metadata, not an amendment: it carries no
   owner stamp, because the ruling is already the decision. A `spec-section` anchor on a covered
   section no longer resolves, and the issue anchors on the superseding ruling instead
   (`../../showrunner/reference/issue-contract.md` § Anchor resolution).
