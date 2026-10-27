@@ -291,6 +291,10 @@ gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review
 producedBy: the-architect@<version>
 created: <date>
 updated: <date>
+delivered: "<date>"                    # PRESENT ONCE the owner accepted delivery (closure)
+deliveryReceipt: "<closure receipt link>"   # with delivered: the receipt it was accepted on
+livesIn: ["<repo path>[ § <section>]", …]   # with delivered: where the behavior is now owned
+supersededInPart: [{"date": "<date>", "sections": ["<section>", …], "ruling": "<ruling>"}, …]
 ---
 ```
 
@@ -305,6 +309,19 @@ updated: <date>
   existed is accepted as it stands). No skill and no hand edit writes the field; that
   is what makes the date machine-produced and therefore trustworthy to anything that
   resolves against it.
+- **The delivery lifecycle fields** record that a spec's work is delivered. A spec freezes when
+  the owner accepts its delivery: at closure the advisor adds `delivered` (the date),
+  `deliveryReceipt` (the closure receipt's link) and `livesIn` (the shipped docs or code that now
+  own the behavior, the normative pointer) together, and after that the body is never rewritten.
+  When a later owner ruling changes behavior the spec describes, the advisor appends one
+  `supersededInPart` entry naming its date, the sections it covers, and the ruling; the entry is
+  metadata, written without the owner's stamp, and is not an amendment. `status` stays derived
+  from `gates.review`: a delivered spec stays `approved`. Each value is JSON on its one line,
+  written by hand, and every hand edit is checked with `definition_doc.py lifecycle-check` (a
+  delivered spec lacking its date, receipt or pointer fails, as does an entry predating
+  delivery); `anchor-superseded` names the entry covering an anchored section
+  (`skills/showrunner/reference/issue-contract.md` § Anchor resolution). The lifecycle's doctrine
+  home is `skills/architect-spec/reference/spec-content.md` § The spec lifecycle.
 - There is no `parent` field: v1's `plan`→`spec`/`tasks`→`plan` chain existed to link
   sibling definition-docs; with only one doc type left, there is nothing to link to.
 

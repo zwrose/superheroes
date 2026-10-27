@@ -11,6 +11,10 @@ gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-10"
 updated: "2026-10-16"
+delivered: "2026-10-16"
+deliveryReceipt: "https://github.com/zwrose/superheroes/pull/1880#issuecomment-6205923097"
+livesIn: ["plugins/superheroes/skills/configure/reference/set-up.md", "plugins/superheroes/skills/showrunner/reference/orchestration.md", "plugins/superheroes/skills/workhorse/reference/cloud.md", "plugins/superheroes/lib/cloud_builder.py", "plugins/superheroes/lib/cloud_check.py"]
+supersededInPart: [{"date": "2026-10-26", "sections": ["UFR-1", "FR-6"], "ruling": "owner's ruling 392 a, 2026-10-26, https://github.com/zwrose/superheroes/issues/695#issuecomment-6416654081 (delivered by #2181): a failed check pauses cloud launches on that account until a check passes; it no longer switches cloud builds off"}]
 ---
 # Cloud builders
 

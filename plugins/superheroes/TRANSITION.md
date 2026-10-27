@@ -12,6 +12,22 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed at once: an advisor marks a spec delivered at closure, marks a later ruling that changes delivered behavior on the spec instead of amending it, and marks specs delivered before this release when next touched, not all at once.** See [Specs: delivered specs freeze, and later rulings mark them](#specs-delivered-specs-freeze-and-later-rulings-mark-them).
+
+### Specs: delivered specs freeze, and later rulings mark them
+
+- **At closure.** On the owner's delivery decision, full or partial, the advisor adds the new §3.1 front-matter fields `delivered` (the acceptance date), `deliveryReceipt` (the closure receipt's link) and `livesIn` (a JSON list of each shipped doc or reference that now owns the behavior) by hand, and checks the edit with `definition_doc.py lifecycle-check --path <spec> --root <repo>` before committing it. The body is not rewritten after that; a partial delivery's deferred items keep the amendment path while they remain open.
+- **When a ruling changes delivered behavior.** The advisor adds or extends the `supersededInPart` front-matter line by hand, one `{"date", "sections", "ruling"}` entry per ruling, and checks it with `lifecycle-check`. It carries no owner stamp and adds no Amendments-log entry.
+- **Anchors.** A `spec-section` anchor on a delivered spec resolves only when `definition_doc.py anchor-superseded --path <spec> --section <section>` answers `covered: false`; when it is covered, the issue anchors on the superseding ruling instead.
+- **New verbs.** `lifecycle-check` exits 1 with its `errors` listed when a delivered spec lacks its date, receipt or `livesIn`, or an entry is malformed or predates delivery. `anchor-superseded` exits 1 with `lifecycle-invalid` on a spec whose lifecycle fields do not validate.
+- **Existing specs.** A spec delivered before this release stays `approved` with no `delivered` field until its next touch; until then a reader still checks its Amendments log and the collector for later rulings.
+
 ## 0.46.2
 
 ### Before you upgrade

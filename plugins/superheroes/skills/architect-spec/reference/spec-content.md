@@ -7,6 +7,7 @@
 - [Annexes](#annexes)
 - [Rulings live where they were made](#rulings-live-where-they-were-made)
 - [The Amendments section is never deleted](#the-amendments-section-is-never-deleted)
+- [The spec lifecycle](#the-spec-lifecycle)
 
 # Spec content and how it changes
 
@@ -99,3 +100,32 @@ This file does not define how an amendment is classified, what ceremony each cla
 amendments propagate to in-flight children, or how the log is validated — that machinery lives
 elsewhere. For the log's entry format, see the `## Amendments` section of the spec template
 (`templates/spec.md`) — and stop there.
+
+## The spec lifecycle
+
+A spec is amended in place while it is approved and its work is building, freezes when the owner
+accepts its delivery, and after that takes only superseded-in-part lines: a later owner ruling that
+changes delivered behavior is marked on the spec, never amended into its body.
+
+This is how a long-lived written decision stays honest elsewhere: a published IETF RFC never
+changes and is marked updated or obsoleted by later ones, a Final Python PEP is a historical
+document while the language reference is the living authority, and an architecture decision record
+is immutable except for its status. A delivered spec is the record of what the owner asked for and
+accepted; the shipped docs and references it points at own the behavior from then on.
+
+- **Approved and building.** Amendments edit the body in place and log an entry
+  (`../../showrunner/reference/amendments.md`).
+- **Delivered.** At the owner's delivery decision the advisor marks the spec delivered: the date,
+  the closure receipt's link, and `livesIn`, the shipped docs or references that now own the
+  delivered behavior (`../../showrunner/reference/closure.md` § The owner's delivery decision;
+  the fields are CONVENTIONS §3.1). The body is never rewritten after that. A partial delivery's
+  deferred items keep the amendment path while they remain open.
+- **Superseded in part.** When a later owner ruling changes behavior a delivered spec describes, the
+  advisor adds one dated `supersededInPart` entry naming the sections it covers and the ruling
+  (a hand edit of the front matter, checked with `definition_doc.py lifecycle-check`). The entry is metadata, not an amendment: it carries no
+  owner stamp, because the ruling is already the decision. A `spec-section` anchor on a covered
+  section no longer resolves, and the issue anchors on the superseding ruling instead
+  (`../../showrunner/reference/issue-contract.md` § Anchor resolution).
+
+Specs delivered before this lifecycle existed are marked when next touched, not all at once. Until
+then, a reader of such a spec still checks its Amendments log and the collector for later rulings.
