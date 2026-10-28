@@ -19,8 +19,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Base-guard refusal reasons                           (home: review_base_guard.py)
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7;
   copy-holders: review-discipline.md, workhorse §11, review-code step 8, pr_body_regions.py)
-- Session modes                                       (home: review_base_guard.py;
-  copy-holder: pr_body_regions.py)
+- Session modes                                       (home: review_base_guard.py)
 - Wave-watch verbs and exit contract                     (home: wave_watch.py)
 - Issue-contract refusal table + charter skeleton        (home: issue_contract.py)
 - Register-check Results table + verification sentence   (home: register_check.py)
