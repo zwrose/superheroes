@@ -119,9 +119,10 @@ checks record (<folder>/checks-record.md) gives the reviewer (its - Seat: line's
 (its ### Round headings). The vet records (skills/showrunner/reference/spec-vet.md § The vet record) give the commit (the newest
 record's head) and a history line each. The newest must be a clean breakdown vet with its Breakdown pins: lines, and
 <folder>/spec.md must still hash to its Vet done: hash. Every pin must sit in the folder and still hash to its pinned value
-(definition_doc.py content-hash): a stale, missing or unreadable pin refuses, never shown as accepted. A .md file that sits in a
-subfolder beside a pinned file but is not pinned refuses too. There is no folder convention to list a breakdown's bodies from,
-so a body left out of every pin in its subfolder, or at the folder's root, is not caught here; the vet's pins are the inventory.
+(definition_doc.py content-hash): a stale, missing or unreadable pin refuses, never shown as accepted. Breakdown bodies have a
+fixed home in the folder (spec-vet.md § The breakdown pin): children/ for child and layer bodies (a single-issue spec's one body
+too), seams/ for seam bodies, and epic.md for the epic body. A pinned body outside that home refuses, and so does any .md in the
+home that is not pinned, or that sits in a subfolder beside a pinned file, whatever else the folder holds.
 The pins become one Accept card, "The breakdown", under What you're accepting: a line for every body the filing writes (a new
 issue, an issue rewritten in place or a seam quoted onto one: each pin that is not the coverage map, the register or the
 package-read audit trail) and for each of those three, each with its path and hash. Its title counts the bodies. Accepting it
@@ -887,6 +888,14 @@ _VET_VERDICT = re.compile(r"^\*\*Verdict:\*\* `(clean|findings)`")
 _VET_DONE = re.compile(r"^Vet done: round (\d+) · (clean|findings) · ([0-9a-f]{64})$")
 _PIN = re.compile(r"^(\S+) ([0-9a-f]{64})$")
 _SPEC_ARTIFACTS = ("coverage-map.md", "register.md", "package-read-audit.md")  # spec-vet.md's breakdown artifacts; every other pin is a body the filing creates
+_BODY_HOME = ("children", "seams")  # spec-vet.md § The breakdown pin: the folders a breakdown body lives in, beside the epic body
+_EPIC_BODY = "epic.md"
+
+
+def _in_body_home(rel):
+    """Whether a path relative to the spec's folder sits in the breakdown's body home: epic.md, or anywhere under children/ or seams/."""
+    parts = pathlib.PurePath(rel).parts
+    return parts == (_EPIC_BODY,) or (len(parts) > 1 and parts[0] in _BODY_HOME)
 
 
 def _vet_record(text, where, problems):
@@ -974,16 +983,24 @@ def _spec_record(spec, number, words, base, problems):
         elif definition_doc.content_hash(text) != pinned:
             problems.append(f"breakdown pin {path} hashes to {definition_doc.content_hash(text)} now, not the pinned {pinned}: "
                             "the breakdown changed after its vet, so it needs a new vet before it is accepted")
+        elif pathlib.PurePath(rel).name in _SPEC_ARTIFACTS:
+            lines["artifact"].append(_fill(words["breakdownArtifact"], path=path, hash=pinned))
+        # bite-axis: a body pinned outside the fixed home refuses, so the home scan below sees every body the filing writes.
+        elif not _in_body_home(target.relative_to(home)):
+            problems.append(f"breakdown pin {path} is a body outside the breakdown's home: a child or layer body goes in children/, a seam body "
+                            f"in seams/ and the epic body at {_EPIC_BODY} (spec-vet.md § The breakdown pin)")
         else:
-            group = "artifact" if pathlib.PurePath(rel).name in _SPEC_ARTIFACTS else "body"
-            lines[group].append(_fill(words["breakdownArtifact" if group == "artifact" else "breakdownBody"], path=path, hash=pinned))
-    # bite-axis: a body beside a pinned one in its subfolder that the vet does not pin makes the record stale (spec-vet.md § Vetting the breakdown).
-    for unpinned in sorted(f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md") if _resolved(f) not in held):
-        problems.append(f"{unpinned.relative_to(home)} sits beside the pinned bodies but the newest vet record does not pin it: the breakdown needs a new vet")
+            lines["body"].append(_fill(words["breakdownBody"], path=path, hash=pinned))
+    # bite-axis: any .md in the body home, or beside a pinned file in its subfolder, that the vet does not pin makes the record stale.
+    scanned = {f for d in _BODY_HOME for f in (home / d).rglob("*.md")} | {f for f in [home / _EPIC_BODY] if f.is_file() or f.is_symlink()}
+    scanned |= {f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md")}
+    for unpinned in sorted(f for f in scanned if _resolved(f) not in held):
+        where = "sits in the breakdown's body home" if _in_body_home(unpinned.relative_to(home)) else "sits beside the pinned bodies"
+        problems.append(f"{unpinned.relative_to(home)} {where} but the newest vet record does not pin it: the breakdown needs a new vet")
     if [p for p, _ in newest["pins"]] != list(dict.fromkeys(p for p, _ in newest["pins"])):
         problems.append("the newest vet record pins a file more than once")
     history = [_fill(words["specVet"], kind=v["kind"], round=v["round"], verdict=v["verdict"], commit=_short(v["head"])) for v in sorted(vets, key=lambda v: v["round"])]
-    history.append(_fill(words["specPins"], count=len(newest["pins"])))
+    history.append(_fill(words["specPins"], count=len(newest["pins"])) if len(newest["pins"]) != 1 else words["specPin"])
     record = {"schema": review_record.RECORD_SCHEMA, "pr": number, "finalCommit": {"sha": newest["head"]}, "ci": {"state": ci["state"], "sha": ci["commit"]},
               "lane": {"value": None, "reason": None}, "findings": [], "missingReviews": [],
               "reviewers": [{"name": words["specChecksReviewer"], "family": parts[3], "ran": review_record.RAN_REPORTED_BY_SESSION,
@@ -1108,7 +1125,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
     if breakdown is not None:
         filed = breakdown["body"] + breakdown["artifact"]
-        cards.append(_card("b-", number, "breakdown", words["breakdownKind"], _fill(words["breakdownTitle"], count=len(breakdown["body"])),
+        cards.append(_card("b-", number, "breakdown", words["breakdownKind"], _fill(words["breakdownTitle"], count=len(breakdown["body"])) if len(breakdown["body"]) != 1 else words["breakdownTitleOne"],
                            [_section(words["ifLeft"], "bullets", filed)], [], None))
         places.append(None)
     for it in advisor.get("items", []):
