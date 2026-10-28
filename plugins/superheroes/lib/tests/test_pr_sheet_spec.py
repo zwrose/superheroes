@@ -131,6 +131,41 @@ def test_a_missing_pinned_file_and_a_pin_outside_the_folder_refuse(world):
     assert any("children/A.md could not be read" in p for p in found) and any("elsewhere/x.md is outside the spec's folder" in p for p in found)
 
 
+def test_a_body_beside_the_pinned_ones_that_is_not_pinned_refuses(world):
+    # Axis: a breakdown vet that leaves one child body out of its pins is stale; the child is never silently dropped from the card.
+    base, folder, _ = world
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[p for p in PINNED if p != "children/B.md"]), encoding="utf-8")
+    found = problems_of(world)
+    assert len(found) == 1 and found[0].startswith("children/B.md sits beside the pinned bodies") and "needs a new vet" in found[0]
+
+
+@pytest.mark.parametrize("escape", ["dotdot", "symlink"])
+def test_a_pin_that_resolves_outside_the_folder_refuses(world, escape):
+    # Axis: a pin naming the slug but resolving out of the folder (through .. or a symlink) refuses, even when its hash matches.
+    base, folder, _ = world
+    outside = base / "outside.md"
+    outside.write_text("Not part of the package.\n", encoding="utf-8")
+    if escape == "dotdot":
+        pin = f"docs/superheroes/{SLUG}/../outside.md"
+    else:
+        (folder / "children" / "link.md").symlink_to(outside)
+        pin = f"docs/superheroes/{SLUG}/children/link.md"
+    text = vet_text(folder, 3, "Breakdown", pins=PINNED).replace("Vet done:", f"{pin} {content_hash(outside)}\nVet done:")
+    (base / "vet-3.md").write_text(text, encoding="utf-8")
+    assert any(f"breakdown pin {pin} is outside the spec's folder" in p for p in problems_of(world))
+
+
+@pytest.mark.parametrize("ci", [{}, None, {"state": "green"}, {"state": "", "commit": None}])
+def test_malformed_ci_is_a_refusal_never_a_crash(world, ci):
+    # Axis: a malformed spec.ci is named as a problem, through the API and the command, never a traceback.
+    base, _, advisor = world
+    given = {**advisor, "spec": {**advisor["spec"], "ci": ci}}
+    assert any(p.startswith("spec ci must be") for p in problems_of(world, given))
+    (base / "input.json").write_text(json.dumps(given), encoding="utf-8")
+    done = cli(world)
+    assert done.returncode == 1 and "Traceback" not in done.stderr and any(p.startswith("spec ci must be") for p in json.loads(done.stdout)["problems"])
+
+
 def test_the_cli_builds_a_spec_sheet_with_no_record(world):
     # Axis: the command takes no --record when the input names spec, and writes a sheet the page check accepts.
     base = world[0]

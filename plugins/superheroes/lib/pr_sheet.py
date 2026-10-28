@@ -925,6 +925,7 @@ def _spec_record(spec, number, words, base, problems):
         return None
     if not (isinstance(ci, dict) and set(ci) == {"state", "commit"} and _text(ci["state"]) and (ci["commit"] is None or _commit(ci["commit"]))):
         problems.append("spec ci must be {state, commit}: the spec PR's checks in a word or two, and the commit they ran on or null")
+        return None
     folder = pathlib.Path(base or ".", spec["folder"])
     slug, checks = folder.name, _read_text(folder / "checks-record.md")
     seat = re.search(r"^- Seat: (.+)$", checks or "", re.MULTILINE)
@@ -947,10 +948,13 @@ def _spec_record(spec, number, words, base, problems):
     spec_text = _read_text(folder / "spec.md")
     if spec_text is None or definition_doc.content_hash(spec_text) != newest["hash"]:
         problems.append(f"{folder / 'spec.md'} does not hash to {newest['hash']}, the hash on the newest vet record's Vet done: line: the spec changed after its vet")
-    lines = {"body": [], "artifact": []}
+    lines, held, home = {"body": [], "artifact": []}, set(), folder.resolve()
     for path, pinned in newest["pins"]:
         rel = path.split(f"{slug}/", 1)[1] if path.startswith(f"{slug}/") or f"/{slug}/" in path else None
+        # bite-axis: a pin is read only when it resolves inside the spec's folder (no .. and no symlink out of it).
+        rel = rel if rel is not None and (folder / rel).resolve().is_relative_to(home) else None
         text = None if rel is None else _read_text(folder / rel)
+        held.update([] if rel is None else [(folder / rel).resolve()])
         if rel is None:
             problems.append(f"breakdown pin {path} is outside the spec's folder {slug}")
         elif text is None:
@@ -961,6 +965,9 @@ def _spec_record(spec, number, words, base, problems):
         else:
             group = "artifact" if pathlib.PurePath(rel).name in _SPEC_ARTIFACTS else "body"
             lines[group].append(_fill(words["breakdownArtifact" if group == "artifact" else "breakdownBody"], path=path, hash=pinned))
+    # bite-axis: a body beside a pinned one in its subfolder that the vet does not pin makes the record stale (spec-vet.md § Vetting the breakdown).
+    for unpinned in sorted({f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md")} - held):
+        problems.append(f"{unpinned.relative_to(home)} sits beside the pinned bodies but the newest vet record does not pin it: the breakdown needs a new vet")
     if [p for p, _ in newest["pins"]] != list(dict.fromkeys(p for p, _ in newest["pins"])):
         problems.append("the newest vet record pins a file more than once")
     history = [_fill(words["specVet"], kind=v["kind"], round=v["round"], verdict=v["verdict"], commit=_short(v["head"])) for v in sorted(vets, key=lambda v: v["round"])]
