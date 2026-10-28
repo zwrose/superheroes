@@ -22,6 +22,16 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
 
+- **After switching.** **Nothing is owed at once: the gardening pass reads two revisit checks from its next run, and a false PR claim is logged from the next time an act finds one.** See [Gardening: two revisit checks and a false PR claim count](#gardening-two-revisit-checks-and-a-false-pr-claim-count).
+
+### Gardening: two revisit checks and a false PR claim count
+
+- **A fifth misses-log class.** A claim in a merged PR's description that did not hold (that tests ran, a row of its definition-of-done table, or that the verify command passed) is a false PR claim. The act that finds it logs it once per claim, in a review escape's entry shape plus two lines: the marker line ``false PR claim: <the claim> — shown false by <what showed it false>`` and a line naming what would have caught it.
+- **The tally counts it apart.** `review_learning.py tally` reads an escape input item with `"marker": "false-pr-claim"` as a false PR claim and returns the count as `falsePrClaims`, never in `escapes`. It is `0` when there are none and `null` wherever `escapes` reads `null`. A `marker` with any other value reads as malformed, so the tally is incomplete.
+- **A new `seating` verb.** `review_learning.py seating --row <file>` shows the security and premortem seats' finding outcomes, tokens, and minutes. A number the row does not give, or gives as null, a boolean, a negative, or a non-number, reads `"unmeasured"` and is listed under `unmeasured`, never `0`.
+- **Two checks at each pass.** Duty 3 of the gardening pass records, for the false-claim check and the seating check, whether it was met and, when it was, that it went to the owner as a calibration proposal. A met check reopens a decision for the owner to rule on. It changes nothing by itself, and no target or gate on rounds, tokens, or minutes is set.
+- **Nothing is owed at once.** A tally caller that does not read `falsePrClaims` is unaffected, and a misses log with no false PR claim counts zero.
+
 ### Specs: a new spec follows the doc policy
 
 - **Where a new work item lands.** With no existing `spec.md`, a confirmed doc policy now decides where a work item's definition-docs go: its in-repo location (for example `docs/superheroes/<work-item>/`). The calibration storage mode decides only when no policy is confirmed, as before. So a project whose calibration lives out of the repo but whose confirmed policy names an in-repo location now gets new specs in the repo, and its spec PR carries the spec. `resolve-write`, `path` and `dir` all follow it; a gitignored policy still passes the ignore check.

@@ -230,8 +230,9 @@ declined with a trigger by default.
 
 1. **Every grading records its scoring durably on the item**. The record carries the band cited,
    the evidence tier, and the resulting tier. Whoever graded it writes it, normally the advisor.
-2. **The misses log captures four classes**. The classes are declined-then-escaped,
-   launched-then-regretted, mis-tiered, and the [review escape](../../../rubric/glossary.md#review-escape).
+2. **The misses log captures five classes**. The classes are declined-then-escaped,
+   launched-then-regretted, mis-tiered, the [review escape](../../../rubric/glossary.md#review-escape),
+   and the [false PR claim](../../../rubric/glossary.md#false-pr-claim).
    The advisor appends **at the moment the miss is observed**, whether that is a vet, a field report,
    or an incident, and reads the log at every
    [gardening pass](../../../rubric/glossary.md#gardening-pass).
@@ -240,7 +241,7 @@ declined with a trigger by default.
      report traces a bug to a PR that had a review.
    - **Who logs it.** The act that observes it logs it, at that moment. The advisor appends it during
      that vet, while reading that diagnosis or field report, or when the owner reports it. The act's own
-     durable record states the append, as item 4 requires.
+     durable record states the append, as item 5 requires.
      An escape is logged once per bug: the act reads the misses log first, and when an earlier act
      already logged that same bug from that PR, it appends nothing and its record says the escape was
      already logged. A different bug from the same PR is a separate escape and gets its own entry.
@@ -255,23 +256,43 @@ declined with a trigger by default.
      on or after the project's [adoption day](#calibration-changes-and-time-complaints), so no reviewer
      seat is judged on reviews from before the project adopted this way of learning. An escape traced
      to an earlier review is still logged, marked as before adoption, and never counted.
-4. **Every vet receipt states the misses-log appends it made, or `None`,** following that receipt's
+4. **A false PR claim is logged the same way, and marked.** Four things settle it.
+   - **What triggers one.** A vet, a detective diagnosis, a field report, or the owner's own report
+     finds, after merge, that a claim in a merged PR's description did not hold: that tests ran, a row
+     of its definition-of-done table, or that the verify command passed.
+   - **Who logs it.** The act that finds it logs it, at that moment, once per claim. The act reads the
+     misses log first, and when an earlier act already logged that claim, it appends nothing and its
+     record says the claim was already logged. A different false claim in the same PR is its own entry.
+     The act's own durable record states the append, as item 5 requires.
+   - **What the entry says.** Everything a review escape's entry says: the PR, a short description, the
+     link to that PR's [review record](../../../rubric/glossary.md#review-record), the date of that
+     review, and one call. The call is **missed** when no finding in the record named the false claim.
+     It is **seen and left** when a finding named it and its outcome let it through. The entry adds two
+     lines. The marker line is spelled exactly
+     ``false PR claim: <the claim> — shown false by <what showed it false>``, and a second line names
+     what would have caught it. **The marker is what the tally reads.**
+   - **Counting starts at adoption.** Counting starts at the adoption day exactly as it does for an
+     escape. A false PR claim dated earlier is still logged, marked as before adoption, and never
+     counted. **A false PR claim is counted apart from review escapes**: it never adds to the missed or
+     seen-and-left counts. A bug the same PR shipped and the review missed is a separate review escape
+     entry.
+5. **Every vet receipt states the misses-log appends it made, or `None`,** following that receipt's
    own filled-or-`None` convention. The same line rides the durable record of any field-report
    processing or incident response — so a quiet log is visibly claimed quiet by each observing act
    rather than silently unappended, and the advisor's sole-appender role is auditable from the
    receipts. The receipt carries it as spine field 10 (`skills/showrunner/reference/vet-receipt.md`).
    **The gardening record**, not the vet receipt, is where the window's appends are
    accounted for.
-5. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
+6. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
    with corrected inputs, alongside any recalibration of the instruments. Recalibrations reach the
    owner as proposals to stamp, never as silent re-scores.
-6. **Rubber-stamping is watched by judgment, never by count.** No tally of accepts and rejects is
+7. **Rubber-stamping is watched by judgment, never by count.** No tally of accepts and rejects is
    kept, because agreement can simply mean the proposals were sound. When either the owner or the
    advisor suspects it, the advisor reads a sample of recent decisions back to the owner at a walk.
-7. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
+8. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
    comment. One surface, one pin, already read at every vet. The **gardening record** lands as a
    durable comment on the collector at each pass.
-8. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
+9. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
    ran in, full, light, or micro,** so the receipt corpus can be read by lane. The receipt carries it
    as spine field 9 (`skills/showrunner/reference/vet-receipt.md`). **The grading record does not carry it**, because no lane
    exists at intake.
@@ -587,7 +608,10 @@ advisor run together to keep calibration honest.
      record writer's `read --pr <n>` returns it, and each review escape as its review's date
      (`reviewedAt`) and its call (`missed` or `seen-and-left`). The advisor builds that escape input
      from the misses log at the pass, one item per review escape in the log, before-adoption ones
-     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
+     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. The escape input
+     carries each logged [false PR claim](../../../rubric/glossary.md#false-pr-claim) too, as its review
+     date, its call, and `"marker": "false-pr-claim"`. The tally returns that count as `falsePrClaims`,
+     apart from the escape counts: zero when there were none, unmeasured when the tally is. A PR is
      dated by that record and counts only when the date is on or after the adoption day and inside
      the condition window. The record keeps no first date for a finding, so a catch carried from a
      review before the adoption day into a later re-review counts by the later date; the advisor
@@ -599,6 +623,24 @@ advisor run together to keep calibration honest.
      credited to every seat whose lens the finding names (a fixed finding in the security lens
      counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
      in that seat's lens.
+   - **The two revisit checks.** Duty 3 also reads two checks, and the record states each one.
+     - **The false-claim check.** It is met when the window's false PR claim count is one or more. A
+       met check **reopens the decision to run code review without a grounding seat**, the seat that
+       checked a PR's own claims against the repository.
+     - **The seating check.** The advisor judges whether the security and premortem reviewers still
+       look expensive for what they find. It is met when that judgment says they do. A met check
+       **reopens their seating** in the calibration. Beside the judgment, the record lists the numbers
+       it read: each seat's finding outcomes by outcome, its tokens, and its minutes. They come from
+       `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The advisor builds the row
+       file from the window's review-loop measures for those two seats. A number the measures do not
+       give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
+       recorded as unmeasured, never as zero.**
+     - **Each pass records, for each check, whether it was met, and when it was, that it went to the
+       owner** as a calibration proposal: a batch-2 item with the per-item spine, as the
+       calibration-proposal bullet above says. A check that is not met still gets its line.
+     - **No target and no gate.** These checks and the review-loop measures are read as a trend. A met
+       check is a prompt for an owner conversation, never an automatic change. Nothing here sets a
+       target number or a gate on rounds, tokens, or minutes.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -688,6 +730,9 @@ standing rule of the pass, not a ninth duty.
   carries no threshold of its own and is recorded so accumulation on one surface is visible here;
 - **the memory gardening done**: entries moved out to a plugin surface, entries re-read against the
   last doctrine change, and any index lines repaired;
+- **the two revisit checks**: for each, met or not met, and when met, that it went to the owner; the
+  window's false PR claim count, zero included; and the seating check's numbers as read, with an
+  unmeasured number shown as unmeasured;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
 - the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
