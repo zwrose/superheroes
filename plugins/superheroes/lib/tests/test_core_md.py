@@ -2005,6 +2005,25 @@ def test_repo_root_raises_on_dead_gitdir_pointer(tmp_path):
     assert ".git present at" in str(excinfo.value)
 
 
+def test_repo_root_raises_on_dead_gitdir_pointer_git_2_56_wording(tmp_path, monkeypatch):
+    # #2222: git 2.56 reworded the dead-gitfile refusal; CI runners carry 2.55 or 2.56, so the
+    # real-git test above sees whichever wording the runner's git prints. Pin the 2.56 one.
+    repo = str(tmp_path / "repo")
+    sub = os.path.join(repo, "pkg", "deep")
+    os.makedirs(sub)
+    open(os.path.join(repo, ".git"), "w").write("gitdir: /nonexistent/gitdir\n")
+
+    class _Declined:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: gitfile does not point to a valid repository: %s/.git\n" % repo
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: _Declined())
+    with pytest.raises(CM.RepoRootUnavailable) as excinfo:
+        CM._repo_root(sub)
+    assert ".git present at" in str(excinfo.value)
+
+
 def test_repo_root_raises_on_missing_git_head(tmp_path):
     repo = str(tmp_path / "repo")
     sub = os.path.join(repo, "pkg", "deep")
