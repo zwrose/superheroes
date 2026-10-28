@@ -19,7 +19,7 @@ Every statement ends with its source in plain text. The sources are:
 
 - **board · panel N**: the approved build board, saved in `board/` beside this spec, at
   https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8. The owner approved version 4 on 2026-10-27.
-  Versions 5 and 6 redraw panels 1, 3, 4, 8 and 9 for the rulings of 2026-10-28 and vet round 1,
+  Versions 5 to 7 redraw panels 1, 3, 4, 8 and 9 for the rulings of 2026-10-28 and vet round 1,
   and go to the owner on the final sheet.
 - **Canon <entry id>**: an owner ruling recorded in the project's Canon.
 - **framing**: the framing the owner approved on 2026-10-26.
@@ -128,8 +128,10 @@ between slices. (source: Canon 2026-10-27-5692f27d-12)
   - *Acceptance (rule):* A break-it test is written by the test reviewer, never by the build
     session. (source: Canon 2026-10-27-5692f27d-3)
   - *Acceptance (rule):* Where a change touches a risk area, the test reviewer also writes break-it
-    tests on the touched areas, as today: at least one per touched area and at most three per
-    review. Each one is delivered as a finding and is run and graded like any other break-it test.
+    tests on the touched areas, as today: at most three per review, and at least one per touched
+    area while under that cap. A change touching more than three risk areas can leave one or more
+    of them without a break-it test. Each one is delivered as a finding and is run and graded like
+    any other break-it test.
     [cite: plugins/superheroes/agents/test-role.md § Write at most three break-it tests per review.]
     (source: Canon 2026-10-27-5692f27d-3; vet round 1)
 
@@ -488,7 +490,7 @@ then that review shall finish under the old rules. (source: framing; craft, for 
 ## UI / UX
 
 The approved build board is the design: `board/build-board.html` beside this spec, at
-https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 6). Panel 1 covers round 1, panels 2
+https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 7). Panel 1 covers round 1, panels 2
 and 3 the fixes and later rounds, panel 4 how a session stops, panel 5 handback, panel 6 failures,
 panel 7 the review record, and panel 8 what is removed. (source: board · panel 1 to 9)
 

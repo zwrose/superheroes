@@ -19,7 +19,7 @@
 
     <div class="sh-card">
       <div class="card-head">
-        <p class="sh-label">Build board · review loop rework · #2185 · version 6</p>
+        <p class="sh-label">Build board · review loop rework · #2185 · version 7</p>
         <h1 class="sh-heading">A review loop that finishes in a few rounds</h1>
         <p class="sh-caption">One full-lane review, end to end, as it will work after this rework. Light and micro lanes follow the same cap and the same "only what changed" rule with their single reviewer.</p>
       </div>
@@ -39,7 +39,7 @@
         <p class="arrow sh-caption">↓</p>
         <div class="flow-row">
           <div class="sh-step sh-step--reviewer">Code reviewer</div>
-          <div class="sh-step sh-step--reviewer">Test reviewer: attaches a break-it test to each finding it can prove that way, and writes at least one per touched risk area (at most three per review), as today</div>
+          <div class="sh-step sh-step--reviewer">Test reviewer: attaches a break-it test to each finding it can prove that way, and writes break-it tests on touched risk areas as today: at most three per review, at least one per area while under that cap</div>
           <div class="sh-step sh-step--reviewer">Security + premortem: both join on any risk area, or when the risk is unclear, as today</div>
         </div>
         <p class="sh-caption">Each reviewer lists what it actually read.</p>

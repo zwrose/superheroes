@@ -280,6 +280,18 @@ no owner calls. Each was fixed:
 
 The board went to version 6 for V1.2 and V1.3 (panel 1), logged in board/redraws.md.
 
+### Checks after vet round 1, round 1
+
+Reviewed: commit c7bc8bf3c, changed parts only.
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| V-G1 | grounding | FR-11's per-area rule dropped today's "while under that cap" exception | craft | FR-11 and board panel 1 (version 7) restore it, matching test-role.md and the risk-calibrated spec's FR-23 | fixed |
+| V-GAP-1 | gap | Same as V-G1 (reviewer id GAP-1, renamed on the clash) | craft | Same fix | fixed |
+| V-SRC-1 | source | Same as V-G1 (reviewer id SRC-1, renamed on the clash) | craft | Same fix | fixed |
+
+Grounding base: origin/main 8c1712a70f1461b45e48adde967b9deced6a3bb8. Citation check: [].
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
