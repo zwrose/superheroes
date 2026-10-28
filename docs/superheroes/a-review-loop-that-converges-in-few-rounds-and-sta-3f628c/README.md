@@ -5,7 +5,7 @@ that converges in few rounds and stays simple: who applies the fixes; round 1's 
 break-it tests and the verifier, synthesis and repeats, and copies of a bug; findings outside the PR;
 rounds 2 to 4 and how a session stops; after handback; what is removed; the review record; the lanes;
 and how we know it worked. Approval is recorded in the spec's frontmatter (`approved: "2026-10-27"`).
-Its Amendments log holds one entry (2026-10-28, substantive: FR-6, files a change proves identical to a named source are not counted or read). The epic, C1, C1-L5 and C2, whose text or quoted register entry it touches, anchor at `as-of amendment #1`; every other child anchors at `as-of amendment #0`, which still resolves because the sections it cites did not change. The breakdown rides the
+Its Amendments log holds one entry (2026-10-28, substantive: FR-6, files a change proves identical to a named source are not counted or read). The epic, C1, C1-L5 and C2, whose text or quoted register entry it touches, anchor at `as-of amendment #1`; every other child anchors at `as-of amendment #0`, which still resolves because the sections it cites did not change. C1-L10 and C1-L11 each gain one test that keeps proven copies off their seats' orders, under R3. The breakdown rides the
 spec PR, #2199, and one merge word covers spec and breakdown; the children file, with the owner's
 word, as it merges. The epic is the discovery's issue, #2185, whose body is rewritten in place to
 [`epic.md`](epic.md) at filing.
