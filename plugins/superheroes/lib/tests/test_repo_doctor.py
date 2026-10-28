@@ -294,9 +294,11 @@ def test_unresolved_program_the_walk_cannot_be_sure_of_is_unchecked_not_stale(
     profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
     assert not any("no longer resolves" in d for d in res["drift"])
-    assert len(res["unchecked"]) == 1
-    assert "does not resolve here, but" in res["unchecked"][0]
-    assert unsure in res["unchecked"][0]
+    # Check 6 may add its own note for a `./gonebin` after a `cd` (#2146); this is check 5's.
+    notes = [u for u in res["unchecked"] if u.startswith("verify command could not be checked")]
+    assert len(notes) == 1
+    assert "does not resolve here, but" in notes[0]
+    assert unsure in notes[0]
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to list its builtins")
@@ -381,6 +383,89 @@ def test_verify_path_glob_or_var_not_flagged(tmp_path, capsys):
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
     assert rc == 0
     assert not any("missing path" in d.lower() for d in res["drift"])
+
+
+# This repo's calibrated verify command (#2146), with its home directory and project id
+# replaced: an `if` whose `else` arm names Mac-only interpreter paths.
+_MAC_PY = "/Users/owner/.claude/superheroes/projects/0000000000000000/venv/bin/python"
+_CALIBRATED = (
+    "if [ -x scripts/pinned-python ]; then "
+    + " && ".join("scripts/pinned-python .github/scripts/%s.py" % v for v in (
+        "validate_python_pin", "validate_marketplace", "validate_hosts", "validate_skills",
+        "validate_stubs"))
+    + " && scripts/pinned-python .github/scripts/verify_touched_tests.py --base {baseRef}; else "
+    + " && ".join("%s .github/scripts/%s.py" % (_MAC_PY, v) for v in (
+        "validate_marketplace", "validate_hosts", "validate_skills", "validate_stubs"))
+    + " && /usr/bin/python3 .github/scripts/verify_touched_tests.py --base {baseRef}; fi"
+)
+
+
+def test_calibrated_verify_command_in_a_cloud_session_reads_unsure(tmp_path, capsys):
+    """#2146: in a cloud session the calibrated command's Mac-only `else` paths are absent;
+    check 6 says they could not be checked and never calls the profile stale."""
+    root, env = _keyword_led_root(tmp_path, pinned_present=True)
+    for v in ("validate_python_pin", "validate_hosts", "validate_skills", "validate_stubs",
+              "verify_touched_tests"):
+        open(os.path.join(root, ".github/scripts/%s.py" % v), "w").write("print()\n")
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=_CALIBRATED)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["drift"] == []
+    assert res["signal_hash"] == ""
+    assert len(res["unchecked"]) == 1
+    assert res["unchecked"][0].startswith("verify command path(s) could not be checked: ")
+    assert _MAC_PY in res["unchecked"][0]
+    assert "missing path" not in res["message"]
+    assert "consider re-running review-init" not in res["message"]
+
+
+@pytest.mark.parametrize("verify", [
+    "if [ -d src ]; then verifybin plugins/gone/tests; fi",
+    "if [ -d src ]; then verifybin src; else verifybin plugins/gone/tests; fi",
+    "if [ -d x ]; then true; elif [ -d src ]; then verifybin plugins/gone/tests; fi",
+    "verifybin plugins/gone/tests || verifybin src",
+    "verifybin src || verifybin plugins/gone/tests",
+    "verifybin plugins/gone/tests && verifybin src",
+    "verifybin src && verifybin plugins/gone/tests",
+    "case x in x) verifybin plugins/gone/tests;; esac",
+    "cd src; verifybin plugins/gone/tests",
+    "pushd src; verifybin plugins/gone/tests",
+    "while false; do verifybin plugins/gone/tests; done",
+    "for t in a; do verifybin plugins/gone/tests; done",
+    "( cd src && verifybin ../plugins/gone/tests )",
+    "verifybin src # plugins/gone/tests",
+    'verifybin "plugins/gone/tests',
+    "verifybin plugins/gone/tests )",
+    "verifybin plugins/gone/tests <<EOF",
+])
+def test_verify_path_that_may_not_run_reads_unsure(tmp_path, capsys, verify):
+    """#2146: a path in a branch that may not run, after a `cd`, or in a shape the walk does
+    not model is "could not be checked", never missing."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert not any("missing path" in d.lower() for d in res["drift"])
+    assert any(u.startswith("verify command path(s) could not be checked: ")
+               and "plugins/gone/tests" in u for u in res["unchecked"])
+
+
+@pytest.mark.parametrize("verify", [
+    "verifybin plugins/gone/tests -q",
+    "true; verifybin plugins/gone/tests",
+    "if [ -d src ]; then true; fi; verifybin plugins/gone/tests",
+    "verifybin src | verifybin plugins/gone/tests",
+    "verifybin 2>/dev/null plugins/gone/tests",
+])
+def test_verify_path_that_certainly_runs_still_drifts(tmp_path, capsys, verify):
+    """#2146: a path the command certainly runs from the project root, and that is missing,
+    is still reported as missing."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert "verify command references missing path(s): plugins/gone/tests" in res["drift"]
+    assert not any("path(s) could not be checked" in u for u in res["unchecked"])
 
 
 def test_default_branch_unresolvable_drifts(tmp_path, capsys):

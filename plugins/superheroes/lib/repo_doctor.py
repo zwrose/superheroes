@@ -274,34 +274,87 @@ def _verify_program(verify_command):
 _UNRESOLVABLE = set("*?$(){}[]|<>&;`~")
 
 
-def _verify_path_args(verify_command):
-    """Concrete path-like arguments in the verify command.
+def _path_word(tok):
+    """The path a token names, or None. A token counts when it names a file or directory in
+    the repo: it contains a `/`, is not a flag (`-q`, `--run`), and carries no shell
+    metacharacter we cannot resolve statically (globs, `$vars`, subshells). Surrounding quotes
+    are stripped and a trailing `/` is dropped so it can be `os.path`-checked against root."""
+    t = tok.strip().strip("'\"")
+    if not t or t.startswith("-") or "/" not in t or any(c in _UNRESOLVABLE for c in t):
+        return None
+    return t.rstrip("/") or None
 
-    A token counts when it names a file or directory in the repo: it contains a
-    `/`, is not a flag (`-q`, `--run`), and carries no shell metacharacter we
-    cannot resolve statically (globs, `$vars`, subshells). Surrounding quotes are
-    stripped and a trailing `/` is dropped so the token can be `os.path`-checked
-    against root. Used to catch a verify command that still references a test
-    path that has since moved or been removed."""
+
+# Words that open or close a construct whose body may not run (#2146); `elif`/`else` sit
+# inside an `if`, so its depth covers them.
+_CONDITIONAL_OPEN = {"if", "while", "until", "for", "select", "(", "{"}
+_CONDITIONAL_CLOSE = {"fi", "done", ")", "}"}
+_LIST_SEPARATORS = {";", "&", ";;", ";&"}
+
+
+def _verify_path_args(verify_command):
+    """(sure, unsure): the concrete path-like arguments in the verify command (`_path_word`).
+
+    Used to catch a verify command that still references a test path that has since moved or
+    been removed. A path is `sure` only when the command certainly runs it from the project
+    root (#2146): one inside an `if`/`while`/`for` construct, a subshell or a group, in an
+    and-or list (either side of `&&` or `||`), after a `cd`-like builtin, or in a comment is
+    `unsure`. Shapes the walk does not model (`case`, functions, here-documents, unbalanced
+    constructs, text that does not tokenize) make every path `unsure`: the walk is a partial
+    shell reader, so it fails safe."""
     if not verify_command:
-        return []
-    out = []
-    for tok in verify_command.split():
-        t = tok.strip().strip("'\"")
-        if not t or t.startswith("-") or "/" not in t:
-            continue
-        if any(c in _UNRESOLVABLE for c in t):
-            continue
-        out.append(t.rstrip("/"))
-    return out
+        return [], []
+    try:
+        lex = shlex.shlex(verify_command, posix=False, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.commenters = ""
+        tokens = list(lex)
+    except ValueError:
+        return [], [p for p in map(_path_word, verify_command.split()) if p]
+    if any(t in _SHELL_UNPARSED or t.startswith("<<") for t in tokens):
+        return [], [p for p in map(_path_word, tokens) if p]
+    # Split into lists at the separators; a list holding `&&` or `||` is an and-or list.
+    lists, cur = [], []
+    for tok in tokens:
+        if tok in _LIST_SEPARATORS:
+            lists.append(cur)
+            cur = []
+        else:
+            cur.append(tok)
+    lists.append(cur)
+    sure, unsure = [], []
+    depth, tainted, skip, balanced = 0, False, False, True
+    for lst in lists:
+        and_or = "&&" in lst or "||" in lst
+        for tok in lst:
+            if skip:  # a redirection's target
+                skip = False
+            elif tok.startswith("#"):
+                tainted = True  # a comment runs to the end of its line
+            elif tok in _CONDITIONAL_OPEN:
+                depth += 1
+            elif tok in _CONDITIONAL_CLOSE:
+                depth -= 1
+                balanced = balanced and depth >= 0
+            elif tok in _RESOLUTION_CHANGERS:
+                tainted = True
+            elif tok[0] in "<>":
+                skip = True
+            else:
+                p = _path_word(tok)
+                if p:
+                    (unsure if tainted or and_or or depth > 0 else sure).append(p)
+    if depth or not balanced:
+        return [], sure + unsure
+    return sure, unsure
 
 
 def _missing_verify_paths(verify_command, root):
-    """Path args in the verify command that do not exist under root."""
-    return [
-        p for p in _verify_path_args(verify_command)
-        if not os.path.exists(os.path.join(root, p))
-    ]
+    """(missing, unsure): the path args in the verify command that do not exist under root,
+    split into those the command certainly runs and those it may not (`_verify_path_args`)."""
+    sure, unsure = _verify_path_args(verify_command)
+    return ([p for p in sure if not os.path.exists(os.path.join(root, p))],
+            [p for p in unsure if not os.path.exists(os.path.join(root, p))])
 
 
 def _binary_resolves(binary, root, env):
@@ -385,11 +438,18 @@ def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env, unchec
         unchecked.append("verify command could not be checked: %s" % why)
 
     # 6. verify command names a concrete path that no longer exists.
-    missing = _missing_verify_paths(prof["verify-command"], root)
+    # axis: only a path the command certainly runs from the root is missing; one it may not
+    # run is a note, never drift (#2146).
+    missing, unsure = _missing_verify_paths(prof["verify-command"], root)
     if missing:
         drift.append(
             "verify command references missing path(s): %s"
             % ", ".join(sorted(missing))
+        )
+    if unsure and unchecked is not None:
+        unchecked.append(
+            "verify command path(s) could not be checked: %s (a branch that may not run, "
+            "or a directory change, comes before them)" % ", ".join(sorted(unsure))
         )
 
     # 7. default-branch no longer resolves.
