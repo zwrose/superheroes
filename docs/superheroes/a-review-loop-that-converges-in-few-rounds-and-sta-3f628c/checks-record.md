@@ -308,6 +308,11 @@ craft findings, no owner calls:
 | V2.2 | Unclear what the cap of three counts | FR-11: the cap counts only the per-area tests; finding tests and FR-16's second tests have no cap |
 | V2.3 | Unclear risk on a returned change could skip the full panel | FR-45: unclear risk starts a full panel unless the earlier review was also unclear |
 
+### Checks after vet round 2
+
+Reviewed: commit bbfdb2f80, changed parts only. Gap, source and grounding raised nothing new. All
+three clean. Grounding base: origin/main at the time of the run. Citation check: [].
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
