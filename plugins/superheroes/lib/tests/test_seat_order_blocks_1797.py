@@ -270,6 +270,7 @@ def test_lint_elision_covers_both_quoted_blocks_and_nothing_else():
 def test_panel_dimensions_follow_the_seeded_seat_map_roster_in_dimensions_order():
     # axis: the roster-derived default dimensions (neutralize back to all five) — see bite-proof
     # record wo_b_1797_seat_orders
+    # "grounding-seat" is a stale name an older persisted map may still carry: read as an unknown seat
     seat_map = {"roster": ["test-role", "grounding-seat", "code-reviewer", "unknown-seat"],
                 "laneBasis": {"floor": None}}
     cfg = RD._default_config({"seatMap": seat_map})

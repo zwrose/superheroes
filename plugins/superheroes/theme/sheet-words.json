@@ -53,7 +53,6 @@
     "historyMissing": "{name} did not run. {goAhead}",
     "historyGoAhead": "Go-ahead to merge without it: {goAhead}.",
     "historyNoGoAhead": "No owner's word or standing ruling lets the PR go ahead without it.",
-    "historyNotRun": "{name} did not run: {why}.",
     "historyNotIndependent": "{name} is from a maker's model family, so its review was not independent.",
     "historyIncomplete": "The review record is incomplete: {what}.",
     "historyLaterRounds": "Earlier rounds read {earlier}; later rounds re-checked the fixes on the reviewed final commit {final}.",

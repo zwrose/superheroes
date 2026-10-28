@@ -2490,7 +2490,7 @@ def _without(name):
     _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": ""}})),
     _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": 3}})),
     {"roster": ["code-reviewer"], "seats": {"code-reviewer": {"source": "live", "family": "openai"}}},
-    _without("test-role"), _without("grounding-seat"),
+    _without("test-role"),
 ])
 def test_reading_next_parks_on_a_map_that_cannot_show_independence(seat_map):
     out = rr.reading_next([NO_READING, NO_READING], seat_map, ["anthropic"])

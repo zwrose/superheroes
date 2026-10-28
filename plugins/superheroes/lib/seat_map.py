@@ -29,20 +29,19 @@ LENS_SEATS = (
 # one home: every pin normalizer reads it, so a pin under the old key is read as the new seat's pin
 # (an explicit pin under the new key wins). Nothing on disk is rewritten.
 LEGACY_SEAT_ALIASES = {"test-reviewer": "test-role"}
-GROUNDING_SEAT = "grounding-seat"
 # Every seat a roster may name, the architecture reviewer included.
-KNOWN_SEATS = LENS_SEATS + (GROUNDING_SEAT,)
+KNOWN_SEATS = LENS_SEATS
 # The risky full-lane roster: the default for any caller that names no roster, and the roster a
 # change with a touched or unclear risk gets. The architecture reviewer is not on it.
 PANEL_ROSTER = tuple(s for s in KNOWN_SEATS if s != "architecture-reviewer")
 # Seats on every full-lane panel; the specialists are added when the lane call has a floor.
-BASE_ROSTER = ("code-reviewer", "test-role", GROUNDING_SEAT)
+BASE_ROSTER = ("code-reviewer", "test-role")
 STRONG_TIER_SEATS = frozenset({"security-reviewer", "architecture-reviewer"})
 STRONG_TIER_REQUIRED = "reviewer-deep"
 CRITICAL_SEATS = frozenset({"security-reviewer", "premortem-reviewer", "code-reviewer"})
 MIN_CRITICAL_FAMILIES = 2
 # The maker's model family is barred from EVERY panel seat (#670, owner-ratified 2026-07-26) — the
-# five lens seats AND the grounding seat, not merely the strong-tier/critical subset. The test
+# five lens seats, not merely the strong-tier/critical subset. The test
 # role's seat was the hole: it is neither strong-tier nor critical, so post-#651 (cursor's first-party models are
 # ONE `xai` family) a composer-made diff could have cursor-grok reviewing its own tests with no
 # violation recorded. STRONG_TIER_SEATS / CRITICAL_SEATS keep their OTHER jobs (the reviewer-deep bar
@@ -65,8 +64,6 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 # `source` of a seat no reviewer outside the makers' families could fill — recorded, never run.
 UNFILLED_SOURCE = "unfilled"
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
-
-DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 # The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, the
 # gap-sweep / scoped reviewers and the synthesis grouper): compose probes and records these beside
 # the panel's own cells.
@@ -74,8 +71,8 @@ NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep", "synthesis")
 
 
 def roster_for(lane_basis) -> tuple[str, ...]:
-    """The full-lane panel the lane call asks for. The generalist, the test seat and the grounding
-    seat are always on it; the security and premortem seats join whenever the floor is not None.
+    """The full-lane panel the lane call asks for. The generalist and the test seat are always on
+    it; the security and premortem seats join whenever the floor is not None.
     Fail-closed: a basis that is not a dict, or has no `floor` key, gets the risky roster."""
     if isinstance(lane_basis, dict) and "floor" in lane_basis and lane_basis["floor"] is None:
         return tuple(s for s in PANEL_ROSTER if s in BASE_ROSTER)
@@ -101,8 +98,9 @@ _BACKFILL_DOWNGRADE_TO = "reviewer"
 # Tiers _backfill's claude-only fallback rotation tries (#1269).
 _BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
 
-_PANEL_PIN_TIERS = frozenset(model_registry.codex_pin_roles()) & frozenset(
-    DEFAULT_TIER_BY_SEAT.values()
+# `reviewer` stays a pin tier: the backfill downgrade still seats panel seats at it, and a saved map's pins may key it.
+_PANEL_PIN_TIERS = frozenset(model_registry.codex_pin_roles()) & (
+    frozenset(DEFAULT_TIER_BY_SEAT.values()) | {_BACKFILL_DOWNGRADE_TO}
 )
 
 
@@ -750,32 +748,6 @@ def build(
                     "seat": seat,
                     "reason": f"seat {seat} has no strong-tier-eligible live vendor",
                 })
-        elif seat == GROUNDING_SEAT:
-            excl: set[str] = set()
-            if author_family:
-                excl.add(author_family)
-            if narrative_family:
-                excl.add(narrative_family)
-            if not author_family or not narrative_family:
-                degradations.append({
-                    "constraint": "grounding-provenance",
-                    "reason": "author or narrative family unknown — grounding independence not guaranteed",
-                })
-            # makers are barred first, so the fallback below relaxes narrative independence over the non-makers
-            pool = [cfg for cfg in base if cfg["family"] not in makers]
-            if base and not pool:
-                maker_emptied_seats.add(seat)
-            eligible = [cfg for cfg in pool if cfg["family"] not in excl]
-            if not eligible:
-                degradations.append({
-                    "constraint": "grounding-independence",
-                    "reason": "no grounding vendor independent of author/narrative families",
-                })
-                # #670 finding 1: hand the FULL pool to the maker filter below rather than
-                # pre-selecting "not the narrative family" — that old ordering picked the AUTHOR's
-                # own family whenever author and narrative were the only live families. Maker
-                # exclusion outranks narrative independence.
-                eligible = pool
         else:
             eligible = list(base)
 
@@ -839,15 +811,6 @@ def build(
                     ),
                 })
                 continue
-            if pin_seat == GROUNDING_SEAT:
-                excl = {f for f in (author_family, narrative_family) if f}
-                if fam and fam in excl:
-                    degradations.append(
-                        {
-                            "constraint": "pin-breaks-constraint",
-                            "reason": f"pinned grounding seat family {fam} is not independent of author/narrative",
-                        }
-                    )
             if pin_seat in STRONG_TIER_SEATS and tier != "reviewer-deep":
                 degradations.append(
                     {

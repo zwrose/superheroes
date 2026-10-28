@@ -267,16 +267,15 @@ def test_an_unfilled_seat_is_listed_as_planned_and_not_run_even_with_no_slot_jou
     assert rows["code-reviewer (round 1)"]["ran"] is True
 
 
-def test_an_unfilled_seat_the_driver_never_schedules_is_not_a_missing_reviewer(tmp_path):
+def test_an_unfilled_retired_seat_in_an_older_map_is_no_reviewer_row_and_does_not_park(tmp_path):
     seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
                           "grounding-seat": dict(UNFILLED_SEAT)}}
     s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
     s.seat("code-reviewer")
     account = rs.account_from_session(s.save(), extras(), Fake().readers())
-    # bites on: a composed grounding seat (not on the driven path) missing from the account, or parking a complete review as a missing reviewer; it must be named as not run, never park
-    assert {v["name"] for v in account["reviewers"]} == {"code-reviewer (round 1)", "grounding-seat"}
-    grounding = next(v for v in account["reviewers"] if v["name"] == "grounding-seat")
-    assert grounding["ran"] is False and grounding["vendor"] == "unfilled" and grounding["notRunReason"] == "no-loop-phase"
+    # bites on: a seat the map names but no panel round schedules turning into a reviewer row, or parking a complete review
+    assert {v["name"] for v in account["reviewers"]} == {"code-reviewer (round 1)"}
+    assert not any("notRunReason" in v for v in account["reviewers"])
     assert send(tmp_path, s.dir, Fake())["parked"] is False
 
 

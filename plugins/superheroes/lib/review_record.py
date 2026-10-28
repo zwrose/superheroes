@@ -73,11 +73,6 @@ RAN_ENGINE_RECORD = "engine-record"
 RAN_REPORTED_BY_SESSION = "reported-by-session"
 RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
-# The reasons a planned seat is named as not run without being a missing review, its one home: token -> (the only
-# seat name it may label, the words the record carries). The writer refuses the token on any other row, and the
-# session's account and a hand-written one both name the seat through it.
-NOT_RUN_REASONS = {"no-loop-phase": (seat_map_module.GROUNDING_SEAT,
-                                     "no loop phase runs it, so no reviewer checked the PR body's claims")}
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
@@ -586,11 +581,8 @@ def _validate(a):
             fault = _items_fault(r["readParts"], _part_fault)
             # axis: a read-parts list is files with line ranges, never another shape — see bite-proof record c1l1_wo_a_record_seam
             chk(fault is None, f"reviewers[{i}].readParts{fault}")
-        why = r.get("notRunReason")
-        # axis: the not-run token labels only its own seat, never run, never attempted — see bite-proof record wo_1_1976_not_run_seat
-        chk(why is None or (isinstance(why, str) and why in NOT_RUN_REASONS and r["name"] == NOT_RUN_REASONS[why][0]
-                            and r["planned"] is True and r["ran"] is False and not r.get("runDir")
-                            and r.get("commit") is None), f"reviewers[{i}].notRunReason")
+        # axis: the not-run reason is no part of the account, on any reviewer row — see bite-proof record c1l2_wo2_not_run_retired
+        chk(r.get("notRunReason") is None, f"reviewers[{i}].notRunReason")
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
@@ -1302,7 +1294,7 @@ def build_record(account, readers, prior=None):
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
                            _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
                  for r in a["reviewers"]]
-    notes, missing, seats_not_run, held = [], [], [], {}
+    notes, missing, held = [], [], {}
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     findings = _apply_owner_rulings(findings, a["findings"], a["ownerRulings"])
@@ -1337,12 +1329,8 @@ def build_record(account, readers, prior=None):
         return g.get("kind") != "standing-ruling" or finding_outcomes.on_record(
             {"kind": "canon", "ref": g["canonId"]}, sources())[0]
 
-    for v, row in zip(reviewers, a["reviewers"]):  # built in the account's order
+    for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
-            token = row.get("notRunReason")
-            if token:  # the writer checked it labels only its own seat, never run
-                seats_not_run.append({"name": v["name"], "reason": token, "why": NOT_RUN_REASONS[token][1]})
-                continue
             mine = [g for g in a["goAheads"] if g["reviewer"] == v["name"]]
             complete = [g for g in mine if _go_ahead_ok(g)]
             # axis: a standing-ruling go-ahead counts only while its Canon entry is on record — see bite-proof record c7l3_wo1_record_writer
@@ -1377,7 +1365,7 @@ def build_record(account, readers, prior=None):
         **{k: a[k] for k in _ROUND_PARTS if k in a},
         "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
-        "missingReviews": missing, **({"seatsNotRun": seats_not_run} if seats_not_run else {}),
+        "missingReviews": missing,
         "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
@@ -1974,7 +1962,6 @@ def _summary(r, level):
         *([refusals_line] if refusals_line else []),
         *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
         *who,
-        *[f"Not run: {n['name']}, because {n['why']}." for n in r.get("seatsNotRun") or []],
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
         *wider_lines,
@@ -2419,7 +2406,9 @@ def _move_up_blocker(seat_map, maker_families, lane_basis=None):
     """The first reason a seat map does not let a second no-reading review move up to the full lane, else None.
     The panel it must hold is the one the lane basis calls for; with no basis, the full risky panel."""
     roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
-    if not isinstance(roster, list) or not roster:
+    # axis: a roster member this plugin no longer composes (a retired seat in an older map) is not read, so it never parks the lane — see bite-proof record c1l2_wo2_move_up_roster_filter
+    roster = [n for n in roster if n in seat_map_module.KNOWN_SEATS] if isinstance(roster, list) else None
+    if not roster:
         return "the seat map has no roster"
     # axis: a map composed for fewer seats than the lane basis calls for cannot show the whole panel independent, so it parks — see bite-proof record wo_a_1797_roster
     missing = [n for n in seat_map_module.roster_for(lane_basis) if n not in roster]

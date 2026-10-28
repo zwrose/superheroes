@@ -78,8 +78,7 @@ def _scenarios():
     acct, rd = _one(_HEAD, [craft])
     out["pr-c"] = (acct, rd, _pr(_HEAD))
     security = reviewer("security-reviewer", ran=False, runDir="")
-    grounding = reviewer("grounding-seat", ran=False, runDir="", notRunReason="no-loop-phase", commit=None)
-    acct, rd = _one(_HEAD, [fixed], extra_reviewers=[security, grounding])
+    acct, rd = _one(_HEAD, [fixed], extra_reviewers=[security])
     acct["goAheads"] = []
     out["pr-d"] = (acct, rd, _pr(_HEAD))
     left = finding("code-retry-window", title="The retry window is too long",
@@ -189,8 +188,7 @@ def test_fixtures_carry_the_facts_they_stand_for():
     assert c["status"] == "reviewed"
     d = f["pr-d"]["record"]
     assert any(m["goAhead"] is None for m in d["missingReviews"]) and d["parked"] is True
-    assert isinstance(d["seatsNotRun"], list) and len(d["seatsNotRun"]) == 1
-    assert d["seatsNotRun"][0]["name"] == "grounding-seat" and d["seatsNotRun"][0]["reason"] == "no-loop-phase"
+    assert "seatsNotRun" not in d
     assert not any(m["name"] == "grounding-seat" for m in d["missingReviews"])
     e = f["pr-e"]
     assert e["record"]["finalCommit"]["sha"] == e["pr"]["head"] and e["record"]["ci"]["state"] == "green"

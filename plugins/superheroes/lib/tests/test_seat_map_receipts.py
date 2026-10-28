@@ -342,7 +342,7 @@ def test_unjudgeable_receipts_whole_history_not_round_scoped():
 def test_emit_receipt_seat_map_merges_maker_families_and_roster():
     """axis: makerFamilies is the sorted union over every receipt; roster is last-wins."""
     roster_1 = ["code-reviewer", "test-role"]
-    roster_2 = ["code-reviewer", "grounding-seat"]
+    roster_2 = ["code-reviewer", "premortem-reviewer"]
     map1 = _minimal_map(makerFamilies=["anthropic"], roster=roster_1)
     map2 = _minimal_map(makerFamilies=["openai", "anthropic"], roster=roster_2)
     state = {
