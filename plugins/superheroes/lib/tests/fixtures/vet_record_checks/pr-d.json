@@ -97,6 +97,10 @@
     "reviewers": [
       {
         "commit": null,
+        "cost": {
+          "minutes": 2.0,
+          "tokens": 100
+        },
         "coversFinalCommit": true,
         "family": "openai",
         "findingsCoverage": "reported by the session",
@@ -114,6 +118,10 @@
       },
       {
         "commit": null,
+        "cost": {
+          "minutes": null,
+          "tokens": null
+        },
         "coversFinalCommit": false,
         "family": "openai",
         "findingsCoverage": "reported by the session",
@@ -126,6 +134,10 @@
       },
       {
         "commit": null,
+        "cost": {
+          "minutes": null,
+          "tokens": null
+        },
         "coversFinalCommit": false,
         "family": "openai",
         "findingsCoverage": "reported by the session",

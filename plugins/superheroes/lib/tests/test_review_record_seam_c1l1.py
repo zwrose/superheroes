@@ -171,11 +171,6 @@ def every_variant_refused(tmp_path, element):
         refused(tmp_path, path, over)
 
 
-def edge_cases(edge):
-    return [pytest.param(path, over, id=f"{element}-{n}")
-            for element, cases in BAD.items() for n, (e, path, over) in enumerate(cases) if e == edge]
-
-
 # --- the shapes the contract names are refused (one test per guarded element) ---
 
 def test_bp1_extra_audit_is_a_reason_and_nothing_else(tmp_path):
@@ -235,50 +230,6 @@ def test_the_other_malformed_shapes_of_repeat_of_are_refused(tmp_path):
     for edge, path, over in BAD["repeatOf"]:
         if edge == "E2":
             refused(tmp_path, path, over)
-
-
-# --- edges E2-E8, by edge ---
-
-@pytest.mark.parametrize("path,over", edge_cases("E2"))
-def test_e2_a_malformed_part_refuses_and_posts_nothing(tmp_path, path, over):
-    # axis: every malformed shape refuses review-account-invalid naming its path, before any comment is posted
-    refused(tmp_path, path, over)
-
-
-@pytest.mark.parametrize("path,over", edge_cases("E3"))
-def test_e3_a_bool_where_an_int_is_required_is_refused(tmp_path, path, over):
-    # axis: True and False are not ints
-    refused(tmp_path, path, over)
-
-
-@pytest.mark.parametrize("path,over", edge_cases("E4"))
-def test_e4_an_exit_code_goes_with_status_ran_only(tmp_path, path, over):
-    # axis: an int exit code on a run that did not finish, or none on a run that did, is refused
-    refused(tmp_path, path, over)
-
-
-@pytest.mark.parametrize("path,over", edge_cases("E5"))
-def test_e5_a_rerun_check_with_one_or_three_runs_is_refused(tmp_path, path, over):
-    # axis: the runs are the first failure and the one re-run, exactly two
-    refused(tmp_path, path, over)
-
-
-@pytest.mark.parametrize("path,over", edge_cases("E6"))
-def test_e6_the_sweep_id_goes_with_a_sweep_and_hits_are_not_empty(tmp_path, path, over):
-    # axis: a sweep entry needs its sweep id, a reviewer entry must have none, and hits are non-empty
-    refused(tmp_path, path, over)
-
-
-@pytest.mark.parametrize("path,over", edge_cases("E7"))
-def test_e7_unread_is_within_countable_and_ranges_are_real(tmp_path, path, over):
-    # axis: unreadLines <= countableLines, and every range is 1 <= start <= end
-    refused(tmp_path, path, over)
-
-
-@pytest.mark.parametrize("path,over", edge_cases("E8"))
-def test_e8_a_repeat_without_a_finding_key_is_refused(tmp_path, path, over):
-    # axis: findingKey is required and non-blank
-    refused(tmp_path, path, over)
 
 
 def test_a_well_formed_part_of_each_kind_is_accepted(tmp_path):

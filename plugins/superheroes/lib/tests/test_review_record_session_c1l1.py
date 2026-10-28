@@ -125,6 +125,17 @@ def test_e5_only_a_recorded_synthesis_row_with_an_int_round_counts(tmp_path):
     assert "synthesisRounds" not in _account(bare.save())
 
 
+def test_a_synthesis_seat_recorded_missing_is_not_a_synthesis_round(tmp_path):
+    # axis: a record-missing synthesis row (outcome "recorded") is no result; record-result and a row with no cmd count — see bite-proof record c1l1_wo_b_session_seam
+    missing = Session(tmp_path).seat("code-reviewer")
+    missing.rows.append(dict(SYNTHESIS, round=1, cmd="record-missing"))
+    assert "synthesisRounds" not in _account(missing.save())
+    both = Session(_sub(tmp_path, "b")).seat("code-reviewer")
+    both.rows += [dict(SYNTHESIS, round=1, cmd="record-missing"), dict(SYNTHESIS, round=2, cmd="record-result"),
+                  {k: v for k, v in dict(SYNTHESIS, round=3).items() if k != "cmd"}]
+    assert _account(both.save())["synthesisRounds"] == [2, 3]
+
+
 def test_the_round_parts_the_state_holds_reach_the_account_as_they_are(tmp_path):
     # axis: extraAudit, outsideThisPR and unreadShare are carried as the state holds them, the writer validates them
     outside = [{"source": {"kind": "reviewer", "name": "code-reviewer", "sweepId": None},

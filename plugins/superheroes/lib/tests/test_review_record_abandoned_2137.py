@@ -12,12 +12,14 @@ if _HERE not in sys.path:
 
 import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
+import round_phases  # noqa: E402
 
 from test_review_record_session import (  # noqa: E402
     CODEX, EARLIER, GOOD_RUN, HEAD, KEY, Fake, Session, extras, ledger_row, put_envelope, put_extras, raw_comments,
 )
 
 REASON = "owner stopped the loop"
+PANEL, GAPSWEEP, SCOPED = round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED
 ABANDONED_LINE = "session abandoned: the review loop was closed before it ended, so this record cannot read reviewed"
 CHECKED_ABANDONED = "the review loop was abandoned before it ended: " + REASON
 CHECKED_UNFOLDED = "findings in seat results that were recorded but never folded are listed as open findings"
@@ -150,11 +152,20 @@ def test_findings_in_a_seat_result_never_folded_reach_the_record_through_its_raw
     assert CHECKED_UNFOLDED in rec["checked"]
 
 
-def _abandoned_titles(tmp_path, rounds, raised):
-    session = Session(tmp_path, terminal=None, rounds=rounds).seat("code-reviewer").save()
-    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": raised}})
+def _abandoned_slots(tmp_path, rounds, slots):
+    """The (title, line) of each open row an abandoned session lists; `slots` is [(seat, phase, round, findings)]."""
+    s = Session(tmp_path, terminal=None, rounds=rounds)
+    for seat, phase, rnd, _ in slots:
+        s.seat(seat, phase=phase, rnd=rnd)
+    session = s.save()
+    for seat, phase, rnd, raised in slots:
+        put_envelope(session, seat, {"vendor": "codex", "model": CODEX, "payload": {"findings": raised}}, phase=phase, rnd=rnd)
     account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
     return [(f["title"], f["line"]) for f in account["findings"]]
+
+
+def _abandoned_titles(tmp_path, rounds, raised):
+    return _abandoned_slots(tmp_path, rounds, [("code-reviewer", PANEL, 1, raised)])
 
 
 def test_a_same_titled_finding_at_another_line_survives_a_compile_drop_in_an_abandoned_session(tmp_path):
@@ -166,13 +177,48 @@ def test_a_same_titled_finding_at_another_line_survives_a_compile_drop_in_an_aba
     assert got == [("Same title", 20)]
 
 
+PASSED_RUN = {"title": "Break it", "file": "tests/test_x.py", "outcome": "passed", "findingKey": None}
+PROPOSAL = {"title": "Break it", "file": "tests/test_x.py", "line": 1, "severity": "Important", "consequence": "c",
+            "taxonomy": "break-it-test"}
+SAME_PLACE = {"title": "Break it", "file": "tests/test_x.py", "line": 9, "severity": "Important", "consequence": "c"}
+
+
 def test_a_passing_break_it_proposal_is_not_recovered_as_an_open_finding_in_an_abandoned_session(tmp_path):
-    """axis: a proposal whose break-it test passed was dropped before compile and is not listed open on abandonment."""
-    run = {"title": "Break it", "file": "tests/test_x.py", "outcome": "passed", "findingKey": None}
-    got = _abandoned_titles(tmp_path, {"1": {"breakItRuns": [run]}}, [
-        {"title": "Break it", "file": "tests/test_x.py", "line": 1, "severity": "Important", "consequence": "c"},
-        {"title": "Real defect", "file": "a.py", "line": 4, "severity": "Important", "consequence": "c"}])
+    """axis: a test-role panel proposal whose break-it test passed was dropped before compile and is not listed open on
+    abandonment."""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [("test-role", PANEL, 1, [
+        PROPOSAL, {"title": "Real defect", "file": "a.py", "line": 4, "severity": "Important", "consequence": "c"}])])
     assert got == [("Real defect", 4)]
+
+
+def test_a_gap_sweep_finding_sharing_a_passed_proposals_title_and_file_is_listed_open(tmp_path):
+    """axis: the passed-proposal skip settles only the test role's panel proposal; a gap-sweep finding of the same title
+    and file at another line stays open — see bite-proof record c1l1_wo_b_session_seam"""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [
+        ("test-role", PANEL, 1, [PROPOSAL]), ("gap-sweep", GAPSWEEP, 1, [SAME_PLACE])])
+    assert got == [("Break it", 9)]
+
+
+def test_a_code_reviewer_finding_sharing_a_passed_proposals_title_and_file_is_listed_open(tmp_path):
+    """axis: a code-reviewer panel finding of the same title and file as a passed proposal stays open."""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [
+        ("test-role", PANEL, 1, [PROPOSAL]), ("code-reviewer", PANEL, 1, [SAME_PLACE])])
+    assert got == [("Break it", 9)]
+
+
+@pytest.mark.parametrize("seat,phase,rnd,raised,why", [
+    ("test-role", PANEL, 1, dict(PROPOSAL, taxonomy="other"), "E1 a test-role finding that is not a break-it proposal"),
+    ("test-role", PANEL, 1, {k: v for k, v in PROPOSAL.items() if k != "taxonomy"}, "E1 a test-role finding with no taxonomy"),
+    ("code-reviewer", PANEL, 1, PROPOSAL, "E2 a break-it proposal from another seat"),
+    ("test-role", GAPSWEEP, 1, PROPOSAL, "E3 a break-it proposal from the test role in a gap-sweep slot"),
+    ("test-role", SCOPED, 1, PROPOSAL, "E3 a break-it proposal from the test role in a scoped-finder slot"),
+    ("test-role", PANEL, 2, PROPOSAL, "E4 a passing run recorded for another round"),
+])
+def test_a_finding_the_passed_rule_does_not_cover_is_listed_open(tmp_path, seat, phase, rnd, raised, why):
+    """axis: the passed-proposal skip needs the panel phase, the test-role seat, the break-it taxonomy and a passing run
+    of the same round, title and file — see bite-proof record c1l1_wo_b_session_seam"""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [(seat, phase, rnd, [raised])])
+    assert got == [("Break it", 1)], why
 
 
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):

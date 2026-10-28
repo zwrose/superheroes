@@ -28,6 +28,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import audits as audits_mod  # noqa: E402
+import break_it  # noqa: E402
 import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
@@ -567,9 +568,10 @@ def _rerun_checks(rounds):
 
 
 def _synthesis_rounds(rows):
-    """The sorted distinct rounds in which the synthesis step recorded a result."""
+    """The sorted distinct rounds in which the synthesis step recorded a result; a seat recorded missing is no result."""
+    # axis: a record-missing synthesis row is no result and adds no round — see bite-proof record c1l1_wo_b_session_seam
     return sorted({r["round"] for r in rows if r.get("outcome") == "recorded" and r.get("phase") == round_phases.P_SYNTHESIS
-                   and _int(r.get("round"))})
+                   and r.get("cmd") != "record-missing" and _int(r.get("round"))})
 
 
 def _line_key(value):
@@ -595,7 +597,8 @@ def _unfolded(session_dir, rows, rounds, findings):
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
-    stays), and a break-it proposal whose test passed (the intercept dropped it before compile) add nothing."""
+    stays), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
+    own panel proposal is settled that way) add nothing."""
     listed = {f["findingKey"] for f in findings}
     dropped = {(d["round"], d["title"], d["file"], _line_key(d["line"])) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
@@ -613,8 +616,10 @@ def _unfolded(session_dir, rows, rounds, findings):
             fkey = sc.finding_identity_key(f)
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
             # axis: a break-it proposal whose test passed was dropped before compile and is no defect — see bite-proof record c1l1_wo_b_session_seam
-            if fkey in listed or (rnd, f["title"], f.get("file"), _line_key(f.get("line"))) in dropped \
-                    or (rnd, f["title"], f.get("file")) in passed:
+            # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
+            settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
+                and (rnd, f["title"], f.get("file")) in passed
+            if fkey in listed or (rnd, f["title"], f.get("file"), _line_key(f.get("line"))) in dropped or settled:
                 continue
             listed.add(fkey)
             fid = f.get("id")
