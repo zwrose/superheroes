@@ -196,10 +196,48 @@ No new findings. Clean.
 #### Citation check
 []
 
+## After rulings 2
+
+Ruling: the stall menu is retired (Canon 2026-10-28-5692f27d-3). Reviewed spec: commit 6d3053740,
+changed parts only.
+
+### Round 1
+
+#### Gap check
+- Run directory: scratchpad checks/ra2/run-gap
+- Result: real
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| GAP-R2-1 | gap | The board still shows the stall menu, and panel 4's extra audit names only round 4's fixes | craft | Board redrawn to version 5: panel 3 shows recovery then early handback, panel 4 audits "the last round's fixes", panel 8 lists the stall menu as gone, panel 9 carries the revisit checks and the core-first order (Canon 2026-10-05-3dbeb858-35) | fixed |
+| GAP-R2-2 | gap | Recovery after a second failure in round 4 would need a fifth round | craft | FR-35 acceptance: with failures in rounds 3 and 4, no recovery runs and the session hands back at the cap (framing: the breaker stays inside the cap) | fixed |
+
+#### Source check
+- Run directory: scratchpad checks/ra2/run-source
+- Result: real
+- Approved board, for the source check: board/build-board.html (version 4 as approved; version 5 redraw)
+- Confirmations: SRC-16 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SRC-17 | source | Same as GAP-R2-1 | craft | Same fix as GAP-R2-1 | fixed |
+
+#### Grounding check
+- Run directory: scratchpad checks/ra2/run-grounding
+- Result: real
+- Grounding base, for grounding: origin/main, 98a859f0aa7b3b3891d4ddb8b60f76ba073b3e45
+- Confirmations: none owed
+
+No new findings. Clean.
+
+#### Citation check
+[]
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
 - GAP-9 and SRC-15: the revisit conditions, fixed as FR-54 after round 4; confirmed fixed in
   after-rulings round 1, so they leave the queue.
 
-Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat (Canon 2026-10-28-5692f27d-2, FR-21).; the stall menu is retired (Canon 2026-10-28-5692f27d-3, FR-35).
+Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat (Canon 2026-10-28-5692f27d-2, FR-21); the stall menu is retired (Canon 2026-10-28-5692f27d-3, FR-35).

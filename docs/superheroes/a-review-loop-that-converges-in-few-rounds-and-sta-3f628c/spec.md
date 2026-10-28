@@ -18,8 +18,9 @@ updated: "2026-10-27"
 Every statement ends with its source in plain text. The sources are:
 
 - **board · panel N**: the approved build board, saved in `board/` beside this spec, at
-  https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8, version 4, approved by the owner on
-  2026-10-27.
+  https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8. The owner approved version 4 on 2026-10-27.
+  Version 5 redraws panels 3, 4, 8 and 9 for the rulings of 2026-10-28 and goes to the owner on
+  the final sheet.
 - **Canon <entry id>**: an owner ruling recorded in the project's Canon.
 - **framing**: the framing the owner approved on 2026-10-26.
 - **assessment**: the post-0.43 review-loop assessment the owner read and commented on,
@@ -272,6 +273,9 @@ does at the cap (FR-38 to FR-43). (source: Canon 2026-10-28-5692f27d-3)
   - *Acceptance (Given-When-Then):* Given a fix that fails its audit in rounds 2 and 3 and again
     after the recovery attempt, when that happens, then the session ends and the advisor chooses
     the next step at the vet, as at the cap. (source: Canon 2026-10-28-5692f27d-3)
+  - *Acceptance (Given-When-Then):* Given a fix that fails its audit in rounds 3 and 4, when round 4
+    ends, then no recovery attempt runs and the session hands back at the cap. (source: framing;
+    Canon 2026-10-28-5692f27d-3)
 
 ### How a session stops
 
@@ -457,7 +461,7 @@ then that review shall finish under the old rules. (source: framing; craft, for 
 ## UI / UX
 
 The approved build board is the design: `board/build-board.html` beside this spec, at
-https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 4). Panel 1 covers round 1, panels 2
+https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 5). Panel 1 covers round 1, panels 2
 and 3 the fixes and later rounds, panel 4 how a session stops, panel 5 handback, panel 6 failures,
 panel 7 the review record, and panel 8 what is removed. (source: board · panel 1 to 9)
 
