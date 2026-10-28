@@ -1614,6 +1614,28 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
         _release_lock(lock_path)
 
 
+def _reserve_read_back(repo_root, launch_id, written, env):
+    """Classify a reserve whose append reported failure: landed, not-landed or uncertain.
+
+    A line is `landed` only when it reads back equal to what was written; a torn,
+    corrupt or unreadable ledger, or a differing record under this id, is `uncertain`.
+    """
+    read_result = read(repo_root, env=env)
+    state = read_result.get("state")
+    if state not in ("ok", "missing"):
+        return "uncertain"
+    mine = [
+        r for r in read_result.get("records") or []
+        if isinstance(r, dict) and r.get("launchId") == launch_id
+    ]
+    if not mine:
+        return "not-landed"
+    expected = json.loads(json.dumps(written, separators=(",", ":")))
+    if state == "ok" and any(r == expected for r in mine):
+        return "landed"
+    return "uncertain"
+
+
 def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Reserve a launch under lock with overlap detection."""
     if not isinstance(record, dict):
@@ -1709,7 +1731,16 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                 "path": None,
             }
         if not append(repo_root, to_write, env=env):
-            return {"ok": False, "reason": "ledger-append-failed", "path": None}
+            # A visible record is not proof it is durable: a failed append stays a failure
+            # even when the line reads back. The read-back, taken under the lock so a
+            # concurrent writer cannot interleave, only tells the caller whether to
+            # settle a landed record or clean up after a line that never landed.
+            return {
+                "ok": False,
+                "reason": "ledger-append-failed",
+                "path": None,
+                "appendReadBack": _reserve_read_back(repo_root, launch_id, to_write, env),
+            }
         return {
             "ok": True,
             "reason": None,
