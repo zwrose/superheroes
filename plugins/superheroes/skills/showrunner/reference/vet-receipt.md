@@ -102,6 +102,11 @@ shape is wrong and the thinking wins.
    guard you live-fired, the refusal you provoked. Confirm every **probe residue was reverted**. A
    probe that found nothing is still a probe — record it, including the ones whose premise turned out
    to be yours rather than the code's.
+   **The PR's self-claims are checked against the diff, unconditionally.** On every full or light
+   vet, read the PR body's claims against the diff and the artifacts by hand — the DoD table's `done`
+   rows, the degradations it states, and every receipt or test run it claims — whether or not a
+   review seat ran. The auto-fix loop does not run review-code's step 8 honesty check, so this read
+   is the only one. The receipt says what was read and names any claim the artifacts do not support.
 3. **Calls accepted, with reasons.** Every builder judgment call you are letting stand, each with
    why. Silence here reads as *not noticed*, not as *endorsed*.
 4. **What the owner still carries that the owner half does not say.** The **principle check**, asked
