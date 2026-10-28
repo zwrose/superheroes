@@ -1614,6 +1614,28 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
         _release_lock(lock_path)
 
 
+def _reserve_read_back(repo_root, launch_id, written, env):
+    """Classify a reserve whose append reported failure: landed, not-landed or uncertain.
+
+    A line is `landed` only when it reads back equal to what was written; a torn,
+    corrupt or unreadable ledger, or a differing record under this id, is `uncertain`.
+    """
+    read_result = read(repo_root, env=env)
+    state = read_result.get("state")
+    if state not in ("ok", "missing"):
+        return "uncertain"
+    mine = [
+        r for r in read_result.get("records") or []
+        if isinstance(r, dict) and r.get("launchId") == launch_id
+    ]
+    if not mine:
+        return "not-landed"
+    expected = json.loads(json.dumps(written, separators=(",", ":")))
+    if state == "ok" and any(r == expected for r in mine):
+        return "landed"
+    return "uncertain"
+
+
 def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Reserve a launch under lock with overlap detection."""
     if not isinstance(record, dict):
@@ -1708,14 +1730,27 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                 "reason": folded_with_new["reason"],
                 "path": None,
             }
-        if not append(repo_root, to_write, env=env):
-            return {"ok": False, "reason": "ledger-append-failed", "path": None}
-        return {
+        appended = append(repo_root, to_write, env=env)
+        read_back = None
+        if not appended:
+            # Read back under the lock: a concurrent writer could otherwise interleave.
+            read_back = _reserve_read_back(repo_root, launch_id, to_write, env)
+        if not appended and read_back != "landed":
+            return {
+                "ok": False,
+                "reason": "ledger-append-failed",
+                "path": None,
+                "appendReadBack": read_back,
+            }
+        result = {
             "ok": True,
             "reason": None,
             "path": lp["path"],
             "warnings": ["surface-overlap:%s" % lid for lid in overlapped],
         }
+        if read_back is not None:
+            result["appendReadBack"] = read_back
+        return result
     finally:
         _release_lock(lock_path)
 

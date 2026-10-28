@@ -22,6 +22,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
 
+- **After switching.** **Nothing is owed: a launch whose ledger append reports failure is now read back, so a line that did land is no longer treated as lost and a worktree is removed only when no live reservation can name it.** See [Launcher: a reservation whose append reports failure is read back](#launcher-a-reservation-whose-append-reports-failure-is-read-back).
+
 ### Specs: a new spec follows the doc policy
 
 - **Where a new work item lands.** With no existing `spec.md`, a confirmed doc policy now decides where a work item's definition-docs go: its in-repo location (for example `docs/superheroes/<work-item>/`). The calibration storage mode decides only when no policy is confirmed, as before. So a project whose calibration lives out of the repo but whose confirmed policy names an in-repo location now gets new specs in the repo, and its spec PR carries the spec. `resolve-write`, `path` and `dir` all follow it; a gitignored policy still passes the ignore check.
@@ -36,6 +38,13 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Anchors.** A `spec-section` anchor on a delivered spec resolves only when `definition_doc.py anchor-superseded --path <spec> --section <section>` answers `covered: false`; when it is covered, the issue anchors on the superseding ruling instead.
 - **New refusals.** `set_gate` (and `set-gate`) refuses a delivered spec with `delivered-spec-frozen`, every step of a re-approval cycle included. `lifecycle-check` exits 1 with its `errors` listed when a delivered spec lacks its date, receipt or `livesIn`, or an entry is malformed, predates delivery, or names a section the spec body does not contain; `anchor-superseded` exits 1 with `lifecycle-invalid` on a spec whose lifecycle fields do not validate; `mark-delivered` and `mark-superseded` refuse with `lifecycle-invalid`, `already-delivered` or `not-delivered` and write nothing.
 - **Existing specs.** A spec delivered before this release stays `approved` with no `delivered` field until its next touch; until then a reader still checks its Amendments log and the collector for later rulings.
+
+### Launcher: a reservation whose append reports failure is read back
+
+- **`appendReadBack`.** When the `reserved` append reports failure, `launch_ledger.reserve` reads the ledger back under its lock and the result carries `appendReadBack` (the key is absent when the append succeeded): `landed` returns `ok: True` and the launch continues as reserved; `not-landed` returns `ledger-append-failed` and the launcher cleans up as before, removing its worktree and deleting its own phones; `uncertain` (a torn, corrupt or unreadable read-back, or a record under this id that differs from what was written) returns `ledger-append-failed` and the launcher settles it with one terminal write. A failed `launch_build` carries `appendReadBack` with the settled value: `terminal` (the landed record is now ended) or `absent` (the line never landed), or `uncertain` when the settle itself could not read or write the ledger.
+- **A kept worktree.** Only when that one settle cannot read or write the ledger is the record's fate unknown. The worktree is then kept and the result carries `keptWorktree` (its path) and a `remedy` naming `launcher.py repair-lane --repo-root <repo root> --launch-id <launch id>`; once the lane is readable the worktree can be removed. `orphanedWorktree` still means a removal was tried and failed.
+- **The `iphone` key.** On a `ledger-append-failed` result, `recorded` reads `False` (with `deleted`) when the line did not land, `True` when the landed record was ended (the reap owns the phone, nothing is deleted), and `"uncertain"` only when the settle could not read or write the ledger. It no longer reads `"uncertain"` whenever the append reported failure.
+- **Pre-spawn refusals.** `_try_reserve_for_refusal` returns `reserved: True` for a `landed` read-back, so the refusal is ended as before. For an `uncertain` read-back, or a failure result with no `appendReadBack`, it makes the one terminal write itself and returns `reserved: False` with `appendReadBack` set to the settle's result (`terminal`, `absent` or `uncertain`).
 
 ## 0.46.2
 
