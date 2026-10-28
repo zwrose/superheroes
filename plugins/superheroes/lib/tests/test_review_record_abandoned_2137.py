@@ -177,6 +177,25 @@ def test_a_same_titled_finding_at_another_line_survives_a_compile_drop_in_an_aba
     assert got == [("Same title", 20)]
 
 
+def test_a_compile_drop_with_no_file_and_no_line_matches_its_finding_on_round_and_title_in_an_abandoned_session(tmp_path):
+    """axis: a drop whose file is not a string lost its line, so it is matched on round, title and file alone; a drop with a
+    string file stays line-exact — see bite-proof record c1l1_wo_b_session_seam"""
+    drop = {"title": "Same title", "file": None, "line": None, "reason": "no file to cite"}
+    got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+        {"title": "Same title", "file": None, "line": 7, "severity": "Important", "consequence": "c"},
+        {"title": "Same title", "file": "a.py", "line": 9, "severity": "Important", "consequence": "c"}])
+    assert got == [("Same title", 9)]
+
+
+def test_a_compile_drop_with_a_string_file_and_no_line_matches_only_a_finding_with_no_line(tmp_path):
+    """axis: a string-file drop with a null line is still matched line-exact (null against null only) — see bite-proof record c1l1_wo_b_session_seam"""
+    drop = {"title": "Same title", "file": "a.py", "line": None, "reason": "no line to cite"}
+    got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+        {"title": "Same title", "file": "a.py", "line": None, "severity": "Important", "consequence": "c"},
+        {"title": "Same title", "file": "a.py", "line": 7, "severity": "Important", "consequence": "c"}])
+    assert got == [("Same title", 7)]
+
+
 PASSED_RUN = {"title": "Break it", "file": "tests/test_x.py", "outcome": "passed", "findingKey": None}
 PROPOSAL = {"title": "Break it", "file": "tests/test_x.py", "line": 1, "severity": "Important", "consequence": "c",
             "taxonomy": "break-it-test"}

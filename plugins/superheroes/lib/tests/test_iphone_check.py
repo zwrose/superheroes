@@ -1019,7 +1019,9 @@ class Phone:
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def reading(self):
-        r = reading(takenAt=math.ceil(time.time() * 1000), **self.extra)  # rounded up: never below the call-start `shot` races
+        # Unrounded: never below the call-start `shot` races, and a reading built before a call began stays below its start
+        # (rounded up, a reading of the old page built in the same millisecond as a page switch passed as fresh)
+        r = reading(takenAt=time.time() * 1000, **self.extra)
         r["page"], r["where"] = self.page, self.where
         return {k: v for k, v in r.items() if v is not MISSING}
 
