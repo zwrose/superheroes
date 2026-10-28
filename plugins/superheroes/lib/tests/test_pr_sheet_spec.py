@@ -336,3 +336,12 @@ def test_a_same_family_checks_seat_is_marked_not_independent(world):
     part = build(world)["prSheet"]
     assert part["whatChanged"]["reviewers"][0]["notIndependent"] is True
     assert WORDS["historyNotIndependent"].replace("{name}", WORDS["specChecksReviewer"]) in " ".join(part["history"])
+
+
+def test_a_folder_named_like_a_body_is_not_read_as_an_unpinned_body(world):
+    # Axis: the home scan skips a folder whose name ends in .md, so a fully pinned body nested inside one still builds.
+    base, folder, _ = world
+    (folder / "children" / "group.md").mkdir()
+    (folder / "children" / "group.md" / "C1.md").write_text("A nested child body.\n", encoding="utf-8")
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[*PINNED, "children/group.md/C1.md"]), encoding="utf-8")
+    assert len(bullets(build(world))) == len(PINNED) + 1

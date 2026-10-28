@@ -994,7 +994,8 @@ def _spec_record(spec, number, words, base, problems):
     # bite-axis: any .md in the body home, or beside a pinned file in its subfolder, that the vet does not pin makes the record stale.
     scanned = {f for d in _BODY_HOME for f in (home / d).rglob("*.md")} | {f for f in [home / _EPIC_BODY] if f.is_file() or f.is_symlink()}
     scanned |= {f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md")}
-    for unpinned in sorted(f for f in scanned if _resolved(f) not in held):
+    # A folder whose name ends in .md is not a body; a link stays a candidate, so a broken or looping one still refuses.
+    for unpinned in sorted(f for f in scanned if (f.is_symlink() or not f.is_dir()) and _resolved(f) not in held):
         where = "sits in the breakdown's body home" if _in_body_home(unpinned.relative_to(home)) else "sits beside the pinned bodies"
         problems.append(f"{unpinned.relative_to(home)} {where} but the newest vet record does not pin it: the breakdown needs a new vet")
     if [p for p, _ in newest["pins"]] != list(dict.fromkeys(p for p, _ in newest["pins"])):
