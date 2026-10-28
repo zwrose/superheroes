@@ -607,7 +607,36 @@ def _passed_break_it(rounds):
     return out
 
 
-def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None):
+def _audit_candidates(payload):
+    """The new-issue candidates a stored fix-audit result claims: only a `discharged-but-new-issue` ruling carries them."""
+    if not (isinstance(payload, dict) and payload.get("ruling") == "discharged-but-new-issue"):
+        return []
+    raised = payload.get("newIssues")
+    return [c for c in raised if isinstance(c, dict)] if isinstance(raised, list) else []
+
+
+def _raised_reports(session_dir, rows, pending, pending_round):
+    """``[(phase, round, seat, [finding])]``: each stored reviewer report, the stored fix-audit results' new-issue
+    candidates, and the candidates an audit fold left pending in the state (`_newIssues`, folded only by the scoped step)."""
+    out = []
+    for key, (att, _) in _slots(rows).items():
+        phase, rnd, seat, _ = key
+        if phase not in _RAW_PHASES and phase != round_phases.P_AUDITS:
+            continue
+        env = _envelope(_path(session_dir, key, att))
+        payload = env.get("payload") if isinstance(env, dict) else None
+        if phase == round_phases.P_AUDITS:
+            out.append((phase, rnd, seat, _audit_candidates(payload)))
+            continue
+        raised = payload.get("findings") if isinstance(payload, dict) else None
+        out.append((phase, rnd, seat, raised if isinstance(raised, list) else []))
+    if isinstance(pending, list) and pending:
+        out.append((round_phases.P_AUDITS, pending_round, "auditor", [c for c in pending if isinstance(c, dict)]))
+    return out
+
+
+def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None, pending=None,
+              pending_round=None):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
@@ -622,14 +651,8 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
     dropped = {(d["round"], d["title"], _file_key(d["file"]), _line_key(d["line"])) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
     out = []
-    for key, (att, _) in _slots(rows).items():
-        phase, rnd, seat, _ = key
-        if phase not in _RAW_PHASES:
-            continue
-        env = _envelope(_path(session_dir, key, att))
-        payload = env.get("payload") if isinstance(env, dict) else None
-        raised = payload.get("findings") if isinstance(payload, dict) else None
-        for f in raised if isinstance(raised, list) else []:
+    for phase, rnd, seat, raised in _raised_reports(session_dir, rows, pending, pending_round):
+        for f in raised:
             if not (isinstance(f, dict) and isinstance(f.get("title"), str) and f["title"].strip()):
                 continue
             fkey = sc.finding_identity_key(_normalized(f))
@@ -646,11 +669,12 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 # re-report would have reopened the ledger row): the defect came back, so the row reads open again
                 # the scoped finder is the one report phase that runs after a round's fix audit, so in the settling
                 # round itself only its report postdates the settlement; the one exception is a refutation, which the
-                # loop records after the scoped report is folded, so a same-round refuted row answers that report
+                # loop records after the scoped report is folded, so a same-round refuted row answers that report;
+                # so does a same-round owner skip (out-of-scope): only a fix audit's `fixed` is reopened by it
                 if isinstance(held, dict) and held.get("outcome") is not None and _int(rnd) \
                         and _int(settled_rounds.get(fkey)) \
                         and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey] and phase == round_phases.P_SCOPED
-                                                            and settled_kinds.get(fkey) != "refuted")):
+                                                            and settled_kinds.get(fkey) == "fixed")):
                     held.update({"outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
                 continue
             listed.add(fkey)
@@ -717,7 +741,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                           if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
         settled_kinds = {k: sc.resolve_merged_into_entry(r, by_key).get("disposition") for k, r in by_key.items()
                          if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
-        findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds)
+        pending = state.get("_newIssues")
+        findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds, pending,
+                              state.get("round") if _int(state.get("round")) else None)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
             reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []

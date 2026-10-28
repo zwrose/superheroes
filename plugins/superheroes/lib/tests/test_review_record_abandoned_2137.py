@@ -253,9 +253,9 @@ def test_a_same_round_scoped_report_refuted_after_its_fold_stays_refuted_in_an_a
     assert row["reason"] != rs.UNFOLDED_OPEN, row
 
 
-def test_a_same_round_scoped_report_after_an_out_of_scope_settlement_reopens_the_finding_in_an_abandoned_session(tmp_path):
-    """axis: only a refutation (recorded after the scoped report is folded) is exempt from the same-round reopen; an
-    out-of-scope disposition entered before the scoped report is answered by it, so the row reads open again."""
+def test_a_same_round_scoped_report_followed_by_an_out_of_scope_skip_keeps_the_skip_in_an_abandoned_session(tmp_path):
+    """axis: only a fix audit's `fixed` is reopened by a same-round scoped report; an out-of-scope skip the owner
+    recorded after the scoped report was folded keeps its outcome and reason on abandonment."""
     parked = ledger_row(disposition="out-of-scope", outOfScopeReason="a later change")
     s = Session(tmp_path, terminal=None, dispositionLedger=[parked], rounds={"1": {}, "2": {}})
     session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
@@ -263,8 +263,35 @@ def test_a_same_round_scoped_report_after_an_out_of_scope_settlement_reopens_the
         {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}]}}, phase=SCOPED, rnd=2)
     account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
     (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
-    assert row["outcome"] is None, row
-    assert row["reason"] == rs.UNFOLDED_OPEN, row
+    assert row["outcome"] is not None, row
+    assert row["reason"] != rs.UNFOLDED_OPEN, row
+
+
+AUDIT = round_phases.P_AUDITS
+NEW_ISSUE = {"title": "Regression", "file": "b.py", "line": 8, "severity": "Important", "consequence": "c"}
+
+
+def test_a_stored_audit_new_issue_not_yet_folded_is_listed_open_in_an_abandoned_session(tmp_path):
+    """axis: a discharged-but-new-issue audit result stored but never folded reaches the abandoned account's open
+    findings."""
+    s = Session(tmp_path, terminal=None, rounds={"1": {}, "2": {}})
+    session = s.seat("auditor", phase=AUDIT, rnd=2).save()
+    put_envelope(session, "auditor", {"vendor": "codex", "model": CODEX, "payload": {
+        "id": "f-1", "ruling": "discharged-but-new-issue", "reason": "r", "newIssues": [NEW_ISSUE]}}, phase=AUDIT, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    assert [(f["title"], f["outcome"], f["reason"]) for f in account["findings"]] == [("Regression", None, rs.UNFOLDED_OPEN)]
+
+
+def test_pending_audit_new_issues_awaiting_the_scoped_fold_are_listed_open_in_an_abandoned_session(tmp_path):
+    """axis: an audit fold's pending `_newIssues` (reached only through the scoped fold) is listed open on abandonment,
+    and a compile-dropped one stays under refused."""
+    dropped = dict(NEW_ISSUE, title="Dropped", line=9)
+    s = Session(tmp_path, terminal=None, round=2, rounds={"1": {}, "2": {"compileDrops": [
+        {"title": "Dropped", "file": "b.py", "line": 9, "reason": "out of scope"}]}},
+        _newIssues=[NEW_ISSUE, dropped])
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    assert [(f["title"], f["outcome"]) for f in account["findings"]] == [("Regression", None)]
 
 
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):
