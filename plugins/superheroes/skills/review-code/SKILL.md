@@ -30,7 +30,7 @@ The specialist agents a panel may seat are bundled plugin agents (`architecture-
 **Two flags were removed and are not flags:** `--review-only` (one review pass, then a written presentation) and `--post` (posted a review pass to GitHub), because code review runs only as its one review-and-fix loop. Run this block first on every invocation, before Setup, with `REVIEW_CODE_ARGS` set to the invocation's arguments. The block reads the arguments with their quoting kept, so a word inside the value of `--focus` or `--result-file` is never read as a flag. It prints nothing and exits 0 unless a removed flag is passed as an argument of its own; when it exits non-zero, stop: do nothing else, do not start the loop.
 
 ```bash
-ARG=$(python3 -c '
+ARG=$(python3 -B -c '
 import shlex, sys
 text = sys.argv[1]
 try:
