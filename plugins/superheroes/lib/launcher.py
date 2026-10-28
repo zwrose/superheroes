@@ -125,7 +125,12 @@ _WORKTREE_COLLISION_REMEDY = (
     "`git worktree prune` when the directory is already gone), then relaunch."
 )
 
-_WORKHORSE_CMD = "/superheroes:workhorse"
+# One command per launchable charter, built from the ledger's charter set (ll.LAUNCH_CHARTERS).
+_CHARTER_COMMANDS = {charter: "/superheroes:%s" % charter for charter in ll.LAUNCH_CHARTERS}
+_WORKHORSE_CMD = _CHARTER_COMMANDS["workhorse"]
+_DETECTIVE_CMD = _CHARTER_COMMANDS["detective"]
+# The prompt line that names a detective dispatch's budget, right after the issue line.
+_BUDGET_LABEL = "Budget:"
 
 # A cloud launch runs the platform command once and reads the session's identity from what it
 # prints. The command needs a pseudo-terminal, so its output arrives wrapped in terminal control
@@ -1153,6 +1158,43 @@ def adopts_premise_reason(premise):
     return None
 
 
+def charter_premise_reason(premise):
+    """The refusal token for a premise's `charter` and `budget`, or None when they are sound.
+    `charter` names the charter the launch starts (absent means workhorse). A detective lane
+    carries its `budget`, one unpadded line; a workhorse lane carries none. Never raises."""
+    if not isinstance(premise, dict):
+        return None
+    # axis: charter is a string naming a launchable charter — anything else would pick no command, or the wrong one
+    if "charter" in premise and (
+        not isinstance(premise["charter"], str) or premise["charter"] not in ll.LAUNCH_CHARTERS
+    ):
+        return "premise-charter-invalid"
+    charter = premise.get("charter", "workhorse")
+    has_budget = "budget" in premise
+    # axis: a detective prompt is never composed without a budget — the diagnosis would run unbounded
+    if charter == "detective" and not has_budget:
+        return "premise-detective-budget-missing"
+    # axis: a budget on a workhorse lane would be dropped from the prompt, so it is refused rather than ignored
+    if has_budget and charter == "workhorse":
+        return "premise-budget-without-detective"
+    budget = premise["budget"] if has_budget else None
+    # axis: a budget is one unpadded non-blank line free of control characters — a break would let it open a second prompt line, and a NUL cannot cross the process boundary
+    if has_budget and (
+        not isinstance(budget, str)
+        or not budget.strip()
+        or budget != budget.strip()
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in budget)
+    ):
+        return "premise-budget-invalid"
+    # axis: a budget the process argument boundary cannot encode (a lone surrogate) is refused here, before any worktree or reservation
+    if has_budget:
+        try:
+            os.fsencode(budget)
+        except (UnicodeEncodeError, ValueError):
+            return "premise-budget-invalid"
+    return None
+
+
 def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=None):
     """Validate premise stamp per contract C7. Never raises.
 
@@ -1298,6 +1340,10 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not cloud_ready.valid_reported(premise["reportedCloud"]):
             return _fail("premise-reported-cloud-invalid")
 
+    charter_reason = charter_premise_reason(premise)
+    if charter_reason is not None:
+        return _fail(charter_reason)
+
     # axis: adoptsBranch names the pushed branch a successor launch adopts — a string in the branch-name shape, else the builder would be told to check out a name git reads as an option or a path — and adoptsHead, its pushed head, travels with it as a full lowercase sha, else the builder could not tell a moved branch from the one handed over — see bite-proof record adopt_branch
     adopts_reason = adopts_premise_reason(premise)
     if adopts_reason is not None:
@@ -1351,6 +1397,17 @@ def compose_launch(
     adopts_reason = adopts_premise_reason(premise)
     if adopts_reason is not None:
         return _fail(adopts_reason)
+    charter_reason = charter_premise_reason(premise)
+    if charter_reason is not None:
+        return _fail(charter_reason)
+    charter = premise.get("charter", "workhorse") if isinstance(premise, dict) else "workhorse"
+    # axis: a detective lane is never launched in the cloud — its charter carries no cloud intake step, so the receiving-side version and head checks would not run
+    if cloud and charter == "detective":
+        return _fail("compose-detective-cloud-unsupported")
+    cmd = _CHARTER_COMMANDS[charter]
+    issue_line = "Issue: #%s" % issue
+    if charter == "detective":
+        issue_line += "\n%s %s" % (_BUDGET_LABEL, premise["budget"])
     if isinstance(premise, dict) and "adoptsBranch" in premise:
         adopts = adopts_line(premise["adoptsBranch"], premise["adoptsHead"])
     version = None
@@ -1379,8 +1436,8 @@ def compose_launch(
         cloud_launch_line = doctrine.get("cloudLaunchLine")
         if not isinstance(cloud_launch_line, str) or not cloud_launch_line.strip():
             return _fail("compose-cloud-launch-line-absent")
-        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (
-            _WORKHORSE_CMD, issue, place_line, version_line, environment_line, base_line,
+        prompt = "%s\n\n%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (
+            cmd, issue_line, place_line, version_line, environment_line, base_line,
             cloud_launch_line, rulings_block,
         )
     elif adopts is not None:
@@ -1388,12 +1445,12 @@ def compose_launch(
         if not isinstance(local_base, str) or not local_base.strip():
             return _fail("premise-missing-field:baseCommit")
         # A local adopt launch never reaches cloud intake, so its base keeps the non-empty check.
-        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n\n%s" % (
-            _WORKHORSE_CMD, issue, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
+        prompt = "%s\n\n%s\n\n%s\n%s\n\n%s" % (
+            cmd, issue_line, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
             rulings_block,
         )
     else:
-        prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
+        prompt = "%s\n\n%s\n\n%s" % (cmd, issue_line, rulings_block)
     if own_line not in prompt:
         return _fail("compose-ruling-zero-absent")
 
@@ -1441,6 +1498,7 @@ def compose_launch(
         "effort": effort_result["effort"],
         "effortSource": effort_result["source"],
         "doctrine": doctrine,
+        "charter": charter,
     }
     if cloud:
         composed["place"] = PLACE_CLOUD
@@ -3317,6 +3375,7 @@ def _reserved_record(
         # what a reader needs to tell an unpinned lane from one pinned to the same value.
         "effort": compose_result["effort"] or "",
         "effortSource": compose_result["effortSource"],
+        "charter": compose_result["charter"],
     }
     if cloud:
         reserved["place"] = PLACE_CLOUD
@@ -4024,6 +4083,10 @@ def _try_reserve_for_refusal(
         "effort": effort_token,
         "effortSource": effort_source,
     }
+    # An invalid charter value is left off, so the accounting record still folds.
+    refused_charter = premise.get("charter", "workhorse")
+    if isinstance(refused_charter, str) and refused_charter in ll.LAUNCH_CHARTERS:
+        reserved["charter"] = refused_charter
     if slot is not None:
         reserved["slot"] = slot
     if generation is not None:
