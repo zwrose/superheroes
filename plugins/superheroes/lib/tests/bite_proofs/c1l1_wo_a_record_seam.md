@@ -1,7 +1,8 @@
 # C1 L1 WO-A bite-proof record: the review record writer's new optional parts
 
 Thirteen entries: the twelve guarded elements the order declared (BP1-BP12) and one the order named as a detector but
-left out of its set (BP13, the claim-check exclusion). None is grouped. Every red and green below is the raw output of
+left out of its set (BP13, the claim-check exclusion). WO-A2 adds four more at the end (BP11b, BP12b, BP12c, BP14).
+None is grouped. Every red and green below is the raw output of
 the single test node run alone (`scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "<node>" -q`,
 run from the worktree root); nothing is filtered. Each neutralization was one targeted `Edit` to
 `plugins/superheroes/lib/review_record.py`, restored by the inverse `Edit` (the restored line is quoted back in each
@@ -16,10 +17,10 @@ What the reds do and do not show, stated once:
   malformed shapes of that element, so the red names the first shape the table lists; the other shapes are not each
   neutralized on their own. The same shapes also run one by one in the `test_e2_` to `test_e8_` parametrized nodes.
 - BP11 neutralizes the computing half of the element (the tokens read). The second half (the trim steps never touch
-  `cost`) has a guarding assertion in `test_e12_the_trim_steps_keep_every_rows_cost` but was not neutralized: the test
-  budget of 40 commands ran out of room for a second pair. It is listed as unproven by neutralization.
-- BP12 neutralizes the record-JSON side (an absent key written as `null`). The summary side (no heading when absent) is
-  guarded by the same node but was not neutralized; it is listed as unproven by neutralization.
+  `cost`) was left unproven by WO-A and is proven in the WO-A2 entry BP11b at the end of this file.
+- BP12 neutralizes the record-JSON side (an absent key written as `null`). The summary side (no heading when absent)
+  was left unproven by WO-A and is proven in the WO-A2 entries BP12b and BP12c at the end of this file.
+- WO-A2 adds BP11b, BP12b, BP12c and BP14 (the findings block's dict filter, a guard added by the first rework).
 - The order's guarded-element set omitted the claim-check exclusion although the order names it as a detector it adds;
   BP13 is that element, run the same way.
 
@@ -758,4 +759,294 @@ Green:
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
 1 passed in 1.72s
+```
+
+# WO-A2 additions
+
+The four entries below were added by the first rework (order `c1l1-wo-a2-writer-fix`). Same method as above: one
+targeted `Edit` to `plugins/superheroes/lib/review_record.py`, the single node run alone, the inverse `Edit`, the
+restored lines quoted, the node run again. The captures are unredacted: they hold no secret, token or private URL.
+
+## BP11b. The trim steps never touch `cost` (the half BP11 left unproven)
+
+- Axis: neither reviewer trim step (`_shed_observation`, `_shed_run_dir`) removes a row's `cost`.
+- Neutralization (`_shed_observation`): `rows = [dict(v, observation={k: v["observation"][k] for k in _KEPT_OBSERVATION if k in v["observation"]})` became `rows = [{**{k: x for k, x in v.items() if k != "cost"}, "observation": {k: v["observation"][k] for k in _KEPT_OBSERVATION if k in v["observation"]}}`, so each row it rebuilds loses `cost`.
+- Node: `test_e12_the_trim_steps_keep_every_rows_cost` (already asserted this; no assertion was added).
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_e12_the_trim_steps_keep_every_rows_cost _________________
+
+    def test_e12_the_trim_steps_keep_every_rows_cost():
+        # axis: neither reviewer trim step removes cost, called directly or through render_plan — see bite-proof record c1l1_wo_a_record_seam
+        record = build(*big_record_inputs(3))
+        want = costs(record)
+        assert want == [{"tokens": 100, "minutes": 2.0}] * 3
+>       assert costs(rr._shed_observation(record)) == want
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py:536: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+record = {'schema': 'review-record/1', 'pr': 7, 'sessionId': 's1', 'lane': {'value': 'full', 'source': 'reported by the session', 'reason': 'big'}, ...}
+
+    def costs(record):
+>       return [row["cost"] for row in record["reviewers"]]
+                ^^^^^^^^^^^
+E       KeyError: 'cost'
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py:490: KeyError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py::test_e12_the_trim_steps_keep_every_rows_cost
+1 failed in 2.18s
+```
+
+Restore: the inverse edit. Restored line quoted back (`grep -n` of the line, line number included):
+
+```
+1582:    rows = [dict(v, observation={k: v["observation"][k] for k in _KEPT_OBSERVATION if k in v["observation"]})
+```
+
+Green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 5.38s
+```
+
+Not neutralized: `_shed_run_dir` (the second trim step) on its own; the node asserts it too (`costs(rr._shed_run_dir(record)) == want`) but only `_shed_observation` was neutralized here. The class is the same failure mode (a trim step rebuilds a row without `cost`).
+
+## BP12b. No outside-list heading for an empty or absent list (summary side)
+
+- Axis: the `Outside this PR` heading renders only when the list holds at least one hit.
+- Neutralization (`_outside_lines`): `if not total:` became `if False:`. A first attempt with only that edit crashed in the `for x in outside:` loop on an absent list (`TypeError: 'NoneType' object is not iterable`), which proves a crash and not the heading; so the loop was also changed to `for x in outside or []:` for the red below.
+- Node: `test_dod_an_account_with_no_add_on_field_renders_nothing_of_them` (already asserted this; no assertion was added).
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_dod_an_account_with_no_add_on_field_renders_nothing_of_them _______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-33/test_dod_an_account_with_no_ad0')
+
+    def test_dod_an_account_with_no_add_on_field_renders_nothing_of_them(tmp_path):
+        # axis: absent add-on parts leave no heading and no JSON key — see bite-proof record c1l1_wo_a_record_seam
+        record = build(account(findings=[finding("F-1")], rounds=ROUNDS))
+        summary = rr._summary(record, 0)
+        for text in ("Outside this PR", "kind of mistake", "Left unread", "Re-run after", "Extra audit round"):
+>           assert text not in summary, text
+E           AssertionError: Outside this PR
+E           assert 'Outside this PR' not in '**Review re... at the vet.'
+E             
+E             'Outside this PR' is contained here:
+E               r · fixed
+E               Outside this PR (0)
+E               For the advisor to sort at the vet.
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py:401: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py::test_dod_an_account_with_no_add_on_field_renders_nothing_of_them
+1 failed in 1.71s
+```
+
+Restore: both inverse edits. Restored lines quoted back (the green for BP12b and BP12c is the one run after both restores, below BP12c):
+
+```
+def _outside_lines(outside, compact):
+    total = sum(len(x["hits"]) for x in outside or [])
+    if not total:
+        return []
+    if compact:
+        return [f"Outside this PR ({total}) {LISTED}."]
+    lines = [f"Outside this PR ({total})"]
+    for x in outside:
+```
+
+The empty-list case (`outsideThisPR: []`) is covered by the same neutralization (`total` is 0 either way) and asserted in `test_e14_an_empty_outside_list_is_valid_and_renders_no_heading`; that node was not run on its own against this neutralization.
+
+## BP12c. No unread-share line for an absent share (summary side)
+
+- Axis: the `Left unread by the slice reviewers` line renders only when the record carries an `unreadShare` object.
+- Neutralization (`_unread_line`): `return None` (in the `if not isinstance(share, dict):` branch) became `share = {"unreadLines": 0, "countableLines": 0}`. The outside-list neutralization of BP12b was already restored when this one was applied.
+- Node: `test_dod_an_account_with_no_add_on_field_renders_nothing_of_them`
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_dod_an_account_with_no_add_on_field_renders_nothing_of_them _______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-34/test_dod_an_account_with_no_ad0')
+
+    def test_dod_an_account_with_no_add_on_field_renders_nothing_of_them(tmp_path):
+        # axis: absent add-on parts leave no heading and no JSON key — see bite-proof record c1l1_wo_a_record_seam
+        record = build(account(findings=[finding("F-1")], rounds=ROUNDS))
+        summary = rr._summary(record, 0)
+        for text in ("Outside this PR", "kind of mistake", "Left unread", "Re-run after", "Extra audit round"):
+>           assert text not in summary, text
+E           AssertionError: Left unread
+E           assert 'Left unread' not in '**Review re...table lines.'
+E             
+E             'Left unread' is contained here:
+E               r · fixed
+E               Left unread by the slice reviewers: 0 of 0 countable lines.
+E             ? +++++++++++
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py:401: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_seam_c1l1.py::test_dod_an_account_with_no_add_on_field_renders_nothing_of_them
+1 failed in 1.69s
+```
+
+Restore: the inverse edit. Restored lines quoted back:
+
+```
+def _unread_line(share):
+    if not isinstance(share, dict):
+        return None
+    unread, countable = share["unreadLines"], share["countableLines"]
+```
+
+Green (after both the BP12b and BP12c restores):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 1.65s
+```
+
+## BP14. The findings block renders only the dict entries of a findings list
+
+- Axis: `_findings_lines` takes only dict entries, and returns nothing when `findings` is not a list or holds no dict.
+- Neutralization (`_findings_lines`): `entries = [f for f in findings if isinstance(f, dict)] if isinstance(findings, list) else []` became `entries = list(findings) if isinstance(findings, list) else []` (the dict filter removed; the list check kept).
+- Node: `plugins/superheroes/lib/tests/test_review_record.py::test_w10_a_malformed_earlier_findings_list_is_superseded_and_named` (this file predates the build; the node file differs from the other entries). It has five parameters; `{"a": 1}`, `"x"` and `None` are not lists, so the kept list check handles them and they pass under this neutralization. `[1]` and `[None]` hold no dict and are the two that go red. The mixed-dict-and-non-dict case (E2) is not asserted by any test node; only the all-non-dict lists are.
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+...FF                                                                    [100%]
+=================================== FAILURES ===================================
+___ test_w10_a_malformed_earlier_findings_list_is_superseded_and_named[bad3] ___
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_w10_a_malformed_earlier_f3')
+bad = [1]
+
+    @pytest.mark.parametrize("bad", [{"a": 1}, "x", None, [1], [None]])
+    def test_w10_a_malformed_earlier_findings_list_is_superseded_and_named(tmp_path, bad):
+        # axis: malformed prior; a findings field that is not a list of objects read as having no findings, or blocking every later write
+        fake = Fake()
+        rec = build(account())
+        rec["findings"] = bad
+>       fake.comments = [{"id": 1, "author": "a", "body": rr.render(rec), "url": "u1"}]
+                                                          ^^^^^^^^^^^^^^
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record.py:878: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:2133: in render
+    plan = render_plan(record)
+           ^^^^^^^^^^^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:2086: in render_plan
+    body = single(r)
+           ^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:2081: in single
+    return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
+                         ^^^^^^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:1949: in _summary
+    findings_lines = _findings_lines(r.get("findings"), compact)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:1840: in _findings_lines
+    return ["Findings:", *[_finding_bullet(f) for f in entries]]
+                           ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+f = 1
+
+    def _finding_bullet(f):
+        """One finding's bullet in the findings block; the parts the finding carries follow its outcome. A run's
+        output text is never in the summary."""
+>       bullet = (f"- {' '.join(str(x) for x in (f.get('id'), f.get('severity')) if x)} · "
+                                                 ^^^^^
+                  + _OUTCOME_WORDS.get(f.get("outcome"), "open"))
+E       AttributeError: 'int' object has no attribute 'get'
+
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:1813: AttributeError
+___ test_w10_a_malformed_earlier_findings_list_is_superseded_and_named[bad4] ___
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_w10_a_malformed_earlier_f4')
+bad = [None]
+
+    @pytest.mark.parametrize("bad", [{"a": 1}, "x", None, [1], [None]])
+    def test_w10_a_malformed_earlier_findings_list_is_superseded_and_named(tmp_path, bad):
+        # axis: malformed prior; a findings field that is not a list of objects read as having no findings, or blocking every later write
+        fake = Fake()
+        rec = build(account())
+        rec["findings"] = bad
+>       fake.comments = [{"id": 1, "author": "a", "body": rr.render(rec), "url": "u1"}]
+                                                          ^^^^^^^^^^^^^^
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record.py:878: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:2133: in render
+    plan = render_plan(record)
+           ^^^^^^^^^^^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:2086: in render_plan
+    body = single(r)
+           ^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:2081: in single
+    return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
+                         ^^^^^^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:1949: in _summary
+    findings_lines = _findings_lines(r.get("findings"), compact)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:1840: in _findings_lines
+    return ["Findings:", *[_finding_bullet(f) for f in entries]]
+                           ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+f = None
+
+    def _finding_bullet(f):
+        """One finding's bullet in the findings block; the parts the finding carries follow its outcome. A run's
+        output text is never in the summary."""
+>       bullet = (f"- {' '.join(str(x) for x in (f.get('id'), f.get('severity')) if x)} · "
+                                                 ^^^^^
+                  + _OUTCOME_WORDS.get(f.get("outcome"), "open"))
+E       AttributeError: 'NoneType' object has no attribute 'get'
+
+/home/user/wt/build/plugins/superheroes/lib/review_record.py:1813: AttributeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record.py::test_w10_a_malformed_earlier_findings_list_is_superseded_and_named[bad3]
+FAILED plugins/superheroes/lib/tests/test_review_record.py::test_w10_a_malformed_earlier_findings_list_is_superseded_and_named[bad4]
+2 failed, 3 passed in 2.19s
+```
+
+Restore: the inverse edit. Restored lines quoted back (`sed -n 1834,1840p`):
+
+```
+def _findings_lines(findings, compact):
+    entries = [f for f in findings if isinstance(f, dict)] if isinstance(findings, list) else []
+    if not entries:
+        return []
+    if compact:
+        return [f"Findings: {len(entries)} {LISTED}."]
+    return ["Findings:", *[_finding_bullet(f) for f in entries]]
+```
+
+Green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.....                                                                    [100%]
+5 passed in 1.56s
 ```

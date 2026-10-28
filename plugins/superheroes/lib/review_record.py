@@ -1832,11 +1832,12 @@ def _finding_bullet(f):
 
 
 def _findings_lines(findings, compact):
-    if not findings:
+    entries = [f for f in findings if isinstance(f, dict)] if isinstance(findings, list) else []
+    if not entries:
         return []
     if compact:
-        return [f"Findings: {len(findings)} {LISTED}."]
-    return ["Findings:", *[_finding_bullet(f) for f in findings]]
+        return [f"Findings: {len(entries)} {LISTED}."]
+    return ["Findings:", *[_finding_bullet(f) for f in entries]]
 
 
 def _outside_lines(outside, compact):
