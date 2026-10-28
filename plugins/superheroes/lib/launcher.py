@@ -125,10 +125,10 @@ _WORKTREE_COLLISION_REMEDY = (
     "`git worktree prune` when the directory is already gone), then relaunch."
 )
 
-_WORKHORSE_CMD = "/superheroes:workhorse"
-_DETECTIVE_CMD = "/superheroes:detective"
-# The keys are ll.LAUNCH_CHARTERS; a test holds the two equal.
-_CHARTER_COMMANDS = {"workhorse": _WORKHORSE_CMD, "detective": _DETECTIVE_CMD}
+# One command per launchable charter, built from the ledger's charter set (ll.LAUNCH_CHARTERS).
+_CHARTER_COMMANDS = {charter: "/superheroes:%s" % charter for charter in ll.LAUNCH_CHARTERS}
+_WORKHORSE_CMD = _CHARTER_COMMANDS["workhorse"]
+_DETECTIVE_CMD = _CHARTER_COMMANDS["detective"]
 # The prompt line that names a detective dispatch's budget, right after the issue line.
 _BUDGET_LABEL = "Budget:"
 
@@ -1398,7 +1398,7 @@ def compose_launch(
     # axis: a detective lane is never launched in the cloud — its charter carries no cloud intake step, so the receiving-side version and head checks would not run
     if cloud and charter == "detective":
         return _fail("compose-detective-cloud-unsupported")
-    cmd =_CHARTER_COMMANDS[charter]
+    cmd = _CHARTER_COMMANDS[charter]
     issue_line = "Issue: #%s" % issue
     if charter == "detective":
         issue_line += "\n%s %s" % (_BUDGET_LABEL, premise["budget"])

@@ -226,9 +226,12 @@ def test_a_non_dict_premise_still_composes_as_workhorse_or_refuses_as_before():
 # ---------------------------------------------------------------- the command table
 
 
-def test_the_command_table_keys_are_the_ledger_charters():
-    # axis: the launcher's command table and the ledger's charter names are one set
-    assert set(L._CHARTER_COMMANDS) == set(ll.LAUNCH_CHARTERS)
+@pytest.mark.parametrize("name", sorted(ll.LAUNCH_CHARTERS))
+def test_every_launchable_charter_carries_the_heartbeat_stamp_duty(name):
+    # axis: a launcher-issued lane stamps its heartbeat, so each launchable charter's skill names the producer call
+    root = os.path.dirname(os.path.dirname(os.path.realpath(L.__file__)))
+    with open(os.path.join(root, "skills", name, "SKILL.md"), encoding="utf-8") as fh:
+        assert 'lib/heartbeat.py" stamp' in fh.read()
 
 
 @pytest.mark.parametrize("name", ["workhorse", "detective"])
