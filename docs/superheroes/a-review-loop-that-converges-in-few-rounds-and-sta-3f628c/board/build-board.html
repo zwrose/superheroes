@@ -1,0 +1,191 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review loop build board</title>
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .board { display: grid; gap: 24px; padding-inline: 16px; padding-block: 24px; max-width: 920px; margin-inline: auto; }
+  .flow { display: grid; gap: 10px; margin-block: 14px; }
+  .flow-row { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .arrow { text-align: center; margin: 0; }
+  .card-head { display: grid; gap: 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .list { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; }
+  .record { margin: 0; padding: 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+</style>
+<div class="sh-theme">
+  <div class="board">
+
+    <div class="sh-card">
+      <div class="card-head">
+        <p class="sh-label">Build board · review loop rework · #2185 · version 4</p>
+        <h1 class="sh-heading">A review loop that finishes in a few rounds</h1>
+        <p class="sh-caption">One full-lane review, end to end, as it will work after this rework. Light and micro lanes follow the same cap and the same "only what changed" rule with their single reviewer.</p>
+      </div>
+      <div class="legend">
+        <span class="sh-step sh-step--agent">Build session</span>
+        <span class="sh-step sh-step--reviewer">Independent reviewer</span>
+        <span class="sh-step sh-step--owner">You</span>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 1</p>
+      <h2 class="sh-heading">Round 1: find everything once</h2>
+      <div class="flow">
+        <div class="sh-step sh-step--agent">The build session opens the PR and starts the review</div>
+        <div class="sh-box"><p class="sh-caption"><b>A big change</b> (over about 1,000 lines a reviewer has to read, when the PR can't practically be split) is cut into slices by size, not by folder. Moved-but-unchanged files, generated and lock files, and whole-file deletions don't count; tests and docs do. When in doubt, slices are cut smaller. Each slice gets its own code and test reviewer.</p></div>
+        <p class="arrow sh-caption">↓</p>
+        <div class="flow-row">
+          <div class="sh-step sh-step--reviewer">Code reviewer</div>
+          <div class="sh-step sh-step--reviewer">Test reviewer: attaches a break-it test to each finding it can prove that way</div>
+          <div class="sh-step sh-step--reviewer">Security + premortem: both join on any risk area, as today</div>
+        </div>
+        <p class="sh-caption">Each reviewer lists what it actually read.</p>
+        <p class="arrow sh-caption">↓</p>
+        <div class="sh-step sh-step--agent">The build session runs each break-it test on the unfixed code, exactly as written, and saves the output. It does not judge the result.</div>
+        <p class="arrow sh-caption">↓</p>
+        <div class="sh-step sh-step--reviewer">Verifier grades each finding on its own, with the break-it test's output in hand where there is one</div>
+        <div class="sh-box"><p class="sh-caption"><b>A break-it test passed on the unfixed code?</b> If it really goes down the path the finding describes, the finding was wrong. If it never reaches that path, the test missed: the reviewer writes one better test. If that one also passes, the verifier decides on what it has.</p></div>
+        <p class="arrow sh-caption">↓</p>
+        <div class="sh-step sh-step--reviewer">Synthesis groups findings with the same root cause, and marks any that repeat one from earlier in this PR</div>
+        <p class="arrow sh-caption">↓ big change only</p>
+        <div class="flow-row">
+          <div class="sh-step sh-step--reviewer">Anything no slice reviewer read becomes a new slice, with the full set: code, test, and security + premortem on a risk area</div>
+          <div class="sh-step sh-step--reviewer">Seams check: one reviewer reads the whole change for how the slices interact</div>
+        </div>
+        <p class="sh-caption">Their findings go through the break-it run, the verifier and synthesis like any other. The premortem reviewer reads the whole change, never a slice, as today.</p>
+        <p class="arrow sh-caption">↓</p>
+        <div class="sh-step sh-step--reviewer">Every finding names its kind of mistake and every place in the PR that has it</div>
+        <p class="arrow sh-caption">↓ after a confirmed Important or Critical</p>
+        <div class="sh-step sh-step--reviewer">The reviewer who raised it writes what to look for: the kind of mistake, what it looks like, examples</div>
+        <p class="arrow sh-caption">↓</p>
+        <div class="sh-step sh-step--agent">The build session fans out cheap subagents to search the whole repo, once</div>
+        <div class="flow-row">
+          <div class="sh-box"><p class="sh-caption"><b>Hit inside the PR:</b> becomes a finding and goes through the verifier.</p></div>
+          <div class="sh-box"><p class="sh-caption"><b>Hit outside the PR:</b> goes on the record's "Outside this PR" list. Never blocks, never a card for you.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 2</p>
+      <h2 class="sh-heading">The build session fixes</h2>
+      <div class="flow">
+        <div class="sh-step sh-step--agent">Fixes every copy of each confirmed finding, and commits each fix together with its break-it test</div>
+      </div>
+      <p class="sh-caption">The build session never closes a finding; only the verifier can call one wrong. No separate fixer, no fix orders, no locked-down fixer sandbox.</p>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 3</p>
+      <h2 class="sh-heading">Rounds 2 to 4: check the fixes</h2>
+      <div class="flow">
+        <div class="flow-row">
+          <div class="sh-step sh-step--reviewer">Fix auditor, per fix: is it right? did it break anything next to it? if this fix were wrong, would a test fail?</div>
+          <div class="sh-step sh-step--reviewer">Scoped finder: new problems in the code the fix touched</div>
+        </div>
+        <div class="sh-box"><p class="sh-caption">The auditor also checks the committed break-it test is the one the reviewer wrote. Any change must be explained, and a change that weakens the test is undone.</p></div>
+        <div class="sh-box"><p class="sh-caption">A repeat of an earlier finding keeps its earlier outcome and stays visible in the record. If an old fix no longer holds, it is a new finding.</p></div>
+        <div class="sh-box"><p class="sh-caption">The same fix fails its audit twice: you get the stall menu, as today.</p></div>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 4</p>
+      <h2 class="sh-heading">How a session stops</h2>
+      <div class="flow">
+        <div class="sh-box"><p class="sh-caption"><b>Nothing blocking left:</b> the review hands the PR back.</p></div>
+        <div class="sh-box"><p class="sh-caption"><b>Round 4 reached with something open:</b> it stops and hands back with what's open. No automatic extra round, and no new review session to keep going.</p></div>
+        <p class="arrow sh-caption">↓ the advisor sorts what's open and decides at the vet</p>
+        <div class="sh-box"><p class="sh-caption"><b>Code quality only (craft):</b> the advisor decides it and lists it for your veto. Never a question to you.</p></div>
+        <div class="flow-row">
+          <div class="sh-step sh-step--reviewer">One extra round that only audits round 4's fixes: no panel, no new search. At most once per PR.</div>
+          <div class="sh-step sh-step--owner">To you as a leftover, in your terms: what accepting it means, costs and risks (never a Critical)</div>
+          <div class="sh-step sh-step--agent">Back to the builder to rethink the approach</div>
+        </div>
+        <p class="sh-caption">Each of these choices, and what happened next, is counted at the gardening pass, so we can see whether the advisor is choosing well.</p>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 5</p>
+      <h2 class="sh-heading">After handback</h2>
+      <div class="flow">
+        <div class="sh-step sh-step--agent">The advisor's vet checks the PR description's claims against the change, sorts the "Outside this PR" list (propose a follow-up, or dismiss with a reason) and writes READY or NOT-READY</div>
+        <p class="arrow sh-caption">↓ the PR comes back: a send-back, a fix leg, catching up with main, or a hand fix</p>
+        <div class="sh-step sh-step--reviewer">A new session reviews only what changed since the last reviewed commit, with the same fix audit and scoped finder</div>
+        <div class="sh-box"><p class="sh-caption">A full panel runs only when the new change is itself over about 1,000 lines a reviewer has to read, or touches a risk area the PR hadn't touched before.</p></div>
+        <p class="arrow sh-caption">↓</p>
+        <div class="sh-step sh-step--owner">Your merge sheet: no "grounding seat not run" line any more</div>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 6</p>
+      <h2 class="sh-heading">When something goes wrong</h2>
+      <p class="sh-caption">Includes four field reports from weekly-eats on 0.46.2, folded into this rework.</p>
+      <div class="flow">
+        <div class="sh-box"><p class="sh-caption"><b>A finding carried over from an abandoned session</b> always ends with an outcome. If later commits show it fixed, it is settled as fixed; otherwise it goes back to the reviewers. It never sits with no outcome, blocking the record for good.</p></div>
+        <div class="sh-box"><p class="sh-caption"><b>A layer in a stack</b> is reviewed against the current head of the layer below. If the layer below has moved, the session catches up before it reviews, never against an old base.</p></div>
+        <div class="sh-box"><p class="sh-caption"><b>One failed test run on unchanged code</b> gets one re-run of the same check, recorded in the review record. A second failure stops the round, as today. A single flaky test never costs a new session.</p></div>
+        <div class="sh-box"><p class="sh-caption"><b>A reviewer's break-it test that needs a small change to run</b> (for example, a type error): the build session may change it and says why. If the auditor finds the change weakened the test, the change is undone and the reviewer who wrote it gets one try to correct it. Still open at the cap: handed back like anything else open. The review never ends "cannot certify" over it.</p></div>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 7</p>
+      <h2 class="sh-heading">What the review record shows</h2>
+      <p class="sh-caption">Superheroes has no design system for review records; drawn plain. The new parts are the round count out of 4, the kind of mistake on each finding, the repeat mark and the "Outside this PR" list.</p>
+      <div class="sh-box">
+        <div class="sh-product">
+<pre class="record">Review record · full lane · 3 of 4 rounds · ended: converged
+
+Findings
+F-1  Important · fixed in round 1
+     Kind of mistake: a list read that stops at the first page
+     Also in this PR: lib/launch.py:88, lib/wave_watch.py:140 (all fixed)
+F-2  Minor · not worth fixing (craft call)
+F-4  Important · repeat of F-1 · fix still holds · no new fix
+
+Outside this PR (1)
+O-1  lib/cloud_check.py:212 · the same list read stops at the first page
+     For the advisor to sort at the vet
+
+Reviewers: code, test, security, premortem · verifier · synthesis · fix auditor · scoped finder</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 8</p>
+      <h2 class="sh-heading">Gone after this rework</h2>
+      <ul class="list sh-caption">
+        <li>The separate fixer, its fix orders and its locked-down sandbox (and with it #2186)</li>
+        <li>The review running project tests in throwaway copies of the repo</li>
+        <li>A fresh full panel on every new review session</li>
+        <li>The 7-round cap, the 10-round ceiling, and a separate "park" state at the cap</li>
+        <li>Read-only review mode</li>
+        <li>The grounding reviewer, and its "not run" line</li>
+        <li>Splitting big changes by top-level folder</li>
+        <li>Code review for a project with no test command: setup asks for one</li>
+      </ul>
+      <p class="sh-caption">Not added: a final review pass, per-area specialist seating, a replay of past cases before release, a target number.</p>
+    </div>
+
+    <div class="sh-card">
+      <p class="sh-label">Panel 9</p>
+      <h2 class="sh-heading">How we'll know it worked</h2>
+      <ul class="list sh-caption">
+        <li>The gardening-pass row (#2189): rounds and sessions per PR, reviewer tokens and minutes, CI minutes, findings by reviewer, and now how often each choice was made at the cap and what happened next. Read as a trend; no target, never a gate.</li>
+        <li>Escape logging (#2190): every bug that gets through names what would have caught it.</li>
+      </ul>
+      <div class="tags">
+        <span class="sh-tag">Canon 2026-10-26-5692f27d-1…17</span>
+        <span class="sh-tag">Canon 2026-10-27-5692f27d-1…6</span>
+      </div>
+    </div>
+
+  </div>
+</div>
