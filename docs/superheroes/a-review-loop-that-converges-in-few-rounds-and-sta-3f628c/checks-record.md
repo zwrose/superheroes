@@ -163,9 +163,9 @@ No new findings. Clean.
 
 ## The owner's queue
 
-- GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it.
+- GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
 - GAP-9 and SRC-15: the revisit conditions, fixed as FR-53 after round 4. Marks: the review didn't
   settle this. The after-rulings cycle re-reads FR-53; it reaches the owner only if that cycle does
   not confirm it.
 
-Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1, 2026-10-28).
+Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat (Canon 2026-10-28-5692f27d-2, FR-21).

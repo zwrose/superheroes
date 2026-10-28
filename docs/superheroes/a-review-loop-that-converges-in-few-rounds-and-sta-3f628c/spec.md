@@ -175,44 +175,52 @@ earlier fix still holds. (source: Canon 2026-10-26-5692f27d-9)
     holds, then the repeat keeps the earlier outcome; when it no longer holds, then the repeat is
     treated as a new finding. (source: Canon 2026-10-26-5692f27d-9)
 
-**FR-21.** A marked repeat shall keep its earlier outcome and stay visible in the review record.
+**FR-21.** When a repeat matches an earlier finding closed as wrong, and the code that finding
+was judged on has changed since, the verifier shall judge whether the earlier outcome still holds.
+(source: Canon 2026-10-28-5692f27d-2)
+  - *Acceptance (Given-When-Then):* Given a finding closed as wrong because a guard existed, and a
+    later fix that removed the guard, when the same finding is raised again, then the verifier
+    rules on it afresh and, if it now stands, it is treated as a new finding. (source: Canon
+    2026-10-28-5692f27d-2)
+
+**FR-22.** A marked repeat shall keep its earlier outcome and stay visible in the review record.
 (source: Canon 2026-10-26-5692f27d-9)
-  - *Acceptance (rule):* Unless FR-20 finds the earlier fix no longer holds, a repeat never goes to
-    the fix and never becomes an owner card, and it is never dropped from the record. (source:
+  - *Acceptance (rule):* Unless FR-20 or FR-21 finds its earlier outcome no longer holds, a repeat
+    never goes to the fix and never becomes an owner card, and it is never dropped from the record. (source:
     Canon 2026-10-26-5692f27d-9)
 
 ### Round 1: copies of a bug
 
-**FR-22.** Each finding shall name its kind of mistake and every place in the PR that has it.
+**FR-23.** Each finding shall name its kind of mistake and every place in the PR that has it.
 (source: Canon 2026-10-26-5692f27d-7)
   - *Acceptance (rule):* The fix for a finding covers every place it names. (source: Canon
     2026-10-26-5692f27d-7)
 
-**FR-23.** When an Important or Critical finding is confirmed, the independent reviewer that
+**FR-24.** When an Important or Critical finding is confirmed, the independent reviewer that
 raised it shall write what to look for: the kind of mistake, what it looks like, and examples.
 (source: Canon 2026-10-27-5692f27d-9)
   - *Acceptance (rule):* The search description comes from the reviewer, never from the build
     session. (source: Canon 2026-10-27-5692f27d-9)
 
-**FR-24.** When a search description is written, the build session shall search the whole
+**FR-25.** When a search description is written, the build session shall search the whole
 repository for the same mistake once, with cheap parallel subagents. (source: Canon
 2026-10-27-5692f27d-9)
   - *Acceptance (rule):* One search per confirmed Important or Critical finding. (source: Canon
     2026-10-26-5692f27d-7)
 
-**FR-25.** When the search finds the mistake inside the PR, the review loop shall treat each hit
+**FR-26.** When the search finds the mistake inside the PR, the review loop shall treat each hit
 as a finding that goes through the verifier. (source: Canon 2026-10-27-5692f27d-9)
   - *Acceptance (rule):* A search hit is never fixed without a verifier grade. (source: Canon
     2026-10-27-5692f27d-9)
 
-**FR-26.** When the search finds the mistake outside the PR, the review loop shall add each hit to
+**FR-27.** When the search finds the mistake outside the PR, the review loop shall add each hit to
 the review record's "Outside this PR" list. (source: Canon 2026-10-27-5692f27d-9)
   - *Acceptance (rule):* An outside hit names its file and line and the mistake. (source: board ·
     panel 7)
 
 ### Findings outside the PR
 
-**FR-27.** The review record shall carry an "Outside this PR" list for findings on lines the PR
+**FR-28.** The review record shall carry an "Outside this PR" list for findings on lines the PR
 did not touch, capped at about 3 per reviewer. (source: Canon 2026-10-26-5692f27d-8)
   - *Acceptance (rule):* An outside finding never goes to the fix, never blocks the merge and
     never becomes an owner card. (source: Canon 2026-10-26-5692f27d-8)
@@ -220,43 +228,43 @@ did not touch, capped at about 3 per reviewer. (source: Canon 2026-10-26-5692f27
     reading; every outside finding raised is kept. A sweep's outside hits are not counted against
     the cap and are kept together under that sweep's entry. (source: craft, for your veto)
 
-**FR-28.** At the vet, the advisor shall sort each outside finding into a proposed follow-up filing
+**FR-29.** At the vet, the advisor shall sort each outside finding into a proposed follow-up filing
 or a dismissal with a reason. (source: Canon 2026-10-26-5692f27d-8)
   - *Acceptance (rule):* A follow-up filing still waits on the owner's word. (source: Canon
     2026-10-26-5692f27d-8)
 
 ### Fixing
 
-**FR-29.** The build session shall commit each fix together with its break-it test. (source:
+**FR-30.** The build session shall commit each fix together with its break-it test. (source:
 board · panel 2)
   - *Acceptance (rule):* A fix with a break-it test never lands without the test. (source: board ·
     panel 2)
 
 ### Rounds 2 to 4
 
-**FR-30.** In every round after the first, a fix auditor shall check each fix: that it is right,
+**FR-31.** In every round after the first, a fix auditor shall check each fix: that it is right,
 that it broke nothing next to it, and that a test would fail if the fix were wrong. (source:
 Canon 2026-10-27-5692f27d-2)
   - *Acceptance (rule):* The audit of each fix records an answer to all three checks. (source:
     board · panel 3)
 
-**FR-31.** In every round after the first, a scoped finder shall look for new problems in the code
+**FR-32.** In every round after the first, a scoped finder shall look for new problems in the code
 each fix touched. (source: board · panel 3)
   - *Acceptance (rule):* The scoped finder reads only code the fixes touched. (source: board ·
     panel 3)
 
-**FR-32.** The fix auditor shall check that each committed break-it test matches what the test
+**FR-33.** The fix auditor shall check that each committed break-it test matches what the test
 reviewer wrote. (source: Canon 2026-10-27-5692f27d-3)
   - *Acceptance (rule):* A changed test carries the build session's explanation; a change that
     weakens the test is a blocking finding on the fix. (source: Canon 2026-10-27-5692f27d-3;
     craft, for your veto)
 
-**FR-33.** The review loop shall run no separate review pass on the final commit. (source: Canon
+**FR-34.** The review loop shall run no separate review pass on the final commit. (source: Canon
 2026-10-27-5692f27d-2)
   - *Acceptance (rule):* A converged review that needed fixes ends on a round's audit and scoped
     finder. (source: Canon 2026-10-27-5692f27d-2)
 
-**FR-34.** When the same fix fails its audit in two rounds in a row, the review loop shall make one
+**FR-35.** When the same fix fails its audit in two rounds in a row, the review loop shall make one
 automatic recovery attempt and, if the fix still fails, offer the owner the stall menu, as today.
 [cite: plugins/superheroes/skills/review-code/reference/round-driver.md § reached only after one invisible self-recovery]
 (source: board · panel 3; craft, for your veto)
@@ -267,48 +275,48 @@ automatic recovery attempt and, if the fix still fails, offer the owner the stal
 
 ### How a session stops
 
-**FR-35.** When a round leaves nothing blocking, the review loop shall hand the PR back, round 1
+**FR-36.** When a round leaves nothing blocking, the review loop shall hand the PR back, round 1
 included. (source: board · panel 4)
   - *Acceptance (Given-When-Then):* Given a round-1 panel whose findings are all wrong or
     non-blocking, when the round ends, then the PR is handed back with no second round. (source:
     board · panel 4)
 
-**FR-36.** A review session shall stop at 4 rounds. (source: Canon 2026-10-27-5692f27d-8)
+**FR-37.** A review session shall stop at 4 rounds. (source: Canon 2026-10-27-5692f27d-8)
   - *Acceptance (rule):* No session's review record shows a fifth round, except the one extra
-    audit round the advisor may order at the vet (FR-39), which the record labels as that.
+    audit round the advisor may order at the vet (FR-40), which the record labels as that.
     (source: Canon 2026-10-27-5692f27d-8; Canon 2026-10-27-5692f27d-11)
 
-**FR-37.** When a session ends round 4 with a finding still open, the review loop shall hand the PR
+**FR-38.** When a session ends round 4 with a finding still open, the review loop shall hand the PR
 back with what is open, Important and Critical alike. (source: Canon 2026-10-27-5692f27d-8)
   - *Acceptance (rule):* There is no automatic extra round, no separate park state at the cap and
     no new review session started to keep going. (source: Canon 2026-10-27-5692f27d-11; board ·
     panel 8)
 
-**FR-38.** When a PR is handed back at the cap, the advisor shall decide each open finding whose
+**FR-39.** When a PR is handed back at the cap, the advisor shall decide each open finding whose
 only consequence is code quality and list it for the owner's veto. (source: Canon
 2026-10-27-5692f27d-10)
   - *Acceptance (rule):* No code-quality finding reaches the owner as a question. (source: Canon
     2026-10-27-5692f27d-10)
 
-**FR-39.** When a PR is handed back at the cap with a finding that has a real owner consequence,
+**FR-40.** When a PR is handed back at the cap with a finding that has a real owner consequence,
 the advisor shall choose one of three next steps: one extra round that only audits the last
 round's fixes, a leftover for the owner, or a send-back to the builder to rethink the approach.
 (source: Canon 2026-10-27-5692f27d-11)
   - *Acceptance (rule):* The extra audit round runs no panel and no new search. (source: Canon
     2026-10-27-5692f27d-11)
 
-**FR-40.** The review loop shall allow the extra audit round at most once per PR. (source: Canon
+**FR-41.** The review loop shall allow the extra audit round at most once per PR. (source: Canon
 2026-10-27-5692f27d-11)
   - *Acceptance (Given-When-Then):* Given a PR that already had its extra audit round, when it is
     handed back at the cap again, then the advisor's choices are a leftover or a rethink.
     (source: Canon 2026-10-27-5692f27d-11)
 
-**FR-41.** The advisor shall never take an open Critical to the owner as a leftover. (source:
+**FR-42.** The advisor shall never take an open Critical to the owner as a leftover. (source:
 Canon 2026-10-27-5692f27d-8)
   - *Acceptance (rule):* An open Critical leaves the cap only by an extra audit round or a rethink.
     (source: Canon 2026-10-27-5692f27d-8)
 
-**FR-42.** When a finding reaches the owner as a leftover, the advisor shall frame it in owner
+**FR-43.** When a finding reaches the owner as a leftover, the advisor shall frame it in owner
 terms: what accepting it means, what it costs and what it risks. (source: Canon
 2026-10-27-5692f27d-10)
   - *Acceptance (rule):* A leftover never asks the owner to pick between code fixes. (source:
@@ -316,7 +324,7 @@ terms: what accepting it means, what it costs and what it risks. (source: Canon
 
 ### After handback
 
-**FR-43.** When a PR comes back for review (after a vet send-back, a fix leg, a catch-up with its
+**FR-44.** When a PR comes back for review (after a vet send-back, a fix leg, a catch-up with its
 base or a hand fix), the new session shall review only what changed since the last reviewed
 commit, with the fix audit and scoped finder of a later round. (source: Canon
 2026-10-26-5692f27d-5)
@@ -324,61 +332,61 @@ commit, with the fix audit and scoped finder of a later round. (source: Canon
     it is reviewed again, then no full panel runs and the review reads only those 40 lines and
     what they touch. (source: Canon 2026-10-26-5692f27d-5)
 
-**FR-44.** A new session shall run a full panel only when the change since the last reviewed
+**FR-45.** A new session shall run a full panel only when the change since the last reviewed
 commit is over about 1,000 countable lines or touches a risk area the PR had not touched before.
 (source: Canon 2026-10-26-5692f27d-5; craft, for your veto)
   - *Acceptance (rule):* "Countable lines" here is the count of FR-6. (source: craft, for your veto)
 
-**FR-45.** At the vet, the advisor shall check the PR description's claims against the change.
+**FR-46.** At the vet, the advisor shall check the PR description's claims against the change.
 (source: Canon 2026-10-27-5692f27d-1)
   - *Acceptance (rule):* Every vet receipt records the claims check. (source: Canon
     2026-10-27-5692f27d-1)
 
 ### Removed
 
-**FR-46.** The review loop shall have no grounding reviewer. (source: Canon 2026-10-27-5692f27d-1)
+**FR-47.** The review loop shall have no grounding reviewer. (source: Canon 2026-10-27-5692f27d-1)
   - *Acceptance (rule):* No review record or merge sheet carries a "grounding seat not run" line.
     (source: Canon 2026-10-27-5692f27d-1; board · panel 5)
 
-**FR-47.** Code review shall have no read-only mode. (source: Canon 2026-10-26-5692f27d-10)
+**FR-48.** Code review shall have no read-only mode. (source: Canon 2026-10-26-5692f27d-10)
   - *Acceptance (rule):* Review always runs as the one loop; a vet's narrow doubt goes to one
     independent reviewer given the doubt. (source: Canon 2026-10-26-5692f27d-10)
 
-**FR-48.** Code review shall review only PRs built in the project it serves. (source: Canon
+**FR-49.** Code review shall review only PRs built in the project it serves. (source: Canon
 2026-10-26-5692f27d-10)
   - *Acceptance (rule):* A request to review someone else's PR is told plainly it is not
     supported. (source: Canon 2026-10-26-5692f27d-10; craft, for your veto)
 
-**FR-49.** Code review shall run no project tests in throwaway copies of the repository.
+**FR-50.** Code review shall run no project tests in throwaway copies of the repository.
 (source: board · panel 8)
   - *Acceptance (rule):* Every break-it test runs in the build session's own working copy.
     (source: board · panel 8; Canon 2026-10-27-5692f27d-3)
 
 ### The review record
 
-**FR-50.** The review record shall show the round count out of 4, the kind of mistake on each
+**FR-51.** The review record shall show the round count out of 4, the kind of mistake on each
 finding, each repeat mark, the "Outside this PR" list, and how much of a sliced change the slice
 reviewers left unread. (source: board · panel 7)
   - *Acceptance (rule):* A record reads like the sample on board panel 7. (source: board · panel 7)
 
 ### Lanes
 
-**FR-51.** The light and micro lanes shall follow the same 4-round cap and the same
+**FR-52.** The light and micro lanes shall follow the same 4-round cap and the same
 only-what-changed rule for a PR that comes back. (source: craft, for your veto)
   - *Acceptance (rule):* A light-lane review record never shows a fifth round in one session.
     (source: craft, for your veto)
 
 ### Knowing it worked
 
-**FR-52.** The gardening-pass measure shall count each choice the advisor made at the cap and what
+**FR-53.** The gardening-pass measure shall count each choice the advisor made at the cap and what
 happened next. (source: board · panel 4; board · panel 9)
   - *Acceptance (rule):* Each pass shows, per choice: how often it was made, whether an extra
     audit round settled what was open, whether an accepted leftover later became an escape, and
     whether a rethink converged. (source: board · panel 4)
 
-**FR-53.** At each gardening pass after this work ships, the advisor shall check two revisit
+**FR-54.** At each gardening pass after this work ships, the advisor shall check two revisit
 conditions and bring any that is met to the owner: a false PR claim reached merge past the vet,
-which reopens the grounding reviewer's removal (FR-46); or the security and premortem reviewers
+which reopens the grounding reviewer's removal (FR-47); or the security and premortem reviewers
 still look expensive for what they find, which reopens their seating (FR-3). (source: Canon
 2026-10-27-5692f27d-1; Canon 2026-10-27-5692f27d-5)
   - *Acceptance (rule):* Each gardening pass records whether each condition was met and, when
@@ -462,7 +470,7 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 ## Assumptions & dependencies
 
 - The gardening-pass measure is filed as #2189 and the escape logging as #2190; this work relies
-  on both for its proof and adds the cap-choice counts (FR-52) to #2189. (source: Canon
+  on both for its proof and adds the cap-choice counts (FR-53) to #2189. (source: Canon
   2026-10-27-5692f27d-6; board · panel 9)
 - Splitting big changes exists today, by top-level folder above 1,500 changed lines or 20 files,
   with one gap reviewer over the whole change. This work replaces how it cuts and what it counts.
@@ -474,7 +482,7 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 - Today the grounding reviewer never runs inside the loop.
   [cite: plugins/superheroes/skills/review-code/reference/grounding-seat.md § Known limitation]
   (source: Canon 2026-10-27-5692f27d-1)
-- The seating check in FR-53 reads the gardening-pass measure's finding outcomes by lens (#2189).
+- The seating check in FR-54 reads the gardening-pass measure's finding outcomes by lens (#2189).
   (source: Canon 2026-10-27-5692f27d-5)
 
 ## Constraints
@@ -505,16 +513,16 @@ _No amendments since the last full approval._
 | --- | --- | --- | --- |
 | Empty & first-run | Specify | No | UFR-7 (no verify command), UFR-8 (in-flight reviews at adoption) |
 | Invalid & malformed input | Specify | No | UFR-4 (a break-it test that won't compile), UFR-5 (a weakened test) |
-| Boundaries & limits | Specify | No | FR-5 to FR-7 (slicing bar), FR-36 to FR-40 (the cap), FR-27 (outside-list cap) |
-| Errors & failures | Specify | No | UFR-1, UFR-3, UFR-6, FR-34 (a fix that keeps failing its audit) |
-| Access & permissions | Specify | No | FR-2 (only the verifier closes a finding as wrong), FR-48 |
-| Duplicates & double-actions | Specify | No | FR-19 to FR-21 (repeat findings) |
+| Boundaries & limits | Specify | No | FR-5 to FR-7 (slicing bar), FR-37 to FR-41 (the cap), FR-28 (outside-list cap) |
+| Errors & failures | Specify | No | UFR-1, UFR-3, UFR-6, FR-35 (a fix that keeps failing its audit) |
+| Access & permissions | Specify | No | FR-2 (only the verifier closes a finding as wrong), FR-49 |
+| Duplicates & double-actions | Specify | No | FR-19 to FR-22 (repeat findings) |
 | Conflicting / simultaneous use | Specify | No | UFR-2 (a moved lower layer in a stack) |
 | Misuse & abuse | N-A | — | Deliberate faking of review records is outside the trust boundary (Canon 2026-10-08-d6064e1d-20) |
 | Reach (i18n / a11y) | N-A | — | No new owner-facing screen; sheets keep today's template |
-| Wording & tone | Specify | Yes | FR-42 (leftovers in owner terms), FR-50 and board panel 7 (record wording) |
-| Workflow shape | Specify | Yes | FR-13 to FR-17 (break-it before the verifier), FR-35 to FR-40, board panels 1 to 5 |
-| Placement & prominence | Specify | No | FR-27 (outside findings in the record, not on the sheet), FR-21 |
-| Limits & defaults | Specify | No | FR-36 (4 rounds), FR-40 (one extra audit round per PR), FR-44 |
-| Tier & access boundaries | Specify | No | FR-3 (specialists on any risk area), FR-51 (light and micro lanes) |
-| Visibility & disclosure | Specify | Yes | FR-50, FR-52, UFR-3 (both test runs recorded) |
+| Wording & tone | Specify | Yes | FR-43 (leftovers in owner terms), FR-51 and board panel 7 (record wording) |
+| Workflow shape | Specify | Yes | FR-13 to FR-17 (break-it before the verifier), FR-36 to FR-41, board panels 1 to 5 |
+| Placement & prominence | Specify | No | FR-28 (outside findings in the record, not on the sheet), FR-22 |
+| Limits & defaults | Specify | No | FR-37 (4 rounds), FR-41 (one extra audit round per PR), FR-45 |
+| Tier & access boundaries | Specify | No | FR-3 (specialists on any risk area), FR-52 (light and micro lanes) |
+| Visibility & disclosure | Specify | Yes | FR-51, FR-53, UFR-3 (both test runs recorded) |
