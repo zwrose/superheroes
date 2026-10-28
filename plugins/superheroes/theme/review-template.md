@@ -235,7 +235,9 @@ records, and the newest one must be a clean breakdown vet. The breakdown comes f
 lists every body the filing creates and the coverage map, register and package-read audit trail, each
 with its path and hash, and its title counts the bodies. A pin that no longer hashes to its pinned value
 refuses the build, and so does a spec that no longer hashes to the newest record's `Vet done:` hash: a
-stale breakdown is never shown as accepted. The mode is chosen only by the input's `spec`, so a code PR
+stale breakdown is never shown as accepted. A `.md` file beside a pinned file in its subfolder that
+the vet does not pin also refuses. The vet's pins are the inventory: a body left out of every pin in
+its subfolder, or at the folder's root, is not caught, because no folder convention lists the bodies. The mode is chosen only by the input's `spec`, so a code PR
 missing its record still refuses. The merge verdict and "done" read exactly as on a code PR's sheet.
 
 The shape of the advisor's input is defined in the docstring of `lib/pr_sheet.py`, and nowhere else.

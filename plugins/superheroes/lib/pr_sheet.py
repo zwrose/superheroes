@@ -119,7 +119,9 @@ checks record (<folder>/checks-record.md) gives the reviewer (its - Seat: line's
 (its ### Round headings). The vet records (skills/showrunner/reference/spec-vet.md § The vet record) give the commit (the newest
 record's head) and a history line each. The newest must be a clean breakdown vet with its Breakdown pins: lines, and
 <folder>/spec.md must still hash to its Vet done: hash. Every pin must sit in the folder and still hash to its pinned value
-(definition_doc.py content-hash): a stale, missing or unreadable pin refuses, never shown as accepted. The pins become one Accept
+(definition_doc.py content-hash): a stale, missing or unreadable pin refuses, never shown as accepted. A .md file that sits in a
+subfolder beside a pinned file but is not pinned refuses too. There is no folder convention to list a breakdown's bodies from, so
+a body left out of every pin in its subfolder, or at the folder's root, is not caught here; the vet's pins are the inventory. The pins become one Accept
 card, "The breakdown", under What you're accepting: a line for every body the filing creates (each pin that is not the coverage
 map, the register or the package-read audit trail) and for each of those three, each with its path and hash. Its title counts
 the bodies. Accepting it with the page's one Merge verdict is the word that merges the spec and files its breakdown
