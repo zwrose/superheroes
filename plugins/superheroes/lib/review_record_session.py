@@ -580,6 +580,21 @@ def _line_key(value):
     return line if ok else repr(value)
 
 
+def _file_key(value):
+    """A finding's file as a comparable, hashable key: a string as itself, any other JSON value as a tagged repr."""
+    return value if isinstance(value, str) else ("non-string", repr(value))
+
+
+def _normalized(finding):
+    """A copy of a stored reviewer finding with its line normalized as `mechanical_compile` does: a numeric-string
+    line coerced to its int. A supplied findingKey is kept (an existing test pins that it matches a listed row)."""
+    out = dict(finding)
+    ok, line = sc.coerce_line(finding.get("line"))
+    if ok:
+        out["line"] = line
+    return out
+
+
 def _passed_break_it(rounds):
     """``{(round, title, file)}`` of each break-it run whose test passed: the intercept dropped that proposal
     before compile, so it is in neither the listed findings nor the compile drops."""
@@ -588,19 +603,22 @@ def _passed_break_it(rounds):
         runs = rounds[n].get("breakItRuns") if str(n).isdigit() and isinstance(rounds[n], dict) else None
         for r in runs if isinstance(runs, list) else []:
             if isinstance(r, dict) and r.get("outcome") == "passed" and isinstance(r.get("title"), str):
-                out.add((int(n), r["title"], r.get("file")))
+                out.add((int(n), r["title"], _file_key(r.get("file"))))
     return out
 
 
-def _unfolded(session_dir, rows, rounds, findings):
+def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
     stays), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
-    own panel proposal is settled that way) add nothing."""
+    own panel proposal is settled that way) add nothing. A listed finding already settled in a round before the
+    report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
+    settled_rounds = settled_rounds or {}
     listed = {f["findingKey"] for f in findings}
-    dropped = {(d["round"], d["title"], d["file"], _line_key(d["line"])) for d in _refused(rounds)}
+    by_listed = {f["findingKey"]: f for f in findings}
+    dropped = {(d["round"], d["title"], _file_key(d["file"]), _line_key(d["line"])) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
     out = []
     for key, (att, _) in _slots(rows).items():
@@ -613,13 +631,21 @@ def _unfolded(session_dir, rows, rounds, findings):
         for f in raised if isinstance(raised, list) else []:
             if not (isinstance(f, dict) and isinstance(f.get("title"), str) and f["title"].strip()):
                 continue
-            fkey = sc.finding_identity_key(f)
+            fkey = sc.finding_identity_key(_normalized(f))
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
             # axis: a break-it proposal whose test passed was dropped before compile and is no defect — see bite-proof record c1l1_wo_b_session_seam
             # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
             settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
-                and (rnd, f["title"], f.get("file")) in passed
-            if fkey in listed or (rnd, f["title"], f.get("file"), _line_key(f.get("line"))) in dropped or settled:
+                and (rnd, f["title"], _file_key(f.get("file"))) in passed
+            if (rnd, f["title"], _file_key(f.get("file")), _line_key(f.get("line"))) in dropped or settled:
+                continue
+            if fkey in listed:
+                held = by_listed.get(fkey)
+                # a report from a round after the one that settled the listed finding was never folded (a folded
+                # re-report would have reopened the ledger row): the defect came back, so the row reads open again
+                if isinstance(held, dict) and held.get("outcome") is not None and _int(rnd) \
+                        and _int(settled_rounds.get(fkey)) and rnd > settled_rounds[fkey]:
+                    held.update({"outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
                 continue
             listed.add(fkey)
             fid = f.get("id")
@@ -679,7 +705,11 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     findings, merged = _findings_and_merges(state)
     if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
         # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
-        findings += _unfolded(session_dir, rows, rounds, findings)
+        ledger, _ = sc.read_disposition_ledger(state, required=False)
+        by_key = {sc.finding_identity_key(r): r for r in ledger or [] if isinstance(r, dict)}
+        settled_rounds = {k: sc.resolve_merged_into_entry(r, by_key).get("dispositionRound") for k, r in by_key.items()
+                          if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
+        findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
             reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
