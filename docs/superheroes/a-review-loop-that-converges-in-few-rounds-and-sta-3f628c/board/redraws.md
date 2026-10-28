@@ -11,7 +11,7 @@
   adds the two revisit checks and the core-first release order; the Canon tags name the real
   entries.
 - Board: https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 5, version id 1793148814-4b9b)
-- sent: no
+- sent: yes (final sheet 1-final, 2026-10-28)
 
 ## 2026-10-28: version 6
 
@@ -22,7 +22,7 @@
 - What changed: panel 1's test reviewer also writes at least one break-it test per touched risk
   area, at most three per review; security and premortem also join when the risk is unclear
 - Board: https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 6, version id 1793151096-c719)
-- sent: no
+- sent: yes (final sheet 1-final, 2026-10-28)
 
 ## 2026-10-28: version 7
 
@@ -32,4 +32,4 @@
 - What changed: panel 1 says at least one break-it test per touched area only while under the cap
   of three, as today
 - Board: https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 7, version id 1793151310-3be6)
-- sent: no
+- sent: yes (final sheet 1-final, 2026-10-28)
