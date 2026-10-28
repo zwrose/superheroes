@@ -1186,6 +1186,12 @@ def charter_premise_reason(premise):
         or any(ord(ch) < 32 or ord(ch) == 127 for ch in budget)
     ):
         return "premise-budget-invalid"
+    # axis: a budget the process argument boundary cannot encode (a lone surrogate) is refused here, before any worktree or reservation
+    if has_budget:
+        try:
+            os.fsencode(budget)
+        except (UnicodeEncodeError, ValueError):
+            return "premise-budget-invalid"
     return None
 
 

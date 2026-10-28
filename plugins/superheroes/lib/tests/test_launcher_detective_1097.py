@@ -36,7 +36,7 @@ DETECTIVE_HEAD = "/superheroes:detective\n\nIssue: #%s\nBudget: %s\n\n"
 _BAD_CHARTERS = [None, "", "Detective", " detective", "detective ", "bogus", ["detective"], True, 7]
 _BAD_BUDGETS = [
     None, "", "   ", " 1h", "1h ", "\t1h", "1h\n", "1h\n2h", "1h\r", "1h\r\n2h",
-    "1\x00h", "1h\x00", "\x001h", "1\th", "1h\x7f", "1\x1bh", 5, True, ["1h"], {"a": 1},
+    "1\x00h", "1h\x00", "\x001h", "1\th", "1h\x7f", "1\x1bh", "1" + chr(0xD800) + "h", 5, True, ["1h"], {"a": 1},
 ]
 
 
@@ -393,8 +393,19 @@ def test_an_invalid_charter_refusal_leaves_no_charter_on_the_record_and_the_ledg
     result = L.launch_build(
         repo, 656, _valid_premise(repo, charter="bogus"), _all_checks(), str(tmp_path / "logs"))
     assert result["ok"] is False
+    assert result["reason"] == "premise-charter-invalid"
     records = ll.read(repo)["records"]
-    for rec in records:
-        if rec.get("event") == "reserved":
-            assert "charter" not in rec
+    reserved = [
+        r for r in records
+        if r.get("event") == "reserved" and r.get("launchId") == result["launchId"]
+    ]
+    assert len(reserved) == 1
+    assert "charter" not in reserved[0]
+    refused = [
+        r for r in records
+        if r.get("event") == "refused" and r.get("launchId") == result["launchId"]
+    ]
+    assert len(refused) == 1
+    assert refused[0]["stage"] == "premise"
+    assert refused[0]["reason"] == "premise-charter-invalid"
     assert ll.fold(records)["ok"] is True
