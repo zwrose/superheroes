@@ -294,6 +294,22 @@ def test_pending_audit_new_issues_awaiting_the_scoped_fold_are_listed_open_in_an
     assert [(f["title"], f["outcome"]) for f in account["findings"]] == [("Regression", None)]
 
 
+@pytest.mark.parametrize("kind,reopened", [("fixed", True), ("refuted", False), ("out-of-scope", False)])
+def test_a_pending_audit_new_issue_sharing_a_key_settled_this_round_reopens_only_a_fixed_row(tmp_path, kind, reopened):
+    """axis: a pending audit candidate repeating a finding the same round's audit discharged reads open (the audit
+    fold records the discharge before it stores the candidate); a refutation or owner skip is recorded after it."""
+    extra = {"refutedReason": "the code does not do that"} if kind == "refuted" else (
+        {"outOfScopeReason": "a later change"} if kind == "out-of-scope" else {})
+    row_in = ledger_row(disposition=kind, **extra)
+    same = {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}
+    s = Session(tmp_path, terminal=None, round=2, dispositionLedger=[row_in], rounds={"1": {}, "2": {}}, _newIssues=[same])
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert (row["outcome"] is None) is reopened, row
+    assert (row["reason"] == rs.UNFOLDED_OPEN) is reopened, row
+
+
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):
     """axis: E5 — an empty reviewers list without abandoned is still review-account-invalid; a blank, missing-reason
     or non-dict abandoned is refused under its own name; a valid abandoned lets the empty list through."""

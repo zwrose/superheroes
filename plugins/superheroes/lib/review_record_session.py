@@ -670,10 +670,13 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 # the scoped finder is the one report phase that runs after a round's fix audit, so in the settling
                 # round itself only its report postdates the settlement; the one exception is a refutation, which the
                 # loop records after the scoped report is folded, so a same-round refuted row answers that report;
-                # so does a same-round owner skip (out-of-scope): only a fix audit's `fixed` is reopened by it
+                # so does a same-round owner skip (out-of-scope): only a fix audit's `fixed` is reopened by it;
+                # an audit's own new-issue candidate (stored or pending) is unprocessed whatever its identity, so
+                # it too reopens the `fixed` row its own audit fold recorded
                 if isinstance(held, dict) and held.get("outcome") is not None and _int(rnd) \
                         and _int(settled_rounds.get(fkey)) \
-                        and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey] and phase == round_phases.P_SCOPED
+                        and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey]
+                                                            and phase in (round_phases.P_SCOPED, round_phases.P_AUDITS)
                                                             and settled_kinds.get(fkey) == "fixed")):
                     held.update({"outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
                 continue
