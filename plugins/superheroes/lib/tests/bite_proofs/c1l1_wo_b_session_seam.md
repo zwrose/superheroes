@@ -365,3 +365,223 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 .                                                                        [100%]
 1 passed in 0.59s
 ```
+
+# WO-E additions
+
+Four entries, one per guarded element the WO-E order declared (BP-E1 to BP-E4). None is grouped. Same method as
+above: each red and green is the raw output of the single node run alone, nothing filtered; each neutralization was
+one targeted `Edit` to `plugins/superheroes/lib/review_record_session.py`, restored by the inverse `Edit`, with the
+restored lines quoted back by a `grep -n` over the file. The captures are unredacted: they hold no secret, token or
+private URL (the secret-shaped value in BP-E3's test is built from pieces at runtime, so no whole credential-like
+literal appears).
+
+The order asked for each regression's red run on the code before the change. For M2 and M3 that run was made before
+the code was changed (one pytest call over the four new nodes: 2 failed, 2 passed; the two failures are the M2
+no-file node and the M3 scrub node, and their failure text matches BP-E2's and BP-E3's reds below). The two nodes
+that passed there are the edge nodes (E1, E2), which pin behaviour the change keeps. For M4 the M4 code edit was
+made before any run, so there is no run on the unchanged code; BP-E4's neutralization restores exactly the
+pre-change condition (`r.get("outcome") == "recorded"`), and its red stands in for that run.
+
+## BP-E1. a boolean synthesis round is not counted
+
+- Axis: `_synthesis_rounds` counts only rows whose `round` is an int and not a bool (`_int`); the boolean row now sits in a case of its own, so `True == 1` can no longer collapse it into a real round-1 row.
+- Neutralization (`review_record_session.py`, `_synthesis_rounds`): `_int(r.get("round"))` became `isinstance(r.get("round"), int)`.
+- Node: `plugins/superheroes/lib/tests/test_review_record_session_c1l1.py::test_e5_only_a_recorded_synthesis_row_with_an_int_round_counts`
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_e5_only_a_recorded_synthesis_row_with_an_int_round_counts ________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-61/test_e5_only_a_recorded_synthe0')
+
+    def test_e5_only_a_recorded_synthesis_row_with_an_int_round_counts(tmp_path):
+        # axis: synthesisRounds lists the sorted distinct rounds of recorded synthesis rows with an int round
+        s = Session(tmp_path, rounds={"1": {}, "2": {}, "3": {}}).seat("code-reviewer")
+        s.rows += [dict(SYNTHESIS, round=2), dict(SYNTHESIS, round=1), dict(SYNTHESIS, round=1, attempt=1),
+                   dict(SYNTHESIS, round=3, outcome="rejected"), dict(SYNTHESIS, round="3"), dict(SYNTHESIS, round=None)]
+        assert _account(s.save())["synthesisRounds"] == [1, 2]
+        bare = Session(_sub(tmp_path, "b")).seat("code-reviewer")
+        bare.rows.append(dict(SYNTHESIS, round=1, outcome="rejected"))
+        assert "synthesisRounds" not in _account(bare.save())
+        # a boolean round alone: True == 1, so beside a real round-1 row it would collapse into it and hide an accepted bool
+        boolean = Session(_sub(tmp_path, "c")).seat("code-reviewer")
+        boolean.rows.append(dict(SYNTHESIS, round=True))
+>       assert "synthesisRounds" not in _account(boolean.save())
+E       AssertionError: assert 'synthesisRounds' not in {'schema': 'review-account/1', 'pr': 7, 'repo': None, 'lane': 'full', ...}
+E        +  where {'schema': 'review-account/1', 'pr': 7, 'repo': None, 'lane': 'full', ...} = _account('/tmp/claude-0/pytest-of-root/pytest-61/test_e5_only_a_recorded_synthe0/c/session')
+E        +    where '/tmp/claude-0/pytest-of-root/pytest-61/test_e5_only_a_recorded_synthe0/c/session' = save()
+E        +      where save = <test_review_record_session.Session object at 0x7f21295d0ef0>.save
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_session_c1l1.py:128: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_session_c1l1.py::test_e5_only_a_recorded_synthesis_row_with_an_int_round_counts
+1 failed in 0.67s
+```
+
+(The axis comment line in the red output is the one before it was extended with the record pointer; the test body is the same.)
+
+Restore: the inverse edit. Restored lines quoted back (`grep -n -B3 '_int(r.get("round"))})'`, the `_synthesis_rounds` hit):
+
+```
+575:    return sorted({r["round"] for r in rows if r.get("outcome") in ("recorded", "accepted")
+576-                   and r.get("phase") == round_phases.P_SYNTHESIS
+577:                   and r.get("cmd") != "record-missing" and _int(r.get("round"))})
+```
+
+Green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 0.66s
+```
+
+## BP-E2. a compile drop with no string file is matched without its line
+
+- Axis: `_drop_key` leaves the line out of the key when the file is not a string (the drop was recorded without its line); a string-file drop stays line-exact (null against null only).
+- Neutralization (`review_record_session.py`, `_drop_key`): `_line_key(line) if isinstance(file, str) else None` became `_line_key(line)`.
+- Node: `plugins/superheroes/lib/tests/test_review_record_abandoned_2137.py::test_a_compile_drop_with_no_file_and_no_line_matches_its_finding_on_round_and_title_in_an_abandoned_session`
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_compile_drop_with_no_file_and_no_line_matches_its_finding_on_round_and_title_in_an_abandoned_session _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-63/test_a_compile_drop_with_no_fi0')
+
+    def test_a_compile_drop_with_no_file_and_no_line_matches_its_finding_on_round_and_title_in_an_abandoned_session(tmp_path):
+        """axis: a drop whose file is not a string lost its line, so it is matched on round, title and file alone; a drop with a
+        string file stays line-exact — see bite-proof record c1l1_wo_b_session_seam"""
+        drop = {"title": "Same title", "file": None, "line": None, "reason": "no file to cite"}
+        got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+            {"title": "Same title", "file": None, "line": 7, "severity": "Important", "consequence": "c"},
+            {"title": "Same title", "file": "a.py", "line": 9, "severity": "Important", "consequence": "c"}])
+>       assert got == [("Same title", 9)]
+E       AssertionError: assert [('Same title...me title', 9)] == [('Same title', 9)]
+E         
+E         At index 0 diff: ('Same title', 7) != ('Same title', 9)
+E         Left contains one more item: ('Same title', 9)
+E         Use -v to get more diff
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_abandoned_2137.py:187: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_abandoned_2137.py::test_a_compile_drop_with_no_file_and_no_line_matches_its_finding_on_round_and_title_in_an_abandoned_session
+1 failed in 1.12s
+```
+
+Restore: the inverse edit. Restored line quoted back (`grep -n 'return (rnd, title'`):
+
+```
+595:    return (rnd, title, _file_key(file), _line_key(line) if isinstance(file, str) else None)
+```
+
+Green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 0.60s
+```
+
+## BP-E3. a current break-it run is compared in its scrubbed form
+
+- Axis: `_fill` compares each current run, through `review_record._scrubbed`, against the earlier runs (which come from the scrubbed posted record), so a run the scrub changed is not appended again on a rewrite.
+- Neutralization (`review_record_session.py`, `_fill`): `if (review_record._scrubbed(run) if isinstance(run, dict) else run) not in runs:` became `if run not in runs:`.
+- Node: `plugins/superheroes/lib/tests/test_review_record_session_c1l1.py::test_fill_a_current_run_the_scrub_changed_is_not_appended_again_beside_its_scrubbed_earlier_form`
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_fill_a_current_run_the_scrub_changed_is_not_appended_again_beside_its_scrubbed_earlier_form _
+
+    def test_fill_a_current_run_the_scrub_changed_is_not_appended_again_beside_its_scrubbed_earlier_form():
+        # axis: the earlier runs come from the scrubbed posted record, so a current run is compared in its scrubbed form — see bite-proof record c1l1_wo_b_session_seam
+        raw = dict(RUN_1, output="setup ok " + "pass" + "word=" + "x" * 12)
+        scrubbed = rr._scrubbed(raw)
+        assert scrubbed != raw  # the premise: the writer's scrub changes this run
+        account = {"findings": [dict(LIVE, breakItRuns=[raw])]}
+        rs._fill(account, [dict(LIVE, breakItRuns=[scrubbed])])
+>       assert account["findings"][0]["breakItRuns"] == [scrubbed]
+E       AssertionError: assert [{'test': 'te...ode': 1, ...}] == [{'test': 'te...ode': 1, ...}]
+E         
+E         Left contains one more item: {'test': 'tests/test_a.py::test_t', 'commit': 'abc1234', 'status': 'ran', 'exitCode': 1, ...}
+E         Use -v to get more diff
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_session_c1l1.py:287: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_session_c1l1.py::test_fill_a_current_run_the_scrub_changed_is_not_appended_again_beside_its_scrubbed_earlier_form
+1 failed in 0.72s
+```
+
+Restore: the inverse edit. Restored lines quoted back (`grep -n -A1 '_scrubbed(run)'`):
+
+```
+894:                if (review_record._scrubbed(run) if isinstance(run, dict) else run) not in runs:
+895-                    runs.append(run)
+```
+
+Green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 0.69s
+```
+
+## BP-E4. a hand submit's accepted synthesis row is counted
+
+- Axis: `_synthesis_rounds` counts a synthesis-phase row whose `outcome` is `recorded` or `accepted` (a successful hand `submit` journals `accepted`), and never one whose `cmd` is `record-missing`.
+- Neutralization (`review_record_session.py`, `_synthesis_rounds`): `r.get("outcome") in ("recorded", "accepted")` became `r.get("outcome") == "recorded"`.
+- Node: `plugins/superheroes/lib/tests/test_review_record_session_c1l1.py::test_an_accepted_synthesis_row_counts_as_a_synthesis_round`
+
+Red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_an_accepted_synthesis_row_counts_as_a_synthesis_round __________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-67/test_an_accepted_synthesis_row0')
+
+    def test_an_accepted_synthesis_row_counts_as_a_synthesis_round(tmp_path):
+        # axis: a hand submit journals outcome "accepted" and counts like "recorded"; record-missing never does — see bite-proof record c1l1_wo_b_session_seam
+        s = Session(tmp_path, rounds={"1": {}, "2": {}, "3": {}}).seat("code-reviewer")
+        s.rows += [dict(SYNTHESIS, round=1, outcome="accepted", cmd="submit"), dict(SYNTHESIS, round=3, outcome="accepted",
+                                                                                     cmd="record-missing")]
+>       assert _account(s.save())["synthesisRounds"] == [1]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'synthesisRounds'
+
+/home/user/wt/build/plugins/superheroes/lib/tests/test_review_record_session_c1l1.py:136: KeyError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_session_c1l1.py::test_an_accepted_synthesis_row_counts_as_a_synthesis_round
+1 failed in 0.71s
+```
+
+Restore: the inverse edit. Restored lines quoted back (`grep -n -B1 -A2 '"recorded", "accepted"'`):
+
+```
+574-    # axis: a hand submit journals "accepted" and counts as "recorded" does — see bite-proof record c1l1_wo_b_session_seam
+575:    return sorted({r["round"] for r in rows if r.get("outcome") in ("recorded", "accepted")
+576-                   and r.get("phase") == round_phases.P_SYNTHESIS
+577-                   and r.get("cmd") != "record-missing" and _int(r.get("round"))})
+```
+
+Green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 0.67s
+```

@@ -114,15 +114,26 @@ def test_e4_a_rerun_list_that_is_not_a_list_contributes_nothing(tmp_path):
 
 
 def test_e5_only_a_recorded_synthesis_row_with_an_int_round_counts(tmp_path):
-    # axis: synthesisRounds lists the sorted distinct rounds of recorded synthesis rows with an int round
+    # axis: synthesisRounds lists the sorted distinct rounds of recorded synthesis rows with an int round, a boolean round never — see bite-proof record c1l1_wo_b_session_seam
     s = Session(tmp_path, rounds={"1": {}, "2": {}, "3": {}}).seat("code-reviewer")
     s.rows += [dict(SYNTHESIS, round=2), dict(SYNTHESIS, round=1), dict(SYNTHESIS, round=1, attempt=1),
-               dict(SYNTHESIS, round=3, outcome="rejected"), dict(SYNTHESIS, round="3"), dict(SYNTHESIS, round=True),
-               dict(SYNTHESIS, round=None)]
+               dict(SYNTHESIS, round=3, outcome="rejected"), dict(SYNTHESIS, round="3"), dict(SYNTHESIS, round=None)]
     assert _account(s.save())["synthesisRounds"] == [1, 2]
     bare = Session(_sub(tmp_path, "b")).seat("code-reviewer")
     bare.rows.append(dict(SYNTHESIS, round=1, outcome="rejected"))
     assert "synthesisRounds" not in _account(bare.save())
+    # a boolean round alone: True == 1, so beside a real round-1 row it would collapse into it and hide an accepted bool
+    boolean = Session(_sub(tmp_path, "c")).seat("code-reviewer")
+    boolean.rows.append(dict(SYNTHESIS, round=True))
+    assert "synthesisRounds" not in _account(boolean.save())
+
+
+def test_an_accepted_synthesis_row_counts_as_a_synthesis_round(tmp_path):
+    # axis: a hand submit journals outcome "accepted" and counts like "recorded"; record-missing never does — see bite-proof record c1l1_wo_b_session_seam
+    s = Session(tmp_path, rounds={"1": {}, "2": {}, "3": {}}).seat("code-reviewer")
+    s.rows += [dict(SYNTHESIS, round=1, outcome="accepted", cmd="submit"), dict(SYNTHESIS, round=3, outcome="accepted",
+                                                                                 cmd="record-missing")]
+    assert _account(s.save())["synthesisRounds"] == [1]
 
 
 def test_a_synthesis_seat_recorded_missing_is_not_a_synthesis_round(tmp_path):
@@ -264,6 +275,23 @@ def test_fill_a_malformed_current_break_it_runs_value_is_left_for_the_writer_to_
     account = {"findings": [dict(LIVE, breakItRuns=RUN_2)]}
     rs._fill(account, [dict(LIVE, breakItRuns=[RUN_1])])
     assert account["findings"][0]["breakItRuns"] == RUN_2
+
+
+def test_fill_a_current_run_the_scrub_changed_is_not_appended_again_beside_its_scrubbed_earlier_form():
+    # axis: the earlier runs come from the scrubbed posted record, so a current run is compared in its scrubbed form — see bite-proof record c1l1_wo_b_session_seam
+    raw = dict(RUN_1, output="setup ok " + "pass" + "word=" + "x" * 12)
+    scrubbed = rr._scrubbed(raw)
+    assert scrubbed != raw  # the premise: the writer's scrub changes this run
+    account = {"findings": [dict(LIVE, breakItRuns=[raw])]}
+    rs._fill(account, [dict(LIVE, breakItRuns=[scrubbed])])
+    assert account["findings"][0]["breakItRuns"] == [scrubbed]
+
+
+def test_fill_a_current_run_that_is_not_a_dict_is_compared_as_it_is():
+    # axis: a non-dict run takes no scrub call and is appended once, not dropped and not doubled — see bite-proof record c1l1_wo_b_session_seam
+    account = {"findings": [dict(LIVE, breakItRuns=["not a run", "not a run"])]}
+    rs._fill(account, [dict(LIVE, breakItRuns=[RUN_1])])
+    assert account["findings"][0]["breakItRuns"] == [RUN_1, "not a run"]
 
 
 def test_fill_the_earlier_grade_and_runs_survive_a_later_session_that_lacks_them(tmp_path):

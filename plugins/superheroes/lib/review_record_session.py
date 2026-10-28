@@ -568,9 +568,12 @@ def _rerun_checks(rounds):
 
 
 def _synthesis_rounds(rows):
-    """The sorted distinct rounds in which the synthesis step recorded a result; a seat recorded missing is no result."""
+    """The sorted distinct rounds in which the synthesis step recorded a result (`recorded`, or a hand submit's
+    `accepted`); a seat recorded missing is no result."""
     # axis: a record-missing synthesis row is no result and adds no round — see bite-proof record c1l1_wo_b_session_seam
-    return sorted({r["round"] for r in rows if r.get("outcome") == "recorded" and r.get("phase") == round_phases.P_SYNTHESIS
+    # axis: a hand submit journals "accepted" and counts as "recorded" does — see bite-proof record c1l1_wo_b_session_seam
+    return sorted({r["round"] for r in rows if r.get("outcome") in ("recorded", "accepted")
+                   and r.get("phase") == round_phases.P_SYNTHESIS
                    and r.get("cmd") != "record-missing" and _int(r.get("round"))})
 
 
@@ -583,6 +586,13 @@ def _line_key(value):
 def _file_key(value):
     """A finding's file as a comparable, hashable key: a string as itself, any other JSON value as a tagged repr."""
     return value if isinstance(value, str) else ("non-string", repr(value))
+
+
+def _drop_key(rnd, title, file, line):
+    """The key a compile drop and the finding it dropped share: round, title, file and line. A file that is not a
+    string was recorded without its line, so for it the line is left out of the key."""
+    # axis: a drop with no string file lost its line when recorded, so it is matched on round, title and file alone — see bite-proof record c1l1_wo_b_session_seam
+    return (rnd, title, _file_key(file), _line_key(line) if isinstance(file, str) else None)
 
 
 def _normalized(finding):
@@ -641,14 +651,14 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
-    stays), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
+    stays; a drop whose file is not a string lost its line, so it is matched by round, title and file), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
     own panel proposal is settled that way) add nothing. A listed finding already settled in a round before the
     report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
     settled_rounds = settled_rounds or {}
     settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
     listed = {f["findingKey"] for f in findings}
     by_listed = {f["findingKey"]: f for f in findings}
-    dropped = {(d["round"], d["title"], _file_key(d["file"]), _line_key(d["line"])) for d in _refused(rounds)}
+    dropped = {_drop_key(d["round"], d["title"], d["file"], d["line"]) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
     out = []
     for phase, rnd, seat, raised in _raised_reports(session_dir, rows, pending, pending_round):
@@ -661,7 +671,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
             settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
-            if (rnd, f["title"], _file_key(f.get("file")), _line_key(f.get("line"))) in dropped or settled:
+            if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
                 continue
             if fkey in listed:
                 held = by_listed.get(fkey)
@@ -864,7 +874,8 @@ def _fill(account, earlier):
     """Give each account finding the parts the earlier record held for it and the session's row lacks.
 
     A `grade`, `repeatOf` or `kindOfMistake` the row lacks is the earlier one; the earlier `breakItRuns` come first,
-    followed by each of the row's runs not already among them."""
+    followed by each of the row's runs not already among them. The earlier runs come from the posted record, which the
+    writer scrubbed, so each of the row's runs is compared in its scrubbed form."""
     held = {review_record._key(f): f for f in earlier}
     for f in account["findings"]:
         old = held.get(review_record._key(f))
@@ -879,7 +890,8 @@ def _fill(account, earlier):
             mine = f.get("breakItRuns", [])
             runs = list(old["breakItRuns"])
             for run in mine:
-                if run not in runs:
+                # axis: a current run is compared as the writer will post it (scrubbed), so a run the scrub changed is not appended on every rewrite — see bite-proof record c1l1_wo_b_session_seam
+                if (review_record._scrubbed(run) if isinstance(run, dict) else run) not in runs:
                     runs.append(run)
             f["breakItRuns"] = runs
 
