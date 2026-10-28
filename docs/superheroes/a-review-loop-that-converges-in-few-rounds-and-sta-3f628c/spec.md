@@ -10,7 +10,7 @@ approved: "2026-10-27"
 gates: {review: passed}
 producedBy: "the-architect@0.46.2"
 created: "2026-10-27"
-updated: "2026-10-27"
+updated: "2026-10-28"
 ---
 # A review loop that converges in few rounds and stays simple
 
@@ -96,10 +96,17 @@ slices by size and give each slice its own code and test reviewer. (source: Cano
     board · panel 1)
 
 **FR-6.** The review loop shall count as countable lines every changed line except those in files
-moved without change, in generated and lock files, and in whole-file deletions. (source: Canon
-2026-10-27-5692f27d-7)
+moved without change, in generated and lock files, in whole-file deletions, and in files the change
+proves byte-for-byte identical to a named source by a checksum proof that covers each such file.
+(source: Canon 2026-10-27-5692f27d-7; Canon 2026-10-28-0b372f49-1)
   - *Acceptance (rule):* Changed test lines and changed doc lines count. (source: Canon
     2026-10-27-5692f27d-7)
+  - *Acceptance (rule):* A file the proof covers and matches is given to no reviewer to read, is not
+    an unread part of the change (FR-8), and is listed in the review record with the proof, so the
+    advisor's vet can check the proof against the named source. (source: Canon 2026-10-28-0b372f49-1)
+  - *Acceptance (Given-When-Then):* Given a changed file the proof does not cover, or whose content
+    in the change does not match the proof's checksum, when round 1 starts, then that file counts
+    and is read like any other changed file. (source: Canon 2026-10-28-0b372f49-1)
 
 **FR-7.** Where it is unclear whether a line counts or where to cut, the review loop shall cut
 smaller slices. (source: Canon 2026-10-27-5692f27d-7)
@@ -568,14 +575,22 @@ The approved requirements and shipped rules below change under this spec. The ad
 
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-28 (owner-stamped, substantive):** files a change proves byte-for-byte identical to a
+  named source, by a checksum proof that covers each such file, no longer count as countable lines
+  and are given to no reviewer to read; the review loop checks each file against the proof, a file
+  the proof does not cover or match counts and is read as usual, such a file is not an unread part,
+  and the review record lists the files left out with the proof for the advisor's vet. The owner's
+  ruling: "A" on collector #695 item 415, 2026-10-28, reaffirmed the same day ("I want 415 a done
+  by this session now"); Canon 2026-10-28-0b372f49-1. Sections touched: frontmatter (`updated`);
+  Round 1: big changes (FR-6, its statement and two new acceptances); Coverage (Invalid &
+  malformed input); Amendments.
 
 ## Coverage
 
 | Area | Disposition | Show-it? | Where / why |
 | --- | --- | --- | --- |
 | Empty & first-run | Specify | No | UFR-7 (no verify command), UFR-8 (in-flight reviews at adoption) |
-| Invalid & malformed input | Specify | No | UFR-4 (a break-it test that won't compile), UFR-5 (a weakened test) |
+| Invalid & malformed input | Specify | No | UFR-4 (a break-it test that won't compile), UFR-5 (a weakened test), FR-6 (a copy proof that does not cover or match a file) |
 | Boundaries & limits | Specify | No | FR-5 to FR-7 (slicing bar), FR-37 to FR-41 (the cap), FR-28 (outside-list cap) |
 | Errors & failures | Specify | No | UFR-1, UFR-3, UFR-6, FR-35 (a fix that keeps failing its audit) |
 | Access & permissions | Specify | No | FR-2 (only the verifier closes a finding as wrong), FR-49 |

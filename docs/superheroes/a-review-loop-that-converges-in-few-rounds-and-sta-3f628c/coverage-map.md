@@ -7,11 +7,11 @@ gives it, or, for the spec's Definition of done, by the epic's closure. Drafted 
 after the approval.
 
 **What counts as one criterion.** Each acceptance bullet of an FR or UFR is one criterion, at the
-spec's own bullet granularity: 72 bullets across FR-1 to FR-54 and UFR-1 to UFR-8. Every FR and UFR
+spec's own bullet granularity: 74 bullets across FR-1 to FR-54 and UFR-1 to UFR-8. Every FR and UFR
 carries at least one acceptance bullet, so no statement is counted on its own; an FR's statement is
 owned by the child that owns its bullets. Each of the three non-functional lines (No silent loss,
 Independence, No target number) is one criterion. Each of the two Definition of done bullets is one
-criterion, owned by the epic's closure. That makes 77 criteria. The table has 78 rows, because one
+criterion, owned by the epic's closure. That makes 79 criteria. The table has 80 rows, because one
 bullet is split at its own sentences into two rows (declared below).
 
 **Children and layers.** C1, the core loop, is a native stack of thirteen layers (C1-L1 to C1-L13);
@@ -44,7 +44,7 @@ each names its one owner and the register entry that binds the other child:
   DoD carries its part.
 - **FR-4** (each round-1 reviewer records the parts it read) is **C1-L5**'s. C2 reads those lists for
   FR-8 and FR-10 (R4).
-- **FR-6** (countable lines) is **C1-L5**'s. C1-L11 reads it for FR-45, and C2 for FR-5 and FR-7 (R3).
+- **FR-6** (countable lines) is **C1-L5**'s, its two acceptances added by amendment 1 (2026-10-28: proven copies are not counted or read and are listed in the record) included. C1-L11 reads it for FR-45, and C2 for FR-5, FR-7 and FR-8 (R3).
 - **FR-26** (a search hit inside the PR goes through the verifier) is **C4**'s; the verifier it goes
   through is C1-L7's (R6).
 - **FR-27** (outside search hits go on the "Outside this PR" list) is **C4**'s; the list is C3's (R12).
@@ -74,6 +74,8 @@ that reads it.
 | FR-5 | 1 | GWT | Given a 3,000-line change whose files all sit under one top-level folder, when round 1 starts, then it is… | **C2** |
 | FR-5 | 2 | rule | Splitting a big change into separate PRs stays the usual first answer. Slicing is for a PR that is not… | **C2** |
 | FR-6 | 1 | rule | Changed test lines and changed doc lines count. | **C1** (C1-L5) |
+| FR-6 | 2 | rule | A file the proof covers and matches is given to no reviewer to read, is not an unread part of the change… | **C1** (C1-L5) |
+| FR-6 | 3 | GWT | Given a changed file the proof does not cover, or whose content in the change does not match the proof's… | **C1** (C1-L5) |
 | FR-7 | 1 | rule | A borderline cut never produces a slice above the bar. | **C2** |
 | FR-8 | 1 | rule | An unread part touching a risk area gets a code, a test, a security and a premortem reviewer. | **C2** |
 | FR-9 | 1 | rule | The seams check runs once per sliced change, in round 1 only. | **C2** |
@@ -185,10 +187,12 @@ nothing in the spec falls between children.
 ## Mechanical check
 
 A script (kept out of the repo, in the drafting session's scratchpad) parsed every acceptance bullet
-of `spec.md` (`grep -c '^  - \*Acceptance' spec.md` gives 72), keyed by its FR or UFR and its
+of `spec.md` (`grep -c '^  - \*Acceptance' spec.md` gives 74), keyed by its FR or UFR and its
 position, plus the three non-functional lines and the two Definition of done bullets, and every row of
-the table above. Its result: each of the 72 bullets appears exactly once, the one split bullet appears
+the table above. Its result: each of the 74 bullets appears exactly once, the one split bullet appears
 as exactly its two declared rows, no row names a bullet the spec lacks, each NFR line and each DoD
-bullet appears once, and every row names exactly one owner. Owners: C1 60 rows (L1 4, L2 1, L3 3,
-L4 8, L5 4, L6 6, L7 5, L8 5, L9 3, L10 5, L11 6, L12 6, L13 4), C2 6, C3 3, C4 5, #2189 2, epic
-closure 2; 78 rows in all.
+bullet appears once, and every row names exactly one owner. Owners: C1 62 rows (L1 4, L2 1, L3 3,
+L4 8, L5 6, L6 6, L7 5, L8 5, L9 3, L10 5, L11 6, L12 6, L13 4), C2 6, C3 3, C4 5, #2189 2, epic
+closure 2; 80 rows in all.
+
+**Re-checked after amendment 1 (2026-10-28).** The spec's FR-6 gained two acceptances (proven copies are not counted or read and are listed in the record; an uncovered or unmatched file counts and is read). Both are C1-L5's. The same script re-ran on the amended spec: 74 bullets, 80 rows, each owned exactly once, errors none.

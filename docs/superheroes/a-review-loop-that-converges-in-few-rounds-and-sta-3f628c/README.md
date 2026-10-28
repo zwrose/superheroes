@@ -5,7 +5,7 @@ that converges in few rounds and stays simple: who applies the fixes; round 1's 
 break-it tests and the verifier, synthesis and repeats, and copies of a bug; findings outside the PR;
 rounds 2 to 4 and how a session stops; after handback; what is removed; the review record; the lanes;
 and how we know it worked. Approval is recorded in the spec's frontmatter (`approved: "2026-10-27"`).
-Its Amendments log is empty, so every child anchors at `as-of amendment #0`. The breakdown rides the
+Its Amendments log holds one entry (2026-10-28, substantive: FR-6, files a change proves identical to a named source are not counted or read). The epic, C1, C1-L5 and C2, whose text or quoted register entry it touches, anchor at `as-of amendment #1`; every other child anchors at `as-of amendment #0`, which still resolves because the sections it cites did not change. The breakdown rides the
 spec PR, #2199, and one merge word covers spec and breakdown; the children file, with the owner's
 word, as it merges. The epic is the discovery's issue, #2185, whose body is rewritten in place to
 [`epic.md`](epic.md) at filing.
@@ -17,8 +17,8 @@ board, version 7, with its README and redraw record), [`sheets/`](sheets/) (disc
 The breakdown:
 
 - [`coverage-map.md`](coverage-map.md): every acceptance criterion of the spec owned exactly once:
-  72 acceptance bullets (one split inside C1, declared), 3 non-functional lines and 2 Definition of
-  done bullets, 78 rows in all, checked by script. FR-53 is owned by #2189, as the spec says.
+  74 acceptance bullets (one split inside C1, declared), 3 non-functional lines and 2 Definition of
+  done bullets, 80 rows in all, checked by script (re-checked after amendment 1, 2026-10-28). FR-53 is owned by #2189, as the spec says.
 - [`register.md`](register.md): the cross-child contract register (16 entries; 8 carry a
   decide-by). R9 and R10 are the seam with #2189 and R11 the seam with #2190.
 - [`epic.md`](epic.md): #2185's body, as it would be rewritten at filing.
@@ -33,7 +33,7 @@ The breakdown:
 
 | Child | What | Criteria | Size (non-test lines) | Stack | Wave | Lane | Presentation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [C1](children/C1.md) | The core loop | 60 | ~5,650, much of it deletion | 13 layers | 1 | full | show it |
+| [C1](children/C1.md) | The core loop | 62 | ~5,710, much of it deletion | 13 layers | 1 | full | show it |
 | [C2](children/C2.md) | Big changes | 6 | ~550 | no | 2 | full | show it |
 | [C3](children/C3.md) | Findings outside the PR | 3 | ~300 | no | 2 | full | show it |
 | [C4](children/C4.md) | Copies of a bug | 5 | ~550 | no | 3 | full | show it |
@@ -46,7 +46,7 @@ C1's layers, bottom to top:
 | [C1-L2](children/C1-L2.md) | The grounding seat removed | FR-47 | ~400 counted + ~1,600 whole-file deletions | say it |
 | [C1-L3](children/C1-L3.md) | Review runs only as the loop | FR-48 (first sentence), FR-49, UFR-7 | ~350 | say it |
 | [C1-L4](children/C1-L4.md) | Rounds and stops | FR-35 to FR-38, FR-41, UFR-8 | ~650 | show it |
-| [C1-L5](children/C1-L5.md) | Round 1's panel, read lists, countable lines | FR-3, FR-4, FR-6, Independence | ~300 | say it |
+| [C1-L5](children/C1-L5.md) | Round 1's panel, read lists, countable lines | FR-3, FR-4, FR-6, Independence | ~360 | say it |
 | [C1-L6](children/C1-L6.md) | Break-it tests the build session runs | FR-11 to FR-13, FR-50, UFR-4 | ~600 | show it |
 | [C1-L7](children/C1-L7.md) | The verifier's grade | FR-2, FR-14 to FR-17 | ~350 | show it |
 | [C1-L8](children/C1-L8.md) | Synthesis and repeats | FR-18 to FR-22 | ~400 | say it |
