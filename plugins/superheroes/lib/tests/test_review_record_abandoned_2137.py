@@ -221,6 +221,24 @@ def test_a_finding_the_passed_rule_does_not_cover_is_listed_open(tmp_path, seat,
     assert got == [("Break it", 1)], why
 
 
+@pytest.mark.parametrize("phase,reopened", [
+    (SCOPED, True),  # runs after the round's fix audit settled the finding: the defect came back
+    (PANEL, False),  # runs before the round's fix: the settlement answers it
+    (GAPSWEEP, False),
+])
+def test_a_same_round_report_after_the_settling_audit_reopens_the_finding_in_an_abandoned_session(tmp_path, phase, reopened):
+    """axis: a finding settled (fixed) in round N and reported again in round N by a phase that runs after the audit
+    (the scoped finder) reads open on abandonment; a same-round report from a phase before the fix does not."""
+    s = Session(tmp_path, terminal=None, dispositionLedger=[ledger_row()], rounds={"1": {}, "2": {}})
+    session = s.seat("code-reviewer", phase=phase, rnd=2).save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}]}}, phase=phase, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert (row["outcome"] is None) is reopened, row
+    assert (row["reason"] == rs.UNFOLDED_OPEN) is reopened, row
+
+
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):
     """axis: E5 — an empty reviewers list without abandoned is still review-account-invalid; a blank, missing-reason
     or non-dict abandoned is refused under its own name; a valid abandoned lets the empty list through."""
