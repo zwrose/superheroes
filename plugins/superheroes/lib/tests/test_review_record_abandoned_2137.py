@@ -150,6 +150,31 @@ def test_findings_in_a_seat_result_never_folded_reach_the_record_through_its_raw
     assert CHECKED_UNFOLDED in rec["checked"]
 
 
+def _abandoned_titles(tmp_path, rounds, raised):
+    session = Session(tmp_path, terminal=None, rounds=rounds).seat("code-reviewer").save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": raised}})
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    return [(f["title"], f["line"]) for f in account["findings"]]
+
+
+def test_a_same_titled_finding_at_another_line_survives_a_compile_drop_in_an_abandoned_session(tmp_path):
+    """axis: the compile-drop match includes the line, so only the dropped location is left out of the unfolded rows."""
+    drop = {"title": "Same title", "file": "a.py", "line": 10, "reason": "out of scope"}
+    got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+        {"title": "Same title", "file": "a.py", "line": 10, "severity": "Important", "consequence": "c"},
+        {"title": "Same title", "file": "a.py", "line": 20, "severity": "Important", "consequence": "c"}])
+    assert got == [("Same title", 20)]
+
+
+def test_a_passing_break_it_proposal_is_not_recovered_as_an_open_finding_in_an_abandoned_session(tmp_path):
+    """axis: a proposal whose break-it test passed was dropped before compile and is not listed open on abandonment."""
+    run = {"title": "Break it", "file": "tests/test_x.py", "outcome": "passed", "findingKey": None}
+    got = _abandoned_titles(tmp_path, {"1": {"breakItRuns": [run]}}, [
+        {"title": "Break it", "file": "tests/test_x.py", "line": 1, "severity": "Important", "consequence": "c"},
+        {"title": "Real defect", "file": "a.py", "line": 4, "severity": "Important", "consequence": "c"}])
+    assert got == [("Real defect", 4)]
+
+
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):
     """axis: E5 — an empty reviewers list without abandoned is still review-account-invalid; a blank, missing-reason
     or non-dict abandoned is refused under its own name; a valid abandoned lets the empty list through."""

@@ -572,13 +572,33 @@ def _synthesis_rounds(rows):
                    and _int(r.get("round"))})
 
 
+def _line_key(value):
+    """A finding's line as a comparable key: the coerced int when it coerces, else its repr."""
+    ok, line = sc.coerce_line(value)
+    return line if ok else repr(value)
+
+
+def _passed_break_it(rounds):
+    """``{(round, title, file)}`` of each break-it run whose test passed: the intercept dropped that proposal
+    before compile, so it is in neither the listed findings nor the compile drops."""
+    out = set()
+    for n in rounds:
+        runs = rounds[n].get("breakItRuns") if str(n).isdigit() and isinstance(rounds[n], dict) else None
+        for r in runs if isinstance(runs, list) else []:
+            if isinstance(r, dict) and r.get("outcome") == "passed" and isinstance(r.get("title"), str):
+                out.add((int(n), r["title"], r.get("file")))
+    return out
+
+
 def _unfolded(session_dir, rows, rounds, findings):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
-    A finding the account already lists, one an earlier seat stored the same, and one the round's compile dropped
-    (it stays under `refused`) add nothing."""
+    A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
+    (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
+    stays), and a break-it proposal whose test passed (the intercept dropped it before compile) add nothing."""
     listed = {f["findingKey"] for f in findings}
-    dropped = {(d["round"], d["title"], d["file"]) for d in _refused(rounds)}
+    dropped = {(d["round"], d["title"], d["file"], _line_key(d["line"])) for d in _refused(rounds)}
+    passed = _passed_break_it(rounds)
     out = []
     for key, (att, _) in _slots(rows).items():
         phase, rnd, seat, _ = key
@@ -592,7 +612,9 @@ def _unfolded(session_dir, rows, rounds, findings):
                 continue
             fkey = sc.finding_identity_key(f)
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
-            if fkey in listed or (rnd, f["title"], f.get("file")) in dropped:
+            # axis: a break-it proposal whose test passed was dropped before compile and is no defect — see bite-proof record c1l1_wo_b_session_seam
+            if fkey in listed or (rnd, f["title"], f.get("file"), _line_key(f.get("line"))) in dropped \
+                    or (rnd, f["title"], f.get("file")) in passed:
                 continue
             listed.add(fkey)
             fid = f.get("id")
