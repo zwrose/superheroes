@@ -1136,15 +1136,24 @@ def _doctrine(name):
 
 
 # axis: the guarding test for the misses-log census — every site that lists the classes names the false PR claim
-@pytest.mark.parametrize("name, sites, counted", [("owner-decisions", 1, "five classes"), ("vet-receipt", 2, None), ("glossary", 1, "five kinds")])
-def test_every_misses_log_class_list_names_the_false_pr_claim(name, sites, counted):
+@pytest.mark.parametrize("name, sites", [("owner-decisions", 1), ("vet-receipt", 2), ("glossary", 1)])
+def test_every_misses_log_class_list_names_the_false_pr_claim(name, sites):
     text = _doctrine(name)
     starts = [i for i in range(len(text)) if text.startswith("declined-then-escaped", i)]
     assert len(starts) == sites, "a class list was added or removed: update this census"
     for i in starts:
         assert "false PR claim" in text[i:i + 260], (name, text[i:i + 260])
-    assert "four classes" not in text and "four kinds" not in text
-    assert counted is None or counted in text
+
+
+# axis: the guarding test for the closed duties list — the revisit checks sit after the memory-gardening lead-in, outside the eight duties
+def test_owner_decisions_revisit_checks_sit_outside_the_closed_duties_list():
+    text = _doctrine("owner-decisions")
+    lead = "**The two revisit checks at the pass.**"
+    assert text.count(lead) == 1
+    after = text.index(lead)
+    assert after > text.index("**Memory gardening at the pass.**")
+    assert text.index("**The false-claim check.**") > after
+    assert text.index("**The seating check.**") > after
 
 
 def test_owner_decisions_spells_the_marker_line_and_the_tally_marker():

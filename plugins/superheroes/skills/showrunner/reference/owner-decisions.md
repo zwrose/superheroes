@@ -608,10 +608,7 @@ advisor run together to keep calibration honest.
      record writer's `read --pr <n>` returns it, and each review escape as its review's date
      (`reviewedAt`) and its call (`missed` or `seen-and-left`). The advisor builds that escape input
      from the misses log at the pass, one item per review escape in the log, before-adoption ones
-     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. The escape input
-     carries each logged [false PR claim](../../../rubric/glossary.md#false-pr-claim) too, as its review
-     date, its call, and `"marker": "false-pr-claim"`. The tally returns that count as `falsePrClaims`,
-     apart from the escape counts: zero when there were none, unmeasured when the tally is. A PR is
+     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
      dated by that record and counts only when the date is on or after the adoption day and inside
      the condition window. The record keeps no first date for a finding, so a catch carried from a
      review before the adoption day into a later re-review counts by the later date; the advisor
@@ -623,24 +620,6 @@ advisor run together to keep calibration honest.
      credited to every seat whose lens the finding names (a fixed finding in the security lens
      counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
      in that seat's lens.
-   - **The two revisit checks.** Duty 3 also reads two checks, and the record states each one.
-     - **The false-claim check.** It is met when the window's false PR claim count is one or more. A
-       met check **reopens the decision to run code review without a grounding seat**, the seat that
-       checked a PR's own claims against the repository.
-     - **The seating check.** The advisor judges whether the security and premortem reviewers still
-       look expensive for what they find. It is met when that judgment says they do. A met check
-       **reopens their seating** in the calibration. Beside the judgment, the record lists the numbers
-       it read: each seat's finding outcomes by outcome, its tokens, and its minutes. They come from
-       `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The advisor builds the row
-       file from the window's review-loop measures for those two seats. A number the measures do not
-       give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
-       recorded as unmeasured, never as zero.**
-     - **Each pass records, for each check, whether it was met, and when it was, that it went to the
-       owner** as a calibration proposal: a batch-2 item with the per-item spine, as the
-       calibration-proposal bullet above says. A check that is not met still gets its line.
-     - **No target and no gate.** These checks and the review-loop measures are read as a trend. A met
-       check is a prompt for an owner conversation, never an automatic change. Nothing here sets a
-       target number or a gate on rounds, tokens, or minutes.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -703,6 +682,32 @@ standing rule of the pass, not a ninth duty.
   session will recall, which is the same outcome as never having written it — with the cost already
   paid. **Repairing a missing index line is not a substantive rewrite** — the entry's meaning is
   untouched — so it is the advisor's to fix on the spot, and it is recorded like any other craft call.
+
+**The two revisit checks at the pass.** Two checks ride duty 3's reading of the misses log and the
+reviewer seats' evidence, and the record states each one. They are a standing rule of the pass, not a
+ninth duty.
+
+- **The count comes from the tally.** The tally's escape input carries each logged
+  [false PR claim](../../../rubric/glossary.md#false-pr-claim) too, as its review date, its call, and
+  `"marker": "false-pr-claim"`. The tally returns that count as `falsePrClaims`, apart from the escape
+  counts: zero when there were none, unmeasured when the tally is.
+- **The false-claim check.** It is met when the window's false PR claim count is one or more. A
+  met check **reopens the decision to run code review without a grounding seat**, the seat that
+  checked a PR's own claims against the repository.
+- **The seating check.** The advisor judges whether the security and premortem reviewers still
+  look expensive for what they find. It is met when that judgment says they do. A met check
+  **reopens their seating** in the calibration. Beside the judgment, the record lists the numbers
+  it read: each seat's finding outcomes by outcome, its tokens, and its minutes. They come from
+  `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The advisor builds the row
+  file from the window's review-loop measures for those two seats. A number the measures do not
+  give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
+  recorded as unmeasured, never as zero.**
+- **Each pass records, for each check, whether it was met, and when it was, that it went to the
+  owner** as a calibration proposal: a batch-2 item with the per-item spine, as the
+  calibration-proposal bullet in duty 3 says. A check that is not met still gets its line.
+- **No target and no gate.** These checks and the review-loop measures are read as a trend. A met
+  check is a prompt for an owner conversation, never an automatic change. Nothing here sets a
+  target number or a gate on rounds, tokens, or minutes.
 
 - **The pass's output is batched words for the owner, delivered in the walk itself.**
 - **The decisions-asked count, and the baseline the forward share is read against, come from the
