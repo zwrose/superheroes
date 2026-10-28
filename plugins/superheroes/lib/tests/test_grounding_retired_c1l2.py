@@ -241,3 +241,20 @@ def test_the_backfill_tier_is_in_play_for_a_roster_with_no_reviewer_tier_seat():
     assert model is not None
     assert ("codex", model, effort) in SM._synthesize_live_cells(["codex"], roster, None)
     assert [model, effort] in SM.reachable_configs(["codex"], None, roster)["codex"]
+
+
+def test_the_backfill_tier_follows_the_rosters_pins_in_reachable_configs():
+    # axis: the backfill tier's cells follow the roster's pins - all seats honorably pinned narrow it to the pinned vendor, any rotating seat rotates it across every vendor
+    roster = SM.roster_for({"floor": None})
+    vendors = ["codex", "cursor"]
+    codex_backfill = list(SM._cell("reviewer", "codex", None)[:2])
+    # the codex reviewer cell differs from its reviewer-deep cell, so it discriminates; cursor's two cells are identical, so for cursor only presence/emptiness is asserted
+    assert SM._cell("reviewer", "codex", None) != SM._cell("reviewer-deep", "codex", None)
+    assert SM._cell("reviewer", "cursor", None) == SM._cell("reviewer-deep", "cursor", None)
+    assert len(roster) > 1
+    unpinned = SM.reachable_configs(vendors, None, roster)
+    assert codex_backfill in unpinned["codex"] and unpinned["cursor"]
+    all_codex = SM.reachable_configs(vendors, {s: {"vendor": "codex"} for s in roster}, roster)
+    assert codex_backfill in all_codex["codex"] and all_codex["cursor"] == []
+    mixed = SM.reachable_configs(vendors, {roster[0]: {"vendor": "codex"}}, roster)
+    assert codex_backfill in mixed["codex"] and mixed["cursor"]

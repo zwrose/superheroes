@@ -528,6 +528,9 @@ def reachable_configs(
         for cv in configured_vendors:
             _add_cell(cv, tier)
 
+    any_seat_rotated = False
+    honorably_pinned: set[str] = set()
+
     for seat in roster:
         tier = _tier_for(seat)
         pin = pins.get(seat)
@@ -549,17 +552,27 @@ def reachable_configs(
                 )
                 if honorable:
                     reachable[v].add((model, effort))
+                    honorably_pinned.add(v)
                 else:
+                    any_seat_rotated = True
                     _rotate_all(tier)
             else:
+                any_seat_rotated = True
                 _rotate_all(tier)
         else:
+            any_seat_rotated = True
             _rotate_all(tier)
 
     seat_tiers = {_tier_for(seat) for seat in roster}
     in_play_tiers = _tiers_in_play(seat_tiers)
+    # The backfill tier's cells follow the roster's pins, as the cells of a seat at that tier would: any rotating
+    # seat rotates it across every vendor; otherwise only the vendors the roster was honorably pinned to get its cell.
     for tier in in_play_tiers - seat_tiers:
-        _rotate_all(tier)
+        if any_seat_rotated:
+            _rotate_all(tier)
+        else:
+            for v in honorably_pinned:
+                _add_cell(v, tier)
 
     if codex_role_pins and "codex" in configured_vendors:
         for tier in _PANEL_PIN_TIERS:
