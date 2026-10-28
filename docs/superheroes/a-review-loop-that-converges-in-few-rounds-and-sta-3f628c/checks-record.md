@@ -292,6 +292,11 @@ Reviewed: commit c7bc8bf3c, changed parts only.
 
 Grounding base: origin/main 8c1712a70f1461b45e48adde967b9deced6a3bb8. Citation check: [].
 
+### Checks after vet round 1, round 2
+
+Reviewed: commit 14a8d7e0d, changed parts only. Gap, source and grounding each confirmed their
+finding fixed and raised nothing new. All three clean. Citation check: [].
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
