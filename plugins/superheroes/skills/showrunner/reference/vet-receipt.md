@@ -292,10 +292,13 @@ owner-vs-craft line, with doubt resolving upward.
 
 **A finding whose only consequence is code quality is yours to decide.** Decide it, and list it in
 the receipt under `**Decided for the owner's veto.**`, one line each: the finding, what you decided,
-and why. On the PR's sheet it is an entry of the decided-for-you list
-([the review template](../../../theme/review-template.md#decided-for-you)); where no sheet is built
-it is a line under the owner half's *what accepting it means*, saying what you decided and that the
-owner can take it back. It never reaches the owner as a question.
+and why. A finding the review record already settles as craft is listed for the owner's veto on the
+PR's sheet by its folded part of craft decisions put to the owner's veto. An open or left-for-owner
+finding you grade as code quality only is an entry of the sheet's decided-for-you list
+([the review template](../../../theme/review-template.md#decided-for-you)), written in the sheet
+input's craftDeterminations. Where no sheet is built it is a line under the owner half's *what
+accepting it means*, saying what you decided and that the owner can take it back. It never reaches
+the owner as a question.
 
 **A finding with a real owner consequence takes one of three next steps, and you choose which:**
 
