@@ -973,6 +973,13 @@ PR-body markers from the retired execution spine survive independently of it:
   `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` field 7. Accepted limit: each
   marker is its author's declaration, so the writer reads no prose and the vet reads the prose
   against the markers.
+- **Cap-choice lines** — the vet receipt's `**Cap choices.**` field carries one `superheroes:cap-choice`
+  marker line per choice, written by the advisor at vet in the receipt comment: `choice=` one of
+  `extra-audit-round`, `leftover` or `rethink`, then `vet=` (the vet's ordinal), `record=` (the review
+  record the choice was made against) and `key=` (the finding's `findingKey`, to the end of the line).
+  The gardening pass counts them. A posted line is never rewritten; a later choice is a new line.
+  Payload-carrying, like the list markers, so not an exact-byte anchor. Home:
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` § A handback with open findings.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that

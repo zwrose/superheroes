@@ -4,6 +4,8 @@
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
 - [The review record checks](#the-review-record-checks)
+- [A handback with open findings](#a-handback-with-open-findings)
+- [The claims check](#the-claims-check)
 - [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
 - [The owner-half write — register](#the-owner-half-write--register)
@@ -209,6 +211,8 @@ are never holding the inventory in working memory.
 | the PR carries a **build record** (a full or light build) | the **review record checks** — one line per check, saying what was read from the record and whether it held the PR; the three checks are the rows of [The review record checks](#the-review-record-checks) |
 | the review record carries `commandRefusals`, or the build record's dispatch provenance lists a refusal | a **refusals line**: each refusal was read, and any refusal followed by the same act in another form, as the stop rule defines that, is named as a **finding**, without listing the forms. The rule's one home is `lib/command_refusals.py` |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
+| the review record shows a finding still **open at handback** (the review stopped at its round cap, or handed back as it does at the cap) | the **handback with open findings** — the craft list and the cap choices, as [A handback with open findings](#a-handback-with-open-findings) says |
+| the PR body claims tests ran or passed, carries a definition-of-done table, or claims the verify command passed | the **claims check** — each such claim listed with holds or does not hold and its evidence, as [The claims check](#the-claims-check) says |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
@@ -276,6 +280,78 @@ unreadable or about something else, the row holds the PR.
 go-ahead that covered it, and the record you verified it against.
 
 The vet carries these checks. Nothing automated runs them at handback.
+
+## A handback with open findings
+
+A review stops at its round cap and hands the PR back with every finding still open, Important and
+Critical alike; a fix that keeps failing its audit hands back the same way. Nothing from the review
+reached the owner while it ran, so this vet is where each open finding is settled. Read the open
+findings from the latest review record and grade each one's consequence as
+[The review record checks](#the-review-record-checks) grade a real consequence: against the
+owner-vs-craft line, with doubt resolving upward.
+
+**A finding whose only consequence is code quality is yours to decide.** Decide it, and list it in
+the receipt under `**Decided for the owner's veto.**`, one line each: the finding, what you decided,
+and why. A finding the review record already settles as craft is listed for the owner's veto on the
+PR's sheet by its folded part of craft decisions put to the owner's veto. An open or left-for-owner
+finding you grade as code quality only is an entry of the sheet's decided-for-you list
+([the review template](../../../theme/review-template.md#decided-for-you)), written in the sheet
+input's craftDeterminations. Where no sheet is built it is a line under the owner half's *what
+accepting it means*, saying what you decided and that the owner can take it back. It never reaches
+the owner as a question.
+
+**A finding with a real owner consequence takes one of three next steps, and you choose which:**
+
+1. **An extra audit round.** One more round that audits only the last round's fixes, with no panel
+   and no new search. A PR has it at most once, so it is open to you only while the PR's review
+   records show no extra audit round. You order it from the build session; nothing else runs in it.
+2. **A leftover for the owner.** The finding goes to the owner, framed in owner terms as
+   `skills/showrunner/reference/owner-decisions.md` § The per-item spine says for a leftover. Its
+   outcome in the record is `left-for-owner`, and the third row of the review record checks holds
+   the PR until the owner is shown it.
+3. **A rethink.** The PR goes back to the builder to rethink the approach, not to patch the finding.
+   The record of the PR's next review session shows whether the rethink converged.
+
+**An open Critical is never a leftover.** It leaves the cap only by the extra audit round or a
+rethink, so on a PR that already had its extra audit round it goes to a rethink.
+
+**The cap-choice field.** The receipt records each choice in one fixed field, `**Cap choices.**`,
+which the gardening pass counts. Under it, each choice is a bullet followed by its own marker line:
+
+```markdown
+**Cap choices.**
+- <finding title> — <choice> — <why>
+<!-- superheroes:cap-choice choice=<choice> vet=<this vet's ordinal> record=<link to the review record> key=<findingKey> -->
+```
+
+`choice` is exactly one of three spellings: `extra-audit-round`, `leftover` or `rethink`. `key` is
+the finding's stored `findingKey`, copied exactly from the review record, and runs to the end of the
+marker line; never the finding's `id`, which is the reviewer's own and can repeat. `record` is the
+review record the choice was made against. A posted line is never removed or rewritten, even when
+the receipt is edited in place: a later vet's choice for the same finding, such as a rethink after
+an extra audit round that did not settle it, is a new line in that vet's receipt, carrying that
+vet's ordinal. A receipt that records `leftover` for a Critical is a defect in the receipt. A vet
+with no open finding that has a real owner consequence writes no field.
+
+## The claims check
+
+The vet checks what the PR description claims against the change and its runs. Read the PR body for
+three kinds of claim: each claim that tests ran or passed, each row of its definition-of-done table,
+and each claim that the verify command passed. List every one in the receipt under
+`**Claims checked.**`, one line each:
+
+```markdown
+**Claims checked.**
+- <the claim, quoted or named> — holds | does not hold — <the evidence>
+```
+
+The evidence is what you read or ran: the CI run on the vetted head, selected as spine field 1 says;
+the test or file in the diff; a run you made yourself; or output the build record quotes, checked
+against the run it names. A row of the definition-of-done table holds only when the evidence it
+points at shows the outcome the row claims. **One line saying the claims were checked does not meet
+this**, and neither does a list that leaves a claim out. A claim you cannot check either way is
+listed as does not hold, with what was missing. A claim that does not hold is a finding, and it
+holds the PR.
 
 ## Project vet checks
 
