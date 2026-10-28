@@ -22,6 +22,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
 
+- **After switching.** **Nothing is owed at once: code review composes no grounding seat; remove a saved `grounding-seat` seat pin, which now reads as a pin for an unknown seat.** See [Review: the grounding seat is gone](#review-the-grounding-seat-is-gone).
+
 ### Specs: a new spec follows the doc policy
 
 - **Where a new work item lands.** With no existing `spec.md`, a confirmed doc policy now decides where a work item's definition-docs go: its in-repo location (for example `docs/superheroes/<work-item>/`). The calibration storage mode decides only when no policy is confirmed, as before. So a project whose calibration lives out of the repo but whose confirmed policy names an in-repo location now gets new specs in the repo, and its spec PR carries the spec. `resolve-write`, `path` and `dir` all follow it; a gitignored policy still passes the ignore check.
@@ -44,6 +46,16 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Cost on every reviewer row.** Each record row carries `cost`, `{tokens, minutes}`, computed by the writer from the engine's run record. A value it could not measure is null, never zero, and trimming a long record does not remove it. An account cannot set it.
 - **Other parts, only once a review fills them.** `rounds.extraAudit`, `rerunChecks`, `synthesisRounds`, `outsideThisPR`, `unreadShare`, a reviewer row's `readParts`, and a finding's `grade`, `repeatOf`, `breakItRuns` and `kindOfMistake` appear on a record only when the account carries them. A record without them reads as before. See [Parts that show only when present](skills/review-code/reference/review-record.md#parts-that-show-only-when-present).
 - **Abandoned sessions.** The record of an abandoned session now lists a finding that was recorded but never folded into the loop as open, with the reason saying so, instead of leaving it only in the raw findings files.
+
+### Review: the grounding seat is gone
+
+- **The seat.** Code review's grounding seat, its agent (`agents/grounding-seat.md`), its stage (the `grounding_stage` module, all of its `stage`/`check`/`attest` verbs) and its reference are gone; no roster composes it.
+- **What checks the PR's claims instead.** The advisor's vet checks the PR's self-claims (the DoD table, the degradations list, the receipts claimed); code review's step 8 keeps its inline DoD-table check.
+- **The record.** A new review record has no `seatsNotRun` list and no "Not run:" line; an account row carrying `notRunReason` is refused `review-account-invalid` (the writer's existing account refusal; `test_grounding_retired_c1l2.py` pins it). An earlier record that carries `seatsNotRun` still reads, and no merge sheet shows it. The merge-sheet word `historyNotRun` is gone.
+- **The region reader.** A caller that imported `REGION_MARKERS` or `read_region` from `grounding_stage` imports them from `lib/pr_body_regions.py`, unchanged.
+- **Seat pins.** A saved pin keyed `grounding-seat` is reported as a pin for an unknown seat; remove it.
+- **The script allowlist.** `grounding_stage.py` is off the plugin-scripts hook's approved list (eight scripts).
+- **Unchanged.** The spec checks' grounding reviewer.
 
 ## 0.46.2
 

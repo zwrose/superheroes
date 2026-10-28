@@ -102,22 +102,6 @@ def test_read_only_hand_dispatch_prints_the_rule_from_its_one_home(phase):
     assert out.stdout.rstrip("\n") == RO.seat_rule_block(phase)
 
 
-def test_grounding_seat_order_prints_the_review_rule_from_its_one_home():
-    # The grounding seat's order is hand-composed for engine and native host seats alike; a
-    # native seat never sees the dispatch preamble, so the order itself must end with the rule.
-    path = os.path.join(_LIB_DIR, "..", "skills", "review-code", "reference", "grounding-seat.md")
-    with open(path, encoding="utf-8") as fh:
-        doc = fh.read()
-    commands = re.findall(r'`(python3 -B -c "[^`]*seat_rule_block[^`]*")`', doc)
-    assert len(commands) == 1
-    command = commands[0].replace("$ROOT_DIR", os.path.dirname(_LIB_DIR))
-    out = subprocess.run(["bash", "-c", command.replace("python3", sys.executable, 1)],
-                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.rstrip("\n") == RO.seat_rule_block(RP.P_VERIFIERS)
-    assert RO.REVIEW_SEAT_RULE in out.stdout
-
-
 def test_rules_and_order_blocks_list_no_programs():
     import engine_dispatch as ED
     texts = {"REVIEW_SEAT_RULE": RO.REVIEW_SEAT_RULE, "FIXER_SEAT_RULE": RO.FIXER_SEAT_RULE,

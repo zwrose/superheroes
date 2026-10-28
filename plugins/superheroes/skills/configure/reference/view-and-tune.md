@@ -678,15 +678,16 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a review-panel seat to a vendor/model** → write the pin under `core.md`'s
   `enginePreferences.seatPins`. Valid seat keys are `architecture-reviewer`, `code-reviewer`,
-  `security-reviewer`, `test-role`, `premortem-reviewer`, and `grounding-seat` (a pin written under
+  `security-reviewer`, `test-role`, and `premortem-reviewer` (a pin written under
   the old `test-reviewer` key is read as the test role's pin); each pin is
   `{vendor, model?, effort?}` — a present `model` or `effort` must be a non-empty string or the whole
   pin is rejected into `invalidSeatPins` (an absent optional field is fine; a vendor-only pin uses the
   seat's default model). It feeds the review-code panel's `seat_map compose --pins`; a pin the
   account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
-  grounding/strong-seat independence break) **stays loud** — the shipped seat-map machinery
+  strong-seat independence break) **stays loud** — the shipped seat-map machinery
   emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
-  review receipt and the seat falls back to rotation. The loader does structural validation only; a
+  review receipt and the seat falls back to rotation. A saved pin under a seat key the panel does
+  not have reads as a pin for an unknown seat and is reported, so remove it. The loader does structural validation only; a
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
   existing `seatPins` object, and preserve every sibling key.

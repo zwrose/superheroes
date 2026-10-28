@@ -41,7 +41,7 @@ _ROOTS = (
 )
 
 # Measured at the 2158 fix: 35 call forms across the three trees (fenced lines plus inline spans).
-POPULATION_FLOOR = 33
+POPULATION_FLOOR = 32  # the grounding stage's call forms left with it (C1-L2)
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)

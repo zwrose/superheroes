@@ -27,7 +27,7 @@ _HEADING = "## The review record checks"
 _FIXED_WRITTEN_AT = "2026-01-01T00:00:00Z"
 
 _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha", "ci.source", "missingReviews",
-                  "seatsNotRun", "goAhead", "parked", "findings", "title", "body", "consequence", "outcome", "reason",
+                  "goAhead", "parked", "findings", "title", "body", "consequence", "outcome", "reason",
                   "leftForOwner", "status", "whatIsMissing")
 # transitDamage is added by `read` for parts damage and by the writer for redacted fields
 _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
