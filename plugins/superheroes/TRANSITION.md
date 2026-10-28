@@ -26,10 +26,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 ### Gardening: two revisit checks and a false PR claim count
 
-- **A fifth misses-log class.** A claim in a merged PR's description that did not hold (that tests ran, a row of its definition-of-done table, or that the verify command passed) is a false PR claim. The act that finds it logs it once per claim, in a review escape's entry shape plus two lines: the marker line ``false PR claim: <the claim> — shown false by <what showed it false>`` and a line naming what would have caught it.
+- **A fifth misses-log class.** The misses log gains a fifth class, the [false PR claim](rubric/glossary.md#false-pr-claim). The act that finds one logs it once per claim, in a review escape's entry shape plus two lines: the marker line ``false PR claim: <the claim> — shown false by <what showed it false>`` and a line naming what would have caught it.
 - **The tally counts it apart.** `review_learning.py tally` reads an escape input item with `"marker": "false-pr-claim"` as a false PR claim and returns the count as `falsePrClaims`, never in `escapes`. It is `0` when there are none and `null` wherever `escapes` reads `null`. A `marker` with any other value reads as malformed, so the tally is incomplete.
 - **A new `seating` verb.** `review_learning.py seating --row <file>` shows the security and premortem seats' finding outcomes, tokens, and minutes. A number the row does not give, or gives as null, a boolean, a negative, or a non-number, reads `"unmeasured"` and is listed under `unmeasured`, never `0`.
 - **Two checks at each pass.** Each gardening pass records, for the false-claim check and the seating check, whether it was met and, when it was, that it went to the owner as a calibration proposal. A met check reopens a decision for the owner to rule on. It changes nothing by itself, and no target or gate on rounds, tokens, or minutes is set.
+- **The vet.** The vet now settles findings left open at the round cap, records each cap choice in the receipt, and checks a PR description's claims one by one.
 - **Nothing is owed at once.** A tally caller that does not read `falsePrClaims` is unaffected, and a misses log with no false PR claim counts zero.
 
 ### Specs: a new spec follows the doc policy

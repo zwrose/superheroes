@@ -698,9 +698,12 @@ ninth duty.
   [false PR claim](../../../rubric/glossary.md#false-pr-claim) too, as its review date, its call, and
   `"marker": "false-pr-claim"`. The tally returns that count as `falsePrClaims`, apart from the escape
   counts: zero when there were none, unmeasured when the tally is.
-- **The false-claim check.** It is met when the window's false PR claim count is one or more. A
-  met check **reopens the decision to run code review without a grounding seat**, the seat that
-  checked a PR's own claims against the repository.
+- **The false-claim check.** It is met when the window's false PR claim count is one or more, and
+  also when any false PR claim was appended to the misses log since the last pass, whatever its PR's
+  review date. The tally windows claims by review date, so a claim found now on an old PR must still
+  meet the check. When the tally could not measure the count (`falsePrClaims` is null), the check is
+  recorded as **unmeasured**, never as **not met**. A met check **reopens the decision to run code
+  review without a grounding seat**, the seat that checked a PR's own claims against the repository.
 - **The seating check.** The advisor judges whether the security and premortem reviewers still
   look expensive for what they find. It is met when that judgment says they do. A met check
   **reopens their seating** in the calibration. Beside the judgment, the record lists the numbers
@@ -709,9 +712,9 @@ ninth duty.
   file from the window's review-loop measures for those two seats. A number the measures do not
   give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
   recorded as unmeasured, never as zero.**
-- **Each pass records, for each check, whether it was met, and when it was, that it went to the
-  owner** as a calibration proposal: a batch-2 item with the per-item spine, as the
-  calibration-proposal bullet in duty 3 says. A check that is not met still gets its line.
+- **Each pass records, for each check, whether it was met, not met or unmeasured, and when it was
+  met, that it went to the owner** as a calibration proposal: a batch-2 item with the per-item spine, as the
+  calibration-proposal bullet in duty 3 says. A check that is not met, or unmeasured, still gets its line.
 - **No target and no gate.** These checks and the review-loop measures are read as a trend. A met
   check is a prompt for an owner conversation, never an automatic change. Nothing here sets a
   target number or a gate on rounds, tokens, or minutes.
@@ -742,7 +745,7 @@ ninth duty.
   carries no threshold of its own and is recorded so accumulation on one surface is visible here;
 - **the memory gardening done**: entries moved out to a plugin surface, entries re-read against the
   last doctrine change, and any index lines repaired;
-- **the two revisit checks**: for each, met or not met, and when met, that it went to the owner; the
+- **the two revisit checks**: for each, met, not met or unmeasured, and when met, that it went to the owner; the
   window's false PR claim count, zero included; and the seating check's numbers as read, with an
   unmeasured number shown as unmeasured;
 - the workaround-marker state;

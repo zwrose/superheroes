@@ -1017,6 +1017,8 @@ def test_tally_a_marked_item_outside_the_window_is_left_out_and_does_not_make_th
 def test_tally_a_non_dict_escape_item_reads_malformed_and_the_claim_count_none():
     got = _tally_escapes(["junk"])
     assert got["measured"] is False and got["falsePrClaims"] is None
+    assert got["reason"] == "incomplete-evidence"
+    assert got["leftOut"] == {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 1}
 
 
 # --- the seating numbers ---
