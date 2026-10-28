@@ -1472,6 +1472,7 @@ def _commit_withheld_config_change(repo, extra_files=None):
 
 
 def test_diff_fully_withheld_builds_review_view(tmp_path):
+    # axis: a change that touches only withheld config still builds a view carrying the config-changes file and no patch; a refusal, a leaked config path, or a notice that omits the config file
     repo = _init_repo(tmp_path / "allstripped", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _commit_withheld_config_change(repo)
@@ -1500,6 +1501,7 @@ def test_diff_fully_withheld_builds_review_view(tmp_path):
 
 
 def test_diff_fully_withheld_with_no_rendered_hunks_refuses_empty(tmp_path, monkeypatch):
+    # axis: a fully withheld change with nothing rendered refuses as empty; an empty view built, or a temp dir left behind
     repo = _init_repo(tmp_path / "allstripped-empty", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _commit_withheld_config_change(repo)
@@ -1515,6 +1517,7 @@ def test_diff_fully_withheld_with_no_rendered_hunks_refuses_empty(tmp_path, monk
 
 
 def test_diff_mixed_withheld_keeps_config_out_of_tree_and_patch(tmp_path):
+    # axis: in a mixed change the shown file stays in the patch and the withheld config stays out of the tree and the patch; config content leaking into either
     repo = _init_repo(tmp_path / "mixed-stripped", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _commit_withheld_config_change(repo, {"keep.txt": "KEEP_CHANGED_LINE\n"})
@@ -1555,6 +1558,7 @@ def _assert_alias_absent_data_present(view):
 
 
 def test_leaf_config_dir_alias_mixed_change_withholds_symlink(tmp_path):
+    # axis: a .claude symlink to a data folder is withheld in a mixed change while the folder it points at stays; the alias left in the tree, or the data folder stripped with it
     repo = _alias_repo(tmp_path, "alias-mixed")
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _write_repo_files(repo, {"CLAUDE.md": "changed\n", "keep.txt": "changed keep\n"})
@@ -1574,6 +1578,7 @@ def test_leaf_config_dir_alias_mixed_change_withholds_symlink(tmp_path):
 
 
 def test_leaf_config_dir_alias_fully_withheld_change_withholds_symlink(tmp_path):
+    # axis: a .claude symlink to a data folder is withheld when the whole change is withheld, with the config-changes file standing in for the patch; the alias left in the tree, a patch built, or the data folder stripped
     repo = _alias_repo(tmp_path, "alias-full")
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _write_repo_files(repo, {"CLAUDE.md": "changed\n"})
@@ -1593,6 +1598,7 @@ def test_leaf_config_dir_alias_fully_withheld_change_withholds_symlink(tmp_path)
 
 
 def test_leaf_config_dir_in_calibration_dir_is_withheld(tmp_path):
+    # axis: a .claude leaf inside the calibration folder is withheld whether or not it exists at head; it shown as reviewable, or the answer changing when the path is absent
     leaf = ".claude/superheroes/.claude"
     repo = _init_repo(tmp_path / "calib-leaf", files={"keep.txt": "k\n", leaf: "x\n"})
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -1603,7 +1609,9 @@ def test_leaf_config_dir_in_calibration_dir_is_withheld(tmp_path):
 
 
 def test_diff_fully_withheld_too_large_refuses(tmp_path, monkeypatch):
-    monkeypatch.setattr(sv, "CONFIG_CHANGES_MAX_BYTES", 50)
+    # axis: the cap counts the withheld hunks, not only the header; a header-only count lets an oversize config change through
+    header_bytes = len(sv.CONFIG_CHANGES_HEADER.encode("utf-8"))
+    monkeypatch.setattr(sv, "CONFIG_CHANGES_MAX_BYTES", header_bytes + 64)
     repo = _init_repo(
         tmp_path / "allstripped-large",
         files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
