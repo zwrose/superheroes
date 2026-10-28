@@ -54,7 +54,8 @@ CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
 HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw outputs were not stored"
 ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
-UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded appear only in the raw findings files"
+UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
+UNFOLDED_OPEN = "recorded by a reviewer but never taken into the loop before it was closed"
 NO_SEAT_RESULT = "the session recorded no seat result or seat status"
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
@@ -65,6 +66,8 @@ _PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P
 _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
+# the finding parts a later row must not erase: the live row's value wins, else the ledger row's
+_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
 
 
 def _int(v):
@@ -353,9 +356,12 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
-        out.append(_reviewer(state, rnd, seat, stem, key in ran, env,
-                             r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
-                             _text(r.get("citedHead")), bound.get(key), phase))
+        row = _reviewer(state, rnd, seat, stem, key in ran, env,
+                        r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
+                        _text(r.get("citedHead")), bound.get(key), phase)
+        if phase == sc.PANEL_PHASE and isinstance(body, dict) and "readParts" in body:
+            row["readParts"] = body["readParts"]  # what the reviewer reported reading; the writer validates it
+        out.append(row)
     out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
             if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
@@ -456,6 +462,17 @@ def _id(row, key):
     return rid if isinstance(rid, str) and rid and not verification.is_staged_id(rid) else key
 
 
+def _finding_parts(row, older):
+    """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent."""
+    out = {}
+    for k in _FINDING_PARTS:
+        for src in (row, older):
+            if isinstance(src, dict) and k in src:
+                out[k] = src[k]
+                break
+    return out
+
+
 def _findings(state):
     """The account's findings list."""
     return _findings_and_merges(state)[0]
@@ -499,11 +516,13 @@ def _findings_and_merges(state):
         if rep is not None and reason and sc.finding_identity_key(rep) != key:
             reason += MERGED_INTO_FORMAT.format(_id(rep, sc.finding_identity_key(rep)))
         dim = row.get("dimension")
+        # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
+        held = _finding_parts(row, by_key.get(key))
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
-                    "body": row.get("body", row.get("detail"))})
+                    "body": row.get("body", row.get("detail")), **held})
     return out, merged
 
 
@@ -534,6 +553,53 @@ def _refused(rounds):
             if isinstance(d, dict) and _text(d.get("title")) and _text(d.get("reason")):
                 out.append({"file": d.get("file"), "line": d.get("line"), "title": d["title"],
                             "reason": d["reason"], "round": int(n)})
+    return out
+
+
+def _rerun_checks(rounds):
+    """Every re-run check the rounds recorded, in round order; the containing round names each one."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        checks = rounds[n].get("rerunChecks") if isinstance(rounds[n], dict) else None
+        # a malformed entry passes through unchanged: the writer's validation is the refusing layer
+        out += [dict(e, round=int(n)) if isinstance(e, dict) else e for e in checks] if isinstance(checks, list) else []
+    return out
+
+
+def _synthesis_rounds(rows):
+    """The sorted distinct rounds in which the synthesis step recorded a result."""
+    return sorted({r["round"] for r in rows if r.get("outcome") == "recorded" and r.get("phase") == round_phases.P_SYNTHESIS
+                   and _int(r.get("round"))})
+
+
+def _unfolded(session_dir, rows, rounds, findings):
+    """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
+
+    A finding the account already lists, one an earlier seat stored the same, and one the round's compile dropped
+    (it stays under `refused`) add nothing."""
+    listed = {f["findingKey"] for f in findings}
+    dropped = {(d["round"], d["title"], d["file"]) for d in _refused(rounds)}
+    out = []
+    for key, (att, _) in _slots(rows).items():
+        phase, rnd, seat, _ = key
+        if phase not in _RAW_PHASES:
+            continue
+        env = _envelope(_path(session_dir, key, att))
+        payload = env.get("payload") if isinstance(env, dict) else None
+        raised = payload.get("findings") if isinstance(payload, dict) else None
+        for f in raised if isinstance(raised, list) else []:
+            if not (isinstance(f, dict) and isinstance(f.get("title"), str) and f["title"].strip()):
+                continue
+            fkey = sc.finding_identity_key(f)
+            # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
+            if fkey in listed or (rnd, f["title"], f.get("file")) in dropped:
+                continue
+            listed.add(fkey)
+            fid = f.get("id")
+            out.append({"id": fid if isinstance(fid, str) and fid.strip() else fkey, "findingKey": fkey, "title": f["title"],
+                        "severity": f.get("severity"), "file": f.get("file"), "line": f.get("line"),
+                        "consequence": f.get("consequence"), "body": f.get("body", f.get("detail")), "reviewer": seat,
+                        "outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
     return out
 
 
@@ -584,6 +650,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
+    if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
+        # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
+        findings += _unfolded(session_dir, rows, rounds, findings)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
             reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
@@ -627,13 +696,17 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
         capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
+    rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
             "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
                        "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
-                       **({"wider": wider} if wider else {})},
+                       **({"wider": wider} if wider else {}),
+                       **({"extraAudit": state["extraAudit"]} if isinstance(state.get("extraAudit"), dict) else {})},
+            **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
+            **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
@@ -679,10 +752,10 @@ def _owner_rulings(entries, findings, merged):
     return out
 
 
-def _carried(account, extras, repo_root, readers):
-    """The latest earlier record's findings this session did not raise, as that record stored them.
+def _earlier(account, extras, repo_root, readers):
+    """The latest earlier record's findings, or [] when there is none.
 
-    Any refusal other than "no earlier record", and any malformed findings list, carries nothing: the
+    Any refusal other than "no earlier record", and any malformed findings list, reads as none: the
     writer makes its own refusal, so there is one place that refuses.
     """
     repo = extras.get("repo") or review_record._readers(readers)["repo_name"](repo_root)
@@ -690,6 +763,34 @@ def _carried(account, extras, repo_root, readers):
     earlier = prior.get("findings") if prior.get("ok") else None
     if not isinstance(earlier, list) or not all(isinstance(f, dict) for f in earlier):
         return []
+    return earlier
+
+
+def _fill(account, earlier):
+    """Give each account finding the parts the earlier record held for it and the session's row lacks.
+
+    A `grade`, `repeatOf` or `kindOfMistake` the row lacks is the earlier one; the earlier `breakItRuns` come first,
+    followed by each of the row's runs not already among them."""
+    held = {review_record._key(f): f for f in earlier}
+    for f in account["findings"]:
+        old = held.get(review_record._key(f))
+        if old is None:
+            continue
+        for part in ("grade", "repeatOf", "kindOfMistake"):
+            if part not in f and part in old:
+                f[part] = old[part]
+        # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
+        if isinstance(old.get("breakItRuns"), list):
+            mine = f.get("breakItRuns") if isinstance(f.get("breakItRuns"), list) else []
+            runs = list(old["breakItRuns"])
+            for run in mine:
+                if run not in runs:
+                    runs.append(run)
+            f["breakItRuns"] = runs
+
+
+def _carried(account, earlier):
+    """The latest earlier record's findings this session did not raise, as that record stored them."""
     present = {review_record._key(f) for f in account["findings"]}
     out = []
     for f in earlier:
@@ -712,7 +813,9 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0], abandoned)
-        account["findings"] += _carried(account, extras, repo_root, readers)
+        earlier = _earlier(account, extras, repo_root, readers)
+        _fill(account, earlier)
+        account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)

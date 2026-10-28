@@ -20,7 +20,7 @@ from test_review_record_session import (  # noqa: E402
 REASON = "owner stopped the loop"
 ABANDONED_LINE = "session abandoned: the review loop was closed before it ended, so this record cannot read reviewed"
 CHECKED_ABANDONED = "the review loop was abandoned before it ended: " + REASON
-CHECKED_UNFOLDED = "findings in seat results that were recorded but never folded appear only in the raw findings files"
+CHECKED_UNFOLDED = "findings in seat results that were recorded but never folded are listed as open findings"
 LIVE_FINDING = {"findingKey": KEY, "id": "f-1", "title": "t", "severity": "Important", "file": "a.py", "line": 3,
                 "detail": "d", "dimension": "code-reviewer"}
 
@@ -132,8 +132,8 @@ def test_any_other_refusal_still_stands_for_an_abandoned_session(tmp_path):
 
 
 def test_findings_in_a_seat_result_never_folded_reach_the_record_through_its_raw_file(tmp_path):
-    """axis: a recorded-but-never-folded seat result becomes no finding row; its findings are in the raw findings
-    file the record lists."""
+    """axis: a recorded-but-never-folded seat result becomes one open finding row; its findings are also in the raw
+    findings file the record lists."""
     session = Session(tmp_path, terminal=None).seat("code-reviewer").save()
     put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
         {"title": "Unfolded defect", "severity": "Important", "consequence": "a defect stays in the change"}]}})
@@ -141,7 +141,9 @@ def test_findings_in_a_seat_result_never_folded_reach_the_record_through_its_raw
     out = _write(tmp_path, session, fake, abandoned=REASON)
     assert out["ok"] and out["status"] == "not-reviewed", out
     rec = rr.read(7, readers=fake.readers())
-    assert rec["findings"] == []
+    assert len(rec["findings"]) == 1
+    row = rec["findings"][0]
+    assert row["outcome"] is None and row["reason"] == rs.UNFOLDED_OPEN and row["title"] == "Unfolded defect"
     assert len(rec["rawOutputs"]) == 1 and "code-reviewer" in rec["rawOutputs"][0]["file"]
     posted = raw_comments(fake)
     assert len(posted) == 1 and "Unfolded defect" in posted[0]
