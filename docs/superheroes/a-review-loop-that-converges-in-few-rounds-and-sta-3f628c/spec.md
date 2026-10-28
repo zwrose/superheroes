@@ -376,6 +376,14 @@ happened next. (source: board · panel 4; board · panel 9)
     audit round settled what was open, whether an accepted leftover later became an escape, and
     whether a rethink converged. (source: board · panel 4)
 
+**FR-53.** At each gardening pass after this work ships, the advisor shall check two revisit
+conditions and bring any that is met to the owner: a false PR claim reached merge past the vet,
+which reopens the grounding reviewer's removal (FR-46); or the security and premortem reviewers
+still look expensive for what they find, which reopens their seating (FR-3). (source: Canon
+2026-10-27-5692f27d-1; Canon 2026-10-27-5692f27d-5)
+  - *Acceptance (rule):* Each gardening pass records whether each condition was met and, when
+    one was, that it went to the owner. (source: craft, for your veto)
+
 ## Significant unhappy paths
 
 **UFR-1.** If a finding carried over from an abandoned session has no outcome, then the review
@@ -466,11 +474,7 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 - Today the grounding reviewer never runs inside the loop.
   [cite: plugins/superheroes/skills/review-code/reference/grounding-seat.md § Known limitation]
   (source: Canon 2026-10-27-5692f27d-1)
-- The grounding reviewer's removal (FR-46) holds while the vet catches false PR claims; a false PR
-  claim that reaches merge past the vet reopens it with the owner. (source: Canon
-  2026-10-27-5692f27d-1)
-- The owner's revisit of security and premortem seating (FR-3) reads the gardening-pass measure's
-  finding outcomes by lens (#2189) after this work ships; this work builds nothing for it.
+- The seating check in FR-53 reads the gardening-pass measure's finding outcomes by lens (#2189).
   (source: Canon 2026-10-27-5692f27d-5)
 
 ## Constraints

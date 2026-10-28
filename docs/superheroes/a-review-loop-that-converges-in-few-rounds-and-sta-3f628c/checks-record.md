@@ -126,6 +126,46 @@ No new findings. Clean.
 #### Citation check
 []
 
+### Round 4
+
+Reviewed spec: commit 359d37e1a. The fix for its two findings landed in the next commit; round 4 was
+the last round, so the after-rulings cycle re-reads it.
+
+#### Gap check
+- Run directory: scratchpad checks/r4/run-gap
+- Result: real
+- Confirmations: GAP-2 -> not-fixed (still queued for the owner); GAP-8 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| GAP-9 | gap | The grounding-retirement reopening condition sits only in Assumptions | craft | New FR-53: at each gardening pass the advisor checks both revisit conditions and brings a met one to the owner (Canon 2026-10-27-5692f27d-1, 2026-10-27-5692f27d-5) | fixed, not yet confirmed |
+
+#### Source check
+- Run directory: scratchpad checks/r4/run-source
+- Result: real
+- Approved board, for the source check: board/build-board.html (version 4)
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SRC-15 | source | The round-3 rewording dropped the seating revisit's cost-versus-findings condition | craft | Same fix as GAP-9: FR-53 states the condition | fixed, not yet confirmed |
+
+#### Grounding check
+- Run directory: scratchpad checks/r4/run-grounding
+- Result: real
+- Grounding base, for grounding: origin/main, 98a859f0aa7b3b3891d4ddb8b60f76ba073b3e45
+- Confirmations: none owed
+
+No new findings. Clean.
+
+#### Citation check
+[] (and [] after the FR-53 fix)
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it.
+- GAP-9 and SRC-15: the revisit conditions, fixed as FR-53 after round 4. Marks: the review didn't
+  settle this. The after-rulings cycle re-reads FR-53; it reaches the owner only if that cycle does
+  not confirm it.
+
+Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1, 2026-10-28).
