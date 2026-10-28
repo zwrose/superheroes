@@ -645,12 +645,12 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 # a report from a round after the one that settled the listed finding was never folded (a folded
                 # re-report would have reopened the ledger row): the defect came back, so the row reads open again
                 # the scoped finder is the one report phase that runs after a round's fix audit, so in the settling
-                # round itself only its report postdates a fix-audit settlement (fixed); a refutation is recorded
-                # after the scoped report is folded, so a same-round refuted row is the loop's answer to that report
+                # round itself only its report postdates the settlement; the one exception is a refutation, which the
+                # loop records after the scoped report is folded, so a same-round refuted row answers that report
                 if isinstance(held, dict) and held.get("outcome") is not None and _int(rnd) \
                         and _int(settled_rounds.get(fkey)) \
                         and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey] and phase == round_phases.P_SCOPED
-                                                            and settled_kinds.get(fkey) == "fixed")):
+                                                            and settled_kinds.get(fkey) != "refuted")):
                     held.update({"outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
                 continue
             listed.add(fkey)

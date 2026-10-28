@@ -241,7 +241,7 @@ def test_a_same_round_report_after_the_settling_audit_reopens_the_finding_in_an_
 
 def test_a_same_round_scoped_report_refuted_after_its_fold_stays_refuted_in_an_abandoned_session(tmp_path):
     """axis: a scoped finding folded and then refuted in the same round keeps its shown-wrong outcome and reason on
-    abandonment; only a fixed settlement is answered by a later same-round scoped report."""
+    abandonment; a refutation is recorded after the scoped report is folded."""
     refuted = ledger_row(disposition="refuted", refutedReason="the code does not do that")
     s = Session(tmp_path, terminal=None, dispositionLedger=[refuted], rounds={"1": {}, "2": {}})
     session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
@@ -251,6 +251,20 @@ def test_a_same_round_scoped_report_refuted_after_its_fold_stays_refuted_in_an_a
     (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
     assert row["outcome"] is not None, row
     assert row["reason"] != rs.UNFOLDED_OPEN, row
+
+
+def test_a_same_round_scoped_report_after_an_out_of_scope_settlement_reopens_the_finding_in_an_abandoned_session(tmp_path):
+    """axis: only a refutation (recorded after the scoped report is folded) is exempt from the same-round reopen; an
+    out-of-scope disposition entered before the scoped report is answered by it, so the row reads open again."""
+    parked = ledger_row(disposition="out-of-scope", outOfScopeReason="a later change")
+    s = Session(tmp_path, terminal=None, dispositionLedger=[parked], rounds={"1": {}, "2": {}})
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}]}}, phase=SCOPED, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert row["outcome"] is None, row
+    assert row["reason"] == rs.UNFOLDED_OPEN, row
 
 
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):
