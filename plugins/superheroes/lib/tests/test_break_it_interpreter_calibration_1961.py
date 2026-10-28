@@ -531,7 +531,7 @@ def test_c5_the_other_output_keys_are_unchanged(tmp_path):
     # axis: C5 resolve adds exactly one key
     repo, store = _setup_repo(tmp_path)
     assert set(review_code_config.resolve(repo, root=store)) == {
-        "verifyCommand", "verifyMode", "tiers", "calibrationRefusal", "breakItInterpreter"}
+        "verifyCommand", "verifyRefusal", "tiers", "calibrationRefusal", "breakItInterpreter"}
 
 
 # --- C6: one validator ------------------------------------------------------------------------

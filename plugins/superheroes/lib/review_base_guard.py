@@ -559,7 +559,9 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
             return {
                 "ok": False,
                 "reason": REASON_REPO_MISMATCH,
-                "detail": "PR base repo %r does not match origin %r" % (pr_repo, base_repo),
+                "detail": ("reviewing this PR is not supported: code review reviews only PRs "
+                           "built in the project it serves, and this PR's base repository %r is "
+                           "not this project's (%r)" % (pr_repo, base_repo)),
             }
         base_repo_check = "matched"
 

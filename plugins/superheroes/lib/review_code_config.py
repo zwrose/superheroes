@@ -15,16 +15,31 @@ import model_tier_overrides  # noqa: E402
 import core_md               # noqa: E402  (sibling)
 
 
+VERIFY_REFUSAL_REASON = "verify-command-required"
+VERIFY_REFUSAL_MESSAGE = (
+    "Code review is not available until a verify command is set. Code review needs a command "
+    "that verifies this project's code; set one with /superheroes:configure."
+)
+
+
+def verify_command_configured(cmd):
+    """True when ``cmd`` is a REAL verify command: a string that is not empty or 'none' (any case,
+    any surrounding whitespace). The one no-command test; the review driver applies the same one."""
+    if not isinstance(cmd, str):
+        return False
+    return cmd.strip().lower() not in ("", "none")
+
+
 def resolve_verify_command(profile_path):
     """The profile's `## Verify` `command:` value (first wins), or 'none' when absent/unreadable."""
-    _mode, cmd = resolve_verify_from_profile(profile_path)
-    return cmd
+    return resolve_verify_from_profile(profile_path)
 
 
 def resolve_verify_from_profile(profile_path):
-    """Return (verify_mode, verify_command). verify_mode is None, 'unverified', or 'review-only'."""
+    """Return the profile's `## Verify` `command:` value (first wins), or 'none' when the profile
+    is absent, unreadable, or sets no command."""
     if not profile_path or not os.path.exists(profile_path):
-        return None, "none"
+        return "none"
     try:
         in_verify = False
         with open(profile_path, encoding="utf-8") as fh:
@@ -37,16 +52,11 @@ def resolve_verify_from_profile(profile_path):
                     break
                 if not in_verify:
                     continue
-                if line.startswith("mode: unverified"):
-                    return "unverified", "none"
-                if line.startswith("mode: review-only"):
-                    return "review-only", "none"
                 if line.startswith("command:"):
-                    cmd = line.split(":", 1)[1].strip() or "none"
-                    return None, cmd
+                    return line.split(":", 1)[1].strip() or "none"
     except OSError:
-        return None, "none"
-    return None, "none"
+        return "none"
+    return "none"
 
 
 # The cfg.tiers key -> model_tier role map. The single home for the review-code tier vocabulary
@@ -80,7 +90,6 @@ def _break_it_interpreter_value(record):
 
 def resolve(cwd, root=None):
     verify = None
-    verify_mode = None
     profile = None
     overrides = {}
     refusal = None
@@ -110,7 +119,7 @@ def resolve(cwd, root=None):
         if profile and not os.path.isfile(profile):
             profile = None
         if verify is None:
-            verify_mode, verify = resolve_verify_from_profile(profile)
+            verify = resolve_verify_from_profile(profile)
     except Exception as exc:
         _cr = sys.modules.get("calibration_resolve")
         if _cr is None:
@@ -121,7 +130,6 @@ def resolve(cwd, root=None):
         if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
         profile = None
-        verify_mode = None
     try:
         # Deliberate fail-open: model tiers here are a cost knob for review-code rounds,
         # not a governance gate — an unreadable profile yields band defaults (cost concern,
@@ -129,7 +137,8 @@ def resolve(cwd, root=None):
         overrides = model_tier_overrides.load_overrides(profile)
     except Exception:
         overrides = {}
-    if verify is None:
+    configured = verify_command_configured(verify)
+    if not configured:
         verify = "none"
     try:
         tiers = resolve_tiers(overrides)
@@ -137,7 +146,10 @@ def resolve(cwd, root=None):
         tiers = resolve_tiers({})
     return {
         "verifyCommand": verify,
-        "verifyMode": verify_mode,
+        "verifyRefusal": None if configured else {
+            "reason": VERIFY_REFUSAL_REASON,
+            "message": VERIFY_REFUSAL_MESSAGE,
+        },
         "tiers": tiers,
         "calibrationRefusal": refusal,
         "breakItInterpreter": break_it_interpreter,

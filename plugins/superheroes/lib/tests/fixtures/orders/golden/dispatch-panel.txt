@@ -21,15 +21,12 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 
 
 
-
 - Prior comments + author justifications: /tmp/superheroes-session-wo4-golden/prior-comments.json
 - Focus: touch auth paths carefully
 
 ## Calibration precedence
 Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
 > strict fallback when a needed field is absent in all of them.
-
-
 
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing
