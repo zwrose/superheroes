@@ -439,7 +439,7 @@ plainly that code review needs one. (source: Canon 2026-10-26-5692f27d-11)
     that code review is not available until a verify command is set. (source: Canon
     2026-10-26-5692f27d-11)
 
-**UFR-8.** If a review is already running when its project adopts the release carrying this work,
+**UFR-8.** If a review is already running when its project adopts a release carrying this work,
 then that review shall finish under the old rules. (source: framing; craft, for your veto)
   - *Acceptance:* Given an in-flight review at adoption, when it ends, then its record is complete
     under the rules it started with. (source: craft, for your veto)
@@ -463,7 +463,9 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 
 ## Definition of done / success
 
-- Every requirement above is built and released together in one plugin release. (source: framing)
+- Every requirement above is built and released. The core loop ships first, in one plugin release;
+  the three add-ons (big changes, FR-5 to FR-10; copies of a bug, FR-23 to FR-27; findings outside
+  the PR, FR-28 and FR-29) may ship in a later release. (source: Canon 2026-10-28-5692f27d-1)
 - Whether this work lost real catches is read, after it ships, from the gardening-pass measure
   (#2189) and the escape logging (#2190). (source: Canon 2026-10-27-5692f27d-6)
 
@@ -487,7 +489,8 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 
 ## Constraints
 
-- Ships in one plugin release with no trial mode. (source: framing; craft, for your veto)
+- No trial mode: the core loop ships in one release, and each add-on ships whole in its release.
+  (source: framing; Canon 2026-10-28-5692f27d-1; craft, for your veto)
 - Keeps the light, full and micro lanes; no new lane. (source: Canon 2026-10-08-d6064e1d-12)
 
 ## Out of scope

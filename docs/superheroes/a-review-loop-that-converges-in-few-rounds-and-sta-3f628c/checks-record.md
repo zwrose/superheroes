@@ -161,11 +161,45 @@ No new findings. Clean.
 #### Citation check
 [] (and [] after the FR-53 fix)
 
+## After rulings 1
+
+Rulings: one spec (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat
+(Canon 2026-10-28-5692f27d-2). Reviewed spec: commit 09d7138e6, changed parts only.
+
+### Round 1
+
+#### Gap check
+- Run directory: scratchpad checks/ra1/run-gap
+- Result: real
+- Confirmations: GAP-2 -> fixed (by the owner's ruling, FR-21); GAP-9 -> fixed
+
+No new findings. Clean.
+
+#### Source check
+- Run directory: scratchpad checks/ra1/run-source
+- Result: real
+- Approved board, for the source check: board/build-board.html (version 4)
+- Confirmations: SRC-15 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SRC-16 | source | The one-release lines contradict the core-first ruling | craft | DoD and Constraints now say the core loop ships first in one release and the three add-ons may follow; UFR-8 reads "a release" (Canon 2026-10-28-5692f27d-1) | fixed |
+
+#### Grounding check
+- Run directory: scratchpad checks/ra1/run-grounding
+- Result: real
+- Grounding base, for grounding: origin/main, 98a859f0aa7b3b3891d4ddb8b60f76ba073b3e45
+- Confirmations: none owed
+
+No new findings. Clean.
+
+#### Citation check
+[]
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
-- GAP-9 and SRC-15: the revisit conditions, fixed as FR-53 after round 4. Marks: the review didn't
-  settle this. The after-rulings cycle re-reads FR-53; it reaches the owner only if that cycle does
-  not confirm it.
+- GAP-9 and SRC-15: the revisit conditions, fixed as FR-54 after round 4; confirmed fixed in
+  after-rulings round 1, so they leave the queue.
 
 Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat (Canon 2026-10-28-5692f27d-2, FR-21).
