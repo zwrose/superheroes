@@ -59,6 +59,41 @@ Reviewed spec: commit c184da18d. Fixes landed in the next commit on this branch.
 #### Citation check
 [] (against the grounding base, before the fixes); [] (after the fixes, against the same base)
 
+### Round 2
+
+Reviewed spec: commit 75700a058. Fixes landed in the next commit on this branch.
+
+#### Gap check
+- Run directory: scratchpad checks/r2/run-gap
+- Result: real
+- Confirmations: GAP-1 -> fixed; GAP-2 -> not-fixed (queued for the owner, as recorded); GAP-3 -> fixed; GAP-4 -> fixed; GAP-5 -> fixed; GAP-6 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| GAP-7 | gap | Stall recovery and the stall menu's extra round can run past the 4-round cap | craft | FR-34 acceptance: recovery and the menu run only inside the 4 rounds; a stall at round 4 is handed back at the cap (framing: "the stuck-fix breaker stays inside the cap"; board panel 4) | fixed |
+
+#### Source check
+- Run directory: scratchpad checks/r2/run-source
+- Result: real
+- Approved board, for the source check: board/build-board.html (version 4)
+- Confirmations: SRC-01 to SRC-12 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SRC-13 | source | Same as GAP-7 | craft | Same fix as GAP-7 | fixed |
+| SRC-14 | source | The specialist-seating revisit condition is missing | craft | Added under Assumptions & dependencies (Canon 2026-10-27-5692f27d-5) | fixed |
+
+#### Grounding check
+- Run directory: scratchpad checks/r2/run-grounding
+- Result: real
+- Grounding base, for grounding: origin/main, 98a859f0aa7b3b3891d4ddb8b60f76ba073b3e45 (fresh base, same commit)
+- Confirmations: G-1 -> fixed
+
+No new findings.
+
+#### Citation check
+[]
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it.

@@ -261,6 +261,9 @@ automatic recovery attempt and, if the fix still fails, offer the owner the stal
 [cite: plugins/superheroes/skills/review-code/reference/round-driver.md § reached only after one invisible self-recovery]
 (source: board · panel 3; craft, for your veto)
   - *Acceptance (rule):* The stall menu's choices are unchanged. (source: board · panel 3)
+  - *Acceptance (rule):* The recovery attempt and the stall menu run only inside the 4 rounds. A
+    stall that reaches round 4 is handed back at the cap like any other open finding, and no menu
+    choice takes a session past round 4. (source: framing; board · panel 4)
 
 ### How a session stops
 
@@ -466,6 +469,8 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 - The grounding reviewer's removal (FR-46) holds while the vet catches false PR claims; a false PR
   claim that reaches merge past the vet reopens it with the owner. (source: Canon
   2026-10-27-5692f27d-1)
+- Security and premortem seating stays as today; if the two still look expensive for what they find
+  after this work ships, the gardening-pass numbers reopen it. (source: Canon 2026-10-27-5692f27d-5)
 
 ## Constraints
 
