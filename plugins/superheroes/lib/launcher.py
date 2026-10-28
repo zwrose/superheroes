@@ -1178,13 +1178,12 @@ def charter_premise_reason(premise):
     if has_budget and charter == "workhorse":
         return "premise-budget-without-detective"
     budget = premise["budget"] if has_budget else None
-    # axis: a budget is one unpadded non-blank line — a break would let it open a second prompt line
+    # axis: a budget is one unpadded non-blank line free of control characters — a break would let it open a second prompt line, and a NUL cannot cross the process boundary
     if has_budget and (
         not isinstance(budget, str)
         or not budget.strip()
         or budget != budget.strip()
-        or "\n" in budget
-        or "\r" in budget
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in budget)
     ):
         return "premise-budget-invalid"
     return None
@@ -1396,7 +1395,10 @@ def compose_launch(
     if charter_reason is not None:
         return _fail(charter_reason)
     charter = premise.get("charter", "workhorse") if isinstance(premise, dict) else "workhorse"
-    cmd = _CHARTER_COMMANDS[charter]
+    # axis: a detective lane is never launched in the cloud — its charter carries no cloud intake step, so the receiving-side version and head checks would not run
+    if cloud and charter == "detective":
+        return _fail("compose-detective-cloud-unsupported")
+    cmd =_CHARTER_COMMANDS[charter]
     issue_line = "Issue: #%s" % issue
     if charter == "detective":
         issue_line += "\n%s %s" % (_BUDGET_LABEL, premise["budget"])

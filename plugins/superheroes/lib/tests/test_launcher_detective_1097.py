@@ -16,6 +16,7 @@ import heartbeat as hb
 import launch_ledger as ll
 import wave_watch as ww
 from test_cloud_builder import ENV_ID, SHA
+from test_launcher_cloud import _cloud_repo, _fake_spawn as _fake_cloud_spawn, _launch as _cloud_launch
 from test_launcher import (  # noqa: F401  (the two autouse fixtures apply to this module too)
     L,
     _all_checks,
@@ -34,7 +35,8 @@ DETECTIVE_HEAD = "/superheroes:detective\n\nIssue: #%s\nBudget: %s\n\n"
 
 _BAD_CHARTERS = [None, "", "Detective", " detective", "detective ", "bogus", ["detective"], True, 7]
 _BAD_BUDGETS = [
-    None, "", "   ", " 1h", "1h ", "\t1h", "1h\n", "1h\n2h", "1h\r", "1h\r\n2h", 5, True, ["1h"], {"a": 1},
+    None, "", "   ", " 1h", "1h ", "\t1h", "1h\n", "1h\n2h", "1h\r", "1h\r\n2h",
+    "1\x00h", "1h\x00", "\x001h", "1\th", "1h\x7f", "1\x1bh", 5, True, ["1h"], {"a": 1},
 ]
 
 
@@ -146,14 +148,12 @@ def test_local_detective_prompt_starts_with_the_command_and_names_the_budget(tmp
     assert detective["prompt"] in detective["argv"]
 
 
-def test_cloud_detective_prompt_starts_with_the_command_and_names_the_budget():
-    # axis: the command choice and the budget line on the cloud prompt
-    detective = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET})
-    workhorse = _cloud({"baseCommit": SHA})
-    assert detective["ok"] is True, detective
-    assert detective["prompt"].startswith(DETECTIVE_HEAD % (1747, BUDGET))
-    assert detective["charter"] == "detective"
-    assert _without_command_and_budget(detective["prompt"]) == workhorse["prompt"]
+def test_compose_refuses_a_cloud_detective_and_composes_nothing():
+    # axis: the detective charter carries no cloud intake step, so a cloud detective is refused
+    result = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET})
+    assert result["ok"] is False
+    assert result["reason"] == "compose-detective-cloud-unsupported"
+    assert "prompt" not in result
 
 
 def test_local_adopt_detective_prompt_starts_with_the_command_and_names_the_budget(tmp_path):
@@ -167,15 +167,36 @@ def test_local_adopt_detective_prompt_starts_with_the_command_and_names_the_budg
     assert _without_command_and_budget(detective["prompt"]) == workhorse["prompt"]
 
 
-def test_cloud_adopt_detective_prompt_starts_with_the_command_and_names_the_budget():
-    # axis: the command choice and the budget line on the cloud-adopt prompt
+def test_compose_refuses_a_cloud_adopt_detective_and_composes_nothing():
+    # axis: the cloud refusal holds for an adopting detective too — no intake step selects the handed-over head
     adopt = {"adoptsBranch": BRANCH, "adoptsHead": HEAD}
-    detective = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET, **adopt})
-    workhorse = _cloud({"baseCommit": SHA, **adopt})
-    assert detective["ok"] is True, detective
-    assert detective["prompt"].startswith(DETECTIVE_HEAD % (1747, BUDGET))
-    assert "Adopts branch: %s at %s" % (BRANCH, HEAD) in detective["prompt"]
-    assert _without_command_and_budget(detective["prompt"]) == workhorse["prompt"]
+    result = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET, **adopt})
+    assert result["ok"] is False
+    assert result["reason"] == "compose-detective-cloud-unsupported"
+    assert "prompt" not in result
+
+
+def test_a_detective_lane_routed_to_the_cloud_leaves_an_accounted_refusal(tmp_path):
+    # axis: launch_build refuses a cloud detective lane and the refusal is accounted in the ledger
+    repo = _cloud_repo(tmp_path)
+    calls = []
+    result = _cloud_launch(
+        repo, tmp_path, _fake_cloud_spawn(calls=calls),
+        premise=_valid_premise(repo, charter="detective", budget=BUDGET))
+    assert result["ok"] is False
+    assert result["reason"] == "compose-detective-cloud-unsupported"
+    assert calls == []
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"]
+    assert len(reserved) == 1
+    assert reserved[0]["charter"] == "detective"
+    refused = [
+        r for r in records
+        if r.get("event") == "refused" and r.get("launchId") == reserved[0]["launchId"]
+    ]
+    assert len(refused) == 1
+    assert refused[0]["reason"] == "compose-detective-cloud-unsupported"
+    assert ll.fold(records)["ok"] is True
 
 
 def test_workhorse_prompts_are_byte_identical_with_the_charter_absent_or_explicit(tmp_path):
