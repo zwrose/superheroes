@@ -469,8 +469,9 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 - The grounding reviewer's removal (FR-46) holds while the vet catches false PR claims; a false PR
   claim that reaches merge past the vet reopens it with the owner. (source: Canon
   2026-10-27-5692f27d-1)
-- Security and premortem seating stays as today; if the two still look expensive for what they find
-  after this work ships, the gardening-pass numbers reopen it. (source: Canon 2026-10-27-5692f27d-5)
+- The owner's revisit of security and premortem seating (FR-3) reads the gardening-pass measure's
+  finding outcomes by lens (#2189) after this work ships; this work builds nothing for it.
+  (source: Canon 2026-10-27-5692f27d-5)
 
 ## Constraints
 

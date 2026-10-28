@@ -94,6 +94,38 @@ No new findings.
 #### Citation check
 []
 
+### Round 3
+
+Reviewed spec: commit 3552f3a5a. The fix landed in the next commit on this branch.
+
+#### Gap check
+- Run directory: scratchpad checks/r3/run-gap
+- Result: real
+- Confirmations: GAP-2 -> not-fixed (still queued for the owner); GAP-7 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| GAP-8 | gap | The specialist-seating revisit line in Assumptions decides something the core does not | craft | Reworded as a plain dependency: the owner's revisit (Canon 2026-10-27-5692f27d-5) reads #2189's existing "finding outcomes by lens" row, and this work builds nothing for it, so a builder reading only the core builds the same thing | fixed |
+
+#### Source check
+- Run directory: scratchpad checks/r3/run-source
+- Result: real
+- Approved board, for the source check: board/build-board.html (version 4)
+- Confirmations: SRC-13 -> fixed; SRC-14 -> fixed
+
+No new findings. Clean.
+
+#### Grounding check
+- Run directory: scratchpad checks/r3/run-grounding
+- Result: real
+- Grounding base, for grounding: origin/main, 98a859f0aa7b3b3891d4ddb8b60f76ba073b3e45
+- Confirmations: none owed
+
+No new findings. Clean.
+
+#### Citation check
+[]
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it.
