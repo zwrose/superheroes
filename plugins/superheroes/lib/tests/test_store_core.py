@@ -1110,6 +1110,13 @@ def test_not_a_repository_true_on_declined_not_a_git_repo():
     assert sc.not_a_repository(res) is True
 
 
+def test_not_a_repository_true_on_git_2_56_dead_gitfile_wording():
+    # #2222: git <= 2.55 says "not a git repository: <gitdir>"; 2.56 says this instead.
+    res = sc.GitResult(
+        None, sc.GIT_DECLINED, "fatal: gitfile does not point to a valid repository: /r/.git")
+    assert sc.not_a_repository(res) is True
+
+
 def test_not_a_repository_false_on_other_declined():
     res = sc.GitResult(None, sc.GIT_DECLINED, "fatal: detected dubious ownership")
     assert sc.not_a_repository(res) is False

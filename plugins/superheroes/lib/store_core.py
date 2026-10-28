@@ -239,11 +239,16 @@ def short_hash(s):
 
 
 def not_a_repository(res):
-    """True when git declined with its canonical not-a-repository message (issue #699)."""
+    """True when git declined with its canonical not-a-repository message (issue #699).
+
+    A ``.git`` file whose gitdir is not a repository is refused as "not a git repository:
+    <gitdir>" up to git 2.55 and as "gitfile does not point to a valid repository: <.git>"
+    from 2.56 (issue #2222); both are the same refusal."""
     if res.status != GIT_DECLINED:
         return False
     detail = (res.detail or "").lower()
-    return "not a git repository" in detail or "not a git repo" in detail
+    return ("not a git repository" in detail or "not a git repo" in detail
+            or "does not point to a valid repository" in detail)
 
 
 def git_dot_entry_ancestor(cwd):
