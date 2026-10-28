@@ -1,0 +1,118 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "final",
+  "title": "Review loop spec approval",
+  "final": {
+    "history": {
+      "reviewRounds": 10,
+      "fixesMade": 44,
+      "vet": "The advisor's vet came back clean on its third round, with no calls for you. After the checks, the wording was tidied, and an independent reviewer confirmed that no meaning moved."
+    },
+    "declinedFindings": [],
+    "approval": {
+      "approvedBoard": true,
+      "boardSavedWithSpec": true
+    }
+  },
+  "cards": [
+    {
+      "id": "redraw-v5",
+      "callKind": "Board redraw",
+      "warning": false,
+      "question": "Does the board's version 5 match your rulings from this morning?",
+      "context": [
+        {
+          "title": "What changed on the board",
+          "blocks": [
+            {
+              "paragraph": "You approved version 4. Your three rulings on 2026-10-28 changed what the board shows, so panels 3, 4, 8 and 9 were redrawn."
+            },
+            {
+              "bullets": [
+                "Panel 3: when the same fix fails its audit in two rounds in a row, the loop makes one automatic recovery attempt. If the fix still fails, the session stops early and hands back the same way it does at round 4. There is no stall menu, and nothing reaches you mid-review.",
+                "Panel 3: a repeat of an earlier \"not a bug\" ruling gets a fresh look when the code behind that ruling has changed.",
+                "Panel 4: a stuck fix hands back like the cap, and the advisor's extra audit round covers the last round's fixes, not only round 4's.",
+                "Panel 8: the stall menu is listed as gone.",
+                "Panel 9: the two revisit checks at each gardening pass, and the core loop shipping first, with the three add-ons allowed to follow."
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Where to look",
+          "blocks": [
+            {
+              "paragraph": "The board is at https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8. It now shows version 7, which includes this change."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": []
+    },
+    {
+      "id": "redraw-v6",
+      "callKind": "Board redraw",
+      "warning": false,
+      "question": "Does panel 1 now say \"as today\" in full?",
+      "context": [
+        {
+          "title": "What changed on the board",
+          "blocks": [
+            {
+              "paragraph": "The advisor's first vet found two things that panel 1 left out of today's behavior, which you had kept. They were added."
+            },
+            {
+              "bullets": [
+                "Security and premortem also join when a change's risk is unclear. That covers every change in a project that has not set its risk areas.",
+                "The test reviewer still writes break-it tests on the risk areas a change touches, as today."
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Where to look",
+          "blocks": [
+            {
+              "paragraph": "The board is at https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8. It now shows version 7, which includes this change."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": []
+    },
+    {
+      "id": "redraw-v7",
+      "callKind": "Board redraw",
+      "warning": false,
+      "question": "Does panel 1 keep today's limit of three break-it tests?",
+      "context": [
+        {
+          "title": "What changed on the board",
+          "blocks": [
+            {
+              "paragraph": "The checks found that version 6 had dropped the exception you approved in October. It is back."
+            },
+            {
+              "bullets": [
+                "The test reviewer writes at most three per-area break-it tests per review, and at least one per touched area only while under that cap. A change touching more than three risk areas can leave some without one.",
+                "Tests attached to findings have no cap."
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Where to look",
+          "blocks": [
+            {
+              "paragraph": "The board is at https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8. It now shows version 7, which includes this change."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": []
+    }
+  ]
+}

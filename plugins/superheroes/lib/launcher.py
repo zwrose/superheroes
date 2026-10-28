@@ -1930,6 +1930,20 @@ def _terminalize(
     return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
 
 
+def _settle_uncertain_reservation(repo_root, launch_id, reason, stage, env):
+    """End a reservation whose append reported failure and whose read-back could not say.
+
+    One terminal write: `terminal` when the landed record is now ended, `absent` when the
+    line never landed, `uncertain` when the settle could not read or write the ledger.
+    """
+    term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
+    if term["ok"]:
+        return "terminal"
+    if term["reason"] == "terminal-unknown-launch":
+        return "absent"
+    return "uncertain"
+
+
 def _accounted_fail(reserve_result, reason, launch_id, **extra):
     """A pre-spawn refusal carries the disclosure its accounting reservation recorded.
 
@@ -3674,14 +3688,27 @@ def launch_build(
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         extra = {}
+        read_back = None
+        if reserve_result.get("reason") == "ledger-append-failed":
+            # The append reported failure: the read-back says whether the line landed. An
+            # undecided or missing read-back (fail closed) is settled by one terminal write.
+            read_back = reserve_result.get("appendReadBack")
+            if read_back != "not-landed":
+                read_back = _settle_uncertain_reservation(
+                    repo_root, launch_id, "ledger-append-failed", "reserve", env,
+                )
+            extra["appendReadBack"] = read_back
         if made_iphone_id:
-            if reserve_result.get("reason") == "ledger-append-failed":
-                # The append may or may not have landed, so the record may name these phones:
-                # they are reported, never removed.
+            if read_back == "uncertain":
+                # The settle could not read or write the ledger, so a record may name these
+                # phones: they are reported, never removed.
                 phone_outcomes = [{"id": udid, "recorded": "uncertain"} for udid in made_iphone_ids]
+            elif read_back == "terminal":
+                # The landed record is now terminal and names these phones: the reap owns them.
+                phone_outcomes = [{"id": udid, "recorded": True} for udid in made_iphone_ids]
             else:
-                # Every other refusal returns before the append: no record names these phones,
-                # so they are this launch's own and nothing else can reap them.
+                # No record names these phones (the refusal returned before the append, or the
+                # line did not land): they are this launch's own and nothing else can reap them.
                 phone_outcomes = [
                     {"id": udid, "recorded": False, "deleted": _delete_own_iphone(udid, run)}
                     for udid in made_iphone_ids
@@ -3690,12 +3717,25 @@ def launch_build(
             if models_named:
                 extra["iphones"] = phone_outcomes
         if not cloud:
-            proc = _git_scrubbed(
-                repo_root, "worktree", "remove", worktree_path,
-                env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-            )
-            if proc is None or proc.returncode != 0:
-                extra["orphanedWorktree"] = worktree_path
+            if read_back == "uncertain":
+                # A live reservation may name this worktree: keep it until the lane is readable.
+                extra["keptWorktree"] = worktree_path
+                extra["remedy"] = (
+                    "First make the ledger read cleanly again: `repair-lane` refuses an unreadable "
+                    "ledger. Then, after confirming no builder runs for this launch, end the lane "
+                    "with `launcher.py repair-lane --repo-root %s --launch-id %s "
+                    "--evidence \"<what failed and what was checked>\" "
+                    "--no-builder \"<what was checked to show no builder exists>\"`. "
+                    "Only once the lane reads terminal (or absent) can the worktree at %s be removed."
+                    % (repo_root, launch_id, worktree_path)
+                )
+            else:
+                proc = _git_scrubbed(
+                    repo_root, "worktree", "remove", worktree_path,
+                    env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+                )
+                if proc is None or proc.returncode != 0:
+                    extra["orphanedWorktree"] = worktree_path
         return _fail(reserve_result["reason"], launchId=launch_id, **extra)
 
     # The lanes this launch's surfaces overlapped are a recorded, disclosed warning rather
@@ -4066,6 +4106,17 @@ def _try_reserve_for_refusal(
         if isinstance(account_id, str) and account_id:
             reserved["accountId"] = account_id
     result = ll.reserve(repo_root, reserved, env=env)
+    if result.get("reason") == "ledger-append-failed" and result.get("appendReadBack") == "landed":
+        # The line is in the ledger and this path never spawns: the caller ends it with the
+        # refusal's own reason and stage, so the diagnostic is not replaced by the append failure.
+        return {"reserved": True, "warnings": []}
+    if result.get("reason") == "ledger-append-failed" and result.get("appendReadBack") != "not-landed":
+        # Undecided or missing read-back (fail closed): one terminal write settles the record,
+        # so the caller has nothing left to end.
+        settled = _settle_uncertain_reservation(
+            repo_root, launch_id, "ledger-append-failed", "reserve", env,
+        )
+        return {"reserved": False, "warnings": [], "appendReadBack": settled}
     # This accounting reservation can itself land on a live lane's surfaces, so it carries
     # the same disclosure a normal reservation does (#1054). Dropping it here is how the
     # pre-spawn refusal paths used to return a result that hid an overlap the ledger had
