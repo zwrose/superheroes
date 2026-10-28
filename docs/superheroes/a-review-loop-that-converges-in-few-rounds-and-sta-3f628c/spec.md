@@ -38,8 +38,9 @@ the change. (source: framing)
 Code review finds real problems, but it does not finish. Between 2026-10-17 and 2026-10-26 one PR
 in ten needed 9 or more review rounds and the worst needed about 30, PRs reviewed in more than one
 session held 81 to 83% of review tokens, and 21 merged PRs fixed the loop stalling or losing a
-session. (source: assessment) This work makes a review finish in a few rounds, find what it will find in round 1, and have fewer moving parts that can stall, without
-giving up the independent checks that make a review worth trusting. (source: framing)
+session. (source: assessment) This work makes a review finish in a few rounds, find in round 1 what
+it will find, and have fewer moving parts that can stall. It does this without giving up the
+independent checks that make a review worth trusting. (source: framing)
 
 ## Who it's for
 
@@ -69,7 +70,7 @@ same way it built the change. (source: Canon 2026-10-26-5692f27d-4)
 **FR-3.** The round-1 panel shall be a code reviewer and a test reviewer, joined by both the
 security and the premortem reviewer whenever the change touches any declared risk area.
 (source: Canon 2026-10-27-5692f27d-5)
-  - *Acceptance (rule):* A change that touches one risk area seats both specialists; a change that
+  - *Acceptance (rule):* A change that touches one risk area seats both specialists. A change that
     touches none seats neither. (source: Canon 2026-10-27-5692f27d-5)
 
 **FR-4.** Each round-1 reviewer shall record which parts of the change it actually read.
@@ -85,8 +86,8 @@ slices by size and give each slice its own code and test reviewer. (source: Cano
   - *Acceptance (Given-When-Then):* Given a 3,000-line change whose files all sit under one
     top-level folder, when round 1 starts, then it is reviewed as more than one slice.
     (source: Canon 2026-10-27-5692f27d-7)
-  - *Acceptance (rule):* Splitting a big change into separate PRs stays the usual first answer;
-    slicing is for a PR that is not practical to split. (source: Canon 2026-10-27-5692f27d-4;
+  - *Acceptance (rule):* Splitting a big change into separate PRs stays the usual first answer.
+    Slicing is for a PR that is not practical to split. (source: Canon 2026-10-27-5692f27d-4;
     board · panel 1)
 
 **FR-6.** The review loop shall count as countable lines every changed line except those in files
@@ -159,7 +160,7 @@ better test. (source: Canon 2026-10-27-5692f27d-3)
 **FR-17.** When the second break-it test also passes on the unfixed code, the verifier shall
 decide the finding on the evidence it has. (source: craft, for your veto)
   - *Acceptance (rule):* The finding is closed as wrong or kept as a judgment call without a
-    test; no third test is written. (source: craft, for your veto)
+    test. No third test is written. (source: craft, for your veto)
 
 ### Round 1: synthesis and repeats
 
@@ -173,8 +174,8 @@ its review record. (source: Canon 2026-10-26-5692f27d-9)
 **FR-20.** When a repeat matches an earlier fixed finding, the verifier shall judge whether the
 earlier fix still holds. (source: Canon 2026-10-26-5692f27d-9)
   - *Acceptance (Given-When-Then):* Given a repeat of a fixed finding, when the old fix still
-    holds, then the repeat keeps the earlier outcome; when it no longer holds, then the repeat is
-    treated as a new finding. (source: Canon 2026-10-26-5692f27d-9)
+    holds, then the repeat keeps the earlier outcome. When the old fix no longer holds, then the
+    repeat is treated as a new finding. (source: Canon 2026-10-26-5692f27d-9)
 
 **FR-21.** When a repeat matches an earlier finding closed as wrong, and the code that finding
 was judged on has changed since, the verifier shall judge whether the earlier outcome still holds.
@@ -226,7 +227,7 @@ did not touch, capped at about 3 per reviewer. (source: Canon 2026-10-26-5692f27
   - *Acceptance (rule):* An outside finding never goes to the fix, never blocks the merge and
     never becomes an owner card. (source: Canon 2026-10-26-5692f27d-8)
   - *Acceptance (rule):* The cap limits how many outside findings each reviewer raises from its own
-    reading; every outside finding raised is kept. A sweep's outside hits are not counted against
+    reading. Every outside finding raised is kept. A sweep's outside hits are not counted against
     the cap and are kept together under that sweep's entry. (source: craft, for your veto)
 
 **FR-29.** At the vet, the advisor shall sort each outside finding into a proposed follow-up filing
@@ -256,7 +257,7 @@ each fix touched. (source: board · panel 3)
 
 **FR-33.** The fix auditor shall check that each committed break-it test matches what the test
 reviewer wrote. (source: Canon 2026-10-27-5692f27d-3)
-  - *Acceptance (rule):* A changed test carries the build session's explanation; a change that
+  - *Acceptance (rule):* A changed test carries the build session's explanation. A change that
     weakens the test is a blocking finding on the fix. (source: Canon 2026-10-27-5692f27d-3;
     craft, for your veto)
 
@@ -268,7 +269,7 @@ reviewer wrote. (source: Canon 2026-10-27-5692f27d-3)
 **FR-35.** When the same fix fails its audit in two rounds in a row, the review loop shall make one
 automatic recovery attempt and, if the fix still fails, end the session and hand the PR back as it
 does at the cap (FR-38 to FR-43). (source: Canon 2026-10-28-5692f27d-3)
-  - *Acceptance (rule):* There is no stall menu; nothing from the review reaches the owner
+  - *Acceptance (rule):* There is no stall menu. Nothing from the review reaches the owner
     mid-review. (source: Canon 2026-10-28-5692f27d-3)
   - *Acceptance (Given-When-Then):* Given a fix that fails its audit in rounds 2 and 3 and again
     after the recovery attempt, when that happens, then the session ends and the advisor chooses
@@ -287,8 +288,8 @@ included. (source: board · panel 4)
 
 **FR-37.** A review session shall stop at 4 rounds. (source: Canon 2026-10-27-5692f27d-8)
   - *Acceptance (rule):* No session's review record shows a fifth round, except the one extra
-    audit round the advisor may order at the vet (FR-40), which the record labels as that.
-    (source: Canon 2026-10-27-5692f27d-8; Canon 2026-10-27-5692f27d-11)
+    audit round the advisor may order at the vet (FR-40). The record labels that round as
+    an extra audit round. (source: Canon 2026-10-27-5692f27d-8; Canon 2026-10-27-5692f27d-11)
 
 **FR-38.** When a session ends round 4 with a finding still open, the review loop shall hand the PR
 back with what is open, Important and Critical alike. (source: Canon 2026-10-27-5692f27d-8)
@@ -353,7 +354,7 @@ commit is over about 1,000 countable lines or touches a risk area the PR had not
     (source: Canon 2026-10-27-5692f27d-1; board · panel 5)
 
 **FR-48.** Code review shall have no read-only mode. (source: Canon 2026-10-26-5692f27d-10)
-  - *Acceptance (rule):* Review always runs as the one loop; a vet's narrow doubt goes to one
+  - *Acceptance (rule):* Review always runs as the one loop. A vet's narrow doubt goes to one
     independent reviewer given the doubt. (source: Canon 2026-10-26-5692f27d-10)
 
 **FR-49.** Code review shall review only PRs built in the project it serves. (source: Canon
@@ -389,10 +390,10 @@ happened next. (source: board · panel 4; board · panel 9)
     whether a rethink converged. (source: board · panel 4)
 
 **FR-54.** At each gardening pass after this work ships, the advisor shall check two revisit
-conditions and bring any that is met to the owner: a false PR claim reached merge past the vet,
-which reopens the grounding reviewer's removal (FR-47); or the security and premortem reviewers
-still look expensive for what they find, which reopens their seating (FR-3). (source: Canon
-2026-10-27-5692f27d-1; Canon 2026-10-27-5692f27d-5)
+conditions and bring any that is met to the owner. One condition is that a false PR claim reached
+merge past the vet, which reopens the grounding reviewer's removal (FR-47). The other is that the
+security and premortem reviewers still look expensive for what they find, which reopens their
+seating (FR-3). (source: Canon 2026-10-27-5692f27d-1; Canon 2026-10-27-5692f27d-5)
   - *Acceptance (rule):* Each gardening pass records whether each condition was met and, when
     one was, that it went to the owner. (source: craft, for your veto)
 
@@ -416,7 +417,7 @@ with, then the review session shall catch up to the lower layer's current head b
 re-run the same check once and record both results. (source: board · panel 6; craft, for your
 veto)
   - *Acceptance:* Given one flaky failure, when the re-run passes, then the round goes on and the
-    record shows both runs; when the re-run fails, then the round stops as today. (source: board ·
+    record shows both runs. When the re-run fails, then the round stops as today. (source: board ·
     panel 6)
 
 **UFR-4.** If a reviewer's break-it test needs a small change to run, then the build session shall
@@ -450,7 +451,7 @@ then that review shall finish under the old rules. (source: framing; craft, for 
 
 ## Non-functional requirements
 
-- **No silent loss:** nothing a reviewer finds is dropped from the review record; every finding
+- **No silent loss:** nothing a reviewer finds is dropped from the review record. Every finding
   ends with a recorded outcome or is shown open. (source: Canon 2026-10-10-d6064e1d-6)
 - **Independence:** every reviewer, verifier, auditor and search description comes from a
   different model family than every maker of the change. (source: Canon 2026-10-10-d6064e1d-12;
@@ -467,19 +468,21 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 
 ## Definition of done / success
 
-- Every requirement above is built and released. The core loop ships first, in one plugin release;
-  the three add-ons (big changes, FR-5 to FR-10; copies of a bug, FR-23 to FR-27; findings outside
-  the PR, FR-28 and FR-29) may ship in a later release. (source: Canon 2026-10-28-5692f27d-1)
+- Every requirement above is built and released. The core loop ships first, in one plugin release.
+  The three add-ons may ship in a later release: big changes (FR-5 to FR-10), copies of a bug
+  (FR-23 to FR-27), and findings outside the PR (FR-28 and FR-29). (source: Canon
+  2026-10-28-5692f27d-1)
 - Whether this work lost real catches is read, after it ships, from the gardening-pass measure
   (#2189) and the escape logging (#2190). (source: Canon 2026-10-27-5692f27d-6)
 
 ## Assumptions & dependencies
 
-- The gardening-pass measure is filed as #2189 and the escape logging as #2190; this work relies
+- The gardening-pass measure is filed as #2189 and the escape logging as #2190. This work relies
   on both for its proof and adds the cap-choice counts (FR-53) to #2189. (source: Canon
   2026-10-27-5692f27d-6; board · panel 9)
 - Splitting big changes exists today, by top-level folder above 1,500 changed lines or 20 files,
-  with one gap reviewer over the whole change. This work replaces how it cuts and what it counts.
+  with one gap reviewer over the whole change. This work replaces how splitting cuts and what
+  splitting counts.
   [cite: plugins/superheroes/lib/delta_surface.py § DEFAULT_SHARD_MAX_LINES = 1500] (source: board
   · panel 1)
 - Today's cap is 7 rounds with a hard ceiling of 10.
@@ -495,7 +498,8 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 
 - No trial mode: the core loop ships in one release, and each add-on ships whole in its release.
   (source: framing; Canon 2026-10-28-5692f27d-1; craft, for your veto)
-- Keeps the light, full and micro lanes; no new lane. (source: Canon 2026-10-08-d6064e1d-12)
+- Keeps the light, full and micro lanes, and adds no new lane. (source: Canon
+  2026-10-08-d6064e1d-12)
 
 ## Out of scope
 

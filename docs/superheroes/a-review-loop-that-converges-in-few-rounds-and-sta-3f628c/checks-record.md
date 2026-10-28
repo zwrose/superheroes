@@ -245,6 +245,21 @@ Reviewed spec and board: commit f109923a0, changed parts only.
 
 All three checks clean. The owner's queue is empty.
 
+## Writing pass
+
+The pass changed wording only, to the prose standard: it split long sentences, replaced semicolons
+with periods, named the noun behind three unclear pronouns, and rewrapped one unwrapped Purpose
+line. Every source tag, citation marker and requirement number is unchanged (checked mechanically).
+The author reverted one edit to FR-19 before the meaning check, because moving its phrase could
+change what "in its review record" attaches to.
+
+- Meaning check 1: scratchpad checks/rm1/run-meaning. Real. 18 findings for 18 changed statements:
+  17 meaning:kept, 1 meaning:shifted (FR-22's acceptance: the "Unless" exception no longer covered
+  "never dropped"). The pass was redone once with FR-22's acceptance restored as it stood before.
+- Meaning check 2: scratchpad checks/rm2/run-meaning. Real. 17 findings for the 17 changed
+  statements, each matched to one statement, all meaning:kept.
+- Outcome: the redone pass is kept.
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
