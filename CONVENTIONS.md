@@ -1417,7 +1417,7 @@ canonical ruling record is `LEDGERS.md` §4.
 > shared rule in `lib/wave_watch.py`. `plugins/superheroes/lib/heartbeat.py`'s module constants are
 > **authoritative** for the heartbeat.
 
-**Producer:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7).
+**Producers:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7) and a launched detective (`skills/detective/SKILL.md` — stamp duty in § What you may write).
 **Consumers:** the showrunner's scheduled liveness sweep (`skills/showrunner/SKILL.md` duty 9);
 `lib/wave_watch.py` for `lane-terminal` and `lane-blocked`.
 
