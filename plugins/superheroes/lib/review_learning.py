@@ -458,9 +458,12 @@ def _measured(value):
     # axis: a bool is not a number — see bite-proof record wo_revisit_measured-bool
     if isinstance(value, bool):
         return UNMEASURED
+    # axis: a huge integer is compared as an integer, never converted to a float — see bite-proof record wo_revisit_measured-huge-int
+    if isinstance(value, int):
+        return value if value >= 0 else UNMEASURED
     # axis: a missing or null number reads unmeasured, never zero — see bite-proof record wo_revisit_measured-none
     # axis: a negative or non-numeric value reads unmeasured — see bite-proof record wo_revisit_measured-range
-    if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+    if not isinstance(value, float) or not math.isfinite(value) or value < 0:
         return UNMEASURED
     return value
 

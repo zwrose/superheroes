@@ -1032,7 +1032,8 @@ def test_seating_echoes_the_numbers_read_and_keeps_a_real_zero():
     assert list(got["seats"]["security"]["outcomes"]) == list(RL.review_findings_schema.OUTCOMES)
     assert got["seats"]["security"] == SEAT_ROW
     zero = got["seats"]["premortem"]
-    assert zero["tokens"] == 0 and type(zero["tokens"]) is int and type(zero["minutes"]) is int
+    assert zero["tokens"] == 0 and type(zero["tokens"]) is int
+    assert zero["minutes"] == 0 and type(zero["minutes"]) is int
     assert all(n == 0 and type(n) is int for n in zero["outcomes"].values())
     ignored = RL.seating({"security": dict(SEAT_ROW, outcomes=dict(SEAT_ROW["outcomes"], bogus=4))})
     assert "bogus" not in ignored["seats"]["security"]["outcomes"]
@@ -1065,6 +1066,18 @@ def test_seating_measured_keeps_a_real_number(good):
     assert RL._measured(good) == good and type(RL._measured(good)) is type(good)
 
 
+# axis: the guarding test for the huge-integer branch of _measured — an integer past the float range never raises and never reads as a float
+def test_seating_measured_a_huge_integer_never_raises():
+    huge = 10 ** 400
+    assert RL._measured(-huge) == UNMEASURED
+    kept = RL._measured(huge)
+    assert kept == huge and type(kept) is int
+    got = RL.seating({"security": {"tokens": huge, "minutes": -huge}})
+    sec = got["seats"]["security"]
+    assert sec["tokens"] == huge and type(sec["tokens"]) is int and sec["minutes"] == UNMEASURED
+    assert "security.minutes" in got["unmeasured"] and "security.tokens" not in got["unmeasured"]
+
+
 @pytest.mark.parametrize("seat", ["lots", 5, None, [], {"outcomes": [1, 2], "tokens": 3}])
 def test_seating_a_seat_that_is_not_a_usable_dict_reads_unmeasured_where_it_is_missing(seat):
     got = RL.seating({"security": seat})
@@ -1095,6 +1108,14 @@ def test_cli_seating_round_trip_and_exit_codes(tmp_path, capsys):
     assert (code, out["reason"]) == (1, "bad-input")
     code, out = _cli(capsys, "seating", "--row", _json_file(tmp_path, "list.json", []))
     assert (code, out["reason"]) == (1, "bad-input")
+
+
+def test_cli_seating_a_huge_integer_is_echoed_or_read_unmeasured(tmp_path, capsys):
+    huge = 10 ** 400
+    row = _json_file(tmp_path, "huge.json", {"security": {"tokens": huge, "minutes": -huge}})
+    code, out = _cli(capsys, "seating", "--row", row)
+    assert code == 0 and out["ok"] is True
+    assert out["seats"]["security"]["tokens"] == huge and out["seats"]["security"]["minutes"] == UNMEASURED
 
 
 def test_cli_tally_carries_falsePrClaims(tmp_path, capsys):
