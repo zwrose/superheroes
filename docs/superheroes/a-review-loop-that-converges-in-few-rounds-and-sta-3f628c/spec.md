@@ -19,13 +19,14 @@ Every statement ends with its source in plain text. The sources are:
 
 - **board · panel N**: the approved build board, saved in `board/` beside this spec, at
   https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8. The owner approved version 4 on 2026-10-27.
-  Version 5 redraws panels 3, 4, 8 and 9 for the rulings of 2026-10-28 and goes to the owner on
-  the final sheet.
+  Versions 5 and 6 redraw panels 1, 3, 4, 8 and 9 for the rulings of 2026-10-28 and vet round 1,
+  and go to the owner on the final sheet.
 - **Canon <entry id>**: an owner ruling recorded in the project's Canon.
 - **framing**: the framing the owner approved on 2026-10-26.
 - **assessment**: the post-0.43 review-loop assessment the owner read and commented on,
   https://claude.ai/artifact/52LE5cg8Xd7HuKUJEvgf3v (2026-10-26).
 - **registry · item N**: item N's row in the revisit registry on #695.
+- **vet round 1**: the advisor's spec vet, round 1, posted on the spec PR (#2199).
 - **craft, for your veto**: a choice the author made, recorded for the owner's veto.
 
 "The review loop" in this spec is the code review that runs on a full-lane build, unless a
@@ -68,10 +69,13 @@ same way it built the change. (source: Canon 2026-10-26-5692f27d-4)
 ### Round 1: the panel
 
 **FR-3.** The round-1 panel shall be a code reviewer and a test reviewer, joined by both the
-security and the premortem reviewer whenever the change touches any declared risk area.
-(source: Canon 2026-10-27-5692f27d-5)
-  - *Acceptance (rule):* A change that touches one risk area seats both specialists. A change that
-    touches none seats neither. (source: Canon 2026-10-27-5692f27d-5)
+security and the premortem reviewer whenever the change touches any declared risk area or its risk
+is unclear, as today. (source: Canon 2026-10-28-5692f27d-4)
+  - *Acceptance (rule):* A change that touches one risk area seats both specialists. So does a
+    change whose risk is unclear, which, while a project has set no risk areas, means every change.
+    A change whose risk is clear and that touches no risk area seats neither.
+    [cite: plugins/superheroes/rubric/review-discipline.md § While a project has set no risk areas, that means every change.]
+    (source: Canon 2026-10-28-5692f27d-4; vet round 1)
 
 **FR-4.** Each round-1 reviewer shall record which parts of the change it actually read.
 (source: Canon 2026-10-27-5692f27d-4)
@@ -123,6 +127,11 @@ between slices. (source: Canon 2026-10-27-5692f27d-12)
 (source: Canon 2026-10-27-5692f27d-3; board · panel 1)
   - *Acceptance (rule):* A break-it test is written by the test reviewer, never by the build
     session. (source: Canon 2026-10-27-5692f27d-3)
+  - *Acceptance (rule):* Where a change touches a risk area, the test reviewer also writes break-it
+    tests on the touched areas, as today: at least one per touched area and at most three per
+    review. Each one is delivered as a finding and is run and graded like any other break-it test.
+    [cite: plugins/superheroes/agents/test-role.md § Write at most three break-it tests per review.]
+    (source: Canon 2026-10-27-5692f27d-3; vet round 1)
 
 **FR-12.** The test reviewer shall keep checking changed tests for tests that pass by chance,
 flaky tests and fixes with no test that would fail, and shall count test bloat against the change.
@@ -341,11 +350,16 @@ commit, with the fix audit and scoped finder of a later round. (source: Canon
 commit is over about 1,000 countable lines or touches a risk area the PR had not touched before.
 (source: Canon 2026-10-26-5692f27d-5; craft, for your veto)
   - *Acceptance (rule):* "Countable lines" here is the count of FR-6. (source: craft, for your veto)
+  - *Acceptance (rule):* A change whose risk is unclear counts as touching a risk area, as in FR-3.
+    It starts a full panel only when the PR's earlier review did not already treat its risk as
+    unclear or touched. (source: vet round 1; craft, for your veto)
 
-**FR-46.** At the vet, the advisor shall check the PR description's claims against the change.
-(source: Canon 2026-10-27-5692f27d-1)
-  - *Acceptance (rule):* Every vet receipt records the claims check. (source: Canon
-    2026-10-27-5692f27d-1)
+**FR-46.** At the vet, the advisor shall check the PR description's claims against the change and
+its runs: at least each claim that tests ran, each row of its definition-of-done table, and each
+claim that the verify command passed. (source: Canon 2026-10-27-5692f27d-1; vet round 1)
+  - *Acceptance (rule):* The vet receipt lists each such claim with its result, holds or does not
+    hold, and the evidence for it. A single line saying the claims were checked does not meet this.
+    (source: Canon 2026-10-27-5692f27d-1; vet round 1)
 
 ### Removed
 
@@ -373,13 +387,17 @@ commit is over about 1,000 countable lines or touches a risk area the PR had not
 finding, each repeat mark, the "Outside this PR" list, and how much of a sliced change the slice
 reviewers left unread. (source: board · panel 7)
   - *Acceptance (rule):* A record reads like the sample on board panel 7. (source: board · panel 7)
+  - *Acceptance (rule):* Each part of the record shows once the requirement that produces it has
+    shipped: the "Outside this PR" list with FR-28, and the unread share of a sliced change with
+    FR-5 and FR-7 to FR-10. (source: Canon 2026-10-28-5692f27d-1; vet round 1)
 
 ### Lanes
 
 **FR-52.** The light and micro lanes shall follow the same 4-round cap and the same
 only-what-changed rule for a PR that comes back. (source: craft, for your veto)
-  - *Acceptance (rule):* A light-lane review record never shows a fifth round in one session.
-    (source: craft, for your veto)
+  - *Acceptance (rule):* A light-lane review record never shows a fifth round in one session,
+    except the one extra audit round of FR-37, which the advisor may order for a light-lane PR as
+    for any other (FR-40). (source: craft, for your veto; vet round 1)
 
 ### Knowing it worked
 
@@ -388,14 +406,22 @@ happened next. (source: board · panel 4; board · panel 9)
   - *Acceptance (rule):* Each pass shows, per choice: how often it was made, whether an extra
     audit round settled what was open, whether an accepted leftover later became an escape, and
     whether a rethink converged. (source: board · panel 4)
+  - *Acceptance (rule):* #2189 builds this count. This work depends on it and builds nothing for
+    it. (source: vet round 1)
 
 **FR-54.** At each gardening pass after this work ships, the advisor shall check two revisit
 conditions and bring any that is met to the owner. One condition is that a false PR claim reached
 merge past the vet, which reopens the grounding reviewer's removal (FR-47). The other is that the
 security and premortem reviewers still look expensive for what they find, which reopens their
-seating (FR-3). (source: Canon 2026-10-27-5692f27d-1; Canon 2026-10-27-5692f27d-5)
+seating (FR-3). (source: Canon 2026-10-27-5692f27d-1; Canon 2026-10-28-5692f27d-4)
   - *Acceptance (rule):* Each gardening pass records whether each condition was met and, when
     one was, that it went to the owner. (source: craft, for your veto)
+  - *Acceptance (rule):* A false PR claim found after merge is logged by the act that finds it, the
+    way a review escape is logged, and each gardening pass shows how many there were, zero
+    included. (source: Canon 2026-10-27-5692f27d-1; vet round 1)
+  - *Acceptance (rule):* For the seating condition, each pass records beside its judgment the
+    numbers it read: the security and premortem reviewers' finding outcomes, and their tokens and
+    minutes. (source: Canon 2026-10-28-5692f27d-4; vet round 1)
 
 ## Significant unhappy paths
 
@@ -462,16 +488,18 @@ then that review shall finish under the old rules. (source: framing; craft, for 
 ## UI / UX
 
 The approved build board is the design: `board/build-board.html` beside this spec, at
-https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 5). Panel 1 covers round 1, panels 2
+https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 6). Panel 1 covers round 1, panels 2
 and 3 the fixes and later rounds, panel 4 how a session stops, panel 5 handback, panel 6 failures,
 panel 7 the review record, and panel 8 what is removed. (source: board · panel 1 to 9)
 
 ## Definition of done / success
 
-- Every requirement above is built and released. The core loop ships first, in one plugin release.
-  The three add-ons may ship in a later release: big changes (FR-5 to FR-10), copies of a bug
-  (FR-23 to FR-27), and findings outside the PR (FR-28 and FR-29). (source: Canon
-  2026-10-28-5692f27d-1)
+- Every requirement above is built and released, except FR-53, which #2189 delivers. The core
+  loop ships first, in one plugin release, and includes the line count of FR-6. The three add-ons
+  may ship in a later release: big changes (FR-5 and FR-7 to FR-10), findings outside the PR
+  (FR-28 and FR-29), and copies of a bug (FR-23 to FR-27). Copies of a bug ships with or after
+  findings outside the PR, because its outside hits go on that list. (source: Canon
+  2026-10-28-5692f27d-1; vet round 1)
 - Whether this work lost real catches is read, after it ships, from the gardening-pass measure
   (#2189) and the escape logging (#2190). (source: Canon 2026-10-27-5692f27d-6)
 
@@ -491,8 +519,27 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 - Today the grounding reviewer never runs inside the loop.
   [cite: plugins/superheroes/skills/review-code/reference/grounding-seat.md § Known limitation]
   (source: Canon 2026-10-27-5692f27d-1)
-- The seating check in FR-54 reads the gardening-pass measure's finding outcomes by lens (#2189).
-  (source: Canon 2026-10-27-5692f27d-5)
+- The seating check in FR-54 reads the gardening-pass measure's finding outcomes by lens and its
+  tokens and minutes per reviewer, which #2189 adds for this check. (source: Canon
+  2026-10-28-5692f27d-4; vet round 1)
+
+### What this spec changes elsewhere
+
+The approved requirements and shipped rules below change under this spec. The advisor marks them.
+(source: vet round 1)
+
+- **The risk-calibrated review spec** (`risk-calibrated-review-that-learns-dec0af`): FR-16, where
+  the specialists are picked by risk area, against FR-3. FR-23 and FR-24, where the test role runs
+  its own break-it tests and a failing run is a finding, against FR-13 to FR-17. FR-38's second
+  acceptance, where an out-of-scope finding with a real consequence reaches the owner, against
+  FR-28. UFR-2, where the cap brings open findings out as leftovers, against FR-38 to FR-43. Its
+  Constraints line keeping the round caps, the stuck-loop stop and the fixer that works only on its
+  finding, against FR-1, FR-35 and FR-37. (source: vet round 1)
+- **The converge-faster spec** (`make-the-shared-review-and-fix-loop-converge-faste-4c45d8`): FR-3,
+  where a first-time finding gets one local fix, against FR-23. (source: vet round 1)
+- **Shipped rules:** the round driver's cap of 7 and ceiling of 10, the stall menu, the separate
+  fixer and its fix orders, the grounding seat, read-only review mode, and the test role's rule
+  that the loop runs its break-it tests in a throwaway copy. (source: board · panel 8)
 
 ## Constraints
 
@@ -505,7 +552,7 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
 
 - Merging routine changes without a merge sheet (declined for now as collector item 397).
   (source: registry · item 397)
-- Seating security or premortem by risk area. (source: Canon 2026-10-27-5692f27d-5)
+- Seating security or premortem by risk area. (source: Canon 2026-10-28-5692f27d-4)
 - A replay of past cases before release. (source: Canon 2026-10-27-5692f27d-6)
 - Building the gardening-pass measure (#2189) and the escape logging (#2190), which are their own
   issues. (source: Canon 2026-10-27-5692f27d-6)

@@ -19,7 +19,7 @@
 
     <div class="sh-card">
       <div class="card-head">
-        <p class="sh-label">Build board · review loop rework · #2185 · version 5</p>
+        <p class="sh-label">Build board · review loop rework · #2185 · version 6</p>
         <h1 class="sh-heading">A review loop that finishes in a few rounds</h1>
         <p class="sh-caption">One full-lane review, end to end, as it will work after this rework. Light and micro lanes follow the same cap and the same "only what changed" rule with their single reviewer.</p>
       </div>
@@ -39,8 +39,8 @@
         <p class="arrow sh-caption">↓</p>
         <div class="flow-row">
           <div class="sh-step sh-step--reviewer">Code reviewer</div>
-          <div class="sh-step sh-step--reviewer">Test reviewer: attaches a break-it test to each finding it can prove that way</div>
-          <div class="sh-step sh-step--reviewer">Security + premortem: both join on any risk area, as today</div>
+          <div class="sh-step sh-step--reviewer">Test reviewer: attaches a break-it test to each finding it can prove that way, and writes at least one per touched risk area (at most three per review), as today</div>
+          <div class="sh-step sh-step--reviewer">Security + premortem: both join on any risk area, or when the risk is unclear, as today</div>
         </div>
         <p class="sh-caption">Each reviewer lists what it actually read.</p>
         <p class="arrow sh-caption">↓</p>
@@ -187,7 +187,7 @@ Reviewers: code, test, security, premortem · verifier · synthesis · fix audit
       <div class="tags">
         <span class="sh-tag">Canon 2026-10-26-5692f27d-1…11</span>
         <span class="sh-tag">Canon 2026-10-27-5692f27d-1…12</span>
-        <span class="sh-tag">Canon 2026-10-28-5692f27d-1…3</span>
+        <span class="sh-tag">Canon 2026-10-28-5692f27d-1…4</span>
       </div>
     </div>
 

@@ -12,3 +12,14 @@
   entries.
 - Board: https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 5, version id 1793148814-4b9b)
 - sent: no
+
+## 2026-10-28: version 6
+
+- Date: 2026-10-28
+- Rulings: Canon 2026-10-28-5692f27d-4 (specialist seating restated, "as today" in full), and the
+  test role's per-area break-it tests kept as today (Canon 2026-10-27-5692f27d-3), both from spec
+  vet round 1
+- What changed: panel 1's test reviewer also writes at least one break-it test per touched risk
+  area, at most three per review; security and premortem also join when the risk is unclear
+- Board: https://claude.ai/artifact/VSbmFZk1oeHRLrVB4Znuw8 (version 6, version id 1793151096-c719)
+- sent: no

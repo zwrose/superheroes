@@ -260,6 +260,26 @@ change what "in its review record" attaches to.
   statements, each matched to one statement, all meaning:kept.
 - Outcome: the redone pass is kept.
 
+## After vet round 1
+
+Vet round 1 (advisor, PR #2199 comment 6458205829, head b45b4fd6) raised ten craft findings and
+no owner calls. Each was fixed:
+
+| id | finding | fix |
+| --- | --- | --- |
+| V1.1 | No list of the approved sections this spec changes | New "What this spec changes elsewhere" under Assumptions |
+| V1.2 | Per-risk-area break-it tests left open | Kept as today: FR-11's new acceptance (at least one per touched area, at most three per review). No lost coverage, so no owner call |
+| V1.3 | Unclear risk lost both specialists | FR-3 seats both when risk is unclear, as today; FR-45's acceptance says when unclear risk starts a full panel |
+| V1.4 | The seating ruling replaced 2026-10-08-d6064e1d-16 without saying so | New Canon line 2026-10-28-5692f27d-4 with `supersedes:` and what still stands; the spec cites it |
+| V1.5 | The core-first split broke in three places | FR-6's count is core; FR-51 shows each part once its requirement ships; copies of a bug ships with or after findings outside the PR |
+| V1.6 | Unclear who builds FR-53 | FR-53's acceptance and the Definition of done say #2189 delivers it |
+| V1.7 | FR-46's claims check could not be graded | FR-46 names the claims and requires each in the receipt with its result and evidence |
+| V1.8 | No record of a false PR claim reaching merge | FR-54: the finding act logs it like a review escape; each pass shows the count, zero included |
+| V1.9 | No cost input for the seating condition | FR-54 records the numbers read; the assumption names per-reviewer tokens and minutes, which #2189 adds |
+| V1.10 | Light lane and the extra audit round disagreed | FR-52's acceptance allows the extra audit round for a light-lane PR |
+
+The board went to version 6 for V1.2 and V1.3 (panel 1), logged in board/redraws.md.
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
