@@ -202,4 +202,4 @@ No new findings. Clean.
 - GAP-9 and SRC-15: the revisit conditions, fixed as FR-54 after round 4; confirmed fixed in
   after-rulings round 1, so they leave the queue.
 
-Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat (Canon 2026-10-28-5692f27d-2, FR-21).
+Owner rulings so far: one spec, not split (Canon 2026-10-28-5692f27d-1); the verifier re-judges a stale "wrong" repeat (Canon 2026-10-28-5692f27d-2, FR-21).; the stall menu is retired (Canon 2026-10-28-5692f27d-3, FR-35).

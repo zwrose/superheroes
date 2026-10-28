@@ -265,13 +265,13 @@ reviewer wrote. (source: Canon 2026-10-27-5692f27d-3)
     finder. (source: Canon 2026-10-27-5692f27d-2)
 
 **FR-35.** When the same fix fails its audit in two rounds in a row, the review loop shall make one
-automatic recovery attempt and, if the fix still fails, offer the owner the stall menu, as today.
-[cite: plugins/superheroes/skills/review-code/reference/round-driver.md § reached only after one invisible self-recovery]
-(source: board · panel 3; craft, for your veto)
-  - *Acceptance (rule):* The stall menu's choices are unchanged. (source: board · panel 3)
-  - *Acceptance (rule):* The recovery attempt and the stall menu run only inside the 4 rounds. A
-    stall that reaches round 4 is handed back at the cap like any other open finding, and no menu
-    choice takes a session past round 4. (source: framing; board · panel 4)
+automatic recovery attempt and, if the fix still fails, end the session and hand the PR back as it
+does at the cap (FR-38 to FR-43). (source: Canon 2026-10-28-5692f27d-3)
+  - *Acceptance (rule):* There is no stall menu; nothing from the review reaches the owner
+    mid-review. (source: Canon 2026-10-28-5692f27d-3)
+  - *Acceptance (Given-When-Then):* Given a fix that fails its audit in rounds 2 and 3 and again
+    after the recovery attempt, when that happens, then the session ends and the advisor chooses
+    the next step at the vet, as at the cap. (source: Canon 2026-10-28-5692f27d-3)
 
 ### How a session stops
 
