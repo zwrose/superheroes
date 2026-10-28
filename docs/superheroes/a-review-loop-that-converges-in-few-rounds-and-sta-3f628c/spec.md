@@ -26,7 +26,7 @@ Every statement ends with its source in plain text. The sources are:
 - **assessment**: the post-0.43 review-loop assessment the owner read and commented on,
   https://claude.ai/artifact/52LE5cg8Xd7HuKUJEvgf3v (2026-10-26).
 - **registry · item N**: item N's row in the revisit registry on #695.
-- **vet round 1**: the advisor's spec vet, round 1, posted on the spec PR (#2199).
+- **vet round 1**, **vet round 2**: the advisor's spec vet rounds, posted on the spec PR (#2199).
 - **craft, for your veto**: a choice the author made, recorded for the owner's veto.
 
 "The review loop" in this spec is the code review that runs on a full-lane build, unless a
@@ -70,12 +70,12 @@ same way it built the change. (source: Canon 2026-10-26-5692f27d-4)
 
 **FR-3.** The round-1 panel shall be a code reviewer and a test reviewer, joined by both the
 security and the premortem reviewer whenever the change touches any declared risk area or its risk
-is unclear, as today. (source: Canon 2026-10-28-5692f27d-4)
+is unclear, as today. (source: Canon 2026-10-28-5692f27d-5)
   - *Acceptance (rule):* A change that touches one risk area seats both specialists. So does a
     change whose risk is unclear, which, while a project has set no risk areas, means every change.
     A change whose risk is clear and that touches no risk area seats neither.
     [cite: plugins/superheroes/rubric/review-discipline.md § While a project has set no risk areas, that means every change.]
-    (source: Canon 2026-10-28-5692f27d-4; vet round 1)
+    (source: Canon 2026-10-28-5692f27d-5; vet round 1)
 
 **FR-4.** Each round-1 reviewer shall record which parts of the change it actually read.
 (source: Canon 2026-10-27-5692f27d-4)
@@ -130,10 +130,11 @@ between slices. (source: Canon 2026-10-27-5692f27d-12)
   - *Acceptance (rule):* Where a change touches a risk area, the test reviewer also writes break-it
     tests on the touched areas, as today: at most three per review, and at least one per touched
     area while under that cap. A change touching more than three risk areas can leave one or more
-    of them without a break-it test. Each one is delivered as a finding and is run and graded like
-    any other break-it test.
+    of them without a break-it test. The cap of three counts only these per-area tests. The tests
+    attached to findings and the second tests of FR-16 have no cap. Each per-area test is delivered
+    as a finding and is run and graded like any other break-it test.
     [cite: plugins/superheroes/agents/test-role.md § Write at most three break-it tests per review.]
-    (source: Canon 2026-10-27-5692f27d-3; vet round 1)
+    (source: Canon 2026-10-27-5692f27d-3; vet round 1; vet round 2; board · panel 1)
 
 **FR-12.** The test reviewer shall keep checking changed tests for tests that pass by chance,
 flaky tests and fixes with no test that would fail, and shall count test bloat against the change.
@@ -353,8 +354,9 @@ commit is over about 1,000 countable lines or touches a risk area the PR had not
 (source: Canon 2026-10-26-5692f27d-5; craft, for your veto)
   - *Acceptance (rule):* "Countable lines" here is the count of FR-6. (source: craft, for your veto)
   - *Acceptance (rule):* A change whose risk is unclear counts as touching a risk area, as in FR-3.
-    It starts a full panel only when the PR's earlier review did not already treat its risk as
-    unclear or touched. (source: vet round 1; craft, for your veto)
+    It starts a full panel unless the PR's earlier review also treated its risk as unclear, because
+    that earlier panel already seated both specialists for the same uncertainty. (source: vet
+    round 1; vet round 2; craft, for your veto)
 
 **FR-46.** At the vet, the advisor shall check the PR description's claims against the change and
 its runs: at least each claim that tests ran, each row of its definition-of-done table, and each
@@ -415,7 +417,7 @@ happened next. (source: board · panel 4; board · panel 9)
 conditions and bring any that is met to the owner. One condition is that a false PR claim reached
 merge past the vet, which reopens the grounding reviewer's removal (FR-47). The other is that the
 security and premortem reviewers still look expensive for what they find, which reopens their
-seating (FR-3). (source: Canon 2026-10-27-5692f27d-1; Canon 2026-10-28-5692f27d-4)
+seating (FR-3). (source: Canon 2026-10-27-5692f27d-1; Canon 2026-10-28-5692f27d-5)
   - *Acceptance (rule):* Each gardening pass records whether each condition was met and, when
     one was, that it went to the owner. (source: craft, for your veto)
   - *Acceptance (rule):* A false PR claim found after merge is logged by the act that finds it, the
@@ -423,7 +425,7 @@ seating (FR-3). (source: Canon 2026-10-27-5692f27d-1; Canon 2026-10-28-5692f27d-
     included. (source: Canon 2026-10-27-5692f27d-1; vet round 1)
   - *Acceptance (rule):* For the seating condition, each pass records beside its judgment the
     numbers it read: the security and premortem reviewers' finding outcomes, and their tokens and
-    minutes. (source: Canon 2026-10-28-5692f27d-4; vet round 1)
+    minutes. (source: Canon 2026-10-28-5692f27d-5; vet round 1)
 
 ## Significant unhappy paths
 
@@ -523,7 +525,7 @@ panel 7 the review record, and panel 8 what is removed. (source: board · panel 
   (source: Canon 2026-10-27-5692f27d-1)
 - The seating check in FR-54 reads the gardening-pass measure's finding outcomes by lens and its
   tokens and minutes per reviewer, which #2189 adds for this check. (source: Canon
-  2026-10-28-5692f27d-4; vet round 1)
+  2026-10-28-5692f27d-5; vet round 1)
 
 ### What this spec changes elsewhere
 
@@ -554,7 +556,7 @@ The approved requirements and shipped rules below change under this spec. The ad
 
 - Merging routine changes without a merge sheet (declined for now as collector item 397).
   (source: registry · item 397)
-- Seating security or premortem by risk area. (source: Canon 2026-10-28-5692f27d-4)
+- Seating security or premortem by risk area. (source: Canon 2026-10-28-5692f27d-5)
 - A replay of past cases before release. (source: Canon 2026-10-27-5692f27d-6)
 - Building the gardening-pass measure (#2189) and the escape logging (#2190), which are their own
   issues. (source: Canon 2026-10-27-5692f27d-6)

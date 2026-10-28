@@ -297,6 +297,17 @@ Grounding base: origin/main 8c1712a70f1461b45e48adde967b9deced6a3bb8. Citation c
 Reviewed: commit 14a8d7e0d, changed parts only. Gap, source and grounding each confirmed their
 finding fixed and raised nothing new. All three clean. Citation check: [].
 
+## After vet round 2
+
+Vet round 2 (advisor, PR #2199, head 873c171d) confirmed V1.1 to V1.10 resolved and raised three
+craft findings, no owner calls:
+
+| id | finding | fix |
+| --- | --- | --- |
+| V2.1 | The seating restatement superseded only d6064e1d-16 and carried the restating date | New Canon line 2026-10-28-5692f27d-5, dated 2026-10-27 at the owner's 02:15 UTC, superseding d6064e1d-16, 2026-10-27-5692f27d-5 and 2026-10-28-5692f27d-4; the spec cites it |
+| V2.2 | Unclear what the cap of three counts | FR-11: the cap counts only the per-area tests; finding tests and FR-16's second tests have no cap |
+| V2.3 | Unclear risk on a returned change could skip the full panel | FR-45: unclear risk starts a full panel unless the earlier review was also unclear |
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.
