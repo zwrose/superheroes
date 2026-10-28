@@ -615,27 +615,6 @@ project names its keep list as a [project configuration](rubric/glossary.md#proj
 This rule activates only once the owner has stamped the project's keep list. Before that, nothing
 is deleted under this rule, and an obsolete expectation is rewritten as before, with the classification and its reason in the pull request body.
 
-## Prose-driven review (`--review-only`)
-
-A **prose-driven review** is a sanctioned lane on the read-only path — not a shortcut, not a
-degradation, and **not** something the auto-fix loop may do. The orchestrator compiles findings in
-main context (`SKILL.md` § Compile + Dedupe) instead of obeying the driver's fold, but it still owes
-a **named substitute receipt** standing in for `round-receipt.json` and the driver journal:
-
-1. **Dispositions table** — how each finding was handled (the workhorse charter's table in the PR
-   body on PR paths).
-2. **Durable linked receipt** — review results posted on the PR as a comment or similar, not
-   something that only lives in session context (`skills/workhorse/SKILL.md` §10).
-
-**Branch mode has no PR.** The durable home is `$SESSION_DIR/dispositions.md` — write the
-dispositions table and receipt link there; when the branch later becomes a PR, that file's content
-is what the PR body carries. (The workhorse charter names the same substitute-receipt shape for
-light-lane handback.)
-
-The auto-fix loop's "never plan continuation by eye" rule
-(`skills/review-code/reference/round-driver.md` § The one
-entrypoint) applies only inside `next`/`submit`; it does not forbid this lane.
-
 ## Presentation standard (show it / say it / nothing to see)
 
 Three **presentation calls** name how much the owner must *see* before merge — not how much ceremony
