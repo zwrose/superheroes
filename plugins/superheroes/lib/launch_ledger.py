@@ -1730,27 +1730,23 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                 "reason": folded_with_new["reason"],
                 "path": None,
             }
-        appended = append(repo_root, to_write, env=env)
-        read_back = None
-        if not appended:
-            # Read back under the lock: a concurrent writer could otherwise interleave.
-            read_back = _reserve_read_back(repo_root, launch_id, to_write, env)
-        if not appended and read_back != "landed":
+        if not append(repo_root, to_write, env=env):
+            # A visible record is not proof it is durable: a failed append stays a failure
+            # even when the line reads back. The read-back, taken under the lock so a
+            # concurrent writer cannot interleave, only tells the caller whether to
+            # settle a landed record or clean up after a line that never landed.
             return {
                 "ok": False,
                 "reason": "ledger-append-failed",
                 "path": None,
-                "appendReadBack": read_back,
+                "appendReadBack": _reserve_read_back(repo_root, launch_id, to_write, env),
             }
-        result = {
+        return {
             "ok": True,
             "reason": None,
             "path": lp["path"],
             "warnings": ["surface-overlap:%s" % lid for lid in overlapped],
         }
-        if read_back is not None:
-            result["appendReadBack"] = read_back
-        return result
     finally:
         _release_lock(lock_path)
 

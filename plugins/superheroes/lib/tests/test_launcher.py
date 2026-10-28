@@ -5196,22 +5196,21 @@ def _launch_656(repo, tmp_path, **kwargs):
     )
 
 
-def test_launch_append_failure_that_landed_continues_as_reserved_and_relaunches(
+def test_launch_append_failure_that_landed_is_settled_never_spawned_and_relaunches(
     tmp_path, monkeypatch,
 ):
-    # axis: a reservation whose append reported failure but landed continues; relaunch not refused
+    # axis: a reservation whose append reported failure stays a failure even when it landed:
+    # no builder is spawned, the landed record is settled terminal, relaunch not refused
     repo = _init_repo(tmp_path / "repo")
     _worktree_root(tmp_path, monkeypatch)
     restore = _fail_reserved_append(monkeypatch, land=True)
     first = _launch_656(repo, tmp_path)
-    assert first["ok"] is True
+    assert first["ok"] is False
+    assert first["reason"] == "ledger-append-failed"
+    assert first["appendReadBack"] == "terminal"
     records = ll.read(repo)["records"]
-    assert [r["event"] for r in records if r["launchId"] == first["launchId"]] == [
-        "reserved", "started",
-    ]
-    _reap(first)
-    outcome = L.record_outcome(repo, first["launchId"], "handback", "done", await_exit=30)
-    assert outcome["ok"] is True, outcome
+    assert "started" not in [r["event"] for r in records if r["launchId"] == first["launchId"]]
+    assert _folded_launch(repo, first)["terminal"] is True
     restore()
     second = _launch_656(repo, tmp_path)
     assert second["ok"] is True, second
@@ -5294,7 +5293,7 @@ def test_launch_accounting_reservation_that_landed_ends_terminal_and_relaunches(
     assert result["ok"] is False
     assert result["reason"] == "launch-worktree-collision"
     refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
-    assert [r["reason"] for r in refused] == ["launch-worktree-collision"]
+    assert [r["reason"] for r in refused] == ["ledger-append-failed"]
     assert _folded_launch(repo, result)["terminal"] is True
     restore()
     monkeypatch.setattr(L, "build_worktree_path", real_path_for)

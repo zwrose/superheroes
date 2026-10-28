@@ -463,16 +463,16 @@ def _fail_reserved_append(monkeypatch, *, land, read_state=None):
 
 
 def test_reserve_append_failure_that_landed_reads_back_landed(tmp_path, monkeypatch):
-    # axis: an append that reports failure but landed reads back landed — reserved exactly once
+    # axis: an append that reports failure but landed reads back landed — still a failure, never a spawn go-ahead
     repo = _init_repo(tmp_path / "repo")
     env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
     _fail_reserved_append(monkeypatch, land=True)
     result = ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo), env=env)
-    assert result["ok"] is True
-    assert result["reason"] is None
-    assert result["appendReadBack"] == "landed"
-    assert result["warnings"] == []
+    assert result == {
+        "ok": False, "reason": "ledger-append-failed", "path": None,
+        "appendReadBack": "landed",
+    }
     records = ll.read(repo, env=env)["records"]
     assert [r["launchId"] for r in records if r.get("event") == "reserved"] == ["l1"]
 
