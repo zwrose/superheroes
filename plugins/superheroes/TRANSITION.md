@@ -22,6 +22,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
 
+- **After switching.** **Nothing is owed: the review setup's verify-command doctor no longer calls a profile stale over a path its verify command may not run.** See [Verify-command doctor: check 6 fails safe](#verify-command-doctor-check-6-fails-safe).
+
+### Verify-command doctor: check 6 fails safe
+
+- `lib/repo_doctor.py` check 6 reports a missing path only when the verify command certainly runs it from the project root; a path in an `if`/`while`/`for`/`case` construct, a subshell or group, on either side of `&&` or `||`, after a `cd`-like builtin, in a comment, or in a shape the walk does not model now reads "verify command path(s) could not be checked", a note that never marks the profile stale.
+
 ### Specs: a new spec follows the doc policy
 
 - **Where a new work item lands.** With no existing `spec.md`, a confirmed doc policy now decides where a work item's definition-docs go: its in-repo location (for example `docs/superheroes/<work-item>/`). The calibration storage mode decides only when no policy is confirmed, as before. So a project whose calibration lives out of the repo but whose confirmed policy names an in-repo location now gets new specs in the repo, and its spec PR carries the spec. `resolve-write`, `path` and `dir` all follow it; a gitignored policy still passes the ignore check.
