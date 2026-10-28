@@ -1,4 +1,4 @@
-The review record: the plain account of one PR's review. This file is the one home of the rule for how a review writes it. The full lane, the light lane, the micro lane, and `--review-only` each point here.
+The review record: the plain account of one PR's review. This file is the one home of the rule for how a review writes it. The full lane, the light lane, and the micro lane each point here.
 
 ## Contents
 
@@ -213,7 +213,6 @@ Reading and independence are computed by the record, never taken from the sessio
 
 ## Map each exit's results to outcomes
 
-**`--review-only` exit.** Branch mode has no PR, so no record is written.
 - A REFUTED drop becomes `shown-wrong`, with the drop reason as the reason. A REFUTED resting on a check that did not execute is not a drop and never becomes `shown-wrong`; the finding keeps its earlier outcome path and the round's verify record lists it under `notExecuted`.
 - A finding the session decided is code-quality only becomes `craft`, with the reason.
 - A finding put to a human (the undecided set) becomes `left-for-owner`.

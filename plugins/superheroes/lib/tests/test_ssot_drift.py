@@ -18,7 +18,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Model-registry leak scan (_CONCRETE_MODEL_TOKENS)     (home: model_registry.py + retired literals)
 - Base-guard refusal reasons                           (home: review_base_guard.py)
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7;
-  copy-holders: review-discipline.md, workhorse §11, review-code step 8, pr_body_regions.py)
+  copy-holders: review-discipline.md, workhorse §11, review-code step 7, pr_body_regions.py)
 - Session modes                                       (home: review_base_guard.py)
 - Wave-watch verbs and exit contract                     (home: wave_watch.py)
 - Issue-contract refusal table + charter skeleton        (home: issue_contract.py)
@@ -990,21 +990,21 @@ def _review_discipline_ship_phase_honesty():
     return m.group(0)
 
 
-def _review_code_step_8():
+def _review_code_step_7():
     text = _read("skills/review-code/SKILL.md")
     m = re.search(
-        r"8\. \*\*PR-body honesty check.*?(?=\n9\. |\nDetermine the verdict)",
+        r"7\. \*\*PR-body honesty check.*?(?=\n8\. |\nDetermine the verdict)",
         text,
         re.DOTALL,
     )
-    assert m, "review-code SKILL.md step 8 not found"
+    assert m, "review-code SKILL.md step 7 not found"
     return m.group(0)
 
 
 # CONVENTIONS §10.7 carries two distinct marker families, and only one of them propagates.
 #
 # The OMISSION FLOOR family is a PR-body contract every copy-holder restates, so §11 drift
-# applies to it: review-discipline.md, workhorse §11 and review-code step 8 must each carry it.
+# applies to it: review-discipline.md, workhorse §11 and review-code step 7 must each carry it.
 _FLOOR_MARKERS = frozenset({
     "<!-- superheroes:build-record -->",
     "<!-- superheroes:degradations -->",
@@ -1015,7 +1015,7 @@ _FLOOR_MARKERS = frozenset({
 # advisor-vet to builder-emitted, stamped into the empty slot with a reminder comment beneath it,
 # while the other two stay advisor-authored at vet.) It is deliberately NOT propagated to the
 # copy-holders — a build's pre-handback review-code runs in BRANCH mode, before any PR body or vet
-# exists, so requiring these of review-code step 8 would manufacture a finding nothing can satisfy
+# exists, so requiring these of review-code step 7 would manufacture a finding nothing can satisfy
 # (CONVENTIONS §13: no machinery without a consumer).
 _VET_RECEIPT_MARKERS = frozenset({
     "<!-- superheroes:vet-receipt -->",
@@ -1068,7 +1068,7 @@ _OMISSION_FLOOR_ENUMERATION_PINS = {
         "  whatever its disposition is called; (3) every **costly disclosed degradation** "
         "(sorted in skills/workhorse/reference/handback.md § Disclosed degradations)."
     ),
-    "skills/review-code/SKILL.md step 8": (
+    "skills/review-code/SKILL.md step 7": (
         "enumerate (1) each deferred DoD row, (2) each blocking or important dispositions-table "
         "finding not fixed (by severity, not disposition label), and (3) each costly disclosed degradation "
         "under `<!-- superheroes:degradations -->` (bullets, or **None** when empty)"
@@ -1288,7 +1288,7 @@ def test_omission_floor_matches_conventions_10_7():
     copies = (
         ("rubric/review-discipline.md (Ship-phase honesty)", _review_discipline_ship_phase_honesty()),
         ("skills/workhorse/SKILL.md §11", _workhorse_section_11()),
-        ("skills/review-code/SKILL.md step 8", _review_code_step_8()),
+        ("skills/review-code/SKILL.md step 7", _review_code_step_7()),
     )
     for label, text in copies:
         _assert_omission_floor_matches_home(text, label, home)

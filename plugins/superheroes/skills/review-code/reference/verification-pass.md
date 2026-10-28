@@ -17,17 +17,16 @@ do not judge realness yourself and do not reimplement them here or in a second s
 
 ## Where it runs
 
-On the **read-only path**, inside `## Compile + Dedupe`, **every round**, after the
-mechanical filters (steps 1–5) and **before** the verdict. On the **auto-fix loop**, the same
-mechanical compile (steps 1–4 + 5 nit cap) and this verification stage run **inside
-`round_driver.py`** when findings are submitted — see `round-driver.md`. This stage **replaces**
+On the loop, **every round**, the mechanical compile (steps 1–3 + 4 nit cap, in `## Compile + Dedupe`)
+and this verification stage run **inside `round_driver.py`** when findings are submitted, before
+the verdict — see `round-driver.md`. This stage **replaces**
 the old single synthesis keep/drop judge. The orchestrator dispatches subagents and reads only
 small JSON files; it never loads the diff.
 
 ## The verifier dispatch
 
 1. **Stage ids and cluster.** After mechanical compile (citation, diff-scope, dedupe, nit cap —
-   driver-owned on the loop path; orchestrator steps 1–5 on read-only), run `verification.stage_ids`
+   driver-owned), run `verification.stage_ids`
    on the merged findings array so every finding carries a guaranteed-unique staged id (`v0`, `v1`, …).
    Persist the staged array to `$SESSION_DIR/round-<N>/merged.json`. Then cluster with
    `verification.cluster_findings` — one cluster per `(file, line // 100)` bucket.
@@ -54,8 +53,7 @@ attempt must never be globbed and honored.
    `model_registry.matrix_config("verifier", <vendor>)` and dispatch that pair instead — the
    manifest carries the vendor, not its model, and `dispatch_guard check` with role `verifier`
    validates the vendor/model pair, so a Claude alias on another vendor is refused. The driver seats a non-panel reviewer only on a vendor whose dispatched cell for the phase (the verifier cell here, the reviewer-deep cell for gap sweep and scoped) the seat map proves live, and a native host seat takes the host's family. Each verifier reads the cluster's findings (with their staged
-   `id`s), the round diff, and the repo — the working tree on branch/auto-fix paths, or
-   `$SESSION_DIR/repo` on `--review-only`. It must **never** read the PR's own
+   `id`s), the round diff, and the repo — the working tree. It must **never** read the PR's own
    description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,
    so each writes its **OWN** file — `$SESSION_DIR/round-<N>/verdicts-<cluster-index>.json`,
    where `<cluster-index>` is the cluster's 0-based position in the `cluster_findings` order —
@@ -65,13 +63,6 @@ attempt must never be globbed and honored.
    **On the auto-fix loop**, the driver emits each verifier's complete order at
    `$SESSION_DIR/round-<N>/orders/dispatch-verifiers/<skey>.a<K>.md` on `next` — dispatch that
    file, do not hand-compose. Template body: `rubric/orders/dispatch-verifiers.md`.
-
-   **On the read-only path**, the orchestrator still dispatches verifiers manually; use the same
-   shipped template at `rubric/orders/dispatch-verifiers.md` only as reference for what the emitted
-   order contains — or dispatch the driver-emitted file when you have run `next` through the driver.
-   A hand-composed order ends with the seat's standing rule, printed from its one home (never
-   retyped):
-   `python3 -B -c "import sys; sys.path.insert(0, '$ROOT_DIR/lib'); import round_orders; print(round_orders.seat_rule_block('dispatch-verifiers'))"`.
 
    **Delivery channel — file vs stdout.** The emitted order's `## Output` / channel block names
    which path this seat uses:
@@ -149,9 +140,7 @@ The synthesis seat sits outside every maker family on a proven synthesis cell; w
 
 **On the auto-fix loop**, dispatch the driver-emitted order at
 `$SESSION_DIR/round-<N>/orders/dispatch-synthesis/<skey>.a<K>.md` (template body:
-`rubric/orders/dispatch-synthesis.md`). **On the read-only path**, the orchestrator dispatches
-manually against that same shipped template, ending the order with the seat's standing rule printed
-the same way, with `'dispatch-synthesis'` as the phase.
+`rubric/orders/dispatch-synthesis.md`).
 
 Then finalize:
 
