@@ -1376,11 +1376,11 @@ def test_same_commit_non_str_operand_returns_false(left, right):
 # --- WO #1340 layer 2f: read_vet_verdict ------------------------------------------------
 
 
-import grounding_stage as gs  # noqa: E402
+import pr_body_regions as regions  # noqa: E402
 
 HEAD_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 OTHER_SHA = "1234567890abcdef1234567890abcdef12345678"
-VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+VET_MARKER = regions.REGION_MARKERS["advisor-vet"]
 
 
 def _vet_body(*lines_after_marker):

@@ -321,20 +321,20 @@ def test_census_collects_and_flags_a_command_split_before_the_script_path():
     split = (
         "```bash\n"
         "python3 -B \\\n"
-        "  <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n"
+        "  <plugin root>/lib/review_store.py stage --session-dir <session dir>\n"
         "```\n"
     )
     forms = _call_forms_in_text("fake.md", split)
     assert len(forms) == 1, forms
     assert "spans more than one physical line" in _shape_problems(forms[0].text)
-    single = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n```\n"
+    single = "```bash\npython3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir>\n```\n"
     one = _call_forms_in_text("fake.md", single)
     assert len(one) == 1 and _shape_problems(one[0].text) == []
 
 
 def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
     session, repo = scene
-    base = "python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>"
+    base = "python3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir>"
     assert _judge(base, _PLUGIN, session, repo) is None
     for redirect in (" < /tmp/input > /tmp/output", " </tmp/input>/tmp/output", " </tmp/in >/tmp/out",
                      " <input.txt>output.txt", " <input.txt> output.txt", " <in>out"):
@@ -344,7 +344,7 @@ def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
 
 @pytest.mark.parametrize("boundary", ["\\\n```\n", "\\\n"])
 def test_a_trailing_backslash_at_a_fence_or_eof_boundary_is_collected_and_flagged(boundary):
-    text = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir> " + boundary
+    text = "```bash\npython3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir> " + boundary
     forms = _call_forms_in_text("fake.md", text)
     assert len(forms) == 1, forms
     assert "ends in a backslash continuation" in _shape_problems(forms[0].text)

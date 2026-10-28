@@ -18,9 +18,9 @@ are gone with them; no lib/*.js copy-holders remain):
 - Model-registry leak scan (_CONCRETE_MODEL_TOKENS)     (home: model_registry.py + retired literals)
 - Base-guard refusal reasons                           (home: review_base_guard.py)
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7;
-  copy-holders: review-discipline.md, workhorse §11, review-code step 8, grounding_stage.py)
+  copy-holders: review-discipline.md, workhorse §11, review-code step 8, pr_body_regions.py)
 - Session modes                                       (home: review_base_guard.py;
-  copy-holder: grounding_stage.py)
+  copy-holder: pr_body_regions.py)
 - Wave-watch verbs and exit contract                     (home: wave_watch.py)
 - Issue-contract refusal table + charter skeleton        (home: issue_contract.py)
 - Register-check Results table + verification sentence   (home: register_check.py)
@@ -1155,11 +1155,11 @@ def _body_marker_from_conventions(home):
     return marker
 
 
-def _grounding_stage_region_markers_from_home(home):
-    """Derive grounding_stage.REGION_MARKERS from §10.7 — the four PR-body regions #609 stages.
+def _pr_body_region_markers_from_home(home):
+    """Derive pr_body_regions.REGION_MARKERS from §10.7 — the four PR-body regions it reads.
 
     dod-table (prose-named), the omission-floor pair, and the PR-body vet marker. Vet-receipt's
-    comment-only markers are intentionally excluded — grounding_stage never parses them.
+    comment-only markers are intentionally excluded — pr_body_regions never parses them.
     """
     m = re.search(
         r"\*\*Definition-of-done disposition table\*\* \(`(superheroes:dod-table)` marker\)",
@@ -1342,35 +1342,17 @@ def test_handback_sort_applies_the_costly_test_before_the_named_harmless_causes(
     assert _build_deviations_note("## Unreleased\n\n" + body + "\n## 0.1.0\n") == _build_deviations_note("## 9.9.9\n\n" + body + "\n## 0.1.0\n") == body
 
 
-def test_grounding_stage_region_markers_match_conventions_10_7():
-    """§10.7 + §11: grounding_stage.REGION_MARKERS tracks the PR-body region family."""
+def test_pr_body_regions_markers_match_conventions_10_7():
+    """§10.7 + §11: pr_body_regions.REGION_MARKERS tracks the PR-body region family."""
     # bite-axis: region-marker SSOT — plugin REGION_MARKERS must match CONVENTIONS §10.7.
-    import grounding_stage
+    import pr_body_regions
 
     home = _conventions_section_10_7()
-    expected = _grounding_stage_region_markers_from_home(home)
-    assert dict(grounding_stage.REGION_MARKERS) == expected, (
-        "grounding_stage.REGION_MARKERS drift from CONVENTIONS §10.7 — "
-        "expected %r, got %r" % (expected, dict(grounding_stage.REGION_MARKERS))
+    expected = _pr_body_region_markers_from_home(home)
+    assert dict(pr_body_regions.REGION_MARKERS) == expected, (
+        "pr_body_regions.REGION_MARKERS drift from CONVENTIONS §10.7 — "
+        "expected %r, got %r" % (expected, dict(pr_body_regions.REGION_MARKERS))
     )
-
-
-def test_grounding_stage_session_modes_match_review_base_guard():
-    """§11: grounding_stage derives session mode through session_mode.resolve."""
-    import inspect
-
-    import grounding_stage
-    import review_base_guard
-
-    assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
-    read_meta_source = inspect.getsource(grounding_stage._read_meta)
-    assert "session_mode.resolve" in read_meta_source, (
-        "grounding_stage._read_meta must derive through session_mode.resolve"
-    )
-    gs_source = _read("lib/grounding_stage.py")
-    assert not re.search(
-        r'\(\s*["\']pr["\']\s*,\s*["\']branch["\']\s*\)', gs_source
-    ), "grounding_stage.py must not re-inline a local mode tuple"
 
 
 # --- Cluster: raw session-mode reads in round_driver.py / review_base_guard.py (#1107 WO-rc1) --
@@ -4433,34 +4415,11 @@ def test_review_code_skill_shell_mode_assignments_anti_vacuity():
 
 
 def test_session_mode_guards_derive_through_resolve():
-    """T3: check_base and _read_meta derive through session_mode.resolve."""
+    """T3: check_base derives through session_mode.resolve."""
     import inspect
 
-    import grounding_stage
     import review_base_guard
 
     check_base_source = inspect.getsource(review_base_guard.check_base)
-    read_meta_source = inspect.getsource(grounding_stage._read_meta)
     assert "session_mode.resolve" in check_base_source
-    assert "session_mode.resolve" in read_meta_source
     assert "not in SESSION_MODES" not in check_base_source
-    assert "not in SESSION_MODES" not in read_meta_source
-
-
-def test_grounding_stage_branch_disposition_uses_mode_branch_constant():
-    """Branch-mode disposition compares against session_mode.MODE_BRANCH."""
-    import inspect
-
-    import grounding_stage
-
-    for label, func in (
-        ("stage", grounding_stage.stage),
-        ("_trust_boundary", grounding_stage._trust_boundary),
-    ):
-        src = inspect.getsource(func)
-        assert "session_mode.MODE_BRANCH" in src, (
-            "grounding_stage.%s must compare against session_mode.MODE_BRANCH" % label
-        )
-        assert '== "branch"' not in src and "== 'branch'" not in src, (
-            "grounding_stage.%s must not compare against bare branch literal" % label
-        )

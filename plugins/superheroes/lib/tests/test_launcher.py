@@ -6972,9 +6972,9 @@ def test_stack_gate_passes_when_github_heads_are_uppercase(tmp_path, monkeypatch
 # --- dependency premise field and gate (I3) ----------------------------------
 
 
-import grounding_stage as gs  # noqa: E402
+import pr_body_regions as regions  # noqa: E402
 
-_VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+_VET_MARKER = regions.REGION_MARKERS["advisor-vet"]
 
 
 def _dependency_premise(repo, dependency, **overrides):

@@ -38,7 +38,7 @@ REASON_DIFF_BASE_UNVERIFIABLE = "round-diff-base-unverifiable"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
-# Closed session modes — authoritative set for check_base and grounding_stage.
+# Closed session modes — authoritative set for check_base.
 SESSION_MODES = session_mode.MODES
 
 _PIN_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
