@@ -7,10 +7,10 @@ as `pass` / `fail` / `timeout` — a timeout is reported distinctly from a plain
 The terminal decision (clean requires pass; fail/timeout -> halted) is the tally's; this module
 only produces the classified result it consumes.
 
-`mode: unverified` projects pass the literal command "none" (or ""): the gate is SKIPPED — the
-accepted no-verify limitation (spec › Ship-gate). Bounded by a default timeout mirroring the
-band's project-command convention in blocks.py. Never raises; any execution error is a `fail`
-(fail-closed — never a silent pass). stdlib only.
+The literal command "none" (or "") makes the gate SKIPPED; review-code refuses to start without a
+verify command, so that skip is reached only by a caller that passes no command. Bounded by a
+default timeout mirroring the band's project-command convention in blocks.py. Never raises; any
+execution error is a `fail` (fail-closed — never a silent pass). stdlib only.
 """
 import argparse
 import json

@@ -557,19 +557,17 @@ _DIFF = SESSION + "/round-1/diff.txt"
 # Populated by `round_orders._panel_derived_placeholders` / `_channel_derived_placeholders`.
 _DERIVED_PLACEHOLDER_NAMES = frozenset({
     "OUTPUT_CHANNEL_BLOCK",
-    "PR_CHECKOUT_CONTEXT_LINE",
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
     "BREAK_IT_GRAMMAR_BLOCK",
-    "PR_CHECKOUT_INSTRUCTION_BLOCK",
 })
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.
 _FIXTURE_AUX_INPUTS = {
-    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH", "PRIOR_COMMENTS_PATH",
+    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PRIOR_COMMENTS_PATH",
                            "ROLE_BRIEF_PATH", "RISK_AREAS_TEXT", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
@@ -592,7 +590,6 @@ _KNOWN_REALISTIC_VALUES = {
         "ROLE_BRIEF_PATH": "/plugin/agents/code-reviewer.md",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
-        "PR_CHECKOUT_PATH": "",
         "PRIOR_COMMENTS_PATH": SESSION + "/prior-comments.json",
         "FOCUS_NOTES": "",
         "DIMENSION": "correctness",

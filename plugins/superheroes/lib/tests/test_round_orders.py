@@ -55,7 +55,7 @@ def _base_context(**over):
     return ctx
 
 
-def _panel_placeholders(channel="file", pr_checkout=False):
+def _panel_placeholders(channel="file"):
     prior_path = os.path.join(_SESSION, "prior-comments.json")
     ph = {
         "MODE": "branch",
@@ -67,7 +67,6 @@ def _panel_placeholders(channel="file", pr_checkout=False):
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "CLAUDE_MD_PATH": _CLAUDE_MD,
-        "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
         "PRIOR_COMMENTS_PATH": prior_path,
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "Code",
@@ -378,7 +377,7 @@ def test_clause_manifest_covers_every_order_template():
 def test_clause_manifest_survives_in_rendered_orders():
     manifest = json.load(open(_CLAUSE_MANIFEST, encoding="utf-8"))
     phase_map = {
-        "dispatch-panel": (RP.P_PANEL, lambda: _panel_placeholders(pr_checkout=True)),
+        "dispatch-panel": (RP.P_PANEL, _panel_placeholders),
         "dispatch-verifiers": (RP.P_VERIFIERS, _verifier_placeholders),
         "dispatch-synthesis": (RP.P_SYNTHESIS, _synthesis_placeholders),
         "dispatch-fixer": (RP.P_FIXER, _fixer_placeholders),
@@ -987,39 +986,13 @@ def test_panel_order_dimension_uses_rubric_label(tmp_path):
     assert ph_sec["DIMENSION"] == "Failure-Mode"
 
 
-# --- FX-4A: PR checkout two-arm clause coverage --------------------------------
-
-
-def test_panel_order_without_pr_checkout_omits_checkout_clause():
+def test_panel_order_names_no_pr_checkout_clause():
+    # The PR-checkout slots are retired: no producer is left, so the panel order never carries one.
     text, reason = RO.render_order(
         RP.P_PANEL, "code-reviewer", _base_context(placeholders=_panel_placeholders()))
     assert reason is None
     assert "PR branch checkout" not in text
     assert "ONLY source of truth for verifying code" not in text
-
-
-def test_panel_order_with_pr_checkout_includes_checkout_clause():
-    text, reason = RO.render_order(
-        RP.P_PANEL, "code-reviewer",
-        _base_context(placeholders=_panel_placeholders(pr_checkout=True)))
-    assert reason is None
-    assert "PR branch checkout:" in text
-    assert "ONLY source of truth for verifying code" in text
-
-
-def test_golden_render_with_pr_checkout_matches_fixture():
-    golden_path = os.path.join(_GOLDEN_DIR, "dispatch-panel-with-checkout.txt")
-    ctx = _base_context(
-        host_seat=True,
-        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
-                                  "code-reviewer.a0.payload.json"),
-        placeholders=_panel_placeholders(pr_checkout=True),
-    )
-    text, reason = RO.render_order(RP.P_PANEL, "golden-seat", ctx)
-    assert reason is None
-    with open(golden_path, encoding="utf-8") as fh:
-        expected = fh.read()
-    assert _normalize_golden_machine_paths(text) == _normalize_golden_machine_paths(expected)
 
 
 # --- #1151: mode-less session defaults to PR via session_mode SSOT --------------

@@ -21,15 +21,12 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 {{ROLE_BRIEF_LINE}}
 {{RISK_AREAS_LINE}}
 {{BREAK_IT_GRAMMAR_BLOCK}}
-{{PR_CHECKOUT_CONTEXT_LINE}}
 {{PRIOR_COMMENTS_CONTEXT_LINE}}
 {{FOCUS_CONTEXT_LINE}}
 
 ## Calibration precedence
 Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
 > strict fallback when a needed field is absent in all of them.
-
-{{PR_CHECKOUT_INSTRUCTION_BLOCK}}
 
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing

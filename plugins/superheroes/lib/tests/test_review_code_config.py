@@ -29,22 +29,6 @@ def test_verify_command_none_when_absent_or_unreadable(tmp_path):
     assert RC.resolve_verify_command(None) == "none"
 
 
-def test_resolve_verify_from_profile_review_only(tmp_path):
-    p = tmp_path / "p.md"
-    p.write_text("## Verify\nmode: review-only\n")
-    mode, cmd = RC.resolve_verify_from_profile(str(p))
-    assert mode == "review-only"
-    assert cmd == "none"
-
-
-def test_resolve_verify_from_profile_unverified(tmp_path):
-    p = tmp_path / "p.md"
-    p.write_text("## Verify\nmode: unverified\n")
-    mode, cmd = RC.resolve_verify_from_profile(str(p))
-    assert mode == "unverified"
-    assert cmd == "none"
-
-
 def test_tiers_default_policy():
     assert RC.resolve_tiers({}) == {
         "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
@@ -94,7 +78,7 @@ def test_resolve_failopen_on_calibration_error(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "resolve", boom)
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["verifyMode"] is None
+    assert "verifyMode" not in out
     assert out["tiers"]["fixer"] == "sonnet"
 
 
@@ -174,7 +158,7 @@ def test_resolve_fallopen_when_calibration_resolve_unimportable(tmp_path, monkey
     monkeypatch.setitem(sys.modules, "calibration_resolve", None)
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["verifyMode"] is None
+    assert "verifyMode" not in out
     assert out["tiers"]["fixer"] == "sonnet"
 
 
@@ -191,7 +175,7 @@ def test_resolve_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeyp
     monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["verifyMode"] is None
+    assert "verifyMode" not in out
 
 
 def test_load_failopen_when_profile_unreadable(tmp_path):

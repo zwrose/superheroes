@@ -77,7 +77,6 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "FOCUS_NOTES",
     "FINDINGS_OUTPUT_PATH",
     "GROUPING_OUTPUT_PATH",
-    "PR_CHECKOUT_PATH",
     "PRIOR_COMMENTS_PATH",
     "ROLE_BRIEF_PATH",
     "RISK_AREAS_TEXT",
@@ -453,24 +452,7 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
             "artifact to %s — write an empty findings list rather than skipping the file when "
             "you have nothing to flag." % landing
         )
-    pr_checkout = ph.get("PR_CHECKOUT_PATH", "").strip()
-    ph["PR_CHECKOUT_CONTEXT_LINE"] = (
-        "- PR branch checkout: %s" % pr_checkout if pr_checkout else ""
-    )
-    if pr_checkout:
-        ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = (
-            "## PR branch checkout (--review-only PR path only)\n"
-            "On the read-only PR path the PR branch is checked out at %s.\n"
-            "This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob\n"
-            "against this directory, NOT the main repo working directory — it may be on a\n"
-            "different branch with stale or missing code. (On the auto-fix loop there is no\n"
-            "detached checkout: the PR branch IS the current working tree, so verify against\n"
-            "the working tree directly.)"
-            % pr_checkout
-        )
-    else:
-        ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = ""
-    prior = ph.get("PRIOR_COMMENTS_PATH", "").strip()
+    prior =ph.get("PRIOR_COMMENTS_PATH", "").strip()
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (
         "- Prior comments + author justifications: %s" % prior if prior else ""
     )
