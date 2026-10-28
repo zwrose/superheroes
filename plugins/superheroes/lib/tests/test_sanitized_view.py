@@ -31,8 +31,10 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
 
 
 def _git(repo, *args, check=True):
+    # Pinned: no auto-maintenance. Otherwise a commit starts git's detached background maintenance, which on a repo
+    # past its loose-object threshold packs and prunes object directories while the test's next git command writes there.
     return subprocess.run(
-        ["git", "-C", repo, *args],
+        ["git", "-C", repo, "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args],
         capture_output=True,
         text=True,
         check=check,
