@@ -22,12 +22,15 @@ VERIFY_REFUSAL_MESSAGE = (
 )
 
 
-def verify_command_configured(cmd):
-    """True when ``cmd`` is a REAL verify command: a string that is not empty or 'none' (any case,
-    any surrounding whitespace). The one no-command test; the review driver applies the same one."""
-    if not isinstance(cmd, str):
-        return False
-    return cmd.strip().lower() not in ("", "none")
+verify_command_configured = core_md.verify_command_configured  # the one shared no-command test
+
+
+_RETIRED_VERIFY_MODES = ("review-only", "unverified")
+
+
+def _is_retired_mode(value):
+    """True when a legacy `mode:` value (backticks and case tolerated) names a retired verify mode."""
+    return value.strip().strip("`").strip().lower() in _RETIRED_VERIFY_MODES
 
 
 def resolve_verify_command(profile_path):
@@ -42,6 +45,7 @@ def resolve_verify_from_profile(profile_path):
         return "none"
     try:
         in_verify = False
+        command = None
         with open(profile_path, encoding="utf-8") as fh:
             for raw in fh:
                 line = raw.strip()
@@ -52,11 +56,14 @@ def resolve_verify_from_profile(profile_path):
                     break
                 if not in_verify:
                     continue
-                if line.startswith("command:"):
-                    return line.split(":", 1)[1].strip() or "none"
+                if line.startswith("mode:") and _is_retired_mode(line.split(":", 1)[1]):
+                    # A retired opt-out mode wins over a retained command, in either order.
+                    return "none"
+                if command is None and line.startswith("command:"):
+                    command = line.split(":", 1)[1].strip() or "none"
+        return command or "none"
     except OSError:
         return "none"
-    return "none"
 
 
 # The cfg.tiers key -> model_tier role map. The single home for the review-code tier vocabulary

@@ -459,6 +459,15 @@ def _section(text, heading):
     return "\n".join(out).strip()
 
 
+def verify_command_configured(cmd):
+    """True when ``cmd`` is a REAL verify command: a string that is not empty or 'none' (any case,
+    any surrounding whitespace). The one no-command test; review config resolution and the review
+    driver both call it."""
+    if not isinstance(cmd, str):
+        return False
+    return cmd.strip().lower() not in ("", "none")
+
+
 def _checked_verify_command(raw):
     """A verifyCommand is a non-empty, non-whitespace string, or null/absent for none. Any other
     value raises VerifyCommandMalformed — refused, never normalised to "none" (#1331).

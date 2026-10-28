@@ -5542,10 +5542,7 @@ def _verify_command_configured(config):
     """True when the profile configures a REAL verify command (not absent / `none`). A configured
     command must actually PASS — a skip result then means the run did not execute, so it fails closed
     rather than advancing unverified (#507 R2 residual-2)."""
-    cmd = config.get("verifyCommand")
-    if not isinstance(cmd, str):
-        return False
-    return cmd.strip().lower() not in ("", "none")
+    return core_md.verify_command_configured(config.get("verifyCommand"))
 
 
 def _verify_via_row(config, artifact):

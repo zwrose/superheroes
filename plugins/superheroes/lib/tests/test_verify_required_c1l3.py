@@ -108,6 +108,20 @@ def test_legacy_profile_unverified_is_refused(tmp_path):
     assert "verifyMode" not in out
 
 
+@pytest.mark.parametrize("section", [
+    "mode: review-only\ncommand: make test",
+    "command: make test\nmode: review-only",
+    "mode: unverified\ncommand: make test",
+    "command: make test\nmode: `unverified`",
+])
+def test_legacy_profile_retired_mode_with_retained_command_is_refused(tmp_path, section):
+    repo = _repo(tmp_path)
+    _write_legacy_profile(repo, section)
+    out = _resolve(tmp_path, repo)
+    assert out["verifyRefusal"] == _REFUSAL
+    assert out["verifyCommand"] == "none"
+
+
 @pytest.mark.parametrize("verify", ["NONE", "  none  ", "None"])
 def test_core_none_in_any_case_is_refused(tmp_path, verify):
     repo = _repo(tmp_path)
