@@ -799,8 +799,27 @@ def test_state_6_detached_head_refuse(git_world, shipped_guard):
     )
     assert code == 1
     text = _combined_output(out, err)
+    assert "Code review runs only on this project's own PR, from the PR's branch" in text
     assert "An ADOPTED build also qualifies" in text
     assert "currently on '<detached HEAD>'" in text
+
+
+def test_refusal_says_not_supported_and_offers_no_read_only_path(git_world, shipped_guard):
+    """A failing guard tells the user plainly the review is not supported, naming no other way."""
+    _setup_detached(git_world)
+    code, out, err = run_guard(
+        shipped_guard,
+        git_world["work_dir"],
+        git_world["pr_branch"],
+        git_world["head_sha"],
+        tmp_path=git_world["tmp_path"],
+    )
+    assert code == 1
+    text = _combined_output(out, err)
+    assert "is not supported" in text
+    assert "Reviewing a PR that was not built in this project is not supported." in text
+    assert "read-only" not in text
+    assert "review-only" not in text
 
 
 def test_state_6b_detached_head_with_branch_head_config_refuse(git_world, shipped_guard):

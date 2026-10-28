@@ -42,7 +42,6 @@ _INTERACTIVE_PATTERNS = [
 # Files that necessarily name the retired literal to detect it — excluded from the census walk.
 _CENSUS_SELF_PATHS = {
     os.path.normpath(os.path.join(_PLUGIN_ROOT, "lib/tests/test_presence_flag_retired.py")),
-    os.path.normpath(os.path.join(_PLUGIN_ROOT, "lib/tests/test_review_only_headless.py")),
 }
 
 # Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
