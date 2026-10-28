@@ -414,7 +414,7 @@ def test_calibrated_verify_command_in_a_cloud_session_reads_unsure(tmp_path, cap
     assert res["signal_hash"] == ""
     assert len(res["unchecked"]) == 1
     assert res["unchecked"][0].startswith("verify command path(s) could not be checked: ")
-    assert _MAC_PY in res["unchecked"][0]
+    assert res["unchecked"][0].count(_MAC_PY) == 1  # named once, not once per use
     assert "missing path" not in res["message"]
     assert "consider re-running review-init" not in res["message"]
 

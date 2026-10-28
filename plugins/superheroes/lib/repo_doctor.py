@@ -449,7 +449,7 @@ def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env, unchec
     if unsure and unchecked is not None:
         unchecked.append(
             "verify command path(s) could not be checked: %s (a branch that may not run, "
-            "or a directory change, comes before them)" % ", ".join(sorted(unsure))
+            "or a directory change, comes before them)" % ", ".join(sorted(set(unsure)))
         )
 
     # 7. default-branch no longer resolves.
