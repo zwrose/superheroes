@@ -378,10 +378,14 @@ judgment, not the deterministic check's.
 
 ### 3.3 Location and convertibility
 
-- **Location follows the storage mode (§2.3):** in-repo →
-  `docs/superheroes/<work-item>/spec.md` in the repo (committed, diffable); global →
+- **Location follows the doc policy, then the storage mode (§2.3):** an existing
+  `spec.md` anchors its work item first, wherever it is (in the repo or the project store).
+  For a NEW work item, a confirmed doc policy decides: its in-repo location, e.g.
+  `docs/superheroes/<work-item>/spec.md` (committed, diffable). The storage mode decides
+  only when no policy is confirmed: in-repo → the same in-repo location; global →
   `projects/<config-key>/docs/<work-item>/spec.md` in the **git-initialized project
-  store** (§2.3), so global-mode specs are versioned and diffable too.
+  store** (§2.3), so global-mode specs are versioned and diffable too. The storage mode
+  says where calibration lives; the doc policy says where definition-docs live.
   The-architect implements this: the in-repo location plus committed/gitignored choice
   is the doc-policy established via `superheroes:configure` (which drives the-architect's
   doc-policy; the standalone `architect-init` is now an internal helper reached only from

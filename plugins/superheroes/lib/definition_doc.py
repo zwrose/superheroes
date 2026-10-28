@@ -82,30 +82,31 @@ def doc_path(work_item, doc_type, root=".", location=DEFAULT_LOCATION):
     return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
 
 
-def _in_repo_candidate(work_item, root, cwd, store_root=None):
-    import architect_config
-    pol = architect_config.read_policy(cwd, store_root)
-    location = pol["location"] if pol else architect_config.DEFAULT_LOCATION
-    return work_item_dir(work_item, root, location)
-
-
 def _global_candidate(work_item, cwd, store_root):
     import mode_registry
     return os.path.join(mode_registry.project_store_dir(cwd, store_root), "docs", work_item)
 
 
 def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
-    """Mode-aware, spec-anchored directory for a work-item's definition-docs.
+    """Spec-anchored, policy-then-mode directory for a work-item's definition-docs.
     Propagates mode_registry.UnknownSchemaVersion (UFR-7 — caller halts)."""
+    import architect_config
     import mode_registry
-    in_repo = _in_repo_candidate(work_item, root, cwd, store_root)
+    pol = architect_config.read_policy(cwd, store_root)
+    in_repo = work_item_dir(work_item, root,
+                            pol["location"] if pol else architect_config.DEFAULT_LOCATION)
     global_dir = _global_candidate(work_item, cwd, store_root)
     # Spec-anchor (UFR-2): an existing work-item lives wherever its spec is — keep docs together.
     for cand in (in_repo, global_dir):
         if os.path.isfile(os.path.join(cand, "spec.md")):
             return cand
-    # No existing doc → the recorded mode decides (raises UnknownSchemaVersion if newer).
+    # No existing doc → the mode is still read first (raises UnknownSchemaVersion if newer).
     mode = mode_registry.resolve(cwd, store_root)["mode"]
+    # The doc policy says where definition-docs live; the storage mode says where calibration
+    # lives. So a confirmed policy decides, and the mode only when no policy is confirmed (#2197).
+    # Every policy names an in-repo location: the record has no out-of-repo value to honor.
+    if pol and pol["confirmed"]:
+        return in_repo
     return in_repo if mode == mode_registry.IN_REPO else global_dir
 
 
