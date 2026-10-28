@@ -1001,10 +1001,9 @@ No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step
 existing *PR-body honesty check (PR mode only)* — already PR-gated, already reads the
 `superheroes:dod-table` marker, already emits an **Important** / `tradeoff` /
 author-resolved finding. The floor is the **same check emitting the same finding shape**.
-Step 8 catches the floor on a read-only review (`--review-only`) of an **existing** PR. A
-full-lane build's pre-handback `review-code` run now runs in PR mode on the draft PR the builder
-opens first and writes its review record against it (workhorse charter §10), but it runs the
-driver-owned auto-fix loop, which does not run step 8 today
+There is no read-only review: a full-lane build's pre-handback `review-code` run is in PR mode on
+the draft PR the builder opens first and writes its review record against it (workhorse charter
+§10), and it runs the driver-owned auto-fix loop, which does not run step 8
 (`skills/review-code/reference/auto-fix-loop.md`). So the **advisor's vet** is the ratified
 independent checker for the principle in every case (do not add a new body-aware pass here).
 
