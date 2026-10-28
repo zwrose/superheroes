@@ -232,7 +232,7 @@ Its facts come from the spec's own artifacts. The reviewer and the round count c
 record, `checks-record.md`. The commit and one history line per round come from the advisor's vet
 records, and the newest one must be a clean breakdown vet. The breakdown comes from that record's
 `Breakdown pins:`. The pins become one Accept card, **The breakdown**, under What you're accepting. It
-lists every body the filing creates and the coverage map, register and package-read audit trail, each
+lists every body the filing writes (a new issue, an issue rewritten in place, or a seam quoted onto one) and the coverage map, register and package-read audit trail, each
 with its path and hash, and its title counts the bodies. A pin that no longer hashes to its pinned value
 refuses the build, and so does a spec that no longer hashes to the newest record's `Vet done:` hash: a
 stale breakdown is never shown as accepted. A `.md` file beside a pinned file in its subfolder that
