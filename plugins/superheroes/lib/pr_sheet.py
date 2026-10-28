@@ -916,6 +916,14 @@ def _read_text(path):
         return None
 
 
+def _resolved(path):
+    """A path with its links resolved, None when it cannot be (a link loop, an unreadable folder)."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
 def _spec_record(spec, number, words, base, problems):
     """(the review record a spec PR stands on, built from the spec's own artifacts, and the breakdown card's lines and history), or None after
     naming what is wrong. The checks record gives the reviewer and the rounds, the newest vet record the commit, and its pins the breakdown."""
@@ -954,9 +962,10 @@ def _spec_record(spec, number, words, base, problems):
     for path, pinned in newest["pins"]:
         rel = path.split(f"{slug}/", 1)[1] if path.startswith(f"{slug}/") or f"/{slug}/" in path else None
         # bite-axis: a pin is read only when it resolves inside the spec's folder (no .. and no symlink out of it).
-        rel = rel if rel is not None and (folder / rel).resolve().is_relative_to(home) else None
+        target = None if rel is None else _resolved(folder / rel)
+        rel = rel if target is not None and target.is_relative_to(home) else None
         text = None if rel is None else _read_text(folder / rel)
-        held.update([] if rel is None else [(folder / rel).resolve()])
+        held.update([] if rel is None else [target])
         if rel is None:
             problems.append(f"breakdown pin {path} is outside the spec's folder {slug}")
         elif text is None:
@@ -968,7 +977,7 @@ def _spec_record(spec, number, words, base, problems):
             group = "artifact" if pathlib.PurePath(rel).name in _SPEC_ARTIFACTS else "body"
             lines[group].append(_fill(words["breakdownArtifact" if group == "artifact" else "breakdownBody"], path=path, hash=pinned))
     # bite-axis: a body beside a pinned one in its subfolder that the vet does not pin makes the record stale (spec-vet.md § Vetting the breakdown).
-    for unpinned in sorted(f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md") if f.resolve() not in held):
+    for unpinned in sorted(f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md") if _resolved(f) not in held):
         problems.append(f"{unpinned.relative_to(home)} sits beside the pinned bodies but the newest vet record does not pin it: the breakdown needs a new vet")
     if [p for p, _ in newest["pins"]] != list(dict.fromkeys(p for p, _ in newest["pins"])):
         problems.append("the newest vet record pins a file more than once")

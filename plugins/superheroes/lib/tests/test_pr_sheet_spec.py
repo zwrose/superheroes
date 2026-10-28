@@ -147,6 +147,19 @@ def test_a_pinned_link_to_another_pinned_body_is_not_read_as_unpinned(world):
     assert len(bullets(build(world))) == len(PINNED) + 1
 
 
+@pytest.mark.parametrize("pinned", [False, True], ids=["unpinned-loop", "pinned-loop"])
+def test_a_link_loop_is_a_refusal_never_a_crash(world, pinned):
+    # Axis: a body that links to itself refuses with a named problem through the command, whether or not the vet pins it.
+    base, folder, _ = world
+    (folder / "children" / "loop.md").symlink_to(folder / "children" / "loop.md")
+    pin = f"docs/superheroes/{SLUG}/children/loop.md"
+    text = vet_text(folder, 3, "Breakdown", pins=PINNED)
+    (base / "vet-3.md").write_text(text.replace("Vet done:", f"{pin} {'0' * 64}\nVet done:") if pinned else text, encoding="utf-8")
+    done = cli(world)
+    expected = f"breakdown pin {pin} is outside the spec's folder" if pinned else "children/loop.md sits beside the pinned bodies"
+    assert done.returncode == 1 and "Traceback" not in done.stderr and any(expected in p for p in json.loads(done.stdout)["problems"])
+
+
 @pytest.mark.parametrize("escape", ["dotdot", "symlink"])
 def test_a_pin_that_resolves_outside_the_folder_refuses(world, escape):
     # Axis: a pin naming the slug but resolving out of the folder (through .. or a symlink) refuses, even when its hash matches.
