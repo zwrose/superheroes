@@ -29,8 +29,11 @@ _RETIRED_VERIFY_MODES = ("review-only", "unverified")
 
 
 def _is_retired_mode(value):
-    """True when a legacy `mode:` value (backticks and case tolerated) names a retired verify mode."""
-    return value.strip().strip("`").strip().lower() in _RETIRED_VERIFY_MODES
+    """True when a legacy `mode:` value names a retired verify mode. Backticks and case are
+    tolerated, and any inline annotation after the mode token (`review-only # disabled`) is
+    ignored, so an annotated opt-out still refuses."""
+    tokens = value.split("#", 1)[0].replace("`", " ").split()
+    return bool(tokens) and tokens[0].lower() in _RETIRED_VERIFY_MODES
 
 
 def resolve_verify_command(profile_path):

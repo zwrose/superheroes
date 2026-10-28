@@ -113,6 +113,8 @@ def test_legacy_profile_unverified_is_refused(tmp_path):
     "command: make test\nmode: review-only",
     "mode: unverified\ncommand: make test",
     "command: make test\nmode: `unverified`",
+    "mode: review-only # temporarily disabled\ncommand: make test",
+    "command: make test\nmode: `unverified` # old opt-out",
 ])
 def test_legacy_profile_retired_mode_with_retained_command_is_refused(tmp_path, section):
     repo = _repo(tmp_path)

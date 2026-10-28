@@ -172,7 +172,7 @@ REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empt
 [ "$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.reason // empty')" = "verify-command-malformed" ] && { echo "$REFUSAL" >&2; exit 1; }
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 NO_VERIFY=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyRefusal.message // empty')
-[ -z "$NO_VERIFY" ] && [ -n "$VERIFY_CMD" ] || { [ -n "$NO_VERIFY" ] || NO_VERIFY="Code review is not available until a verify command is set. Code review needs a command that verifies this project's code; set one with /superheroes:configure."; echo "review-code: $NO_VERIFY" >&2; exit 1; }
+[ -z "$NO_VERIFY" ] && [ -n "$VERIFY_CMD" ] || { [ -n "$NO_VERIFY" ] || NO_VERIFY="the verify-command resolver did not return a result; check this project's calibration with /superheroes:configure."; echo "review-code: $NO_VERIFY" >&2; exit 1; }
 BREAK_IT_ARGS=()
 [ "$(printf '%s' "$VERIFY_JSON" | jq -r '.breakItInterpreter != null')" = "true" ] && \
   BREAK_IT_ARGS=("--break-it-interpreter=$(printf '%s' "$VERIFY_JSON" | jq -r '.breakItInterpreter')")

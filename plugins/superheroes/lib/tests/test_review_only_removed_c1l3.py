@@ -142,10 +142,12 @@ def test_setup_refuses_when_the_resolver_reports_a_refusal(verify_json):
 
 @needs_jq
 def test_setup_refuses_when_the_resolver_result_is_empty():
-    # The resolver call falls back to `{}` when it fails; that must refuse with the same message.
+    # The resolver call falls back to `{}` when it fails; that must refuse with its own
+    # diagnostic, not a second copy of the resolver's authoritative refusal message.
     code, out, err = _run_verify_refusal("{}")
     assert code == 1, (out, err)
-    assert err == "review-code: %s\n" % NO_VERIFY_MESSAGE
+    assert err.startswith("review-code: the verify-command resolver did not return a result")
+    assert NO_VERIFY_MESSAGE not in "\n".join(_read_lines(SETUP_MD))
     assert "|| VERIFY_JSON='{}'" in "\n".join(_read_lines(SETUP_MD)), (
         "setup.md no longer falls back to `{}` when the resolver fails")
 
