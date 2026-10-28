@@ -240,3 +240,115 @@ FAILED ...::test_no_file_names_a_review_only_or_unverified_verify_mode
   `With no verify command the review refuses` finds the sentence at `setup.md:185` (the matching
   line was too long for the tool to display, so its start of line was not re-read).
 - Green: `1 passed, 14 deselected in 0.20s`.
+
+---
+
+# Addendum — WO-E (argument boundaries in the removed-flags check)
+
+**Detectors.** The new and changed tests in `test_review_only_removed_c1l3.py`. Guarded-element set as
+declared: B11–B14. Method as above (one targeted `Edit` of the shipped block in `SKILL.md`, the tests
+unedited, one `-k` selection per run, the inverse `Edit`, a green run of the same selection); command
+`scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-e -m pytest <file> -k <selection> -q`.
+Nothing is redacted: the captures hold no secret, token or private URL. The B11 red is the last 40
+lines of its output; the B12, B13 and B14 reds are the `E` lines, `FAILED` lines and summary line of
+their output (a `grep -E` over the run's output, so the tracebacks between them are not shown); the
+greens are whole minus the launcher's `UV_NATIVE_TLS` warning line. After the four proofs
+`SKILL.md` was read back (lines 32–55, the block as shipped) and `git status --porcelain` listed it
+modified together with the two other files this order changes, and no residue of a neutralization.
+
+## B11. a removed flag inside a quoted `--focus` value is not refused
+
+- Axis: the block tokenizes with the quoting kept (`shlex.split`), so a quoted value is one word.
+- Neutralization (`SKILL.md`): `    words = shlex.split(text)` became `    words = text.split()`
+  (the old whitespace split).
+- Red (`-k "inside_an_argument_value and (double-quoted or single-quoted or post-in-focus)"`; tail):
+
+```
+E       AssertionError: ('review-code: --post was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without --post.
+E         ', '')
+E       assert 1 == 0
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[double-quoted]
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[single-quoted]
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[post-in-focus]
+3 failed, 26 deselected in 0.39s
+```
+
+- Restore: the inverse edit. Restore receipt (`SKILL.md:37`): `    words = shlex.split(text)`.
+- Green: `3 passed, 26 deselected in 2.80s`.
+
+## B12. the value after `--focus` / `--result-file`, and the `--focus=<value>` form, are not read as flags
+
+- Axis: the skip rule governs a flag-shaped value; a flag name inside a single token is not a flag.
+- Neutralization (`SKILL.md`, two edits in one run): `        skip = True` became `        pass` (the skip
+  rule has no effect) and `    elif word in ("--review-only", "--post"):` became
+  `    elif any(flag in word for flag in ("--review-only", "--post")):` (a flag name anywhere in a word is
+  read). Why not the old whitespace split: it keeps `--focus=--review-only` and `'/tmp/--post.json'` as
+  single words that are not equal to a flag, so it leaves those two cases green; the neutralization
+  above is what turns them red.
+- Red (`-k "inside_an_argument_value and (focus-equals or result-file-quoted or flag-shaped)"`):
+
+```
+FFFF                                                                     [100%]
+E       AssertionError: ('review-code: --focus=--review-only was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without --focus=--review-only.
+E       AssertionError: ('review-code: /tmp/--post.json was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without /tmp/--post.json.
+E       AssertionError: ('review-code: --review-only was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without --review-only.
+E       AssertionError: ('review-code: --post was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without --post.
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[focus-equals]
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[result-file-quoted]
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[flag-shaped-focus-value]
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[flag-shaped-result-file-value]
+4 failed, 25 deselected in 0.45s
+```
+
+- Restore: the inverse edits. Restore receipt (`SKILL.md:44-47`): `    elif word in ("--focus", "--result-file"):`,
+  `        skip = True`, `    elif word in ("--review-only", "--post"):`, `        print(word)`.
+- Green: `4 passed, 25 deselected in 0.37s`.
+- Not separated: this one run holds two neutralizations; which of the two turns which case red was
+  not measured case by case.
+
+## B13. the unbalanced-quote fallback does not refuse the review, and still reads the other words
+
+- Axis: a string `shlex.split` cannot tokenize falls back to a whitespace split.
+- Neutralization (`SKILL.md:38`): `except ValueError:` became `except KeyError:` (the tokenizing
+  error is no longer caught).
+- Red (`-k unbalanced`):
+
+```
+FFF                                                                      [100%]
+E       AssertionError: ('', 'Traceback (most recent call last):
+E           File "<string>", line 5, in <module>
+E           File "/root/.local/share/uv/python.../shlex.py", line 191, in read_token
+E             raise ValueError("No closing quotation")
+E         ValueError: No closing quotation
+E         ')
+E       assert 0 == 1
+FAILED ...::test_a_removed_flag_inside_an_argument_value_is_not_a_flag[unbalanced-quote]
+FAILED ...::test_a_removed_flag_beside_a_value_is_still_answered[unbalanced-quote-beside-flag]
+FAILED ...::test_a_removed_flag_beside_a_value_is_still_answered[unbalanced-quote-beside-post]
+3 failed, 26 deselected in 0.39s
+```
+
+- Restore: the inverse edit. Restore receipt (`SKILL.md:38`): `except ValueError:`.
+- Green: `3 passed, 26 deselected in 0.36s`.
+
+## B14. the test reads the block's own exit status
+
+- Axis: `_run_removed_flags_block` returns the block's exit code, not the sentinel's.
+- Neutralization (`SKILL.md`): a line `false` appended after the block's last line (`fi`; the block
+  has no `done` now), the vet's probe.
+- Red (`-k test_ordinary_arguments_pass_through`):
+
+```
+FFFF                                                                     [100%]
+E       AssertionError: ('', '')
+E       assert 1 == 0
+FAILED ...::test_ordinary_arguments_pass_through[pr 12 --focus x]
+FAILED ...::test_ordinary_arguments_pass_through[branch]
+FAILED ...::test_ordinary_arguments_pass_through[--result-file /tmp/r.json]
+FAILED ...::test_ordinary_arguments_pass_through[]
+4 failed, 25 deselected in 0.43s
+```
+
+- Restore: the inverse edit (the `false` line removed). Restore receipt (`SKILL.md:32-55`, read back
+  whole): the block ends `  exit 1`, `fi`, then the closing fence.
+- Green: `4 passed, 25 deselected in 0.38s`.

@@ -452,7 +452,7 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
             "artifact to %s — write an empty findings list rather than skipping the file when "
             "you have nothing to flag." % landing
         )
-    prior =ph.get("PRIOR_COMMENTS_PATH", "").strip()
+    prior = ph.get("PRIOR_COMMENTS_PATH", "").strip()
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (
         "- Prior comments + author justifications: %s" % prior if prior else ""
     )

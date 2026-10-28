@@ -27,16 +27,30 @@ The specialist agents a panel may seat are bundled plugin agents (`architecture-
 
 **Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
 
-**Two flags were removed and are not flags:** `--review-only` (one review pass, then a written presentation) and `--post` (posted a review pass to GitHub), because code review runs only as its one review-and-fix loop. Run this block first on every invocation, before Setup, with `REVIEW_CODE_ARGS` set to the invocation's arguments. It prints nothing and exits 0 unless a removed flag is present; when it exits non-zero, stop: do nothing else, do not start the loop.
+**Two flags were removed and are not flags:** `--review-only` (one review pass, then a written presentation) and `--post` (posted a review pass to GitHub), because code review runs only as its one review-and-fix loop. Run this block first on every invocation, before Setup, with `REVIEW_CODE_ARGS` set to the invocation's arguments. The block reads the arguments with their quoting kept, so a word inside the value of `--focus` or `--result-file` is never read as a flag. It prints nothing and exits 0 unless a removed flag is passed as an argument of its own; when it exits non-zero, stop: do nothing else, do not start the loop.
 
 ```bash
-for ARG in ${REVIEW_CODE_ARGS:-}; do
-  case "$ARG" in
-    --review-only|--post)
-      echo "review-code: $ARG was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without $ARG."
-      exit 1;;
-  esac
-done
+ARG=$(python3 -c '
+import shlex, sys
+text = sys.argv[1]
+try:
+    words = shlex.split(text)
+except ValueError:
+    words = text.split()  # unbalanced quote: plain whitespace split, still skipping the word after --focus or --result-file
+skip = False
+for word in words:
+    if skip:
+        skip = False
+    elif word in ("--focus", "--result-file"):
+        skip = True
+    elif word in ("--review-only", "--post"):
+        print(word)
+        break
+' "${REVIEW_CODE_ARGS:-}")
+if [ -n "$ARG" ]; then
+  echo "review-code: $ARG was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without $ARG."
+  exit 1
+fi
 ```
 
 Open no `AskUserQuestion` on any review-code path, for any purpose.

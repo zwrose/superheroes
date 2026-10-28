@@ -62,10 +62,11 @@ def _removal_notice_span():
 
 
 def _run_removed_flags_block(tmp_path, args):
-    """Run the block, then a sentinel `touch "$MARK"`; return (code, stdout, stderr, ran_after)."""
+    """Run the block in a subshell, then a sentinel `touch "$MARK"` only when the block exited 0;
+    return (the block's own exit code, stdout, stderr, ran_after)."""
     _, _, block = _removal_notice_span()
     mark = tmp_path / "mark"
-    script = block + '\ntouch "$MARK"\n'
+    script = "(\n" + block + '\n)\nrc=$?\n[ "$rc" -eq 0 ] && touch "$MARK"\nexit "$rc"\n'
     env = {"PATH": os.environ.get("PATH", ""), "REVIEW_CODE_ARGS": args, "MARK": str(mark)}
     out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True,
                          timeout=60, stdin=subprocess.DEVNULL)
@@ -127,6 +128,44 @@ def test_a_removed_flag_among_other_arguments_is_still_answered(tmp_path):
     assert code == 1
     assert "--review-only was removed" in out
     assert not ran_after
+
+
+@pytest.mark.parametrize("args", [
+    '--focus "check how --review-only is rejected"',
+    "--focus 'check how --review-only is rejected'",
+    '--focus "check how --post is rejected"',
+    "--focus=--review-only",
+    "--result-file '/tmp/--post.json'",
+    "--focus --review-only",
+    "--result-file --post",
+    "--focus",
+    "--result-file",
+    "--focus don't break it",
+], ids=["double-quoted", "single-quoted", "post-in-focus", "focus-equals", "result-file-quoted",
+        "flag-shaped-focus-value", "flag-shaped-result-file-value", "trailing-focus",
+        "trailing-result-file", "unbalanced-quote"])
+def test_a_removed_flag_inside_an_argument_value_is_not_a_flag(tmp_path, args):
+    code, out, err, ran_after = _run_removed_flags_block(tmp_path, args)
+    assert code == 0, (out, err)
+    assert out == "" and err == ""
+    assert ran_after, "the sentinel after the block did not run on an invocation with no removed flag"
+
+
+@pytest.mark.parametrize("args, flag", [
+    ("--focus don't --review-only", "--review-only"),
+    ('--focus "notes" --review-only', "--review-only"),
+    ("--focus don't --post", "--post"),
+    ('--result-file "a b.json" --post', "--post"),
+], ids=["unbalanced-quote-beside-flag", "quoted-focus-beside-flag", "unbalanced-quote-beside-post",
+        "quoted-result-file-beside-post"])
+def test_a_removed_flag_beside_a_value_is_still_answered(tmp_path, args, flag):
+    code, out, err, ran_after = _run_removed_flags_block(tmp_path, args)
+    assert code == 1, (out, err)
+    assert out == (
+        "review-code: %s was removed. Code review runs only as its one "
+        "review-and-fix loop, so nothing ran. Run /superheroes:review-code without %s.\n" % (flag, flag)
+    )
+    assert not ran_after, "the sentinel after the block ran: the flag did not stop the run"
 
 
 # --- the verify refusal ------------------------------------------------------
