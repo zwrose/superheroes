@@ -313,6 +313,17 @@ craft findings, no owner calls:
 Reviewed: commit bbfdb2f80, changed parts only. Gap, source and grounding raised nothing new. All
 three clean. Grounding base: origin/main at the time of the run. Citation check: [].
 
+## Final sheet and approval
+
+- Vet round 3 (advisor, head 8888cf96, spec hash 69ed47e9): clean, no owner calls.
+- Final sheet 1-final (https://claude.ai/artifact/H6LmcBhgXVniH7uZVpUvNx, digest 19a54de4): the
+  three board redraws (versions 5 to 7) all Aligned, verdict Approve, and the owner said "Sheet
+  done" in chat on 2026-10-28.
+- Gate: `set-gate --review passed` recorded the approval (status approved).
+- Note: an earlier renumbering script in this session had dropped the "@" from the frontmatter's
+  `producedBy` value. That value is provenance, not spec content, and was restored with the gate
+  commit.
+
 ## The owner's queue
 
 - GAP-2: a repeat of a finding closed as wrong, after the code it was judged on has changed. Recommendation: the verifier re-judges it. Ruled 2026-10-28: a (Canon 2026-10-28-5692f27d-2), now FR-21.

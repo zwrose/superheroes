@@ -5,9 +5,10 @@ docType: spec
 workItem: a-review-loop-that-converges-in-few-rounds-and-sta-3f628c
 issue: 2185
 size: large
-status: draft
-gates: {review: pending}
-producedBy: "the-architect0.46.2"
+status: approved
+approved: "2026-10-27"
+gates: {review: passed}
+producedBy: "the-architect@0.46.2"
 created: "2026-10-27"
 updated: "2026-10-27"
 ---
