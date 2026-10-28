@@ -46,6 +46,8 @@ LEDGER_DIR_NAME = "superheroes-launch-ledger"
 LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
 EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome", "amendment")
+# The charters a launch can start, the one home of their names (the launcher keys its command table by them).
+LAUNCH_CHARTERS = ("workhorse", "detective")
 TERMINAL_OUTCOMES = ("handback", "park", "refusal", "died")
 AMENDMENT_EVENT = "amendment"
 AMENDMENT_REOUTCOME = "reoutcome"
@@ -957,6 +959,17 @@ def _validate_reserved_optional_fields(rec):
     place_err = _validate_reserved_place(rec)
     if place_err:
         return place_err
+
+    if "charter" in rec:
+        charter = rec["charter"]
+        premise = rec.get("premise")
+        # axis: the record's charter is a launchable charter name and agrees with the premise's own — an absent field reads as workhorse (records before the field existed)
+        if (
+            not isinstance(charter, str)
+            or charter not in LAUNCH_CHARTERS
+            or (isinstance(premise, dict) and "charter" in premise and premise["charter"] != charter)
+        ):
+            return "fold-bad-field:reserved:charter"
 
     if "surfaceOverlap" in rec:
         # The live lanes this launch's premise surfaces overlapped at reserve time (#1054).

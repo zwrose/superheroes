@@ -184,6 +184,19 @@ lane's `started` record, and returns once the session exists. It does not wait f
     identity from the result and reach the session
     by it.
 
+**Detective lanes.** A premise launches a detective lane with `"charter": "detective"` and a
+`"budget"`, one line in time or usage terms. The prompt then starts with the detective command and
+carries `Budget: <budget>` on the line after the issue pointer. Without a budget the launch refuses
+`premise-detective-budget-missing` and composes nothing. The other refusals are `premise-charter-invalid`,
+`premise-budget-invalid` and `premise-budget-without-detective`. The `reserved` record names the lane's
+`charter`; older records carry none and read as workhorse. Declare-batch, preflight, `record-outcome`,
+`amend` and the watch's ledger reads take a detective lane like any other lane. The one difference is in
+the cloud: a cloud detective lane posts no builder terminal comment, since its only write is the
+diagnosis receipt, so the watch's cloud terminal signal, which a cloud workhorse lane does get, never
+fires for it. Read its end from the receipt and record it with `record-outcome`. A `claude -p` session
+started by hand with the detective command, the issue pointer and the budget is the fallback only for a
+host or plugin version without this launcher support; disclose it on the issue as outside the ledger, never as the norm.
+
 **Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
 `reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
 the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`) and its URL
