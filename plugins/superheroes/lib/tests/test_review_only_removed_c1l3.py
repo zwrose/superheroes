@@ -17,8 +17,15 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
+
+_LIB = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import review_code_config  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -28,10 +35,8 @@ SETUP_MD = os.path.join(REVIEW_CODE, "reference", "setup.md")
 HEADLESS_MD = os.path.join(REVIEW_CODE, "reference", "headless-presentation.md")
 
 NOTICE_ANCHOR = "**Two flags were removed"
-NO_VERIFY_MESSAGE = (
-    "Code review is not available until a verify command is set. Code review needs a command "
-    "that verifies this project's code; set one with /superheroes:configure."
-)
+# The refusal message is read from its authoritative home, never re-typed here.
+NO_VERIFY_MESSAGE = review_code_config.VERIFY_REFUSAL_MESSAGE
 
 needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required to run the block")
 
