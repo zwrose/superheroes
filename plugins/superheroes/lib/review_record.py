@@ -96,6 +96,14 @@ _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registr
                   "cursor": model_registry.cursor_models}
 
 
+# The words of the record's optional parts, their one home.
+GRADE_VERDICTS = ("confirmed", "plausible", "wrong")
+RUN_STATUSES = ("ran", "timed-out", "not-started")
+SOURCE_KINDS = ("reviewer", "sweep")
+# The optional account keys the record carries whole, when the account has them.
+_ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare")
+
+
 class Refusal(Exception):
     def __init__(self, reason, detail):
         super().__init__(reason, detail)
@@ -377,6 +385,172 @@ def _makers_for(makers, step):
                      if m.get("fromStep") is None or step is None or step >= m["fromStep"])
 
 
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _nb(v):
+    return isinstance(v, str) and bool(v.strip())
+
+
+def _nb_or_none(v):
+    return v is None or _nb(v)
+
+
+def _str_or_none(v):
+    return v is None or isinstance(v, str)
+
+
+def _bool_or_none(v):
+    return v is None or isinstance(v, bool)
+
+
+def _int_or_none(v):
+    return v is None or _is_int(v)
+
+
+def _items_fault(v, item_fault):
+    """Where a list's item is malformed, as a path suffix (`[2].grade`), "" when `v` is no list, else None."""
+    if not isinstance(v, list):
+        return ""
+    for j, x in enumerate(v):
+        fault = item_fault(x)
+        if fault is not None:
+            return f"[{j}]{fault}"
+    return None
+
+
+def _range_fault(p):
+    ok = isinstance(p, list) and len(p) == 2 and all(_is_int(x) for x in p) and 1 <= p[0] <= p[1]
+    return None if ok else ""
+
+
+def _part_fault(p):
+    """Where one `{"file", "lines"}` entry is malformed, as a path suffix, else None."""
+    if not isinstance(p, dict):
+        return ""
+    if not _nb(p.get("file")):
+        return ".file"
+    fault = _items_fault(p.get("lines"), _range_fault)
+    return None if fault is None else f".lines{fault}"
+
+
+def _run_fault(run):
+    """Where one command run is malformed, as a path suffix, else None: a status, an exit code (an int when it
+    ran, else null), the output and a reason."""
+    if not isinstance(run, dict):
+        return ""
+    if run.get("status") not in RUN_STATUSES:
+        return ".status"
+    if not (_is_int(run.get("exitCode")) if run["status"] == "ran" else run.get("exitCode") is None):
+        return ".exitCode"
+    if not isinstance(run.get("output"), str):
+        return ".output"
+    return None if _str_or_none(run.get("reason")) else ".reason"
+
+
+def _rerun_fault(c):
+    if not isinstance(c, dict):
+        return ""
+    if not (_is_int(c.get("round")) and c["round"] >= 1):
+        return ".round"
+    if not _nb(c.get("check")):
+        return ".check"
+    if not (isinstance(c.get("runs"), list) and len(c["runs"]) == 2):
+        return ".runs (needs exactly two)"
+    fault = _items_fault(c["runs"], _run_fault)
+    return None if fault is None else f".runs{fault}"
+
+
+def _break_it_fault(x):
+    if not isinstance(x, dict):
+        return ""
+    if not _nb(x.get("test")):
+        return ".test"
+    if not _nb_or_none(x.get("commit")):
+        return ".commit"
+    if not _nb_or_none(x.get("changedWhy")):
+        return ".changedWhy"
+    return _run_fault(x)
+
+
+def _hit_fault(h):
+    if not isinstance(h, dict):
+        return ""
+    for k in ("id", "file", "title"):
+        if not _nb(h.get(k)):
+            return f".{k}"
+    return None if _int_or_none(h.get("line")) else ".line"
+
+
+def _outside_fault(x):
+    if not isinstance(x, dict):
+        return ""
+    src = x.get("source")
+    if not isinstance(src, dict):
+        return ".source"
+    if src.get("kind") not in SOURCE_KINDS:
+        return ".source.kind"
+    if not _nb(src.get("name")):
+        return ".source.name"
+    if not (_nb(src.get("sweepId")) if src["kind"] == "sweep" else src.get("sweepId") is None):
+        return ".source.sweepId"
+    if not (isinstance(x.get("hits"), list) and x["hits"]):
+        return ".hits"
+    fault = _items_fault(x["hits"], _hit_fault)
+    return None if fault is None else f".hits{fault}"
+
+
+def _unread_fault(u):
+    if not isinstance(u, dict):
+        return ""
+    for k in ("unreadLines", "countableLines"):
+        if not (_is_int(u.get(k)) and u[k] >= 0):
+            return f".{k}"
+    if u["unreadLines"] > u["countableLines"]:
+        return ".unreadLines (more than countableLines)"
+    fault = _items_fault(u.get("parts"), _part_fault)
+    return None if fault is None else f".parts{fault}"
+
+
+def _grade_fault(g):
+    if not isinstance(g, dict):
+        return ""
+    if g.get("verdict") not in GRADE_VERDICTS:
+        return ".verdict"
+    return None if _nb(g.get("reason")) else ".reason"
+
+
+def _repeat_fault(g):
+    if not isinstance(g, dict):
+        return ""
+    # axis: a repeat names the earlier finding by its stored key, never by an id alone — see bite-proof record c1l1_wo_a_record_seam
+    if not _nb(g.get("findingKey")):
+        return ".findingKey"
+    if not _nb_or_none(g.get("id")):
+        return ".id"
+    return None if _bool_or_none(g.get("fixHolds")) else ".fixHolds"
+
+
+def _place_fault(p):
+    if not isinstance(p, dict):
+        return ""
+    if not _nb(p.get("file")):
+        return ".file"
+    if not _int_or_none(p.get("line")):
+        return ".line"
+    return None if _bool_or_none(p.get("fixed")) else ".fixed"
+
+
+def _kind_fault(k):
+    if not isinstance(k, dict):
+        return ""
+    if not _nb(k.get("kind")):
+        return ".kind"
+    fault = _items_fault(k.get("places"), _place_fault)
+    return None if fault is None else f".places{fault}"
+
+
 def _validate(a):
     def chk(ok, key):
         if not ok:
@@ -408,6 +582,10 @@ def _validate(a):
         chk(_step_ok(r.get("step")), f"reviewers[{i}].step")
         chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
+        if "readParts" in r:
+            fault = _items_fault(r["readParts"], _part_fault)
+            # axis: a read-parts list is files with line ranges, never another shape — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"reviewers[{i}].readParts{fault}")
         why = r.get("notRunReason")
         # axis: the not-run token labels only its own seat, never run, never attempted — see bite-proof record wo_1_1976_not_run_seat
         chk(why is None or (isinstance(why, str) and why in NOT_RUN_REASONS and r["name"] == NOT_RUN_REASONS[why][0]
@@ -428,6 +606,21 @@ def _validate(a):
         decided_by = session_contract.decided_by_of(f)
         chk(decided_by is None or isinstance(decided_by, dict), f"findings[{i}].decidedBy")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
+        if "grade" in f:
+            fault = _grade_fault(f["grade"])
+            # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"findings[{i}].grade{fault}")
+        if "repeatOf" in f:
+            fault = _repeat_fault(f["repeatOf"])
+            chk(fault is None, f"findings[{i}].repeatOf{fault}")
+        if "breakItRuns" in f:
+            fault = _items_fault(f["breakItRuns"], _break_it_fault)
+            # axis: a break-it run says what ran, and carries an exit code exactly when it ran — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"findings[{i}].breakItRuns{fault}")
+        if "kindOfMistake" in f:
+            fault = _kind_fault(f["kindOfMistake"])
+            # axis: a kind of mistake names its kind and each place it recurs, never an unnamed place — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"findings[{i}].kindOfMistake{fault}")
     for k in ("rawFindingsFiles", "checked"):
         chk(all(ne(x) for x in lst(k)), k)
     for i, g in enumerate(lst("goAheads")):
@@ -473,6 +666,27 @@ def _validate(a):
         and isinstance(rounds.get("stoppedAtCap"), bool)
         and rounds.get("capKind", CAP_KINDS[0]) in CAP_KINDS
         and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
+    if "extraAudit" in rounds:
+        extra = rounds["extraAudit"]
+        # axis: the extra audit round is said with a reason and nothing else — see bite-proof record c1l1_wo_a_record_seam
+        chk(isinstance(extra, dict) and set(extra) == {"why"} and _nb(extra["why"]), "rounds.extraAudit")
+    if "rerunChecks" in a:
+        fault = _items_fault(a["rerunChecks"], _rerun_fault)
+        # axis: a re-run check holds the first failure and the one re-run, two runs, each with a coherent status — see bite-proof record c1l1_wo_a_record_seam
+        chk(fault is None, f"rerunChecks{fault}")
+    if "synthesisRounds" in a:
+        sr = a["synthesisRounds"]
+        # axis: the synthesis rounds are distinct rounds in ascending order — see bite-proof record c1l1_wo_a_record_seam
+        chk(isinstance(sr, list) and all(_is_int(n) and n >= 1 for n in sr)
+            and all(x < y for x, y in zip(sr, sr[1:])), "synthesisRounds")
+    if "outsideThisPR" in a:
+        fault = _items_fault(a["outsideThisPR"], _outside_fault)
+        # axis: an outside entry names its source, a sweep id exactly for a sweep, and at least one hit — see bite-proof record c1l1_wo_a_record_seam
+        chk(fault is None, f"outsideThisPR{fault}")
+    if "unreadShare" in a:
+        fault = _unread_fault(a["unreadShare"])
+        # axis: the unread lines are part of the countable lines, and every range is a real span — see bite-proof record c1l1_wo_a_record_seam
+        chk(fault is None, f"unreadShare{fault}")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -742,6 +956,8 @@ def _own_word_ok(word):
 def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset()):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
+    if "readParts" in r:
+        out["readParts"] = r["readParts"]
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
     out["findingsCoverage"] = SESSION
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
@@ -822,6 +1038,12 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
     out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
     if isinstance(r.get("ownerWord"), dict):
         out["ownerWord"] = r["ownerWord"]
+    # axis: a row's cost is read from the engine record that credited it, never from the account; unmeasured is null, never zero — see bite-proof record c1l1_wo_a_record_seam
+    obs = out.get("observation") if out["ran"] == RAN_ENGINE_RECORD else None
+    obs = obs if isinstance(obs, dict) else {}
+    wall = obs.get("wallSeconds")
+    out["cost"] = {"tokens": obs.get("tokens") if _is_int(obs.get("tokens")) else None,
+                   "minutes": round(wall / 60, 1) if isinstance(wall, (int, float)) and not isinstance(wall, bool) else None}
     return out
 
 
@@ -1151,6 +1373,8 @@ def build_record(account, readers, prior=None):
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
         "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),
+        # axis: a part shows in the record exactly when the account carries it — see bite-proof record c1l1_wo_a_record_seam
+        **{k: a[k] for k in _ROUND_PARTS if k in a},
         "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, **({"seatsNotRun": seats_not_run} if seats_not_run else {}),
@@ -1392,6 +1616,15 @@ _ROUND_SUFFIX = re.compile(r"(.*) \(round (\d+)\)", re.S)
 LISTED = "(listed in the full record)"
 _RAN_STATES = ("engine-record", "reported-by-session")
 _ROUNDS_WORD = {"rounds": "round cap", "ceiling": "round ceiling"}
+# The reviewer header's roles, their one home: a panel seat's lens, a row's phase stem (`<stem> <seat> (round n)`)
+# and the order the non-lens roles are listed in.
+_PANEL_LENS = {"code-reviewer": "code", "test-role": "test", "security-reviewer": "security",
+               "premortem-reviewer": "premortem", "architecture-reviewer": "architecture"}
+_STEM_ROLE = {"verifiers ": "verifier", "audits ": "fix auditor", "scoped-finder ": "scoped finder",
+              "gap-sweep ": "gap sweep"}
+_ROLE_ORDER = ("verifier", "synthesis", "fix auditor", "scoped finder", "gap sweep")
+_OUTCOME_WORDS = {"fixed": "fixed", "shown-wrong": "shown wrong", "craft": "craft call",
+                  "left-for-owner": "left for the owner", "ruling": "settled by a ruling"}
 
 
 def _seat_round(name):
@@ -1407,11 +1640,25 @@ def _row_bullet(v, final_sha):
     if v["ran"] != "not-run" and v.get("commit") and v["commit"] != final_sha:
         label += f" on {v['commit'][:7]}"
     word = v.get("ownerWord")
+    read = _read_words([v])
     return (f"- {v['name']}: {label}"
             + ("; not independent of the makers" if v.get("notIndependent") else "")
             + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
                and isinstance(word.get("where"), str) and word["where"] else "")
-            + f"; findings: {v['findingsCoverage']}")
+            + f"; findings: {v['findingsCoverage']}" + (f"; {read}" if read else ""))
+
+
+def _read_words(rows):
+    """What the rows that carry a read-parts list say was read: `read <n> files, <m> lines`, `read nothing` when
+    every such list is empty, None when no row carries one."""
+    lists = [v["readParts"] for v in rows if isinstance(v.get("readParts"), list)]
+    if not lists:
+        return None
+    parts = [p for part_list in lists for p in part_list]
+    if not parts:
+        return "read nothing"
+    return (f"read {len({p['file'] for p in parts})} files, "
+            f"{sum(end - start + 1 for p in parts for start, end in p['lines'])} lines")
 
 
 def _rounds_text(rounds):
@@ -1445,7 +1692,8 @@ def _seat_bullet(seat, rows, final_sha):
     coverage = list(dict.fromkeys(v["findingsCoverage"] for v, _ in rows))
     said.append("findings: " + (coverage[0] if len(coverage) == 1
                                 else "; ".join(f"round {n}: {v['findingsCoverage']}" for v, n in rows)))
-    return f"- {seat}: " + "; ".join(said)
+    read = _read_words([v for v, _ in rows])
+    return f"- {seat}: " + "; ".join(said + ([read] if read else []))
 
 
 def _seat_groups(r):
@@ -1508,6 +1756,110 @@ def _rounds_line(rounds):
     word = _ROUNDS_WORD.get(rounds.get("capKind"), _ROUNDS_WORD["rounds"])
     return (f"Rounds: {rounds.get('count')} of {cap} ({word})."
             + (" The loop stopped at its cap." if rounds.get("stoppedAtCap") else ""))
+
+
+def _extra_audit_line(rounds, compact):
+    extra = rounds.get("extraAudit") if isinstance(rounds, dict) else None
+    if not isinstance(extra, dict):
+        return None
+    cap = rounds.get("cap")
+    why = _clip(extra.get("why")) if compact else extra.get("why")
+    return (f"Extra audit round: ran, ordered at the vet and not counted in the {f'{cap} ' if cap is not None else ''}"
+            f"rounds: {why}.")
+
+
+def _run_result(run):
+    if run.get("status") == "ran":
+        return "passed" if run.get("exitCode") == 0 else f"failed (exit {run.get('exitCode')})"
+    return "timed out" if run.get("status") == "timed-out" else "did not start"
+
+
+def _rerun_line(checks, compact):
+    if not checks:
+        return None
+    lead = "Re-run after one failure on unchanged code: "
+    if compact:
+        return f"{lead}{len(checks)} checks {LISTED}."
+    return lead + "; ".join(
+        f"round {c.get('round')} {_inline_code(str(c.get('check')))}: "
+        + " then ".join(_run_result(run) for run in c.get("runs") or []) for c in checks)
+
+
+def _roles(r):
+    """The reviewer header's roles: the panel lenses, then the other roles in `_ROLE_ORDER`, for the rows that
+    ran and the rounds the synthesis step ran in; each role once, the groups joined by ` · `."""
+    lenses, roles = [], set()
+    for v in r["reviewers"]:
+        if v["ran"] == "not-run":
+            continue
+        seat = _seat_round(v["name"])[0]
+        stem = next((role for prefix, role in _STEM_ROLE.items() if seat.startswith(prefix)), None)
+        if stem:
+            roles.add(stem)
+        elif seat in _PANEL_LENS and _PANEL_LENS[seat] not in lenses:
+            lenses.append(_PANEL_LENS[seat])
+    if r.get("synthesisRounds"):
+        roles.add("synthesis")
+    return " · ".join(([", ".join(lenses)] if lenses else []) + [role for role in _ROLE_ORDER if role in roles])
+
+
+def _place_text(p):
+    return p["file"] if p.get("line") is None else f"{p['file']}:{p['line']}"
+
+
+def _finding_bullet(f):
+    """One finding's bullet in the findings block; the parts the finding carries follow its outcome. A run's
+    output text is never in the summary."""
+    bullet = (f"- {' '.join(str(x) for x in (f.get('id'), f.get('severity')) if x)} · "
+              + _OUTCOME_WORDS.get(f.get("outcome"), "open"))
+    grade, repeat = f.get("grade"), f.get("repeatOf")
+    runs, kind = f.get("breakItRuns"), f.get("kindOfMistake")
+    if isinstance(grade, dict):
+        bullet += f" · {grade.get('verdict')}: {grade.get('reason')}"
+    if isinstance(repeat, dict):
+        bullet += f" · repeat of {repeat.get('id') or str(repeat.get('findingKey'))[:12]}"
+        bullet += {True: " · fix still holds", False: " · fix no longer holds"}.get(repeat.get("fixHolds"), "")
+    if runs:
+        bullet += f" · break-it: {len(runs)} run(s) ({', '.join(_run_result(run) for run in runs)})"
+    if isinstance(kind, dict):
+        bullet += f" · kind of mistake: {kind.get('kind')}"
+        places = kind.get("places") or []
+        if places:
+            fixed = sum(1 for p in places if p.get("fixed") is True)
+            bullet += (f" · also in this PR: {', '.join(_place_text(p) for p in places)} "
+                       f"({'all fixed' if fixed == len(places) else f'{fixed} of {len(places)} fixed'})")
+    return bullet
+
+
+def _findings_lines(findings, compact):
+    entries = [f for f in findings if isinstance(f, dict)] if isinstance(findings, list) else []
+    if not entries:
+        return []
+    if compact:
+        return [f"Findings: {len(entries)} {LISTED}."]
+    return ["Findings:", *[_finding_bullet(f) for f in entries]]
+
+
+def _outside_lines(outside, compact):
+    total = sum(len(x["hits"]) for x in outside or [])
+    if not total:
+        return []
+    if compact:
+        return [f"Outside this PR ({total}) {LISTED}."]
+    lines = [f"Outside this PR ({total})"]
+    for x in outside:
+        src = x["source"]
+        words = f"from {src['name']}" if src["kind"] == "reviewer" else f"from sweep {src['sweepId']} by {src['name']}"
+        lines += [f"- {h['id']} {_place_text(h)} · {h['title']} ({words})" for h in x["hits"]]
+    return [*lines, "For the advisor to sort at the vet."]
+
+
+def _unread_line(share):
+    if not isinstance(share, dict):
+        return None
+    unread, countable = share["unreadLines"], share["countableLines"]
+    return (f"Left unread by the slice reviewers: {unread} of {countable} countable lines"
+            + (f" ({100 * unread / countable:.1f}%)" if countable > 0 else "") + ".")
 
 
 def _not_checked_line(entries, compact):
@@ -1586,9 +1938,19 @@ def _summary(r, level):
         groups = _seat_groups(r)
         who = [f"Reviewers: {_plural(len(r['reviewers']), 'row', 'rows')} across "
                f"{_plural(len(groups), 'seat', 'seats')} {LISTED}."]
+        roles_line = None
     else:
-        who = ["Reviewers:", *_reviewer_bullets(r)]
+        roles = _roles(r)
+        roles_line = f"Reviewers: {roles}" if roles else "Reviewers:"
+        who = [roles_line, *_reviewer_bullets(r)]
     rounds_line = _rounds_line(r.get("rounds"))
+    extra_audit_line = _extra_audit_line(r.get("rounds"), compact)
+    rerun_line = _rerun_line(r.get("rerunChecks"), compact)
+    findings_lines = _findings_lines(r.get("findings"), compact)
+    outside_lines = _outside_lines(r.get("outsideThisPR"), compact)
+    unread_line = _unread_line(r.get("unreadShare"))
+    # the lines that carry reviewer or session text, left out of the claim check by the line objects built here
+    quoted_lines = [*findings_lines, *outside_lines, *([roles_line] if roles_line else [])]
     refused = r.get("refused") or []
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
@@ -1606,6 +1968,8 @@ def _summary(r, level):
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
+        *([extra_audit_line] if extra_audit_line else []),
+        *([rerun_line] if rerun_line else []),
         *([_refused_line(refused, compact)] if refused else []),
         *([refusals_line] if refusals_line else []),
         *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
@@ -1613,17 +1977,23 @@ def _summary(r, level):
         *[f"Not run: {n['name']}, because {n['why']}." for n in r.get("seatsNotRun") or []],
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
-        *wider_lines]
+        *wider_lines,
+        *findings_lines,
+        *outside_lines,
+        *([unread_line] if unread_line else [])]
     # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.
     # The wider lines carry the driver's own reason text, and the withheld line carries literal path data,
     # like the floor line. The refusals line carries the agent's literal command and next-step text. The transit
     # line carries the recorded fields' literal paths (record keys), so it is left out too.
+    # The findings block, the outside list and the reviewer header carry reviewers' and the session's own text, so
+    # they are left out too, by the line objects built above.
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
+    # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
     _assert_no_bug_free_claim(
         "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l is not transit_line and l not in wider_lines))
+                  and l is not transit_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
     return "\n".join(lines)
 
 

@@ -112,7 +112,10 @@ def test_66_rows_in_6_seats_over_11_rounds_fit_one_comment(tmp_path):
     out = send(tmp_path, fake, reviewers=rows, findings=many_findings(10, 300))
     assert out["parts"] == 0 and len(fake.marked()) == 1 and not parts_of(fake)
     body = fake.marked()[0]["body"]
-    assert len(body) <= rr.MAX_BODY_CHARS and sum(l.startswith("- ") for l in body.split("\n")) == 6
+    lines = body.split("\n")
+    cut = lines.index("Findings:") if "Findings:" in lines else len(lines)
+    assert len(body) <= rr.MAX_BODY_CHARS and sum(l.startswith("- ") for l in lines[:cut]) == 6
+    assert sum(l.startswith("- ") for l in lines[cut:]) == 10
 
 
 def test_the_next_write_reads_the_multi_part_prior_record(tmp_path):
