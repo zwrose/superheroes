@@ -607,7 +607,7 @@ def _passed_break_it(rounds):
     return out
 
 
-def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None):
+def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
@@ -616,6 +616,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None):
     own panel proposal is settled that way) add nothing. A listed finding already settled in a round before the
     report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
     settled_rounds = settled_rounds or {}
+    settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
     listed = {f["findingKey"] for f in findings}
     by_listed = {f["findingKey"]: f for f in findings}
     dropped = {(d["round"], d["title"], _file_key(d["file"]), _line_key(d["line"])) for d in _refused(rounds)}
@@ -644,10 +645,12 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None):
                 # a report from a round after the one that settled the listed finding was never folded (a folded
                 # re-report would have reopened the ledger row): the defect came back, so the row reads open again
                 # the scoped finder is the one report phase that runs after a round's fix audit, so in the settling
-                # round itself only its report postdates the settlement
+                # round itself only its report postdates a fix-audit settlement (fixed); a refutation is recorded
+                # after the scoped report is folded, so a same-round refuted row is the loop's answer to that report
                 if isinstance(held, dict) and held.get("outcome") is not None and _int(rnd) \
                         and _int(settled_rounds.get(fkey)) \
-                        and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey] and phase == round_phases.P_SCOPED)):
+                        and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey] and phase == round_phases.P_SCOPED
+                                                            and settled_kinds.get(fkey) == "fixed")):
                     held.update({"outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
                 continue
             listed.add(fkey)
@@ -712,7 +715,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         by_key = {sc.finding_identity_key(r): r for r in ledger or [] if isinstance(r, dict)}
         settled_rounds = {k: sc.resolve_merged_into_entry(r, by_key).get("dispositionRound") for k, r in by_key.items()
                           if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
-        findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds)
+        settled_kinds = {k: sc.resolve_merged_into_entry(r, by_key).get("disposition") for k, r in by_key.items()
+                         if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
+        findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
             reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
