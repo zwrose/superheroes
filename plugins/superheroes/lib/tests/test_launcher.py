@@ -5275,6 +5275,8 @@ def test_launch_keeps_the_worktree_while_a_live_reservation_may_name_it(tmp_path
     assert "launcher.py repair-lane" in result["remedy"]
     assert "--repo-root %s" % repo in result["remedy"]
     assert "--launch-id %s" % result["launchId"] in result["remedy"]
+    assert "--evidence" in result["remedy"]
+    assert "--no-builder" in result["remedy"]
     assert result["launchId"] in ll.live_launches(ll.read(repo)["records"])
 
 

@@ -3662,8 +3662,12 @@ def launch_build(
                 # A live reservation may name this worktree: keep it until the lane is readable.
                 extra["keptWorktree"] = worktree_path
                 extra["remedy"] = (
-                    "Bring the lane to a readable state with `launcher.py repair-lane "
-                    "--repo-root %s --launch-id %s`, after which the worktree at %s can be removed."
+                    "First make the ledger read cleanly again: `repair-lane` refuses an unreadable "
+                    "ledger. Then, after confirming no builder runs for this launch, end the lane "
+                    "with `launcher.py repair-lane --repo-root %s --launch-id %s "
+                    "--evidence \"<what failed and what was checked>\" "
+                    "--no-builder \"<what was checked to show no builder exists>\"`. "
+                    "Only once the lane reads terminal (or absent) can the worktree at %s be removed."
                     % (repo_root, launch_id, worktree_path)
                 )
             else:
