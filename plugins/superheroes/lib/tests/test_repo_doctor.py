@@ -437,6 +437,9 @@ def test_calibrated_verify_command_in_a_cloud_session_reads_unsure(tmp_path, cap
     'verifybin "plugins/gone/tests',
     "verifybin plugins/gone/tests )",
     "verifybin plugins/gone/tests <<EOF",
+    'verifybin "plugins/"gone/tests',
+    "false&&>/dev/null verifybin plugins/gone/tests",
+    "true && verifybin < plugins/gone/tests",
 ])
 def test_verify_path_that_may_not_run_reads_unsure(tmp_path, capsys, verify):
     """#2146: a path in a branch that may not run, after a `cd`, or in a shape the walk does
@@ -456,6 +459,8 @@ def test_verify_path_that_may_not_run_reads_unsure(tmp_path, capsys, verify):
     "if [ -d src ]; then true; fi; verifybin plugins/gone/tests",
     "verifybin src | verifybin plugins/gone/tests",
     "verifybin 2>/dev/null plugins/gone/tests",
+    "verifybin < plugins/gone/tests",
+    "verifybin > src/out.log 2>&1 plugins/gone/tests",
 ])
 def test_verify_path_that_certainly_runs_still_drifts(tmp_path, capsys, verify):
     """#2146: a path the command certainly runs from the project root, and that is missing,

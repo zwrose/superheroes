@@ -290,6 +290,10 @@ def _path_word(tok):
 _CONDITIONAL_OPEN = {"if", "while", "until", "for", "select", "(", "{"}
 _CONDITIONAL_CLOSE = {"fi", "done", ")", "}"}
 _LIST_SEPARATORS = {";", "&", ";;", ";&"}
+# Redirections; only an input file must already exist, so only its target is checked.
+_REDIRECTIONS = {"<", ">", ">>", ">|", "<>", ">&", "<&", "&>", "&>>"}
+_INPUT_REDIRECTIONS = {"<", "<>"}
+_OPERATOR_CHARS = set("();<>|&")
 
 
 def _verify_path_args(verify_command):
@@ -299,20 +303,28 @@ def _verify_path_args(verify_command):
     been removed. A path is `sure` only when the command certainly runs it from the project
     root (#2146): one inside an `if`/`while`/`for` construct, a subshell or a group, in an
     and-or list (either side of `&&` or `||`), after a `cd`-like builtin, or in a comment is
-    `unsure`. Shapes the walk does not model (`case`, functions, here-documents, unbalanced
-    constructs, text that does not tokenize) make every path `unsure`: the walk is a partial
-    shell reader, so it fails safe."""
+    `unsure`. Shapes the walk does not model (quoting or escapes, which can join or split a
+    word; `case`, functions, here-documents; an operator it does not know, such as `&&>`;
+    unbalanced constructs; text that does not tokenize) make every path `unsure`: the walk is
+    a partial shell reader, so it fails safe."""
     if not verify_command:
         return [], []
+    # The fallback's words: quotes and escapes dropped, split at operator characters.
+    whole_words = [p for p in map(_path_word, re.split(
+        r"[\s;&|<>()]+", re.sub(r"[\"'\\]", "", verify_command))) if p]
+    if any(c in verify_command for c in "\"'\\"):
+        return [], whole_words
     try:
         lex = shlex.shlex(verify_command, posix=False, punctuation_chars=True)
         lex.whitespace_split = True
         lex.commenters = ""
         tokens = list(lex)
     except ValueError:
-        return [], [p for p in map(_path_word, verify_command.split()) if p]
-    if any(t in _SHELL_UNPARSED or t.startswith("<<") for t in tokens):
-        return [], [p for p in map(_path_word, tokens) if p]
+        return [], whole_words
+    if any(t in _SHELL_UNPARSED or t.startswith("<<") for t in tokens) or any(
+            set(t) <= _OPERATOR_CHARS and t not in _CONTROL_OPS | _REDIRECTIONS
+            for t in tokens):
+        return [], whole_words
     # Split into lists at the separators; a list holding `&&` or `||` is an and-or list.
     lists, cur = [], []
     for tok in tokens:
@@ -327,7 +339,7 @@ def _verify_path_args(verify_command):
     for lst in lists:
         and_or = "&&" in lst or "||" in lst
         for tok in lst:
-            if skip:  # a redirection's target
+            if skip:  # an output redirection's target, or a file descriptor
                 skip = False
             elif tok.startswith("#"):
                 tainted = True  # a comment runs to the end of its line
@@ -338,8 +350,8 @@ def _verify_path_args(verify_command):
                 balanced = balanced and depth >= 0
             elif tok in _RESOLUTION_CHANGERS:
                 tainted = True
-            elif tok[0] in "<>":
-                skip = True
+            elif tok in _REDIRECTIONS:
+                skip = tok not in _INPUT_REDIRECTIONS
             else:
                 p = _path_word(tok)
                 if p:
