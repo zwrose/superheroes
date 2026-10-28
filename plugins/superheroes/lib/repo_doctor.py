@@ -292,7 +292,7 @@ _CONDITIONAL_CLOSE = {"fi", "done", ")", "}"}
 _LIST_SEPARATORS = {";", "&", ";;", ";&"}
 # Redirections; only an input file must already exist, so only its target is checked.
 _REDIRECTIONS = {"<", ">", ">>", ">|", "<>", ">&", "<&", "&>", "&>>"}
-_INPUT_REDIRECTIONS = {"<", "<>"}
+_INPUT_REDIRECTIONS = {"<"}  # `<>` creates its file, like `>`
 _OPERATOR_CHARS = set("();<>|&")
 
 

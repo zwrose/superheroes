@@ -385,6 +385,23 @@ def test_verify_path_glob_or_var_not_flagged(tmp_path, capsys):
     assert not any("missing path" in d.lower() for d in res["drift"])
 
 
+@pytest.mark.parametrize("verify", [
+    "verifybin > src/new.log",
+    "verifybin >> src/new.log",
+    "verifybin <>src/state",
+    "verifybin &> src/new.log",
+])
+def test_verify_path_the_command_creates_is_never_checked(tmp_path, capsys, verify):
+    """#2146 review: a file a redirection creates need not exist, so it is neither missing
+    nor a could-not-be-checked note."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"], verify=verify)
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["drift"] == []
+    assert not any("path(s) could not be checked" in u for u in res["unchecked"])
+
+
 # This repo's calibrated verify command (#2146), with its home directory and project id
 # replaced: an `if` whose `else` arm names Mac-only interpreter paths.
 _MAC_PY = "/Users/owner/.claude/superheroes/projects/0000000000000000/venv/bin/python"
