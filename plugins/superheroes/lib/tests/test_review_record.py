@@ -2552,21 +2552,21 @@ def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
 
 NO_FLOOR_BASIS = {"floor": None}
 RISKY_BASIS = {"floor": "full"}
-THREE_SEAT_MAP = seat_map_module.to_receipt(
+TWO_SEAT_MAP = seat_map_module.to_receipt(
     seat_map_module.build(list(seat_map_module.roster_for(NO_FLOOR_BASIS)),
                           ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
 
 
-def test_move_up_holds_a_no_floor_basis_to_the_three_seat_roster():
+def test_move_up_holds_a_no_floor_basis_to_the_two_seat_roster():
     # axis: the move-up check requires the roster the lane basis calls for, not the full panel — see bite-proof record wo_a_1797_roster
-    assert len(THREE_SEAT_MAP["roster"]) == 3
-    assert rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), NO_FLOOR_BASIS) is None
-    out = rr.reading_next([NO_READING, NO_READING], THREE_SEAT_MAP, ["anthropic"], NO_FLOOR_BASIS)
+    assert len(TWO_SEAT_MAP["roster"]) == 2
+    assert rr._move_up_blocker(TWO_SEAT_MAP, frozenset(["anthropic"]), NO_FLOOR_BASIS) is None
+    out = rr.reading_next([NO_READING, NO_READING], TWO_SEAT_MAP, ["anthropic"], NO_FLOOR_BASIS)
     assert out["next"] == "move-up"
 
 
 def test_move_up_blocks_a_three_seat_roster_under_a_risky_basis_and_names_the_missing_seats():
-    blocker = rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), RISKY_BASIS)
+    blocker = rr._move_up_blocker(TWO_SEAT_MAP, frozenset(["anthropic"]), RISKY_BASIS)
     assert blocker.startswith("the seat map's roster omits a panel seat")
     assert "security-reviewer" in blocker and "premortem-reviewer" in blocker
     assert "code-reviewer" not in blocker and "test-role" not in blocker
@@ -2574,14 +2574,14 @@ def test_move_up_blocks_a_three_seat_roster_under_a_risky_basis_and_names_the_mi
 
 def test_move_up_with_no_lane_basis_requires_the_full_risky_roster():
     for basis in (None, "full", {}, {"lane": "full"}):
-        blocker = rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), basis)
+        blocker = rr._move_up_blocker(TWO_SEAT_MAP, frozenset(["anthropic"]), basis)
         assert blocker and "omits a panel seat" in blocker, basis
-    out = rr.reading_next([NO_READING, NO_READING], THREE_SEAT_MAP, ["anthropic"])
+    out = rr.reading_next([NO_READING, NO_READING], TWO_SEAT_MAP, ["anthropic"])
     assert out["next"] == "park" and "omits a panel seat" in out["reason"]
 
 
 def test_reading_next_reads_the_lane_basis_the_seat_map_carries_unless_one_is_given():
-    carried = dict(THREE_SEAT_MAP, laneBasis=NO_FLOOR_BASIS)
+    carried = dict(TWO_SEAT_MAP, laneBasis=NO_FLOOR_BASIS)
     assert rr.reading_next([NO_READING, NO_READING], carried, ["anthropic"])["next"] == "move-up"
     given = rr.reading_next([NO_READING, NO_READING], carried, ["anthropic"], RISKY_BASIS)
     assert given["next"] == "park" and "security-reviewer" in given["reason"]

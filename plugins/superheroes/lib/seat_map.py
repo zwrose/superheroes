@@ -109,6 +109,11 @@ def panel_pin_tiers() -> frozenset[str]:
     return _PANEL_PIN_TIERS
 
 
+def _tiers_in_play(tiers) -> set[str]:
+    # compose can backfill any seat at the downgrade tier, so its cells are in play whatever the roster's own tiers
+    return set(tiers) | {_BACKFILL_DOWNGRADE_TO}
+
+
 def _read_codex_role_pins(seat_map: dict) -> tuple[dict[str, str] | None, bool]:
     """Read ``codexRolePins`` from a seat map — absent, validated mapping, or unusable."""
     if "codexRolePins" not in seat_map:
@@ -226,7 +231,7 @@ def _synthesize_live_cells(
     tiers_map = dict(DEFAULT_TIER_BY_SEAT)
     if tier_by_seat:
         tiers_map.update(tier_by_seat)
-    tiers_in_play = {tiers_map.get(s, "reviewer") for s in roster}
+    tiers_in_play = _tiers_in_play(tiers_map.get(s, "reviewer") for s in roster)
     cells: set[tuple[str, str, str | None]] = set()
     for vendor in live_vendors:
         if not isinstance(vendor, str) or not vendor:
@@ -551,8 +556,12 @@ def reachable_configs(
         else:
             _rotate_all(tier)
 
+    seat_tiers = {_tier_for(seat) for seat in roster}
+    in_play_tiers = _tiers_in_play(seat_tiers)
+    for tier in in_play_tiers - seat_tiers:
+        _rotate_all(tier)
+
     if codex_role_pins and "codex" in configured_vendors:
-        in_play_tiers = {_tier_for(seat) for seat in roster}
         for tier in _PANEL_PIN_TIERS:
             if tier in codex_role_pins and tier in in_play_tiers:
                 _add_cell("codex", tier)

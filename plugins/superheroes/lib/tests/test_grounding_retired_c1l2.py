@@ -231,3 +231,13 @@ def test_reviewer_stays_a_codex_role_pin_tier_after_the_retired_seat_took_its_de
     assert SM.to_receipt(dict(bare, codexRolePins=pins), "xai")["codexRolePins"] == pins
     cells, source = SM._live_cells_fields_for_receipt(dict(bare, codexRolePins=dict(pins, **{"no-such-role": "x"})))
     assert source == liveness_cache.LIVE_CELLS_SOURCE_UNPROBED and cells == []
+
+
+def test_the_backfill_tier_is_in_play_for_a_roster_with_no_reviewer_tier_seat():
+    # axis: a no-floor roster seats only reviewer-deep, yet compose can backfill a seat at reviewer, so that tier's codex cell is probed and synthesized live
+    roster = SM.roster_for({"floor": None})
+    assert roster and {SM.DEFAULT_TIER_BY_SEAT[s] for s in roster} == {"reviewer-deep"}
+    model, effort, _pin = SM._cell("reviewer", "codex", None)
+    assert model is not None
+    assert ("codex", model, effort) in SM._synthesize_live_cells(["codex"], roster, None)
+    assert [model, effort] in SM.reachable_configs(["codex"], None, roster)["codex"]
