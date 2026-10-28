@@ -259,6 +259,13 @@ def test_e12_a_break_it_run_both_sides_hold_is_kept_once(tmp_path):
     assert row["breakItRuns"] == [RUN_1, RUN_2]
 
 
+def test_fill_a_malformed_current_break_it_runs_value_is_left_for_the_writer_to_refuse():
+    # axis: a present non-list breakItRuns is not replaced by the earlier list, so validation still sees it
+    account = {"findings": [dict(LIVE, breakItRuns=RUN_2)]}
+    rs._fill(account, [dict(LIVE, breakItRuns=[RUN_1])])
+    assert account["findings"][0]["breakItRuns"] == RUN_2
+
+
 def test_fill_the_earlier_grade_and_runs_survive_a_later_session_that_lacks_them(tmp_path):
     # axis: a later row without a grade gets the earlier one, and the earlier runs come before the new run — see bite-proof record c1l1_wo_b_session_seam
     fake = Fake()

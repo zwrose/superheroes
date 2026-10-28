@@ -845,8 +845,9 @@ def _fill(account, earlier):
             if part not in f and part in old:
                 f[part] = old[part]
         # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
-        if isinstance(old.get("breakItRuns"), list):
-            mine = f.get("breakItRuns") if isinstance(f.get("breakItRuns"), list) else []
+        # a present non-list value is left as supplied, so the writer refuses it as review-account-invalid
+        if isinstance(old.get("breakItRuns"), list) and isinstance(f.get("breakItRuns", []), list):
+            mine = f.get("breakItRuns", [])
             runs = list(old["breakItRuns"])
             for run in mine:
                 if run not in runs:
