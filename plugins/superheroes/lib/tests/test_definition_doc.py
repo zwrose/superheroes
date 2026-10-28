@@ -772,6 +772,63 @@ def test_resolve_anchors_on_existing_spec(tmp_path, monkeypatch):
     assert d == inrepo
 
 
+def _stub_policy(monkeypatch, *, location="docs/specs", confirmed=True):
+    import architect_config
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": location, "visibility": "committed",
+                                                "confirmed": confirmed, "disclosures": []})
+
+
+def test_resolve_new_workitem_confirmed_policy_beats_global_mode(tmp_path, monkeypatch):
+    # #2197: a confirmed in-repo doc policy decides a new work item's home, not the storage mode.
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "global", store)
+    _stub_policy(monkeypatch)
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == os.path.join(str(tmp_path), "docs", "specs", WI)
+
+
+def test_resolve_provisional_policy_leaves_global_mode_deciding(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "global", store)
+    _stub_policy(monkeypatch, confirmed=False)
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == os.path.join(store, "docs", WI)
+
+
+def test_resolve_anchors_on_existing_store_spec_despite_confirmed_policy(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "global", store)
+    _stub_policy(monkeypatch)
+    in_store = os.path.join(store, "docs", WI)
+    os.makedirs(in_store, exist_ok=True)
+    open(os.path.join(in_store, "spec.md"), "w").write("x")
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == in_store
+
+
+def test_resolve_anchors_on_existing_inrepo_spec_with_confirmed_policy(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "global", store)
+    _stub_policy(monkeypatch)
+    inrepo = os.path.join(str(tmp_path), "docs", "specs", WI)
+    os.makedirs(inrepo, exist_ok=True)
+    open(os.path.join(inrepo, "spec.md"), "w").write("x")
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == inrepo
+
+
+def test_resolve_propagates_unknown_schema_with_confirmed_policy(tmp_path, monkeypatch):
+    # A confirmed policy never lets a newer registry slip past the UFR-7 halt.
+    import mode_registry
+    def boom(cwd, root=None):
+        raise mode_registry.UnknownSchemaVersion("newer")
+    monkeypatch.setattr(mode_registry, "resolve", boom)
+    _stub_policy(monkeypatch)
+    with pytest.raises(mode_registry.UnknownSchemaVersion):
+        DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+
+
 def test_resolve_propagates_unknown_schema(tmp_path, monkeypatch):
     import mode_registry
     def boom(cwd, root=None):

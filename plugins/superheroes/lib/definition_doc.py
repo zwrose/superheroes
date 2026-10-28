@@ -82,30 +82,31 @@ def doc_path(work_item, doc_type, root=".", location=DEFAULT_LOCATION):
     return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
 
 
-def _in_repo_candidate(work_item, root, cwd, store_root=None):
-    import architect_config
-    pol = architect_config.read_policy(cwd, store_root)
-    location = pol["location"] if pol else architect_config.DEFAULT_LOCATION
-    return work_item_dir(work_item, root, location)
-
-
 def _global_candidate(work_item, cwd, store_root):
     import mode_registry
     return os.path.join(mode_registry.project_store_dir(cwd, store_root), "docs", work_item)
 
 
 def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
-    """Mode-aware, spec-anchored directory for a work-item's definition-docs.
+    """Spec-anchored, policy-then-mode directory for a work-item's definition-docs.
     Propagates mode_registry.UnknownSchemaVersion (UFR-7 — caller halts)."""
+    import architect_config
     import mode_registry
-    in_repo = _in_repo_candidate(work_item, root, cwd, store_root)
+    pol = architect_config.read_policy(cwd, store_root)
+    in_repo = work_item_dir(work_item, root,
+                            pol["location"] if pol else architect_config.DEFAULT_LOCATION)
     global_dir = _global_candidate(work_item, cwd, store_root)
     # Spec-anchor (UFR-2): an existing work-item lives wherever its spec is — keep docs together.
     for cand in (in_repo, global_dir):
         if os.path.isfile(os.path.join(cand, "spec.md")):
             return cand
-    # No existing doc → the recorded mode decides (raises UnknownSchemaVersion if newer).
+    # No existing doc → the mode is still read first (raises UnknownSchemaVersion if newer).
     mode = mode_registry.resolve(cwd, store_root)["mode"]
+    # The doc policy says where definition-docs live; the storage mode says where calibration
+    # lives. So a confirmed policy decides, and the mode only when no policy is confirmed (#2197).
+    # Every policy names an in-repo location: the record has no out-of-repo value to honor.
+    if pol and pol["confirmed"]:
+        return in_repo
     return in_repo if mode == mode_registry.IN_REPO else global_dir
 
 
@@ -599,6 +600,10 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
     if expected_hash != "current" and content_hash(text) != expected_hash:
         return {"ok": False, "reason": "stale"}
     lines, end = _frontmatter_bounds(text, path)
+    if any((m := _LIFECYCLE_ANY_KEY_RE.match(ln)) and m.group(1) == "delivered"
+           for ln in lines[1:end]):
+        # A delivered spec is frozen (§3.1): its review gate no longer moves.
+        return {"ok": False, "reason": "delivered-spec-frozen"}
     status = _STATUS_FOR_REVIEW[review]
     today = datetime.date.today().isoformat()
     found = False
@@ -638,6 +643,235 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
     if lease:
         out["lease"] = lease
     return out
+
+
+# --- delivery lifecycle (§3.1) ---------------------------------------------
+#
+# A spec freezes when the owner accepts its delivery: `delivered` (the date), `deliveryReceipt`
+# (the closure receipt's link) and `livesIn` (where the delivered behavior is now owned) are
+# recorded together, and a later ruling that changes delivered behavior adds a
+# `supersededInPart` entry rather than amending the body. Each value is written as JSON on its
+# one line, which is also a valid YAML flow scalar, so the flat line reader above still sees one
+# line per field.
+
+LIFECYCLE_FIELDS = ("delivered", "deliveryReceipt", "livesIn", "supersededInPart")
+_LIFECYCLE_KEY_RE = re.compile(r"^(%s):[ \t]*(.*)$" % "|".join(LIFECYCLE_FIELDS))
+# Any top-level spelling of a lifecycle key (quoted, or spaced before the colon), so one the
+# canonical form misses is refused rather than silently skipped.
+_LIFECYCLE_ANY_KEY_RE = re.compile(
+    r"^[\"']?(%s)[\"']?[ \t]*:" % "|".join(LIFECYCLE_FIELDS))
+
+
+def _iso_date(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value if parsed.isoformat() == value else None
+
+
+def _lifecycle_lines(text, path):
+    """Return (lines, end, {field: (index, raw)}, problems) for the lifecycle keys, where
+    problems names each repeated key and each key written in a non-canonical spelling."""
+    lines, end = _frontmatter_bounds(text, path)
+    found, problems = {}, []
+    for i in range(1, end):
+        m = _LIFECYCLE_KEY_RE.match(lines[i])
+        if m:
+            if m.group(1) in found:
+                problems.append("%s appears more than once" % m.group(1))
+            found[m.group(1)] = (i, m.group(2).strip())
+        elif _LIFECYCLE_ANY_KEY_RE.match(lines[i]):
+            problems.append("line %d writes a lifecycle key in a non-canonical spelling: %s"
+                            % (i + 1, lines[i].split(":", 1)[0]))
+    return lines, end, found, problems
+
+
+def lifecycle_errors(text, path="spec", root=None):
+    """Return the list of §3.1 lifecycle violations in a spec's text (empty = valid).
+
+    With `root`, every `livesIn` path (the part before an optional ` § <section>`) must exist
+    under it, so a normative pointer that names nothing fails.
+    """
+    try:
+        lines, end, found, problems = _lifecycle_lines(text, path)
+    except ValueError as exc:
+        return [str(exc)]
+    errors = list(problems)
+    values = {}
+    for key, (_, raw) in found.items():
+        try:
+            values[key] = json.loads(raw)
+        except ValueError:
+            errors.append("%s is not written as JSON: %s" % (key, raw))
+    if not found:
+        return errors
+    if "delivered" not in found:
+        return errors + ["%s needs a delivered date" % k for k in sorted(found)]
+    review = None
+    approved = None
+    for ln in lines[1:end]:
+        m = _GATES_RE.match(ln)
+        if m:
+            review = m.group(1)
+        m = _APPROVED_CANONICAL_RE.match(ln)
+        if m:
+            approved = m.group(1)
+    if review != "passed":
+        errors.append("a delivered spec must be approved (gates.review passed)")
+    delivered = _iso_date(values.get("delivered"))
+    if "delivered" in values and delivered is None:
+        errors.append("delivered must be a canonical ISO date")
+    if delivered and approved and delivered < approved:
+        errors.append("delivered %s is before approved %s" % (delivered, approved))
+    receipt = values.get("deliveryReceipt")
+    if not (isinstance(receipt, str) and re.match(r"^https?://\S+$", receipt)):
+        errors.append("a delivered spec needs deliveryReceipt, the closure receipt's link")
+    lives_in = values.get("livesIn")
+    if not (isinstance(lives_in, list) and lives_in
+            and all(isinstance(p, str) and p.split(" § ", 1)[0].strip() for p in lives_in)):
+        errors.append("a delivered spec needs livesIn, a non-empty list of where its "
+                      "behavior now lives")
+    elif root is not None:
+        top = os.path.realpath(root)
+        for p in lives_in:
+            rel = p.split(" § ", 1)[0].strip()
+            target = os.path.realpath(os.path.join(top, rel))
+            if os.path.isabs(rel) or os.path.commonpath([top, target]) != top:
+                errors.append("livesIn path is outside the repository: %s" % rel)
+            elif not os.path.exists(target):
+                errors.append("livesIn path does not exist: %s" % rel)
+    body = _norm_section("\n".join(lines[end + 1:]))
+    entries = values.get("supersededInPart", [])
+    if not isinstance(entries, list) or ("supersededInPart" in values and not entries):
+        errors.append("supersededInPart must be a non-empty list")
+        entries = []
+    for n, entry in enumerate(entries, 1):
+        if not isinstance(entry, dict) or set(entry) != {"date", "sections", "ruling"}:
+            errors.append("supersededInPart entry %d must carry exactly date, sections, "
+                          "ruling" % n)
+            continue
+        date = _iso_date(entry["date"])
+        if date is None:
+            errors.append("supersededInPart entry %d date is not a canonical ISO date" % n)
+        elif delivered and date < delivered:
+            errors.append("supersededInPart entry %d predates delivery" % n)
+        sections = entry["sections"]
+        if not (isinstance(sections, list) and sections
+                and all(isinstance(s, str) and _norm_section(s) for s in sections)):
+            errors.append("supersededInPart entry %d must name its sections" % n)
+        else:
+            # A section the body never names (a typo such as `FR6`) would leave every anchor
+            # on the real section uncovered, so the anchor check would fail open.
+            for s in sections:
+                if not _section_in(_norm_section(s), body):
+                    errors.append("supersededInPart entry %d names section %r, which the "
+                                  "spec body does not contain" % (n, s))
+        if not (isinstance(entry["ruling"], str) and entry["ruling"].strip()):
+            errors.append("supersededInPart entry %d must name its ruling" % n)
+    return errors
+
+
+def _norm_section(text):
+    return re.sub(r"\s+", " ", str(text).replace("§", " ")).strip().casefold()
+
+
+def _section_in(section, text):
+    """True when the normalized `section` occurs in normalized `text` as a whole token."""
+    return re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(section), text) is not None
+
+
+def superseding_ruling(text, section, path="spec"):
+    """Return the latest superseded-in-part entry that covers `section`, or None.
+
+    The latest is the newest date, and the later-written entry on a tie, so a ruling that
+    replaced an earlier one is the one named. A section is covered when it names an entry's section exactly (ignoring `§`, spacing and
+    case), or contains it as a whole token, so an anchor on `Part A (FR-6)` is covered by an
+    entry naming `FR-6` while `FR-60` and `UFR-6` are not. Refuses (ValueError) a spec whose
+    lifecycle fields are invalid: a leg that cannot be read never resolves an anchor.
+    """
+    errors = lifecycle_errors(text, path)
+    if errors:
+        raise ValueError("%s: invalid lifecycle fields: %s" % (path, "; ".join(errors)))
+    _, _, found, _ = _lifecycle_lines(text, path)
+    if "supersededInPart" not in found:
+        return None
+    wanted = _norm_section(section)
+    covering = []
+    for n, entry in enumerate(json.loads(found["supersededInPart"][1])):
+        for s in entry["sections"]:
+            s = _norm_section(s)
+            if s == wanted or _section_in(s, wanted):
+                covering.append((entry["date"], n, entry))
+                break
+    return max(covering, key=lambda c: c[:2])[2] if covering else None
+
+
+def _read_lifecycle(path):
+    """Return (text, found) for a spec's lifecycle lines, or a refusal dict."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        _, _, found, _ = _lifecycle_lines(text, path)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "reason": "unreadable", "detail": str(exc)}
+    return text, found
+
+
+def _write_lifecycle(path, text, updates, root=None):
+    """Write lifecycle fields in place (at the end of the frontmatter), refusing a result that
+    `lifecycle-check` (with the same `root`) would reject; nothing is written on a refusal."""
+    lines, end, found, _ = _lifecycle_lines(text, path)
+    for key in LIFECYCLE_FIELDS:
+        if key not in updates:
+            continue
+        line = "%s: %s" % (key, json.dumps(updates[key], ensure_ascii=False))
+        if key in found:
+            lines[found[key][0]] = line
+        else:
+            lines.insert(end, line)
+            end += 1
+    prospective = "\n".join(lines)
+    errors = lifecycle_errors(prospective, path, root=root)
+    if errors:
+        return {"ok": False, "reason": "lifecycle-invalid", "errors": errors}
+    result = _atomic_replace(path, prospective)
+    return {"ok": True, **updates} if result.get("ok") else result
+
+
+def mark_delivered(path, date, receipt, lives_in, root=None):
+    """Record a spec's delivery (closure, the owner's delivery decision). Refuses a second mark."""
+    read = _read_lifecycle(path)
+    if isinstance(read, dict):
+        return read
+    text, found = read
+    if "delivered" in found:
+        return {"ok": False, "reason": "already-delivered"}
+    return _write_lifecycle(
+        path, text, {"delivered": date, "deliveryReceipt": receipt, "livesIn": list(lives_in)},
+        root=root)
+
+
+def add_superseded(path, date, sections, ruling, root=None):
+    """Append one superseded-in-part entry to a delivered spec."""
+    read = _read_lifecycle(path)
+    if isinstance(read, dict):
+        return read
+    text, found = read
+    if "delivered" not in found:
+        return {"ok": False, "reason": "not-delivered"}
+    try:
+        entries = json.loads(found["supersededInPart"][1]) if "supersededInPart" in found else []
+    except ValueError:
+        return {"ok": False, "reason": "lifecycle-invalid",
+                "errors": ["supersededInPart is not written as JSON"]}
+    if not isinstance(entries, list):
+        return {"ok": False, "reason": "lifecycle-invalid",
+                "errors": ["supersededInPart must be a non-empty list"]}
+    entries.append({"date": date, "sections": list(sections), "ruling": ruling})
+    return _write_lifecycle(path, text, {"supersededInPart": entries}, root=root)
 
 
 # --- CLI -------------------------------------------------------------------
@@ -696,6 +930,34 @@ def _build_parser():
     cn = sub.add_parser("canon", help="locate the project's Canon file (read-only)")
     cn.add_argument("--root", default=".")
 
+    lc = sub.add_parser("lifecycle-check",
+                        help="validate a spec's delivery-lifecycle frontmatter fields")
+    lc.add_argument("--path", required=True)
+    lc.add_argument("--root", default=None,
+                    help="resolve livesIn paths under this directory")
+
+    an = sub.add_parser("anchor-superseded",
+                        help="name the superseded-in-part entry covering a spec section")
+    an.add_argument("--path", required=True)
+    an.add_argument("--section", required=True)
+
+    md = sub.add_parser("mark-delivered", help="record a spec's delivery at closure")
+    md.add_argument("--path", required=True)
+    md.add_argument("--date", required=True)
+    md.add_argument("--receipt", required=True)
+    md.add_argument("--lives-in", required=True, action="append")
+    md.add_argument("--root", required=True,
+                    help="repository root; every --lives-in path must exist under it")
+
+    ms = sub.add_parser("mark-superseded",
+                        help="add a superseded-in-part entry to a delivered spec")
+    ms.add_argument("--path", required=True)
+    ms.add_argument("--date", required=True)
+    ms.add_argument("--section", required=True, action="append")
+    ms.add_argument("--ruling", required=True)
+    ms.add_argument("--root", required=True,
+                    help="repository root; the spec's livesIn paths must exist under it")
+
     gb = sub.add_parser("grounding-base",
                         help="fetch the default branch and add a detached worktree at its tip")
     gb.add_argument("--root", default=".")
@@ -742,6 +1004,36 @@ def main(argv):
             issue=args.issue, created=args.created, updated=args.updated)
         sys.stdout.write(render_frontmatter(fm))
         return 0
+    if args.cmd in ("lifecycle-check", "anchor-superseded"):
+        try:
+            with open(args.path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as exc:
+            sys.stdout.write(json.dumps({"ok": False, "reason": "unreadable",
+                                         "detail": str(exc)}) + "\n")
+            return 1
+        if args.cmd == "lifecycle-check":
+            errors = lifecycle_errors(text, args.path, root=args.root)
+            sys.stdout.write(json.dumps({"ok": not errors, "errors": errors}) + "\n")
+            return 1 if errors else 0
+        try:
+            entry = superseding_ruling(text, args.section, args.path)
+        except ValueError as exc:
+            sys.stdout.write(json.dumps({"ok": False, "reason": "lifecycle-invalid",
+                                         "detail": str(exc)}) + "\n")
+            return 1
+        sys.stdout.write(json.dumps({"ok": True, "covered": entry is not None,
+                                     "entry": entry}) + "\n")
+        return 0
+    if args.cmd in ("mark-delivered", "mark-superseded"):
+        if args.cmd == "mark-delivered":
+            result = mark_delivered(args.path, args.date, args.receipt, args.lives_in,
+                                    root=args.root)
+        else:
+            result = add_superseded(args.path, args.date, args.section, args.ruling,
+                                    root=args.root)
+        sys.stdout.write(json.dumps(result) + "\n")
+        return 0 if result.get("ok") else 1
     if args.cmd == "grounding-base":
         try:
             result = grounding_base(root=args.root, dest=args.dest)

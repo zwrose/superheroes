@@ -291,6 +291,10 @@ gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review
 producedBy: the-architect@<version>
 created: <date>
 updated: <date>
+delivered: "<date>"                    # PRESENT ONCE the owner accepted delivery (closure)
+deliveryReceipt: "<closure receipt link>"   # with delivered: the receipt it was accepted on
+livesIn: ["<repo path>[ § <section>]", …]   # with delivered: where the behavior is now owned
+supersededInPart: [{"date": "<date>", "sections": ["<section>", …], "ruling": "<ruling>"}, …]
 ---
 ```
 
@@ -305,6 +309,23 @@ updated: <date>
   existed is accepted as it stands). No skill and no hand edit writes the field; that
   is what makes the date machine-produced and therefore trustworthy to anything that
   resolves against it.
+- **The delivery lifecycle fields** record that a spec's work is delivered. A spec freezes when
+  the owner accepts its delivery: the closure step writes `delivered` (the date),
+  `deliveryReceipt` (the closure receipt's link) and `livesIn` (the shipped docs or code that now
+  own the behavior, the normative pointer) together, and after that the body is never rewritten.
+  When a later owner ruling changes behavior the spec describes, the advisor appends one
+  `supersededInPart` entry naming its date, the sections it covers (at the granularity anchors
+  cite, each occurring in the body as a whole token), and the ruling; the entry is
+  metadata, written without the owner's stamp, and is not an amendment. A `livesIn` path that
+  moves is updated in place in the same PR that moves it; that too is metadata, not an amendment. `status` stays derived
+  from `gates.review`: a delivered spec stays `approved`, and `set_gate` refuses every change to
+  its gate (`delivered-spec-frozen`). Each value is JSON on its one line. `definition_doc.py
+  lifecycle-check` validates them (a delivered spec lacking its date, receipt or pointer fails,
+  as does an entry predating delivery), `mark-delivered` and `mark-superseded` are their writers
+  and refuse any mark it would reject,
+  and `anchor-superseded` names the entry covering an anchored section
+  (`skills/showrunner/reference/issue-contract.md` § Anchor resolution). The lifecycle's doctrine
+  home is `skills/architect-spec/reference/spec-content.md` § The spec lifecycle.
 - There is no `parent` field: v1's `plan`→`spec`/`tasks`→`plan` chain existed to link
   sibling definition-docs; with only one doc type left, there is nothing to link to.
 
@@ -357,10 +378,14 @@ judgment, not the deterministic check's.
 
 ### 3.3 Location and convertibility
 
-- **Location follows the storage mode (§2.3):** in-repo →
-  `docs/superheroes/<work-item>/spec.md` in the repo (committed, diffable); global →
+- **Location follows the doc policy, then the storage mode (§2.3):** an existing
+  `spec.md` anchors its work item first, wherever it is (in the repo or the project store).
+  For a NEW work item, a confirmed doc policy decides: its in-repo location, e.g.
+  `docs/superheroes/<work-item>/spec.md` (committed, diffable). The storage mode decides
+  only when no policy is confirmed: in-repo → the same in-repo location; global →
   `projects/<config-key>/docs/<work-item>/spec.md` in the **git-initialized project
-  store** (§2.3), so global-mode specs are versioned and diffable too.
+  store** (§2.3), so global-mode specs are versioned and diffable too. The storage mode
+  says where calibration lives; the doc policy says where definition-docs live.
   The-architect implements this: the in-repo location plus committed/gitignored choice
   is the doc-policy established via `superheroes:configure` (which drives the-architect's
   doc-policy; the standalone `architect-init` is now an internal helper reached only from

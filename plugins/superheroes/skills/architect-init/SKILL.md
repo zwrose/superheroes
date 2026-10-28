@@ -24,8 +24,9 @@ print(result['mode'])
 "
 ```
 
-If the mode is `global`: report "nothing to configure — global mode keeps
-docs in the project store" and exit. The storage mode is decided once by the
+If the mode is `global`: report "nothing to configure here — the storage mode
+decides where calibration lives; a confirmed doc policy (set through configure)
+decides where definition-docs go" and exit. The storage mode is decided once by the
 band-wide init, not by this skill (CONVENTIONS `§2.3`).
 
 ## Step 2 — Check for an existing policy (idempotency gate)
@@ -133,6 +134,6 @@ or changes it.
 | Mistake | Fix |
 | --- | --- |
 | Re-deciding the policy when one is already confirmed | Honor FR-11: report and exit; only proceed on an explicit owner reset. |
-| Running Step 3 in `global` mode | `global` mode keeps docs in the project store — no in-repo policy to set. Exit after Step 1. |
+| Running Step 3 in `global` mode | This skill sets no policy in `global` mode; a confirmed doc policy comes through configure. Exit after Step 1. |
 | Blocking on a contended config lock | `WRITE_POLICY_REFUSED` is the signal — surface a notice; never spin-wait. |
 | Setting `confirmed: true` without owner confirmation via configure | Every init run is provisional (`confirmed: false`); the owner confirms through `/superheroes:configure`. |

@@ -5,9 +5,11 @@ import filecmp
 import json
 import os
 import re
+import subprocess
 import sys
 
 import charter_detect
+import cloud_setup_text
 
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
@@ -163,7 +165,81 @@ def _gap_keys(from_v, to_v, installed, trans, changelog_versions):
     changelog_sections = sorted([v for v in crossed if v in changelog_versions], key=_vt)
     return gaps, changelog_sections
 
-def _plan(role, cache, from_v, to_v):
+def _start_loaded(root):
+    """{path: bytes} for the parts a cloud session loads at its start in one version tree, as the
+    setup text's stamp counts them (cloud_setup_text._plugin_inventory): each skill's frontmatter,
+    each agent file, the hooks file and the hook modules it loads. None when a part is unreadable."""
+    out = {}
+    try:
+        for name in sorted(os.listdir(os.path.join(root, "skills"))):
+            path = os.path.join(root, "skills", name, "SKILL.md")
+            if os.path.isfile(path):
+                out["skills/%s/SKILL.md" % name] = cloud_setup_text._frontmatter(
+                    cloud_setup_text._inventory_file(path))
+    except FileNotFoundError:
+        pass
+    except (OSError, cloud_setup_text._Refused):
+        return None
+    try:
+        agents = sorted(n for n in os.listdir(os.path.join(root, "agents")) if n.endswith(".md"))
+        for name in agents:
+            out["agents/" + name] = cloud_setup_text._inventory_file(os.path.join(root, "agents", name))
+    except FileNotFoundError:
+        pass
+    except (OSError, cloud_setup_text._Refused):
+        return None
+    hooks_dir = os.path.join(root, "hooks")
+    hooks = os.path.join(hooks_dir, "hooks.json")
+    try:
+        if os.path.isfile(hooks):
+            out["hooks/hooks.json"] = cloud_setup_text._inventory_file(hooks)
+        for rel, data in cloud_setup_text._hook_modules(hooks_dir, hooks):
+            out["hooks/" + rel.replace(os.sep, "/")] = data
+    except cloud_setup_text._Refused:
+        return None
+    return out
+
+# Each tree's own code computes the stamp the cloud check compares, in its own process, read-only.
+_STAMP_CODE = (
+    "import json, sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import cloud_setup, cloud_setup_text\n"
+    "print(json.dumps(cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(sys.argv[2], None))))\n")
+STAMP_TIMEOUT_SECONDS = 120
+
+def _placed_stamp(root, project):
+    """The setup stamp `project` gets under one version tree, computed by that tree's own
+    cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(project, None)) in a separate
+    process with the tree's lib first on its path. None when it cannot be computed."""
+    try:
+        done = subprocess.run([sys.executable, "-B", "-I", "-c", _STAMP_CODE,
+                               os.path.join(root, "lib"), project], cwd=project, capture_output=True, text=True,
+                              timeout=STAMP_TIMEOUT_SECONDS)
+        stamp = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return stamp if isinstance(stamp, str) and stamp else None
+
+def _cloud_start(cache, inst, from_v, to_v, project):
+    """One entry per installed release in range, against the installed release before it: which
+    start-loaded parts changed (None when unreadable) and whether `project`'s setup stamp differs
+    between the two trees (None when either cannot be computed, or no project was named). A release
+    that is not installed falls inside the next entry's span."""
+    span = [v for v in inst if _vt(from_v) <= _vt(v) <= _vt(to_v)]
+    stamps = {v: _placed_stamp(os.path.join(cache, v), project) for v in span} if project else {}
+    entries = []
+    for since, ver in zip(span, span[1:]):
+        la, lb = _start_loaded(os.path.join(cache, since)), _start_loaded(os.path.join(cache, ver))
+        parts = None if la is None or lb is None else sorted(
+            k for k in set(la) | set(lb) if la.get(k) != lb.get(k))
+        sa, sb = stamps.get(since), stamps.get(ver)
+        entries.append({"version": ver, "since": since, "startLoaded": parts,
+                        "setupSteps": None if sa is None or sb is None else sa != sb})
+    changed = any(e["startLoaded"] is None or e["startLoaded"] or e["setupSteps"] is not False
+                  for e in entries)
+    return entries, changed
+
+def _plan(role, cache, from_v, to_v, project=None):
     if not os.path.isdir(cache):
         return _refuse("cache-dir-missing", "cache dir missing or not a directory")
     cache = os.path.abspath(cache)
@@ -179,6 +255,7 @@ def _plan(role, cache, from_v, to_v):
                for k in ("charter", "covenantHooks", "libs", "other")}
     up, trans, miss = from_v == to_v, [], []
     gaps, changelog_secs = [], []
+    cloud_start, cloud_changed = _cloud_start(cache, inst, from_v, to_v, project)
     if not up:
         parsed = _parse_transition(os.path.join(tr, "TRANSITION.md"), from_v, to_v, inst)
         if parsed is None:
@@ -206,7 +283,8 @@ def _plan(role, cache, from_v, to_v):
     payload = {"ok": True, "role": role, "cacheDir": cache, "from": from_v, "to": to_v, "fromRoot": fr,
                "toRoot": tr, "installed": inst, "upToDate": up, "transitionSections": trans,
                "missingTransitionSections": miss, "unresolvedGaps": gaps, "changelogSections": changelog_secs,
-               "buckets": buckets, "counts": counts}
+               "buckets": buckets, "counts": counts,
+               "cloudStart": cloud_start, "cloudStartChanged": cloud_changed}
     sys.stdout.write(json.dumps(payload) + "\n")
     return 0
 
@@ -219,6 +297,7 @@ def main(argv=None):
     g.add_argument("--from", dest="from_ver")
     p.add_argument("--to")
     p.add_argument("--cache-dir")
+    p.add_argument("--project", help="a project whose cloud setup stamp each release is computed for")
     args = ap.parse_args(argv)
     if args.from_root:
         fr = os.path.abspath(args.from_root)
@@ -229,7 +308,8 @@ def main(argv=None):
             p.error("--cache-dir is required with --from")
         cache = os.path.abspath(args.cache_dir)
     inst = _installed(cache) if os.path.isdir(cache) else []
-    return _plan(args.role, cache, from_v, args.to or (inst[-1] if inst else from_v))
+    return _plan(args.role, cache, from_v, args.to or (inst[-1] if inst else from_v),
+                 os.path.abspath(args.project) if args.project else None)
 
 if __name__ == "__main__":
     sys.exit(main())
