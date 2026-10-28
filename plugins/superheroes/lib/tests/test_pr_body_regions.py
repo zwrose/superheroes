@@ -137,10 +137,14 @@ def test_region_start_line_aligns_with_region_text():
         "| real row | done | tests/a.py |\n"
     )
     scan = PBR._context_scan(body)
-    region_text, _, region_start_line = PBR._extract_region(
+    region_text, line_count, region_start_line = PBR._extract_region(
         body, PBR.REGION_MARKERS["dod-table"], scan, "dod-table",
     )
     _, bare = PBR._bare_lines_from_body(body)
     region_lines = region_text.splitlines()
+    assert region_start_line == 3
+    assert line_count == 6
+    assert region_lines == bare[3:9]
+    assert bare[8] in region_lines
     for i, line in enumerate(region_lines):
         assert bare[region_start_line + i] == line
