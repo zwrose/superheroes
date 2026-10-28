@@ -5293,7 +5293,7 @@ def test_launch_accounting_reservation_that_landed_ends_terminal_and_relaunches(
     assert result["ok"] is False
     assert result["reason"] == "launch-worktree-collision"
     refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
-    assert [r["reason"] for r in refused] == ["ledger-append-failed"]
+    assert [r["reason"] for r in refused] == ["launch-worktree-collision"]
     assert _folded_launch(repo, result)["terminal"] is True
     restore()
     monkeypatch.setattr(L, "build_worktree_path", real_path_for)

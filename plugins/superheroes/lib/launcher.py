@@ -4039,6 +4039,10 @@ def _try_reserve_for_refusal(
         if isinstance(account_id, str) and account_id:
             reserved["accountId"] = account_id
     result = ll.reserve(repo_root, reserved, env=env)
+    if result.get("reason") == "ledger-append-failed" and result.get("appendReadBack") == "landed":
+        # The line is in the ledger and this path never spawns: the caller ends it with the
+        # refusal's own reason and stage, so the diagnostic is not replaced by the append failure.
+        return {"reserved": True, "warnings": []}
     if result.get("reason") == "ledger-append-failed" and result.get("appendReadBack") != "not-landed":
         # Undecided or missing read-back (fail closed): one terminal write settles the record,
         # so the caller has nothing left to end.
