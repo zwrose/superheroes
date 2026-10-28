@@ -319,7 +319,7 @@ def _verify_path_args(verify_command):
         lex.whitespace_split = True
         lex.commenters = ""
         tokens = list(lex)
-    except ValueError:
+    except ValueError:  # bite-proof unavailable: shlex raises only on a quote or escape, read above
         return [], whole_words
     if any(t in _SHELL_UNPARSED or t.startswith("<<") for t in tokens) or any(
             set(t) <= _OPERATOR_CHARS and t not in _CONTROL_OPS | _REDIRECTIONS

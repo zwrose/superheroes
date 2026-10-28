@@ -428,6 +428,8 @@ def test_calibrated_verify_command_in_a_cloud_session_reads_unsure(tmp_path, cap
     "verifybin plugins/gone/tests && verifybin src",
     "verifybin src && verifybin plugins/gone/tests",
     "case x in x) verifybin plugins/gone/tests;; esac",
+    "case x in (x) verifybin plugins/gone/tests;; esac",
+    "coproc verifybin plugins/gone/tests",
     "cd src; verifybin plugins/gone/tests",
     "pushd src; verifybin plugins/gone/tests",
     "while false; do verifybin plugins/gone/tests; done",
