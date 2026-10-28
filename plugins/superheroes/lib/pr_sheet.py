@@ -966,7 +966,7 @@ def _spec_record(spec, number, words, base, problems):
             group = "artifact" if pathlib.PurePath(rel).name in _SPEC_ARTIFACTS else "body"
             lines[group].append(_fill(words["breakdownArtifact" if group == "artifact" else "breakdownBody"], path=path, hash=pinned))
     # bite-axis: a body beside a pinned one in its subfolder that the vet does not pin makes the record stale (spec-vet.md § Vetting the breakdown).
-    for unpinned in sorted({f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md")} - held):
+    for unpinned in sorted(f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md") if f.resolve() not in held):
         problems.append(f"{unpinned.relative_to(home)} sits beside the pinned bodies but the newest vet record does not pin it: the breakdown needs a new vet")
     if [p for p, _ in newest["pins"]] != list(dict.fromkeys(p for p, _ in newest["pins"])):
         problems.append("the newest vet record pins a file more than once")

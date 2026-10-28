@@ -139,6 +139,14 @@ def test_a_body_beside_the_pinned_ones_that_is_not_pinned_refuses(world):
     assert len(found) == 1 and found[0].startswith("children/B.md sits beside the pinned bodies") and "needs a new vet" in found[0]
 
 
+def test_a_pinned_link_to_another_pinned_body_is_not_read_as_unpinned(world):
+    # Axis: the sibling check compares resolved paths, so a pinned name that links to another pinned body inside the folder is pinned.
+    base, folder, _ = world
+    (folder / "children" / "C.md").symlink_to(folder / "children" / "A.md")
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[*PINNED, "children/C.md"]), encoding="utf-8")
+    assert len(bullets(build(world))) == len(PINNED) + 1
+
+
 @pytest.mark.parametrize("escape", ["dotdot", "symlink"])
 def test_a_pin_that_resolves_outside_the_folder_refuses(world, escape):
     # Axis: a pin naming the slug but resolving out of the folder (through .. or a symlink) refuses, even when its hash matches.
