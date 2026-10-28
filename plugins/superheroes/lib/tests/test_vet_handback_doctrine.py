@@ -32,7 +32,7 @@ _ELEMENTS = (
     ("spelling-leftover", _VET_RECEIPT, _OPEN_FINDINGS, ("`leftover`",), ()),
     ("spelling-rethink", _VET_RECEIPT, _OPEN_FINDINGS, ("`rethink`",), ()),
     ("marker-template", _VET_RECEIPT, _OPEN_FINDINGS, ("<!-- superheroes:cap-choice choice=",), ()),
-    ("key-is-finding-key", _VET_RECEIPT, _OPEN_FINDINGS, ("`findingKey`",), ()),
+    ("key-is-finding-key", _VET_RECEIPT, _OPEN_FINDINGS, ("key=<findingKey> -->",), ()),
     ("field-cap-choices", _VET_RECEIPT, _OPEN_FINDINGS, ("`**Cap choices.**`",), ()),
     ("field-decided-for-veto", _VET_RECEIPT, _OPEN_FINDINGS, ("`**Decided for the owner's veto.**`",), ()),
     ("field-claims-checked", _VET_RECEIPT, _CLAIMS, ("`**Claims checked.**`",), ()),
