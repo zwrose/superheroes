@@ -39,6 +39,8 @@ for ARG in ${REVIEW_CODE_ARGS:-}; do
 done
 ```
 
+Open no `AskUserQuestion` on any review-code path, for any purpose.
+
 ## Session Directory
 
 All review artifacts live in a per-invocation temp directory so parallel reviews don't collide:

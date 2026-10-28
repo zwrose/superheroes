@@ -133,3 +133,62 @@ assertions pass against it. Only the positive half ("reviewing this PR is not su
 to bite. Proving the negative half needs a second neutralization (append a read-only pointer to the
 detail), which was not run: the order's 12-run bite-proof budget is one red and one green per element.
 Its protection is unverified until that run is made.
+
+## E6 negative legs — WO-D (#2207), run after the section above
+
+**Provenance:** produced by WO-D, claude / the implementer cell the dispatcher resolved, on the
+worktree with WO-A/B/C merged. These two entries close the "Unproven part of E6" section above. Same
+method: one targeted edit to the production string in `review_base_guard.py` (never the detector), the
+detector run unedited, the edit undone by the exact inverse edit, the detector re-run. The detector
+was selected with `-k test_pr_mode_repo_mismatch_detail_is_the_plain_refusal` (the single guarding
+node, narrower than the order's `-k mismatch`). Command, with `UV_NATIVE_TLS` warning line left out of
+the quotes below:
+
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-d -m pytest plugins/superheroes/lib/tests/test_review_base_guard.py -k test_pr_mode_repo_mismatch_detail_is_the_plain_refusal -q
+```
+
+The red captures quote the failing assertion, its source line, the FAILED line and the summary line;
+the test-body echo and the temp `tmp_path` lines are left out. Nothing in them is a secret; no
+redaction was needed.
+
+### E6 leg 1 — detail names `read-only`
+
+- **neutralization:** `review_base_guard.py:564` `"not this project's (%r)" % (pr_repo, base_repo)),` →
+  `"not this project's (%r) (or use the read-only review)" % (pr_repo, base_repo)),`
+- **raw red** (exit 1):
+```
+>       assert "read-only" not in r["detail"]
+E       AssertionError: assert 'read-only' not in 'reviewing t...only review)'
+E         
+E         'read-only' is contained here:
+E           r use the read-only review)
+E         ?           +++++++++
+
+plugins/superheroes/lib/tests/test_review_base_guard.py:371: AssertionError
+FAILED plugins/superheroes/lib/tests/test_review_base_guard.py::test_pr_mode_repo_mismatch_detail_is_the_plain_refusal
+1 failed, 95 deselected in 1.04s
+```
+- **restore:** inverse edit (the appended ` (or use the read-only review)` removed).
+- **restore receipt:** `review_base_guard.py:564:                           "not this project's (%r)" % (pr_repo, base_repo)),`
+- **raw green:** `1 passed, 95 deselected in 0.62s`
+
+### E6 leg 2 — detail names `review-only`
+
+- **neutralization:** `review_base_guard.py:564` `"not this project's (%r)" % (pr_repo, base_repo)),` →
+  `"not this project's (%r) (or use review-only)" % (pr_repo, base_repo)),`
+- **raw red** (exit 1):
+```
+>       assert "review-only" not in r["detail"]
+E       AssertionError: assert 'review-only' not in 'reviewing t...review-only)'
+E         
+E         'review-only' is contained here:
+E           ) (or use review-only)
+
+plugins/superheroes/lib/tests/test_review_base_guard.py:372: AssertionError
+FAILED plugins/superheroes/lib/tests/test_review_base_guard.py::test_pr_mode_repo_mismatch_detail_is_the_plain_refusal
+1 failed, 95 deselected in 2.58s
+```
+- **restore:** inverse edit (the appended ` (or use review-only)` removed).
+- **restore receipt:** `review_base_guard.py:564:                           "not this project's (%r)" % (pr_repo, base_repo)),`; `git diff plugins/superheroes/lib/review_base_guard.py` is empty after the restore.
+- **raw green:** `1 passed, 95 deselected in 0.47s`

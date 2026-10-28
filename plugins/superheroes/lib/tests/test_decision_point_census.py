@@ -78,6 +78,7 @@ _CARRIER_REGISTRY = frozenset({
 
 # Byte-pinned stripped lines — literals only; no rationale (#1144).
 _BYTE_PIN_LINES = frozenset({
+    "Open no `AskUserQuestion` on any review-code path, for any purpose.",
     "past it, and **never** treat it like `present-judgment` (an intervention gate that folds back into",
     "**Owner gates on the durable-record path.** When `advance` parks at `present-judgment` or",
     "`present-stall-menu` because gate policy has not pre-authorized the resolution",

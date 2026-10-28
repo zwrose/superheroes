@@ -614,8 +614,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
    forfeits on the attempt cap before its work is collected). If the budget's run fails, fix the
    failure and retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
-   output — never commit broken code. If the full verify command in the budget reads "none"
-   (unverified profile), skip the static validators and run only the referencing tests, if any.
+   output — never commit broken code.
    When you need to verify something by *running* it, choose a throwaway test file path inside
    the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
    identifiable. **Before writing it, check that the chosen path does not already exist** — a
@@ -636,8 +635,8 @@ You are the fixer for one round of an auto-fix code-review loop.
    round may leave its own probe behind, and nothing sweeps it up: a stray `autofix-probe-*`
    file can still be present in the working tree the orchestrator inspects when it verifies.
    Delete the throwaway before step 4's commit — it must never land in the fix commit.
-4. Commit ALL changes in ONE commit (after the check passes, or immediately when
-   unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
+4. Commit ALL changes in ONE commit (after the check passes):
+   `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.
 
 ## Escalation

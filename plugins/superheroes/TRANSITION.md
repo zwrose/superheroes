@@ -60,7 +60,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 ### Review: the grounding seat is gone
 
 - **The seat.** Code review's grounding seat, its agent (`agents/grounding-seat.md`), its stage (the `grounding_stage` module, all of its `stage`/`check`/`attest` verbs) and its reference are gone; no roster composes it.
-- **What checks the PR's claims instead.** The advisor's vet checks the PR's self-claims (the DoD table, the degradations list, the receipts claimed); code review's step 8 keeps its inline DoD-table check.
+- **What checks the PR's claims instead.** The advisor's vet checks the PR's self-claims (the DoD table, the degradations list, the receipts claimed); code review's step 7 keeps its inline DoD-table check.
 - **The record.** A new review record has no `seatsNotRun` list and no "Not run:" line; an account row carrying `notRunReason` is refused `review-account-invalid` (the writer's existing account refusal; `test_grounding_retired_c1l2.py` pins it). An earlier record that carries `seatsNotRun` still reads, and no merge sheet shows it. The merge-sheet word `historyNotRun` is gone.
 - **The region reader.** A caller that imported `REGION_MARKERS` or `read_region` from `grounding_stage` imports them from `lib/pr_body_regions.py`, unchanged.
 - **Seat pins.** A saved pin keyed `grounding-seat` is reported as a pin for an unknown seat; remove it.
