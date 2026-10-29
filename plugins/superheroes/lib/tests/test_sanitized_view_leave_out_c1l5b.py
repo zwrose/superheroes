@@ -186,6 +186,7 @@ def test_loader_accepts_a_well_formed_file(tmp_path):
 
 @pytest.mark.parametrize("doc", MALFORMED)
 def test_loader_refuses_each_malformed_shape(tmp_path, doc):
+    # axis: the loader refuses every malformed shape with the one invalid-file detail, so no bad file reaches a reviewer's patch
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.load_leave_out_file(_leave_out_file(tmp_path, doc))
     assert exc.value.detail == INVALID

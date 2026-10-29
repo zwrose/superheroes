@@ -73,6 +73,9 @@ def _parse_section(lines):
     added_lines = []
     removed_lines = []
     head_lines = []
+    added_no_eol = False
+    removed_no_eol = False
+    last_lead = ""
     in_hunks = False
     in_patch = False
     new_no = 1
@@ -90,6 +93,17 @@ def _parse_section(lines):
             if body.endswith("\n"):
                 body = body[:-1]
             lead = line[:1]
+            if lead == "\\":
+                # git's "\ No newline at end of file" qualifies the line before it: one side after a +/- line, both after context
+                if last_lead == "+":
+                    added_no_eol = True
+                elif last_lead == "-":
+                    removed_no_eol = True
+                elif last_lead == " ":
+                    added_no_eol = removed_no_eol = True
+                continue
+            if lead == "+" or lead == "-" or lead == " " or line == "\n":
+                last_lead = lead if line != "\n" else " "
             if lead == "+":
                 added_lines.append(body)
                 head_lines.append(new_no)
@@ -139,6 +153,8 @@ def _parse_section(lines):
         "removed": len(removed_lines),
         "addedLines": added_lines,
         "removedLines": removed_lines,
+        "addedNoEol": added_no_eol,
+        "removedNoEol": removed_no_eol,
         "headLines": head_lines,
         "text": "".join(lines),
     }
@@ -236,9 +252,10 @@ def load_proof(path):
 
 
 def _lexically_unsafe(file):
-    if os.path.isabs(file) or file.startswith("/") or file.startswith("\\"):
+    # Axis: any backslash makes a path unsafe, because the leave-out loader refuses an entry holding one.
+    if os.path.isabs(file) or file.startswith("/") or "\\" in file:
         return True
-    return ".." in file.replace("\\", "/").split("/")
+    return ".." in file.split("/")
 
 
 def _git_env():
@@ -390,9 +407,9 @@ def _proven_files(proven):
 
 def _moved_pairs(sections):
     """Indices of ``added`` sections whose added lines equal exactly the removed lines of a ``deleted``
-    section in the same diff; each deleted section pairs at most once."""
+    section in the same diff, with the same final-newline status; each deleted section pairs at most once."""
     free = [
-        (i, s["removedLines"])
+        (i, (s["removedLines"], s["removedNoEol"]))
         for i, s in enumerate(sections)
         if s["status"] == "deleted" and not s["unreadable"] and s["removedLines"]
     ]
@@ -401,7 +418,8 @@ def _moved_pairs(sections):
         if section["status"] != "added" or section["unreadable"] or not section["addedLines"]:
             continue
         for slot, (_, removed) in enumerate(free):
-            if removed == section["addedLines"]:
+            # Axis: a move keeps the bytes, so the final-newline status must match as well as the lines.
+            if removed == (section["addedLines"], section["addedNoEol"]):
                 moved.add(i)
                 del free[slot]
                 break

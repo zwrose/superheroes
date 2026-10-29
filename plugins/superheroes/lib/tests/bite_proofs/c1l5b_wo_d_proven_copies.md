@@ -6,7 +6,7 @@ Declared guarded elements (from the order): E1 `_ensure_round_diff` writing the 
 
 | ID | Guarded element | Axis | Proving test |
 |---|---|---|---|
-| E1 | `round_driver.py` `_ensure_round_diff`, the `expected` line | the round's `diff.txt` is the reviewer view, with the copies still proven left out | `test_a_fresh_next_with_a_proof_gives_no_seat_the_proven_copy` |
+| E1 | `round_driver.py` `_ensure_round_diff`, the view-vs-raw split (replaces the earlier E1, below) | the seat-facing diff is its own file and never overwrites the round's `diff.txt` | `test_a_refused_order_emission_leaves_the_round_diff_as_the_input` |
 | E2 | `countable_lines.py` `still_proven`, the `section_digest(...) == entry["section"]` test | a copy stays out of a diff only while its section is the one the proof was checked against | `test_a_copy_whose_section_changed_is_not_still_proven` |
 | E3 | `round_driver.py` `_left_out_files`, the returned list | the leave-out file names the copies still proven, and nothing else | `test_the_leave_out_file_names_exactly_the_proven_copy` |
 | E4 | `round_driver.py` `_risk_areas_text`, the `paths` filter | a proven copy no seat is given is not named as touching a risk area | `test_the_test_role_risk_clause_does_not_name_the_proven_copy` |
@@ -16,48 +16,72 @@ E5 stands for the validation's other shape tests (the exact key set, non-blank `
 
 ---
 
-## E1 — `_ensure_round_diff` writes the reviewer view
+## E1 — `_ensure_round_diff` keeps the whole diff in `diff.txt` and writes the reviewer view beside it
 
-**neutralization** (`round_driver.py`, `_ensure_round_diff`):
+This section replaces the earlier E1 (which neutralized the `expected` line that made `diff.txt` itself the reviewer view). That design overwrote the file a session may have been started from (`--diff-path <session>/round-1/diff.txt`), so a refused first `next` left the input filtered and a retry could not bind it. The driver now writes the raw diff to `diff.txt`, and the view, only when a copy is left out, to `reviewer-diff.txt`; the order names the view's path. The proving test is the refusal regression, run from `/home/user/wt-2243-h` under `-X pycache_prefix=/tmp/c1l5b-pyc-h`; the `UV_NATIVE_TLS` warning line is left out of both captures, and nothing is redacted.
+
+**axis:** the seat-facing diff is its own file and never overwrites the round's `diff.txt`.
+
+**neutralization** (`round_driver.py`, `_ensure_round_diff`, the last three lines):
 ```python
--    expected = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text)).encode("utf-8")
-+    expected = diff_text.encode("utf-8")
+-    if view == diff_text:
+-        return diff_path
+-    return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-diff.txt"), view.encode("utf-8"))
++    return _ensure_bytes_at_path(session_dir, diff_path, view.encode("utf-8"))
 ```
 
-**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-d -m pytest plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py -q -k test_a_fresh_next_with_a_proof_gives_no_seat_the_proven_copy`
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-h -m pytest plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py -q -k test_a_refused_order_emission_leaves_the_round_diff_as_the_input`
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_________ test_a_fresh_next_with_a_proof_gives_no_seat_the_proven_copy _________
+_______ test_a_refused_order_emission_leaves_the_round_diff_as_the_input _______
 
-started = <test_proven_copies_c1l5b.Fx object at 0x7fadda3bfe90>
+fx = <test_proven_copies_c1l5b.Fx object at 0x7fa79ca41e50>
+capsys = <_pytest.capture.CaptureFixture object at 0x7fa79ca4a8a0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa79ca42d20>
 
-    def test_a_fresh_next_with_a_proof_gives_no_seat_the_proven_copy(started):
-        # axis: the round's diff.txt leaves out the proven copy and keeps the uncovered file and the mismatched copy
-        text = _read(os.path.join(started.dir, "round-1", "diff.txt"))
->       assert sorted(_files(text)) == [MISMATCH, OTHER]
-E       AssertionError: assert ['src/mismatc...ents/copy.py'] == ['src/mismatc...src/other.py']
-E         
-E         Left contains one more item: 'src/payments/copy.py'
-E         Use -v to get more diff
+    def test_a_refused_order_emission_leaves_the_round_diff_as_the_input(fx, capsys, monkeypatch):
+        # axis: the driver never writes over the round's diff.txt, so a refusal after the materializers ran leaves the input and a retry binds it
+        emit = RD._emit_orders_manifest
+    
+        def refuse_after_materializing(session_dir, state, rnd, *args, **kwargs):
+            RD._ensure_round_diff(session_dir, rnd, state)
+            raise ValueError("order-render-refused:x")
+    
+        monkeypatch.setattr(RD, "_emit_orders_manifest", refuse_after_materializing)
+        rc, out = _next(fx.dir, fx.argv("--copy-proof", fx.proof_path), capsys)
+        assert out["ok"] is False and out["reason"] == "order-render-refused", out
+>       assert os.path.isfile(os.path.join(fx.dir, "round-1", "reviewer-diff.txt"))
+E       AssertionError: assert False
+E        +  where False = <function isfile at 0x7fa79da44b80>('/tmp/claude-0/pytest-of-root/pytest-37/test_a_refused_order_emission_0/session/round-1/reviewer-diff.txt')
+E        +    where <function isfile at 0x7fa79da44b80> = <module 'posixpath' (frozen)>.isfile
+E        +      where <module 'posixpath' (frozen)> = os.path
+E        +    and   '/tmp/claude-0/pytest-of-root/pytest-37/test_a_refused_order_emission_0/session/round-1/reviewer-diff.txt' = <function join at 0x7fa79da45580>('/tmp/claude-0/pytest-of-root/pytest-37/test_a_refused_order_emission_0/session', 'round-1', 'reviewer-diff.txt')
+E        +      where <function join at 0x7fa79da45580> = <module 'posixpath' (frozen)>.join
+E        +        where <module 'posixpath' (frozen)> = os.path
+E        +      and   '/tmp/claude-0/pytest-of-root/pytest-37/test_a_refused_order_emission_0/session' = <test_proven_copies_c1l5b.Fx object at 0x7fa79ca41e50>.dir
 
-/home/user/wt-2243-d/plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py:158: AssertionError
+/home/user/wt-2243-h/plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py:192: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py::test_a_fresh_next_with_a_proof_gives_no_seat_the_proven_copy
-1 failed, 41 deselected in 2.05s
+FAILED plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py::test_a_refused_order_emission_leaves_the_round_diff_as_the_input
+1 failed, 46 deselected in 5.76s
 ```
 
-**restore:** the inverse edit, the `expected` line back to the reviewer view.
+The red stops at the view-file assertion, which comes before the assertion that `diff.txt` equals the input; with the neutralization `diff.txt` holds the filtered view, so the next assertion would fail as well.
 
-**restore receipt:** the restored line quoted from the file after the edit (`grep -n`, round_driver.py:10685):
+**restore:** the inverse edit, the three lines back.
+
+**restore receipt:** the restored lines quoted from the file after the edit (`grep -n -B2 -A1`, round_driver.py:10693-10695):
 ```
-10685:    expected = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text)).encode("utf-8")
+10693-    if view == diff_text:
+10694-        return diff_path
+10695:    return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-diff.txt"), view.encode("utf-8"))
 ```
 
 **raw green:** same command after the restore
 ```
 .                                                                        [100%]
-1 passed, 41 deselected in 4.80s
+1 passed, 46 deselected in 1.91s
 ```
 
 ---

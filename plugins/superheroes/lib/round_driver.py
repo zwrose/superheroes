@@ -7905,44 +7905,6 @@ def cmd_next(session_dir, config_overrides=None):
         return _lock_held_refusal(session_dir, "next", held)
 
 
-def _startup_diff_snapshot(session_dir, rnd):
-    """(path, bytes) of the round's ``diff.txt`` as a fresh start found it, or None when absent/unreadable."""
-    if not isinstance(rnd, int):
-        return None
-    path = os.path.join(round_records.round_dir(session_dir, rnd), "diff.txt")
-    try:
-        with open(path, "rb") as fh:
-            return path, fh.read()
-    except OSError:
-        return None
-
-
-def _sealed_commit_present(session_dir):
-    """True when any commit under ``commits/`` is sealed (so recovery will finish it), or cannot be ruled out."""
-    root = round_commit.commits_root(session_dir)
-    try:
-        names = os.listdir(root)
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
-    for name in names:
-        if os.path.isfile(os.path.join(root, name, round_commit._SEALED)):
-            return True
-    return False
-
-
-def _restore_startup_diff(snapshot):
-    """Put a fresh start's ``diff.txt`` bytes back after an order-emission refusal (best effort)."""
-    if snapshot is None:
-        return
-    path, content = snapshot
-    try:
-        round_commit.atomic_write_bytes(path, content)
-    except OSError:
-        pass
-
-
 def _cmd_next_locked(session_dir, config_overrides=None):
     ok, loaded = load_state(session_dir)
     if not ok:
@@ -8041,30 +8003,19 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                             pending.get("round"), attempt)
         if roster_refusal is not None:
             return roster_refusal
-        # A fresh start may have been handed the round's own diff.txt as its input; order emission
-        # rewrites that path with the reviewer's filtered diff before it can refuse. No state is
-        # committed on a refusal, so put the startup bytes back or a retry cannot bind the diff.
-        startup_diff = _startup_diff_snapshot(session_dir, pending.get("round")) if loaded is None else None
         try:
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
-            # A refusal raised after the orders commit sealed (apply, cleanup, ...) leaves a
-            # sealed commit that recovery will complete; the committed exclusion state expects
-            # the filtered diff to stay in place. Restore only when no sealed commit exists.
-            if not _sealed_commit_present(session_dir):
-                _restore_startup_diff(startup_diff)
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
         except AuditorUnseatable as exc:
-            _restore_startup_diff(startup_diff)
             return _refuse_cmd(session_dir, "next", AUDITOR_UNSEATABLE_CAUSE, phase=phase,
                                rnd=pending.get("round"), attempt=attempt,
                                liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
                                detail=exc.detail)
         except ValueError as exc:
-            _restore_startup_diff(startup_diff)
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
     save_state(session_dir, state)
@@ -10728,28 +10679,36 @@ def _ensure_bytes_at_path(session_dir, path, expected):
 
 
 def _ensure_round_diff(session_dir, rnd, state):
-    """Write `round-<N>/diff.txt` when absent or untrusted so order templates have a real path to cite."""
+    """Write `round-<N>/diff.txt` (the whole diff) when absent or untrusted so order templates have a real path to
+    cite, and return the path a seat is given: `reviewer-diff.txt` beside it when a copy is left out, else `diff.txt`."""
     rdir = round_records.round_dir(session_dir, rnd)
     diff_path = os.path.join(rdir, "diff.txt")
     diff_text = state.get("reviewedDiff")
     if not isinstance(diff_text, str):
         raise ValueError("reviewed-diff-unavailable")
-    # axis: the reviewer's diff leaves out the copies still proven for it and nothing else — see bite-proof record c1l5b_wo_d_proven_copies
-    expected = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text)).encode("utf-8")
+    _ensure_bytes_at_path(session_dir, diff_path, diff_text.encode("utf-8"))
+    # axis: the seat-facing diff is its own file and never overwrites the round's diff.txt — see bite-proof record c1l5b_wo_d_proven_copies
+    view = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text))
     _ensure_leave_out_file(session_dir, state)
-    return _ensure_bytes_at_path(session_dir, diff_path, expected)
+    if view == diff_text:
+        return diff_path
+    return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-diff.txt"), view.encode("utf-8"))
 
 
 def _ensure_round_head_diff(session_dir, rnd, state):
-    """Write `round-<N>/head.diff` from state when absent or untrusted."""
+    """Write `round-<N>/head.diff` (the whole head diff) from state when absent or untrusted, and return the path a
+    seat is given: `reviewer-head.diff` beside it when a copy is left out, else `head.diff`."""
     head_text = state.get("headDiff")
     if not isinstance(head_text, str):
         raise ValueError("order-render-refused:head-diff-unavailable")
     rdir = round_records.round_dir(session_dir, rnd)
     head_path = os.path.join(rdir, "head.diff")
-    expected = countable_lines.reviewer_diff(head_text, _left_out(state, head_text)).encode("utf-8")
+    _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
+    view = countable_lines.reviewer_diff(head_text, _left_out(state, head_text))
     _ensure_leave_out_file(session_dir, state)
-    return _ensure_bytes_at_path(session_dir, head_path, expected)
+    if view == head_text:
+        return head_path
+    return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-head.diff"), view.encode("utf-8"))
 
 
 LEAVE_OUT_FILE = "reviewer-leave-out.json"

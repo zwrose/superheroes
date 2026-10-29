@@ -156,12 +156,46 @@ def started(fx, capsys):
     return fx
 
 
+def _ordered_diff_path(fx):
+    """The diff path the round's emitted panel order names (its ``- Diff:`` line, which renders ``DIFF_PATH``)."""
+    pend = fx.state()["pending"]
+    manifest = json.loads(_read(RD._orders_manifest_path(fx.dir, pend["round"], pend["phase"], pend["attempt"])))
+    for entry in manifest["seats"].values():
+        for line in _read(entry["orderPath"]).splitlines():
+            if line.startswith("- Diff: "):
+                return line[len("- Diff: "):]
+    raise AssertionError("no emitted panel order names a diff path")
+
+
 def test_a_fresh_next_with_a_proof_gives_no_seat_the_proven_copy(started):
-    # axis: the round's diff.txt leaves out the proven copy and keeps the uncovered file and the mismatched copy
-    text = _read(os.path.join(started.dir, "round-1", "diff.txt"))
+    # axis: the diff the panel order names leaves out the proven copy and keeps the uncovered file and the mismatched copy; the round's diff.txt stays the input
+    ordered = _ordered_diff_path(started)
+    assert os.path.realpath(ordered) == os.path.realpath(os.path.join(started.dir, "round-1", "reviewer-diff.txt"))
+    text = _read(ordered)
     assert sorted(_files(text)) == [MISMATCH, OTHER]
     assert COPY not in text
     assert _files(started.diff) == sorted([COPY, MISMATCH, OTHER])
+    assert _read(started.diff_path) == started.diff
+
+
+def test_a_refused_order_emission_leaves_the_round_diff_as_the_input(fx, capsys, monkeypatch):
+    # axis: the driver never writes over the round's diff.txt, so a refusal after the materializers ran leaves the input and a retry binds it
+    emit = RD._emit_orders_manifest
+
+    def refuse_after_materializing(session_dir, state, rnd, *args, **kwargs):
+        RD._ensure_round_diff(session_dir, rnd, state)
+        raise ValueError("order-render-refused:x")
+
+    monkeypatch.setattr(RD, "_emit_orders_manifest", refuse_after_materializing)
+    rc, out = _next(fx.dir, fx.argv("--copy-proof", fx.proof_path), capsys)
+    assert out["ok"] is False and out["reason"] == "order-render-refused", out
+    assert os.path.isfile(os.path.join(fx.dir, "round-1", "reviewer-diff.txt"))
+    assert _read(fx.diff_path) == fx.diff
+    assert RD.load_state(fx.dir) == (True, None)
+    monkeypatch.setattr(RD, "_emit_orders_manifest", emit)
+    rc, out = _next(fx.dir, fx.argv("--copy-proof", fx.proof_path), capsys)
+    assert rc == 0 and out["ok"], out
+    assert _read(fx.diff_path) == fx.diff
 
 
 def test_the_leave_out_file_names_exactly_the_proven_copy(started):
@@ -218,7 +252,11 @@ def test_a_session_without_a_proof_writes_the_whole_diff_and_an_empty_leave_out(
     state = fx.state()
     assert not {"provenCopies", "copyProofRejected", "provenCopiesHead"} & set(state)
     assert _read(os.path.join(fx.dir, "round-1", "diff.txt")) == fx.diff
+    assert os.path.realpath(_ordered_diff_path(fx)) == os.path.realpath(fx.diff_path)
     assert json.loads(_read(os.path.join(fx.dir, "reviewer-leave-out.json"))) == {"schema": "leave-out/1", "files": []}
+    views = [name for _, _, names in os.walk(fx.dir) for name in names
+             if name in ("reviewer-diff.txt", "reviewer-head.diff")]
+    assert views == []
 
 
 def test_a_later_round_gives_a_copy_back_when_its_section_changed(started):
@@ -227,7 +265,9 @@ def test_a_later_round_gives_a_copy_back_when_its_section_changed(started):
     os.makedirs(os.path.join(started.dir, "round-2"))
     state["headDiff"] = started.diff
     kept_path = RD._ensure_round_head_diff(started.dir, 2, state)
+    assert os.path.basename(kept_path) == "reviewer-head.diff"
     assert COPY not in _read(kept_path)
+    assert _read(os.path.join(started.dir, "round-2", "head.diff")) == started.diff
     assert json.loads(_read(os.path.join(started.dir, "reviewer-leave-out.json")))["files"] == [COPY]
     _write(started.root, COPY, COPY_BYTES + b"line 6\n")
     _commit(started.root, "edit the copy")
@@ -241,6 +281,11 @@ def test_a_later_round_gives_a_copy_back_when_its_section_changed(started):
     assert RD._left_out(state, changed) == []
     state["reviewedDiff"] = changed
     assert COPY in _read(RD._ensure_round_diff(started.dir, 2, state))
+    # a round whose view equals the whole diff gets the whole-diff paths and no view file
+    os.makedirs(os.path.join(started.dir, "round-3"))
+    assert RD._ensure_round_diff(started.dir, 3, state) == os.path.join(started.dir, "round-3", "diff.txt")
+    assert RD._ensure_round_head_diff(started.dir, 3, state) == os.path.join(started.dir, "round-3", "head.diff")
+    assert sorted(os.listdir(os.path.join(started.dir, "round-3"))) == ["diff.txt", "head.diff"]
 
 
 @pytest.mark.parametrize("body,detail", [
