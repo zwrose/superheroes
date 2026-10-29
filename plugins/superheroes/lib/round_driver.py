@@ -2172,9 +2172,11 @@ def _record_merged_into(state, key, into_key):
 
 def _set_terminal(state, verdict, *, cap=False):
     """The one writer of the loop's terminal verdict: set it, then give every finding the review
-    took in an outcome (`_settle_open_findings`). `cap` marks a stop at a round cap."""
+    took in an outcome (`_settle_open_findings`). `cap` marks a stop at a round cap. A `verdict` of
+    `None` reopens the session and settles nothing."""
     state["terminal"] = verdict
-    _settle_open_findings(state, cap=cap)
+    if verdict is not None:
+        _settle_open_findings(state, cap=cap)
 
 
 def _decision_sources(state):
@@ -8733,7 +8735,7 @@ def _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=None, readers=
     state["extraAudit"] = {"why": why, "by": by, "round": new_round,
                            "orderedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                            "supersededReceipt": superseded, "supersededReceiptSha256": superseded_sha}
-    state["terminal"] = None
+    _set_terminal(state, None)
     state["certification"] = None
     state["pending"] = None
     for mark in _RECEIPT_FINALIZED_MARKS:
