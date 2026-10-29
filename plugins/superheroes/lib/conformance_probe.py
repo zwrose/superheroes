@@ -803,7 +803,7 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
     if "claude" not in owner_map:
         live_vendors.add("claude")
     try:
-        sm = seat_map.build(None, sorted(live_vendors), author_family, None, 0,
+        sm = seat_map.build(None, sorted(live_vendors), author_family, 0,
                             live_cells=live_cells, live_cells_source="probed")
     except Exception as exc:
         return {"ok": False, "reason": "seat-map-failed:%s" % type(exc).__name__}, 1

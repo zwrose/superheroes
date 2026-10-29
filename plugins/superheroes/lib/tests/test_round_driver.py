@@ -3906,7 +3906,7 @@ def test_seat_map_excused_only_violation_unchanged_cert_shape():
     RD._terminal_converged(state_clean, cfg, full_panel=True)
     shape_clean = state_clean["certification"]["shape"]
     SM = _load("seat_map")
-    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0)
     seat_map_excused = SM.to_receipt(m, "anthropic")
     state_excused = RD.new_state(cfg)
     state_excused["seatMap"] = seat_map_excused
@@ -4555,11 +4555,10 @@ def _verified_clean_seat_map(vendors):
     if not live:
         live = ["claude"]
     for author in ("xai", "anthropic", "openai"):
-        for narrative in ("anthropic", "openai"):
-            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
-            violations = SM.verify(m, author)
-            if violations == []:
-                return SM.to_receipt(m, author)
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0)
+        violations = SM.verify(m, author)
+        if violations == []:
+            return SM.to_receipt(m, author)
     raise AssertionError("no verify-clean seat map for vendors %r" % vendors)
 
 
@@ -4583,12 +4582,11 @@ def _assertable_seat_map(vendors, fixer_vendor="claude"):
         live = ["claude"]
     driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
     for author in ("xai", "anthropic", "openai"):
-        for narrative in ("anthropic", "openai"):
-            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
-            receipt = SM.to_receipt(m, author)
-            if SM.unexcused_violations(receipt, driver_author_family) == []:
-                receipt.update(_nonpanel_cell_proof(live))
-                return receipt
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0)
+        receipt = SM.to_receipt(m, author)
+        if SM.unexcused_violations(receipt, driver_author_family) == []:
+            receipt.update(_nonpanel_cell_proof(live))
+            return receipt
     raise AssertionError(
         "no assertable seat map for vendors %r driver_author_family=%r"
         % (vendors, driver_author_family))

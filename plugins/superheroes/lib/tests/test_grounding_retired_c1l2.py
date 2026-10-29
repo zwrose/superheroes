@@ -158,15 +158,14 @@ def test_roster_for_composes_no_grounding_seat_on_any_lane_basis(basis):
 
 
 @pytest.mark.parametrize("live", [["claude", "codex"], THREE_VENDORS], ids=["two-vendors", "three-vendors"])
-@pytest.mark.parametrize("families", [("xai", "anthropic"), ("anthropic", "openai"), (None, "anthropic"), ("anthropic", None)])
+@pytest.mark.parametrize("author", ["xai", "anthropic", None])
 @pytest.mark.parametrize("basis", [{"floor": None}, None], ids=["no-floor", "risky"])
-def test_build_seats_lens_seats_only_and_records_no_grounding_degradation(live, families, basis):
+def test_build_seats_lens_seats_only_and_records_no_grounding_degradation(live, author, basis):
     # axis: build over live vendors names no seat outside LENS_SEATS and no grounding-* constraint, whichever family is unknown
-    author, narrative = families
-    m = SM.build(SM.roster_for(basis), live, author, narrative, SM.seed_from(2206, None))
+    m = SM.build(SM.roster_for(basis), live, author, SM.seed_from(2206, None))
     assert _is_lens_only(m["roster"]) and _is_lens_only(m["seats"])
     assert not [d for d in m["degradations"] if str(d.get("constraint", "")).startswith("grounding-")]
-    default = SM.build(None, live, author, narrative, 0)
+    default = SM.build(None, live, author, 0)
     assert _is_lens_only(default["roster"]) and _is_lens_only(default["seats"])
 
 
@@ -213,7 +212,7 @@ def test_reading_next_with_only_retired_members_has_no_roster():
 
 def test_a_saved_pin_under_the_retired_seat_is_an_unknown_seat_pin_not_a_crash():
     # axis: an owner's saved pin keyed grounding-seat falls to the existing unknown-seat degradation
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins={"grounding-seat": {"vendor": "codex"}})
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins={"grounding-seat": {"vendor": "codex"}})
     assert {"constraint": "pin", "reason": "pin for unknown seat grounding-seat"} in m["degradations"]
     assert "grounding-seat" not in m["seats"]
 
@@ -224,7 +223,7 @@ def test_reviewer_stays_a_codex_role_pin_tier_after_the_retired_seat_took_its_de
     pins = {"reviewer": "gpt-5.6-sol", "reviewer-deep": "gpt-5.6-sol"}
     assert SM._read_codex_role_pins({"codexRolePins": pins}) == (pins, True)
     assert SM._read_codex_role_pins({"codexRolePins": {"reviewer": "gpt-5.6-sol", "no-such-role": "gpt-5.6-sol"}}) == (None, False)
-    built = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "xai", "anthropic", 0)
+    built = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "xai", 0)
     bare = {k: v for k, v in built.items() if k not in ("liveCells", "liveCellsSource")}
     cells, source = SM._live_cells_fields_for_receipt(dict(bare, codexRolePins=pins))
     assert source == liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED and cells
