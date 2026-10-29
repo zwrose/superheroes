@@ -21,7 +21,14 @@ PY = shlex.quote(sys.executable)
 
 
 @pytest.fixture(autouse=True)
-def _pinned_git_config(monkeypatch):
+def _pinned_git_config(monkeypatch, tmp_path):
+    """The fixture's own git calls read no user or system git config. The runner drops GIT_CONFIG_GLOBAL from the
+    environment it gives git, so its own git calls are kept off the developer's configuration by an empty per-test
+    HOME and XDG_CONFIG_HOME."""
+    for name in ("home", "xdg-config"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
@@ -168,9 +175,13 @@ with open("untracked.txt", "w") as fh:
 '''
 
 
+def _ref_map(repo):
+    return dict(line.split(" ", 1) for line in _refs(repo).splitlines())
+
+
 def test_e6_everything_the_test_changes_is_restored_and_named(repo):
     pinned = _git(repo, "rev-parse", "HEAD")
-    refs_before = _refs(repo)
+    refs_before = _ref_map(repo)
     config_before = (repo / ".git" / "config").read_bytes()
     record = _run(repo, "tests/test_e6.py", E6_SCRIPT)
     assert record["outcome"] == "passed", record
@@ -178,7 +189,15 @@ def test_e6_everything_the_test_changes_is_restored_and_named(repo):
     assert record["restored"] == ["test-file", "refs", "head", "config", "index", "tracked", "untracked"], record
     assert _git(repo, "rev-parse", "HEAD") == pinned
     assert _git(repo, "symbolic-ref", "HEAD") == "refs/heads/main"
-    assert _refs(repo) == refs_before
+    # the branch HEAD pointed at is put back; every other ref the test moved, deleted or added is left and listed
+    refs_after = _ref_map(repo)
+    left = ["refs/heads/doomed", "refs/heads/movable", "refs/tags/added-by-test"]
+    assert record["refsLeft"] == left, record
+    assert refs_after["refs/heads/main"] == refs_before["refs/heads/main"] == pinned
+    assert "refs/heads/doomed" not in refs_after
+    assert refs_after["refs/heads/movable"] != refs_before["refs/heads/movable"]
+    assert "refs/tags/added-by-test" not in refs_before and "refs/tags/added-by-test" in refs_after
+    assert {r: o for r, o in refs_after.items() if r not in left} == {r: o for r, o in refs_before.items() if r not in left}
     assert (repo / ".git" / "config").read_bytes() == config_before
     assert (repo / "README.md").read_text() == "fixture\n"
     assert (repo / "mod.py").read_text() == "def value():\n    return 2\n"
@@ -313,12 +332,17 @@ def test_t_search_the_source_holds_no_copy_machinery():
         assert word not in source, word
 
 
-WRITES_CONTENT = ("import tempfile\n"
+WRITES_CONTENT = ("import os, tempfile\n"
                   "f = tempfile.NamedTemporaryFile(delete=False)\n"
                   "f.write(b'x')\n"
                   "f.close()\n"
                   "print('TMPDIR=' + tempfile.gettempdir())\n"
-                  "print('FILE=' + f.name)\n")
+                  "print('FILE=' + f.name)\n"
+                  "for name in ('TMPDIR', 'TMP', 'TEMP', 'XDG_CACHE_HOME'):\n"
+                  "    path = os.path.join(os.environ[name], 'made-through-' + name)\n"
+                  "    with open(path, 'w') as fh:\n"
+                  "        fh.write('x')\n"
+                  "    print('MADE_' + name + '=' + path)\n")
 
 
 def test_t_writes_the_runs_temp_files_land_in_the_session_folder_and_nowhere_else(repo, tmp_path, monkeypatch):
@@ -326,7 +350,7 @@ def test_t_writes_the_runs_temp_files_land_in_the_session_folder_and_nowhere_els
     sentinel.mkdir()
     scratch = tmp_path / "session"
     scratch.mkdir()
-    for name in ("TMPDIR", "TMP", "TEMP"):
+    for name in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME"):
         monkeypatch.setenv(name, str(sentinel))
     before = _status(repo)
     record = _run(repo, "tests/test_w.py", WRITES_CONTENT, scratch=str(scratch))
@@ -335,6 +359,8 @@ def test_t_writes_the_runs_temp_files_land_in_the_session_folder_and_nowhere_els
     under = os.path.realpath(str(scratch)) + os.sep
     assert os.path.realpath(lines["TMPDIR"]).startswith(under), lines
     assert os.path.realpath(lines["FILE"]).startswith(under), lines
+    for name in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME"):
+        assert os.path.realpath(lines["MADE_" + name]).startswith(under), (name, lines)
     assert os.listdir(str(sentinel)) == []
     assert os.listdir(str(scratch)) == []
     assert _status(repo) == before == ""
