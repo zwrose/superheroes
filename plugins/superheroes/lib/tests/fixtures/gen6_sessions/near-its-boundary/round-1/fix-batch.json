@@ -1,0 +1,1 @@
+[{"classification":"mechanical","consequence":"a reviewer-found defect stays in the change","consequenceKind":null,"dimension":"code-reviewer","file":"f.py","findingKey":"f.py::bug@L1","id":"v0","line":1,"raisedRound":1,"raisedSeq":1,"severity":"Important","title":"bug","verdict":"PLAUSIBLE"}]

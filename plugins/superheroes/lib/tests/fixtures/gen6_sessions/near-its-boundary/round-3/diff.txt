@@ -1,0 +1,17 @@
+diff --git a/f.py b/f.py
+index 2..3 100644
+--- a/f.py
++++ b/f.py
+@@ -1 +1,5 @@
+-old
++new
++z0
++z1
++z2
+diff --git a/newsurf.py b/newsurf.py
+index 0..1 100644
+--- a/newsurf.py
++++ b/newsurf.py
+@@ -0,0 +1,2 @@
++ns3
++ns2
