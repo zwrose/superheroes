@@ -8,6 +8,7 @@ G4 a ref another worktree changes during the run is left and listed in `refsLeft
 G5 a run whose line value the coercion rejects is unmatched (`droppedAtCompile`), never a crash.
 G7 a recorded `working-copy-restore-failed` run parks cannot-certify whatever the finding's disposition.
 """
+import copy
 import os
 import shlex
 import subprocess
@@ -173,6 +174,7 @@ def test_g2_the_changed_test_is_carried_onto_the_entry_and_its_disposition_famil
              "disposition": "refuted", "dispositionRound": 1, "refutedReason": "no defect"}
     other = {session_contract.FINDING_KEY_FIELD: "k2", "suggestion": "other", "disposition": "fixed"}
     state = _ledger_state(entry, other)
+    before_other = copy.deepcopy(other)
     record = {"outcome": "passed", "reason": None, "exitCode": 0, "output": "", "path": "a.py", "head": "h"}
     RD._carry_break_it_change_to_ledger(state, key, "new text", record, "the import was wrong")
     row = state[session_contract.DISPOSITION_LEDGER_KEY][0]
@@ -180,7 +182,7 @@ def test_g2_the_changed_test_is_carried_onto_the_entry_and_its_disposition_famil
     assert [r["changedWhy"] for r in row[break_it.RUNS_FIELD]] == ["the import was wrong"]
     assert {f: row[f] for f in ("disposition", "dispositionRound", "refutedReason")} == {
         "disposition": "refuted", "dispositionRound": 1, "refutedReason": "no defect"}
-    assert state[session_contract.DISPOSITION_LEDGER_KEY][1] == other
+    assert state[session_contract.DISPOSITION_LEDGER_KEY][1] == before_other
 
 
 def test_g2_a_state_with_no_entry_for_the_finding_is_left_as_it_was():
