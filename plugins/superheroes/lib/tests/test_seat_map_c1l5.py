@@ -282,11 +282,15 @@ def test_i2_codex_engine_on_a_codex_host_adds_no_second_maker(capsys):
 
 
 def test_i2_a_third_family_is_still_seated_beside_the_two_makers(capsys):
-    # axis: (a) with an independent family live, the seats are filled from it alone
+    # axis: (a) with an independent family live, the seats are filled from it alone; (b) no seat is left unfilled
     receipt = _compose(capsys, "--live-vendors", "claude,codex,cursor", "--implementation-engine", "codex",
                        "--host-model", "claude-opus-5", "--pr-number", "2209")
     assert receipt["makerFamilies"] == ["anthropic", "openai"]
     assert _filled_families(receipt) == {"xai"}
+    assert set(receipt["seats"]) == set(SM.PANEL_ROSTER)
+    unfilled = [seat for seat, entry in receipt["seats"].items() if entry["source"] == SM.UNFILLED_SOURCE]
+    assert unfilled == [], unfilled
+    assert [d for d in receipt["degradations"] if d["constraint"] == "seat-unfilled"] == []
     # every recorded maker family is out of the achievable set: no false constraint breach
     assert SM.classify_violations(receipt)["unexcused"] == []
 
