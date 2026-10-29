@@ -273,8 +273,15 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # The session generation. `new_state` stamps it into state it MINTS and nothing else ever writes it:
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
-# version; while it is unfinished, `_upgrade_gate` refuses every command on it.
+# version; while it is unfinished, `_upgrade_gate` refuses every command on it, except a state of a
+# generation in `CONTINUABLE_EARLIER_GENERATIONS`: that session finishes under the rules it started
+# with and keeps its stamp, so its hash never moves.
 SESSION_GENERATION = 7
+# The earlier generations whose unfinished sessions are continued, not refused. Each keeps the round
+# cap it recorded at its start (`_round_cap` reads the stored `maxRounds`), has no ceiling above it
+# and no owner gate: one waiting at a gate this version no longer has is handed back
+# (`_finish_retired_gate_step`).
+CONTINUABLE_EARLIER_GENERATIONS = (6,)
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
@@ -6576,6 +6583,72 @@ def _hand_back(state, kind, detail, *, cap):
     state["step"] = P_TERMINAL
 
 
+# The state an earlier generation left when it stopped at an owner gate this version no longer has:
+# the judgment gate kept the blockers it put to the owner in `_judgmentFindings`; the stall menu
+# kept the choices and the stalled targets it offered in `_stallChoices` and `_stallTargets`.
+RETIRED_JUDGMENT_FIELD = "_judgmentFindings"
+RETIRED_STALL_FIELDS = ("_stallChoices", "_stallTargets")
+
+
+def _step_is_retired(state):
+    """True when the state's step, or the action and phase it has pending, is not one of
+    `round_phases.ALL_PHASES`. Only a session of an earlier generation can hold one."""
+    held = [state.get("step")]
+    pending = state.get("pending")
+    if isinstance(pending, dict):
+        held += [pending.get("action"), pending.get("phase")]
+    return any(name not in round_phases.ALL_PHASES for name in held)
+
+
+def _finish_retired_gate_step(state):
+    """Hand back a session of a continuable earlier generation that was waiting at an owner gate
+    this version no longer has. Returns True when it did; the caller persists the state.
+
+    A retired step is told by its name not being in `round_phases.ALL_PHASES`. Which gate it was is
+    told by the state it left: held judgment findings mean the judgment gate (`owner-choice-open`,
+    each held finding joining `ownerChoiceHeld`); otherwise a stall menu's fields mean the stall
+    menu (`fix-keeps-failing`); anything else is handed back as `fix-keeps-failing` with the detail
+    saying the step could not be classified. The pending gate action is cleared, so nothing emits
+    it, and `_hand_back` ends the review with every finding given an outcome. A finished state, and a
+    state of any other generation, are left as they are."""
+    if (not isinstance(state, dict) or state.get("terminal")
+            or not _generation_is_continuable_earlier(state)):
+        return False
+    # axis: a step outside ALL_PHASES hands the session back before any command acts on it — see bite-proof record c1l4b_wo_b
+    if not _step_is_retired(state):
+        return False
+    state["pending"] = None
+    held = state.get(RETIRED_JUDGMENT_FIELD)
+    judgment = [f for f in (held if isinstance(held, list) else []) if isinstance(f, dict)]
+    stalled = any(name in state for name in RETIRED_STALL_FIELDS)
+    # axis: the judgment gate and the stall menu hand back under different decision kinds — see bite-proof record c1l4b_wo_b
+    if judgment:
+        keys = state.get("ownerChoiceHeld")
+        if not isinstance(keys, list):
+            keys = state["ownerChoiceHeld"] = []
+        for finding in judgment:
+            key = _finding_key_of(finding)
+            if key and key not in keys:
+                keys.append(key)
+        _hand_back(state, "owner-choice-open",
+                   "%d finding(s) need the owner's choice and are still open: %s. The review was "
+                   "waiting at a judgment gate this version no longer has, so the PR is handed back "
+                   "with its findings still open; certification is withheld."
+                   % (len(judgment), "; ".join(str(f.get("title") or "?") for f in judgment)),
+                   cap=False)
+    elif stalled:
+        _hand_back(state, "fix-keeps-failing",
+                   "The review was waiting at a stall menu this version no longer has, after an "
+                   "audit stall persisted past its recovery attempt. The PR is handed back with its "
+                   "findings still open; certification is withheld.", cap=False)
+    else:
+        _hand_back(state, "fix-keeps-failing",
+                   "The review was waiting at a step this version no longer has (%r), and it could "
+                   "not be classified. The PR is handed back with its findings still open; "
+                   "certification is withheld." % (state.get("step"),), cap=False)
+    return True
+
+
 # Stall self-recovery fix-batch refusal tokens — shared by composition and routing (#1107).
 REFUSAL_UNRESOLVABLE_OPEN_SET = "unresolvable-open-set"
 REFUSAL_OPEN_TARGET_UNREPRESENTABLE = "open-target-unrepresentable"
@@ -9397,13 +9470,29 @@ def _schema_version_is_earlier_supported(state):
             and version < STATE_SCHEMA_VERSION)
 
 
+def _generation_is_continuable_earlier(state):
+    """True only for an earlier generation this version finishes (`CONTINUABLE_EARLIER_GENERATIONS`)
+    whose `schemaVersion` is exactly `STATE_SCHEMA_VERSION`. Both are exact integers: `true`, `6.0`
+    and `"6"` are not generation 6. A continuable generation at any other schema version is not
+    continuable: the gate refuses it as it refuses any earlier session."""
+    generation = state.get("sessionGeneration")
+    version = state.get("schemaVersion")
+    # axis: a generation stamped true, 6.0 or "6" is not generation 6 and stays refused — see bite-proof record c1l4b_wo_b
+    return (type(generation) is int and generation in CONTINUABLE_EARLIER_GENERATIONS
+            and type(version) is int and version == STATE_SCHEMA_VERSION)
+
+
 def _state_is_earlier_unfinished(state):
     """True for a JSON object that has no terminal answer and is either not of the current
     generation, or of an earlier supported schema version. This is the one place that keeps an
     earlier session from being continued: nothing past the gate ever reads an unfinished state of
-    an earlier generation or supported schema version. A current-generation state whose
+    an earlier generation or supported schema version, except one of a continuable earlier
+    generation at the current schema version, which finishes. A current-generation state whose
     `schemaVersion` is unsupported is not judged here; `load_state` refuses it."""
     if not isinstance(state, dict):
+        return False
+    # axis: an unfinished state of a continuable earlier generation at the current schema is not refused — see bite-proof record c1l4b_wo_b
+    if _generation_is_continuable_earlier(state):
         return False
     if _generation_is_current(state) and not _schema_version_is_earlier_supported(state):
         return False
@@ -9509,8 +9598,10 @@ def _upgrade_gate_unlocked(session_dir, cmd):
 
 def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_resolver_for=None):
     """None to carry on, or a refusal. The caller holds the session lock. Replays any sealed commit,
-    then repairs a damaged `loop-state.json` from its mirror: the one shared call path every locked
-    command takes between its upgrade gate and its first state load."""
+    repairs a damaged `loop-state.json` from its mirror, then hands back a session of an earlier
+    generation that was waiting at a retired owner gate: the one shared call path every locked
+    command takes between its upgrade gate and its first state load, so no command reads such a
+    session's retired step."""
     if sidecar_resolver_for is None:
         sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
     if sidecar_target is None:
@@ -9521,7 +9612,27 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     except round_commit.CommitRefused as exc:
         return _refuse_cmd(session_dir, cmd, "commit-recovery-failed", fault=FAULT_INTERNAL,
                            detail="%s: %s" % (exc.reason, exc.detail))
-    return _repair_state_if_damaged(session_dir, cmd)
+    refusal = _repair_state_if_damaged(session_dir, cmd)
+    if refusal is not None:
+        return refusal
+    _hand_back_retired_gate(session_dir, cmd)
+    return None
+
+
+def _hand_back_retired_gate(session_dir, cmd):
+    """Persist `_finish_retired_gate_step` over the saved state and journal it once. A state that
+    cannot be read, or that needs no hand-back, is left for the command's own load to answer. The
+    caller holds the session lock."""
+    ok, state = load_state(session_dir)
+    if not ok or not isinstance(state, dict):
+        return
+    retired = state.get("step")
+    if not _finish_retired_gate_step(state):
+        return
+    save_state(session_dir, state)
+    _journal_append(session_dir, {"cmd": cmd, "phase": retired if isinstance(retired, str) else None,
+                                  "round": state["round"], "attempt": 0,
+                                  "outcome": "retired-gate-hand-back"})
 
 
 def _state_damage(session_dir):
