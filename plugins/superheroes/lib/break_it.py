@@ -83,7 +83,7 @@ def setup_failure_reason(text, exit_code=None):
 # reads its header, field prefixes and separator from it.
 BLOCK_TEMPLATE = "\n".join([
     "break-it-test v1",
-    "path: <the same repo-relative path as `file`>",
+    "path: <a new test file's repo-relative path, one that does not exist yet; for a per-area finding the same path as `file`; for an attached finding not the finding's `file`>",
     "run: <one command, run from the repository root, that runs only this test file>",
     "---",
     "<the complete file content>",

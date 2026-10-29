@@ -443,13 +443,22 @@ def _id(row, key):
 
 
 def _finding_parts(row, older):
-    """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent."""
+    """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent.
+    The break-it runs of both rows, when both hold a list, read older first, then the row's runs not already among them."""
     out = {}
     for k in _FINDING_PARTS:
         for src in (row, older):
             if isinstance(src, dict) and k in src:
                 out[k] = src[k]
                 break
+    mine, earlier = (src.get("breakItRuns") if isinstance(src, dict) else None for src in (row, older))
+    if isinstance(mine, list) and isinstance(earlier, list):
+        # axis: a live row's new runs never hide the ledger row's earlier runs; they read after them, none twice
+        merged = list(earlier)
+        for run in mine:
+            if run not in merged:
+                merged.append(run)
+        out["breakItRuns"] = merged
     return out
 
 

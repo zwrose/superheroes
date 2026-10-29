@@ -1642,6 +1642,16 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+    held_runs = existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
+    if isinstance(held_runs, list):
+        # axis: a finding raised again keeps the break-it runs it held; its new runs read after them, none twice
+        new_runs = entry.get(break_it.RUNS_FIELD, [])
+        if isinstance(new_runs, list):
+            merged = list(held_runs)
+            for run in new_runs:
+                if run not in merged:
+                    merged.append(run)
+            entry[break_it.RUNS_FIELD] = merged
     if key in seen:
         ledger[seen[key]] = entry
     else:
