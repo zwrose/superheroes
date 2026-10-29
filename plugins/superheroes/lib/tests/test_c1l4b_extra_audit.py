@@ -14,6 +14,7 @@ import glob
 import hashlib
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -611,16 +612,55 @@ def test_t6b_after_the_order_a_fresh_next_emits_the_audits_and_the_session_compl
 
 def test_t7_a_moved_checkout_refuses_before_any_write_and_the_restored_head_is_accepted(tmp_path, monkeypatch):
     # axis: a checkout off the certified head refuses before any write — see bite-proof record c1l4b_wo_a
+    # The real git boundary: `_checkout_head` is NOT patched; the session's own temporary checkout moves.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     d = _capped(tmp_path)
-    certified = _pin_head(monkeypatch, d)
-    moved = "f" * 40
-    monkeypatch.setattr(RD, "_checkout_head", lambda session_dir, st: moved)
+    checkout = str(tmp_path / "checkout")
+    ident = ("-c", "user.name=superheroes-test", "-c", "user.email=superheroes-test@example.invalid",
+             "-c", "commit.gpgsign=false")
+
+    def git(*args):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
+        return subprocess.run(["git", *ident, "-C", checkout, *args], capture_output=True, text=True,
+                              check=True, env=env).stdout.strip()
+
+    certified = git("rev-parse", "HEAD")
+    meta_path = os.path.join(d, "meta.json")
+    with open(meta_path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta[RD.FIX_FOLD_HEAD_KEY] = certified
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    git("commit", "-q", "--allow-empty", "-m", "the checkout moves")
+    moved = git("rev-parse", "HEAD")
+    assert moved != certified
     out = _refused(d, _order(tmp_path), "extra-audit-head-moved")
     assert (out["certifiedHead"], out["checkoutHead"]) == (certified, moved)
+    git("reset", "-q", "--hard", certified)
+    assert RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR, readers=_readers())["ok"] is True
+
+
+def test_t7_a_checkout_head_git_cannot_name_refuses_head_unresolvable(tmp_path, monkeypatch):
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
     monkeypatch.setattr(RD, "_checkout_head", lambda session_dir, st: None)
     _refused(d, _order(tmp_path), "extra-audit-head-unresolvable")
-    monkeypatch.setattr(RD, "_checkout_head", lambda session_dir, st: certified)
-    assert RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR, readers=_readers())["ok"] is True
+
+
+def test_reservation_comment_scrubs_a_credential_quoted_in_the_reason():
+    secret = "sk-" + "a" * 48
+    sent = []
+
+    def create(pr, repo, body):
+        sent.append(body)
+        return {"id": 1, "url": "http://c/r"}
+
+    out = RR.reserve_extra_audit(PR, "o/r", "sess-1", "reason quoting " + secret, readers=_readers(create_comment=create))
+    assert out["ok"] is True and len(sent) == 1
+    assert secret not in sent[0]
+    assert "sessionId: sess-1" in sent[0]
 
 
 # --- T8: the remaining refusals ----------------------------------------------------------------------

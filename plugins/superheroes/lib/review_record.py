@@ -2414,7 +2414,7 @@ def reserve_extra_audit(pr, repo, session_id, why, readers=None):
     try:
         rd = _readers(readers)
         sid = session_id if isinstance(session_id, str) and session_id and not re.search(r"\s", session_id) else "unknown"
-        body = f"{EXTRA_AUDIT_RESERVED_MARKER}\nsessionId: {sid}\nwhy: {why}\n"
+        body = f"{EXTRA_AUDIT_RESERVED_MARKER}\nsessionId: {sid}\nwhy: {_scrub_text(str(why))}\n"
         sent = rd["create_comment"](pr, repo, body)
         if not (isinstance(sent, dict) and "id" in sent):
             return {"ok": False, "detail": "the reservation comment could not be written"}
