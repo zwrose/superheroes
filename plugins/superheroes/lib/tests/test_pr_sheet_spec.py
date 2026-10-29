@@ -136,7 +136,7 @@ def test_a_body_beside_the_pinned_ones_that_is_not_pinned_refuses(world):
     base, folder, _ = world
     (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[p for p in PINNED if p != "children/B.md"]), encoding="utf-8")
     found = problems_of(world)
-    assert len(found) == 1 and found[0].startswith("children/B.md sits beside the pinned bodies") and "needs a new vet" in found[0]
+    assert len(found) == 1 and found[0].startswith("children/B.md sits in the breakdown's body home") and "needs a new vet" in found[0]
 
 
 def test_a_pinned_link_to_another_pinned_body_is_not_read_as_unpinned(world):
@@ -156,7 +156,7 @@ def test_a_link_loop_is_a_refusal_never_a_crash(world, pinned):
     text = vet_text(folder, 3, "Breakdown", pins=PINNED)
     (base / "vet-3.md").write_text(text.replace("Vet done:", f"{pin} {'0' * 64}\nVet done:") if pinned else text, encoding="utf-8")
     done = cli(world)
-    expected = f"breakdown pin {pin} is outside the spec's folder" if pinned else "children/loop.md sits beside the pinned bodies"
+    expected = f"breakdown pin {pin} is outside the spec's folder" if pinned else "children/loop.md sits in the breakdown's body home"
     assert done.returncode == 1 and "Traceback" not in done.stderr and any(expected in p for p in json.loads(done.stdout)["problems"])
 
 
@@ -247,3 +247,101 @@ def test_the_merge_verdict_reads_as_on_a_code_pr_sheet(world):
     store = {"answers": {card["id"]: answer}, "verdict": {digest: verdict}}
     assert pr_sheet.pr_state(data, store)["state"] == "ready"
     assert pr_sheet.pr_state(data, {"answers": {card["id"]: answer}})["state"] == "needs-you"
+
+
+@pytest.mark.parametrize("rel", ["seams/S.md", "seams/deep/S.md", "children/nested/D.md"])
+def test_an_unpinned_body_in_the_home_refuses_in_a_folder_with_no_pinned_body(world, rel):
+    # Axis: the home scan reads all of children/ and seams/, not only the folders the pins sit in, so a forgotten pin cannot file unseen.
+    _, folder, _ = world
+    (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+    (folder / rel).write_text("A seam body the vet forgot to pin.\n", encoding="utf-8")
+    found = problems_of(world)
+    assert len(found) == 1 and found[0].startswith(f"{rel} sits in the breakdown's body home") and "needs a new vet" in found[0]
+
+
+def test_an_unpinned_epic_body_refuses(world):
+    # Axis: epic.md is part of the home, so an epic body the vet leaves out of its pins refuses.
+    base, folder, _ = world
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[p for p in PINNED if p != "epic.md"]), encoding="utf-8")
+    found = problems_of(world)
+    assert len(found) == 1 and found[0].startswith("epic.md sits in the breakdown's body home")
+
+
+def test_a_pinned_body_outside_the_home_refuses(world):
+    # Axis: a body pinned at the folder's top level (the shape vet 700's probe B7 built clean) refuses, so the home holds every body.
+    base, folder, _ = world
+    (folder / "child.md").write_text("A body saved beside the spec.\n", encoding="utf-8")
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[*PINNED, "child.md"]), encoding="utf-8")
+    found = problems_of(world)
+    assert len(found) == 1 and found[0].startswith(f"breakdown pin docs/superheroes/{SLUG}/child.md is a body outside the breakdown's home")
+
+
+@pytest.fixture
+def single(world):
+    """The world cut down to a single-issue spec: no epic, no coverage map, one child body in children/ and the vet pinning only it."""
+    base, folder, advisor = world
+    for rel in ("epic.md", "coverage-map.md", "children/A.md", "children/B.md"):
+        (folder / rel).unlink()
+    (folder / "children" / "C1.md").write_text("The single child's body.\n", encoding="utf-8")
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=["children/C1.md"]), encoding="utf-8")
+    return world
+
+
+def test_a_single_issue_sheet_counts_one_body_and_one_pin(single):
+    # Axis: the one/many word pairs: a single-issue spec's sheet reads "1 body" and "pins 1 file", never "1 bodies" or "pins 1 files".
+    sheet = build(single)
+    (card,) = sheet["cards"]
+    assert card["question"] == WORDS["breakdownTitleOne"] and "1 body the filing" in card["question"]
+    assert sheet["prSheet"]["history"][-1] == WORDS["specPin"] and "pins 1 file," in WORDS["specPin"]
+    assert len(bullets(sheet)) == 1
+
+
+def test_a_single_issue_spec_with_an_unpinned_body_beside_its_pinned_one_refuses(single):
+    # Axis: the single-issue body sits in children/, so an unpinned body beside it refuses (vet 700 probe B7 built this clean).
+    _, folder, _ = single
+    (folder / "children" / "C1-unpinned.md").write_text("A second body nobody pinned.\n", encoding="utf-8")
+    found = problems_of(single)
+    assert len(found) == 1 and found[0].startswith("children/C1-unpinned.md sits in the breakdown's body home")
+
+
+def test_a_duplicate_pin_refuses(world):
+    # Axis: vet 700 leg M1: a vet record that pins one file twice refuses.
+    base, folder, _ = world
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[*PINNED, "children/A.md"]), encoding="utf-8")
+    assert problems_of(world) == ["the newest vet record pins a file more than once"]
+
+
+def test_a_vet_record_for_another_spec_refuses(world):
+    # Axis: vet 700 leg M2: a vet record whose header names another work item refuses, naming its round.
+    base = world[0]
+    text = (base / "vet-2.md").read_text(encoding="utf-8").replace(f"spec `{SLUG}`", "spec `another-spec-9f9f9f`")
+    (base / "vet-2.md").write_text(text, encoding="utf-8")
+    assert problems_of(world) == [f"vet record round 2 is for spec another-spec-9f9f9f, not {SLUG}"]
+
+
+def test_a_vet_done_line_that_disagrees_with_its_header_refuses(world):
+    # Axis: vet 700 leg M3: a Vet done: line naming another round or verdict than the header refuses, naming the file.
+    base = world[0]
+    text = (base / "vet-2.md").read_text(encoding="utf-8").replace("Vet done: round 2 · clean", "Vet done: round 2 · findings")
+    (base / "vet-2.md").write_text(text, encoding="utf-8")
+    found = problems_of(world)
+    assert len(found) == 1 and found[0].startswith("vet record vet-2.md: its Vet done: line names round 2 findings")
+
+
+def test_a_same_family_checks_seat_is_marked_not_independent(world):
+    # Axis: vet 700 leg M4: "Same family: yes" sets the reviewer's notIndependent flag and adds the not-independent history line.
+    _, folder, _ = world
+    path = folder / "checks-record.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("- Same family: no", "- Same family: yes"), encoding="utf-8")
+    part = build(world)["prSheet"]
+    assert part["whatChanged"]["reviewers"][0]["notIndependent"] is True
+    assert WORDS["historyNotIndependent"].replace("{name}", WORDS["specChecksReviewer"]) in " ".join(part["history"])
+
+
+def test_a_folder_named_like_a_body_is_not_read_as_an_unpinned_body(world):
+    # Axis: the home scan skips a folder whose name ends in .md, so a fully pinned body nested inside one still builds.
+    base, folder, _ = world
+    (folder / "children" / "group.md").mkdir()
+    (folder / "children" / "group.md" / "C1.md").write_text("A nested child body.\n", encoding="utf-8")
+    (base / "vet-3.md").write_text(vet_text(folder, 3, "Breakdown", pins=[*PINNED, "children/group.md/C1.md"]), encoding="utf-8")
+    assert len(bullets(build(world))) == len(PINNED) + 1

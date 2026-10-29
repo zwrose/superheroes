@@ -362,6 +362,13 @@ audit trail and the child bodies are committed to that same PR's branch, in the 
 beside the spec. Where the project keeps specs out of the repo or gitignored, they sit beside the
 stored spec.
 
+**Where breakdown bodies live.** Every body the filing writes is saved as a file in one fixed home
+in the spec's work-item folder: each child body and each planned layer body in `children/`, each
+seam body (a seam quoted onto an issue that already exists) in `seams/`, and the epic body at
+`epic.md`. A single-issue spec's one body goes in `children/` too, with its planned layer bodies.
+The spec-PR sheet refuses any `.md` in that home that the breakdown vet does not pin, and any pinned
+body outside it (`lib/pr_sheet.py`).
+
 When the breakdown starts is duty 1's, in `skills/showrunner/SKILL.md`. So is the vet you run on it,
 whose mechanism is in `skills/showrunner/reference/spec-vet.md` § Vetting the breakdown.
 
