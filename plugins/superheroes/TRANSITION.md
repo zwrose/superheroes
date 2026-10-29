@@ -12,11 +12,11 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.47.0
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.47.0. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed at once: an advisor marks a spec delivered at closure, marks a later ruling that changes delivered behavior on the spec instead of amending it, and marks specs delivered before this release when next touched, not all at once.** See [Specs: delivered specs freeze, and later rulings mark them](#specs-delivered-specs-freeze-and-later-rulings-mark-them).
 
@@ -30,7 +30,19 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: the review setup's verify-command doctor no longer calls a profile stale over a path its verify command may not run.** See [Verify-command doctor: check 6 fails safe](#verify-command-doctor-check-6-fails-safe).
 
+- **After switching.** **Nothing is owed, except that a consumer that checks `sanitized_view` refusals or reads a successful view's `diffPath` and `diffBytes` must accept the change: `sanitized-view-diff-fully-withheld` is retired, and `diffPath` and `diffBytes` are `null` when there is no review patch.** A change made only of withheld config is now reviewed instead of refused, and a file or symlink named like a config folder is now withheld. See [Review view: a change made only of withheld config is reviewed instead of refused](#review-view-a-change-made-only-of-withheld-config-is-reviewed-instead-of-refused).
+
+- **After switching.** **Nothing is owed, unless a spec package keeps its breakdown bodies outside `children/`, `seams/` and `epic.md`: then move them into that home and re-pin them before its spec PR's sheet is built.** A spec PR now gets a merge sheet without a code review record. See [Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies](#spec-prs-a-merge-sheet-without-a-review-record-and-a-fixed-home-for-breakdown-bodies).
+
 - **After switching.** **A caller that passes `--max-rounds` above 4 or `next --max-rounds-absolute`, folds an owner gate with `advance --owner-artifact`, or reads the verdicts `held`, `stalled`, `capped-with-open-critical` or `capped-with-open-blocker` moves to the replacements listed; a review session started by the previous release now finishes, and an older one is refused and started again fresh. A saved `reviewGatePolicy` key in a project's core block is ignored and safe to remove.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
+
+- **After switching.** **A caller that passes `--narrative-family` to `seat_map.py compose`, or reads `narrativeFamily` from a seat map or its receipt, drops it; nothing replaces it.** See [Seat map: the narrative family is gone](#seat-map-the-narrative-family-is-gone).
+
+- **After switching.** **A project that implements with codex on a claude host and has no third model family live gets no reviewer until it adds one.** See [Seat map: the build session is a maker on every implementation engine](#seat-map-the-build-session-is-a-maker-on-every-implementation-engine).
+
+- **After switching.** **A custom panel reviewer that writes its own findings file writes the object `{"findings": [...], "readParts": [...]}`, and a reviewer on a schema-delivered engine emits `readParts` on every result.** See [Review: round-1 reviewers return what they read](#review-round-1-reviewers-return-what-they-read).
+
+- **After switching.** **Re-run configure once when the "rubric-version advanced" notice appears.** See [Review: the rubric version is 14](#review-the-rubric-version-is-14).
 
 ### Review: rounds stop at 4, and nothing waits on the owner mid-review
 
@@ -99,6 +111,43 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **The `iphone` key.** On a `ledger-append-failed` result, `recorded` reads `False` (with `deleted`) when the line did not land, `True` when the landed record was ended (the reap owns the phone, nothing is deleted), and `"uncertain"` only when the settle could not read or write the ledger. It no longer reads `"uncertain"` whenever the append reported failure.
 - **Pre-spawn refusals.** `_try_reserve_for_refusal` returns `reserved: True` for a `landed` read-back (the refusal path never spawns, so the caller ends the record with the refusal's own reason and stage). For an `uncertain` read-back, or a failure result with no `appendReadBack`, it makes the one terminal write itself and returns `reserved: False` with `appendReadBack` set to the settle's result (`terminal`, `absent` or `uncertain`).
 
+### Review view: a change made only of withheld config is reviewed instead of refused
+
+- **The refusal is retired.** `lib/sanitized_view.py` no longer refuses with `sanitized-view-diff-fully-withheld` when every changed path is withheld as stripped config. Such a change used to get no outside review at all; the view now builds, and the reviewer is told that the whole change is in the configuration-changes file, to read it as data and to cite it by name.
+- **`diffPath` and `diffBytes` are `null`.** On a successful view with a `diffBase`, `diffPath` and `diffBytes` are `null` when there is no review patch to show, and `configDiffPath` holds the whole change. A consumer that reads either key as always present must accept `null`. `diffBase`, `diffWithheldCount`, `calibrationShown`, `configDiffPath` and `configDiffBytes` are unchanged.
+- **Still refused.** `sanitized-view-diff-empty` now also covers a fully withheld change whose hunks render nothing. A fully withheld change too large for the configuration-changes file still refuses with `sanitized-view-diff-config-too-large`; it is never cut short.
+- **A new withheld name.** A file, or a tracked symlink, whose own name is a config-folder name (`.claude`, `.codex`, `.cursor`, `.aider`, `.windsurf`, `.gemini`) is now withheld from reviewers, so a symlink named `.claude` that points at an ordinary folder no longer reaches a reviewer's copy. It is listed with the other withheld paths, and a project that tracks such a name will see it there.
+
+### Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies
+
+- **A spec PR's merge sheet.** `lib/pr_sheet.py build` builds a spec PR's sheet with no review record: the input names `spec` (`folder`, `vetRecords`, `ci`) and `--record` is not given; a `--record` given with `spec` is refused. The sheet reads the spec's checks record and every round's vet record, and shows the breakdown as one Accept card, "The breakdown", under What you're accepting. It lists every body the merge will file and every pinned file, each with its path and hash. A code PR's sheet still needs its review record.
+- **What refuses the sheet.** A pinned file that no longer hashes to its pin (`breakdown pin <path> hashes to ... now`), a spec that no longer hashes to the newest vet record's `Vet done:` hash (`does not hash to ... the spec changed after its vet`), a pin outside the spec's folder (`breakdown pin <path> is outside the spec's folder`), and a newest vet record that is not a clean breakdown vet with its `Breakdown pins:` lines. Each names what to fix, and nothing is shown as accepted.
+- **Breakdown bodies have a fixed home.** In the spec's work-item folder, child and layer bodies go in `children/` (a single-issue spec's one body too), seam bodies in `seams/`, and the epic body at `epic.md`. The sheet refuses a pinned body outside that home (`breakdown pin <path> is a body outside the breakdown's home`) and any `.md` in the home that the vet does not pin (`<file> sits in the breakdown's body home but the newest vet record does not pin it`), single-issue specs included. An unpinned `.md` beside a pinned file in another subfolder still refuses too. `skills/showrunner/reference/spec-vet.md` and `decomposition.md` name the home in the same words.
+- **Wording.** A single-issue spec's sheet reads "1 body" and "pins 1 file".
+
+### Seat map: the narrative family is gone
+
+- **The flag.** `seat_map.py compose --narrative-family` is removed; passing it is now an argument error.
+- **The key.** The seat map and its receipt no longer carry `narrativeFamily`, and `seat_map.build()` no longer takes a `narrative_family` argument. Nothing replaces them.
+- **A stored seat map.** One that still carries the `narrativeFamily` key reads as before, and the key is ignored.
+
+### Seat map: the build session is a maker on every implementation engine
+
+- **What changed.** On `seat_map.py compose --implementation-engine <engine>`, the host model's family (the build session, which applies the review's fixes) is now always a maker and is kept off every review seat, whatever the implementation engine. Before, only a `claude` implementation engine did this.
+- **The record.** When the host family is known and differs from the author family, compose records `maker-family-split`. When the host model is unknown, the claude host family stands in as before.
+- **What it means.** Codex implementing on a claude host keeps anthropic off every seat. Where only claude and codex are live, every seat reads not run, so such a change gets no reviewer until a third model family is live.
+
+### Review: round-1 reviewers return what they read
+
+- **The list.** Each round-1 panel reviewer returns `readParts`, the files and line ranges at the reviewed head it read, beside its findings. A host panel reviewer writes the object `{"findings": [...], "readParts": [...]}` to its landing path instead of a bare array.
+- **The record.** The review record's reviewer row carries it (`read <n> files, <m> lines`). A panel reviewer that ran and returned no list, or a malformed one, reads `read nothing`.
+- **The result schema.** The strict review result schema now requires `readParts` on every branch: an array or null on a findings result, null on every other result kind. A reviewer on a schema-delivered engine emits `"readParts": null` outside a panel findings result.
+- **A run in flight.** A review run opened before the change still replays, with no list.
+
+### Review: the rubric version is 14
+
+- **The marker.** The review rubric's version marker is now 14, because its findings format gained the read list.
+- **The notice.** Each calibrated project sees one "rubric-version advanced" notice from the review's staleness check. Re-running configure re-stamps it.
 ## 0.46.2
 
 ### Before you upgrade

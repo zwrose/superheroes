@@ -287,6 +287,8 @@ def test_i2_a_third_family_is_still_seated_beside_the_two_makers(capsys):
                        "--host-model", "claude-opus-5", "--pr-number", "2209")
     assert receipt["makerFamilies"] == ["anthropic", "openai"]
     assert _filled_families(receipt) == {"xai"}
+    # every recorded maker family is out of the achievable set: no false constraint breach
+    assert SM.classify_violations(receipt)["unexcused"] == []
 
 
 # --- I3: the narrative family is removed ---

@@ -170,11 +170,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | key | meaning |
 > |---|---|
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
-> | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
-> | `diffBytes` | patch size in bytes |
+> | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root; `null` when every changed path was withheld, in which case the whole change is in `configDiffPath` |
+> | `diffBytes` | patch size in bytes; `null` when every changed path was withheld, in which case the whole change is in `configDiffPath` |
 > | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld (it excludes the changed calibration files shown in full, and a view built without `--diff-base`, brief-check included, shows none); undecodable paths, unrecognized spans, and unaccounted census entries **refuse the dispatch** rather than being counted here — opaque review-patch content refuses unless it is a genuine binary blob (placeholder line); opaque content in the configuration-changes file still refuses — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
 > | `configDiffPath` | `SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt`, relative to the view root, when withheld configuration hunks were staged; `null` when nothing was withheld |
 > | `configDiffBytes` | size in bytes of that configuration-changes file; `null` when `configDiffPath` is `null` |
+>
+> A change whose every path is withheld is reviewed from the configuration-changes file alone, and a
+> leaf named like a config directory (such as a `.claude` symlink) is withheld too.
 >
 > The census of changed paths comes from direct two-tree enumeration (`git ls-tree` on the
 > merge-base and head), not from patch presentation — `git diff`, rendered patch text, or a list of
@@ -197,8 +200,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-base-abbreviated` | the base is an abbreviated hex commit id; pass the full 40- or 64-character id |
 > | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a full 40-/64-hex commit object id (non-hex, fewer than four hex digits, or hex lengths of 41–63 or 65 or more), does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
-> | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
-> | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config or left out by `--leave-out-file` — an external seat could not review this change at all |
+> | `sanitized-view-diff-empty` | a base was requested and the change has no paths, or the resulting patch is empty with nothing withheld, or every changed path was withheld and their hunks render nothing |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
 > | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
