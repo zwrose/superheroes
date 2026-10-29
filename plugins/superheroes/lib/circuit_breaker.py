@@ -16,6 +16,7 @@ from finding_identity import (
     clamp_title, normalize_title, finding_label, finding_identity,
 )
 from audits import AUDIT_RULINGS
+import round_phases
 
 BLOCKING = {"Critical", "Important"}
 # The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
@@ -28,7 +29,7 @@ BLOCKING = {"Critical", "Important"}
 # build legs can never disagree on what blocks.
 _NON_BLOCKING = frozenset({"minor", "nit"})
 
-DEFAULT_MAX_ROUNDS_ABSOLUTE = 10
+# No longer emitted here: kept because review_loop_plan (the showrunner panel's decider) still reads it.
 ROUND_CEILING_REASON = "round-ceiling"
 
 # The CLOSED set of halt reasons any breaker decision in this module can carry. A consumer that
@@ -37,9 +38,6 @@ BREAKER_REASONS = frozenset({
     "max-iterations", "no-net-progress", "challenged-principle-recurring",
     "recurring-finding", "audit-stall", ROUND_CEILING_REASON,
 })
-
-CEILING_BELOW_CAP_REFUSAL = "max-rounds-absolute-below-max-rounds"
-CEILING_INVALID_REFUSAL = "max-rounds-absolute-invalid"
 
 
 def _usable_int(value):
@@ -54,46 +52,7 @@ def _positive_usable_int(value):
 def _effective_max_rounds(max_rounds):
     if _positive_usable_int(max_rounds):
         return max_rounds
-    return 7
-
-
-def resolve_round_ceiling(max_rounds, named=None):
-    """Resolve the unconditional round ceiling for the review loop. Never raises."""
-    cap = _effective_max_rounds(max_rounds)
-    if named is None:
-        # Unnamed: unconditional cost backstop — default 10 below a configured cap of 20 is not
-        # incoherent; the ceiling binds first and the run halts at round 10 (stricter than the cap).
-        return DEFAULT_MAX_ROUNDS_ABSOLUTE, None
-    if not _positive_usable_int(named):
-        return None, CEILING_INVALID_REFUSAL
-    if named < cap:
-        return None, CEILING_BELOW_CAP_REFUSAL
-    return named, None
-
-
-def check_round_ceiling(next_round, ceiling):
-    """Unconditional round ceiling — boundary on the round about to begin, not the round just finished."""
-    if ceiling is None:
-        return {"halt": False, "reason": None, "detail": "no round ceiling"}
-    if not _usable_int(ceiling):
-        return {"halt": False, "reason": None, "detail": "malformed round ceiling"}
-    if not _usable_int(next_round):
-        return {"halt": False, "reason": None, "detail": "malformed round count"}
-    if next_round > ceiling:
-        return {
-            "halt": True,
-            "reason": ROUND_CEILING_REASON,
-            "detail": (
-                f"Round ceiling {ceiling} reached: rounds reached {next_round - 1}, "
-                f"round {next_round} not begun. Certification is withheld unconditionally regardless of the "
-                f"completed round's findings (not a max-iterations cap halt)."
-            ),
-        }
-    return {
-        "halt": False,
-        "reason": None,
-        "detail": f"Round {next_round} is within the round ceiling of {ceiling}.",
-    }
+    return round_phases.ROUND_CAP
 
 
 # One normalized severity vocabulary for rank/tier comparisons — lives beside `is_blocking` so a
@@ -349,16 +308,15 @@ def _round_not_discharged(round_rec):
     return out
 
 
-def check_audit_breaker(audit_rounds, max_rounds):
+def check_audit_breaker(audit_rounds):
     """Audit-keyed stall detector for the code leg's delta rounds (#507).
 
     `audit_rounds` — chronological list of {"round": N, "outcomes": [{identity, ruling}]}, the
-    effective rulings from `audits.apply_audit_results`. Halt conditions, checked in order:
-      1. `max-iterations` — round count >= max_rounds while any latest-round outcome is
-         not-discharged.
-      2. `audit-stall` — some identity is not-discharged in the last two audit rounds only
-         (alias-tolerant, so a retitled-but-same-class finding still stalls). An honestly-folded
-         clean round resets the window — historical pairs do not permanently halt later rounds.
+    effective rulings from `audits.apply_audit_results`. It detects only `audit-stall`: some
+    identity is not-discharged in the last two audit rounds only (alias-tolerant, so a
+    retitled-but-same-class finding still stalls). An honestly-folded clean round resets the
+    window — historical pairs do not permanently halt later rounds. The round cap is not a
+    criterion here: it is the driver's boundary on the round about to begin.
 
     Never consults finding counts. Fail-closed on malformed input; empty history → no halt.
     """
@@ -368,20 +326,8 @@ def check_audit_breaker(audit_rounds, max_rounds):
 
     per_round = [_round_not_discharged(r) for r in audit_rounds]
     n = len(per_round)
-    latest = per_round[-1]
 
-    # Criterion 1: round cap reached with an open (not-discharged) finding this round.
-    if n >= max_rounds and latest:
-        open_ids = sorted({a for aliases in latest for a in aliases})
-        return {
-            "halt": True,
-            "reason": "max-iterations",
-            "detail": ("Reached audit round %d (cap %d) with %d finding(s) still not discharged."
-                       % (n, max_rounds, len(latest))),
-            "stalledIdentities": open_ids,
-        }
-
-    # Criterion 2: the same finding failing audit in two consecutive rounds — last two only.
+    # The same finding failing audit in two consecutive rounds — last two only.
     if n >= 2:
         prev = per_round[-2]
         cur = per_round[-1]

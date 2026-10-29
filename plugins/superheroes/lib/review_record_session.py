@@ -29,7 +29,6 @@ if _LIB_DIR not in sys.path:
 
 import audits as audits_mod  # noqa: E402
 import break_it  # noqa: E402
-import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import pr_body_stage  # noqa: E402
@@ -513,13 +512,12 @@ def _original_maker_families(state, fix_round):
 
 
 def _ceiling(cfg):
-    """The round ceiling the driver applied: the configured one when it is a number, else the one it resolves
-    from the configuration; None when no usable ceiling resolves."""
+    """The round ceiling an earlier driver version applied to a session it wrote: the stored one when it is a
+    number, the default it used when none was stored; None when the stored one is unusable."""
     named = cfg.get("maxRoundsAbsolute")
     if _int(named):
         return named
-    found, refusal = circuit_breaker.resolve_round_ceiling(cfg.get("maxRounds"), named)
-    return found if refusal is None and _int(found) else None
+    return 10 if named is None else None  # reads state an earlier version wrote: its flat default ceiling
 
 
 def _refused(rounds):

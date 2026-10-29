@@ -555,11 +555,11 @@ def state_hash(state):
     return _sha256(_canonical(state))
 
 
-class RoundCeilingRefusal(ValueError):
-    """The one load-time refusal for an invalid ``maxRoundsAbsolute`` vs ``maxRounds`` pairing.
+class MaxRoundsRefusal(ValueError):
+    """Load-time refusal for an invalid ``maxRounds`` on a fresh state.
 
-    Raised only from ``_default_config`` — the single config load point — when
-    ``circuit_breaker.resolve_round_ceiling`` refuses the named ceiling."""
+    Raised only from ``_default_config`` — the single config load point — when ``maxRounds`` is not
+    a positive non-bool ``int`` no larger than ``round_phases.ROUND_CAP``."""
     def __init__(self, reason, value=None):
         super().__init__(reason)
         self.reason = reason
@@ -567,7 +567,7 @@ class RoundCeilingRefusal(ValueError):
 
 
 class FixBatchCapRefusal(ValueError):
-    """Load-time refusal for an invalid ``fixBatchCap`` — sibling of ``RoundCeilingRefusal``.
+    """Load-time refusal for an invalid ``fixBatchCap`` — sibling of ``MaxRoundsRefusal``.
 
     Raised only from ``_default_config`` when ``fixBatchCap`` is present, not ``None``, and not a
     positive non-bool ``int``."""
@@ -579,7 +579,7 @@ class FixBatchCapRefusal(ValueError):
 
 class DispositionLedgerOwnerRefusal(ValueError):
     """Fold-time refusal for an unrecognized ``dispositionLedgerOwner`` marker — sibling of
-    ``RoundCeilingRefusal``.
+    ``MaxRoundsRefusal``.
 
     Raised only from ``_fold`` — the single chokepoint every fold passes through."""
     def __init__(self, reason, value=None):
@@ -1280,10 +1280,7 @@ def _default_config(overrides=None):
         "vendors": ["claude"],
         "fixerVendor": None,  # UNKNOWN by default — auditor independence must DEGRADE, not assume claude (#608)
         "verifyCommand": "none",
-        "maxRounds": 7,
-        # Hard round ceiling (default circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE) — owner-tunable
-        # like maxRounds. A named ceiling below maxRounds refuses at load; unnamed uses the flat default.
-        "maxRoundsAbsolute": None,
+        "maxRounds": round_phases.ROUND_CAP,
         "dimensions": None,  # resolved below: explicit list, else the seat map's lens roster, else all five
         # Optional records export (#507 WO-D). When `recordsPath` is set the driver writes the
         # session's round-records ledger there after each folded round — written whole, replacing
@@ -1311,11 +1308,11 @@ def _default_config(overrides=None):
     if cap_val is not None:
         if not isinstance(cap_val, int) or isinstance(cap_val, bool) or cap_val < 1:
             raise FixBatchCapRefusal("fix-batch-cap-invalid", cap_val)
-    ceiling, refusal = circuit_breaker.resolve_round_ceiling(
-        cfg["maxRounds"], cfg.get("maxRoundsAbsolute"))
-    if refusal is not None:
-        raise RoundCeilingRefusal(refusal, cfg.get("maxRoundsAbsolute"))
-    cfg["maxRoundsAbsolute"] = ceiling
+    rounds_val = cfg["maxRounds"]
+    # axis: a fresh session never mints a cap above ROUND_CAP, nor a non-positive or non-int one — see bite-proof record c1l4_wo_b
+    if (not isinstance(rounds_val, int) or isinstance(rounds_val, bool)
+            or rounds_val < 1 or rounds_val > round_phases.ROUND_CAP):
+        raise MaxRoundsRefusal("max-rounds-invalid", rounds_val)
     return cfg
 
 
@@ -1327,7 +1324,7 @@ def _fix_batch_cap(config):
     return round_phases.FIX_BATCH_CAP_DEFAULT
 
 
-VERIFY_THEN_CEILING = "ceiling"
+VERIFY_THEN_CAP = "cap"
 VERIFY_THEN_PANEL = "full-panel"
 VERIFY_THEN_POST_AUDITS = "post-audits"
 DELTA_BASELINE_ABSENT = "delta-baseline-absent"
@@ -1336,17 +1333,14 @@ HEAD_DIFF_MISMATCH_CAUSE = "head-diff-mismatch"
 HEAD_DIFF_UNVERIFIABLE_CAUSE = "head-diff-unverifiable"
 
 
-def _round_ceiling(config):
-    """Return the resolved unconditional round ceiling for this session.
-
-    Persisted state from before #1030 may lack ``maxRoundsAbsolute`` on ``config``; in that case
-    re-resolve from ``maxRounds`` with an unnamed ceiling so the flat default still applies — a
-    resumed session never runs ceiling-less."""
-    ceiling = config.get("maxRoundsAbsolute")
-    if isinstance(ceiling, int) and not isinstance(ceiling, bool):
-        return ceiling
-    ceiling, _ = circuit_breaker.resolve_round_ceiling(config.get("maxRounds", 7), None)
-    return ceiling
+def _round_cap(config):
+    """Return the round cap this session runs under: the config's ``maxRounds`` when it is a positive
+    non-bool int, else ``ROUND_CAP``. A malformed value never means "no cap". A loaded config above
+    ``ROUND_CAP`` (a session an earlier version minted) is honored as stored."""
+    val = config.get("maxRounds") if isinstance(config, dict) else None
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 1:
+        return val
+    return round_phases.ROUND_CAP
 
 
 def new_state(config=None):
@@ -2696,7 +2690,7 @@ def _challenged_recurring_halt(state, config):
     records = state.get("_records") or []
     if len(records) < 2:
         return None
-    brk = circuit_breaker.check_circuit_breaker(records, config.get("maxRounds", 7))
+    brk = circuit_breaker.check_circuit_breaker(records, _round_cap(config))
     if brk.get("halt") and brk.get("reason") == "challenged-principle-recurring":
         return brk
     return None
@@ -5379,8 +5373,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
             return
         state["step"] = P_PANEL
         return
-    # VERIFY_THEN_CEILING, and the legacy position (a gate pending with no flag): the round advance
-    # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
+    # VERIFY_THEN_CAP, and the legacy position (a gate pending with no flag): the round advance is
+    # here — past the cap it hands back `round-cap`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
@@ -5389,13 +5383,13 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
 
 
 def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
-    """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
+    """After the round's last fix-batch slice folds: advance or run the gate at the cap."""
     next_round = state["round"] + 1
-    if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
-        # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
+    if next_round > _round_cap(config):
+        # The round at the cap completes — fix AND gate — before the boundary refuses the next
         # round. The gate always runs on the post-fix head, including when the round's earlier gate
         # already passed.
-        state["_verifyThen"] = VERIFY_THEN_CEILING
+        state["_verifyThen"] = VERIFY_THEN_CAP
         state["step"] = P_VERIFY
         return
     rec = state.get("rounds", {}).get(str(state["round"]), {})
@@ -6296,7 +6290,6 @@ def _settle_delta(state, config):
     state.pop("_settleDelta", None)
     state.pop("_postAudit", None)
     outcome = state.get("_auditOutcome") or {"notDischarged": [], "discharged": []}
-    max_rounds = config.get("maxRounds", 7)
     # Record this delta round in the in-memory ledger and run the challenged-coverage breaker BEFORE
     # any terminal routing: a coverage decision recorded on a wrong principle whose class recurs must
     # park (cannot-certify), never certify as clean (the wrong_principle safety property).
@@ -6315,7 +6308,7 @@ def _settle_delta(state, config):
     if challenged:
         _park_cannot_certify(state, challenged.get("detail"))
         return
-    breaker = circuit_breaker.check_audit_breaker(state["auditRounds"], max_rounds)
+    breaker = circuit_breaker.check_audit_breaker(state["auditRounds"])
     new_blocking = _blocking(state.get("findings") or [])
 
     # track the severities surfaced THIS delta round since the last qualifying panel (for the #174
@@ -6330,20 +6323,6 @@ def _settle_delta(state, config):
 
     if breaker.get("halt") and breaker.get("reason") == "audit-stall":
         _handle_stall(state, config, breaker)
-        return
-    if breaker.get("halt") and breaker.get("reason") == "max-iterations":
-        crit = _open_critical(state.get("findings") or []) or _stalled_critical(state, config, breaker)
-        if crit:
-            _park_capped(state, breaker.get("detail"))
-            return
-        # #507 v12: at the audit-round cap, ONLY a latest round with zero not-discharged outcomes and
-        # no open blocking finding may certify. An Important still not-discharged (or a new blocker)
-        # parks — never certify clean over an unresolved blocker, however it is dressed up.
-        if outcome.get("notDischarged") or new_blocking:
-            _park_capped_open(state, (breaker.get("detail") or "reached the audit-round cap")
-                              + " — blocking finding(s) remain not-discharged; certification withheld")
-            return
-        _terminal_converged(state, config, full_panel=False, note=breaker.get("detail"))
         return
     if breaker.get("halt"):
         _park_cannot_certify(
@@ -6399,7 +6378,7 @@ def _settle_delta_converged(state, config):
         max_confirmations=MAX_CONFIRMATIONS)
     _record_round(state, "confirmationFollowup", followup)
     if followup.get("park"):
-        _park_capped(state, followup.get("reason"))
+        _hand_back(state, "round-cap", followup.get("reason"), cap=True)
         return
     if followup.get("rearm"):
         _decision(state, "confirmation-rearm", followup.get("reason"))
@@ -6429,81 +6408,58 @@ def _batch_severity_is_critical(state, target_id):
     return False
 
 
-def _ceiling_blocks(state, config, next_round, refused_at):
-    """The ONE round-ceiling predicate. Parks loud when `next_round` would exceed the ceiling.
+def _cap_blocks(state, config, next_round, refused_at):
+    """The ONE round-cap predicate. Hands the PR back when `next_round` would exceed the cap.
 
     Bites on the ROUND BOUNDARY: it asks whether the round about to BEGIN is allowed, never
-    whether the round just finished was. Returns True when it parked (caller returns at once)."""
-    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
-    if not brk.get("halt"):
+    whether the round just finished was. Returns True when it handed back (caller returns at once)."""
+    cap = _round_cap(config)
+    # axis: the cap round itself runs; only the round after it is refused — see bite-proof record c1l4_wo_b
+    if not next_round > cap:
         return False
-    detail = brk.get("detail")
+    detail = (
+        "Round cap %s reached: rounds reached %s, round %s not begun. The PR is handed back with "
+        "its findings still open; certification is withheld." % (cap, next_round - 1, next_round)
+    )
     if refused_at:
         detail = "%s (refused at: %s)" % (detail, refused_at)
-    _park_round_ceiling(state, detail)
+    _hand_back(state, "round-cap", detail, cap=True)
     return True
 
 
-def _ceiling_blocks_loaded(state, config):
-    """Persisted-state entry guard: a loaded non-terminal state already above the ceiling must park.
+def _cap_blocks_loaded(state, config):
+    """Persisted-state entry guard: a loaded non-terminal state already above its cap must hand back.
 
-    Equality is allowed (`round == ceiling` runs); park only when `round > ceiling`. A stored
-    terminal (including pending idempotent re-emit) is left unchanged. Returns True when it parked."""
+    Equality is allowed (`round == cap` runs); hand back only when `round > cap`. A stored
+    terminal (including pending idempotent re-emit) is left unchanged. Returns True when it handed back."""
     if state.get("terminal"):
         return False
-    ceiling = _round_ceiling(config)
-    brk = circuit_breaker.check_round_ceiling(state["round"], ceiling)
-    if not brk.get("halt"):
-        return False
+    cap = _round_cap(config)
     rnd = state["round"]
+    if not rnd > cap:
+        return False
     detail = (
-        "Round ceiling %s reached: round %s had already begun and is halted. "
-        "Certification is withheld unconditionally regardless of the completed round's findings "
-        "(not a max-iterations cap halt)." % (ceiling, rnd)
+        "Round cap %s reached: round %s had already begun and is halted. The PR is handed back "
+        "with its findings still open; certification is withheld. (refused at: resumed-state)"
+        % (cap, rnd)
     )
-    detail = "%s (refused at: %s)" % (detail, "resumed-state")
-    _park_round_ceiling(state, detail)
+    _hand_back(state, "round-cap", detail, cap=True)
     return True
 
 
 def _advance_round(state, config, *, reason):
     """The ONE writer of `state["round"]` on the advance path (#1030, owner ruling 19-c).
 
-    The ceiling is a BOUNDARY, not a settle-path terminal: the round at the ceiling completes,
-    and the loop then refuses to begin the next one. Returns True when the counter advanced,
-    False when it parked `round-ceiling` — a False return means the caller must return
-    immediately without any further state mutation. This function is also the one writer of
-    `state["deltaBaseline"]`."""
+    The cap is a BOUNDARY, not a settle-path terminal: the round at the cap completes, and the loop
+    then refuses to begin the next one. Returns True when the counter advanced, False when it
+    handed back `round-cap` — a False return means the caller must return immediately without any
+    further state mutation. This function is also the one writer of `state["deltaBaseline"]`."""
     next_round = state["round"] + 1
-    if _ceiling_blocks(state, config, next_round, reason):
+    if _cap_blocks(state, config, next_round, reason):
         return False
     state["round"] = next_round
     state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
     return True
-
-
-def _park_round_ceiling(state, detail):
-    _set_terminal(state, "halted", cap=True)
-    state["certification"] = {"shape": None, "reason": detail or "round ceiling reached"}
-    _decision(state, "round-ceiling", detail)
-    state["step"] = P_TERMINAL
-
-
-def _park_capped(state, detail):
-    _set_terminal(state, "capped-with-open-critical", cap=True)
-    state["certification"] = {"shape": None, "reason": detail or "capped with an open Critical — park"}
-    _decision(state, "capped-with-open-critical", detail)
-    state["step"] = P_TERMINAL
-
-
-def _park_capped_open(state, detail):
-    """The audit-round cap reached with a non-Critical blocker still not-discharged: park, withhold
-    certification — never certify clean over an unresolved Important (#507 v12)."""
-    _set_terminal(state, "capped-with-open-blocker", cap=True)
-    state["certification"] = {"shape": None,
-                              "reason": detail or "capped with open blocking findings — park"}
-    _decision(state, "capped-with-open-blocker", detail)
-    state["step"] = P_TERMINAL
 
 
 def _hand_back(state, kind, detail, *, cap):
@@ -6564,7 +6520,7 @@ def _resolve_open_audit_targets(state):
 
 def _stalled_open_targets(state, breaker):
     """Targets that are both stalled (alias match) and still open this round — the single selection
-    rule shared by stall self-recovery and the capped-with-open-critical check."""
+    rule shared by stall self-recovery and `_stalled_critical`."""
     stalled = set(breaker.get("stalledIdentities") or [])
     if not stalled:
         return []
@@ -6706,10 +6662,10 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
             "audit-stall self-recovery — open audit target id(s) %s have no matching "
             "_auditTargets entry; cannot compose a complete fix batch" % unmatched)
     elif refusal == REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE:
-        _park_capped_open(
-            state,
+        _hand_back(
+            state, "fix-keeps-failing",
             (breaker.get("detail") or "audit-stall self-recovery")
-            + " — blocking finding(s) remain not-discharged; certification withheld")
+            + " — blocking finding(s) remain not-discharged; certification withheld", cap=False)
     else:
         open_set = _resolve_open_audit_targets(state)
         # Empty resolution: no audit has ever produced targets in this session, so there is
@@ -6727,7 +6683,14 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
 def _handle_stall(state, config, breaker):
     """audit-stall → ONE invisible self-recovery (fixer re-dispatched one rung up via
     model_registry.escalate and/or another vendor, once, journaled). Still stalled → the PR is
-    handed back (`fix-keeps-failing`); nothing is put to the owner mid-review."""
+    handed back (`fix-keeps-failing`); nothing is put to the owner mid-review. A stall found in the
+    cap round runs no recovery: a recovered fix would be audited in a round the cap refuses, so the
+    PR is handed back `round-cap` at once, with no fix leg."""
+    # axis: a stall in the cap round hands back without a recovery attempt — see bite-proof record c1l4_wo_b
+    if state["round"] >= _round_cap(config):
+        _hand_back(state, "round-cap",
+                   breaker.get("detail") or "audit-stall in the cap round", cap=True)
+        return
     if not state.get("selfRecovered"):
         _commit_stall_self_recovery(state, config, breaker)
         batch, refusal = _compose_stall_fix_batch(state, breaker)
@@ -7610,7 +7573,7 @@ def run_loop(seams, config=None):
         raise ValueError("run_loop requires a seams dict")
     try:
         state = new_state(config)
-    except (RoundCeilingRefusal, FixBatchCapRefusal) as refusal:
+    except (MaxRoundsRefusal, FixBatchCapRefusal) as refusal:
         state = new_state()
         _park_cannot_certify(state, refusal.reason)
         return _driver_receipt(state)
@@ -7723,9 +7686,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         _bootstrap_review_session_marker(session_dir)
         try:
             state = new_state(config_overrides)
-        except RoundCeilingRefusal as refusal:
+        except MaxRoundsRefusal as refusal:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
-                                          "attempt": None, "outcome": "refused-round-ceiling",
+                                          "attempt": None, "outcome": "refused-max-rounds",
                                           "reason": refusal.reason})
             return {"ok": False, "reason": refusal.reason, "value": refusal.value}
         except FixBatchCapRefusal as refusal:
@@ -7743,7 +7706,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                               "attempt": None,
                                               "outcome": "refused-records-path-not-fresh"})
                 return {"ok": False, "reason": "records-path-not-fresh-state"}
-        if _ceiling_blocks_loaded(state, state["config"]):
+        if _cap_blocks_loaded(state, state["config"]):
             pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
                        "attempt": 0,
                        "payload": {"verdict": state["terminal"],
@@ -7752,7 +7715,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             save_state(session_dir, state)
             _journal_append(session_dir, {"cmd": "next", "phase": P_TERMINAL,
                                           "round": state["round"], "attempt": 0,
-                                          "outcome": "loaded-ceiling-park"})
+                                          "outcome": "loaded-cap-hand-back"})
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
@@ -8673,7 +8636,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "attempt": attempt, "outcome": "no-state"})
         return {"ok": False, "reason": "no loop-state.json — call next first"}
     state = loaded
-    if _ceiling_blocks_loaded(state, state["config"]):
+    if _cap_blocks_loaded(state, state["config"]):
         pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
                    "attempt": 0,
                    "payload": {"verdict": state["terminal"],
@@ -8681,7 +8644,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         state["pending"] = pending
         save_state(session_dir, state)
         _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": state["round"],
-                                      "attempt": attempt, "outcome": "loaded-ceiling-park"})
+                                      "attempt": attempt, "outcome": "loaded-cap-hand-back"})
         fault = _terminal_receipt_gate(session_dir, state)
         if fault:
             return _receipt_fault_response(fault)
@@ -12864,7 +12827,7 @@ def _advance_not_folded(session_dir, phase, rnd, attempt, git=None, broke=None,
     if durable_record_owed:
         response["durableRecord"] = {
             "written": False,
-            "reason": "no fold committed — the round-ceiling halt returned above the fold "
+            "reason": "no fold committed — the round-cap hand-back returned above the fold "
                       "commit, so the seat record that lands in the fold's commit was never "
                       "written",
         }
@@ -13793,13 +13756,12 @@ def build_parser():
                               help="the Python launcher break-it runs use (fresh state only): "
                                    "stored as config breakItInterpreter and read instead of the "
                                    "verify command. On non-fresh state → fails loud (nonzero)")
-    cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int)
+    cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int,
+                              help="the round cap (fresh state only; default and largest value "
+                                   "%d): a positive integer no larger than the default, else "
+                                   "refused with max-rounds-invalid. Ignored on a loaded state"
+                                   % round_phases.ROUND_CAP)
     cli_contract.add_argument(pn, "--fix-batch-cap", contract="integer", default=None, type=int)
-    cli_contract.add_argument(pn, "--max-rounds-absolute", contract="integer", default=None,
-                              type=int,
-                              help="hard round ceiling (fresh state only): owner-tunable like "
-                                   "--max-rounds; an effective ceiling below maxRounds refuses "
-                                   "at load")
     cli_contract.add_argument(pn, "--diff-path", contract="free-text", default=None,
                               help="round-1 reviewed diff (fresh state only)")
     cli_contract.add_argument(pn, "--repo-root", contract="repo-root", default=None,
@@ -14013,6 +13975,15 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
+            # axis: a fresh session refuses a cap that is not a positive int within ROUND_CAP before any state is written — see bite-proof record c1l4_wo_b
+            st_ok, st = load_state(args.session_dir)
+            if st_ok and st is None:
+                try:
+                    _default_config(dict(overrides))
+                except MaxRoundsRefusal as refusal:
+                    sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
+                                                 "value": refusal.value}) + "\n")
+                    return 1
         if args.fix_batch_cap is not None:
             st_ok, st = load_state(args.session_dir)
             if not (st_ok and st is None):
@@ -14026,20 +13997,6 @@ def _dispatch(args):
             except FixBatchCapRefusal as refusal:
                 sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
                                              "value": refusal.value}) + "\n")
-                return 1
-        if args.max_rounds_absolute is not None:
-            st_ok, st = load_state(args.session_dir)
-            if not (st_ok and st is None):
-                sys.stdout.write(json.dumps({"ok": False,
-                                             "reason": "max-rounds-absolute-not-fresh-state",
-                                             "value": args.max_rounds_absolute}) + "\n")
-                return 1
-            overrides["maxRoundsAbsolute"] = args.max_rounds_absolute
-            try:
-                _default_config(dict(overrides))
-            except RoundCeilingRefusal as refusal:
-                sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
-                                             "value": args.max_rounds_absolute}) + "\n")
                 return 1
         st_ok, st = load_state(args.session_dir)
         if st_ok:

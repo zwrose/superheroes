@@ -12,7 +12,6 @@ import json
 import os
 
 import panel_tally
-import round_phases
 import session_contract
 
 GATE_POLICY_SCHEMA = "gate-policy/1"
@@ -21,15 +20,25 @@ GATE_PRESENT_STALL_MENU = "present-stall-menu"
 PARK = "park"
 
 GATES = (GATE_PRESENT_JUDGMENT, GATE_PRESENT_STALL_MENU)
+
+# Owner-gate vocabulary the retired gates used. The round driver reads none of it: no phase presents
+# anything to the owner. This module keeps validating the stored gate-policy calibration against it.
+ONE_MORE_ROUND_CHOICE = "one-more-round"
+ACCEPT_RISK_CHOICE = "accept-the-disclosed-risk"
+HOLD_CHOICE = "hold"
+STALL_CHOICES = (ONE_MORE_ROUND_CHOICE, ACCEPT_RISK_CHOICE, HOLD_CHOICE)
+RETIRED_STALL_CHOICES = ("ship-smaller", "spend-more")
+RETIRED_STALL_CHOICE_PREFIX = "stall-choice-retired:"
+JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
+
 # Policy rules may authorize only dispositions the resolver can fulfil without owner input.
 POLICY_JUDGMENT_DISPOSITIONS = tuple(
-    d for d in round_phases.JUDGMENT_DISPOSITIONS if not d.endswith("-guidance")
+    d for d in JUDGMENT_DISPOSITIONS if not d.endswith("-guidance")
 )
 JUDGMENT_SKIP_DISPOSITION = next(
     d for d in POLICY_JUDGMENT_DISPOSITIONS
-    if d != round_phases.JUDGMENT_DISPOSITIONS[0]
+    if d != JUDGMENT_DISPOSITIONS[0]
 )
-STALL_CHOICES = round_phases.STALL_CHOICES
 
 # Exact ``_park`` reason tokens (non-parameterized) — authoritative vocabulary for drift guards.
 RESOLVER_PARK_CAUSES = frozenset({
@@ -43,8 +52,6 @@ RESOLVER_PARK_CAUSES = frozenset({
 STALL_CLASS_ELIGIBLE = "stall:accept-risk-eligible"
 STALL_CLASS_INELIGIBLE = "stall:accept-risk-ineligible"
 STALL_FINDING_CLASSES = frozenset((STALL_CLASS_ELIGIBLE, STALL_CLASS_INELIGIBLE))
-
-ACCEPT_RISK_CHOICE = round_phases.ACCEPT_RISK_CHOICE
 
 
 def gate_policy_path(root: str | None = None) -> str:
@@ -156,10 +163,10 @@ def _validate_layer(
             return None, "layer-unknown-disposition"
         if (
             gate == GATE_PRESENT_STALL_MENU
-            and disposition in round_phases.RETIRED_STALL_CHOICES
+            and disposition in RETIRED_STALL_CHOICES
         ):
             return None, "%s%s" % (
-                round_phases.RETIRED_STALL_CHOICE_PREFIX, disposition)
+                RETIRED_STALL_CHOICE_PREFIX, disposition)
         allowed = _allowed_dispositions(gate, finding_class)
         if disposition not in allowed:
             return None, "layer-disposition-not-allowed"
@@ -231,10 +238,10 @@ def validate_policy_for_write(policy: object) -> str | None:
         if (
             gate == GATE_PRESENT_STALL_MENU
             and isinstance(disposition, str)
-            and disposition in round_phases.RETIRED_STALL_CHOICES
+            and disposition in RETIRED_STALL_CHOICES
         ):
             return "rules[%d]: %s%s" % (
-                index, round_phases.RETIRED_STALL_CHOICE_PREFIX, disposition)
+                index, RETIRED_STALL_CHOICE_PREFIX, disposition)
         allowed = _allowed_dispositions(gate, finding_class)
         if not isinstance(disposition, str) or disposition not in allowed:
             return "rules[%d].disposition for gate %s class %s must be one of %s (got %r)" % (

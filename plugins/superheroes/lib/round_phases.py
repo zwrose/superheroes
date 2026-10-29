@@ -20,6 +20,10 @@ P_TERMINAL = "terminal"
 # Default cap on findings per dispatch-fixer order (#1272 round economy).
 FIX_BATCH_CAP_DEFAULT = 4
 
+# The round cap: a review session never begins a round after it, and no session this driver mints
+# carries a larger one. The only home of the number.
+ROUND_CAP = 4
+
 ALL_PHASES = (
     P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_FIXER,
     P_TERMINAL,
@@ -28,17 +32,6 @@ ALL_PHASES = (
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
 DIMENSIONS = list(round_panel_contract.DEFAULT_PANEL_DIMENSIONS)
-
-# Owner-gate vocabulary the retired gates used. The round driver reads none of it: no phase presents
-# anything to the owner. Kept ONLY because `review_gate_policy` (the gate-policy calibration library,
-# retired by a follow-up) derives its rule vocabulary from these names at import.
-ONE_MORE_ROUND_CHOICE = "one-more-round"
-ACCEPT_RISK_CHOICE = "accept-the-disclosed-risk"
-HOLD_CHOICE = "hold"
-STALL_CHOICES = (ONE_MORE_ROUND_CHOICE, ACCEPT_RISK_CHOICE, HOLD_CHOICE)
-RETIRED_STALL_CHOICES = ("ship-smaller", "spend-more")
-RETIRED_STALL_CHOICE_PREFIX = "stall-choice-retired:"
-JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
 
 # Per-finding verification verdicts — lives here so the payload-contract layer can cite it
 # without importing `verification`; `verification.VERDICTS` re-exports this tuple.
