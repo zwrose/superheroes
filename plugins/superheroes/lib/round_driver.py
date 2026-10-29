@@ -6572,7 +6572,30 @@ def _settle_extra_audit(state, config):
                    "back with its findings still open; certification is withheld." % "; ".join(parts),
                    cap=True)
         return
+    pending = _pending_owner_rulings(state)
+    if pending:
+        _hand_back(state, "extra-audit-open",
+                   "The extra audit round ended with owner guidance recorded but never sent to a "
+                   "fixer (%s). The PR is handed back with its findings still open; certification "
+                   "is withheld." % "; ".join(pending),
+                   cap=True)
+        return
     _terminal_converged(state, config, full_panel=False)
+
+
+def _pending_owner_rulings(state):
+    """The effective owner fix/guidance rulings no fixer was sent, as readable labels (sorted).
+    A ledger read fault reads as none: the terminal settle skips on the same fault."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return []
+    effective = _live_ruling_by_key(state)
+    found = set()
+    for key in effective:
+        decision = _undispatched_ruling(state, effective, ledger_by_key, key)
+        if decision is not None:
+            found.add("%s (%s)" % (decision["seq"], decision["ruling"]))
+    return sorted(found)
 
 
 def _hand_back(state, kind, detail, *, cap):
