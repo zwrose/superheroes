@@ -32,6 +32,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **A caller that passes `--max-rounds` above 4 or `next --max-rounds-absolute`, folds an owner gate with `advance --owner-artifact`, or reads the verdicts `held`, `stalled`, `capped-with-open-critical` or `capped-with-open-blocker` moves to the replacements listed; a review session started by the previous release now finishes, and an older one is refused and started again fresh. A saved `reviewGatePolicy` key in a project's core block is ignored and safe to remove.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
 
+- **After switching.** **A caller that passes `--narrative-family` to `seat_map.py compose`, or reads `narrativeFamily` from a seat map or its receipt, drops it; nothing replaces it.** See [Seat map: the narrative family is gone](#seat-map-the-narrative-family-is-gone).
+
+- **After switching.** **A project that implements with codex on a claude host and has no third model family live gets no reviewer until it adds one.** See [Seat map: the build session is a maker on every implementation engine](#seat-map-the-build-session-is-a-maker-on-every-implementation-engine).
+
+- **After switching.** **A custom panel reviewer that writes its own findings file writes the object `{"findings": [...], "readParts": [...]}`, and a reviewer on a schema-delivered engine emits `readParts` on every result.** See [Review: round-1 reviewers return what they read](#review-round-1-reviewers-return-what-they-read).
+
+- **After switching.** **Re-run configure once when the "rubric-version advanced" notice appears.** See [Review: the rubric version is 14](#review-the-rubric-version-is-14).
+
 ### Review: rounds stop at 4, and nothing waits on the owner mid-review
 
 - **The two owner-facing phases.** `present-judgment` and `present-stall-menu` are no longer emitted, and `advance` no longer parks at them (`advance-judgment-park`, `advance-stall-park`). A blocking finding only the owner's choice can settle (`tradeoff: true`) is held out of the fix batch; record a `rule` decision (guidance or out of scope) on it to settle it in the session, or the session hands back `handed-back` / `owner-choice-open` and the finding reaches the owner as a leftover at the vet. When the same fix fails its audit in two rounds in a row, the session makes one recovery attempt (the fix is re-dispatched one rung up, none in the cap round) and, if it still fails, hands back `handed-back` / `fix-keeps-failing`. The stall choices (`one-more-round`, `accept-the-disclosed-risk`, `hold`) and their refusals (`stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`, `stall-choice-missing`, `stall-accept-risk-not-eligible`) are gone with the menu.
@@ -97,6 +105,30 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **A kept worktree.** Only when that one settle cannot read or write the ledger is the record's fate unknown. The worktree is then kept and the result carries `keptWorktree` (its path) and a `remedy` that says, in order: first make the ledger read cleanly again (`repair-lane` refuses an unreadable ledger); then, after confirming no builder runs for this launch, end the lane with `launcher.py repair-lane --repo-root <repo root> --launch-id <launch id> --evidence "<what failed and what was checked>" --no-builder "<what was checked to show no builder exists>"`; only once the lane reads terminal (or absent) can the worktree be removed. `orphanedWorktree` still means a removal was tried and failed.
 - **The `iphone` key.** On a `ledger-append-failed` result, `recorded` reads `False` (with `deleted`) when the line did not land, `True` when the landed record was ended (the reap owns the phone, nothing is deleted), and `"uncertain"` only when the settle could not read or write the ledger. It no longer reads `"uncertain"` whenever the append reported failure.
 - **Pre-spawn refusals.** `_try_reserve_for_refusal` returns `reserved: True` for a `landed` read-back (the refusal path never spawns, so the caller ends the record with the refusal's own reason and stage). For an `uncertain` read-back, or a failure result with no `appendReadBack`, it makes the one terminal write itself and returns `reserved: False` with `appendReadBack` set to the settle's result (`terminal`, `absent` or `uncertain`).
+
+### Seat map: the narrative family is gone
+
+- **The flag.** `seat_map.py compose --narrative-family` is removed; passing it is now an argument error.
+- **The key.** The seat map and its receipt no longer carry `narrativeFamily`, and `seat_map.build()` no longer takes a `narrative_family` argument. Nothing replaces them.
+- **A stored seat map.** One that still carries the `narrativeFamily` key reads as before, and the key is ignored.
+
+### Seat map: the build session is a maker on every implementation engine
+
+- **What changed.** On `seat_map.py compose --implementation-engine <engine>`, the host model's family (the build session, which applies the review's fixes) is now always a maker and is kept off every review seat, whatever the implementation engine. Before, only a `claude` implementation engine did this.
+- **The record.** When the host family is known and differs from the author family, compose records `maker-family-split`. When the host model is unknown, the claude host family stands in as before.
+- **What it means.** Codex implementing on a claude host keeps anthropic off every seat. Where only claude and codex are live, every seat reads not run, so such a change gets no reviewer until a third model family is live.
+
+### Review: round-1 reviewers return what they read
+
+- **The list.** Each round-1 panel reviewer returns `readParts`, the files and line ranges at the reviewed head it read, beside its findings. A host panel reviewer writes the object `{"findings": [...], "readParts": [...]}` to its landing path instead of a bare array.
+- **The record.** The review record's reviewer row carries it (`read <n> files, <m> lines`). A panel reviewer that ran and returned no list, or a malformed one, reads `read nothing`.
+- **The result schema.** The strict review result schema now requires `readParts` on every branch: an array or null on a findings result, null on every other result kind. A reviewer on a schema-delivered engine emits `"readParts": null` outside a panel findings result.
+- **A run in flight.** A review run opened before the change still replays, with no list.
+
+### Review: the rubric version is 14
+
+- **The marker.** The review rubric's version marker is now 14, because its findings format gained the read list.
+- **The notice.** Each calibrated project sees one "rubric-version advanced" notice from the review's staleness check. Re-running configure re-stamps it.
 
 ## 0.46.2
 
