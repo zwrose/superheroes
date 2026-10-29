@@ -5954,7 +5954,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, order_id=None, diff_base=None,
                     mode=None, claude_mode=None, expected_result_kind=None,
-                    pr_body_path=None, session_dir=None,
+                    pr_body_path=None, session_dir=None, leave_out_file=None,
                     **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
@@ -6059,7 +6059,8 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
             claude_mode=claude_mode, resolved_claude_mode=resolved_claude_mode,
             expected_result_kind=expected_result_kind,
-            pr_body_path=pr_body_path, session_dir=session_dir, cloud_history=cloud_history)
+            pr_body_path=pr_body_path, session_dir=session_dir, cloud_history=cloud_history,
+            leave_out_file=leave_out_file)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         stamped["claudeMode"] = resolved_claude_mode["claudeMode"]
@@ -6092,7 +6093,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                           max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
                           mode=None, claude_mode=None, resolved_mode=None,
                           resolved_claude_mode=None, expected_result_kind=None,
-                          pr_body_path=None, session_dir=None, cloud_history=None):
+                          pr_body_path=None, session_dir=None, cloud_history=None,
+                          leave_out_file=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch. In a cloud
     session `cloud_history`, when given, receives the history-completion answer under "cloudHistory"."""
@@ -6304,6 +6306,19 @@ def _dispatch_review_impl(seat, *, prompt_path,
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             resolved_claude_mode["claudeMode"] = claude_mode
+            leave_out = None
+            if leave_out_file is not None:
+                # Loaded and shape-checked on every launch; only a --diff-base view has a patch to use it.
+                try:
+                    leave_out = sanitized_view.load_leave_out_file(leave_out_file)
+                except sanitized_view.SanitizedViewError as exc:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": exc.detail,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir or "", engine=engine,
+                    )
             if cloud_pass._is_cloud(os.environ):
                 # A cloud clone is shallow and has no origin/main; make both right before the view
                 # is built. Never blocks: if it is not ok, build_view still refuses as it does today.
@@ -6332,6 +6347,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     diff_base=diff_base,
                     pr_body_path=pr_body_path,
                     session_dir=session_dir,
+                    **({} if leave_out is None else {"leave_out": leave_out}),
                 )
             except sanitized_view.SanitizedViewError as exc:
                 return _finish_preflight_terminal(
@@ -7789,6 +7805,12 @@ def build_parser():
                     help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
                          "to stage the merge-base->head review patch against; a revision "
                          "expression, branch name or tag is refused")
+    cc.add_argument(d, "--leave-out-file", contract="free-text", default=None,
+                    metavar="<path>",
+                    help="JSON file {\"schema\": \"leave-out/1\", \"files\": [<repo-relative "
+                         "path>, ...]} naming changed files to leave out of the review patch "
+                         "(proven copies); a malformed file refuses "
+                         "sanitized-view-leave-out-invalid; ignored on a continuation")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
     cc.add_argument(d, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
@@ -7879,7 +7901,8 @@ def main(argv):
                                   diff_base=args.diff_base, mode=args.mode,
                                   claude_mode=args.claude_mode,
                                   expected_result_kind=args.expected_result_kind,
-                                  pr_body_path=args.pr_body_path, session_dir=args.session_dir)
+                                  pr_body_path=args.pr_body_path, session_dir=args.session_dir,
+                                  leave_out_file=args.leave_out_file)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-write":
             res = dispatch_write(seat=args.seat,
