@@ -220,6 +220,26 @@ Each `--pr-body` file holds one covered PR's body, read with `gh api repos/<o>/<
 A PR that had no review run gets no sheet; never hand-build a review record to make one. The owner merges it with their own click, as the showrunner charter's duty 6 says
 ([`skills/showrunner/SKILL.md`](../skills/showrunner/SKILL.md)).
 
+**A spec PR's sheet.** A spec PR has no review record, and it still gets a sheet, so that one Merge verdict
+plus "done" covers the spec and its breakdown, as duty 6 says. The input names `spec` (the work-item
+folder, every spec-vet record posted on the PR, and the PR's CI) and the build takes no `--record`:
+
+```
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --pr-body <number>=<file> --input <file> --out sheet.json
+```
+
+Its facts come from the spec's own artifacts. The reviewer and the round count come from the spec checks
+record, `checks-record.md`. The commit and one history line per round come from the advisor's vet
+records, and the newest one must be a clean breakdown vet. The breakdown comes from that record's
+`Breakdown pins:`. The pins become one Accept card, **The breakdown**, under What you're accepting. It
+lists every body the filing writes (a new issue, an issue rewritten in place, or a seam quoted onto one) and the coverage map, register and package-read audit trail, each
+with its path and hash, and its title counts the bodies. A pin that no longer hashes to its pinned value
+refuses the build, and so does a spec that no longer hashes to the newest record's `Vet done:` hash: a
+stale breakdown is never shown as accepted. A `.md` file beside a pinned file in its subfolder that
+the vet does not pin also refuses. The vet's pins are the inventory: a body left out of every pin in
+its subfolder, or at the folder's root, is not caught, because no folder convention lists the bodies. The mode is chosen only by the input's `spec`, so a code PR
+missing its record still refuses. The merge verdict and "done" read exactly as on a code PR's sheet.
+
 The shape of the advisor's input is defined in the docstring of `lib/pr_sheet.py`, and nowhere else.
 Publishing is as § Publishing a sheet says.
 

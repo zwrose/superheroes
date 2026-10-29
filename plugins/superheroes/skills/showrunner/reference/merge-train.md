@@ -208,6 +208,13 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 The rule is not here. One merge word covers a spec and its breakdown, and the approval is never the
 merge word: that is duty 1 and duty 6 of `skills/showrunner/SKILL.md`.
 
+The word you execute under is the owner's saved Merge verdict on the spec PR's sheet, then "done". Build
+that sheet with `lib/pr_sheet.py build` in its spec-PR mode, with no review record
+(`theme/review-template.md` § A PR sheet and a stack sheet). Its breakdown card lists every issue body the
+filing creates, so accepting it and saving Merge covers the spec and its breakdown together. The build
+refuses a pin that no longer hashes to its pinned value, which is item 2 below, checked again when the
+sheet is built.
+
 Before you execute, confirm four things:
 
 1. The approval is recorded with its date.
