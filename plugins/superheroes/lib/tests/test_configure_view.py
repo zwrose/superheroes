@@ -795,7 +795,7 @@ def test_render_spec_reviewer_unset_when_core_absent(tmp_path, monkeypatch):
     screen = _render_core_absent(tmp_path, monkeypatch)
     assert "## Core\n(no core calibration yet)" in screen
     assert _spec_reviewer_block(screen).strip() == cv._SPEC_REVIEWER_UNSET
-    assert screen.index(cv._SPEC_REVIEWER_HEADING) < screen.index("## Review gate policy")
+    assert screen.index(cv._SPEC_REVIEWER_HEADING) < screen.index("## Project configuration")
 
 
 def test_render_spec_reviewer_valid_when_core_absent(tmp_path, monkeypatch):
