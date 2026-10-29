@@ -155,7 +155,7 @@ def test_t3_run_one_failing_test_is_failed_with_output(repo):
     assert record["reason"] is None
     assert "boom-marker" in record["output"]
     assert set(record) == {"schema", "role", "path", "command", "head", "sha256", "content", "outcome",
-                           "reason", "exitCode", "output", "interpreter", "restored"}
+                           "reason", "exitCode", "output", "interpreter", "restored", "refsLeft"}
     assert record["content"] == block["content"]
     assert record["schema"] == break_it.SCHEMA and record["role"] == break_it.ROLE
 
@@ -542,8 +542,9 @@ def test_t14_git_metadata_the_test_writes_is_restored(repo):
                "subprocess.check_call(['git', 'tag', 'break-it-tag'])\n")
     record = break_it.run_one(str(repo), _head(repo), _block("tests/test_m.py", content))
     assert record["outcome"] == "passed", record
-    assert record["restored"] == ["test-file", "refs", "config"]
-    assert _git(repo, "tag", "--list") == ""
+    assert record["restored"] == ["test-file", "config"]
+    assert record["refsLeft"] == ["refs/tags/break-it-tag"]
+    assert _git(repo, "tag", "--list") == "break-it-tag"
     done = subprocess.run(["git", "-C", str(repo), "config", "--local", "break.it"], capture_output=True)
     assert done.returncode != 0
 
