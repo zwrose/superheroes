@@ -280,11 +280,15 @@ def env_tags_readable():
 
 
 # T9
-# axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
-# A detached worker that also clears its environment is contained by the Linux reaper only.
+# axis: containment covers a worker in the command's own group on every platform, and a worker that left it for a new session on Linux only.
+# On Linux the reaper contains a detached worker with or without its environment; off Linux such a worker is refused, not killed (the test_g3a test in test_break_it_review_round2_2210.py).
 @pytest.mark.proc_containment
 @pytest.mark.parametrize("detached,clean_env", [
-    (False, False), (True, False),
+    (False, False),
+    pytest.param(True, False, marks=pytest.mark.skipif(
+        not sys.platform.startswith("linux"),
+        reason="off Linux the runner refuses, rather than kills, a detached worker it cannot attribute; "
+               "test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused covers that refusal")),
     pytest.param(True, True, marks=pytest.mark.skipif(
         not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper"))])
 def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env, env_tags_readable):

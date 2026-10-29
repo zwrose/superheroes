@@ -165,7 +165,7 @@ Collect findings under these named smells; **every finding cites its smell by na
 
 ## Break-it tests
 
-A **break-it test** is a new test file, in the project's own test framework and test folder, that fails on the unfixed code when the defect it targets is real. It must be deterministic, need no network, and target the code the diff changed. You write two kinds, and only you write them.
+A **break-it test** is a new test file, in the project's own test framework and test folder, that fails on the unfixed code when the defect it targets is real. It must be deterministic, need no network, and target the code the diff changed. It writes only inside its own temporary folder, and never changes or deletes a file in the checkout that it did not create. You write two kinds, and only you write them.
 
 - **Attached.** On any finding you can prove that way, attach a test that fails on the unfixed code exactly when the finding is real. The finding keeps its own taxonomy, `file:line` and scope, and its `suggestion` is exactly the `break-it-test v1` block, whose `path` is a new test file inside the project's test folder. Attached tests have no cap.
 - **Per-area.** Your dispatch names the risk areas this change touches. On each touched area, write a new test that tries to break the change there on a named risky scenario (for example, a payment charged twice on retry), delivered as its own finding. Write at most three per review. While under that cap, write at least one per touched area. The cap counts only per-area tests: an attached test, and a second test the loop asks for later, do not count against it. When your dispatch names no risk area, or says risk areas are not set, write no per-area tests.

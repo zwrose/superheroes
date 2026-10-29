@@ -3328,7 +3328,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
                   "independent verification"
                   % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     incomplete = bool(missing_dims)
-    # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
+    # axis: the break-it tests run in the session's own working copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
     # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
     intercepted, runs, exempt, stamped = break_it.intercept(

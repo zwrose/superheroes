@@ -50,6 +50,12 @@ def test_the_build_session_never_writes_a_break_it_test():
     assert "The build session never writes a break-it test" in TEST_ROLE
 
 
+def test_a_break_it_test_writes_only_inside_its_own_temporary_folder():
+    # axis: the contract tells the reviewer a break-it test never touches a checkout file it did not create
+    assert ("writes only inside its own temporary folder, and never changes or deletes a file in the "
+            "checkout that it did not create") in TEST_ROLE
+
+
 def test_no_throwaway_copy_or_drop_on_pass_in_the_break_it_text():
     # axis: the retired throwaway-copy run and the drop-on-pass rule stay out of both docs
     role_section = _section(TEST_ROLE, "Break-it tests")
