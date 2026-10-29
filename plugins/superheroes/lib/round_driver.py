@@ -231,6 +231,7 @@ JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RULE_CMD = session_contract.RULE_CMD
 EXTRA_AUDIT_CMD = "extra-audit"
+BREAK_IT_CHANGE_CMD = "break-it-change"
 RULING_KINDS =frozenset(("out-of-scope", "guidance"))
 RULING_FILE_UNREADABLE = "ruling-file-unreadable"
 RULING_FILE_SHAPE = "ruling-file-shape"
@@ -8630,6 +8631,142 @@ def _cmd_rule_locked(session_dir, ruling_file, by, fixer_not_dispatched=False):
     return response
 
 
+# --- the break-it test change -------------------------------------------------------------------
+#
+# While the verifiers' orders are out, the advisor may correct a break-it test whose run shows the
+# test itself is broken (a syntax error, a wrong import), instead of letting the verifiers and the
+# fixer work from it. `break-it-change` runs the corrected test, puts it on the staged finding and its
+# ledger entry in place of the carried block, records the run beside the first, and clears the pending
+# verifier orders so the next `next` re-emits them at a fresh attempt from the changed copies.
+
+BREAK_IT_CHANGE_NOT_AT_VERIFIERS = "break-it-change-not-at-verifiers"
+BREAK_IT_CHANGE_FINDING_UNKNOWN = "break-it-change-finding-unknown"
+BREAK_IT_CHANGE_NO_TEST = "break-it-change-no-test"
+BREAK_IT_CHANGE_WHY_MISSING = "break-it-change-why-missing"
+BREAK_IT_CHANGE_CONTENT_UNREADABLE = "break-it-change-content-unreadable"
+BREAK_IT_CHANGE_CONTENT_UNCHANGED = "break-it-change-content-unchanged"
+
+
+def _break_it_change_target(state, ref):
+    """``(staged id, staged finding, finding key)`` of the finding in ``_toVerify`` whose staged id or
+    finding identity key is ``ref``; ``(None, None, None)`` when none is. A finding with no derivable
+    key cannot be bound to its ledger entry or its runs, so it is not a target."""
+    staged = state.get("_toVerify")
+    if not isinstance(staged, list) or not isinstance(ref, str) or not ref:
+        return None, None, None
+    for numbered, finding in zip(verification.stage_ids(staged), staged):
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if key and ref in (numbered["id"], key):
+            return numbered["id"], finding, key
+    return None, None, None
+
+
+def _break_it_block_text(block, content):
+    """The block text ``break_it.parse_block`` reads back as ``block``'s path and run with ``content``,
+    laid out from ``break_it.BLOCK_TEMPLATE``, the grammar's one home."""
+    template = break_it.BLOCK_TEMPLATE.split("\n")
+    return "\n".join([template[0],
+                      "%s %s" % (template[1].partition(" ")[0], block["path"]),
+                      "%s %s" % (template[2].partition(" ")[0], block["run"]),
+                      template[3], content])
+
+
+def _rewrite_break_it_copy(copy_, text, record, why):
+    """Put the changed block, its run record and the extra entry of its run list on one copy of a staged
+    finding (the staged one, or its ledger entry), the run list reading after the entries it already holds."""
+    runs = copy_.get(break_it.RUNS_FIELD)
+    runs = list(runs) if isinstance(runs, list) else []
+    runs.append(break_it.record_run(dict(record, file=copy_.get("file")), changed_why=why))
+    copy_["suggestion"] = text
+    copy_[break_it.RUN_FIELD] = record
+    copy_[break_it.RUNS_FIELD] = runs
+
+
+def cmd_break_it_change(session_dir, finding, content_file, why):
+    try:
+        with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, BREAK_IT_CHANGE_CMD)
+            if upgrade is not None:
+                return upgrade
+            refusal = _commit_recover_or_refuse(session_dir, BREAK_IT_CHANGE_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_break_it_change_locked(session_dir, finding, content_file, why)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, BREAK_IT_CHANGE_CMD, held)
+
+
+def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
+    state, refusal = _load_driver_state(session_dir, BREAK_IT_CHANGE_CMD)
+    if refusal is not None:
+        return refusal
+    rnd = state.get("round")
+    pending = state.get("pending")
+    # axis: the verb changes a test only while the verifiers' orders are the open step; at any other step the copies it rewrites are no longer the ones a verifier reads
+    if state.get("step") != round_phases.P_VERIFIERS or state.get("terminal"):
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NOT_AT_VERIFIERS,
+                           phase=state.get("step"), rnd=rnd)
+    staged_id, staged, key = _break_it_change_target(state, finding_ref)
+    if staged is None:
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_FINDING_UNKNOWN,
+                           phase=P_VERIFIERS, rnd=rnd)
+    block, _kind = break_it.carried_block(staged)
+    if not isinstance(staged.get(break_it.RUN_FIELD), dict) or block is None:
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NO_TEST,
+                           phase=P_VERIFIERS, rnd=rnd)
+    if not isinstance(why, str) or not why.strip():
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_WHY_MISSING,
+                           phase=P_VERIFIERS, rnd=rnd)
+    why = why.strip()
+    try:
+        with open(content_file, "rb") as fh:
+            content = fh.read().decode("utf-8")
+    except (OSError, ValueError, TypeError):
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNREADABLE,
+                           phase=P_VERIFIERS, rnd=rnd)
+    sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    if sha == block["sha256"]:
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNCHANGED,
+                           phase=P_VERIFIERS, rnd=rnd)
+    config = state["config"]
+    changed = {"path": block["path"], "run": block["run"], "content": content, "sha256": sha}
+    repo_root, head = _break_it_scope(session_dir, state, config)
+    record = break_it.run_one(repo_root, head, changed, scratch=session_dir,
+                              interpreter=break_it.resolve_interpreter(config))
+    text = _break_it_block_text(changed, content)
+    # axis: the changed text and the old run's stamp are replaced together on the staged copy and its ledger entry, so what the verifiers read, what the fixer commits and what the record shows are the one test
+    _rewrite_break_it_copy(staged, text, record, why)
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    held = _ledger_index_by_key(ledger).get(key) if isinstance(ledger, list) else None
+    if held is not None:
+        _rewrite_break_it_copy(ledger[held], text, record, why)
+    _record_round_append(state, "breakItRuns", dict(
+        record, title=staged.get("title"), file=staged.get("file"),
+        findingKey=key, changedWhy=why))
+    _decision(state, "break-it-change",
+              "the break-it test of %s (%s) changed: %s; the new run %s"
+              % (staged_id, key, why, record.get("outcome")))
+    superseded = pending.get("attempt") if isinstance(pending, dict) else None
+    # axis: the verifiers' orders already out are dropped with the pending step, so the next `next` re-emits them from the changed copies
+    if isinstance(pending, dict) and pending.get("phase") == P_VERIFIERS:
+        state["pending"] = None
+    journal_entry = _journal_entry_for_commit(
+        session_dir, BREAK_IT_CHANGE_CMD, "changed", phase=P_VERIFIERS, round=rnd,
+        attempt=superseded, supersededAttempt=superseded, finding=staged_id, findingKey=key,
+        contentSha256=sha, runOutcome=record.get("outcome"))
+    try:
+        c = round_commit.begin(session_dir, "break-it-change")
+        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, BREAK_IT_CHANGE_CMD, exc, phase=P_VERIFIERS,
+                                        rnd=rnd, attempt=superseded)
+    return {"ok": True, "finding": staged_id, "run": record}
+
+
 # --- the extra audit round ----------------------------------------------------------------------
 #
 # A session that was handed back at its round cap can be reopened once, by the advisor's order, for
@@ -9982,14 +10119,33 @@ def _journal_max_attempt(session_dir, rnd, phase):
     return max_attempt
 
 
+def _journal_max_superseded_attempt(session_dir, rnd, phase):
+    """Highest attempt a ``break-it-change`` took back for ``(rnd, phase)``, or -1 when none: the orders of
+    that attempt were dropped unanswered, so no result for it may be taken."""
+    max_attempt = -1
+    for event in read_journal(session_dir):
+        if event.get("cmd") != BREAK_IT_CHANGE_CMD or event.get("outcome") != "changed":
+            continue
+        if event.get("round") != rnd or event.get("phase") != phase:
+            continue
+        att = event.get("supersededAttempt")
+        if isinstance(att, bool) or not isinstance(att, int) or att < 0:
+            continue
+        max_attempt = max(max_attempt, att)
+    return max_attempt
+
+
 def _max_used_attempt(session_dir, rnd, phase):
-    """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries only.
+    """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries, and from the attempts a
+    ``break-it-change`` superseded.
 
     The durable seat store is excluded: it records landings, not acceptances, so counting it
     would advance past an unaccepted wave and orphan its recorded seats. A lost journal
     entry therefore surfaces as a loud landing collision at record time rather than silent
     orphaning (#1107)."""
-    return _journal_max_attempt(session_dir, rnd, phase)
+    # axis: a superseded verifier attempt is never handed out again, so its late result meets the stale-attempt refusals (`submit` echo, `record-result` attempt-not-pending)
+    return max(_journal_max_attempt(session_dir, rnd, phase),
+               _journal_max_superseded_attempt(session_dir, rnd, phase))
 
 
 def _next_dispatch_attempt(session_dir, rnd, phase, state):
@@ -14456,6 +14612,17 @@ def build_parser():
                                    "re-renders it at the next attempt, unless the driver sees the "
                                    "fixer already landed or committed")
 
+    pbc = sub.add_parser(BREAK_IT_CHANGE_CMD)
+    cli_contract.add_argument(pbc, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pbc, "--finding", contract="free-text", required=True,
+                              help="the staged id (v0, v1, ...) or the finding key of the finding "
+                                   "whose break-it test changes")
+    cli_contract.add_argument(pbc, "--content-file", contract="free-text", required=True,
+                              dest="content_file",
+                              help="path to the changed test file's complete content (UTF-8 text)")
+    cli_contract.add_argument(pbc, "--why", contract="free-text", required=True,
+                              help="the reason the test changed; it rides the new run's record")
+
     pea = sub.add_parser(EXTRA_AUDIT_CMD)
     cli_contract.add_argument(pea, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pea, "--order-file", contract="free-text", required=True,
@@ -14708,6 +14875,10 @@ def _dispatch(args):
     elif args.cmd == "rule":
         out = cmd_rule(args.session_dir, args.ruling_file, args.by,
                        fixer_not_dispatched=args.fixer_not_dispatched)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == BREAK_IT_CHANGE_CMD:
+        out = cmd_break_it_change(args.session_dir, args.finding, args.content_file, args.why)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     elif args.cmd == EXTRA_AUDIT_CMD:
