@@ -69,7 +69,7 @@ _FORBIDDEN_ROOT_DIR = re.compile(
 )
 _NAMES_NINE = re.compile(r"(?<![A-Za-z0-9_])(?:%s)\.py" % _NINE_ALT)
 _SESSION_DIR_VAR = re.compile(r"--session-dir[ =]\"?\$\{?SESSION_DIR\}?\"?")
-_UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule", "extra-audit", "break-it-change")
+_UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule", "extra-audit")
 # the unapproved verbs the population must show a form of; `extra-audit` is asserted not approved when
 # a form is found, but no form of it is required
 _REQUIRED_DRIVER_FORMS = ("run-verify", "rule")

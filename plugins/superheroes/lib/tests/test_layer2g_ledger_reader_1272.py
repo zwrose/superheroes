@@ -21,7 +21,6 @@ _ALLOWED_WRITER_FUNCTIONS = frozenset({
     "_archive_departures",
     "_seed_pending_new_issues",  # writes only at a terminal, inside the terminal's own commit
     "_sync_merged_consequences",  # fold-time: carries a synthesized consequence onto the row
-    "_carry_break_it_change_to_ledger",  # break-it-change: carries the changed test onto the row, never its disposition
 })
 _ALLOWED_LEDGER_KEY_FUNCTIONS = frozenset({_WRITER_NAME})
 _SESSION_CONTRACT_BASENAME = "session_contract.py"

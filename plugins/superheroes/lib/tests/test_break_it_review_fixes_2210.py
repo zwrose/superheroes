@@ -1,5 +1,5 @@
-"""Round-1 review fixes for the working-copy break-it run (#2210): bytecode isolation, concurrent worktrees,
-detached-child cleanup off Linux, and binding a run to the full finding anchor."""
+"""Round-1 review fixes for the working-copy break-it run (#2210): bytecode isolation, concurrent worktrees
+and detached-child cleanup off Linux."""
 import os
 import shlex
 import subprocess
@@ -13,7 +13,6 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import break_it  # noqa: E402
-import round_driver  # noqa: E402
 import test_break_it as TB  # noqa: E402
 
 _ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
@@ -91,17 +90,3 @@ def test_descendant_watch_stops_a_detached_system_worker(tmp_path):
         assert state == "", "the detached worker outlived the watch"
     finally:
         parent.kill()
-
-
-def test_runs_bind_to_the_full_anchor_when_file_and_title_repeat():
-    def finding(line, key, sha):
-        return {"file": "a.py", "title": "Same title", "line": line, "findingKey": key,
-                break_it.RUN_FIELD: {"sha256": sha, "command": "c", "reason": None},
-                "suggestion": "x", "taxonomy": break_it.TAXONOMY}
-
-    compiled = [finding(10, "k10", "s10"), finding(20, "k20", "s20")]
-    runs = [{"file": "a.py", "title": "Same title", "line": 10, "sha256": "s10", "command": "c", "reason": None},
-            {"file": "a.py", "title": "Same title", "line": 20, "sha256": "s20", "command": "c", "reason": None}]
-    out = round_driver._break_it_run_keys(runs, compiled)
-    assert [r["findingKey"] for r in out] == ["k10", "k20"]
-    assert not any(r.get("supersededAtCompile") or r.get("droppedAtCompile") for r in out)

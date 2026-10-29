@@ -157,15 +157,13 @@ def test_l1_a_failing_break_it_test_survives_compile_stamped(world):
     assert cluster[break_it.RUN_FIELD]["outcome"] == "failed"
 
 
-def test_l2_a_passing_break_it_test_keeps_its_finding_stamped_and_is_recorded(world):
-    # the run judges nothing: a passing run no longer drops the finding
+def test_l2_a_passing_break_it_test_is_dropped_and_recorded(world):
     state = world.fold_panel(_break_it_finding(_TEST_PASSING))
-    (staged,) = state["_toVerify"]
-    assert staged[break_it.RUN_FIELD]["outcome"] == "passed"
+    assert state["_toVerify"] == []
     (entry,) = world.round_record["breakItRuns"]
-    assert entry["outcome"] == "passed" and entry["findingKey"] == staged[SC.FINDING_KEY_FIELD]
+    assert entry["outcome"] == "passed" and entry["findingKey"] is None
     decisions = [d for d in state["decisions"] if d["kind"] == "break-it-run"]
-    assert len(decisions) == 1 and "1 run: 1 exited 0, 0 exited non-zero, 0 not run" in decisions[0]["detail"]
+    assert len(decisions) == 1 and "1 passed (dropped)" in decisions[0]["detail"]
 
 
 def test_l12_no_repo_root_keeps_the_finding_as_a_not_run(world):

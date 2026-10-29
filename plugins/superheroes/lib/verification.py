@@ -417,9 +417,9 @@ def merge_and_rank(survivors, grouping=None):
             members = [by_id[mid] for mid in g["member_ids"]]
             merged_ids = list(g["member_ids"])
             if len(members) > 1:
-                # axis: a finding that carries a break-it test (per-area or attached) carries it and its run
-                # records; merging it into a group would fold that away, so it leaves any multi-member group unmerged
-                for m in [m for m in members if break_it.carries_test(m)]:
+                # axis: a break-it finding carries a test and its run record; merging it into a
+                # group would fold that away, so it leaves any multi-member group unmerged
+                for m in [m for m in members if break_it.is_break_it(m)]:
                     findings.append(dict(m))
                     members.remove(m)
                     merged_ids.remove(m["id"])

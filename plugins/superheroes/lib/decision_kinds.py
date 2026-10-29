@@ -13,7 +13,6 @@ DECISION_KINDS = (
     "audit-provenance-fail",
     "audit-unnamed-change",
     "author-justified-drop",
-    "break-it-change",
     "break-it-kept",
     "break-it-run",
     "cannot-certify",

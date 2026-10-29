@@ -117,7 +117,7 @@ def test_t3_intercept_keeps_a_break_it_finding_whose_early_signature_scrolled_of
     block = BI._wire(_PATH, "%s %s" % (BI.PY, _PATH), content)
     finding = {"title": "Break-it: %s" % _PATH, "file": _PATH, "line": 1, "taxonomy": break_it.TAXONOMY,
                "suggestion": block}
-    kept, runs, _, _ = break_it.intercept([finding], str(repo), BI._head(repo))
+    kept, runs, _ = break_it.intercept([finding], str(repo), BI._head(repo))
     assert len(kept) == 1, kept
     run = kept[0][break_it.RUN_FIELD]
     assert (run["outcome"], run["reason"], run["exitCode"]) == ("not-run", "module-not-found", 0)
