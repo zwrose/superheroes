@@ -214,19 +214,27 @@ def test_loader_refuses_bytes_that_are_not_utf8(tmp_path):
     assert exc.value.detail == INVALID
 
 
-def test_every_changed_file_left_out_is_fully_withheld(tmp_path):
+def test_every_changed_file_left_out_refuses_as_empty(tmp_path):
+    # axis: a change whose every file is left out has nothing to review, so it refuses as an empty diff
     repo, base = _three_files(tmp_path)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.build_sanitized_view(repo, diff_base=base, leave_out=frozenset({"a.txt", "b.txt", "c.txt"}))
-    assert exc.value.detail == "sanitized-view-diff-fully-withheld"
+    assert exc.value.detail == "sanitized-view-diff-empty"
 
 
-def test_only_survivor_left_out_beside_a_stripped_path_is_fully_withheld(tmp_path):
+def test_only_survivor_left_out_beside_a_stripped_path_is_reviewed_as_config_only(tmp_path):
+    # axis: with the only non-config file left out, the config-only view still names it in the notice and stages it nowhere
     repo, base = _make_change(
         tmp_path, {"README.md": "base\n"}, {"a.txt": "alpha\n", "CLAUDE.md": "config\n"})
-    with pytest.raises(sv.SanitizedViewError) as exc:
-        sv.build_sanitized_view(repo, diff_base=base, leave_out=frozenset({"a.txt"}))
-    assert exc.value.detail == "sanitized-view-diff-fully-withheld"
+    view = _build(repo, base, leave_out=frozenset({"a.txt"}))
+    assert view["diffPath"] is None and view["diffBytes"] is None
+    assert view["configDiffPath"] is not None
+    assert view["diffLeftOut"] == ["a.txt"]
+    with open(os.path.join(view["path"], view["configDiffPath"]), encoding="utf-8") as fh:
+        config_changes = fh.read()
+    assert "config" in config_changes
+    assert "a.txt" not in config_changes and "alpha" not in config_changes
+    assert NOTICE_SENTENCE % 1 in sv.sanitized_view_notice(view)
 
 
 def test_a_listed_path_not_in_the_change_has_no_effect(tmp_path):

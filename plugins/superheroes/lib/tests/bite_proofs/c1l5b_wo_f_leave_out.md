@@ -211,3 +211,121 @@ engine_dispatch.py-6351-                )
 .                                                                        [100%]
 1 passed, 37 deselected in 2.97s
 ```
+
+---
+
+## Adaptation after merging the layer below (WO-I)
+
+Run from `/home/user/wt-2243-i`. Declared guarded elements: E4 the left-out filter on the `withheld` list, E5 `diffLeftOut` on the no-survivor return of `_stage_review_diff`. Each was neutralized with one targeted edit and restored with the inverse edit; no `git checkout`, `restore`, `reset` or `stash` was used. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out; nothing is redacted (no secrets, tokens or URLs appear).
+
+| ID | Guarded element | Axis | Proving test |
+|---|---|---|---|
+| E4 | `sanitized_view.py:1921` `p not in left_out_set and` in the `withheld` comprehension of `_stage_review_diff` | a left-out config path is not staged in the configuration-changes file | `test_a_left_out_stripped_config_path_is_not_staged_anywhere` |
+| E5 | `sanitized_view.py:1944` `"diffLeftOut": left_out,` in the no-survivor return of `_stage_review_diff` | a config-only view still carries the left-out paths, so the notice names them | `test_only_survivor_left_out_beside_a_stripped_path_is_reviewed_as_config_only` |
+
+## E4 — the left-out filter on the withheld list
+
+- **axis:** a left-out path that the stripped-config policy would withhold is dropped from `withheld`, so it is staged neither in the patch nor in the configuration-changes file.
+
+**neutralization** (`sanitized_view.py`, `_stage_review_diff`):
+```python
+-        if p not in left_out_set and _rel_path_would_be_stripped(p) and p not in shown
++        if _rel_path_would_be_stripped(p) and p not in shown
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-i -m pytest plugins/superheroes/lib/tests/test_sanitized_view_leave_out_c1l5b.py -q -k test_a_left_out_stripped_config_path_is_not_staged_anywhere`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_a_left_out_stripped_config_path_is_not_staged_anywhere __________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-45/test_a_left_out_stripped_confi0')
+
+    def test_a_left_out_stripped_config_path_is_not_staged_anywhere(tmp_path):
+        repo, base = _make_change(
+            tmp_path, {"README.md": "base\n"}, {"a.txt": "alpha\n", "CLAUDE.md": "config line\n"})
+        plain = _build(repo, base)
+        assert plain["configDiffPath"] is not None and plain["diffWithheldCount"] == 1
+        left = _build(repo, base, leave_out=frozenset({"CLAUDE.md"}))
+        assert left["diffLeftOut"] == ["CLAUDE.md"]
+>       assert left["configDiffPath"] is None and left["configDiffBytes"] is None
+E       AssertionError: assert ('SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt' is None)
+
+/home/user/wt-2243-i/plugins/superheroes/lib/tests/test_sanitized_view_leave_out_c1l5b.py:256: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_sanitized_view_leave_out_c1l5b.py::test_a_left_out_stripped_config_path_is_not_staged_anywhere
+1 failed, 37 deselected in 3.30s
+```
+
+**restore:** the inverse edit, `p not in left_out_set and` put back in front of `_rel_path_would_be_stripped(p)`.
+
+**restore receipt:** the restored lines quoted back from the file (Grep `left_out_set` over `sanitized_view.py` after the edit):
+```
+1917:    left_out_set = frozenset(left_out or ())
+1921:        if p not in left_out_set and _rel_path_would_be_stripped(p) and p not in shown
+1926:        if p not in left_out_set and (p in shown or not _rel_path_would_be_stripped(p))
+2022:        "calibrationShown": sorted(shown - left_out_set),
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 5.65s
+```
+
+## E5 — `diffLeftOut` on the no-survivor return
+
+- **axis:** a view with no review patch still carries the left-out paths in `diffLeftOut`, so the seat's notice says how many were left out.
+
+**neutralization** (`sanitized_view.py`, the `if not survivors:` return of `_stage_review_diff`):
+```python
+             "calibrationShown": sorted(shown),
+-            "diffLeftOut": left_out,
+             **config_info,
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-i -m pytest plugins/superheroes/lib/tests/test_sanitized_view_leave_out_c1l5b.py -q -k test_only_survivor_left_out_beside_a_stripped_path_is_reviewed_as_config_only`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_only_survivor_left_out_beside_a_stripped_path_is_reviewed_as_config_only _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-47/test_only_survivor_left_out_be0')
+
+    def test_only_survivor_left_out_beside_a_stripped_path_is_reviewed_as_config_only(tmp_path):
+        # axis: with the only non-config file left out, the config-only view still names it in the notice and stages it nowhere
+        repo, base = _make_change(
+            tmp_path, {"README.md": "base\n"}, {"a.txt": "alpha\n", "CLAUDE.md": "config\n"})
+        view = _build(repo, base, leave_out=frozenset({"a.txt"}))
+        assert view["diffPath"] is None and view["diffBytes"] is None
+        assert view["configDiffPath"] is not None
+>       assert view["diffLeftOut"] == ["a.txt"]
+               ^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'diffLeftOut'
+
+/home/user/wt-2243-i/plugins/superheroes/lib/tests/test_sanitized_view_leave_out_c1l5b.py:232: KeyError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_sanitized_view_leave_out_c1l5b.py::test_only_survivor_left_out_beside_a_stripped_path_is_reviewed_as_config_only
+1 failed, 37 deselected in 10.42s
+```
+
+**restore:** the inverse edit, the `"diffLeftOut": left_out,` line put back after `"calibrationShown": sorted(shown),`.
+
+**restore receipt:** the restored lines quoted back from the file (Grep `"diffLeftOut": left_out` with context):
+```
+1942-            "diffWithheldCount": len(withheld),
+1943-            "calibrationShown": sorted(shown),
+1944:            "diffLeftOut": left_out,
+1945-            **config_info,
+--
+2021-        "diffWithheldCount": len(withheld),
+2022-        "calibrationShown": sorted(shown - left_out_set),
+2023:        "diffLeftOut": left_out,
+2024-        **config_info,
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 2.70s
+```
