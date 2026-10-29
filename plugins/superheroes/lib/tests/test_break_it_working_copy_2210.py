@@ -244,6 +244,25 @@ def test_e2_a_pre_existing_hiding_index_flag_is_not_run(repo, flag):
     assert not (repo / "tests").exists()
 
 
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_e2_a_pre_existing_index_flag_on_a_clean_file_is_run_and_kept(repo, flag):
+    # axis: a flag on a file that matches the head is not a hidden change, so the run goes ahead and the owner's flag is still set after it
+    _git(repo, "update-index", flag, "README.md")
+    record = _run(repo, "tests/test_x.py", "assert True\n")
+    assert record["outcome"] == "passed", record
+    assert [l[2:] for l in _git(repo, "ls-files", "-v").splitlines() if l[0] in "hsS"] == ["README.md"]
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_e2_a_run_that_edits_a_pre_existing_flagged_file_has_the_edit_undone_and_the_flag_kept(repo, flag):
+    # axis: an edit to a file the owner had flagged is put back although status cannot see it, and the owner's flag survives
+    _git(repo, "update-index", flag, "README.md")
+    record = _run(repo, "tests/test_x.py", "open('README.md', 'w').write('hidden edit\\n')\n")
+    assert record["outcome"] == "passed", record
+    assert (repo / "README.md").read_text() == "fixture\n"
+    assert [l[2:] for l in _git(repo, "ls-files", "-v").splitlines() if l[0] in "hsS"] == ["README.md"]
+
+
 def test_e6_a_config_file_that_did_not_exist_is_deleted_again(repo):
     config = repo / ".git" / "config.worktree"
     assert not config.exists()

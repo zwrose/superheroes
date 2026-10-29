@@ -686,9 +686,10 @@ def _ancestors(parents, pid):
 
 
 def _proc_cwd_table():
-    """``(processes, ancestors, note)`` read from ``/proc``: ``processes`` is ``[(pid, cwd, started)]`` for every
-    process whose working directory can be read, ``started`` an epoch time rounded up to the clock tick (so a
-    process that began in the tick before the run reads as started in it); ``ancestors`` the pids of this process and
+    """``(processes, ancestors, note)`` read from ``/proc``: ``processes`` is ``[(pid, cwd, started, ppid, ident)]`` for
+    every process whose working directory can be read, ``started`` an epoch time rounded up to the clock tick (so a
+    process that began in the tick before the run reads as started in it), ``ppid`` its parent and ``ident`` the raw
+    kernel start tick, which does not move between two readings the way ``started`` does; ``ancestors`` the pids of this process and
     its ancestors; ``note`` is ``None``. Inside a sandbox whose ``/proc`` is another PID namespace's (``/proc/self``
     is not this process), the pids it names are not this process's to signal, so the table is empty with a ``note``."""
     try:
@@ -710,7 +711,7 @@ def _proc_cwd_table():
                 tail = fh.read().rsplit(")", 1)[1].split()
             parents[pid] = int(tail[1])
             started = booted + (int(tail[19]) + 1) / ticks
-            processes.append((pid, os.readlink("/proc/%s/cwd" % name), started))
+            processes.append((pid, os.readlink("/proc/%s/cwd" % name), started, parents[pid], int(tail[19])))
         except (OSError, IndexError, ValueError):
             pass
     return processes, _ancestors(parents, os.getpid()), None
@@ -752,7 +753,7 @@ def _lsof_cwd_table():
     for pid, cwd in cwds.items():
         started = _ps_start(table[pid][1]) if pid in table else None
         if started is not None:
-            processes.append((pid, cwd, started))
+            processes.append((pid, cwd, started, table[pid][0], table[pid][1]))
     return processes, _ancestors({pid: ppid for pid, (ppid, _) in table.items()}, os.getpid()), None
 
 
@@ -760,30 +761,63 @@ def _cwd_table():
     return _proc_cwd_table() if os.path.isdir("/proc/self") else _lsof_cwd_table()
 
 
+def _process_ident(entry):
+    """The stable start mark of a table entry ``(pid, cwd, started[, ppid[, ident]])``: its ``ident`` (the raw kernel
+    start tick, or the ``ps`` start text), else its ``started`` time."""
+    return entry[4] if len(entry) > 4 else entry[2]
+
+
 def _known_processes(reader=None):
-    """The ``(pid, started)`` identity of every process the working-directory table names now, taken before a run
-    launches so the net can tell a process that was already there from one the run started."""
+    """The ``(pid, ident)`` identity of every process the working-directory table names now, taken before a run
+    launches so the net can tell a process that was already there from one the run started. ``ident`` is the
+    entry's raw start mark when it has one (``_process_ident``), which is stable between two readings."""
     try:
-        return set((pid, started) for pid, _, started in (reader or _cwd_table)()[0])
+        return set((entry[0], _process_ident(entry)) for entry in (reader or _cwd_table)()[0])
     except Exception:  # an unreadable table leaves the time test alone to decide
         return set()
 
 
-def _kill_in_working_copy(root, since, reader=None, known=frozenset()):
-    """Kill every process whose working directory is ``root`` or lies beneath it, that started at or after ``since``
-    (an epoch time), was not already running when the run launched (``known``, the ``(pid, started)`` pairs taken
-    then, since a start time rounded up can read a process from the run's own second as new), and is neither this
-    process nor one of its ancestors. A second net beside the descendant watch,
+def _belongs_to_run(pid, parent_of, run_pid):
+    """True when the table shows ``pid`` is the run's: its parent chain reaches the run's reaper (``run_pid``), or it
+    has itself been orphaned (its own parent is 0 or 1), which is how a worker that detached from the run reads once its
+    parent is gone. A process whose parent is alive and not the run's was launched by something else and is not the
+    run's, whatever that parent's own parent is."""
+    if parent_of.get(pid) in (0, 1):
+        return True
+    seen = set()
+    while pid not in seen:
+        seen.add(pid)
+        pid = parent_of.get(pid)
+        if pid is None:
+            return False
+        if pid == run_pid:
+            return True
+    return False
+
+
+def _kill_in_working_copy(root, since, reader=None, known=frozenset(), run_pid=None):
+    """Kill every process that belongs to the run (``_belongs_to_run``: descended from ``run_pid``, or orphaned), whose
+    working directory is ``root`` or lies beneath it, that started at or after ``since`` (an epoch time), was not
+    already running when the run launched (``known``, the ``(pid, ident)`` pairs taken then, since a start time
+    rounded up can read a process from the run's own second as new), and is neither this process nor one of its
+    ancestors. A process launched independently in the checkout while the run goes, whose parent is alive and not the
+    run's, is never touched. A second net beside the descendant watch,
     which samples and so misses a worker that starts and detaches between two samples. ``reader`` returns
-    ``(processes, ancestors, note)`` as ``_cwd_table`` does. Returns the note when the net could not run, else ``None``."""
+    ``(processes, ancestors, note)`` as ``_cwd_table`` does; an entry without a parent is not shown to belong to the run
+    and is left alone. Returns the note when the net could not run, else ``None``."""
     processes, ancestors, note = (reader or _cwd_table)()
     if note:
         return note
     real_root = os.path.realpath(root)
     inside = real_root.rstrip(os.sep) + os.sep
-    for pid, cwd, started in processes:
+    parent_of = {entry[0]: entry[3] for entry in processes if len(entry) > 3}
+    for entry in processes:
+        pid, cwd, started = entry[:3]
         # axis: a process that started before the run, this process and its ancestors are never touched, so the session's own shell survives the net
-        if pid == os.getpid() or pid in ancestors or started < since or (pid, started) in known:
+        if pid == os.getpid() or pid in ancestors or started < since or (pid, _process_ident(entry)) in known:
+            continue
+        # axis: a process the table does not show to descend from the run or to be orphaned is never signalled, so independent work in the checkout survives
+        if not _belongs_to_run(pid, parent_of, run_pid):
             continue
         if cwd == real_root or cwd.startswith(inside):
             try:
@@ -916,7 +950,7 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
                 pass
         # axis: a worker that started and detached between two samples of the watch, or that hides its environment, is still stopped by where it runs and when it started — see bite-proof record wo_e_2210_review_round2
         try:
-            net_note = _kill_in_working_copy(repo_root, started_at, known=known)
+            net_note = _kill_in_working_copy(repo_root, started_at, known=known, run_pid=proc.pid)
         except Exception as exc:  # a net that cannot read the process table is disclosed, never raised
             net_note = "working-directory net skipped: %s" % str(exc)[-200:]
         proc.wait()
@@ -983,11 +1017,31 @@ def _tracked_status(root):
 _HIDDEN_TAGS = frozenset("hsS")
 
 
-def _hidden_paths(root):
-    """The tracked paths whose index entry carries an assume-unchanged or skip-worktree flag: those flags hide a
-    working-tree edit from ``git diff`` and ``git status``."""
+def _hidden_flags(root):
+    """``{path: tag}`` for the tracked paths whose index entry carries an assume-unchanged or skip-worktree flag:
+    those flags hide a working-tree edit from ``git diff`` and ``git status``."""
     raw = _text(_must(root, "ls-files", "-v", "-z").stdout)
-    return [entry[2:] for entry in raw.split("\0") if entry[:1] in _HIDDEN_TAGS and entry[1:2] == " "]
+    return {entry[2:]: entry[0] for entry in raw.split("\0") if entry[:1] in _HIDDEN_TAGS and entry[1:2] == " "}
+
+
+def _hidden_edits(root, commit, flags):
+    """The flagged paths whose working-tree content differs from ``commit``: the edits the flags hide. A
+    skip-worktree path that is absent is not an edit; any other absent path is."""
+    edited = []
+    for rel, tag in sorted(flags.items()):
+        path = os.path.join(root, rel)
+        if os.path.islink(path):
+            now = os.readlink(path).encode("utf-8", errors="surrogateescape")
+        elif os.path.isfile(path):
+            now = _read_bytes(path)
+        else:
+            if not (tag in "sS" and not os.path.lexists(path)):
+                edited.append(rel)
+            continue
+        done = _git(root, "--literal-pathspecs", "cat-file", "blob", "%s:%s" % (commit, rel))
+        if done.returncode != 0 or done.stdout != now:
+            edited.append(rel)
+    return edited
 
 
 def _precheck(root, head):
@@ -1002,9 +1056,10 @@ def _precheck(root, head):
         # axis: a modified or staged tracked file is never run over, because the restore could not tell the session's work from the run's — see bite-proof record wo_a_2210_break_it_working_copy
         if _tracked_status(root):
             return None, "working-copy-dirty", "a tracked file is modified or staged"
-        # axis: an index flag that hides edits (assume-unchanged, skip-worktree) already set is never run over, because status and diff cannot show what the restore must undo
-        if _hidden_paths(root):
-            return None, "working-copy-dirty", "a tracked file carries an assume-unchanged or skip-worktree flag"
+        # axis: a flagged file (assume-unchanged, skip-worktree) whose content differs from the head is never run over, because status and diff cannot show what the restore must undo; a clean flagged file is run, its flag kept
+        edited = _hidden_edits(root, at, _hidden_flags(root))
+        if edited:
+            return None, "working-copy-dirty", "a tracked file hidden by an assume-unchanged or skip-worktree flag is modified: %s" % edited[0]
     except _GitFailed as exc:
         return None, "working-copy-unreadable", str(exc)
     return at, None, ""
@@ -1062,13 +1117,18 @@ _UNTRACKED_BACKUP_LIMIT = 16 * 1024 * 1024
 
 def _backup_untracked(root, names):
     """``{rel: ("link", target) | ("file", bytes, mode)}`` for the existing untracked files, so a run that
-    overwrites or deletes one can put it back. Raises ``OSError`` when the files are too large to hold."""
+    overwrites or deletes one can put it back. Raises ``OSError`` when the files are too large to hold, or when an
+    entry is neither a regular file nor a symlink (a nested repository, listed with a trailing ``/``, or a special
+    file): the restore cannot put such an entry back, so the run is refused rather than left unprotected."""
     backup, total = {}, 0
     for rel in sorted(names):
         path = os.path.join(root, rel)
         if os.path.islink(path):
             backup[rel] = ("link", os.readlink(path))
-        elif os.path.isfile(path):
+        elif not os.path.isfile(path):
+            # axis: an existing untracked entry that is not a file or symlink (a nested repository) refuses the run, because its content cannot be put back
+            raise OSError("existing untracked entry %s is not a regular file or symlink and cannot be protected" % rel)
+        else:
             total += os.path.getsize(path)
             if total > _UNTRACKED_BACKUP_LIMIT:
                 raise OSError("existing untracked files exceed %d bytes and cannot be protected" % _UNTRACKED_BACKUP_LIMIT)
@@ -1081,7 +1141,7 @@ def _snapshot(root, pinned):
     """What the run must leave as it found it: HEAD, every ref, the local config bytes and the untracked files
     (names and, for each existing one, its content)."""
     untracked = _untracked(root)
-    return {"pinned": pinned, "symref": _head_symref(root), "refs": _refs(root),
+    return {"pinned": pinned, "symref": _head_symref(root), "refs": _refs(root), "hidden": _hidden_flags(root),
             "config": {path: _read_bytes(path) for path in _config_paths(root)},
             "untracked": untracked, "untrackedBackup": _backup_untracked(root, untracked)}
 
@@ -1142,14 +1202,41 @@ def _restore_config(root, snap):
     return changed
 
 
+def _write_back(root, commit, rel):
+    """Put ``rel`` back to its content in ``commit`` by writing the blob, since ``git checkout`` skips a skip-worktree
+    path. A symlink in the commit is written as a symlink."""
+    entry = _text(_must(root, "--literal-pathspecs", "ls-tree", "-z", commit, "--", rel).stdout)
+    mode = entry.split(" ", 1)[0]
+    blob = _must(root, "--literal-pathspecs", "cat-file", "blob", "%s:%s" % (commit, rel)).stdout
+    path = os.path.join(root, rel)
+    if os.path.islink(path) or (os.path.lexists(path) and mode == "120000"):
+        os.unlink(path)
+    if mode == "120000":
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        pathlib.Path(path).symlink_to(blob.decode("utf-8", errors="surrogateescape"))
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(blob)
+    os.chmod(path, 0o755 if mode == "100755" else 0o644)
+
+
 def _restore_index(root, snap):
     changed = False
     # axis: an assume-unchanged or skip-worktree flag the run set is cleared before tracked changes are looked for, because the flag hides the edit from diff and status
-    hidden = _hidden_paths(root)
-    if hidden:
+    before = snap.get("hidden", {})
+    flags = _hidden_flags(root)
+    # a flag the owner set before the run stays; only a flag the run set is cleared
+    new = sorted(rel for rel in flags if rel not in before)
+    if new:
         # one flag per call: git applies only the last of the two options when both are given
         for option in ("--no-assume-unchanged", "--no-skip-worktree"):
-            _must(root, "update-index", option, "--", *hidden)
+            _must(root, "--literal-pathspecs", "update-index", option, "--", *new)
+        changed = True
+    # a pre-existing flagged file the run edited is put back from the pinned commit, since status cannot show it
+    hidden_edits = _hidden_edits(root, snap["pinned"], {rel: tag for rel, tag in flags.items() if rel in before})
+    for rel in hidden_edits:
+        _write_back(root, snap["pinned"], rel)
         changed = True
     if _must(root, "diff", "--cached", "--name-only", "-z").stdout:
         _must(root, "reset", "-q")

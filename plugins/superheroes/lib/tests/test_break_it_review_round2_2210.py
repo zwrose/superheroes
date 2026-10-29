@@ -184,8 +184,10 @@ def _dead(pid, wait=5.0):
 
 
 def _reader_of(pids_and_starts, root):
-    """A reader of the net's shape that reports each ``(pid, started)`` with its working directory in ``root``."""
-    return lambda: ([(pid, os.path.realpath(str(root)), started()) for pid, started in pids_and_starts()], set(), None)
+    """A reader of the net's shape that reports each ``(pid, started)`` with its working directory in ``root``, as an
+    orphan (parent 1), which is how a detached worker reads."""
+    return lambda: ([(pid, os.path.realpath(str(root)), started(), 1, started())
+                     for pid, started in pids_and_starts()], set(), None)
 
 
 def _only_the_working_directory_net(monkeypatch, reader):
@@ -278,15 +280,37 @@ def test_g3_the_net_stops_what_the_run_started_inside_the_working_copy_and_spare
     outsider = subprocess.Popen(["/bin/sleep", "60"], cwd=str(tmp_path))
     older = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
     real = os.path.realpath
-    table = [(victim.pid, real(str(inside)), since + 1), (ancestor.pid, real(str(repo)), since + 1),
-             (outsider.pid, real(str(tmp_path)), since + 1), (older.pid, real(str(repo)), since - 1)]
+    me = os.getpid()
+    table = [(victim.pid, real(str(inside)), since + 1, me, 1), (ancestor.pid, real(str(repo)), since + 1, me, 2),
+             (outsider.pid, real(str(tmp_path)), since + 1, me, 3), (older.pid, real(str(repo)), since - 1, me, 4)]
     try:
-        note = break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, {ancestor.pid}, None))
+        note = break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, {ancestor.pid}, None), run_pid=me)
         assert note is None
         assert victim.wait(timeout=5) == -9
         assert ancestor.poll() is None and outsider.poll() is None and older.poll() is None
     finally:
         for proc in (victim, ancestor, outsider, older):
+            proc.kill()
+            proc.wait()
+
+
+@needs_sleep
+def test_g3_a_process_launched_independently_in_the_checkout_during_the_run_survives(repo):
+    # axis: a process that started after the run began, sits in the checkout, is not known and has a live parent that is not the run's is never signalled
+    since = time.time()
+    run_pid, shell_pid = os.getpid(), os.getpid() + 100000
+    independent = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
+    child = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
+    orphan = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
+    root = os.path.realpath(str(repo))
+    table = [(independent.pid, root, since + 1, shell_pid, 11), (child.pid, root, since + 1, run_pid, 12),
+             (orphan.pid, root, since + 1, 1, 13), (shell_pid, root, since - 5, 1, 14)]
+    try:
+        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), run_pid=run_pid) is None
+        assert child.wait(timeout=5) == -9 and orphan.wait(timeout=5) == -9
+        assert independent.poll() is None, "a process the run did not start was stopped"
+    finally:
+        for proc in (independent, child, orphan):
             proc.kill()
             proc.wait()
 
@@ -298,10 +322,10 @@ def test_g3_a_process_already_running_when_the_run_launched_survives_a_same_seco
     older = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
     fresh = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
     root = os.path.realpath(str(repo))
-    table = [(older.pid, root, since + 0.2), (fresh.pid, root, since + 0.3)]
+    table = [(older.pid, root, since + 0.2, 1, 500), (fresh.pid, root, since + 0.3, 1, 501)]
     try:
         known = break_it._known_processes(reader=lambda: (table[:1], set(), None))
-        assert known == {(older.pid, since + 0.2)}
+        assert known == {(older.pid, 500)}
         assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), known=known) is None
         assert fresh.wait(timeout=5) == -9
         assert older.poll() is None, "a process that predates the run was stopped"
@@ -309,6 +333,23 @@ def test_g3_a_process_already_running_when_the_run_launched_survives_a_same_seco
         for proc in (older, fresh):
             proc.kill()
             proc.wait()
+
+
+@needs_sleep
+def test_g3_a_pre_existing_process_whose_derived_start_time_moves_between_readings_survives(repo):
+    # axis: identity is the raw start mark, not the derived float time, so a start time that reads differently at cleanup does not make a pre-existing process eligible
+    since = time.time()
+    older = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
+    root = os.path.realpath(str(repo))
+    first = [(older.pid, root, since + 0.2, 1, 777)]
+    later = [(older.pid, root, since + 0.2000001, 1, 777)]
+    try:
+        known = break_it._known_processes(reader=lambda: (first, set(), None))
+        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (later, set(), None), known=known) is None
+        assert older.poll() is None, "a pre-existing process was stopped because its derived start time moved"
+    finally:
+        older.kill()
+        older.wait()
 
 
 def test_g3_a_watcher_is_joined_before_its_dictionary_is_swept(monkeypatch):
@@ -346,7 +387,7 @@ def test_g3_the_lsof_reader_drives_the_same_net(repo):
         assert os.getpid() in ancestors
         mine = [p for p in processes if p[0] == victim.pid]
         assert mine and mine[0][1] == os.path.realpath(str(repo)) and mine[0][2] >= since
-        assert break_it._kill_in_working_copy(str(repo), since, reader=break_it._lsof_cwd_table) is None
+        assert break_it._kill_in_working_copy(str(repo), since, reader=break_it._lsof_cwd_table, run_pid=os.getpid()) is None
         assert victim.wait(timeout=5) == -9
     finally:
         victim.kill()
@@ -375,7 +416,7 @@ def test_g3_the_lsof_reader_assembles_its_table_from_lsof_and_ps_text(repo, monk
         assert note is None
         assert sorted(p[:2] for p in processes) == sorted([(victim.pid, root), (os.getpid(), "/elsewhere")])
         assert {os.getpid(), os.getppid()} <= ancestors and victim.pid not in ancestors
-        assert break_it._kill_in_working_copy(str(repo), time.time(), reader=break_it._lsof_cwd_table) is None
+        assert break_it._kill_in_working_copy(str(repo), time.time(), reader=break_it._lsof_cwd_table, run_pid=os.getpid()) is None
         assert victim.wait(timeout=5) == -9
     finally:
         victim.kill()
@@ -420,6 +461,17 @@ def test_g5_an_existing_untracked_file_the_run_deletes_or_overwrites_is_restored
     assert (repo / "other.txt").read_text() == "keep me\n"
     assert os.stat(str(repo / "other.txt")).st_mode & 0o777 == 0o755
     assert "untracked" in record["restored"], record
+
+
+def test_g5_an_existing_untracked_nested_repository_refuses_the_run(repo):
+    # axis: an untracked nested repository cannot be backed up, so the run is refused and its files are left alone
+    nested = repo / "nested"
+    nested.mkdir()
+    _git(nested, "init", "-q")
+    (nested / "owner-notes.txt").write_text("irreplaceable\n")
+    record = _run(repo, "tests/test_quiet.py", "assert True\n")
+    assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-unreadable"), record
+    assert (nested / "owner-notes.txt").read_text() == "irreplaceable\n"
 
 
 def test_g5_untracked_files_too_large_to_protect_refuse_the_run(repo, monkeypatch):
