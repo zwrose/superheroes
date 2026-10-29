@@ -167,7 +167,7 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
 
 ## Output Format
 
-Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Code"` on every entry. Do not restate the schema — follow the base rubric's.
+Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Code"` on every entry. Do not restate the schema — follow the base rubric's. Return your read list (`readParts`) as that section defines it, covering only what you actually read.
 
 - Every finding carries the base rubric's `confidence` (High/Low) from the in-pass Chain-of-Verification. A **Low** Critical or Important MUST name exactly what is uncertain in its `evidence` line (e.g. "could not confirm the null path is reachable without seeing the caller").
 - Include a non-null `suggestion` field for every Critical or Important finding — propose the concrete fix (the real constant name, the canonical pattern shape, the renamed file).

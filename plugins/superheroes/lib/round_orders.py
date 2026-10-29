@@ -355,6 +355,13 @@ def _result_channel_neutral_delivery(stdout_example=None):
     )
 
 
+_READ_PARTS_REMINDER = (
+    "Return `readParts` — one entry per file you actually read, with the line ranges of it you "
+    "read (the file's lines at the reviewed head), as the base rubric defines it; `[]` when you "
+    "read nothing."
+)
+
+
 def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> str:
     """Format-only panel stdout delivery — shape illustration, not a literal emit target."""
     lines = [
@@ -371,7 +378,7 @@ def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> 
     if include_investigated_reminder:
         lines.append(
             "List in `investigated` every repo-relative path you actually read to ground "
-            "this review — always, whether or not you found anything."
+            "this review — always, whether or not you found anything. " + _READ_PARTS_REMINDER
         )
     return "\n".join(lines)
 
@@ -450,7 +457,7 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Deliver per the base rubric's panel output-format section. Write your payload "
             "artifact to %s — write an empty findings list rather than skipping the file when "
-            "you have nothing to flag." % landing
+            "you have nothing to flag. " % landing + _READ_PARTS_REMINDER
         )
     prior = ph.get("PRIOR_COMMENTS_PATH", "").strip()
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (

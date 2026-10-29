@@ -109,6 +109,7 @@ def _native_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     raise ValueError(kind)

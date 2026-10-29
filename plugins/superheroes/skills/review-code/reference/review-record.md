@@ -88,7 +88,7 @@ On the rounds:
 
 On each reviewer row (`reviewers[i]`):
 
-- `readParts`: a list of `{"file": <non-blank>, "lines": [[start, end], ...]}`, each range with `1 <= start <= end`. It records the parts of the change that reviewer read, and the record row carries it unchanged. `[]` means the reviewer read nothing; an absent key means no list was reported.
+- `readParts`: a list of `{"file": <non-blank>, "lines": [[start, end], ...]}`, each range with `1 <= start <= end`. It records the parts of the change that reviewer read, and the record row carries it unchanged. Line numbers are the file's at the reviewed head, and a deletion inside a file that survives sits at the head line where it was removed. `[]` means the reviewer read nothing; an absent key means no list was reported. The full-lane session writer gives `[]` to a panel reviewer that ran and reported no well-formed list; an absent key is for accounts written by other callers.
 - `cost`: `{"tokens": <int or null>, "minutes": <number or null>}`, on every record row. The account cannot set it; a `cost` key on an account row is ignored. The writer computes it. When the row is credited from the engine's run record and that record's `observation.tokens` is an int, `tokens` is it; `minutes` is the record's `observation.wallSeconds` over 60, to one decimal, when that is a number. Every other row, and every other case, is null. Null means unmeasured and is never zero. Trimming a long record never removes `cost`.
 
 On each finding (`findings[i]`):
