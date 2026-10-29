@@ -273,7 +273,7 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
 # version; while it is unfinished, `_upgrade_gate` refuses every command on it.
-SESSION_GENERATION = 6
+SESSION_GENERATION = 7
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
@@ -559,7 +559,8 @@ class MaxRoundsRefusal(ValueError):
     """Load-time refusal for an invalid ``maxRounds`` on a fresh state.
 
     Raised only from ``_default_config`` — the single config load point — when ``maxRounds`` is not
-    a positive non-bool ``int`` no larger than ``round_phases.ROUND_CAP``."""
+    a positive non-bool ``int``. The ``next`` CLI refuses a value above ``round_phases.ROUND_CAP`` too,
+    before this point."""
     def __init__(self, reason, value=None):
         super().__init__(reason)
         self.reason = reason
@@ -1309,9 +1310,8 @@ def _default_config(overrides=None):
         if not isinstance(cap_val, int) or isinstance(cap_val, bool) or cap_val < 1:
             raise FixBatchCapRefusal("fix-batch-cap-invalid", cap_val)
     rounds_val = cfg["maxRounds"]
-    # axis: a fresh session never mints a cap above ROUND_CAP, nor a non-positive or non-int one — see bite-proof record c1l4_wo_b
-    if (not isinstance(rounds_val, int) or isinstance(rounds_val, bool)
-            or rounds_val < 1 or rounds_val > round_phases.ROUND_CAP):
+    # The library path (harnesses, tests) takes any positive int; the `next` CLI also bounds it by ROUND_CAP.
+    if not isinstance(rounds_val, int) or isinstance(rounds_val, bool) or rounds_val < 1:
         raise MaxRoundsRefusal("max-rounds-invalid", rounds_val)
     return cfg
 
@@ -2623,11 +2623,6 @@ def save_state(session_dir, state):
 def _blocking(findings):
     return [f for f in findings if isinstance(f, dict)
             and circuit_breaker.is_blocking(f.get("severity"))]
-
-
-def _open_critical(findings):
-    return [f for f in findings if isinstance(f, dict)
-            and circuit_breaker.is_critical(f.get("severity"))]
 
 
 # ---- challenged-coverage + the in-memory review-record ledger (#507 WO-D) --------------------
@@ -6519,8 +6514,8 @@ def _resolve_open_audit_targets(state):
 
 
 def _stalled_open_targets(state, breaker):
-    """Targets that are both stalled (alias match) and still open this round — the single selection
-    rule shared by stall self-recovery and `_stalled_critical`."""
+    """Targets that are both stalled (alias match) and still open this round — the selection rule
+    for stall self-recovery."""
     stalled = set(breaker.get("stalledIdentities") or [])
     if not stalled:
         return []
@@ -6545,15 +6540,6 @@ def _stalled_open_targets(state, breaker):
         if isinstance(f, dict) and finding_identity(f) in stalled:
             matched.append(f)
     return matched
-
-
-def _stalled_critical(state, config, breaker):
-    """A stalled identity whose fix batch carried a Critical still counts as an open Critical at the
-    cap (fail toward park)."""
-    for t in _stalled_open_targets(state, breaker):
-        if circuit_breaker.is_critical(t.get("severity")):
-            return [t]
-    return []
 
 
 # ---- stall self-recovery + menu -------------------------------------------------------------
@@ -13975,9 +13961,13 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
-            # axis: a fresh session refuses a cap that is not a positive int within ROUND_CAP before any state is written — see bite-proof record c1l4_wo_b
             st_ok, st = load_state(args.session_dir)
             if st_ok and st is None:
+                # axis: a fresh CLI session refuses a cap above ROUND_CAP before any state is written — see bite-proof record c1l4_wo_b
+                if args.max_rounds > round_phases.ROUND_CAP:
+                    sys.stdout.write(json.dumps({"ok": False, "reason": "max-rounds-invalid",
+                                                 "value": args.max_rounds}) + "\n")
+                    return 1
                 try:
                     _default_config(dict(overrides))
                 except MaxRoundsRefusal as refusal:

@@ -216,7 +216,7 @@ def dis(identity, **extra):
 
 
 def test_audit_breaker_empty_history_no_halt():
-    res = check_audit_breaker([], 7)
+    res = check_audit_breaker([])
     assert res["halt"] is False
     assert res["reason"] is None
     assert res["stalledIdentities"] == []
@@ -225,7 +225,7 @@ def test_audit_breaker_empty_history_no_halt():
 def test_audit_breaker_stalls_on_two_consecutive_not_discharged():
     rounds = [a_round(1, [nd("src/a.py::leak")]),
               a_round(2, [nd("src/a.py::leak")])]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is True
     assert res["reason"] == "audit-stall"
     assert "src/a.py::leak" in res["stalledIdentities"]
@@ -235,7 +235,7 @@ def test_audit_breaker_no_stall_when_audits_alternate():
     rounds = [a_round(1, [nd("src/a.py::leak")]),
               a_round(2, [dis("src/a.py::leak")]),
               a_round(3, [nd("src/a.py::leak")])]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is False
 
 
@@ -246,25 +246,25 @@ def test_audit_breaker_alias_retitle_still_stalls():
         a_round(1, [nd("src/a.py::leaks memory", classKey="Security::CWE-401::orig")]),
         a_round(2, [nd("src/a.py::memory not freed", classKey="Security::CWE-401::orig")]),
     ]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is True
     assert res["reason"] == "audit-stall"
 
 
-def test_audit_breaker_max_iterations_with_open_finding():
+def test_audit_breaker_does_not_halt_on_a_round_count_with_an_open_finding():
+    # the round cap is the driver's boundary, not an audit-count criterion: an open finding that is
+    # not a stall never halts here, however many rounds there have been
     rounds = [a_round(1, [nd("f::a")]),
               a_round(2, [dis("f::a"), nd("f::b")])]
-    res = check_audit_breaker(rounds, 2)
-    assert res["halt"] is True
-    assert res["reason"] == "max-iterations"
-    assert res["stalledIdentities"] == ["f::b"]
+    res = check_audit_breaker(rounds)
+    assert res["halt"] is False
+    assert res["reason"] is None
 
 
-def test_audit_breaker_no_max_iterations_when_all_discharged():
+def test_audit_breaker_no_halt_when_all_discharged():
     rounds = [a_round(1, [dis("f::a")]),
               a_round(2, [dis("f::a"), dis("f::b")])]
-    # at the cap, but nothing is open → no halt
-    res = check_audit_breaker(rounds, 2)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is False
 
 
@@ -276,14 +276,14 @@ def test_audit_breaker_never_consults_counts():
         a_round(2, [dis("f::a"), dis("f::b"), dis("f::c")]),
         a_round(3, [dis("f::a"), dis("f::b"), dis("f::c"), dis("f::d"), dis("f::e")]),
     ]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is False
     assert res["reason"] is None
 
 
 def test_audit_breaker_malformed_round_fails_closed():
     # two consecutive malformed rounds (no outcomes list) → stall, never a silent pass
-    res = check_audit_breaker([{"round": 1}, {"round": 2}], 7)
+    res = check_audit_breaker([{"round": 1}, {"round": 2}])
     assert res["halt"] is True
     assert res["reason"] == "audit-stall"
 
@@ -293,16 +293,15 @@ def test_audit_breaker_malformed_outcome_counts_as_not_discharged():
     # round 1 has a non-dict outcome (fail-closed not-discharged marker); round 2 is a
     # well-formed not-discharged outcome with a different identity. Different identities,
     # so no consecutive stall here, but the round 1 malformed marker is counted, not dropped.
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is False  # different identities, single round each
-    # at the cap, the malformed latest round is still "open"
-    assert check_audit_breaker(rounds, 2)["halt"] is True
-    assert check_audit_breaker(rounds, 2)["reason"] == "max-iterations"
+    # the malformed latest round is still "open", but a count is not a criterion any more
+    assert check_audit_breaker(rounds)["reason"] is None
 
 
 def test_audit_breaker_two_consecutive_malformed_outcomes_stall():
     rounds = [a_round(1, ["junk"]), a_round(2, [None])]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is True
     assert res["reason"] == "audit-stall"
 
@@ -316,10 +315,10 @@ def test_audit_breaker_criterion2_window_stall_stall_clean_clean():
         a_round(3, [dis(ident)]),
         a_round(4, [dis(ident)]),
     ]
-    res_at_2 = check_audit_breaker(rounds[:2], 7)
+    res_at_2 = check_audit_breaker(rounds[:2])
     assert res_at_2["halt"] is True
     assert res_at_2["reason"] == "audit-stall"
-    res_at_4 = check_audit_breaker(rounds, 7)
+    res_at_4 = check_audit_breaker(rounds)
     assert res_at_4["halt"] is False
 
 
@@ -331,11 +330,11 @@ def test_audit_breaker_criterion2_alternating_stall_clean_never_halts():
         a_round(3, [nd(ident)]),
         a_round(4, [dis(ident)]),
     ]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is False
 
 
-def test_audit_breaker_criterion1_backstop_when_latest_round_open_at_cap():
+def test_audit_breaker_reports_a_stall_never_max_iterations_with_the_latest_round_open():
     ident = "f.py::leak"
     rounds = [
         a_round(1, [nd(ident)]),
@@ -343,9 +342,9 @@ def test_audit_breaker_criterion1_backstop_when_latest_round_open_at_cap():
         a_round(3, [nd(ident)]),
         a_round(4, [nd(ident)]),
     ]
-    res = check_audit_breaker(rounds, 4)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is True
-    assert res["reason"] == "max-iterations"
+    assert res["reason"] == "audit-stall"
 
 
 # --- _target_aliases / audit_target_aliases (#915) -----------------------------
@@ -480,19 +479,14 @@ def test_round_not_discharged_malformed_round_unchanged():
     assert _round_not_discharged({"outcomes": "not-a-list"}) == [{_MALFORMED_ROUND}]
 
 
-# --- round ceiling (#1030) ----------------------------------------------------
+# --- breaker reasons (the round ceiling was removed; its reason constant is kept for a reader) ---
 
 import re
 import inspect
 
 from circuit_breaker import (
     BREAKER_REASONS,
-    CEILING_BELOW_CAP_REFUSAL,
-    CEILING_INVALID_REFUSAL,
-    DEFAULT_MAX_ROUNDS_ABSOLUTE,
     ROUND_CEILING_REASON,
-    check_round_ceiling,
-    resolve_round_ceiling,
 )
 
 
@@ -501,86 +495,11 @@ def _reason_literals_from_source():
     return set(re.findall(r'"reason": "([^"]+)"', source))
 
 
-def test_check_round_ceiling_does_not_halt_at_ceiling_boundary():
-    res = check_round_ceiling(10, 10)
-    assert res["halt"] is False
-    assert res["reason"] is None
-
-
-def test_check_round_ceiling_halts_one_above_ceiling():
-    res = check_round_ceiling(11, 10)
-    assert res["halt"] is True
-    assert res["reason"] == ROUND_CEILING_REASON
-
-
-def test_check_round_ceiling_halt_detail_names_reached_and_refused_rounds():
-    res = check_round_ceiling(11, 10)
-    assert "rounds reached 10" in res["detail"]
-    assert "round 11 not begun" in res["detail"]
-    assert "not a max-iterations cap halt" in res["detail"]
-
-
-def test_resolve_round_ceiling_named_above_cap():
-    ceiling, refusal = resolve_round_ceiling(7, named=12)
-    assert ceiling == 12
-    assert refusal is None
-
-
-def test_resolve_round_ceiling_named_equal_to_cap():
-    ceiling, refusal = resolve_round_ceiling(10, named=10)
-    assert ceiling == 10
-    assert refusal is None
-
-
-def test_resolve_round_ceiling_named_below_cap_refuses():
-    ceiling, refusal = resolve_round_ceiling(7, named=5)
-    assert ceiling is None
-    assert refusal == CEILING_BELOW_CAP_REFUSAL
-
-
-def test_resolve_round_ceiling_named_string_refuses():
-    ceiling, refusal = resolve_round_ceiling(7, named="10")
-    assert ceiling is None
-    assert refusal == CEILING_INVALID_REFUSAL
-
-
-def test_resolve_round_ceiling_named_bool_refuses():
-    ceiling, refusal = resolve_round_ceiling(7, named=True)
-    assert ceiling is None
-    assert refusal == CEILING_INVALID_REFUSAL
-
-
-def test_resolve_round_ceiling_named_zero_refuses():
-    ceiling, refusal = resolve_round_ceiling(7, named=0)
-    assert ceiling is None
-    assert refusal == CEILING_INVALID_REFUSAL
-
-
-def test_resolve_round_ceiling_named_negative_refuses():
-    ceiling, refusal = resolve_round_ceiling(7, named=-1)
-    assert ceiling is None
-    assert refusal == CEILING_INVALID_REFUSAL
-
-
-def test_resolve_round_ceiling_unnamed_default_ceiling():
-    ceiling, refusal = resolve_round_ceiling(7)
-    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
-    assert refusal is None
-
-
-def test_resolve_round_ceiling_unnamed_below_cap_returns_flat_default():
-    ceiling, refusal = resolve_round_ceiling(12)
-    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
-    assert refusal is None
-
-
-def test_resolve_round_ceiling_named_below_cap_still_refuses_when_unnamed_accepts():
-    unnamed_ceiling, unnamed_refusal = resolve_round_ceiling(12)
-    assert unnamed_ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
-    assert unnamed_refusal is None
-    named_ceiling, named_refusal = resolve_round_ceiling(12, named=5)
-    assert named_ceiling is None
-    assert named_refusal == CEILING_BELOW_CAP_REFUSAL
+def test_the_round_ceiling_functions_are_gone():
+    import circuit_breaker
+    for name in ("resolve_round_ceiling", "check_round_ceiling", "DEFAULT_MAX_ROUNDS_ABSOLUTE",
+                 "CEILING_BELOW_CAP_REFUSAL", "CEILING_INVALID_REFUSAL", "_effective_max_rounds"):
+        assert not hasattr(circuit_breaker, name), name
 
 
 def test_breaker_reasons_closed_set_matches_source_literals():
@@ -598,47 +517,7 @@ def test_check_circuit_breaker_does_not_halt_clean_at_ten_rounds():
 
 def test_check_audit_breaker_does_not_halt_clean_at_ten_rounds():
     rounds = [a_round(i, [dis(f"f::{i}")]) for i in range(1, 11)]
-    res = check_audit_breaker(rounds, 7)
+    res = check_audit_breaker(rounds)
     assert res["halt"] is False
 
 
-def test_check_round_ceiling_none_ceiling_never_halts():
-    res = check_round_ceiling(100, None)
-    assert res["halt"] is False
-    assert res["detail"] == "no round ceiling"
-
-
-def test_check_round_ceiling_non_int_ceiling_fail_open():
-    res = check_round_ceiling(10, "10")
-    assert res["halt"] is False
-    assert res["detail"] == "malformed round ceiling"
-
-
-def test_check_round_ceiling_bool_ceiling_fail_open():
-    res = check_round_ceiling(10, True)
-    assert res["halt"] is False
-    assert res["detail"] == "malformed round ceiling"
-
-
-def test_check_round_ceiling_non_int_round_count_fail_open():
-    res = check_round_ceiling("10", 10)
-    assert res["halt"] is False
-    assert res["detail"] == "malformed round count"
-
-
-def test_check_round_ceiling_bool_round_count_fail_open():
-    res = check_round_ceiling(True, 10)
-    assert res["halt"] is False
-    assert res["detail"] == "malformed round count"
-
-
-def test_resolve_round_ceiling_never_raises_on_bad_max_rounds():
-    ceiling, refusal = resolve_round_ceiling(True)
-    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
-    assert refusal is None
-    ceiling, refusal = resolve_round_ceiling(None)
-    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
-    assert refusal is None
-    ceiling, refusal = resolve_round_ceiling("bad")
-    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
-    assert refusal is None

@@ -3266,11 +3266,11 @@ def test_receipt_state_writes_census_red_on_post_fold_probe_write():
 
 
 # =============================================================================================
-# round-ceiling advance park — honest notFolded receipts (#1030, ruling 23-b)
+# round-cap advance hand-back — honest notFolded receipts (#1030, ruling 23-b)
 # =============================================================================================
 
-_CEILING_FIXTURE_CEILING = 10
-_CEILING_FIXTURE_REACHED = 11
+_CEILING_FIXTURE_CEILING = 4
+_CEILING_FIXTURE_REACHED = 5
 
 
 def _above_ceiling_state_baseline(state, reached_round):
@@ -3284,8 +3284,7 @@ def _above_ceiling_state_baseline(state, reached_round):
 def _above_ceiling_orchestrator_session(tmp_path, adapters,
                                         ceiling=_CEILING_FIXTURE_CEILING,
                                         reached_round=_CEILING_FIXTURE_REACHED):
-    d = _session(tmp_path, name="ceil-orch",
-                 maxRoundsAbsolute=ceiling, maxRounds=7)
+    d = _session(tmp_path, name="ceil-orch", maxRounds=ceiling)
     state = _state(d)
     _above_ceiling_state_baseline(state, reached_round)
     state["step"] = RD.P_VERIFY
@@ -3299,8 +3298,7 @@ def _above_ceiling_orchestrator_session(tmp_path, adapters,
 def _above_ceiling_panel_session(tmp_path, adapters,
                                  ceiling=_CEILING_FIXTURE_CEILING,
                                  reached_round=_CEILING_FIXTURE_REACHED):
-    d = _session(tmp_path, name="ceil-panel",
-                 maxRoundsAbsolute=ceiling, maxRounds=7)
+    d = _session(tmp_path, name="ceil-panel", maxRounds=ceiling)
     state = _state(d)
     _above_ceiling_state_baseline(state, reached_round)
     state["step"] = RD.P_PANEL
@@ -3317,8 +3315,8 @@ def _advance_rows_for_step(session_dir, phase, rnd, attempt):
             and e.get("round") == rnd and e.get("attempt") == attempt]
 
 
-def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
-    """Loaded state above the ceiling parks through _advance_orchestrator_fulfilled_locked honestly."""
+def test_orchestrator_fulfilled_locked_hands_back_honestly_above_round_cap(tmp_path, adapters):
+    """Loaded state above the cap hands back through _advance_orchestrator_fulfilled_locked honestly."""
     ceiling = _CEILING_FIXTURE_CEILING
     reached_round = _CEILING_FIXTURE_REACHED
     assert reached_round == ceiling + 1, "fixture must distinguish ceiling from round reached"
@@ -3329,17 +3327,17 @@ def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_pa
     phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
     last_accepted_before = copy.deepcopy(state.get("lastAccepted"))
     config = state.get("config") or {}
-    assert config["maxRoundsAbsolute"] == ceiling
+    assert config["maxRounds"] == ceiling
     assert rnd == reached_round
     out = RD._advance_orchestrator_fulfilled_locked(
         d, state, phase, rnd, attempt, config, git=_fake_git(_gitdir(tmp_path)))
     assert out["ok"] is True
     assert "folded" not in out
-    assert out["notFolded"]["reason"] == "round-ceiling"
+    assert out["notFolded"]["reason"] == "round-cap"
     assert out["notFolded"]["phase"] == phase
     assert out["notFolded"]["round"] == rnd
     assert out["notFolded"]["attempt"] == attempt
-    assert out["terminal"] == "halted"
+    assert out["terminal"] == "handed-back"
     reloaded = _state(d)
     assert reloaded["certification"]["shape"] is None
     rows = _advance_rows_for_step(d, phase, rnd, attempt)
@@ -3351,8 +3349,8 @@ def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_pa
     assert not os.path.exists(_verify_store_path(d, rnd=rnd))
 
 
-def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
-    """Loaded state above the ceiling parks through _advance_locked without a folded receipt."""
+def test_advance_locked_hands_back_honestly_above_round_cap(tmp_path, adapters):
+    """Loaded state above the cap hands back through _advance_locked without a folded receipt."""
     d = _above_ceiling_panel_session(tmp_path, adapters)
     state = _state(d)
     pend = state["pending"]
@@ -3360,8 +3358,8 @@ def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
     out = RD._advance_locked(d, state, git=_fake_git(_gitdir(tmp_path)))
     assert out["ok"] is True
     assert "folded" not in out
-    assert out["notFolded"]["reason"] == "round-ceiling"
-    assert out["terminal"] == "halted"
+    assert out["notFolded"]["reason"] == "round-cap"
+    assert out["terminal"] == "handed-back"
     assert "durableRecord" not in out
     rows = _advance_rows_for_step(d, phase, rnd, attempt)
     assert not any(r.get("outcome") == "advanced" for r in rows)

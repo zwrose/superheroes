@@ -415,8 +415,9 @@ def test_handle_stall_retains_occurrence_suffixed_open_targets():
     assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
 
 
-def test_stalled_critical_uses_alias_not_line_less_identity():
-    # axis: stalled Critical cap lookup must match classKey alias, not retitled line-less identity
+def test_stalled_open_targets_use_alias_not_line_less_identity():
+    # axis: stalled-target lookup must match classKey alias, not retitled line-less identity
+    # (was a test of the removed _stalled_critical; the selection helper it called is what remains)
     class_key = "Security::CWE-401::crit"
     target = {
         "id": "f.py::retitled@L1", "identity": "f.py::retitled",
@@ -428,7 +429,7 @@ def test_stalled_critical_uses_alias_not_line_less_identity():
     state["fixBatch"] = [dict(target)]
     state["_auditOutcome"] = {"notDischarged": [target["id"]], "discharged": []}
     breaker = {"stalledIdentities": [class_key]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [target]
 
 
@@ -453,8 +454,8 @@ def test_handle_stall_excludes_discharged_sibling_same_identity():
     assert batch[0]["id"] == open_tgt["id"]
 
 
-def test_stalled_critical_excludes_discharged_sibling_same_identity():
-    # axis: stalled Critical cap must not count a discharged Critical sibling at another line
+def test_stalled_open_targets_exclude_discharged_critical_sibling_same_identity():
+    # axis: stalled-target lookup must not count a discharged Critical sibling at another line
     ident = FI.finding_identity(_finding(file="lib/a.py", title="unchecked input", line=10,
                                          severity="Critical"))
     open_tgt = {"id": "lib/a.py::unchecked input@L10", "identity": ident,
@@ -469,12 +470,12 @@ def test_stalled_critical_excludes_discharged_sibling_same_identity():
     state["_auditOutcome"] = {"notDischarged": [open_tgt["id"]],
                               "discharged": [closed_tgt["id"]]}
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [open_tgt]
 
 
-def test_stalled_critical_important_open_critical_discharged_returns_empty():
-    # axis: discharged Critical sibling must not be reported as open Critical at the cap
+def test_stalled_open_targets_return_only_the_open_important_when_the_critical_is_discharged():
+    # axis: a discharged Critical sibling must not be reported as an open stalled target
     ident = FI.finding_identity(_finding(file="lib/a.py", title="unchecked input", line=10))
     open_tgt = {"id": "lib/a.py::unchecked input@L10", "identity": ident,
                 "file": "lib/a.py", "line": 10, "title": "unchecked input",
@@ -488,8 +489,8 @@ def test_stalled_critical_important_open_critical_discharged_returns_empty():
     state["_auditOutcome"] = {"notDischarged": [open_tgt["id"]],
                               "discharged": [closed_tgt["id"]]}
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
-    assert crit == []
+    crit = RD._stalled_open_targets(state, breaker)
+    assert crit == [open_tgt]
 
 
 def test_stalled_callers_share_helper_no_duplicate_alias_loops():
@@ -520,8 +521,7 @@ def test_stalled_callers_share_helper_no_duplicate_alias_loops():
     # `_handle_stall` no longer selects targets (its stall-menu half is gone and the recovery half's
     # delegation is pinned in test_stall_decomposition.py).
     assert "_stalled_open_targets" not in inspect.getsource(RD._handle_stall)
-    crit_src = inspect.getsource(RD._stalled_critical)
-    assert "_stalled_open_targets" in crit_src
+    assert not hasattr(RD, "_stalled_critical")
 
 
 def test_handle_stall_legacy_no_audit_outcome_uses_alias_only():
@@ -657,18 +657,18 @@ def test_audit_target_aliases_diverges_for_id_only_record():
     assert CB._audit_outcome_aliases(record) == set()
 
 
-def test_stalled_critical_legacy_raw_finding_matches_line_less_identity():
+def test_stalled_open_targets_legacy_raw_finding_matches_line_less_identity():
     # axis: legacy leg, plain raw finding → selected by line-less identity
     raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical"}
     ident = FI.finding_identity(raw)
     state = RD.new_state(_cfg())
     state["fixBatch"] = [dict(raw)]
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [raw]
 
 
-def test_stalled_critical_legacy_classed_finding_matches_line_less_identity():
+def test_stalled_open_targets_legacy_classed_finding_matches_line_less_identity():
     # axis: legacy leg, classed raw finding → selected by line-less identity
     raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical",
            "classKey": "code::bug"}
@@ -676,7 +676,7 @@ def test_stalled_critical_legacy_classed_finding_matches_line_less_identity():
     state = RD.new_state(_cfg())
     state["fixBatch"] = [dict(raw)]
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [raw]
 
 

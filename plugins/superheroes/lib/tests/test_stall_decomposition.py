@@ -181,7 +181,7 @@ def test_routing_owner_is_total():
     assert route is not None
     assert _subtree_has_bare_name_call(route, "_queue_fix_batch")
     assert _subtree_has_bare_name_call(route, "_park_cannot_certify")
-    assert _subtree_has_bare_name_call(route, "_park_capped_open")
+    assert _subtree_has_bare_name_call(route, "_hand_back")  # the uncomposable-blocker park, now a hand-back
     assert _subtree_has_bare_name_call(route, "_settle_delta_converged")
 
 

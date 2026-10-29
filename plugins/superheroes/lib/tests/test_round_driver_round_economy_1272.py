@@ -189,10 +189,10 @@ def test_t2_verify_fail_after_audits_halts(tmp_path):
     assert n3["payload"]["certification"]["shape"] is None
 
 
-# axis: ceiling round with no prior gate runs verify before round-ceiling park
-def test_t3_ceiling_gate_runs_then_parks(tmp_path):
+# axis: cap round with no prior gate runs verify before the round-cap hand-back
+def test_t3_cap_gate_runs_then_hands_back(tmp_path):
     d = str(tmp_path)
-    cfg = _cfg(maxRoundsAbsolute=1, maxRounds=1, verifyCommand="pytest -q")
+    cfg = _cfg(maxRounds=1, verifyCommand="pytest -q")
     respond = _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE)
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
     assert n["round"] == 1
@@ -207,11 +207,11 @@ def test_t3_ceiling_gate_runs_then_parks(tmp_path):
     assert s2["ok"], s2
     n3 = RD.cmd_next(d)
     assert n3["action"] == RD.P_TERMINAL
-    assert n3["payload"]["verdict"] == "halted"
+    assert n3["payload"]["verdict"] == "handed-back"
     ok, state = RD.load_state(d)
     assert ok
     assert state["rounds"]["1"]["verifyResult"] == "pass"
-    assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+    assert any(dec["kind"] == "round-cap" for dec in state["decisions"])
 
 
 def _git_rev_parse(repo):
@@ -277,7 +277,7 @@ def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
     scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1,
                  "consequence": "a reviewer-found defect stays in the change"}]
-    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo,
+    cfg = _cfg(maxRounds=2, verifyCommand="pytest -q", repoRoot=repo,
                seatMap=_nonpanel_cell_proof(["claude", "codex"]))
     respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
     d, n, _head_a, _head_b = _drive_ceiling_round_two_fixer(

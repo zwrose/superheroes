@@ -655,11 +655,10 @@ def test_l3_a3_advance_round_writes_the_baseline_before_the_head_overwrite(monke
     assert state["rounds"]["2"]["roundKind"] == "delta"
 
 
-def test_l3_a3_ceiling_refusal_writes_no_baseline():
-    state = RD.new_state(_cfg(maxRoundsAbsolute=1, maxRounds=1))
+def test_l3_a3_cap_refusal_writes_no_baseline():
+    state = RD.new_state(_cfg(maxRounds=1))
     state["round"] = 1
-    assert RD._advance_round(state, _cfg(maxRoundsAbsolute=1, maxRounds=1),
-                             reason="test-ceiling") is False
+    assert RD._advance_round(state, _cfg(maxRounds=1), reason="test-cap") is False
     assert "deltaBaseline" not in state
 
 

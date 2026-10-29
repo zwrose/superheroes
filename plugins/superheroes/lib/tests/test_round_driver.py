@@ -1518,8 +1518,8 @@ def test_run_loop_returns_the_driver_receipt():
         assert key not in result
 
 
-def test_run_loop_invalid_round_ceiling_returns_a_parked_receipt():
-    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
+def test_run_loop_invalid_max_rounds_returns_a_parked_receipt():
+    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=-1))
     assert result["verdict"] == "cannot-certify"
     assert result["certification"]["shape"] is None
     assert "class" not in result
@@ -1805,11 +1805,12 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     return state
 
 
-def test_capped_with_open_critical_parks(tmp_path):
-    """A Critical still owed at the 2-panel confirmation cap parks (certification withheld)."""
+def test_critical_owed_at_the_confirmation_cap_hands_back_round_cap(tmp_path):
+    """A Critical still owed at the 2-panel confirmation cap hands the PR back (certification withheld)."""
     state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Critical"])
     RD._settle_delta(state, state["config"])
-    assert state["terminal"] == "capped-with-open-critical"
+    assert state["terminal"] == "handed-back"
+    assert any(d["kind"] == "round-cap" for d in state["decisions"])
     assert state["certification"]["shape"] is None
 
 
@@ -2022,7 +2023,7 @@ def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
     retitled = {"round": state["round"] + 1, "outcomes": [
         {"identity": "f.py::memory not freed", "ruling": "not-discharged",
          "classKey": "Security::CWE-401::orig", "dimension": "Security", "taxonomy": "CWE-401"}]}
-    brk = CB.check_audit_breaker([round1, retitled], 20)
+    brk = CB.check_audit_breaker([round1, retitled])
     assert brk["halt"] and brk["reason"] == "audit-stall", brk
 
 
@@ -2045,7 +2046,7 @@ def test_audit_outcome_carries_title_so_distinct_classkeys_dont_false_stall(tmp_
     r1 = fold("secret a", "Security::CWE-401::secret a")
     assert r1["outcomes"][0]["title"] == "secret a"
     r2 = {"round": 2, "outcomes": fold("secret b", "Security::CWE-401::secret b")["outcomes"]}
-    brk = CB.check_audit_breaker([r1, r2], 20)
+    brk = CB.check_audit_breaker([r1, r2])
     assert not brk["halt"], brk  # two distinct classKeys → NOT a stall
 
 
@@ -6121,68 +6122,67 @@ def _rearm_forever_seams():
     return seams
 
 
-def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
-    """DoD headline: clean audits + fresh blocker every review round halts at the ceiling."""
-    # axis: the ROUND BOUNDARY — a round above the ceiling never begins (not: the ceiling round's findings)
-    ceiling = 4
+def test_clean_rearm_forever_halts_at_round_cap(tmp_path):
+    """DoD headline: clean audits + fresh blocker every review round hands back at the cap."""
+    # axis: the ROUND BOUNDARY — a round above the cap never begins (not: the cap round's findings)
+    cap = 4
     seams = _rearm_forever_seams()
-    result = RD.run_loop(seams,
-                         _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=ceiling))
-    assert result["verdict"] == "halted"
+    result = RD.run_loop(seams, _cfg_cert(maxRounds=cap))
+    assert result["verdict"] == "handed-back"
     leg_rnds = seams["_legRnds"]
-    # axis: the ceiling round runs to completion — fixer and verify both ran at the ceiling before park
-    assert ceiling in leg_rnds["fix"]
-    assert ceiling in leg_rnds["verify"]
+    # axis: the cap round runs to completion — fixer and verify both ran at the cap before the hand-back
+    assert cap in leg_rnds["fix"]
+    assert cap in leg_rnds["verify"]
 
 
-def test_clean_rearm_forever_halts_at_distinct_ceiling(tmp_path):
-    """Round reached and ceiling value are asserted independently — not conflated by substring."""
+def test_clean_rearm_forever_hands_back_at_a_cap_below_the_default(tmp_path):
+    """A library-path cap below the default binds: no round past it begins."""
     # axis: the ROUND BOUNDARY — rounds reached N and round N+1 not begun are separate facts
-    ceiling = 11
-    result = RD.run_loop(_rearm_forever_seams(),
-                         _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
-    assert result["verdict"] == "halted"
+    seams = _rearm_forever_seams()
+    result = RD.run_loop(seams, _cfg_cert(maxRounds=3))
+    assert result["verdict"] == "handed-back"
+    assert max(seams["_legRnds"]["verify"]) == 3
 
 
-def test_delta_at_ceiling_records_ledger_then_parks_on_advance():
-    """A verified delta round at the ceiling appends its ledger record, then the advance parks."""
-    # axis: the ceiling round completes (delta ledger append) before the boundary refuses the next round
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=10))
-    state["round"] = 10
+def test_delta_at_cap_records_ledger_then_hands_back_on_advance():
+    """A verified delta round at the cap appends its ledger record, then the advance hands back."""
+    # axis: the cap round completes (delta ledger append) before the boundary refuses the next round
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 4
     state["confirmations"] = 0
     state["surfacedSinceLastPanel"] = ["Critical"]
     state["findings"] = []
     state["fullPanelRan"] = False
-    state["auditRounds"] = [{"round": 9, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["auditRounds"] = [{"round": 3, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
     RD._settle_delta(state, state["config"])
-    assert any(r.get("kind") == "delta" and r.get("round") == 10 for r in state["_records"])
-    assert state["terminal"] == "halted"
-    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
-    assert state["round"] == 10
+    assert any(r.get("kind") == "delta" and r.get("round") == 4 for r in state["_records"])
+    assert state["terminal"] == "handed-back"
+    assert any(d["kind"] == "round-cap" for d in state["decisions"])
+    assert state["round"] == 4
 
 
-def test_delta_at_ceiling_challenged_principle_parks_without_ceiling():
-    """Challenged-principle park at the ceiling round terminates; the ceiling boundary never runs."""
-    # axis: challenged-principle-recurring parks inside _settle_delta — round-ceiling is advance-only
+def test_delta_at_cap_challenged_principle_parks_without_the_cap():
+    """Challenged-principle park at the cap round terminates; the cap boundary never runs."""
+    # axis: challenged-principle-recurring parks inside _settle_delta — round-cap is advance-only
     finding = {"title": "recurs", "file": "a.js", "severity": "Critical", "consequence": _CONSEQUENCE, "dimension": "code-reviewer",
                "classKey": "Code::x::recurs"}
     prior = {
-        "schemaVersion": 2, "round": 9, "kind": "delta",
+        "schemaVersion": 2, "round": 3, "kind": "delta",
         "dimensions": {"code-reviewer": {"dimension": "code-reviewer", "status": "run",
                                          "confidence": "high", "tier": RD.DEEP, "findings": [finding]}},
         "findings": [finding], "coverageDecisions": [],
     }
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=10))
-    state["round"] = 10
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 4
     state["findings"] = [finding]
     state["_records"] = [prior]
     state["_coverage"] = [{"id": "RCD-1", "classKey": "Code::x::recurs"}]
-    state["auditRounds"] = [{"round": 9, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["auditRounds"] = [{"round": 3, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "cannot-certify"
-    assert not any(d["kind"] == "round-ceiling" for d in state["decisions"])
+    assert not any(d["kind"] == "round-cap" for d in state["decisions"])
 
 
 def _rearm_until_converge_seams(converge_at):
@@ -6213,31 +6213,29 @@ def _rearm_until_converge_seams(converge_at):
     return _seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"])
 
 
-def test_round_nine_below_ceiling_does_not_halt_on_ceiling(tmp_path):
-    """Below the ceiling the advance path converges normally — no round-ceiling decision."""
-    # axis: the ceiling does not fire below it — driven through the real advance path, not settle
-    ceiling = 10
-    receipt = RD.run_loop(_rearm_until_converge_seams(9),
-                          _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
+def test_round_three_below_the_cap_does_not_hand_back(tmp_path):
+    """Below the cap the advance path converges normally — no round-cap decision."""
+    # axis: the cap does not fire below it — driven through the real advance path, not settle
+    receipt = RD.run_loop(_rearm_until_converge_seams(3), _cfg_cert(maxRounds=4))
     reached = max(r["round"] for r in receipt["rounds"])
-    assert reached == 9
+    assert reached == 3
     assert receipt["verdict"] == "converged"
     assert not any(r.get("stallChoice") for r in receipt["rounds"])
 
 
-def test_clean_below_ceiling_still_certifies_converged(tmp_path):
-    """No-regression: a clean run below the ceiling still certifies converged."""
-    receipt = RD.run_loop(_seams(), _cfg_cert(maxRoundsAbsolute=10))
+def test_clean_below_the_cap_still_certifies_converged(tmp_path):
+    """No-regression: a clean run below the cap still certifies converged."""
+    receipt = RD.run_loop(_seams(), _cfg_cert())
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] is not None
 
 
-def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
-    """A persisted non-terminal state above the ceiling parks on cmd_next — no certification."""
-    # axis: persisted state at round ceiling+1 halts on cmd_next with round-ceiling, no certification
+def test_loaded_state_above_cap_hands_back_on_cmd_next(tmp_path):
+    """A persisted non-terminal state above the cap hands back on cmd_next — no certification."""
+    # axis: persisted state at round cap+1 hands back on cmd_next with round-cap, no certification
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 11
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
     state["step"] = RD.P_PANEL
@@ -6247,26 +6245,26 @@ def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
     assert n["phase"] == RD.P_TERMINAL
     ok, reloaded = RD.load_state(d)
     assert ok
-    assert reloaded["terminal"] == "halted"
+    assert reloaded["terminal"] == "handed-back"
     assert reloaded["certification"]["shape"] is None
-    assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
-    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-ceiling")
-    # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
-    assert "Round ceiling 10 reached" in detail
-    assert "round 11 had already begun" in detail
+    assert any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
+    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-cap")
+    # axis: loaded-state hand-back detail names the cap and the round reached separately — not boundary "not begun" wording
+    assert "Round cap 4 reached" in detail
+    assert "round 5 had already begun" in detail
     assert "not begun" not in detail
 
 
-def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
-    """A persisted non-terminal state above the ceiling parks on cmd_submit — no certification."""
-    # axis: persisted state at round ceiling+1 halts on cmd_submit with round-ceiling, no certification
+def test_loaded_state_above_cap_hands_back_on_cmd_submit(tmp_path):
+    """A persisted non-terminal state above the cap hands back on cmd_submit — no certification."""
+    # axis: persisted state at round cap+1 hands back on cmd_submit with round-cap, no certification
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 11
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
     state["step"] = RD.P_PANEL
-    state["pending"] = {"action": RD.P_PANEL, "round": 11, "phase": RD.P_PANEL, "attempt": 0,
+    state["pending"] = {"action": RD.P_PANEL, "round": 5, "phase": RD.P_PANEL, "attempt": 0,
                         "payload": {}}
     RD.save_state(d, state)
     h = RD.state_hash(state)
@@ -6275,22 +6273,22 @@ def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
     assert out["nextStep"] == RD.P_TERMINAL
     ok, reloaded = RD.load_state(d)
     assert ok
-    assert reloaded["terminal"] == "halted"
+    assert reloaded["terminal"] == "handed-back"
     assert reloaded["certification"]["shape"] is None
-    assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
-    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-ceiling")
-    # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
-    assert "Round ceiling 10 reached" in detail
-    assert "round 11 had already begun" in detail
+    assert any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
+    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-cap")
+    # axis: loaded-state hand-back detail names the cap and the round reached separately — not boundary "not begun" wording
+    assert "Round cap 4 reached" in detail
+    assert "round 5 had already begun" in detail
     assert "not begun" not in detail
 
 
-def test_loaded_state_at_ceiling_runs_on_cmd_next(tmp_path):
-    """A persisted state at round == ceiling is not parked on cmd_next entry."""
-    # axis: persisted state at round == ceiling runs — equality is allowed
+def test_loaded_state_at_cap_runs_on_cmd_next(tmp_path):
+    """A persisted state at round == cap is not handed back on cmd_next entry."""
+    # axis: persisted state at round == cap runs — equality is allowed
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 10
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 4
     state["findings"] = []
     state["fullPanelRan"] = True
     state["step"] = RD.P_PANEL
@@ -6301,19 +6299,19 @@ def test_loaded_state_at_ceiling_runs_on_cmd_next(tmp_path):
     ok, reloaded = RD.load_state(d)
     assert ok
     assert reloaded.get("terminal") is None
-    assert not any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+    assert not any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
 
 
-def test_loaded_terminal_above_ceiling_re_emits_unchanged(tmp_path):
-    """A stored terminal above the ceiling re-emits unchanged — the loaded-state guard does not clobber."""
-    # axis: already-terminal persisted state above ceiling re-emits its stored terminal unchanged
+def test_loaded_terminal_above_cap_re_emits_unchanged(tmp_path):
+    """A stored terminal above the cap re-emits unchanged — the loaded-state guard does not clobber."""
+    # axis: already-terminal persisted state above the cap re-emits its stored terminal unchanged
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 11
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 5
     state["terminal"] = "converged"
     state["certification"] = {"shape": "full-panel-confirmed-degraded", "reason": "stored"}
     state["step"] = RD.P_TERMINAL
-    state["pending"] = {"action": RD.P_TERMINAL, "round": 11, "phase": RD.P_TERMINAL, "attempt": 0,
+    state["pending"] = {"action": RD.P_TERMINAL, "round": 5, "phase": RD.P_TERMINAL, "attempt": 0,
                         "payload": {"verdict": "converged", "certification": state["certification"]}}
     state["decisions"] = [{"kind": "converged", "detail": "stored"}]
     RD.save_state(d, state)
@@ -6324,72 +6322,21 @@ def test_loaded_terminal_above_ceiling_re_emits_unchanged(tmp_path):
     assert ok
     assert reloaded["terminal"] == "converged"
     assert reloaded["certification"]["shape"] == "full-panel-confirmed-degraded"
-    assert not any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+    assert not any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
 
 
-def test_load_refusal_when_ceiling_below_max_rounds():
-    """A ceiling below maxRounds refuses at load with the named token."""
-    with pytest.raises(RD.RoundCeilingRefusal) as exc:
-        RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 5})
-    assert exc.value.reason == CB.CEILING_BELOW_CAP_REFUSAL
-
-
-def test_load_accepts_ceiling_at_or_above_max_rounds():
-    """A ceiling at or above maxRounds resolves and loads."""
-    cfg = RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 10})
-    assert cfg["maxRoundsAbsolute"] == 10
-    cfg2 = RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 7})
-    assert cfg2["maxRoundsAbsolute"] == 7
-
-
-def test_new_state_unnamed_ceiling_below_max_rounds_loads_flat_default():
-    """maxRounds=20 with no named ceiling loads; flat default ceiling binds below the cap."""
-    state = RD.new_state(_cfg(maxRounds=20))
-    assert state["config"]["maxRoundsAbsolute"] == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
-
-
-def test_max_rounds_absolute_cli_structured_refusal(tmp_path, capsys):
-    """CLI --max-rounds-absolute below maxRounds emits the structured refusal shape."""
-    d = str(tmp_path)
-    rc = RD.main(["next", "--session-dir", d, "--max-rounds", "7",
-                  "--max-rounds-absolute", "5"])
-    assert rc == 1
-    out = json.loads(capsys.readouterr().out.strip())
-    assert out == {"ok": False, "reason": CB.CEILING_BELOW_CAP_REFUSAL, "value": 5}
-
-
-def test_max_rounds_absolute_not_fresh_state_refuses(tmp_path, capsys):
-    """B1: --max-rounds-absolute on non-fresh state refuses with the named token."""
-    d = str(tmp_path)
-    rc, out = _cli_next_json(d, ["--max-rounds", "7"] + _guard_argv(d), capsys)
-    assert rc == 0 and out["ok"]
-    rc2, out2 = _cli_next_json(
-        d, ["--max-rounds-absolute", "20"] + _guard_argv(d, fresh=False), capsys)
-    assert rc2 == 1
-    assert out2 == {"ok": False, "reason": "max-rounds-absolute-not-fresh-state", "value": 20}
-
-
-def test_max_rounds_absolute_fresh_with_max_rounds_loads(tmp_path, capsys):
-    """B1: fresh session with --max-rounds 12 --max-rounds-absolute 12 loads."""
-    d = str(tmp_path)
-    rc, out = _cli_next_json(
-        d, ["--max-rounds", "12", "--max-rounds-absolute", "12"] + _guard_argv(d), capsys)
-    assert rc == 0
-    assert out["ok"] is True
-
-
-def test_run_loop_parks_on_ceiling_refusal():
-    """B2: run_loop with ceiling below maxRounds parks cannot-certify; never raises."""
-    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
+def test_run_loop_parks_on_max_rounds_refusal():
+    """B2: run_loop with a non-positive maxRounds parks cannot-certify; never raises."""
+    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=0))
     assert result["verdict"] == "cannot-certify"
     assert result["certificationShape"] is None
 
 
-def test_persisted_config_without_max_rounds_absolute_resolves_default_ceiling():
-    """Persisted config predating #1030 resolves the default ceiling — never ceiling-less."""
+def test_persisted_config_without_max_rounds_resolves_the_round_cap():
+    """A persisted config with no usable maxRounds resolves ROUND_CAP — never cap-less."""
     cfg = dict(RD.new_state(_cfg())["config"])
-    cfg.pop("maxRoundsAbsolute", None)
-    assert RD._round_ceiling(cfg) == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
+    cfg.pop("maxRounds", None)
+    assert RD._round_cap(cfg) == RD.round_phases.ROUND_CAP
 
 
 def _round_slice_is_round_key(node):
@@ -6454,7 +6401,7 @@ def test_round_counter_mutation_sites_census():
 
 
 def _delta_settle_state_for_breaker(monkeypatch, breaker_result):
-    state = RD.new_state(_cfg(maxRounds=10, maxRoundsAbsolute=10))
+    state = RD.new_state(_cfg(maxRounds=10))
     state["round"] = 3
     state["findings"] = []
     state["auditRounds"] = [{"round": 2, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
@@ -6470,10 +6417,10 @@ def _audit_breaker_emitted_reasons():
 
 
 _SETTLE_DELTA_CLAIMED = frozenset({
-    "max-iterations",
     "audit-stall",
 })
 _SETTLE_DELTA_UNREACHABLE = frozenset({
+    "max-iterations",
     "no-net-progress",
     "recurring-finding",
     "challenged-principle-recurring",
@@ -6487,17 +6434,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     for reason in _SETTLE_DELTA_UNREACHABLE:
         assert reason not in audit_emitted, reason
 
-    # max-iterations — parks or certifies; never routes to the fixer.
-    state = _delta_settle_state_for_breaker(monkeypatch, {
-        "halt": True, "reason": "max-iterations", "detail": "cap",
-        "stalledIdentities": [],
-    })
-    RD._settle_delta(state, state["config"])
-    assert state["step"] != RD.P_FIXER
-    assert state["terminal"] in (
-        "converged", "capped-with-open-critical", "capped-with-open-blocker",
-    )
-
+    # max-iterations — the audit breaker no longer emits it: the round cap is the driver's boundary.
     # audit-stall — discharged targets leave no open work; self-recovery settles via confirmation.
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "audit-stall", "detail": "stalled",
@@ -6649,16 +6586,16 @@ def test_verify_fold_unresolved_head_panel_parks_underivable():
     assert "head unresolved" in state["certification"]["reason"]
 
 
-def test_verify_fold_at_ceiling_parks_round_ceiling():
+def test_verify_fold_at_cap_hands_back_round_cap():
     for resolution in (("a" * 40, None), (None, "fix-fold head: repo root unresolvable")):
-        state = _verify_fold_state(maxRounds=2, maxRoundsAbsolute=2)
+        state = _verify_fold_state(maxRounds=2)
         state["round"] = 2
         state["rounds"] = {"2": {}}
-        state["_verifyThen"] = RD.VERIFY_THEN_CEILING
+        state["_verifyThen"] = RD.VERIFY_THEN_CAP
         RD._fold_verify(state, state["config"], {"result": "pass"}, resolution=resolution)
-        assert state["terminal"] == "halted"
+        assert state["terminal"] == "handed-back"
         assert state["step"] == RD.P_TERMINAL
-        assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+        assert any(dec["kind"] == "round-cap" for dec in state["decisions"])
 
 
 def test_verify_fold_legacy_position_unresolved_head_unknown_surface_parks_underivable():
@@ -6742,13 +6679,13 @@ def test_fixer_fold_records_refusal_when_head_unresolvable(tmp_path, monkeypatch
     assert "fixFoldHead" not in state["rounds"]["1"]
 
 
-def test_ceiling_always_runs_the_verify_gate():
-    state = RD.new_state(_cfg(maxRounds=2, maxRoundsAbsolute=2))
+def test_cap_round_always_runs_the_verify_gate():
+    state = RD.new_state(_cfg(maxRounds=2))
     state["round"] = 2
     state["rounds"] = {"2": {"verifyResult": "pass"}}
     RD._enter_post_fix(state, state["config"], session_dir=None)
     assert state["step"] == RD.P_VERIFY
-    assert state["_verifyThen"] == RD.VERIFY_THEN_CEILING
+    assert state["_verifyThen"] == RD.VERIFY_THEN_CAP
     assert not state.get("terminal")
     assert "ceilingGateReused" not in state["rounds"]["2"]
 

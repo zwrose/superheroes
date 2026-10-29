@@ -16,7 +16,6 @@ from finding_identity import (
     clamp_title, normalize_title, finding_label, finding_identity,
 )
 from audits import AUDIT_RULINGS
-import round_phases
 
 BLOCKING = {"Critical", "Important"}
 # The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
@@ -38,21 +37,6 @@ BREAKER_REASONS = frozenset({
     "max-iterations", "no-net-progress", "challenged-principle-recurring",
     "recurring-finding", "audit-stall", ROUND_CEILING_REASON,
 })
-
-
-def _usable_int(value):
-    """True when value is a non-bool int."""
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _positive_usable_int(value):
-    return _usable_int(value) and value >= 1
-
-
-def _effective_max_rounds(max_rounds):
-    if _positive_usable_int(max_rounds):
-        return max_rounds
-    return round_phases.ROUND_CAP
 
 
 # One normalized severity vocabulary for rank/tier comparisons — lives beside `is_blocking` so a
