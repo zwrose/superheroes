@@ -6,10 +6,10 @@ generated files, lock files, files deleted whole, and proven copies. A file whos
 counter could not settle is returned in ``unsettled``, never silently counted or dropped.
 """
 import hashlib
+import io
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
 
@@ -31,6 +31,9 @@ _CODE_GENERATED_RE = re.compile("Code generated .* " + "DO NOT" + " EDIT")
 _HEX64_RE = re.compile(r"[0-9a-f]{64}")
 _HUNK_RE = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _SIMILARITY_RE = re.compile(r"similarity index (\d+)%")
+_INDEX_RE = re.compile(r"index [0-9a-fA-F]+\.\.([0-9a-fA-F]+)(?: [0-7]+)?")
+_BINDING_MIN_HEX = 7
+_REGULAR_MODES = ("100644", "100755")
 _HEADER_PREFIX = "diff --git "
 _MAX_MARKER_LINE = 65536
 
@@ -66,6 +69,7 @@ def _parse_section(lines):
     binary = False
     renamed = False
     copied = False
+    index_new = None
     added_lines = []
     removed_lines = []
     head_lines = []
@@ -111,6 +115,10 @@ def _parse_section(lines):
             renamed = True
         elif line.startswith("copy from ") or line.startswith("copy to "):
             copied = True
+        elif line.startswith("index "):
+            found = _INDEX_RE.fullmatch(line.rstrip("\n"))
+            if found and index_new is None:
+                index_new = found.group(1).lower()
         else:
             found = _SIMILARITY_RE.match(line)
             if found:
@@ -126,6 +134,7 @@ def _parse_section(lines):
         "status": status,
         "similarity": similarity,
         "binary": binary,
+        "indexNew": index_new,
         "added": len(added_lines),
         "removed": len(removed_lines),
         "addedLines": added_lines,
@@ -232,35 +241,74 @@ def _lexically_unsafe(file):
     return ".." in file.replace("\\", "/").split("/")
 
 
-def _resolved_path(repo_root, file):
-    """``(full_path, None)`` for a regular, non-symlink path inside ``repo_root``, else ``(None, reason)``."""
+def _git_env():
+    """The environment every Git call here runs under: routing variables scrubbed, optional locks off."""
+    with size_count._git_routing_scrubbed_environ():
+        env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
+
+
+def _usable_head(head):
+    """True for a non-empty revision string that Git cannot take for an option."""
+    return isinstance(head, str) and bool(head) and not head.startswith("-")
+
+
+def _head_entry(repo_root, head, file):
+    """``(mode, type, oid)`` of the one tree entry at ``head`` whose path is exactly ``file``, else None.
+
+    ``file`` is passed bare after ``--``, which ``ls-tree`` matches literally. None also covers a Git
+    failure, a timeout and a ``head`` that names no commit."""
+    if not _usable_head(head):
+        return None
     try:
-        if _lexically_unsafe(file):
-            return None, "path-unsafe"
-        real_root = os.path.realpath(os.fspath(repo_root))
-        full = os.path.join(real_root, *[p for p in file.split("/") if p not in ("", ".")])
-        if stat.S_ISLNK(os.lstat(full).st_mode):
-            return None, "path-unsafe"
-        if os.path.realpath(full) != full:
-            return None, "path-unsafe"
-    except (OSError, ValueError, TypeError, UnicodeError):
-        return None, "unreadable"
-    return full, None
+        proc = subprocess.run(
+            ["git", "-C", os.fspath(repo_root), "ls-tree", "-z", head, "--", file],
+            capture_output=True, timeout=ATTR_TIMEOUT, env=_git_env(),
+        )
+        wanted = file.encode("utf-8", "surrogateescape")
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError, TypeError):
+        return None
+    if proc.returncode != 0:
+        return None
+    found = []
+    for entry in proc.stdout.split(b"\0"):
+        if not entry:
+            continue
+        meta, tab, path = entry.partition(b"\t")
+        fields = meta.split(b" ")
+        if tab and path == wanted and len(fields) == 3:
+            found.append(tuple(f.decode("ascii", "replace") for f in fields))
+    return found[0] if len(found) == 1 else None
 
 
-def _sha256_of(full):
-    digest = hashlib.sha256()
-    fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    with os.fdopen(fd, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _head_blob(repo_root, oid):
+    """The bytes of blob ``oid``, or None when Git fails or times out."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", os.fspath(repo_root), "cat-file", "blob", oid],
+            capture_output=True, timeout=ATTR_TIMEOUT, env=_git_env(),
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError, TypeError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
 
 
-def proven_copies(diff_text, repo_root, proof):
-    """``(proven, rejected)``: the proof copies whose file is in the change, not deleted, and whose working-tree
-    bytes hash to the proof's checksum, and every other copy as ``{"file", "reason"}``. A proof that fails
-    ``proof_fault`` proves nothing."""
+def _regular_head_blob(repo_root, head, file):
+    """``(oid, bytes)`` for a regular file at ``head``, else ``(None, None)``."""
+    entry = _head_entry(repo_root, head, file)
+    if entry is None or entry[1] != "blob" or entry[0] not in _REGULAR_MODES:
+        return None, None
+    return entry[2], _head_blob(repo_root, entry[2])
+
+
+def proven_copies(diff_text, repo_root, proof, head="HEAD"):
+    """``(proven, rejected)``: the proof copies whose file is in the change, not deleted, shown in the diff by a
+    section bound to the blob at ``head``, and whose bytes at ``head`` hash to the proof's checksum, and every
+    other copy as ``{"file", "reason"}``. The working tree is never read. A proof that fails ``proof_fault``
+    proves nothing."""
     if not isinstance(diff_text, str) or proof_fault(proof) is not None:
         return [], []
     by_file = {}
@@ -271,7 +319,7 @@ def proven_copies(diff_text, repo_root, proof):
     rejected = []
     for copy in proof["copies"]:
         file = copy["file"]
-        reason = _reject_reason(by_file, repo_root, copy)
+        reason = _reject_reason(by_file, repo_root, head, copy)
         if reason is None:
             proven.append({"file": file, "source": copy["source"], "sha256": copy["sha256"]})
         else:
@@ -279,7 +327,7 @@ def proven_copies(diff_text, repo_root, proof):
     return proven, rejected
 
 
-def _reject_reason(by_file, repo_root, copy):
+def _reject_reason(by_file, repo_root, head, copy):
     file = copy["file"]
     if _lexically_unsafe(file):
         return "path-unsafe"
@@ -289,15 +337,25 @@ def _reject_reason(by_file, repo_root, copy):
         return "not-in-change"
     if sections and all(section["status"] == "deleted" for section in sections):
         return "deleted"
-    full, reason = _resolved_path(repo_root, file)
-    if reason is not None:
-        return reason
-    try:
-        digest = _sha256_of(full)
-    except (OSError, ValueError):
+    entry = _head_entry(repo_root, head, file)
+    if entry is None:
         return "unreadable"
-    # Axis: a proof copy counts only when the working-tree bytes hash to the proof's checksum.
-    if digest != copy["sha256"]:
+    mode, kind, oid = entry
+    if kind != "blob" or mode not in _REGULAR_MODES:
+        return "path-unsafe"
+    # Axis: a proof copy counts only when every diff section shown for it is bound to the head blob (its
+    # ``index`` new id is a prefix of the head oid), so the diff the reviewer reads is of the bytes proven.
+    for section in sections:
+        if section["status"] == "deleted":
+            continue
+        new = section["indexNew"]
+        if new is None or len(new) < _BINDING_MIN_HEX or not oid.startswith(new):
+            return "section-unbound"
+    data = _head_blob(repo_root, oid)
+    if data is None:
+        return "unreadable"
+    # Axis: a proof copy counts only when the head blob's bytes hash to the proof's checksum.
+    if hashlib.sha256(data).hexdigest() != copy["sha256"]:
         return "checksum-mismatch"
     return None
 
@@ -350,16 +408,17 @@ def _moved_pairs(sections):
     return moved
 
 
-def _attribute_flags(repo_root, files):
-    """``{file: bool}`` for ``linguist-generated`` set/true, or None when ``git check-attr`` failed."""
+def _attribute_flags(repo_root, files, head):
+    """``{file: bool}`` for ``linguist-generated`` set/true as ``head`` records it, or None when
+    ``git check-attr`` failed."""
+    if not _usable_head(head):
+        return None
     try:
-        with size_count._git_routing_scrubbed_environ():
-            env = dict(os.environ)
-        env["GIT_OPTIONAL_LOCKS"] = "0"
         stdin = b"".join(f.encode("utf-8", "surrogateescape") + b"\0" for f in files)
+        # Axis: the attribute is read from the head commit's tree, never from the checkout's .gitattributes.
         proc = subprocess.run(
-            ["git", "-C", os.fspath(repo_root), "check-attr", "-z", "linguist-generated", "--stdin"],
-            input=stdin, capture_output=True, timeout=ATTR_TIMEOUT, env=env,
+            ["git", "-C", os.fspath(repo_root), "check-attr", "--source", head, "-z", "linguist-generated", "--stdin"],
+            input=stdin, capture_output=True, timeout=ATTR_TIMEOUT, env=_git_env(),
         )
     except (OSError, subprocess.SubprocessError, UnicodeError, ValueError, TypeError):
         return None
@@ -379,30 +438,27 @@ def _attribute_flags(repo_root, files):
     return {f: values[f] for f in files}
 
 
-def _has_generated_marker(repo_root, file):
-    """True/False for the first ``GENERATED_MARKER_LINES`` lines of the working-tree file, None when unreadable."""
-    full, reason = _resolved_path(repo_root, file)
-    if reason is not None:
+def _has_generated_marker(repo_root, file, head):
+    """True/False for the first ``GENERATED_MARKER_LINES`` lines of the blob at ``head``, None when the entry is
+    missing, is not a regular file, or cannot be read."""
+    _, data = _regular_head_blob(repo_root, head, file)
+    if data is None:
         return None
-    try:
-        fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(fd, "rb") as handle:
-            head = [handle.readline(_MAX_MARKER_LINE) for _ in range(GENERATED_MARKER_LINES)]
-    except (OSError, ValueError):
-        return None
-    for raw in head:
+    handle = io.BytesIO(data)
+    top = [handle.readline(_MAX_MARKER_LINE) for _ in range(GENERATED_MARKER_LINES)]
+    for raw in top:
         text = raw.decode("utf-8", "replace")
         if _GENERATED_TAG in text or _CODE_GENERATED_RE.search(text):
             return True
     return False
 
 
-def _settle_generated(repo_root, files):
+def _settle_generated(repo_root, files, head):
     """``{file: ("generated" | "countable" | <unsettled reason>)}`` for every file that reached the generated test."""
     unique = list(dict.fromkeys(files))
     if not unique:
         return {}
-    flags = _attribute_flags(repo_root, unique)
+    flags = _attribute_flags(repo_root, unique, head)
     if flags is None:
         return {f: "attribute-unreadable" for f in unique}
     out = {}
@@ -410,7 +466,7 @@ def _settle_generated(repo_root, files):
         if flags[file]:
             out[file] = "generated"
             continue
-        marker = _has_generated_marker(repo_root, file)
+        marker = _has_generated_marker(repo_root, file, head)
         if marker is None:
             out[file] = "content-unreadable"
         else:
@@ -418,10 +474,11 @@ def _settle_generated(repo_root, files):
     return out
 
 
-def count(diff_text, repo_root, proven=()):
+def count(diff_text, repo_root, proven=(), head="HEAD"):
     """The countable lines of ``diff_text``: ``{"countable", "bar", "files", "unsettled"}``.
 
-    ``proven`` is an iterable of file paths or of dicts with a ``"file"`` key."""
+    ``proven`` is an iterable of file paths or of dicts with a ``"file"`` key. Attributes and content are read
+    from the commit ``head``, never from the working tree."""
     if not isinstance(diff_text, str):
         return _diff_unreadable()
     sections = parse_sections(diff_text)
@@ -433,7 +490,7 @@ def count(diff_text, repo_root, proven=()):
         decisions[i] = _early_decision(section, i in moved, proven_files)
         if decisions[i] is None:
             candidates.append(section["file"])
-    settled = _settle_generated(repo_root, candidates)
+    settled = _settle_generated(repo_root, candidates, head)
     rows = []
     unsettled = []
     total = 0

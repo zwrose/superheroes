@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 
 import pytest
@@ -351,11 +352,212 @@ def test_proof_naming_a_deleted_file_is_rejected(tmp_path):
     assert proven == [] and rejected == [{"file": "gone.txt", "reason": "deleted"}]
 
 
-def test_proof_naming_a_file_missing_from_the_working_tree_is_unreadable(tmp_path):
+def test_proof_naming_a_file_absent_at_head_is_unreadable(tmp_path):
+    # Was "missing from the working tree": the file is now removed in a later commit, because the counter
+    # reads head, and a working-tree-only deletion no longer changes its answer.
     root, diff = _copy_fixture(tmp_path)
-    (root / "copies/a.txt").unlink()
+    _git(root, "rm", "-q", "copies/a.txt")
+    _commit(root, "drop it")
     proven, rejected = cl.proven_copies(diff, root, _proof(_copy("copies/a.txt", b"alpha\nbeta\n")))
     assert proven == [] and rejected == [{"file": "copies/a.txt", "reason": "unreadable"}]
+
+
+# --- the counter reads the head commit, not the checkout -------------------------------------
+
+def _strip_index_lines(diff):
+    return "".join(line for line in diff.splitlines(True) if not line.startswith("index "))
+
+
+def _rewrite_index_new(diff, change):
+    return re.sub(r"(?m)^(index [0-9a-f]+\.\.)([0-9a-f]+)", lambda m: m.group(1) + change(m.group(2)), diff)
+
+
+def test_sections_record_the_new_blob_id_from_the_index_line(tmp_path):
+    root, diff = _copy_fixture(tmp_path)
+    oid = _git(root, "rev-parse", "HEAD:copies/a.txt").strip()
+    sections = {s["file"]: s for s in cl.parse_sections(diff)}
+    assert oid.startswith(sections["copies/a.txt"]["indexNew"]) and len(sections["copies/a.txt"]["indexNew"]) >= 7
+    assert sections["copies/a.txt"]["indexNew"] == sections["copies/a.txt"]["indexNew"].lower()
+    bare = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n"
+    assert cl.parse_sections(bare)[0]["indexNew"] is None
+    # An index line below the first hunk is hunk content, not a header.
+    late = bare + "index 1111111..2222222 100644\n"
+    assert cl.parse_sections(late)[0]["indexNew"] is None
+    with_mode = "diff --git a/f b/f\nindex 1111111..2222222 100755\n--- a/f\n+++ b/f\n"
+    assert cl.parse_sections(with_mode)[0]["indexNew"] == "2222222"
+
+
+def test_proof_matching_only_the_working_tree_is_a_checksum_mismatch(tmp_path):
+    root, diff = _copy_fixture(tmp_path)
+    (root / "copies/a.txt").write_bytes(b"edited after the commit\n")
+    proven, rejected = cl.proven_copies(diff, root, _proof(_copy("copies/a.txt", b"edited after the commit\n")))
+    assert proven == []
+    assert rejected == [{"file": "copies/a.txt", "reason": "checksum-mismatch"}]
+
+
+def test_proof_matching_head_is_proven_while_the_working_tree_is_edited(tmp_path):
+    root, diff = _copy_fixture(tmp_path)
+    (root / "copies/a.txt").write_bytes(b"edited after the commit\n")
+    proof = _proof(_copy("copies/a.txt", b"alpha\nbeta\n"))
+    proven, rejected = cl.proven_copies(diff, root, proof)
+    assert proven == [proof["copies"][0]] and rejected == []
+
+
+def test_diff_of_one_commit_with_head_at_another_is_section_unbound(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    _write(root, "f.txt", "aaaa\n")
+    _commit(root, "A")
+    diff_a = _diff(root, base)
+    _write(root, "f.txt", "bbbb\n")
+    _commit(root, "B")
+    diff_b = _diff(root, base)
+    proof = _proof(_copy("f.txt", b"bbbb\n"))
+    proven, rejected = cl.proven_copies(diff_a, root, proof)
+    assert proven == [] and rejected == [{"file": "f.txt", "reason": "section-unbound"}]
+    # The diff of the commit that head is at does bind.
+    assert cl.proven_copies(diff_b, root, proof) == ([proof["copies"][0]], [])
+
+
+def test_section_without_an_index_line_is_section_unbound(tmp_path):
+    root, diff = _copy_fixture(tmp_path)
+    stripped = _strip_index_lines(diff)
+    assert "index " not in stripped
+    proven, rejected = cl.proven_copies(stripped, root, _proof(_copy("copies/a.txt", b"alpha\nbeta\n")))
+    assert proven == [] and rejected == [{"file": "copies/a.txt", "reason": "section-unbound"}]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [lambda new: new[:6], lambda new: ("0" if new[0] != "0" else "1") + new[1:]],
+    ids=["too-short", "not-a-prefix"],
+)
+def test_index_id_too_short_or_not_a_prefix_of_the_head_oid_is_section_unbound(tmp_path, change):
+    root, diff = _copy_fixture(tmp_path)
+    altered = _rewrite_index_new(diff, change)
+    assert altered != diff
+    proven, rejected = cl.proven_copies(altered, root, _proof(_copy("copies/a.txt", b"alpha\nbeta\n")))
+    assert proven == [] and rejected == [{"file": "copies/a.txt", "reason": "section-unbound"}]
+
+
+def test_symlink_at_head_is_path_unsafe_and_absent_at_head_is_unreadable(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    (root / "target.txt").write_bytes(b"data\n")
+    os.symlink("target.txt", root / "link.txt")
+    _commit(root, "feature")
+    diff = _diff(root, base)
+    # What the link points at, so that only the entry type can reject it.
+    proven, rejected = cl.proven_copies(diff, root, _proof(_copy("link.txt", b"target.txt")))
+    assert proven == [] and rejected == [{"file": "link.txt", "reason": "path-unsafe"}]
+    ghost = diff + "diff --git a/ghost.txt b/ghost.txt\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/ghost.txt\n@@ -0,0 +1 @@\n+g\n"
+    proven, rejected = cl.proven_copies(ghost, root, _proof(_copy("ghost.txt", b"g\n")))
+    assert proven == [] and rejected == [{"file": "ghost.txt", "reason": "unreadable"}]
+
+
+def test_directory_at_head_is_path_unsafe(tmp_path):
+    root, _ = _copy_fixture(tmp_path)
+    fake = "diff --git a/copies b/copies\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/copies\n@@ -0,0 +1 @@\n+x\n"
+    proven, rejected = cl.proven_copies(fake, root, _proof(_copy("copies", b"x\n")))
+    assert proven == [] and rejected == [{"file": "copies", "reason": "path-unsafe"}]
+
+
+def test_head_naming_no_commit_leaves_every_copy_unreadable_and_candidates_unsettled(tmp_path):
+    root, diff = _copy_fixture(tmp_path)
+    proof = _proof(_copy("copies/a.txt", b"alpha\nbeta\n"))
+    proven, rejected = cl.proven_copies(diff, root, proof, head="nosuchrev")
+    assert proven == [] and rejected == [{"file": "copies/a.txt", "reason": "unreadable"}]
+    result = cl.count(diff, root, head="nosuchrev")
+    assert result["countable"] == 0
+    assert {u["reason"] for u in result["unsettled"]} == {"attribute-unreadable"}
+    assert len(result["unsettled"]) == 3
+    # A revision that looks like an option is not handed to Git at all.
+    assert cl.proven_copies(diff, root, proof, head="--all")[1] == [{"file": "copies/a.txt", "reason": "unreadable"}]
+    assert cl.count(diff, root, head="--all")["countable"] == 0
+
+
+@pytest.mark.parametrize("name", ["dir with space/a*b.txt", "dir with space/axb.txt", "é.txt", "br[ac]ck?t.txt"])
+def test_awkward_file_names_are_looked_up_literally(tmp_path, name):
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    # The decoys match the glob forms of the awkward names but hold other bytes.
+    _write(root, "dir with space/a*b.txt", "star\n")
+    _write(root, "dir with space/axb.txt", "decoy\n")
+    _write(root, "é.txt", "accent\n")
+    _write(root, "br[ac]ck?t.txt", "bracket\n")
+    _write(root, "bracket.txt", "decoy\n")
+    _commit(root, "feature")
+    diff = _diff(root, base)
+    data = (root / name).read_bytes()
+    proven, rejected = cl.proven_copies(diff, root, _proof(_copy(name, data)))
+    assert [c["file"] for c in proven] == [name] and rejected == []
+    wrong = cl.proven_copies(diff, root, _proof(_copy(name, b"not these bytes\n")))
+    assert wrong[0] == [] and wrong[1] == [{"file": name, "reason": "checksum-mismatch"}]
+
+
+def test_a_dirty_checkout_does_not_change_the_count(tmp_path):
+    root, diff = _copy_fixture(tmp_path)
+    (root / "copies/a.txt").unlink()
+    (root / "changed.py").write_text("# %s\n" % GEN_TAG, encoding="utf-8")
+    result = cl.count(diff, root)
+    rows = _rows(result)
+    assert rows["copies/a.txt"]["counted"] is True and rows["changed.py"]["counted"] is True
+    assert result["unsettled"] == []
+
+
+def test_symlink_at_head_is_unsettled_for_the_generated_test(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    os.symlink("target.txt", root / "link.txt")
+    _commit(root, "feature")
+    result = cl.count(_diff(root, base), root)
+    assert result["unsettled"] == [{"file": "link.txt", "reason": "content-unreadable"}]
+
+
+def test_generated_attribute_comes_from_head_not_from_the_dirty_gitattributes(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, ".gitattributes", "by_attr.txt linguist-generated\n")
+    base = _commit(root, "base")
+    _write(root, "by_attr.txt", "a\nb\nc\n")
+    _commit(root, "feature")
+    diff = _diff(root, base)
+    _write(root, ".gitattributes", "# nothing is generated here\n")
+    rows = _rows(cl.count(diff, root))
+    assert rows["by_attr.txt"]["counted"] is False and rows["by_attr.txt"]["why"] == "generated"
+
+
+def test_attribute_only_in_the_dirty_checkout_does_not_exclude_the_file(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, ".gitattributes", "# nothing is generated here\n")
+    base = _commit(root, "base")
+    _write(root, "by_attr.txt", "a\nb\nc\n")
+    _commit(root, "feature")
+    diff = _diff(root, base)
+    _write(root, ".gitattributes", "by_attr.txt linguist-generated\n")
+    result = cl.count(diff, root)
+    assert _rows(result)["by_attr.txt"] == {"file": "by_attr.txt", "lines": 3, "counted": True, "why": None}
+    assert result["countable"] == 3
+
+
+def test_generated_marker_comes_from_the_head_blob_not_the_working_tree(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    _write(root, "plain.py", "x = 1\n")
+    _write(root, "marked.py", "# %s\nx = 1\n" % GEN_TAG)
+    _commit(root, "feature")
+    diff = _diff(root, base)
+    _write(root, "plain.py", "# %s\nx = 1\n" % GEN_TAG)
+    _write(root, "marked.py", "x = 1\n")
+    result = cl.count(diff, root)
+    rows = _rows(result)
+    assert rows["plain.py"]["counted"] is True and rows["plain.py"]["lines"] == 1
+    assert rows["marked.py"]["counted"] is False and rows["marked.py"]["why"] == "generated"
+    assert result["countable"] == 1
 
 
 def test_unsafe_proof_paths_are_rejected(tmp_path):
