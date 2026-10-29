@@ -149,7 +149,7 @@ a reason inside the test itself that a small change fixes, such as a compile, sy
 the session changes it through this verb and says why.
 
 ```bash
-python3 -B <plugin root>/lib/round_driver.py break-it-change --session-dir <session dir> --finding <the staged id or finding key> --content-file <file holding the new test content> --why <text>
+python3 -B <plugin root>/lib/round_driver.py break-it-change --session-dir <session dir> --finding <id> --content-file <value> --why <value>
 ```
 
 The verb is accepted only while the round waits on the verifiers (the pending action is

@@ -117,9 +117,9 @@ def test_a_normal_host_does_not_look_foreign():
     assert not proc_is_foreign()
 
 
-# axis: census membership - each of the nine /proc-reading tests carries the proc_containment mark; catches a census test left unguarded.
+# axis: census membership - each of the eight /proc-reading tests carries the proc_containment mark; catches a census test left unguarded.
 def test_every_census_test_carries_the_proc_containment_mark():
-    assert len(_CENSUS) == 9
+    assert len(_CENSUS) == 8
     for func in _CENSUS:
         names = [mark.name for mark in getattr(func, "pytestmark", [])]
         assert MARKER in names, "%s lacks @pytest.mark.%s" % (func.__name__, MARKER)

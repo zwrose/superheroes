@@ -1701,9 +1701,11 @@ def _scrub_findings(findings, *, echo_nonce=None):
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
             g[key] = _scrub_finding_value(val)
-        if (break_it.is_break_it(g)
-                and g.get("suggestion") != review_findings_schema.normalize_member(f0).get("suggestion")):
-            # the suggestion carries executable test bytes; flag that the scrub altered them
+        original = review_findings_schema.normalize_member(f0).get("suggestion")
+        if ((break_it.is_break_it(g) or break_it.parse_block(original)[0] is not None)
+                and g.get("suggestion") != original):
+            # the suggestion carries executable test bytes (a per-area finding's, or a block attached to any
+            # other finding); flag that the scrub altered them
             g[break_it.REDACTED_FIELD] = True
         accepted.append(g)
     return accepted, rejected

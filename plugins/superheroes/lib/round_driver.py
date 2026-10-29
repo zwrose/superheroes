@@ -135,22 +135,32 @@ QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
 def _fixer_create_items(batch):
-    """The ``file`` of each batch row that is a break-it finding the driver itself stamped for that path.
+    """The path of each batch row that carries a break-it test the driver itself stamped for that path.
 
     The test file such a finding names is written by the fixer, so it does not exist when the
     order is linted. The stamp is the driver's: compile strips a seat-supplied one and only the
     break-it intercept stamps a copy, so an unstamped row, or one stamped for another path, is
-    never exempted.
+    never exempted. A per-area row yields its ``file`` when the stamp names it; an attached row
+    (any other taxonomy whose suggestion is a block) yields its carried block's ``path`` when the
+    stamp names that.
     """
     out = []
     for row in batch if isinstance(batch, list) else []:
-        if not isinstance(row, dict) or not break_it.is_break_it(row):
+        if not isinstance(row, dict):
             continue
         stamp = row.get(break_it.RUN_FIELD)
-        # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
-        if (isinstance(stamp, dict) and isinstance(stamp.get("path"), str) and stamp["path"]
-                and stamp["path"] == row.get("file")):
-            out.append(row["file"])
+        stamped_path = stamp.get("path") if isinstance(stamp, dict) else None
+        if not (isinstance(stamped_path, str) and stamped_path):
+            continue
+        if break_it.is_break_it(row):
+            # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
+            if stamped_path == row.get("file"):
+                out.append(row["file"])
+            continue
+        block, kind = break_it.carried_block(row)
+        # axis: an attached row is exempted only when the driver's stamp names the very path its carried block writes
+        if kind == break_it.KIND_ATTACHED and stamped_path == block["path"]:
+            out.append(block["path"])
     return out
 
 
@@ -221,6 +231,7 @@ JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RULE_CMD = session_contract.RULE_CMD
 EXTRA_AUDIT_CMD = "extra-audit"
+BREAK_IT_CHANGE_CMD = "break-it-change"
 RULING_KINDS =frozenset(("out-of-scope", "guidance"))
 RULING_FILE_UNREADABLE = "ruling-file-unreadable"
 RULING_FILE_SHAPE = "ruling-file-shape"
@@ -914,13 +925,24 @@ def _nit_cap(findings):
 
 
 def _merge_same_finding(existing, incoming):
-    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed."""
+    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed. When exactly one side carries a
+    break-it test with the driver's stamp, the merged dict keeps that side's `suggestion`, `breakItRun` and
+    `breakItRuns`, so an ordinary finding that wins the base never drops the attached test."""
     dims = panel_tally._merge_dims(existing, incoming)
     if circuit_breaker.severity_rank(incoming.get("severity")) \
             < circuit_breaker.severity_rank(existing.get("severity")):
         merged = dict(incoming)
     else:
         merged = dict(existing)
+    carriers = [s for s in (existing, incoming)
+                if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
+    if len(carriers) == 1:
+        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
+        for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD):
+            if field in carriers[0]:
+                merged[field] = carriers[0][field]
+            else:
+                merged.pop(field, None)
     merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(
         [existing, incoming])
     merged["dimension"] = dims
@@ -976,12 +998,14 @@ def _compile_by_anchor(findings):
     return out
 
 
-def mechanical_compile(findings, diff_text=None, scope_exempt=None):
+def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
       2. diff-scope check — drop findings whose (file,line) is not an anchor of the round diff;
-         `scope_exempt` is a set of `id()`s of input dicts the break-it intercept stamped itself —
-         only those skip this check, and any other finding's `breakItRun` stamp is stripped;
+         `scope_exempt` is a set of `id()`s of input dicts the break-it intercept marked per-area
+         scope-exempt — only those skip this check; `stamped` is a set of `id()`s of input dicts the
+         intercept stamped itself — only those keep their `breakItRun` and `breakItRuns`, and every
+         other finding (all of them, by default) has both stripped;
       4. dedupe by the per-LOCATION anchor (file, line, normalized-title) — higher severity wins,
          dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
          two distinct-line findings that share a title (a dropped blocker);
@@ -994,6 +1018,7 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
         findings = []
     valid = diff_scope.parse_diff_lines(diff_text) if diff_text is not None else None
     exempt = scope_exempt if isinstance(scope_exempt, (set, frozenset)) else frozenset()
+    stamped_ids = stamped if isinstance(stamped, (set, frozenset)) else frozenset()
     kept, drops = [], []
     for f in findings:
         if not isinstance(f, dict):
@@ -1009,11 +1034,11 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
             continue
         fc = dict(f)
         fc["line"] = line
-        trusted = id(f) in exempt
-        if not trusted:
+        if id(f) not in stamped_ids:
             # axis: a stamp the seat supplied itself never survives compile — only the intercept's own copies carry one
             fc.pop(break_it.RUN_FIELD, None)
-        if not trusted and not _diff_scope_ok(fc, valid):
+            fc.pop(break_it.RUNS_FIELD, None)
+        if id(f) not in exempt and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
             continue
@@ -3069,30 +3094,29 @@ def _break_it_scope(session_dir, state, config):
 
 
 def _break_it_run_keys(runs, compiled):
-    """Put the compiled finding's key on each run entry (the same (file, normalized title) match);
-    None for a passed run, and `droppedAtCompile` for a stamped finding compile still dropped."""
+    """Put the compiled finding's key on each run entry, passed runs included: the run binds to the compiled
+    finding that carries its test (the same (file, normalized title) match, per-area or attached). A run whose
+    proposal compile merged away is `supersededAtCompile` with no key; a run whose finding compile dropped is
+    `droppedAtCompile` with no key."""
     by_identity = {}
     for f in compiled:
-        if isinstance(f, dict) and break_it.is_break_it(f):
+        if isinstance(f, dict) and break_it.carries_test(f):
             by_identity.setdefault(
                 (f.get("file"), normalize_title(str(f.get("title") or ""))), f)
     out = []
     for run in runs:
         entry = dict(run)
-        if entry.get("outcome") == break_it.OUTCOME_PASSED:
+        match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
+        stamp = match.get(break_it.RUN_FIELD) if match else None
+        if match is not None and isinstance(stamp, dict) and any(
+                stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):
+            # axis: a run whose proposal compile merged away binds to no finding, so the kept-check sees only the surviving test
             entry["findingKey"] = None
+            entry["supersededAtCompile"] = True
         else:
-            match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
-            stamp = match.get(break_it.RUN_FIELD) if match else None
-            if match is not None and isinstance(stamp, dict) and any(
-                    stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):
-                # axis: a run whose proposal compile merged away binds to no finding, so the kept-check sees only the surviving test
-                entry["findingKey"] = None
-                entry["supersededAtCompile"] = True
-            else:
-                entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
-                if match is None:
-                    entry["droppedAtCompile"] = True
+            entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
+            if match is None:
+                entry["droppedAtCompile"] = True
         out.append(entry)
     return out
 
@@ -3287,7 +3311,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
     # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
-    intercepted, runs, exempt = break_it.intercept(
+    intercepted, runs, exempt, stamped = break_it.intercept(
         break_it_raw, repo_root, head,
         interpreter=break_it.resolve_interpreter(config), scratch=session_dir)
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
@@ -3300,15 +3324,15 @@ def _fold_panel(state, config, artifact, session_dir=None):
         elif not placed:
             kept.extend(intercepted)
             placed = True
-    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt)
+    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped)
     if runs:
         runs = _break_it_run_keys(runs, compiled)
         _record_round(state, "breakItRuns", runs)
         _decision(state, "break-it-run",
-                  "%d run: %d failed, %d passed (dropped), %d not run"
+                  "%d run: %d exited 0, %d exited non-zero, %d not run"
                   % (len(runs),
-                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
@@ -5937,9 +5961,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if owner_ruling is not None:
             row["ownerRulingSeq"] = owner_seq
             row["ownerRuling"] = owner_ruling
-        if break_it.is_break_it(f):
-            # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
-            for carried in ("suggestion", "body", break_it.RUN_FIELD):
+        if break_it.carries_test(f):
+            # axis: a re-queued target that carries a break-it test must still hand the next fixer its exact test block, body and run records
+            for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD):
                 if f.get(carried) is not None:
                     row[carried] = f[carried]
         if auditor_vendor is not None:
@@ -6981,8 +7005,8 @@ def _break_it_kept_step(state, config):
     latest = {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
-            if (isinstance(run, dict) and run.get("outcome") != break_it.OUTCOME_PASSED
-                    and isinstance(run.get("findingKey"), str) and run.get("findingKey")):
+            # axis: the latest run per finding key wins, passed ones included, by round order and then list order, so a changed test's run is the one checked
+            if isinstance(run, dict) and isinstance(run.get("findingKey"), str) and run.get("findingKey"):
                 latest[run["findingKey"]] = run
     if not latest:
         return False
@@ -8607,6 +8631,142 @@ def _cmd_rule_locked(session_dir, ruling_file, by, fixer_not_dispatched=False):
     return response
 
 
+# --- the break-it test change -------------------------------------------------------------------
+#
+# While the verifiers' orders are out, the advisor may correct a break-it test whose run shows the
+# test itself is broken (a syntax error, a wrong import), instead of letting the verifiers and the
+# fixer work from it. `break-it-change` runs the corrected test, puts it on the staged finding and its
+# ledger entry in place of the carried block, records the run beside the first, and clears the pending
+# verifier orders so the next `next` re-emits them at a fresh attempt from the changed copies.
+
+BREAK_IT_CHANGE_NOT_AT_VERIFIERS = "break-it-change-not-at-verifiers"
+BREAK_IT_CHANGE_FINDING_UNKNOWN = "break-it-change-finding-unknown"
+BREAK_IT_CHANGE_NO_TEST = "break-it-change-no-test"
+BREAK_IT_CHANGE_WHY_MISSING = "break-it-change-why-missing"
+BREAK_IT_CHANGE_CONTENT_UNREADABLE = "break-it-change-content-unreadable"
+BREAK_IT_CHANGE_CONTENT_UNCHANGED = "break-it-change-content-unchanged"
+
+
+def _break_it_change_target(state, ref):
+    """``(staged id, staged finding, finding key)`` of the finding in ``_toVerify`` whose staged id or
+    finding identity key is ``ref``; ``(None, None, None)`` when none is. A finding with no derivable
+    key cannot be bound to its ledger entry or its runs, so it is not a target."""
+    staged = state.get("_toVerify")
+    if not isinstance(staged, list) or not isinstance(ref, str) or not ref:
+        return None, None, None
+    for numbered, finding in zip(verification.stage_ids(staged), staged):
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if key and ref in (numbered["id"], key):
+            return numbered["id"], finding, key
+    return None, None, None
+
+
+def _break_it_block_text(block, content):
+    """The block text ``break_it.parse_block`` reads back as ``block``'s path and run with ``content``,
+    laid out from ``break_it.BLOCK_TEMPLATE``, the grammar's one home."""
+    template = break_it.BLOCK_TEMPLATE.split("\n")
+    return "\n".join([template[0],
+                      "%s %s" % (template[1].partition(" ")[0], block["path"]),
+                      "%s %s" % (template[2].partition(" ")[0], block["run"]),
+                      template[3], content])
+
+
+def _rewrite_break_it_copy(copy_, text, record, why):
+    """Put the changed block, its run record and the extra entry of its run list on one copy of a staged
+    finding (the staged one, or its ledger entry), the run list reading after the entries it already holds."""
+    runs = copy_.get(break_it.RUNS_FIELD)
+    runs = list(runs) if isinstance(runs, list) else []
+    runs.append(break_it.record_run(dict(record, file=copy_.get("file")), changed_why=why))
+    copy_["suggestion"] = text
+    copy_[break_it.RUN_FIELD] = record
+    copy_[break_it.RUNS_FIELD] = runs
+
+
+def cmd_break_it_change(session_dir, finding, content_file, why):
+    try:
+        with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, BREAK_IT_CHANGE_CMD)
+            if upgrade is not None:
+                return upgrade
+            refusal = _commit_recover_or_refuse(session_dir, BREAK_IT_CHANGE_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_break_it_change_locked(session_dir, finding, content_file, why)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, BREAK_IT_CHANGE_CMD, held)
+
+
+def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
+    state, refusal = _load_driver_state(session_dir, BREAK_IT_CHANGE_CMD)
+    if refusal is not None:
+        return refusal
+    rnd = state.get("round")
+    pending = state.get("pending")
+    # axis: the verb changes a test only while the verifiers' orders are the open step; at any other step the copies it rewrites are no longer the ones a verifier reads
+    if state.get("step") != round_phases.P_VERIFIERS or state.get("terminal"):
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NOT_AT_VERIFIERS,
+                           phase=state.get("step"), rnd=rnd)
+    staged_id, staged, key = _break_it_change_target(state, finding_ref)
+    if staged is None:
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_FINDING_UNKNOWN,
+                           phase=P_VERIFIERS, rnd=rnd)
+    block, _kind = break_it.carried_block(staged)
+    if not isinstance(staged.get(break_it.RUN_FIELD), dict) or block is None:
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NO_TEST,
+                           phase=P_VERIFIERS, rnd=rnd)
+    if not isinstance(why, str) or not why.strip():
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_WHY_MISSING,
+                           phase=P_VERIFIERS, rnd=rnd)
+    why = why.strip()
+    try:
+        with open(content_file, "rb") as fh:
+            content = fh.read().decode("utf-8")
+    except (OSError, ValueError, TypeError):
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNREADABLE,
+                           phase=P_VERIFIERS, rnd=rnd)
+    sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    if sha == block["sha256"]:
+        return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNCHANGED,
+                           phase=P_VERIFIERS, rnd=rnd)
+    config = state["config"]
+    changed = {"path": block["path"], "run": block["run"], "content": content, "sha256": sha}
+    repo_root, head = _break_it_scope(session_dir, state, config)
+    record = break_it.run_one(repo_root, head, changed, scratch=session_dir,
+                              interpreter=break_it.resolve_interpreter(config))
+    text = _break_it_block_text(changed, content)
+    # axis: the changed text and the old run's stamp are replaced together on the staged copy and its ledger entry, so what the verifiers read, what the fixer commits and what the record shows are the one test
+    _rewrite_break_it_copy(staged, text, record, why)
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    held = _ledger_index_by_key(ledger).get(key) if isinstance(ledger, list) else None
+    if held is not None:
+        _rewrite_break_it_copy(ledger[held], text, record, why)
+    _record_round_append(state, "breakItRuns", dict(
+        record, title=staged.get("title"), file=staged.get("file"),
+        findingKey=key, changedWhy=why))
+    _decision(state, "break-it-change",
+              "the break-it test of %s (%s) changed: %s; the new run %s"
+              % (staged_id, key, why, record.get("outcome")))
+    superseded = pending.get("attempt") if isinstance(pending, dict) else None
+    # axis: the verifiers' orders already out are dropped with the pending step, so the next `next` re-emits them from the changed copies
+    if isinstance(pending, dict) and pending.get("phase") == P_VERIFIERS:
+        state["pending"] = None
+    journal_entry = _journal_entry_for_commit(
+        session_dir, BREAK_IT_CHANGE_CMD, "changed", phase=P_VERIFIERS, round=rnd,
+        attempt=superseded, supersededAttempt=superseded, finding=staged_id, findingKey=key,
+        contentSha256=sha, runOutcome=record.get("outcome"))
+    try:
+        c = round_commit.begin(session_dir, "break-it-change")
+        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, BREAK_IT_CHANGE_CMD, exc, phase=P_VERIFIERS,
+                                        rnd=rnd, attempt=superseded)
+    return {"ok": True, "finding": staged_id, "run": record}
+
+
 # --- the extra audit round ----------------------------------------------------------------------
 #
 # A session that was handed back at its round cap can be reopened once, by the advisor's order, for
@@ -9959,14 +10119,33 @@ def _journal_max_attempt(session_dir, rnd, phase):
     return max_attempt
 
 
+def _journal_max_superseded_attempt(session_dir, rnd, phase):
+    """Highest attempt a ``break-it-change`` took back for ``(rnd, phase)``, or -1 when none: the orders of
+    that attempt were dropped unanswered, so no result for it may be taken."""
+    max_attempt = -1
+    for event in read_journal(session_dir):
+        if event.get("cmd") != BREAK_IT_CHANGE_CMD or event.get("outcome") != "changed":
+            continue
+        if event.get("round") != rnd or event.get("phase") != phase:
+            continue
+        att = event.get("supersededAttempt")
+        if isinstance(att, bool) or not isinstance(att, int) or att < 0:
+            continue
+        max_attempt = max(max_attempt, att)
+    return max_attempt
+
+
 def _max_used_attempt(session_dir, rnd, phase):
-    """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries only.
+    """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries, and from the attempts a
+    ``break-it-change`` superseded.
 
     The durable seat store is excluded: it records landings, not acceptances, so counting it
     would advance past an unaccepted wave and orphan its recorded seats. A lost journal
     entry therefore surfaces as a loud landing collision at record time rather than silent
     orphaning (#1107)."""
-    return _journal_max_attempt(session_dir, rnd, phase)
+    # axis: a superseded verifier attempt is never handed out again, so its late result meets the stale-attempt refusals (`submit` echo, `record-result` attempt-not-pending)
+    return max(_journal_max_attempt(session_dir, rnd, phase),
+               _journal_max_superseded_attempt(session_dir, rnd, phase))
 
 
 def _next_dispatch_attempt(session_dir, rnd, phase, state):
@@ -14433,6 +14612,17 @@ def build_parser():
                                    "re-renders it at the next attempt, unless the driver sees the "
                                    "fixer already landed or committed")
 
+    pbc = sub.add_parser(BREAK_IT_CHANGE_CMD)
+    cli_contract.add_argument(pbc, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pbc, "--finding", contract="free-text", required=True,
+                              help="the staged id (v0, v1, ...) or the finding key of the finding "
+                                   "whose break-it test changes")
+    cli_contract.add_argument(pbc, "--content-file", contract="free-text", required=True,
+                              dest="content_file",
+                              help="path to the changed test file's complete content (UTF-8 text)")
+    cli_contract.add_argument(pbc, "--why", contract="free-text", required=True,
+                              help="the reason the test changed; it rides the new run's record")
+
     pea = sub.add_parser(EXTRA_AUDIT_CMD)
     cli_contract.add_argument(pea, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pea, "--order-file", contract="free-text", required=True,
@@ -14685,6 +14875,10 @@ def _dispatch(args):
     elif args.cmd == "rule":
         out = cmd_rule(args.session_dir, args.ruling_file, args.by,
                        fixer_not_dispatched=args.fixer_not_dispatched)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == BREAK_IT_CHANGE_CMD:
+        out = cmd_break_it_change(args.session_dir, args.finding, args.content_file, args.why)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     elif args.cmd == EXTRA_AUDIT_CMD:
