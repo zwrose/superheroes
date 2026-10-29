@@ -41,7 +41,7 @@ _ROOTS = (
 )
 
 # Measured at the 2158 fix: 35 call forms across the three trees (fenced lines plus inline spans).
-POPULATION_FLOOR = 32  # the grounding stage's call forms left with it (C1-L2)
+POPULATION_FLOOR = 31  # the grounding stage's call forms left with it (C1-L2); the owner-gate advance form left with the gates
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
@@ -52,7 +52,7 @@ _PLACEHOLDER_NAMES = frozenset((
     "phase", "N", "phase from next", "verify command, or none", "engine or native",
     "attempt from next", "expectedStateHash from next", "vendor", "id",
     "in-repo or global, the LOC value", "vendors JSON list", "implementation engine", "attempt",
-    "expectedStateHash", "build base", "path from table above", "tripwire, park or held", "seat",
+    "expectedStateHash", "build base", "path from table above", "tripwire or park", "seat",
     "round from next", "rulings file", "who", "effort or null", "sha",
     "the brief-check seat JSON, written out", "claude or codex", "the order file",
     "the build worktree", "the build worktree's plugin root, in this repository",

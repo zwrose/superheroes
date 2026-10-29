@@ -221,12 +221,21 @@ def test_t4_a_panel_whose_findings_are_all_refuted_or_minor_ends_at_round_one(mo
                              for c in (clusters or []) for i in (c.get("ids") or [])],
                 "vendor": "codex"}
 
-    seams = TRD._seams(reviewer=reviewer, verifier=refuting, vendors=["claude", "codex"])
+    def confirming(clusters, rnd):
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "checked"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
+
+    seams = TRD._seams(reviewer=reviewer, verifier=refuting if refute else confirming,
+                       vendors=["claude", "codex"])
     _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
     assert state["terminal"] == "converged", (state["terminal"], _trace(state))
     round_one = state["rounds"]["1"]
-    assert not refute or round_one["verifyPasses"][0]["REFUTED"] == 2, (
-        seen, _trace(state), {k: v for k, v in round_one.items() if k in ("verify", "verifyPasses", "verifierProvenance")})
+    shown = (seen, _trace(state), {k: v for k, v in round_one.items() if k in ("verify", "verifyPasses", "verifierProvenance")})
+    assert not refute or round_one["verifyPasses"][0]["REFUTED"] == 2, shown
+    # axis: the surviving Minor/Nit findings are CONFIRMED by the verifier and still open no second round
+    # — see bite-proof record c1l4_wo_f
+    assert refute or round_one["verifyPasses"][0]["CONFIRMED"] == 2, shown
     assert sorted(state["rounds"]) == ["1"], (seen, _trace(state))
     assert RD.P_FIXER not in [action for action, _rnd in seen]
     assert max(rnd for _action, rnd in seen) == 1
