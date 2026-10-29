@@ -152,7 +152,7 @@ def test_emit_receipt_seat_map_non_list_violations_do_not_erase():
 def _inv17_two_round_fixture():
     """Round 1 submitted pin-excusable strong-tier; round 2 omits violations and re-derives."""
     built = seat_map.build(
-        seat_map.PANEL_ROSTER, ["codex", "cursor"], "anthropic", "anthropic", 0,
+        seat_map.PANEL_ROSTER, ["codex", "cursor"], "anthropic", 0,
     )
     map1 = seat_map.to_receipt(built, "anthropic")
     map1["seats"] = dict(map1["seats"])
@@ -359,7 +359,7 @@ def test_emit_receipt_seat_map_merges_maker_families_and_roster():
 
 
 def test_emit_receipt_seat_map_carries_what_a_composed_receipt_names():
-    built = seat_map.build(seat_map.PANEL_ROSTER, ["claude", "codex"], "anthropic", "openai", 0,
+    built = seat_map.build(seat_map.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0,
                            extra_maker_families=frozenset({"xai"}))
     receipt = seat_map.to_receipt(built, "anthropic")
     assert receipt["makerFamilies"] == ["anthropic", "xai"]

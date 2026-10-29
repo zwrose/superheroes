@@ -2408,7 +2408,7 @@ def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
 
 PANEL = list(seat_map_module.PANEL_ROSTER)
 SEAT_MAP = seat_map_module.to_receipt(
-    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", 0), "anthropic")
 ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
 NO_READING = dict(ENGAGED_RUN, observation={"read": "unknown"})
 
@@ -2554,7 +2554,7 @@ NO_FLOOR_BASIS = {"floor": None}
 RISKY_BASIS = {"floor": "full"}
 TWO_SEAT_MAP = seat_map_module.to_receipt(
     seat_map_module.build(list(seat_map_module.roster_for(NO_FLOOR_BASIS)),
-                          ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+                          ["codex", "cursor", "gemini"], "anthropic", 0), "anthropic")
 
 
 def test_move_up_holds_a_no_floor_basis_to_the_two_seat_roster():

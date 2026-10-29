@@ -252,24 +252,23 @@ def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
     proving the live pool's non-panel cells (the harness synthesizes them; nothing is probed)."""
     live = _EVAL_LIVE_POOL
     driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
-    for narrative in ("anthropic", "openai"):
-        m = SM.build(SM.PANEL_ROSTER, live, driver_author_family, narrative, 0)
-        receipt = SM.to_receipt(m, driver_author_family)
-        if SM.unexcused_violations(receipt, driver_author_family) == []:
-            assert receipt.get("authorFamily") == driver_author_family
-            seated_vendors = {
-                cell.get("vendor")
-                for cell in (receipt.get("seats") or {}).values()
-                if isinstance(cell, dict) and cell.get("vendor")
-            }
-            if len(seated_vendors) < 2:
-                raise RuntimeError(
-                    "eval harness baseline seat map must seat at least two distinct vendors "
-                    "(single-vendor collapse breaks liveness-gate preconditions; INV-15)"
-                )
-            receipt["nonPanelLiveCells"] = _eval_nonpanel_cells()
-            receipt["nonPanelLiveCellsSource"] = "synthesized"
-            return receipt
+    m = SM.build(SM.PANEL_ROSTER, live, driver_author_family, 0)
+    receipt = SM.to_receipt(m, driver_author_family)
+    if SM.unexcused_violations(receipt, driver_author_family) == []:
+        assert receipt.get("authorFamily") == driver_author_family
+        seated_vendors = {
+            cell.get("vendor")
+            for cell in (receipt.get("seats") or {}).values()
+            if isinstance(cell, dict) and cell.get("vendor")
+        }
+        if len(seated_vendors) < 2:
+            raise RuntimeError(
+                "eval harness baseline seat map must seat at least two distinct vendors "
+                "(single-vendor collapse breaks liveness-gate preconditions; INV-15)"
+            )
+        receipt["nonPanelLiveCells"] = _eval_nonpanel_cells()
+        receipt["nonPanelLiveCellsSource"] = "synthesized"
+        return receipt
     raise RuntimeError(
         "eval harness seat map must have no unexcused violations for "
         "fixer_vendor=%r driver_author_family=%r"

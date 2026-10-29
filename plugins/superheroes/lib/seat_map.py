@@ -601,7 +601,6 @@ def build(
     roster: tuple[str, ...] | list[str] | None,
     live_vendors: list[str] | None,
     author_family: str | None,
-    narrative_family: str | None,
     seed: int,
     tier_by_seat: dict[str, str] | None = None,
     pins: dict[str, dict] | None = None,
@@ -1038,7 +1037,6 @@ def build(
         "liveVendors": list(live),
         "liveCells": sorted([list(c) for c in live_cells_normalized]),
         "authorFamily": author_family,
-        "narrativeFamily": narrative_family,
         "livenessPinScoped": bool(liveness_pin_scoped),
         "makerFamilies": sorted(makers),
         "roster": list(roster),
@@ -1369,7 +1367,6 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "liveVendors": seat_map.get("liveVendors", []),
         "liveCells": receipt_live_cells,
         "liveCellsSource": receipt_cells_source,
-        "narrativeFamily": seat_map.get("narrativeFamily"),
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
@@ -1399,7 +1396,6 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("compose", help="compute the panel seat map for a run")
     cc.add_argument(c, "--author-family", contract="free-text", default=None)
-    cc.add_argument(c, "--narrative-family", contract="free-text", default=None)
     cc.add_argument(c, "--pr-number", contract="free-text", default=None)
     cc.add_argument(c, "--head-sha", contract="free-text", default=None)
     cc.add_argument(
@@ -1614,12 +1610,14 @@ def main(argv):
                     })
 
         author_family = args.author_family
-        narrative_family = args.narrative_family
         receipt_host_family = None
+        # The build session applies the review's fixes on this host, so its family is a maker: the
+        # one family kept off every seat besides the author's, on every implementation engine.
+        host_maker_family = None
         host_model, _ = host_model_lib.resolve(
             args.host_model or "", args.session_transcript or "", args.session_transcript_from or "")
         if args.implementation_engine is not None:
-            if args.author_family is not None or args.narrative_family is not None:
+            if args.author_family is not None:
                 print("family-flags-conflict", file=sys.stderr)
                 return 1
             host_fam = model_registry.host_family(host_model)
@@ -1630,11 +1628,11 @@ def main(argv):
             if author_family is None:
                 print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
                 return 1
-            narrative_family = host_fam or claude_host_fam
+            host_maker_family = host_fam or claude_host_fam
             if host_fam is None:
                 reason = (
                     "host model unknown — neither the start event nor the session transcript "
-                    "named a model; the narrative family fell back to the claude "
+                    "named a model; the host family fell back to the claude "
                     "host's family (%s); the author family is the %s implementation "
                     "engine's (%s)"
                     % (claude_host_fam, impl_engine, author_family)
@@ -1643,33 +1641,21 @@ def main(argv):
                     "constraint": "host-model-unknown",
                     "reason": reason,
                 })
-            elif (
-                impl_engine == "claude"
-                and host_fam is not None
-                and host_fam != author_family
-            ):
+            elif host_fam != author_family:
                 family_degradations.append({
                     "constraint": "maker-family-split",
                     "reason": (
-                        "author family is %s (claude implementation engine) but "
-                        "review-code's native fixer on this host writes as %s; "
-                        "the host family is excluded from the panel as a second "
+                        "author family is %s (%s implementation engine) but the build "
+                        "session applies the review's fixes on this host as %s; "
+                        "the host family is kept off every seat as a second "
                         "maker family"
-                        % (author_family, host_fam)
+                        % (author_family, impl_engine, host_fam)
                     ),
                 })
 
         extra_maker_families: frozenset[str] | None = None
-        if args.implementation_engine is not None:
-            impl_engine = args.implementation_engine
-            host_fam_for_extra = model_registry.host_family(host_model)
-            if (
-                impl_engine == "claude"
-                and host_fam_for_extra is not None
-                and author_family is not None
-                and host_fam_for_extra != author_family
-            ):
-                extra_maker_families = frozenset({host_fam_for_extra})
+        if host_maker_family is not None and host_maker_family != author_family:
+            extra_maker_families = frozenset({host_maker_family})
 
         flag_makers = frozenset(f for f in (args.maker_family or []) if f)
         if flag_makers:
@@ -1728,7 +1714,6 @@ def main(argv):
             roster,
             live,
             author_family,
-            narrative_family,
             seed,
             **build_kwargs,
         )
