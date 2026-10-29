@@ -548,6 +548,34 @@ def reviewer_diff(diff_text, proven):
     return preamble + "".join(kept)
 
 
+def section_digest(diff_text, file):
+    """sha256 hex of the concatenated ``text`` of every section of ``diff_text`` whose ``file`` is ``file``, in
+    diff order, or None when no section is for it."""
+    texts = [s["text"] for s in parse_sections(diff_text) if s["file"] == file]
+    if not texts:
+        return None
+    return hashlib.sha256("".join(texts).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def still_proven(entries, diff_text):
+    """The stored proven-copy ``entries`` (``{file, source, sha256, section}``), in stored order and as
+    ``{file, source, sha256}``, whose file's section digest in ``diff_text`` still equals the entry's ``section``.
+    A malformed entry is skipped, and a non-``str`` diff leaves none."""
+    if not isinstance(diff_text, str) or not isinstance(entries, (list, tuple)):
+        return []
+    kept = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        fields = [entry.get(k) for k in ("file", "source", "sha256", "section")]
+        if not all(isinstance(v, str) for v in fields):
+            continue
+        # Axis: a copy stays out of a diff only while its section is the one the proof was checked against.
+        if section_digest(diff_text, entry["file"]) == entry["section"]:
+            kept.append({"file": entry["file"], "source": entry["source"], "sha256": entry["sha256"]})
+    return kept
+
+
 def _merge_numbers(numbers):
     ranges = []
     for n in sorted(set(numbers)):
