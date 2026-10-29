@@ -145,18 +145,15 @@ things we deliberately do not build — is a first-class artifact, cited instead
 re-litigated.
 *Re-check:* the unlock conditions written on the ledger itself.
 
-**B8 — Forward share.** The share of capacity that goes to new goals, rather than to
-maintaining the machine, is the harm the product steers by. The control is the
-[dial](plugins/superheroes/rubric/glossary.md#dial), and each project sets its own.
-Test-pilot work counts as product, because
-it exercises the product rather than the machine. Work
-[folded into an epic](plugins/superheroes/rubric/glossary.md#folded-in-items) from the
-backlog counts as product too. A project records its own starting point and reads the
-trend against it at each
-[gardening pass](plugins/superheroes/rubric/glossary.md#gardening-pass).
-*Re-check:* steering by this one ratio should move the product outward. We change our
-mind if the trend fails to close the gap over recorded windows, or closes it by shipping
-junk.
+**B8 — New goals before the machine.** Work toward new goals comes before maintaining
+the machine, and that order is what the product steers by. The advisor weighs the mix
+by judgment when routing; no number, ceiling, or measured share governs it.
+Test-pilot work counts as product, because it exercises the product rather than the
+machine. Work folded into an epic from the backlog rides as product scope too.
+*Re-check:* steering by this order should move the product outward. We change our mind
+if machinery keeps crowding out new goals across
+[gardening passes](plugins/superheroes/rubric/glossary.md#gardening-pass), or if the product
+moves outward only by shipping junk.
 
 **B9 — Tolerate a miss before you refuse it.** Agents drive the plugin's commands, and
 they sometimes get a flag or a word slightly wrong. When that happens, the first fix is

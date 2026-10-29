@@ -30,6 +30,8 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 - **After switching.** **Nothing is owed, unless a spec package keeps its breakdown bodies outside `children/`, `seams/` and `epic.md`: then move them into that home and re-pin them before its spec PR's sheet is built.** A spec PR now gets a merge sheet without a code review record. See [Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies](#spec-prs-a-merge-sheet-without-a-review-record-and-a-fixed-home-for-breakdown-bodies).
 
+- **After switching.** **Nothing is owed: the advisor stops writing a share sentence at launch and applying a kind label at routing, and a project's stamped `dial` or `budgetN` is ignored. Existing `kind:machinery` and `kind:product` labels may be deleted by hand.** See [Advisor: the forward-share dial and the kind labels are retired](#advisor-the-forward-share-dial-and-the-kind-labels-are-retired).
+
 ### Verify-command doctor: check 6 fails safe
 
 - `lib/repo_doctor.py` check 6 reports a missing path only when the verify command certainly runs it from the project root; a path in an `if`/`while`/`for`/`case` construct, a subshell or group, on either side of `&&` or `||`, after a `cd`-like builtin, in a comment, or in a shape the walk does not model now reads "verify command path(s) could not be checked", a note that never marks the profile stale.
@@ -69,6 +71,13 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 - **What refuses the sheet.** A pinned file that no longer hashes to its pin (`breakdown pin <path> hashes to ... now`), a spec that no longer hashes to the newest vet record's `Vet done:` hash (`does not hash to ... the spec changed after its vet`), a pin outside the spec's folder (`breakdown pin <path> is outside the spec's folder`), and a newest vet record that is not a clean breakdown vet with its `Breakdown pins:` lines. Each names what to fix, and nothing is shown as accepted.
 - **Breakdown bodies have a fixed home.** In the spec's work-item folder, child and layer bodies go in `children/` (a single-issue spec's one body too), seam bodies in `seams/`, and the epic body at `epic.md`. The sheet refuses a pinned body outside that home (`breakdown pin <path> is a body outside the breakdown's home`) and any `.md` in the home that the vet does not pin (`<file> sits in the breakdown's body home but the newest vet record does not pin it`), single-issue specs included. An unpinned `.md` beside a pinned file in another subfolder still refuses too. `skills/showrunner/reference/spec-vet.md` and `decomposition.md` name the home in the same words.
 - **Wording.** A single-issue spec's sheet reads "1 body" and "pins 1 file".
+
+### Advisor: the forward-share dial and the kind labels are retired
+
+- **The dial and N are gone.** Nothing in the plugin computes, stamps, shows or reads the forward-share dial, its per-wave lane count N, or a forward share. The `dial` and `budgetN` configuration items and `project_config.derive_budget` are removed, so `project_config.py get` or `set` on either slug now refuses `unknown-slug`, and the configure screen loses those two rows. A project configuration that still carries a stamped `dial` or `budgetN` loads without an error, and the value is ignored.
+- **No share sentence at launch.** The launch go-ahead is the owner's word alone; the advisor writes no machinery-over-total sentence beside it, and the gardening pass and its record no longer read a forward share against a dial or list folded-in items. The record keeps the decisions-asked count, the escape rate and the declines list.
+- **The kind labels are gone.** Routing applies no `kind:machinery` or `kind:product` label and records no kind; the routed issue carries three routing-time calls (lane, presentation, size). Configure's set-up no longer creates the labels, and `lib/kind_labels.py` is removed. The front door still tells machinery from product at entry, by the classification test in the issue contract, as the advisor's judgment at that moment.
+- **Existing labels stay until removed by hand.** Labels already on issues and repositories are left in place; deleting them is the owner's own cleanup.
 
 ## 0.46.2
 
