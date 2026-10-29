@@ -3,6 +3,7 @@
 - [The one entrypoint](#the-one-entrypoint)
 - [next / submit protocol](#next--submit-protocol)
 - [checkpoint](#checkpoint)
+- [break-it-change](#break-it-change)
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
@@ -140,6 +141,35 @@ receipts, not interim supersession.
 
 **Not handback evidence.** An interim receipt is progress evidence for the operator, not valid
 handback.
+
+## break-it-change
+
+The build session's only edit to a reviewer's break-it test: when the test cannot run as written for
+a reason inside the test itself that a small change fixes, such as a compile, syntax or type error,
+the session changes it through this verb and says why.
+
+```bash
+python3 -B <plugin root>/lib/round_driver.py break-it-change --session-dir <session dir> --finding <the staged id or finding key> --content-file <file holding the new test content> --why <text>
+```
+
+The verb is accepted only while the round waits on the verifiers (the pending action is
+`dispatch-verifiers`). The path and the run command stay the reviewer's; only the test's content
+changes. On success it returns `{"ok": true, "finding": <id>, "run": <the new run record>}`. The new
+run is the changed test run again in the working copy, and the second record carries the reason in
+its `changedWhy` field. The verb rewrites the finding's `suggestion` block with the changed content
+(same `path` and `run`), so the changed test is the one the fixer writes and commits and the kept
+check reads. It clears the pending verifier dispatch, so the next `next` re-emits the verifier
+orders at a fresh attempt carrying the changed test and both runs; a verifier result for the
+superseded attempt is refused.
+
+Each refusal is `{"ok": false, "reason": <token>}`:
+
+- `break-it-change-not-at-verifiers`: the pending action is not `dispatch-verifiers`.
+- `break-it-change-finding-unknown`: `--finding` names no staged finding.
+- `break-it-change-no-test`: the finding carries no break-it test the driver ran.
+- `break-it-change-why-missing`: `--why` is absent or blank.
+- `break-it-change-content-unreadable`: the content file cannot be read.
+- `break-it-change-content-unchanged`: the content equals the test already in the block.
 
 ## Durable-record path
 
@@ -975,7 +1005,7 @@ than the current state version, `5`. Any other `schemaVersion` (`1`, a later one
 `true`, or `null`) is not such a session: the state loader refuses it as unsupported and no restart
 marker is written. While such a session is unfinished (its `terminal` is empty), every driver
 command on it — `next`, `submit`, `record-result`, `record-missing`, `advance`, `attest`,
-`checkpoint`, `rule` and `extra-audit` — answers, before it recovers a commit, reads or writes the
+`checkpoint`, `break-it-change`, `rule` and `extra-audit` — answers, before it recovers a commit, reads or writes the
 journal, mints a session id, emits an order, records or folds:
 
 ```json
