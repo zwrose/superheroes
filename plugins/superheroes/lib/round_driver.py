@@ -469,6 +469,7 @@ P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_VERIFY = round_phases.P_VERIFY
 P_FIXER = round_phases.P_FIXER
 P_TERMINAL = round_phases.P_TERMINAL
@@ -2861,6 +2862,20 @@ def _panel_dimensions(config):
     return round_phases.panel_dimensions(config)
 
 
+# The held finding's fields the second-test seat reads: the finding as staged, its first test, that
+# test's runs with their output, and the note the verifier gave for holding it.
+_SECOND_TEST_ENTRY_FIELDS = ("id", "title", "file", "line", "severity", "body", "consequence",
+                             "suggestion", break_it.RUNS_FIELD)
+
+
+def _second_test_entry(row):
+    """One order entry of the second-test payload from a `_secondTestHeld` row (`finding`, `note`)."""
+    finding = row.get("finding") if isinstance(row.get("finding"), dict) else {}
+    entry = {field: finding.get(field) for field in _SECOND_TEST_ENTRY_FIELDS}
+    entry["verifierNote"] = row.get("note")
+    return entry
+
+
 def _advance(state, config):
     """Given the state, return the next step to dispatch (or the terminal). Pure read — never
     mutates. `next` and run_loop both call this."""
@@ -2885,6 +2900,9 @@ def _advance(state, config):
     elif step == P_GAPSWEEP:
         payload = {"verifiedFindings": state.get("findings") or [],
                    "fullDiff": True}
+    elif step == P_SECOND_TEST:
+        payload = {"findings": [_second_test_entry(row) for row in state.get("_secondTestHeld") or []
+                                if isinstance(row, dict)]}
     elif step == P_AUDITS:
         payload = {"targets": state.get("_auditTargets") or []}
         if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
@@ -2990,6 +3008,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
         _fold_synthesis(state, config, artifact)
     elif phase == P_GAPSWEEP:
         _fold_gapsweep(state, config, artifact)
+    elif phase == P_SECOND_TEST:
+        _fold_second_test(state, config, artifact, session_dir=session_dir)
     elif phase == P_AUDITS:
         _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
@@ -10488,7 +10508,7 @@ def _reviewer_engine_vendor(repo_root):
         return "claude", VENDOR_SOURCE_DEFAULTED
 
 
-_NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
+_NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED, P_SECOND_TEST)
 
 # The cell role each non-panel phase dispatches on (`model_registry.matrix_config`): the verifier
 # row for verifiers, the reviewer-deep row for gap sweep and scoped, the synthesis row for grouping.
@@ -10497,6 +10517,7 @@ _NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
 _NONPANEL_PHASE_ROLE = {
     P_VERIFIERS: receipt_disclosures.NONPANEL_ROLE_VERIFIER,
     P_GAPSWEEP: receipt_disclosures.NONPANEL_ROLE_FINDER,
+    P_SECOND_TEST: receipt_disclosures.NONPANEL_ROLE_FINDER,
     P_SCOPED: receipt_disclosures.NONPANEL_ROLE_FINDER,
     P_SYNTHESIS: receipt_disclosures.NONPANEL_ROLE_SYNTHESIS,
 }

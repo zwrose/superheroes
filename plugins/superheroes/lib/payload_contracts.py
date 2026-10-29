@@ -22,16 +22,18 @@ P_PANEL = round_phases.P_PANEL
 P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
 P_FIXER = round_phases.P_FIXER
 
-ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_AUDITS, P_SCOPED, P_VERIFY,
-                  P_FIXER)
+ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_SECOND_TEST, P_AUDITS,
+                  P_SCOPED, P_VERIFY, P_FIXER)
 
 SEAT_SYNTHESIS = "synthesis"
 SEAT_GAPSWEEP = "gap-sweep"
+SEAT_SECOND_TEST = "second-test"
 SEAT_SCOPED = "scoped-finder"
 SEAT_VERIFY = "verify"
 SEAT_FIXER = "fixer"
@@ -387,6 +389,11 @@ def _gap_sweep_payload_fault(payload, seat_key):
     return _payload_fault_from_contract(payload, P_GAPSWEEP, seat_key)
 
 
+def _second_test_payload_fault(payload, seat_key):
+    """The second-test candidate list: the held findings, each carrying its one more test."""
+    return _payload_fault_from_contract(payload, P_SECOND_TEST, seat_key)
+
+
 def _scoped_payload_fault(payload, seat_key):
     """The scoped-finder candidate list."""
     return _payload_fault_from_contract(payload, P_SCOPED, seat_key)
@@ -430,6 +437,7 @@ _PAYLOAD_CHECKERS = {
     P_VERIFIERS: _verifiers_payload_fault,
     P_SYNTHESIS: _synthesis_payload_fault,
     P_GAPSWEEP: _gap_sweep_payload_fault,
+    P_SECOND_TEST: _second_test_payload_fault,
     P_SCOPED: _scoped_payload_fault,
     P_FIXER: lambda payload, seat_key: _fixer_payload_fault(payload, seat_key),
     P_VERIFY: _verify_payload_fault,
@@ -478,13 +486,14 @@ _PAYLOAD_FIELD_BINDINGS = {
         "elements": {
             "verdicts": {
                 "required": ["id", "verdict", "reason"],
-                "optional": ["severity", "evidence"],
+                "optional": ["severity", "evidence", "pathReached"],
                 "types": {
                     "id": "non-empty-string",
                     "verdict": "non-empty-string",
                     "reason": "non-empty-string",
                     "severity": "string",
                     "evidence": "string",
+                    "pathReached": "boolean",
                 },
                 "enums": {"verdict": list(round_phases.VERDICTS)},
             },
@@ -512,6 +521,17 @@ _PAYLOAD_FIELD_BINDINGS = {
         }],
     },
     P_GAPSWEEP: {
+        "required": ["findings"],
+        "optional": ["reviewerVendor"],
+        "conditional": {},
+        "enums": {},
+        "types": {"findings": "list-of-objects", "reviewerVendor": "string"},
+        "elements": {
+            "findings": {"required": [], "optional": [], "types": {}, "enums": {}},
+        },
+        "predicates": [],
+    },
+    P_SECOND_TEST: {
         "required": ["findings"],
         "optional": ["reviewerVendor"],
         "conditional": {},

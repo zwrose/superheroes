@@ -64,7 +64,10 @@ _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an ea
 _HANDED_BACK = "handed-back"
 _HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
-_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS)
+# the second-test seat is a test reviewer run on the held findings: it reads before the round's fix, and
+# its results are tests for findings already raised, so it is listed as a reviewer but never as a raw report
+_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS,
+                   round_phases.P_SECOND_TEST)
 # synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
 # nothing, so it is not a reviewer of the change and the account does not list it
 _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
@@ -306,7 +309,7 @@ def _status_reviewers(state, setup=None, rows=()):
         later = {_audit_key(a) for r, rows in by_round.items() if r > rnd for a in rows if isinstance(a, dict) and not _audit_silent(a)}
         out += _audit_reviewers(state, rnd, audits, later)
     for rnd, phase in sorted({(r["round"], r["phase"]) for r in rows if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
-                              and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, *_RAW_PHASES[1:])}):
+                              and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, round_phases.P_SECOND_TEST, *_RAW_PHASES[1:])}):
         # axis: a hand-accepted verifier phase with no staged finding is not a planned reviewer — see bite-proof record wo_6_1910_empty_verifier
         if phase == round_phases.P_VERIFIERS and _nothing_to_verify(state, rnd):
             continue

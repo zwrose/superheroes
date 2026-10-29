@@ -13,6 +13,7 @@ P_SYNTHESIS = "dispatch-synthesis"
 P_AUDITS = "dispatch-audits"
 P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
 P_GAPSWEEP = "dispatch-gap-sweep"
+P_SECOND_TEST = "dispatch-second-test"
 P_VERIFY = "run-verify"
 P_FIXER = "dispatch-fixer"
 P_TERMINAL = "terminal"
@@ -26,7 +27,7 @@ ROUND_CAP = 4
 
 ALL_PHASES = (
     P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_FIXER,
-    P_TERMINAL,
+    P_TERMINAL, P_SECOND_TEST,
 )
 
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
