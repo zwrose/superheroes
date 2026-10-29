@@ -21,6 +21,7 @@ DECISION_KINDS = (
     "confirmation-rearm",
     "converged",
     "extra-audit-open",
+    "extra-audit-ordered",
     "fix-batch-excluded",
     "fix-batch-ruled",
     "fix-batch-split",

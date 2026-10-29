@@ -2340,6 +2340,11 @@ def write(account_path, repo_root, readers=None):
                 else:
                     why = "changed in transit"
                 not_checked.append({"id": c["id"], "url": c.get("url"), "why": why})
+            # axis: a second session's record that carries the extra audit round is refused when an earlier readable record of another session already carries it — see bite-proof record c1l4b_wo_a
+            if (parsed is not None and "extraAudit" in a["rounds"] and parsed.get("sessionId") != a["sessionId"]
+                    and isinstance(parsed.get("rounds"), dict) and "extraAudit" in parsed["rounds"]):
+                raise Refusal("review-record-extra-audit-repeated",
+                              f"an earlier record of another session already shows the extra audit round: {c.get('url')}")
             if c is latest:
                 # axis: an unreadable earlier record never blocks a new one; it is listed instead
                 prior = usable
@@ -2393,6 +2398,40 @@ def read(pr, repo=None, readers=None):
             raise Refusal("review-record-unreadable", _unreadable_detail(latest, by_id))
         return {"ok": True, "url": latest.get("url"), **rec, "earlierRecords": [c.get("url") for c in found[:-1]]}
     return _guarded(go)
+
+
+HISTORY_UNREADABLE = "review-record-history-unreadable"
+
+
+def extra_audit_history(pr, repo=None, readers=None):
+    """Whether any review record already posted on the PR shows the extra audit round.
+
+    Every record comment is read: one that does not parse makes the whole answer unreadable, and so
+    does a comment list that failed, so history that cannot be read never reads as "not run". Returns
+    {"ok": True, "ran", "sessionId", "url"} (the session and comment of the first record that shows
+    the round, else None), or {"ok": False, "reason": HISTORY_UNREADABLE, "detail"}. Nothing raises."""
+    try:
+        rd = _readers(readers)
+        if repo is None:
+            repo = rd["repo_name"](None)
+            if not (isinstance(repo, str) and _REPO_RE.fullmatch(repo)):
+                raise Refusal("review-record-gh-failed", "the repository could not be resolved")
+        comments = _comments(rd, pr, repo)
+        by_id = {c["id"]: c for c in comments}
+        shown = None
+        for c in _marker_comments(comments):
+            rec = _parse_body(c["body"], by_id)
+            if rec is None:
+                raise Refusal("review-record-unreadable", _unreadable_detail(c, by_id))
+            rounds = rec.get("rounds")
+            if shown is None and isinstance(rounds, dict) and "extraAudit" in rounds:
+                shown = {"sessionId": rec.get("sessionId"), "url": c.get("url")}
+        return {"ok": True, "ran": shown is not None,
+                "sessionId": shown["sessionId"] if shown else None, "url": shown["url"] if shown else None}
+    except Refusal as e:
+        return {"ok": False, "reason": HISTORY_UNREADABLE, "detail": f"{e.reason}: {e.detail}"}
+    except Exception as e:  # nothing raises to the caller
+        return {"ok": False, "reason": HISTORY_UNREADABLE, "detail": f"{type(e).__name__}: {e}"}
 
 
 def _shows_reading(run):

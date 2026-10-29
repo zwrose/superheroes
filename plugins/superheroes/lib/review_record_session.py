@@ -779,14 +779,18 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
+    extra = state.get("extraAudit")
+    # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
+    # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
+    counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
-            "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
+            "rounds": {"count": counted, "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
                        "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {}),
-                       **({"extraAudit": state["extraAudit"]} if isinstance(state.get("extraAudit"), dict) else {})},
+                       **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
