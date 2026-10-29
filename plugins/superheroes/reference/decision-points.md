@@ -86,8 +86,6 @@ still contains the forbidden literal.
 
 - `AskUserQuestion`
 - `decide-location)` (the CLI invocation substring)
-- `present-judgment`
-- `present-stall-menu`
 - `one question at a time`
 - `one-question-at-a-time`
 - `Ask, one at a time`

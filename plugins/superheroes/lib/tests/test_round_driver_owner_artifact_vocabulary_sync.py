@@ -17,7 +17,7 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _REF = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md")
 
 _REFUSAL_TABLE_MARKER = "**Refusal tokens when paths interleave.**"
-_REFUSAL_TABLE_END = "**Owner-artifact refusal causes**"
+_REFUSAL_TABLE_END = "**No dead ends.**"
 
 
 def _read(path):
