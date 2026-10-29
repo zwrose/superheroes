@@ -794,3 +794,10 @@ def test_the_launchers_detective_cloud_prompt_passes_intake():
     assert parsed == {"advisorVersion": composed["pluginVersion"],
                       "environment": ENV_ID, "baseCommit": SHA, "adoptsBranch": None, "adoptsHead": None}
     assert cb.launch_charter(composed["prompt"]) == "detective"
+    run = FakeRun()
+    result = cb.intake("/repo", composed["prompt"], env=_session(), run=run,
+                       running_version=composed["pluginVersion"])
+    assert result["ok"] is True
+    assert result["startedFrom"] == SHA
+    assert result["comment"] == cb.DETECTIVE_INTAKE_TEXT.format(v=composed["pluginVersion"], sha=SHA)
+    assert run.git_calls[-1][3:] == ["checkout", "--detach", SHA]

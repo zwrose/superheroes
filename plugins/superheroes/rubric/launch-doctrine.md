@@ -49,7 +49,7 @@ Standing permission from the owner: push to your own build branch (the one you c
 **Detective cloud rule (parsed).** The block below holds one sentence. `lib/launch_doctrine.py` parses it as one line that must carry the intake step, where disposable copies live, and the no-push limit, and `compose_launch` carries it in every detective cloud launch prompt, in place of the builder's standing permission above, and in no local one.
 
 <!-- launch-doctrine:cloud-detective:begin -->
-Detective in a cloud session: before anything else run `<plugin root>/lib/cloud_builder.py intake` with this launch prompt as its launch file, and on a refusal post its comment on the incident issue and stop; you stay observe-only — your disposable copies live only inside this cloud session, you push no branch and open no pull request for the surface under diagnosis, and your only writes are the diagnosis receipt and your intake, progress and terminal notes on the incident issue.
+Detective in a cloud session: before anything else run `<plugin root>/lib/cloud_builder.py intake` with this launch prompt as its launch file, and on a refusal post its comment on the incident issue and stop; you stay observe-only — your disposable copies live only inside this cloud session, you push no branch and open no pull request for the surface under diagnosis, and your only writes are the diagnosis receipt and your intake, progress, builder-note and terminal comments on the incident issue.
 <!-- launch-doctrine:cloud-detective:end -->
 
 **Wave live canary (documentation only — not parsed).** A wave preflight runs the conformance probe

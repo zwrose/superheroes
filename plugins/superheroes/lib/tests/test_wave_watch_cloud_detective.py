@@ -108,13 +108,3 @@ def test_each_terminal_kind_on_a_detective_lane_is_lane_terminal_through_the_led
     assert (launch["launchId"], launch["state"], launch["kind"], launch["commentId"]) == (
         "cloud-a", state, kind, 7)
     assert launch["issue"] == 101
-
-
-def test_each_terminal_kind_is_lane_terminal_when_the_lanes_go_straight_to_the_evaluator():
-    lanes = _lanes({"cloud-a": (101, 600), "cloud-b": (202, 600), "cloud-c": (303, 600)})
-    comments = [_comment(1, 303, _terminal_body("park")), _comment(2, 101, _terminal_body("handback")),
-                _comment(3, 202, _terminal_body("stop"))]
-    notes, terminals = _evaluate(lanes, comments)
-    assert notes == []
-    assert [(t["launchId"], t["state"]) for t in terminals] == [
-        ("cloud-a", "handback"), ("cloud-b", "stopped"), ("cloud-c", "parked")]

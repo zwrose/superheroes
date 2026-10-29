@@ -229,3 +229,41 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_cloud_detective.py::test_a_
 ## Post-restore check
 
 `git status --porcelain` after the last restore lists no `plugins/superheroes/lib/wave_watch.py` entry; the modified production file in the final tree is `plugins/superheroes/lib/cloud_builder.py` (the feature itself). This is a supplementary check, not the restore receipt.
+
+## 6. D1: the composed detective cloud prompt passes intake with the detective note (review round 1, F-v1)
+
+- Guarded element and axis: `test_cloud_builder.py::test_the_launchers_detective_cloud_prompt_passes_intake` — the launcher's composed detective prompt selects the detective charter and, run through `cb.intake`, yields the detective intake note and a detached checkout of the base commit.
+- Neutralization (`cloud_builder.py`, `launch_charter`): the return line `return "detective" if first == _sibling("launcher")._CHARTER_COMMANDS["detective"] else "workhorse"` became `return "workhorse"`.
+- Red (single node, unedited test; the pytest `UV_NATIVE_TLS` deprecation warning line is omitted from the quote):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_the_launchers_detective_cloud_prompt_passes_intake ____________
+
+    def test_the_launchers_detective_cloud_prompt_passes_intake():
+        composed = _composed_detective_prompt()
+        parsed = cb.parse_launch(composed["prompt"])
+        assert parsed == {"advisorVersion": composed["pluginVersion"],
+                          "environment": ENV_ID, "baseCommit": SHA, "adoptsBranch": None, "adoptsHead": None}
+>       assert cb.launch_charter(composed["prompt"]) == "detective"
+E       AssertionError: assert 'workhorse' == 'detective'
+E         
+E         - detective
+E         + workhorse
+
+/home/user/wt-2230/plugins/superheroes/lib/tests/test_cloud_builder.py:796: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_builder.py::test_the_launchers_detective_cloud_prompt_passes_intake
+1 failed in 0.74s
+```
+
+  (The red lands on the existing `launch_charter` assertion, which runs before the new intake lines, so this neutralization shows the node bites but does not isolate the new `cb.intake` assertions. Those assertions follow the same selection at `cloud_builder.py:262-263`, which this record did not neutralize separately.)
+- Restore: the inverse edit, putting the original return line back.
+- Restore receipt (`cloud_builder.py:226`, read back after the restore): `    return "detective" if first == _sibling("launcher")._CHARTER_COMMANDS["detective"] else "workhorse"`. `git status --porcelain` lists no `cloud_builder.py` entry.
+- Green:
+
+```
+.                                                                        [100%]
+1 passed in 3.75s
+```
