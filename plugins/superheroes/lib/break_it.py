@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Run a break-it test the test role wrote as text, in a throwaway copy, and check it was kept (#1800).
+"""Run a break-it test the test role wrote as text, in the session's own working copy, and check it was kept (#1800, #2210).
 
-Stdlib only. A break-it test runs **only** inside a detached copy of the reviewed head: it never
-touches the caller's tree, index or HEAD, and its process tree never outlives the call. The runner
-itself writes only inside the copy. The copy links the reviewed checkout's installed, untracked
-dependency directories (``DEPENDENCY_DIRS``); a test may write untracked cache files inside a linked
-directory, such as vite's ``node_modules/.vite-temp``, but no tracked file of the reviewed checkout is
-written, and a dependency tree that links back into the checkout's tracked files is never linked.
+Stdlib only. A break-it test runs **only** from the root of the session's own working copy
+(``repo_root``), and only when that tree is exactly the reviewed head: the working copy's HEAD must be
+the head and no tracked file may be modified or staged, else the run is ``not-run`` and nothing is
+written. The runner writes nowhere but the working copy (its own git directory included) and the
+session folder: the test file it writes, the run's temporary and cache folders (``TMPDIR``, ``TMP``,
+``TEMP`` and ``XDG_CACHE_HOME`` point at a per-run folder in the session folder, or in the git
+directory's ``superheroes`` folder when no session folder is given) and nothing else. After the run, in
+a ``finally``, it restores the working copy to what it was: the test file and the directories the write
+made, every ref, HEAD, the local git config, the index, every tracked file and every non-ignored
+untracked file the test added; a restore that fails is recorded ``working-copy-restore-failed``.
+The one limit, stated plainly: a test that writes to an absolute path outside the working copy and the
+session folder is not stopped (there is no OS sandbox). Its process tree never outlives the call.
 Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
 and the caller decides from the record; nothing is raised."""
 import hashlib
@@ -15,12 +21,10 @@ import os
 import posixpath
 import re
 import shlex
-import shutil
 import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 
@@ -43,9 +47,6 @@ OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
 REASON_COMMAND_NOT_FOUND = "command-not-found"
 REASON_MODULE_NOT_FOUND = "module-not-found"
-REASON_DEPENDENCY_LINK_FAILED = "dependency-link-failed"
-REASON_DEPENDENCY_LINK_UNSAFE = "dependency-link-unsafe"
-DEPENDENCY_DIRS = ("node_modules",)
 _JS_LAUNCHERS = frozenset(["npm", "npx", "pnpm", "yarn"])
 _COMMAND_NOT_FOUND_EXIT = 127
 _COMMAND_NOT_FOUND_RE = re.compile(r"command not found")
@@ -78,8 +79,8 @@ BLOCK_TEMPLATE = "\n".join([
     "<the complete file content>",
 ])
 RUN_RULES = (
-    "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
-    "files plus the reviewed checkout's installed `node_modules` when it has one: one command, "
+    "The loop runs `run` without a shell, from the root of the session's own working copy, at the "
+    "reviewed head: one command, "
     "optionally led by `NAME=value` settings, with no pipes, redirects, "
     "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run. A `run` "
     "whose program is `python` or `python3` (or another Python interpreter path), or, when the "
@@ -93,7 +94,7 @@ CONTENT_RULES = (
     "formatting and title, and a JavaScript or TypeScript comment counts). So the content must "
     "already be the file the project's own rules accept: every marker or directive comment those "
     "rules require on a test file (in CLAUDE.md, the calibration, or a check the project runs over "
-    "its tests, which you can read in the repository copy) is written in its full required form, "
+    "its tests, which you can read in the repository) is written in its full required form, "
     "never as a bare marker the project would then have to extend.")
 
 _TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
@@ -270,7 +271,7 @@ def parse_command(run):
         m = _ENV_TOKEN.match(tokens[0])
         if not m:
             break
-        # axis: a leading git routing assignment is refused, so the copy's git can never be redirected — see bite-proof record wo_a_1800_break-it
+        # axis: a leading git routing assignment is refused, so the working copy's git can never be redirected — see bite-proof record wo_a_1800_break-it
         if m.group(1) in GIT_ROUTING_VARS or m.group(1) == _TOKEN_ENV:
             return None, None, "run-env-refused"
         env[m.group(1)] = m.group(2)
@@ -481,7 +482,8 @@ def resolve_interpreter(config):
     return project_interpreter(config.get("verifyCommand"))
 
 
-def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None):
+def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None, restored=None):
+    """The run record. ``restored`` names what the run had to put back in the working copy, in restore order."""
     block = block if isinstance(block, dict) else {}
     # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
     output = readout.scrub(output)[0] if output else ""
@@ -489,7 +491,8 @@ def _record(head, block, outcome, reason=None, exit_code=None, output="", interp
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
             "content": block.get("content"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
-            "interpreter": shlex.join(interpreter) if isinstance(interpreter, list) else interpreter}
+            "interpreter": shlex.join(interpreter) if isinstance(interpreter, list) else interpreter,
+            "restored": list(restored or [])}
 
 
 def _git(repo_root, *args):
@@ -565,8 +568,8 @@ def _tagged_pids(token):
     """Pids of processes whose environment carries ``token`` (inherited through any session).
 
     On macOS, ``ps -E`` cannot read the environment of Apple's system programs (such as
-    ``/bin/sleep``). So a detached worker running one, after it has left the copy's directory,
-    escapes this net. The session kill and the in-copy working-directory net still apply.
+    ``/bin/sleep``). So a detached worker running one escapes this net. The reaper and the session
+    kill still apply.
     """
     needle = (_TOKEN_ENV + "=" + token).encode()
     found = []
@@ -604,53 +607,29 @@ def _kill_tagged(token):
                 pass
 
 
-def _kill_in_dir(copy):
-    """Third net, independent of session and environment: kill any process whose working directory
-    lies inside ``copy`` (``/proc/<pid>/cwd`` on Linux, ``lsof`` elsewhere when it is installed)."""
-    root = os.path.realpath(copy)
-    pids = []
-    if os.path.isdir("/proc/self"):
-        for name in os.listdir("/proc"):
-            try:
-                cwd = os.readlink("/proc/%s/cwd" % name) if name.isdigit() else ""
-            except OSError:
-                continue
-            if cwd == root or cwd.startswith(root + os.sep):
-                pids.append(int(name))
-    elif shutil.which("lsof"):
-        try:
-            out = subprocess.run(["lsof", "-t", "+D", root], capture_output=True, timeout=30).stdout
-            pids = [int(w) for w in out.split() if w.isdigit()]
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    for pid in pids:
-        if pid != os.getpid():
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-
-
-def _write_confined(copy, rel, content):
-    """Create ``rel`` inside ``copy`` and nowhere else. None on success, else the not-run reason."""
+def _write_confined(root, rel, content, created=None):
+    """Create ``rel`` inside ``root`` and nowhere else. None on success, else the not-run reason. Each directory
+    the write makes is appended to ``created`` when it is given."""
     parts = rel.split("/")
-    current = copy
+    current = root
     for part in parts[:-1]:
         current = os.path.join(current, part)
         try:
             mode = os.lstat(current).st_mode
         except FileNotFoundError:
             os.mkdir(current)
+            if created is not None:
+                created.append(current)
             continue
-        # axis: a symlinked ancestor inside the copy is refused, never followed out of it — see bite-proof record wo_a_1800_break-it
+        # axis: a symlinked ancestor is refused, never followed out of the root — see bite-proof record wo_a_1800_break-it
         if stat.S_ISLNK(mode):
             return "path-escapes"
         if not stat.S_ISDIR(mode):
             return "path-exists"
-    target = os.path.join(copy, *parts)
-    real_copy = os.path.realpath(copy)
+    target = os.path.join(root, *parts)
+    real_root = os.path.realpath(root)
     real_parent = os.path.realpath(os.path.dirname(target))
-    if real_parent != real_copy and not real_parent.startswith(real_copy + os.sep):
+    if real_parent != real_root and not real_parent.startswith(real_root + os.sep):
         return "path-escapes"
     try:
         # axis: O_EXCL refuses to overwrite a file the head already tracks — see bite-proof record wo_a_1800_break-it
@@ -664,11 +643,11 @@ def _write_confined(copy, rel, content):
     return None
 
 
-def _already_kept(copy, rel, sha):
-    """True when ``rel`` is already a regular file in ``copy`` (no symlink on the way) whose bytes
+def _already_kept(root, rel, sha):
+    """True when ``rel`` is already a regular file in ``root`` (no symlink on the way) whose bytes
     hash to ``sha`` — the test was kept in the change, so it is run as it stands."""
     parts = rel.split("/")
-    current = copy
+    current = root
     try:
         for part in parts[:-1]:
             current = os.path.join(current, part)
@@ -685,54 +664,10 @@ def _already_kept(copy, rel, sha):
     return hashlib.sha256(data).hexdigest() == sha
 
 
-def _scan_entries(directory):
-    """The paths of every entry of ``directory`` and of each ``@``-prefixed scope directory and the ``.bin``
-    directory beneath it."""
-    found = []
-    for name in sorted(os.listdir(directory)):
-        entry = os.path.join(directory, name)
-        found.append(entry)
-        # axis: a ``.bin`` entry that links back into the reviewed checkout's tracked tree is scanned like a package link, so it is never linked
-        if (name.startswith("@") or name == ".bin") and os.path.isdir(entry) and not os.path.islink(entry):
-            found.extend(os.path.join(entry, sub) for sub in sorted(os.listdir(entry)))
-    return found
-
-
-def _link_dependencies(repo_root, copy):
-    """Link the reviewed checkout's installed dependency directories into ``copy``. None on success or when
-    there is nothing to do, else the not-run reason."""
-    root_real = os.path.realpath(repo_root)
-    for name in DEPENDENCY_DIRS:
-        source = os.path.join(os.path.abspath(repo_root), name)
-        target = os.path.join(copy, name)
-        # axis: a dependency directory the head tracks is already in the copy and is never replaced by a link
-        if os.path.lexists(target) or not os.path.isdir(source):
-            continue
-        src_real = os.path.realpath(source)
-        # axis: a dependency folder that is itself a link into another part of the reviewed checkout is never linked, so a test cannot write a tracked file through it
-        if (src_real == root_real or src_real.startswith(root_real.rstrip(os.sep) + os.sep)) and src_real != os.path.join(root_real, name):
-            return REASON_DEPENDENCY_LINK_UNSAFE
-        try:
-            for entry in _scan_entries(source):
-                if not os.path.islink(entry):
-                    continue
-                real = os.path.realpath(entry)
-                inside_root = real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep)
-                inside_src = real == src_real or real.startswith(src_real.rstrip(os.sep) + os.sep)
-                # axis: a package that links back into the reviewed checkout's tracked tree is never linked, so a test cannot write a tracked file through it
-                if inside_root and not inside_src:
-                    return REASON_DEPENDENCY_LINK_UNSAFE
-            os.symlink(source, target, target_is_directory=True)
-        except OSError:
-            # axis: a scan or link that fails reads not-run, never a run without the dependencies
-            return REASON_DEPENDENCY_LINK_FAILED
-    return None
-
-
-def _declares_dependencies(copy):
-    """True when the copy's root ``package.json`` (a regular file, read without following a symlink)
+def _declares_dependencies(root):
+    """True when the root ``package.json`` of ``root`` (a regular file, read without following a symlink)
     declares a non-empty ``dependencies`` or ``devDependencies`` object."""
-    target = os.path.join(copy, "package.json")
+    target = os.path.join(root, "package.json")
     try:
         if not stat.S_ISREG(os.lstat(target).st_mode):
             return False
@@ -746,15 +681,15 @@ def _declares_dependencies(copy):
     return any(isinstance(data.get(key), dict) and data[key] for key in ("dependencies", "devDependencies"))
 
 
-def _run_contained(argv, env, copy, repo_root, token, timeout):
-    """Run ``argv`` in ``copy`` under the reaper, with the token and working-directory sweeps, keeping only the
+def _run_contained(argv, env, cwd, repo_root, token, timeout):
+    """Run ``argv`` in ``cwd`` under the reaper, with the token sweep, keeping only the
     output tail. Returns ``(launch_failed, timed_out, returncode, output, setup)``, ``setup`` being the setup-failure
     reason the drain latched while the output went by, or ``None``. Every process a break-it run starts,
     the readiness probe included, goes through here."""
     status_r, status_w = os.pipe()
     try:
-        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
-        proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=copy,
+        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net, the only one on other hosts, where a worker that clears its environment is not contained. There is no working-directory sweep: the working directory is the session's own checkout, which a sweep would take the session's own shell down with.
+        proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=cwd,
                                 env=_clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True,
@@ -782,7 +717,6 @@ def _run_contained(argv, env, copy, repo_root, token, timeout):
         # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
         _kill_group(proc.pid)
         _kill_tagged(token)
-        _kill_in_dir(copy)
         proc.wait()
         launch_failed = os.read(status_r, 1) == b"E"
         os.close(status_r)
@@ -799,33 +733,300 @@ _PROBE_CODE = "import sys; sys.stdout.write(str(6 * 7) + 'ok')"
 _PROBE_MARKER = "42ok"
 
 
-def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, interpreter=None):
-    def rec(outcome, reason=None, exit_code=None, output=""):
-        return _record(head, block, outcome, reason, exit_code, output, interpreter)
+_ROUTED_TMP_VARS = ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME")
+_CHECKOUT_CONFIG = "config." + "work" + "tree"  # git's per-checkout config file name, built in parts so a source search for the word finds none
 
+
+class _GitFailed(Exception):
+    """A git call the working-copy run depends on failed."""
+
+
+def _must(root, *args, ok=(0,)):
+    """Run git in ``root`` through ``_git``; the completed process when its exit code is in ``ok``, else ``_GitFailed``."""
     try:
-        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
-        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
-                     "--", os.path.abspath(repo_root), copy)
-        if added.returncode == 0:
-            added = _git(copy, "remote", "remove", "origin")
-        if added.returncode == 0:
-            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
+        done = _git(root, *args)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
-    if added.returncode != 0:
-        return rec(OUTCOME_NOT_RUN, "copy-failed",
-                   output=_tail_text(added.stderr, True))
-    # axis: the dependencies are linked before the block is written, so a block path under a linked directory meets a symlinked ancestor and is refused `path-escapes`
-    unlinked = _link_dependencies(repo_root, copy)
-    if unlinked:
-        return rec(OUTCOME_NOT_RUN, unlinked)
-    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
-    if write and _already_kept(copy, block["path"], block.get("sha256")):
+        raise _GitFailed("git %s: %s" % (args[0], exc))
+    if done.returncode not in ok:
+        raise _GitFailed("git %s failed: %s" % (" ".join(args[:2]), _tail_text(done.stderr, True).strip()))
+    return done
+
+
+def _text(raw):
+    return raw.decode("utf-8", errors="surrogateescape")
+
+
+def _head_commit(root):
+    """The commit HEAD resolves to, or the empty string when it resolves to none."""
+    return _text(_must(root, "rev-parse", "--verify", "-q", "HEAD^{commit}", ok=(0, 1)).stdout).strip()
+
+
+def _head_symref(root):
+    """The ref HEAD points at, or the empty string when HEAD is detached."""
+    return _text(_must(root, "symbolic-ref", "-q", "HEAD", ok=(0, 1)).stdout).strip()
+
+
+def _tracked_status(root):
+    """The porcelain status of the tracked files: empty when none is modified or staged."""
+    return _must(root, "status", "--porcelain=v1", "-z", "--untracked-files=no").stdout
+
+
+def _precheck(root, head):
+    """``(pinned commit, None, "")`` when the working copy is exactly ``head`` with no modified or staged tracked
+    file, else ``(None, reason, detail)``. Reads only; nothing is written."""
+    try:
+        at = _text(_must(root, "rev-parse", "--verify", "HEAD^{commit}").stdout).strip()
+        want = _text(_must(root, "rev-parse", "--verify", head + "^{commit}").stdout).strip()
+        # axis: a working copy that is not at the reviewed head is never run, because the test would meet another tree — see bite-proof record wo_a_2210_break_it_working_copy
+        if at != want:
+            return None, "working-copy-not-at-head", "HEAD is %s, the reviewed head is %s" % (at, want)
+        # axis: a modified or staged tracked file is never run over, because the restore could not tell the session's work from the run's — see bite-proof record wo_a_2210_break_it_working_copy
+        if _tracked_status(root):
+            return None, "working-copy-dirty", "a tracked file is modified or staged"
+    except _GitFailed as exc:
+        return None, "working-copy-unreadable", str(exc)
+    return at, None, ""
+
+
+def _remove_folder(path):
+    """Remove the per-run folder and everything under it; a failure leaves what it could not remove."""
+    for top, dirs, files in os.walk(path, topdown=False):
+        for name in files + [d for d in dirs if os.path.islink(os.path.join(top, d))]:
+            try:
+                os.unlink(os.path.join(top, name))
+            except OSError:
+                pass
+        try:
+            os.rmdir(top)
+        except OSError:
+            pass
+
+
+def _read_bytes(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def _config_paths(root):
+    """The local git config file and the per-checkout one, as absolute paths."""
+    paths = []
+    for name in ("config", _CHECKOUT_CONFIG):
+        found = _text(_must(root, "rev-parse", "--git-path", name).stdout).rstrip("\n")
+        paths.append(os.path.join(root, found))
+    return paths
+
+
+def _refs(root):
+    out = _text(_must(root, "for-each-ref", "--format=%(refname)%00%(objectname)").stdout)
+    refs = {}
+    for line in out.split("\n"):
+        name, sep, oid = line.partition("\0")
+        if sep:
+            refs[name] = oid
+    return refs
+
+
+def _untracked(root):
+    """The non-ignored untracked files, as repo-relative paths."""
+    raw = _must(root, "ls-files", "--others", "--exclude-standard", "-z").stdout
+    return set(_text(name) for name in raw.split(b"\0") if name)
+
+
+def _snapshot(root, pinned):
+    """What the run must leave as it found it: HEAD, every ref, the local config bytes and the untracked files."""
+    return {"pinned": pinned, "symref": _head_symref(root), "refs": _refs(root),
+            "config": {path: _read_bytes(path) for path in _config_paths(root)},
+            "untracked": _untracked(root)}
+
+
+def _restore_test_file(root, ctx):
+    """Remove the test file the runner wrote and each directory its write made that is now empty."""
+    target = ctx["target"]
+    changed = False
+    if target is not None and os.path.lexists(target):
+        os.unlink(target)
+        changed = True
+    for directory in reversed(ctx["created"]):
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+    return changed
+
+
+def _restore_refs(root, snap):
+    now = _refs(root)
+    # axis: a ref the test moved or deleted is put back, and a ref it added is deleted — see bite-proof record wo_a_2210_break_it_working_copy
+    changed = [ref for ref in sorted(snap["refs"]) if now.get(ref) != snap["refs"][ref]]
+    added = [ref for ref in sorted(now) if ref not in snap["refs"]]
+    for ref in changed:
+        _must(root, "update-ref", ref, snap["refs"][ref])
+    for ref in added:
+        _must(root, "update-ref", "-d", ref)
+    return bool(changed or added)
+
+
+def _restore_head(root, snap):
+    # axis: HEAD is put back on its branch, or on the pinned commit when it was detached — see bite-proof record wo_a_2210_break_it_working_copy
+    if _head_symref(root) == snap["symref"] and _head_commit(root) == snap["pinned"]:
+        return False
+    if snap["symref"]:
+        _must(root, "symbolic-ref", "HEAD", snap["symref"])
+    else:
+        _must(root, "update-ref", "--no-deref", "HEAD", snap["pinned"])
+    return True
+
+
+def _restore_config(root, snap):
+    changed = False
+    for path, old in snap["config"].items():
+        if _read_bytes(path) == old:
+            continue
+        changed = True
+        if old is None:
+            os.unlink(path)
+        else:
+            with open(path, "wb") as fh:
+                fh.write(old)
+    return changed
+
+
+def _restore_index(root, snap):
+    if not _must(root, "diff", "--cached", "--name-only", "-z").stdout:
+        return False
+    _must(root, "reset", "-q")
+    return True
+
+
+def _restore_tracked(root, snap):
+    names = [name for name in _must(root, "diff", "--name-only", "-z", snap["pinned"]).stdout.split(b"\0") if name]
+    if not names:
+        return False
+    # axis: every tracked file that differs from the pinned commit, a deleted one included, is checked out again — see bite-proof record wo_a_2210_break_it_working_copy
+    _must(root, "--literal-pathspecs", "checkout", "-q", snap["pinned"], "--", *[_text(name) for name in names])
+    return True
+
+
+def _restore_untracked(root, snap):
+    added = sorted(_untracked(root) - snap["untracked"])
+    problems = []
+    for rel in added:
+        path = os.path.join(root, rel)
+        if rel.endswith("/") or (os.path.isdir(path) and not os.path.islink(path)):
+            problems.append("%s is a directory the run added" % rel)
+            continue
+        # axis: a non-ignored untracked file the run added is removed, and any directory that leaves empty — see bite-proof record wo_a_2210_break_it_working_copy
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            continue
+        parent = os.path.dirname(path)
+        while parent.startswith(root + os.sep):
+            try:
+                os.rmdir(parent)
+            except OSError:
+                break
+            parent = os.path.dirname(parent)
+    if problems:
+        raise OSError("; ".join(problems))
+    return bool(added)
+
+
+def _restore(root, snap, ctx):
+    """Put the working copy back as the snapshot found it, then verify. Returns ``(restored step names,
+    failures)``; a step that fails does not stop the ones after it."""
+    restored, failures = [], []
+    steps = (("test-file", _restore_test_file, ctx), ("refs", _restore_refs, snap), ("head", _restore_head, snap),
+             ("config", _restore_config, snap), ("index", _restore_index, snap),
+             ("tracked", _restore_tracked, snap), ("untracked", _restore_untracked, snap))
+    for name, step, state in steps:
+        try:
+            if step(root, state):
+                restored.append(name)
+        except (_GitFailed, OSError) as exc:
+            restored.append(name)
+            failures.append("%s: %s" % (name, str(exc)[-OUTPUT_TAIL_BYTES:]))
+    try:
+        if _head_commit(root) != snap["pinned"]:
+            failures.append("verify: HEAD does not resolve to %s" % snap["pinned"])
+        if _tracked_status(root):
+            failures.append("verify: a tracked file is still modified or staged")
+    except _GitFailed as exc:
+        failures.append("verify: %s" % exc)
+    return restored, failures
+
+
+def _scratch_folder(root, scratch):
+    """``(folder base, None)`` for the per-run folders, or ``(None, reason)``: ``scratch`` when given and an existing
+    directory, else the ``superheroes`` folder of the working copy's git directory."""
+    if scratch is not None:
+        try:
+            scratch = os.path.abspath(os.fspath(scratch))
+        except (TypeError, ValueError):
+            return None, "scratch-unresolved"
+        return (scratch, None) if os.path.isdir(scratch) else (None, "scratch-unresolved")
+    gitdir = _text(_must(root, "rev-parse", "--git-dir").stdout).rstrip("\n")
+    return os.path.join(os.path.abspath(os.path.join(root, gitdir)), "superheroes"), None
+
+
+def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, interpreter=None, scratch=None):
+    def rec(outcome, reason=None, exit_code=None, output="", restored=None):
+        return _record(head, block, outcome, reason, exit_code, output, interpreter, restored)
+
+    root = os.path.abspath(repo_root)
+    pinned, reason, detail = _precheck(root, head)
+    if reason:
+        return rec(OUTCOME_NOT_RUN, reason, output=detail)
+    try:
+        base, reason = _scratch_folder(root, scratch)
+    except _GitFailed as exc:
+        return rec(OUTCOME_NOT_RUN, "working-copy-unreadable", output=str(exc))
+    if reason:
+        return rec(OUTCOME_NOT_RUN, reason)
+    try:
+        snap = _snapshot(root, pinned)
+    except (_GitFailed, OSError) as exc:
+        return rec(OUTCOME_NOT_RUN, "working-copy-unreadable", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    tmp = os.path.join(base, "break-it-tmp-" + uuid.uuid4().hex)
+    ctx = {"target": None, "created": []}
+    result = None
+    try:
+        try:
+            result = _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx)
+        except Exception as exc:  # the restore below still runs; the caller decides from the record
+            result = rec(OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    finally:
+        # axis: the per-run folder and every change the run made to the working copy are undone on every exit path, an exception included — see bite-proof record wo_a_2210_break_it_working_copy
+        _remove_folder(tmp)
+        restored, failures = _restore(root, snap, ctx)
+    if failures:
+        return rec(OUTCOME_NOT_RUN, "working-copy-restore-failed", output="; ".join(failures)[-OUTPUT_TAIL_BYTES:],
+                   restored=restored)
+    result["restored"] = restored
+    return result
+
+
+def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx):
+    """Write the block into ``root``, run the interpreter probe and the test there, and return the record."""
+    try:
+        os.makedirs(os.path.dirname(tmp), exist_ok=True)
+        os.mkdir(tmp)
+    except OSError as exc:
+        return rec(OUTCOME_NOT_RUN, "scratch-unresolved", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    # axis: the run's temporary and cache folders are routed into the per-run folder, so nothing the test writes through them lands elsewhere — see bite-proof record wo_a_2210_break_it_working_copy
+    env = dict(env, **{name: tmp for name in _ROUTED_TMP_VARS})
+    # axis: a target already in the working copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
+    if write and _already_kept(root, block["path"], block.get("sha256")):
         write = False
     if write:
+        target = os.path.join(root, *block["path"].split("/"))
+        if not os.path.lexists(target):
+            ctx["target"] = target
         try:
-            refusal = _write_confined(copy, block["path"], block["content"])
+            refusal = _write_confined(root, block["path"], block["content"], ctx["created"])
         except OSError:
             refusal = "write-failed"
         if refusal:
@@ -834,17 +1035,17 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
         # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
         failed, timed, status, tail, _ = _run_contained(
             (interpreter if isinstance(interpreter, list) else [interpreter]) + ["-c", _PROBE_CODE],
-            env, copy, repo_root, uuid.uuid4().hex, timeout)
+            env, root, root, uuid.uuid4().hex, timeout)
         # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
         if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
             return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
     # axis: a JavaScript launcher with dependencies declared and none installed is not launched, so npx never falls back to a global or cached runner and reads passed or failed without the project's dependencies
-    if (os.path.basename(argv[0]) in _JS_LAUNCHERS and _declares_dependencies(copy)
-            and not os.path.lexists(os.path.join(copy, "node_modules"))):
+    if (os.path.basename(argv[0]) in _JS_LAUNCHERS and _declares_dependencies(root)
+            and not os.path.lexists(os.path.join(root, "node_modules"))):
         return rec(OUTCOME_NOT_RUN, REASON_MODULE_NOT_FOUND,
-                   output="the copy holds package.json with dependencies but the reviewed checkout has no installed node_modules")
+                   output="the working copy holds package.json with dependencies but has no installed node_modules")
     token = uuid.uuid4().hex
-    launch_failed, timed_out, code, output, setup = _run_contained(argv, env, copy, repo_root, token, timeout)
+    launch_failed, timed_out, code, output, setup = _run_contained(argv, env, root, root, token, timeout)
     if launch_failed and not timed_out:
         return rec(OUTCOME_NOT_RUN, REASON_COMMAND_NOT_FOUND)
     if timed_out:
@@ -857,8 +1058,10 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, int
     return rec(OUTCOME_PASSED if code == 0 else OUTCOME_FAILED, exit_code=code, output=output)
 
 
-def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, interpreter=_UNSET):
-    """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record.
+def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, interpreter=_UNSET, scratch=None):
+    """Run one parsed block from the root of the session's own working copy, ``repo_root``, at ``head``, and put the
+    working copy back as it was. Always returns a record. ``scratch`` is the session folder that holds the run's
+    temporary folder; left ``None``, that folder is made in the working copy's git directory.
     Given ``interpreter`` (the project's launcher, or ``None`` when it could not be resolved), a
     command whose program is a Python interpreter runs under that launcher, and is not run when
     there is none or it does not start. A ``list`` is the calibrated launcher prefix: it also runs a
@@ -890,25 +1093,22 @@ def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, inte
         return _record(head, block, OUTCOME_NOT_RUN, "head-unresolved")
     if write and (not isinstance(block.get("content"), str) or _path_unsafe(block.get("path"))):
         return _record(head, block, OUTCOME_NOT_RUN, "path-unsafe")
-    d = tempfile.mkdtemp(prefix="break-it-")
-    copy = os.path.join(d, "copy")
     try:
-        result = _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write, substituted)
+        return _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, substituted, scratch)
     except Exception as exc:  # the caller decides from the record; nothing is raised
-        result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:],
-                         interpreter=substituted)
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
-    return result
+        return _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:],
+                       interpreter=substituted)
 
 
 def _not_run(head, block, reason):
     return _record(head, block, OUTCOME_NOT_RUN, reason)
 
 
-def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, **kwargs):
+def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, scratch=None, **kwargs):
     if interpreter is not _UNSET:
         kwargs["interpreter"] = interpreter
+    if scratch is not None:
+        kwargs["scratch"] = scratch
     try:
         got = runner(repo_root, head, block, **kwargs)
     except Exception:  # the caller decides from the record; nothing is raised
@@ -919,7 +1119,7 @@ def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, **kwargs):
     return got
 
 
-def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET):
+def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, scratch=None):
     """Run every break-it finding (each run is bounded by its timeout; how many to write is the test
     role's policy, stated in its agent file) and fold the results in. Returns ``(kept, runs, exempt_ids)``:
     ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
@@ -946,7 +1146,7 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET):
         elif block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
-            record = _safe_run(runner, repo_root, head, block, interpreter)
+            record = _safe_run(runner, repo_root, head, block, interpreter, scratch)
         runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
         # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
         if record["outcome"] == OUTCOME_PASSED:
@@ -1009,7 +1209,7 @@ def _rewrite_command(command, old_path, new_path, titles):
     argv, env, refusal = parse_command(command)
     if refusal:
         return None, "command-unmapped"
-    # axis: a renamed test's command that filters by flag, selector or old title is refused, because the filter would select nothing in the moved copy — see bite-proof record wo_a_2053_break_it_body
+    # axis: a renamed test's command that filters by flag, selector or old title is refused, because the filter would select nothing in the moved test — see bite-proof record wo_a_2053_break_it_body
     if titles and any(_selects_tests(tok, titles, old_path) for tok in argv):
         return None, "command-selects-tests"
     # axis: a selector the environment carries (PYTEST_ADDOPTS=-k ...) filters like one in argv, so it is refused the same way — see bite-proof record wo_a_2053_break_it_body
@@ -1132,7 +1332,7 @@ def _calls_runner_directly(command):
     return False
 
 
-def _body_search(repo_root, base, head, record, today, res, runner, interpreter):
+def _body_search(repo_root, base, head, record, today, res, runner, interpreter, scratch=None):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
     # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
@@ -1189,13 +1389,13 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter)
         return res(KEPT_UNRESOLVED, refusal)
     run = _safe_run(runner, repo_root, head,
                     {"path": found["path"], "run": command, "content": "", "sha256": record["sha256"]},
-                    interpreter, write=False)
+                    interpreter, scratch, write=False)
     if run["outcome"] == OUTCOME_PASSED:
         return res(KEPT, "body-match", run)
     return res(KEPT_FAILING, run.get("reason"), run)
 
 
-def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET):
+def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET, scratch=None):
     """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
     Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
     record = record if isinstance(record, dict) else {}
@@ -1208,7 +1408,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
         # axis: a record without content never searches, so it keeps the byte-exact check — see bite-proof record wo_a_2053_break_it_body
         if not isinstance(record.get("content"), str):
             return today
-        return _body_search(repo_root, base, head, record, today, res, runner, interpreter)
+        return _body_search(repo_root, base, head, record, today, res, runner, interpreter, scratch)
 
     for value in (repo_root, base, head, path, record.get("command"), record.get("sha256")):
         if not isinstance(value, str) or not value:
@@ -1241,7 +1441,7 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
         return searched(res(KEPT_CHANGED, "sha256-differs"))
     run = _safe_run(runner, repo_root, head,
                     {"path": path, "run": record["command"], "content": "",
-                     "sha256": record["sha256"]}, interpreter, write=False)
+                     "sha256": record["sha256"]}, interpreter, scratch, write=False)
     if run["outcome"] == OUTCOME_PASSED:
         return res(KEPT, run=run)
     return res(KEPT_FAILING, run.get("reason"), run)

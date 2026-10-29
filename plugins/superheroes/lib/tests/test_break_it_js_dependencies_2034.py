@@ -187,82 +187,94 @@ def test_t4_npx_with_a_global_install_holding_the_fake_is_not_run(tmp_path, monk
 
 
 # T5
-def test_t5_a_run_writes_no_tracked_file_of_the_reviewed_checkout(tmp_path):
+def test_t5_a_tracked_file_the_run_writes_is_restored(tmp_path):
     repo = _repo(tmp_path)
     before = _tracked_hashes(repo)
     content = 'import fs from "node:fs"; fs.writeFileSync("README.md", "changed");\n' + PASSING
     got = _run(repo, content, NPM_RUN)
     assert got["outcome"] == "passed", got
+    assert got["restored"] == ["test-file", "tracked"], got
     assert _tracked_hashes(repo) == before
     assert _git(repo, "status", "--porcelain") == ""
+    # the installed (ignored) node_modules is the checkout's own, so the run's cache file stays in it
     assert (repo / "node_modules" / ".vite-temp" / "config.txt").is_file()
 
 
 # T6
-@pytest.mark.parametrize("link,target", [
-    ("node_modules/localpkg", "../packages/localpkg"),
-    ("node_modules/@s/localpkg", "../../packages/localpkg"),
+_THROUGH_THE_LINK = 'import fs from "node:fs"; fs.writeFileSync(%r, "changed");\n'
+
+
+@pytest.mark.parametrize("link,target,written", [
+    ("node_modules/localpkg", "../packages/localpkg", "node_modules/localpkg/index.js"),
+    ("node_modules/@s/localpkg", "../../packages/localpkg", "node_modules/@s/localpkg/index.js"),
 ])
-def test_t6_a_dependency_linking_into_tracked_files_is_never_linked(tmp_path, link, target):
+def test_t6_a_write_through_a_dependency_link_into_a_tracked_file_is_restored(tmp_path, link, target, written):
     repo = _repo(tmp_path, install=False, tracked_local=True)
     _install_fake(repo / "node_modules")
     (repo / link).parent.mkdir(parents=True, exist_ok=True)
     os.symlink(target, repo / link)
-    got = _run(repo, PASSING, NPM_RUN)
-    assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-unsafe"), got
+    before = _tracked_hashes(repo)
+    got = _run(repo, _THROUGH_THE_LINK % written, "node " + TEST_PATH)
+    assert got["outcome"] == "passed", got
+    assert got["restored"] == ["test-file", "tracked"], got
+    assert _tracked_hashes(repo) == before
+    assert _git(repo, "status", "--porcelain") == ""
 
 
-def test_t6_a_dependency_folder_that_is_itself_a_link_into_the_checkout_is_never_linked(tmp_path):
+def test_t6_a_write_through_a_dependency_folder_that_links_into_the_checkout_is_restored(tmp_path):
     repo = _repo(tmp_path, install=False)
     _write(repo, "vendor/pkg/index.js", "module.exports = 1;\n")
     _git(repo, "add", "-A")
     _git(repo, *_ID, "commit", "-q", "-m", "vendor")
     os.symlink("vendor", repo / "node_modules")
-    got = _run(repo, PASSING, NPM_RUN)
-    assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-unsafe"), got
+    before = _tracked_hashes(repo)
+    got = _run(repo, _THROUGH_THE_LINK % "node_modules/pkg/index.js", "node " + TEST_PATH)
+    assert got["outcome"] == "passed", got
+    assert got["restored"] == ["test-file", "tracked"], got
+    assert _tracked_hashes(repo) == before
+    # the link itself is an untracked file the .gitignore directory pattern does not match, and it stays
+    assert _git(repo, "status", "--porcelain") == "?? node_modules\n"
 
 
-def test_t6_a_bin_entry_linking_into_tracked_files_is_never_linked(tmp_path):
+def test_t6_a_write_through_a_bin_entry_linking_into_tracked_files_is_restored(tmp_path):
     repo = _repo(tmp_path, install=False)
     _write(repo, "scripts/tool.js", "console.log(1);\n")
     _git(repo, "add", "-A")
     _git(repo, *_ID, "commit", "-q", "-m", "scripts")
     _install_fake(repo / "node_modules")
     os.symlink("../../scripts/tool.js", repo / "node_modules" / ".bin" / "tool")
-    got = _run(repo, PASSING, NPM_RUN)
-    assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-unsafe"), got
-
-
-# T7
-def test_t7_a_link_that_fails_is_not_run(tmp_path, monkeypatch):
-    repo = _repo(tmp_path)
-
-    def refuse(*args, **kwargs):
-        raise OSError("no links here")
-
-    monkeypatch.setattr(break_it.os, "symlink", refuse)
-    got = _run(repo, PASSING, NPM_RUN)
-    assert (got["outcome"], got["reason"]) == ("not-run", "dependency-link-failed"), got
+    before = _tracked_hashes(repo)
+    got = _run(repo, _THROUGH_THE_LINK % "node_modules/.bin/tool", "node " + TEST_PATH)
+    assert got["outcome"] == "passed", got
+    assert got["restored"] == ["test-file", "tracked"], got
+    assert _tracked_hashes(repo) == before
+    assert _git(repo, "status", "--porcelain") == ""
 
 
 # T8
-def test_t8_a_block_path_under_node_modules_escapes(tmp_path):
+def test_t8_a_block_path_under_node_modules_is_removed_after_the_run(tmp_path):
     path = "node_modules/x.test.mjs"
-    got = _run(_repo(tmp_path), PASSING, "npm test -- " + path, path)
-    assert (got["outcome"], got["reason"]) == ("not-run", "path-escapes"), got
+    repo = _repo(tmp_path)
+    got = _run(repo, PASSING, "npm test -- " + path, path)
+    assert got["outcome"] == "passed", got
+    assert got["restored"] == ["test-file"], got
+    assert not (repo / path).exists()
+    assert (repo / "node_modules" / "vitest").is_dir()
 
 
 # T9
-def test_t9_a_head_that_tracks_node_modules_keeps_its_own(tmp_path):
+def test_t9_a_head_that_tracks_node_modules_runs_in_its_own(tmp_path):
     repo = _repo(tmp_path, track_modules=True)
     got = _run(repo, PASSING, NPM_RUN)
     assert got["outcome"] == "passed", got
-    # the copy's own tracked directory ran, so nothing was written through a link into the checkout
+    # the run wrote its cache file into the tracked directory; the restore removed it again
+    assert "untracked" in got["restored"], got
     assert not (repo / "node_modules" / ".vite-temp").exists()
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""
 
 
 # T10
-def test_t10_the_run_rules_and_the_sanitized_view_notice_name_the_dependencies():
-    assert "node_modules" in break_it.RUN_RULES
+def test_t10_the_run_rules_and_the_sanitized_view_notice_name_the_working_copy_and_the_dependencies():
+    assert "root of the session's own working copy, at the reviewed head" in break_it.RUN_RULES
     notice = sanitized_view.sanitized_view_notice({"headSha": "abc"})
     assert "no installed dependencies" in notice and "node_modules" in notice
