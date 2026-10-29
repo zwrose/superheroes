@@ -584,8 +584,10 @@ def _normalized(finding):
 
 
 def _passed_break_it(rounds):
-    """``{(round, title, file)}`` of each break-it run whose test passed: the intercept dropped that proposal
-    before compile, so it is in neither the listed findings nor the compile drops."""
+    """``{(round, title, file)}`` of each break-it run whose test passed. Under the current rules a passed run
+    keeps its finding (the run judges nothing), so such a proposal is listed; a session that began under the
+    earlier rules has passed proposals the intercept dropped before compile, which are in neither the listed
+    findings nor the compile drops, and this settles them."""
     out = set()
     for n in rounds:
         runs = rounds[n].get("breakItRuns") if str(n).isdigit() and isinstance(rounds[n], dict) else None
@@ -645,7 +647,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 continue
             fkey = sc.finding_identity_key(_normalized(f))
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
-            # axis: a break-it proposal whose test passed was dropped before compile and is no defect — see bite-proof record c1l1_wo_b_session_seam
+            # axis: a break-it proposal whose test passed was dropped before compile and is no defect; kept for a session that began under the earlier rules, since the current intercept drops nothing — see bite-proof record c1l1_wo_b_session_seam
             # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
             settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
@@ -864,7 +866,8 @@ def _fill(account, earlier):
 
     A `grade`, `repeatOf` or `kindOfMistake` the row lacks is the earlier one; the earlier `breakItRuns` come first,
     followed by each of the row's runs not already among them. The earlier runs come from the posted record, which the
-    writer scrubbed, so each of the row's runs is compared in its scrubbed form."""
+    writer scrubbed, so each of the row's runs is compared in its scrubbed form and appended in that form: a run
+    the scrub changes is carried once, as the writer will post it."""
     held = {review_record._key(f): f for f in earlier}
     for f in account["findings"]:
         old = held.get(review_record._key(f))
@@ -879,9 +882,10 @@ def _fill(account, earlier):
             mine = f.get("breakItRuns", [])
             runs = list(old["breakItRuns"])
             for run in mine:
-                # axis: a current run is compared as the writer will post it (scrubbed), so a run the scrub changed is not appended on every rewrite — see bite-proof record c1l1_wo_b_session_seam
-                if (review_record._scrubbed(run) if isinstance(run, dict) else run) not in runs:
-                    runs.append(run)
+                # axis: a current run is compared and appended as the writer will post it (scrubbed), so a run the scrub changed is carried once and not appended again on every rewrite — see bite-proof record c1l1_wo_b_session_seam
+                shown = review_record._scrubbed(run) if isinstance(run, dict) else run
+                if shown not in runs:
+                    runs.append(shown)
             f["breakItRuns"] = runs
 
 

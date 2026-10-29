@@ -135,22 +135,32 @@ QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
 def _fixer_create_items(batch):
-    """The ``file`` of each batch row that is a break-it finding the driver itself stamped for that path.
+    """The path of each batch row that carries a break-it test the driver itself stamped for that path.
 
     The test file such a finding names is written by the fixer, so it does not exist when the
     order is linted. The stamp is the driver's: compile strips a seat-supplied one and only the
     break-it intercept stamps a copy, so an unstamped row, or one stamped for another path, is
-    never exempted.
+    never exempted. A per-area row yields its ``file`` when the stamp names it; an attached row
+    (any other taxonomy whose suggestion is a block) yields its carried block's ``path`` when the
+    stamp names that.
     """
     out = []
     for row in batch if isinstance(batch, list) else []:
-        if not isinstance(row, dict) or not break_it.is_break_it(row):
+        if not isinstance(row, dict):
             continue
         stamp = row.get(break_it.RUN_FIELD)
-        # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
-        if (isinstance(stamp, dict) and isinstance(stamp.get("path"), str) and stamp["path"]
-                and stamp["path"] == row.get("file")):
-            out.append(row["file"])
+        stamped_path = stamp.get("path") if isinstance(stamp, dict) else None
+        if not (isinstance(stamped_path, str) and stamped_path):
+            continue
+        if break_it.is_break_it(row):
+            # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
+            if stamped_path == row.get("file"):
+                out.append(row["file"])
+            continue
+        block, kind = break_it.carried_block(row)
+        # axis: an attached row is exempted only when the driver's stamp names the very path its carried block writes
+        if kind == break_it.KIND_ATTACHED and stamped_path == block["path"]:
+            out.append(block["path"])
     return out
 
 
@@ -914,13 +924,24 @@ def _nit_cap(findings):
 
 
 def _merge_same_finding(existing, incoming):
-    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed."""
+    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed. When exactly one side carries a
+    break-it test with the driver's stamp, the merged dict keeps that side's `suggestion`, `breakItRun` and
+    `breakItRuns`, so an ordinary finding that wins the base never drops the attached test."""
     dims = panel_tally._merge_dims(existing, incoming)
     if circuit_breaker.severity_rank(incoming.get("severity")) \
             < circuit_breaker.severity_rank(existing.get("severity")):
         merged = dict(incoming)
     else:
         merged = dict(existing)
+    carriers = [s for s in (existing, incoming)
+                if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
+    if len(carriers) == 1:
+        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
+        for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD):
+            if field in carriers[0]:
+                merged[field] = carriers[0][field]
+            else:
+                merged.pop(field, None)
     merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(
         [existing, incoming])
     merged["dimension"] = dims
@@ -976,12 +997,14 @@ def _compile_by_anchor(findings):
     return out
 
 
-def mechanical_compile(findings, diff_text=None, scope_exempt=None):
+def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
       2. diff-scope check — drop findings whose (file,line) is not an anchor of the round diff;
-         `scope_exempt` is a set of `id()`s of input dicts the break-it intercept stamped itself —
-         only those skip this check, and any other finding's `breakItRun` stamp is stripped;
+         `scope_exempt` is a set of `id()`s of input dicts the break-it intercept marked per-area
+         scope-exempt — only those skip this check; `stamped` is a set of `id()`s of input dicts the
+         intercept stamped itself — only those keep their `breakItRun` and `breakItRuns`, and every
+         other finding (all of them, by default) has both stripped;
       4. dedupe by the per-LOCATION anchor (file, line, normalized-title) — higher severity wins,
          dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
          two distinct-line findings that share a title (a dropped blocker);
@@ -994,6 +1017,7 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
         findings = []
     valid = diff_scope.parse_diff_lines(diff_text) if diff_text is not None else None
     exempt = scope_exempt if isinstance(scope_exempt, (set, frozenset)) else frozenset()
+    stamped_ids = stamped if isinstance(stamped, (set, frozenset)) else frozenset()
     kept, drops = [], []
     for f in findings:
         if not isinstance(f, dict):
@@ -1009,11 +1033,11 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
             continue
         fc = dict(f)
         fc["line"] = line
-        trusted = id(f) in exempt
-        if not trusted:
+        if id(f) not in stamped_ids:
             # axis: a stamp the seat supplied itself never survives compile — only the intercept's own copies carry one
             fc.pop(break_it.RUN_FIELD, None)
-        if not trusted and not _diff_scope_ok(fc, valid):
+            fc.pop(break_it.RUNS_FIELD, None)
+        if id(f) not in exempt and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
             continue
@@ -3069,30 +3093,29 @@ def _break_it_scope(session_dir, state, config):
 
 
 def _break_it_run_keys(runs, compiled):
-    """Put the compiled finding's key on each run entry (the same (file, normalized title) match);
-    None for a passed run, and `droppedAtCompile` for a stamped finding compile still dropped."""
+    """Put the compiled finding's key on each run entry, passed runs included: the run binds to the compiled
+    finding that carries its test (the same (file, normalized title) match, per-area or attached). A run whose
+    proposal compile merged away is `supersededAtCompile` with no key; a run whose finding compile dropped is
+    `droppedAtCompile` with no key."""
     by_identity = {}
     for f in compiled:
-        if isinstance(f, dict) and break_it.is_break_it(f):
+        if isinstance(f, dict) and break_it.carries_test(f):
             by_identity.setdefault(
                 (f.get("file"), normalize_title(str(f.get("title") or ""))), f)
     out = []
     for run in runs:
         entry = dict(run)
-        if entry.get("outcome") == break_it.OUTCOME_PASSED:
+        match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
+        stamp = match.get(break_it.RUN_FIELD) if match else None
+        if match is not None and isinstance(stamp, dict) and any(
+                stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):
+            # axis: a run whose proposal compile merged away binds to no finding, so the kept-check sees only the surviving test
             entry["findingKey"] = None
+            entry["supersededAtCompile"] = True
         else:
-            match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
-            stamp = match.get(break_it.RUN_FIELD) if match else None
-            if match is not None and isinstance(stamp, dict) and any(
-                    stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):
-                # axis: a run whose proposal compile merged away binds to no finding, so the kept-check sees only the surviving test
-                entry["findingKey"] = None
-                entry["supersededAtCompile"] = True
-            else:
-                entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
-                if match is None:
-                    entry["droppedAtCompile"] = True
+            entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
+            if match is None:
+                entry["droppedAtCompile"] = True
         out.append(entry)
     return out
 
@@ -3287,7 +3310,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
     # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
-    intercepted, runs, exempt = break_it.intercept(
+    intercepted, runs, exempt, stamped = break_it.intercept(
         break_it_raw, repo_root, head,
         interpreter=break_it.resolve_interpreter(config), scratch=session_dir)
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
@@ -3300,15 +3323,15 @@ def _fold_panel(state, config, artifact, session_dir=None):
         elif not placed:
             kept.extend(intercepted)
             placed = True
-    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt)
+    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped)
     if runs:
         runs = _break_it_run_keys(runs, compiled)
         _record_round(state, "breakItRuns", runs)
         _decision(state, "break-it-run",
-                  "%d run: %d failed, %d passed (dropped), %d not run"
+                  "%d run: %d exited 0, %d exited non-zero, %d not run"
                   % (len(runs),
-                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
@@ -5937,9 +5960,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if owner_ruling is not None:
             row["ownerRulingSeq"] = owner_seq
             row["ownerRuling"] = owner_ruling
-        if break_it.is_break_it(f):
-            # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
-            for carried in ("suggestion", "body", break_it.RUN_FIELD):
+        if break_it.carries_test(f):
+            # axis: a re-queued target that carries a break-it test must still hand the next fixer its exact test block, body and run records
+            for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD):
                 if f.get(carried) is not None:
                     row[carried] = f[carried]
         if auditor_vendor is not None:
@@ -6981,8 +7004,8 @@ def _break_it_kept_step(state, config):
     latest = {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
-            if (isinstance(run, dict) and run.get("outcome") != break_it.OUTCOME_PASSED
-                    and isinstance(run.get("findingKey"), str) and run.get("findingKey")):
+            # axis: the latest run per finding key wins, passed ones included, by round order and then list order, so a changed test's run is the one checked
+            if isinstance(run, dict) and isinstance(run.get("findingKey"), str) and run.get("findingKey"):
                 latest[run["findingKey"]] = run
     if not latest:
         return False

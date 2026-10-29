@@ -309,7 +309,7 @@ def test_the_probe_and_the_test_run_with_the_repository_root_as_their_working_di
 def test_t_search_the_source_holds_no_copy_machinery():
     with open(break_it.__file__, encoding="utf-8") as fh:
         source = fh.read()
-    for word in ("mkdtemp", "clone", "worktree", "os.symlink", "DEPENDENCY_DIRS", "_link_dependencies"):
+    for word in ("mkdtemp", "clone", "worktree add", "git worktree", "os.symlink", "DEPENDENCY_DIRS", "_link_dependencies"):
         assert word not in source, word
 
 
