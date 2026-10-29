@@ -230,7 +230,7 @@ def _normalize_golden_machine_paths(text):
 # --- fail-closed edges ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("phase", [RP.P_VERIFY, RP.P_JUDGMENT, RP.P_STALL])
+@pytest.mark.parametrize("phase", [RP.P_VERIFY])
 def test_render_refuses_phases_without_templates(phase):
     text, reason = RO.render_order(phase, "seat", _base_context())
     assert text is None

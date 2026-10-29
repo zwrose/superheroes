@@ -39,12 +39,12 @@ def _finding(file="f.py", line=1, title="bug", severity="Important", **extra):
 # --- D1: judgment ids byte-identical ------------------------------------------
 
 def test_judgment_row_ids_same_finding_same_id():
-    # axis: byte-identical judgment rows share one minted finding key
+    # axis: byte-identical rows share one minted finding key (the key an owner-choice hold records)
     f = _finding(line=5, title="dup")
     findings = [f, dict(f), dict(f)]
     RD._mint_finding_keys(findings)
     key = SC.finding_identity_key(findings[0])
-    assert RD._judgment_row_ids(findings) == [key, key, key]
+    assert [RD._finding_key_of(row) for row in findings] == [key, key, key]
 
 
 # --- D2: unique ids + identity ------------------------------------------------
@@ -517,10 +517,9 @@ def test_stalled_callers_share_helper_no_duplicate_alias_loops():
         "audit_target_aliases must appear only in _stalled_open_targets, found: %s" % alias_fns)
     compose_src = inspect.getsource(RD._compose_stall_fix_batch)
     assert "_stalled_open_targets" in compose_src
-    stall_src = inspect.getsource(RD._handle_stall)
-    # the stall-MENU half still selects through the shared helper; the RECOVERY half's
-    # delegation is pinned separately in test_stall_decomposition.py.
-    assert "_stalled_open_targets" in stall_src
+    # `_handle_stall` no longer selects targets (its stall-menu half is gone and the recovery half's
+    # delegation is pinned in test_stall_decomposition.py).
+    assert "_stalled_open_targets" not in inspect.getsource(RD._handle_stall)
     crit_src = inspect.getsource(RD._stalled_critical)
     assert "_stalled_open_targets" in crit_src
 

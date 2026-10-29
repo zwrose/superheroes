@@ -10,7 +10,7 @@ mandated path is the easiest path. These pin BOTH layers over the shared core:
 Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; the #174
 confirmation economics incl. cap-parks-on-Critical; fail-toward-run-all on an unknown surface;
 exits only off a qualifying round — now also expressible as an audited-chain certification), plus
-the new #507 mechanics: audit-keyed stall + self-recovery + stall menu, delta rounds, degraded
+the new #507 mechanics: audit-keyed stall + self-recovery + hand-back, delta rounds, degraded
 independence, receipt-missing seats carried unverified, the author-justification POST-filter, and
 the driver receipt + its validator.
 """
@@ -1656,7 +1656,7 @@ def test_run_loop_certification_success_carries_writer_fields():
     assert "terminalState" not in refusal
 
 # =============================================================================
-# audit-keyed stall → self-recovery once → stall menu
+# audit-keyed stall → self-recovery once → hand back
 # =============================================================================
 
 def _persistent_not_discharged_seams(io=None):
@@ -1680,253 +1680,27 @@ def _persistent_not_discharged_seams(io=None):
         fix_step=fix_step, io=io)
 
 
-def test_not_discharged_twice_self_recovers_once_then_stall_menu(tmp_path):
-    menu_shown = []
-
-    def stall_menu(payload):
-        menu_shown.append(payload)
-        return "hold"
-
-    seams = _persistent_not_discharged_seams(io={"stall_menu": stall_menu})
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
+def test_not_discharged_twice_self_recovers_once_then_is_handed_back(tmp_path):
+    receipt = RD.run_loop(_persistent_not_discharged_seams(), _cfg_cert(maxRounds=20))
     recoveries = [r for r in receipt["rounds"] if r.get("selfRecovery")]
     assert len(recoveries) == 1
-    # the stall menu was presented without accept-the-risk (PLAUSIBLE stalled target).
-    assert len(menu_shown) == 1
-    assert menu_shown[0]["choices"] == ["one-more-round", "hold"]
-    assert menu_shown[0]["acceptRiskEligible"] is False
-    assert receipt["verdict"] == "held"
-
-
-def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
-    """Build state with a stalled audit target (empty findings list) for accept-risk tests."""
-    state = RD.new_state(_cfg_cert())
-    state["findings"] = []
-    f = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
-         "verdict": verdict, "evidence": evidence}
-    state["fixBatch"] = [f]
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    tgt = state["_auditTargets"][0]
-    ident = identity or tgt["identity"]
-    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
-    state["selfRecovered"] = True
-    return state, ident, tgt
+    assert receipt["verdict"] == "handed-back"
+    assert receipt["decisions"][-1]["kind"] == "fix-keeps-failing"
 
 
 _STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
 
 
-def test_accept_the_risk_gated_on_confirmed(tmp_path):
-    """accept-the-disclosed-risk is offerable ONLY for a CONFIRMED-with-receipt stalled target."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is True
-    assert "accept-the-disclosed-risk" in state["_stallChoices"]
-    # without evidence on the stalled target → NOT eligible.
-    state2, ident2, _ = _stall_target_state(verdict="CONFIRMED", evidence=None)
-    RD._handle_stall(state2, state2["config"], {"reason": "audit-stall",
-                                                "detail": "x", "stalledIdentities": [ident2]})
-    assert state2["_acceptRiskEligible"] is False
-    assert "accept-the-disclosed-risk" not in state2["_stallChoices"]
-
-
-def test_accept_risk_eligible_empty_findings_confirmed_stalled_target():
-    """accept-risk reads stalled audit targets, not the findings list — empty findings still eligible."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is True
-
-
-def test_accept_risk_not_eligible_without_evidence_on_stalled_target():
-    state, ident, tgt = _stall_target_state(evidence=None)
-    assert tgt.get("evidence") is None
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is False
-
-
-def test_empty_stall_targets_omit_one_more_round_from_menu():
-    """one-more-round is not offered when the stall-target snapshot is empty."""
+def test_a_stall_after_the_recovery_attempt_is_handed_back_not_put_to_the_owner():
+    """A stall with selfRecovered already true hands the PR back (fix-keeps-failing) — no menu."""
     state = RD.new_state(_cfg())
     state["selfRecovered"] = True
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert state["_stallTargets"] == []
-    assert "one-more-round" not in state["_stallChoices"]
-
-
-def test_second_stall_menu_omits_one_more_round_after_latch():
-    """one-more-round is offerable once per session — a second stall menu drops it."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_oneMoreRoundUsed"] = True
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert "one-more-round" not in state["_stallChoices"]
-    assert state["_stallChoices"] == ["hold"]
-
-
-@pytest.mark.parametrize("choice", ["ship-smaller", "spend-more"])
-def test_retired_stall_choice_refused_at_submit(tmp_path, choice):
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": choice})
-    assert out["ok"] is False
-    assert out["reason"] == "stall-choice-retired:%s" % choice
-    ok, reloaded = RD.load_state(d)
-    assert ok and reloaded["step"] == RD.P_STALL
-
-
-def test_one_more_round_accepted_through_cmd_submit(tmp_path):
-    """Stepwise owner gate: one-more-round survives cmd_submit and re-enters dispatch-fixer."""
-    d = str(tmp_path)
-    state, ident, tgt = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert "one-more-round" in state["_stallChoices"]
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
-    assert out["ok"] is True, out
-    ok, reloaded = RD.load_state(d)
-    assert ok
-    assert reloaded["step"] == RD.P_FIXER
-    assert reloaded["_oneMoreRoundUsed"] is True
-    assert reloaded["_fixBatch"] == reloaded["_stallTargets"]
-
-
-def test_stale_accept_risk_flag_without_stall_targets_fails_closed():
-    """A cached _acceptRiskEligible from an older rule must not certify without a qualifying snapshot."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = []
-    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
-    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
-    assert state["terminal"] == "stalled"
+    assert state["terminal"] == "handed-back"
     assert state["step"] == RD.P_TERMINAL
-    assert state["certification"]["shape"] is None
-
-
-def test_stale_accept_risk_menu_refused_at_submit_chokepoint(tmp_path):
-    """Stale persisted menu with accept-the-disclosed-risk must not consume the owner gate."""
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = []
-    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
-    state["step"] = RD.P_STALL
-    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 1}
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"],
-        {"choice": "accept-the-disclosed-risk"})
-    assert out["ok"] is False
-    assert out["reason"] == RD.STALL_ACCEPT_RISK_NOT_ELIGIBLE
-    ok, reloaded = RD.load_state(d)
-    assert ok and reloaded["step"] == RD.P_STALL
-    assert reloaded.get("terminal") is None
-
-
-def test_stale_accept_risk_flag_is_not_advertised_in_the_stall_menu():
-    """The MENU reads the persisted snapshot, not the cached flag (#1037 rider).
-
-    The chokepoint already refused this state (the two tests above); what shipped dishonest was the
-    display — a menu offering `accept-the-disclosed-risk` and `acceptRiskEligible: true` for a
-    choice the fold would then refuse. Same source for both, so they cannot disagree."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True          # cached under a broader (prior) rule
-    state["_stallTargets"] = []                  # …with nothing in the snapshot to justify it
-    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
-    state["step"] = RD.P_STALL
-    action = RD._advance(state, state["config"])
-    assert action["phase"] == RD.P_STALL, action
-    assert action["payload"]["acceptRiskEligible"] is False
-    assert "accept-the-disclosed-risk" not in action["payload"]["choices"]
-    assert "hold" in action["payload"]["choices"]
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_INELIGIBLE
-
-
-def test_qualifying_snapshot_still_advertises_accept_risk_in_the_stall_menu():
-    """A/B for the test above: a real CONFIRMED-with-evidence snapshot still offers the choice."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_stallTargets"], "the fixture must leave a qualifying snapshot"
-    action = RD._advance(state, state["config"])
-    assert action["phase"] == RD.P_STALL, action
-    assert action["payload"]["acceptRiskEligible"] is True
-    assert "accept-the-disclosed-risk" in action["payload"]["choices"]
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_ELIGIBLE
-
-
-def test_stall_policy_class_ignores_the_cached_flag_without_a_snapshot():
-    """Gate policy resolves on the snapshot too — the classifier and the fold agree by construction."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = [{"verdict": "PLAUSIBLE", "evidence": "ran"}]   # not CONFIRMED
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_INELIGIBLE
-    state["_stallTargets"] = [{"verdict": "CONFIRMED", "evidence": "ran"}]   # A/B
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_ELIGIBLE
-
-
-def test_accept_risk_submit_authorized_when_eligible(tmp_path):
-    """accept-the-disclosed-risk with a qualifying snapshot is still accepted at submit."""
-    d = str(tmp_path)
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"],
-        {"choice": "accept-the-disclosed-risk"})
-    assert out["ok"] is True, out
-
-
-def test_stall_choice_not_offered_refused_at_submit(tmp_path):
-    """A choice absent from the presented menu is refused before fold — pending survives."""
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_oneMoreRoundUsed"] = True
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert "one-more-round" not in state["_stallChoices"]
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
-    assert out["ok"] is False
-    assert out["reason"] == "stall-choice-not-offered:one-more-round"
-    ok, reloaded = RD.load_state(d)
-    assert ok and reloaded["step"] == RD.P_STALL
-
-
-def test_unknown_stall_choice_fails_closed_to_stalled_terminal():
-    """An unknown stall choice still parks as `stalled` — fail-closed, not converged."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = False
-    state["_stallChoices"] = ["one-more-round", "hold"]
-    RD._fold_stall(state, state["config"], {"choice": "ship-whenever"})
-    assert state["terminal"] == "stalled"
-    assert state["step"] == RD.P_TERMINAL
-    assert state["certification"]["shape"] is None
+    assert state["decisions"][-1] == {"round": state["round"], "kind": "fix-keeps-failing",
+                                      "detail": "stalled"}
+    assert state["certification"] == {"shape": None, "reason": "stalled"}
 
 
 def _stall_then_clean_auditor_seams(io=None, clean_after=2):
@@ -1980,75 +1754,6 @@ def test_audit_stall_clears_on_clean_round_then_certifies_converged():
     assert len(recoveries) == 1
 
 
-def test_one_more_round_reenters_fixer_then_certifies_converged():
-    """#960: one-more-round re-enters dispatch-fixer, re-audits, discharges, and certifies."""
-    fix_after_menu = {"n": 0}
-    stall_menus = []
-
-    def stall_menu(payload):
-        stall_menus.append(dict(payload))
-        return "one-more-round"
-
-    base = _stall_then_clean_auditor_seams(io={"stall_menu": stall_menu}, clean_after=3)
-    orig_fix = base["fix_step"]
-
-    def fix_step(batch, rnd, payload):
-        if stall_menus:
-            fix_after_menu["n"] += 1
-        return orig_fix(batch, rnd, payload)
-
-    base["fix_step"] = fix_step
-    receipt = RD.run_loop(base, _cfg_cert(maxRounds=20))
-    assert receipt["verdict"] == "converged"
-    assert receipt.get("certificationShape") is not None
-    assert len(stall_menus) == 1
-    assert "one-more-round" in stall_menus[0]["choices"]
-    assert fix_after_menu["n"] >= 1
-    assert base["_audit_calls"]["n"] >= 4
-
-
-def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
-    """#960: after one-more-round is spent, a second stall menu offers exactly two choices."""
-    stall_menus = []
-
-    def stall_menu(payload):
-        stall_menus.append(dict(payload))
-        return "one-more-round" if len(stall_menus) == 1 else "hold"
-
-    counter = {"n": 0}
-
-    def fix_step(batch, rnd, payload):
-        counter["n"] += 1
-        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
-
-    seams = _seams(
-        reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
-             if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
-                                      for t in (targets or [])],
-        fix_step=fix_step,
-        io={"stall_menu": stall_menu}, vendors=["claude", "codex"])
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
-    assert len(stall_menus) == 2
-    assert "one-more-round" in stall_menus[0]["choices"]
-    assert "one-more-round" not in stall_menus[1]["choices"]
-    assert stall_menus[1]["choices"] == ["accept-the-disclosed-risk", "hold"]
-    assert len(stall_menus[1]["choices"]) == 2
-    assert receipt["verdict"] == "held"
-
-
-def test_one_more_round_empty_stall_targets_parks_cannot_certify():
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = False
-    state["_stallChoices"] = ["one-more-round", "hold"]
-    state["_stallTargets"] = []
-    RD._fold_stall(state, state["config"], {"choice": "one-more-round"})
-    assert state["terminal"] == "cannot-certify"
-    assert state["step"] == RD.P_TERMINAL
-
-
 def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
     """#608 review: unknown fixer → escalate returns None — must not set a truthy _escalatedRung."""
     state = RD.new_state({"leg": "code", "vendors": ["claude"]})
@@ -2078,133 +1783,6 @@ def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
     sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
     assert len(sr) == 1
     assert ("fixer escalated to %r" % (escalated["rung"],)) in sr[0]["detail"]
-
-
-def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
-    """#507 v9: exercise the eligible owner-acceptance stall path to its terminal — an eligible
-    CONFIRMED-with-receipt stall, the owner submits `accept-the-disclosed-risk`, and the run
-    converges (terminal, certification note records the accepted disclosed risk). Guards against a
-    mutation that makes an eligible acceptance hold/park instead of converge."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is True
-    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
-    assert state["terminal"] == "converged"
-    assert state["step"] == RD.P_TERMINAL
-    note = (state.get("certification") or {}).get("note") or ""
-    assert "accepted the disclosed" in note, note
-
-
-def _dual_stall_target_state(confirmed, plausible):
-    """Two stalled audit targets for mixed accept-risk disposition tests."""
-    state = RD.new_state(_cfg_cert())
-    state["findings"] = []
-    compiled, _ = RD.mechanical_compile([dict(confirmed), dict(plausible)], None)
-    for row, src in zip(compiled, (confirmed, plausible)):
-        row["verdict"] = src["verdict"]
-        row["evidence"] = src.get("evidence")
-    RD._stage_findings(state, compiled)
-    state["fixBatch"] = compiled
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    targets = state["_auditTargets"]
-    state["_auditOutcome"] = {"notDischarged": [t["id"] for t in targets]}
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], {
-        "reason": "audit-stall", "detail": "x",
-        "stalledIdentities": [t["identity"] for t in targets]})
-    return state, targets
-
-
-def _ledger_by_key(state):
-    SC = _load("session_contract")
-    return {SC.finding_identity_key(e): e
-            for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
-
-
-def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_path):
-    """accept-the-disclosed-risk must not clear PLAUSIBLE siblings — only per-target qualifiers."""
-    confirmed = {"title": "confirmed-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "a.py", "line": 1,
-                 "verdict": "CONFIRMED", "evidence": "tests pass"}
-    plausible = {"title": "plausible-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "b.py", "line": 2,
-                  "verdict": "PLAUSIBLE", "evidence": "maybe"}
-    state, targets = _dual_stall_target_state(confirmed, plausible)
-    assert state["_acceptRiskEligible"] is True
-    follow_up = {"item": "defer plausible sibling", "revisitTrigger": "next milestone",
-                 "classClosure": "tracked separately"}
-    RD._fold_stall(state, state["config"], {
-        "choice": RD.ACCEPT_RISK_CHOICE,
-        "followUp": follow_up,
-    })
-    ledger = _ledger_by_key(state)
-    confirmed_key = RD._finding_key_of(targets[0])
-    plausible_key = RD._finding_key_of(targets[1])
-    assert ledger[confirmed_key]["disposition"] == "left-for-owner"
-    assert ledger[confirmed_key]["followUp"] == follow_up
-    assert ledger[plausible_key].get("disposition") == "left-for-owner"
-    assert ledger[confirmed_key].get("outOfScopeReason")
-    assert "outOfScopeReason" not in ledger[plausible_key]
-    assert "followUp" not in ledger[plausible_key]
-
-
-def test_accept_risk_never_dispositions_critical_targets(tmp_path):
-    """Critical stalled targets stay open — out-of-scope on Critical is forbidden at certification."""
-    critical = {"title": "crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "c.py", "line": 1,
-                "verdict": "CONFIRMED", "evidence": "proven"}
-    important = {"title": "imp", "severity": "Important", "consequence": _CONSEQUENCE, "file": "d.py", "line": 2,
-                 "verdict": "CONFIRMED", "evidence": "proven"}
-    state, targets = _dual_stall_target_state(critical, important)
-    follow_up = {"item": "accept important only", "revisitTrigger": "next milestone",
-                 "classClosure": "none"}
-    RD._fold_stall(state, state["config"], {
-        "choice": RD.ACCEPT_RISK_CHOICE,
-        "followUp": follow_up,
-    })
-    ledger = _ledger_by_key(state)
-    critical_key = RD._finding_key_of(targets[0])
-    important_key = RD._finding_key_of(targets[1])
-    assert ledger[critical_key].get("disposition") == "left-for-owner"
-    assert ledger[important_key]["disposition"] == "left-for-owner"
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["shape"] is None
-
-
-def test_accepted_risk_leaving_a_critical_open_parks_and_never_converges(tmp_path):
-    state, ident, _ = _stall_target_state()
-    state["fixBatch"][0]["severity"] = "Critical"
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    tgt = state["_auditTargets"][0]
-    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": [tgt["identity"]]})
-    assert state["_acceptRiskEligible"] is True
-    RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
-    assert state["terminal"] == "cannot-certify"
-    assert state["step"] == RD.P_TERMINAL
-    assert state["certification"]["shape"] is None
-    assert "bug" in state["certification"]["reason"]
-    entry = _ledger_by_key(state).get(RD._finding_key_of(tgt)) or {}
-    assert entry.get("disposition") is None
-
-
-def test_accepted_risk_with_an_ineligible_critical_sibling_parks(tmp_path):
-    """An ineligible Critical (PLAUSIBLE, or no evidence) still blocks convergence."""
-    important = {"title": "imp", "severity": "Important", "consequence": _CONSEQUENCE, "file": "d.py", "line": 2,
-                 "verdict": "CONFIRMED", "evidence": "proven"}
-    plausible_crit = {"title": "plausible-crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "c.py",
-                      "line": 1, "verdict": "PLAUSIBLE", "evidence": "maybe"}
-    noevidence_crit = {"title": "noevidence-crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "e.py",
-                       "line": 3, "verdict": "CONFIRMED", "evidence": None}
-    for crit in (plausible_crit, noevidence_crit):
-        state, targets = _dual_stall_target_state(important, crit)
-        assert state["_acceptRiskEligible"] is True
-        RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
-        assert state["terminal"] == "cannot-certify"
-        assert state["step"] == RD.P_TERMINAL
-        assert crit["title"] in state["certification"]["reason"]
-        ledger = _ledger_by_key(state)
-        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "left-for-owner"
-        assert ledger[RD._finding_key_of(targets[1])].get("disposition") == "left-for-owner"
 
 
 # =============================================================================
@@ -2323,7 +1901,7 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
                 if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
     loop_receipt = RD.build_receipt(state)
-    assert refusal["verdict"] == "held" and refusal["certificationShape"] is None
+    assert refusal["verdict"] == "handed-back" and refusal["certificationShape"] is None
     assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
                         for t in seen)
     assert state["independenceDegraded"] is True
@@ -2373,7 +1951,7 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert result["verdict"] == "held" and result["certificationShape"] is None
+    assert result["verdict"] == "handed-back" and result["certificationShape"] is None
     t = captured["targets"][0]
     assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
@@ -2964,25 +2542,17 @@ def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     assert state["_auditOutcome"]["discharged"] == []
 
 
-def test_judgment_dispositions_distinct_for_same_title_different_lines():
-    """#507 R2 v5: two same-title tradeoff blockers at DIFFERENT lines get DISTINCT disposition ids,
-    so a skip for the one never collides onto the other (the line-less id collapsed them)."""
+def test_owner_choice_holds_are_distinct_for_same_title_different_lines():
+    """#507 R2 v5: two same-title tradeoff blockers at DIFFERENT lines are held under DISTINCT keys,
+    so a ruling on the one never settles the other (the line-less id collapsed them)."""
     a = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
          "tradeoff": True}
     b = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 20,
          "tradeoff": True}
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(a), dict(b)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    assert len(set(ids)) == 2, ids
-    id_a, id_b = ids
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": id_a, "disposition": "fix-as-suggested"},
-        {"id": id_b, "disposition": "skip", "reason": "defer the line-20 choice"}]})
-    assert state["step"] == RD.P_FIXER
-    assert [f["line"] for f in state["_fixBatch"]] == [10]
-    assert [s["line"] for s in state["_skippedBlockers"]] == [20]
+    assert RD._hold_owner_choice(state, [dict(a), dict(b)]) == []
+    assert len(set(state["ownerChoiceHeld"])) == 2, state["ownerChoiceHeld"]
+    assert state["ownerChoiceHeld"] == [RD._finding_key_of(a), RD._finding_key_of(b)]
 
 
 def test_fixer_vendor_flag_rejects_unknown_and_wires_fresh(tmp_path):
@@ -4743,12 +4313,12 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
 
 
 # =============================================================================
-# the judgment gate is an INTERVENTION, not a terminal (#507 R2a)
+# an owner-choice blocker is held out of the fix batch and handed back open (C1-L4)
 # =============================================================================
 
 _TRADEOFF = {"title": "widen the API", "severity": "Important", "consequence": _CONSEQUENCE,
              "file": "f.py", "line": 1, "tradeoff": True}
-# The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
+# The held-finding key is the per-LOCATION id (line-less finding_identity + line) so two
 # same-title tradeoff blockers at different lines never collide (#507 R2 v5).
 _TRADEOFF_ID = "f.py::widen the api@L1"
 _RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Important", "consequence": _CONSEQUENCE,
@@ -4756,78 +4326,60 @@ _RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Imp
 _RESUME_IDENTITY_TRADEOFF_ID = "pkg/resume_identity.py::resume identity fields@L42"
 
 
-def test_judgment_payload_rows_carry_single_classification_literal():
-    """Every present-judgment row must use the one classification literal the gate-policy enum assumes."""
+def test_tradeoff_blocker_is_held_out_of_the_fix_batch_not_put_to_the_owner():
+    """A tradeoff/product-choice blocker is held out of the fixer's batch and journaled — no phase
+    puts it to the owner, and the step does not move."""
     state = RD.new_state(_cfg())
-    finding_b = {"title": "narrow the API", "severity": "Minor", "consequence": _CONSEQUENCE,
-                 "file": "g.py", "line": 2, "tradeoff": True}
-    state["_judgmentFindings"] = [dict(_TRADEOFF), finding_b]
-    state["step"] = RD.P_JUDGMENT
-    step = RD._advance(state, state["config"])
-    classifications = {row["classification"] for row in step["payload"]["findings"]}
-    assert classifications == {"judgment"}
-
-
-def test_tradeoff_blocker_routes_to_judgment_not_stall():
-    """A tradeoff/product-choice blocker routes to the present-judgment gate — NEVER the terminal
-    stall menu (the R2a defect: the stall menu dead-ended it so it could never be fixed)."""
-    state = RD.new_state(_cfg())
-    took = RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    assert took is True
-    assert state["step"] == RD.P_JUDGMENT and state["step"] != RD.P_STALL
-    step = RD._advance(state, state["config"])
-    assert step["action"] == RD.P_JUDGMENT
-    fnd = step["payload"]["findings"]
-    assert len(fnd) == 1 and fnd[0]["id"] == _TRADEOFF_ID
-    assert fnd[0]["dispositions"] == list(RD.JUDGMENT_DISPOSITIONS)
+    step_before = state["step"]
+    assert RD._hold_owner_choice(state, [dict(_TRADEOFF)]) == []
+    assert state["step"] == step_before
+    assert state["ownerChoiceHeld"] == [_TRADEOFF_ID]
     kinds = [d["kind"] for d in state["decisions"]]
-    assert "judgment-gate" in kinds
+    assert kinds == ["owner-choice-held"]
 
 
-def test_fix_as_suggested_folds_to_fixer_batch():
+def test_mechanical_blocker_is_not_held_with_the_tradeoff():
+    """A mechanical (non-tradeoff) blocker in the SAME batch stays in the batch — never abandoned."""
+    mech = {"title": "null deref", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"],
-                      {"dispositions": [{"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"}]})
-    assert state["step"] == RD.P_FIXER
-    batch = state["_fixBatch"]
-    assert len(batch) == 1 and batch[0]["title"] == "widen the API"
-    assert batch[0]["judgmentDisposition"] == "fix-as-suggested"
+    rest = RD._hold_owner_choice(state, [dict(mech), dict(_TRADEOFF)])
+    assert [r["title"] for r in rest] == ["null deref"]
+    assert state["ownerChoiceHeld"] == [_TRADEOFF_ID]
 
 
-def test_fix_with_guidance_attaches_guidance():
+def test_a_purely_mechanical_batch_holds_nothing_and_journals_nothing():
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    assert state["step"] == RD.P_FIXER
-    b = state["_fixBatch"][0]
-    assert b["judgmentDisposition"] == "fix-with-guidance"
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in b
+    mech = {"title": "null deref", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
+    assert RD._hold_owner_choice(state, [dict(mech)]) == [mech]
+    assert "ownerChoiceHeld" not in state and state["decisions"] == []
 
 
-def test_skip_with_reason_records_ledger_and_rides_disclosure():
-    """A skip needs a citable reason: it lands in the decision ledger, rides the exit disclosure AND
-    the dedicated top-level `skippedBlockers` channel. With nothing left to fix, the run converges —
-    but CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
+def test_held_keys_are_deduped_append_only_and_journaled_once_per_call():
+    state = RD.new_state(_cfg())
+    other = dict(_TRADEOFF, title="drop the flag", line=2)
+    RD._hold_owner_choice(state, [dict(_TRADEOFF)])
+    RD._hold_owner_choice(state, [dict(_TRADEOFF), dict(other)])
+    assert state["ownerChoiceHeld"] == [_TRADEOFF_ID, "f.py::drop the flag@L2"]
+    assert [d["kind"] for d in state["decisions"]].count("owner-choice-held") == 2
+    RD._hold_owner_choice(state, [])  # a call that holds nothing leaves the list and journal alone
+    assert len(state["ownerChoiceHeld"]) == 2 and len(state["decisions"]) == 2
+
+
+def test_recorded_skipped_blocker_still_rides_the_certification_and_disclosure():
+    """A skipped blocker an earlier version recorded is still read at the converge: the run converges
+    CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
     state = RD.new_state(_cfg())
     state["seatMapReceipts"] = _seat_map_receipts(
         _assertable_seat_map(state["config"]["vendors"], state["config"].get("fixerVendor")))
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "shipping v1 narrow on purpose"}]})
+    state["_skippedBlockers"] = [{"id": _TRADEOFF_ID, "file": "f.py", "line": 1,
+                                  "title": "widen the API", "severity": "Important",
+                                  "reason": "shipping v1 narrow on purpose"}]
+    state["rounds"].setdefault("1", {})["skippedBlockers"] = list(state["_skippedBlockers"])
+    RD._terminal_converged(state, state["config"], full_panel=False)
     assert state["terminal"] == "converged"
-    kinds = [d["kind"] for d in state["decisions"]]
-    assert "judgment-skip" in kinds
-    # the certification is non-plain: shape unchanged (audited-chain) but the reason leads with
-    # the exit_skipped invariant marker.
     cert = state.get("certification") or {}
     assert cert.get("shape") == "audited-chain"
     assert (cert.get("reason") or "").startswith("clean-except-skipped: 1 blocker(s) skipped")
-    assert "owner-skipped" in (cert.get("note") or "")
     receipt = RD.build_receipt(state)
     # top-level dedicated channel — id/title/severity/reason
     assert receipt["skippedBlockers"] == [
@@ -4858,199 +4410,23 @@ def test_receipt_always_carries_skipped_blockers_channel():
     assert not ok3 and "skippedBlockers" in why3
 
 
-def test_partial_skip_end_to_end_marks_clean_except_skipped(tmp_path):
-    """A run that fixes one judgment finding and skips another converges CLEAN EXCEPT FOR SKIPPED:
-    the skipped one rides the top-level channel and the certification reason leads with the marker,
-    even though real fix-and-audit work ran."""
-    trade_a = {"title": "widen the API", "severity": "Important", "consequence": _CONSEQUENCE,
-               "file": "f.py", "line": 1, "tradeoff": True}
-    trade_b = {"title": "drop the flag", "severity": "Important", "consequence": _CONSEQUENCE,
-               "file": "f.py", "line": 2, "tradeoff": True}
-
-    def judgment_gate(payload):
-        out = []
-        for f in payload["findings"]:
-            if f["id"] == "f.py::widen the api@L1":
-                out.append({"id": f["id"], "disposition": "fix-as-suggested"})
-            else:
-                out.append({"id": f["id"], "disposition": "skip", "reason": "deferred to v2"})
-        return {"dispositions": out}
-
-    refusal, receipt = _run_loop_with_loop_receipt(_seams(
-        reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [dict(trade_a), dict(trade_b)]}
-             if rnd == 1 and dim == "code-reviewer" else []),
-        io={"judgment_gate": judgment_gate}), _cfg_cert())
-    assert refusal["verdict"] == "converged"
-    assert [s["title"] for s in receipt["skippedBlockers"]] == ["drop the flag"]
-    reason = (receipt["certification"] or {}).get("reason") or ""
-    assert reason.startswith("clean-except-skipped: 1 blocker(s) skipped")
-    ok, _ = RD.validate_receipt(receipt)
-    assert ok
-
-
-def test_skip_without_reason_fails_closed_to_fix():
-    """A skip with no citable reason is NOT honored — it fails closed to fix-as-suggested (a judgment
-    blocker is never silently skipped)."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip"}]})
-    assert state["step"] == RD.P_FIXER
-    assert state["_fixBatch"][0]["judgmentFailClosed"] is True
-    assert "judgment-fail-closed" in [d["kind"] for d in state["decisions"]]
-
-
-def test_missing_or_unknown_disposition_fails_closed_to_fix():
-    """A listed judgment finding with a MISSING disposition (or an UNKNOWN one) folds as
-    fix-as-suggested, flagged failClosed — never silently skipped."""
-    # missing: the artifact lists no disposition at all
-    s1 = RD.new_state(_cfg())
-    RD._route_judgment_blockers(s1, [dict(_TRADEOFF)])
-    RD._fold_judgment(s1, s1["config"], {"dispositions": []})
-    assert s1["step"] == RD.P_FIXER
-    b1 = s1["_fixBatch"][0]
-    assert b1["judgmentDisposition"] == "fix-as-suggested" and b1["judgmentFailClosed"] is True
-    # unknown: a disposition string the gate does not recognize
-    s2 = RD.new_state(_cfg())
-    RD._route_judgment_blockers(s2, [dict(_TRADEOFF)])
-    RD._fold_judgment(s2, s2["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "ship-it-anyway"}]})
-    assert s2["step"] == RD.P_FIXER
-    assert s2["_fixBatch"][0]["judgmentFailClosed"] is True
-
-
-def test_mechanical_blocker_carried_through_judgment_gate():
-    """A mechanical (non-tradeoff) blocker in the SAME batch is carried through the gate and rides
-    the fix batch even when the tradeoff finding is skipped — never abandoned at the gate."""
-    mech = {"title": "null deref", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
-    state = RD.new_state(_cfg())
-    took = RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
-    assert took is True and state["step"] == RD.P_JUDGMENT
-    # only the tradeoff finding is presented for judgment
-    step = RD._advance(state, state["config"])
-    assert [x["id"] for x in step["payload"]["findings"]] == [_TRADEOFF_ID]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "deferred to v2"}]})
-    assert state["step"] == RD.P_FIXER
-    assert [b["title"] for b in state["_fixBatch"]] == ["null deref"]
-
-
-def test_judgment_row_ids_same_finding_same_id():
-    """Byte-identical tradeoff findings at the same location are one finding and share one disposition id."""
-    key = RD._judgment_row_ids([dict(_TRADEOFF)])[0]
-    findings = [dict(_TRADEOFF), dict(_TRADEOFF)]
-    assert RD._judgment_row_ids(findings) == [key, key]
-
-
-def test_judgment_colliding_identity_different_severity_dispositions_not_collapse():
-    """Fixtures are two tradeoff findings at one location whose long titles agree past the title
-    clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
-    the assertion then reads per row — severity is not the distinguishing axis."""
-    loc_id_prefix = RD.session_contract.location_key({"title": "same choice " + "x" * 205 + " alpha",
-                                                      "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
-                                                      "tradeoff": True})
-    critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical", "consequence": _CONSEQUENCE,
-                "file": "f.py", "line": 10, "tradeoff": True}
-    important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important", "consequence": _CONSEQUENCE,
-                 "file": "f.py", "line": 10, "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(critical), dict(important)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    assert len(ids) == 2 and ids[0] != ids[1]
-    assert all(i.startswith(loc_id_prefix) for i in ids)
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "fix-as-suggested"},
-        {"id": ids[1], "disposition": "skip", "reason": "defer the important one"},
-    ]})
-    assert state["step"] == RD.P_FIXER
-    assert [f["severity"] for f in state["_fixBatch"]] == ["Critical"]
-    assert [s["severity"] for s in state["_skippedBlockers"]] == ["Important"]
-
-
-def test_judgment_identical_disposition_same_id_collapses():
-    """Two artifact entries with the same id and the same disposition collapse harmlessly."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
-    ]})
-    assert state["step"] == RD.P_FIXER
-    assert len(state["_fixBatch"]) == 1
-
-
-def test_judgment_conflicting_dispositions_same_id_parks():
-    """Colliding ids with conflicting dispositions park — never last-wins merge."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "conflict"},
-    ]})
-    assert state["terminal"] == "cannot-certify"
-    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
-
-
-def test_judgment_conflicting_guidance_same_id_parks():
-    """Two fix-with-guidance rows for one id with different guidance park via collision cause."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach A"},
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach B"},
-    ]})
-    assert state["terminal"] == "cannot-certify"
-    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
-
-
-def test_judgment_identical_guidance_same_id_collapses():
-    """Identical guidance for the same id folds normally — not a conflict."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
-    ]})
-    assert state["step"] == RD.P_FIXER
-    assert len(state["_fixBatch"]) == 1
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "same text"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
-
-
-def test_fix_with_guidance_blank_records_disposition_without_guidance_value():
-    """fix-with-guidance with blank guidance records disposition only — no fabricated guidance."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "   "}]})
-    assert state["step"] == RD.P_FIXER
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged["disposition"] == "fix-with-guidance"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in logged
-
-
-def test_judgment_dispositions_record_carries_guidance_text():
-    """G3 axis: disposition_log carries userGuidance for fix-with-guidance folds."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
+def _record_gate_decision(state, finding, disposition, guidance=None):
+    """Write the `judgmentDispositions` row an earlier version's judgment fold recorded for `finding`
+    (the readers of that recorded state are what these tests pin)."""
+    key = RD._finding_key_of(finding)
+    entry = {"id": key, RD.session_contract.FINDING_KEY_FIELD: key, "title": finding["title"],
+             "file": finding["file"], "line": finding["line"], "disposition": disposition}
+    if guidance is not None:
+        entry[RD.GATE_GUIDANCE_RECORD_KEY] = guidance
+    RD._stamp_ruling_seq(state, entry)
+    RD._record_round_append(state, "judgmentDispositions", entry)
+    return entry
 
 
 def test_receipt_projects_judgment_dispositions_when_recorded():
     """G4 axis: build_receipt carries judgmentDispositions when the round recorded one."""
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "narrow only"}]})
+    _record_gate_decision(state, _TRADEOFF, "fix-with-guidance", "narrow only")
     state["terminal"] = "converged"
     receipt = RD.build_receipt(state)
     rd = receipt["rounds"][0]
@@ -5061,10 +4437,7 @@ def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_f
     """E6: fold guidance reaches the export, the receipt and the rendered fixer order in one session."""
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "narrow only"}]})
+    _record_gate_decision(state, _TRADEOFF, "fix-with-guidance", "narrow only")
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
     on_disk = json.loads(records.read_text())
@@ -5101,10 +4474,7 @@ def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_
     tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
     guidance_text = "keep the resume identity intact"
     state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
-    RD._route_judgment_blockers(state, [tradeoff])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _RESUME_IDENTITY_TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": guidance_text}]})
+    _record_gate_decision(state, tradeoff, "fix-with-guidance", guidance_text)
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
     on_disk = json.loads(records.read_text())
@@ -5154,173 +4524,17 @@ def _gate_guidance_record_id_line(block):
     return m.group(1) if m else None
 
 
-def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
-    """E3: durable record id is minted once at the fold and appears on the record-id line."""
-    mech = {"title": "widen the API", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    record = state["rounds"]["1"]["judgmentDispositions"][0]
-    record_id = record["id"]
-    assert record["file"] == _TRADEOFF.get("file")
-    assert record["line"] == _TRADEOFF.get("line")
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][1]
-    session_dir = str(tmp_path / "e3-id-match")
-    os.makedirs(session_dir)
-    state["reviewedDiff"] = "diff --git a/f b/f\n"
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
-    assert _gate_guidance_record_id_line(block) == record_id
-    assert "### %s:%s — %s" % (_TRADEOFF["file"], _TRADEOFF["line"], _TRADEOFF["title"]) in block
-
-
-def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
-    """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
-    a = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Important", "consequence": _CONSEQUENCE,
-         "file": "f.py", "line": 10, "tradeoff": True}
-    b = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important", "consequence": _CONSEQUENCE,
-         "file": "f.py", "line": 10, "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(a), dict(b)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    assert ids[0] != ids[1]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
-        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
-    ]})
-    records = state["rounds"]["1"]["judgmentDispositions"]
-    record_by_guidance = {r[RD.GATE_GUIDANCE_RECORD_KEY]: r["id"] for r in records}
-    session_dir = str(tmp_path / "e4-same-loc")
-    os.makedirs(session_dir)
-    state["reviewedDiff"] = "diff --git a/f b/f\n"
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
-    for guidance, record_id in record_by_guidance.items():
-        assert record_id in block
-        assert "> %s" % guidance in block
-    identity_line = RD._gate_guidance_identity_line(
-        {"file": "f.py", "line": 10, "title": "same choice " + "x" * 205 + " alpha"})
-    assert block.count(identity_line) == 2
-    assert block.count("Note: 2 guided findings share this identity") == 2
-    assert block.count("BEGIN owner-gate guidance") == 2
-
-
-def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
-    """Edge 10: same title at different lines → distinct identity lines, no ambiguity note."""
-    a = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
-         "tradeoff": True}
-    b = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 20,
-         "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(a), dict(b)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
-        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
-    ]})
-    session_dir = str(tmp_path / "two-guided")
-    os.makedirs(session_dir)
-    state["reviewedDiff"] = "diff --git a/f b/f\n"
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
-    assert "### f.py:10 — same choice" in block
-    assert "### f.py:20 — same choice" in block
-    assert "Note:" not in block
-    assert ids[0] in block and ids[1] in block
-    assert "guidance A" in block and "guidance B" in block
-    assert ids[0] != ids[1]
-
-
-def test_stall_menu_payload_carries_no_judgment_findings():
-    """The stall menu is the audit-stall TERMINAL only — its payload never carries judgment
-    findings (they route to present-judgment)."""
-    state = RD.new_state(_cfg())
-    state["findings"] = [{"id": "v0", "verdict": "PLAUSIBLE"}]
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": ["v0"]})
-    assert state["step"] == RD.P_STALL
-    step = RD._advance(state, state["config"])
-    assert set(step["payload"].keys()) == {"choices", "acceptRiskEligible"}
-    assert "judgmentFindings" not in step["payload"]
-
-
-def test_migrate_old_stall_routed_judgment_state(tmp_path):
-    """#507 R2a migration: a state persisted under the OLD routing (a judgment blocker parked at the
-    present-stall-menu terminal) is re-pointed to present-judgment on load, and `next` re-emits the
-    judgment action from state under the new contract (schemaVersion stays 2)."""
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["step"] = RD.P_STALL
-    state["_judgmentFindings"] = [dict(_TRADEOFF)]
-    state["_stallChoices"] = ["one-more-round", "hold"]
-    state["_acceptRiskEligible"] = False
-    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL,
-                        "attempt": 0, "payload": {"choices": []}}
-    RD.save_state(d, state)
-    ok, loaded = RD.load_state(d)
-    assert ok and loaded["step"] == RD.P_JUDGMENT and loaded["pending"] is None
-    out = RD.cmd_next(d)
-    assert out["ok"] and out["action"] == RD.P_JUDGMENT
-    assert out["payload"]["findings"][0]["dispositions"] == list(RD.JUDGMENT_DISPOSITIONS)
-
-
-def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
-    """End-to-end: one tradeoff blocking finding routes to the judgment gate, the owner disposes it
-    fix-as-suggested, and the run fixes-and-audits it to an audited-chain certification — the very
-    path the R2a defect made unreachable."""
-    disposed = []
-
-    def judgment_gate(payload):
-        disposed.append(payload)
-        return {"dispositions": [{"id": f["id"], "disposition": "fix-as-suggested"}
-                                 for f in payload["findings"]]}
-
+def test_tradeoff_finding_alone_is_handed_back_open_end_to_end():
+    """End-to-end: one tradeoff blocking finding is held out of the fix batch, nothing is put to the
+    owner mid-review, and the run ends handed back with the finding open — never converged."""
     refusal, loop_receipt = _run_loop_with_loop_receipt(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
-        io={"judgment_gate": judgment_gate}), _cfg_cert())
-    assert len(disposed) == 1 and disposed[0]["findings"][0]["id"] == _TRADEOFF_ID
-    assert refusal["verdict"] == "converged"
-    assert refusal["certificationShape"] == "audited-chain-degraded"
-    assert "judgment-gate" in [d["kind"] for d in loop_receipt["decisions"]]
+            ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else [])),
+        _cfg_cert())
+    assert refusal["verdict"] == "handed-back"
+    assert refusal["certificationShape"] is None
+    kinds = [d["kind"] for d in loop_receipt["decisions"]]
+    assert kinds[-2:] == ["owner-choice-held", "owner-choice-open"]
     ok, _ = RD.validate_receipt(loop_receipt)
     assert ok
 

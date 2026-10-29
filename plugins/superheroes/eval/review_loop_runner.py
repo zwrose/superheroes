@@ -622,7 +622,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
 
     RD._fold_panel = _fold_panel_persist
     try:
-        io = {"stall_menu": lambda payload: "hold"}
+        io = {}
         fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
         _validate_fixer_vendor_override(fixer_vendor)
         seat_map_obj = None

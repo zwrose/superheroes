@@ -59,6 +59,9 @@ UNFOLDED_OPEN = "recorded by a reviewer but never taken into the loop before it 
 NO_SEAT_RESULT = "the session recorded no seat result or seat status"
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
+_LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an earlier version wrote
+_HANDED_BACK = "handed-back"
+_HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 _PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS)
 # synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
@@ -471,7 +474,7 @@ def _findings_and_merges(state):
     rulings = {r["findingKey"]: r for r in log if isinstance(r, dict) and isinstance(r.get("findingKey"), str)}  # the latest ruling per key stands
     for p in state.get("_policyApplied") if isinstance(state.get("_policyApplied"), list) else []:
         act = p.get("action") if isinstance(p, dict) and p.get("source") == _OWNER_SUPPLIED \
-            and p.get("phase") == round_phases.P_JUDGMENT else None  # the owner-supplied source string; the driver is not importable here
+            and p.get("phase") == _LEGACY_JUDGMENT_PHASE else None  # the owner-supplied source string; the driver is not importable here
         prov = act.get("_provenance") if isinstance(act, dict) else None
         if isinstance(prov, dict) and _text(prov.get("ruledBy")) and _text(prov.get("ruledAt")):
             for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
@@ -771,7 +774,11 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         cause, capped = {}, False  # no terminal to map
     else:
         cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
-        capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
+        if state["terminal"] == _HANDED_BACK:
+            # a hand-back stops at the cap only for the round cap and the extra audit; the others end early
+            capped = last.get("kind") in _HANDED_BACK_AT_CAP
+        else:
+            capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
