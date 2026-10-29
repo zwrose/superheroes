@@ -52,6 +52,7 @@ ABANDON_REASON_MISSING = "review-session-abandon-reason-missing"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
+REFUTED_UNGRADED = "refuted without the verifier's wrong grade; still open"
 HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw outputs were not stored"
 ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
 UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
@@ -414,7 +415,13 @@ def _decide(own, by_key, rulings, exempt=None):
         return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))
-        return (_LEFT_FOR_OWNER if (why or "").startswith("author-justified") else _SHOWN_WRONG), why, rep
+        grade = rep.get("grade")
+        # axis: a refuted row reads shown-wrong only on the verifier's own wrong grade, never on the disposition alone — see bite-proof record c1l7_wo_a_verifier_grade
+        if isinstance(grade, dict) and grade.get("verdict") == "wrong":
+            return _SHOWN_WRONG, why, rep
+        if (why or "").startswith("author-justified"):
+            return _LEFT_FOR_OWNER, why, rep
+        return None, REFUTED_UNGRADED, rep
     if disp in (_CRAFT, _LEFT_FOR_OWNER, _RULING):  # the end-of-loop settle names its outcome and reason
         return disp, _text(rep.get("settledReason")), rep
     why = _text(rep.get("outOfScopeReason"))
@@ -507,6 +514,9 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
+        if outcome == _SHOWN_WRONG:
+            # axis: a finding closed as wrong carries the closing representative's wrong grade, never a merged member's own — see bite-proof record c1l7_wo_a_verifier_grade
+            held["grade"] = rep["grade"]
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
@@ -923,12 +933,14 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0], abandoned)
         earlier = _earlier(account, extras, repo_root, readers)
+        # the findings the driver's verifier fold closed as wrong in this session (`_decide` reads shown-wrong on no other ground)
+        verifier_closed = {review_record._key(f) for f in account["findings"] if f.get("outcome") == _SHOWN_WRONG}
         _fill(account, earlier)
         account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)
-        return review_record.write(path, repo_root, readers)
+        return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed)
     try:
         return review_record._guarded(go)
     finally:
