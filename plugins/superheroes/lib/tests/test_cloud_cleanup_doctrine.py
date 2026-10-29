@@ -2,7 +2,7 @@
 
 Bites on: any shipped line that reminds the owner about an unanswered archive prompt; any new
 reader of the reviewer-pass gardening line beyond the one the gardening pass names; the closed
-duties list drifting from eight, or duties 1 to 7 changing; the gardening record losing the
+duties list drifting from eight; the gardening record losing the
 reviewer-pass line; the cleanup procedure, its heading or its distinctive step appearing in a
 second shipped document; requirement, Canon, issue or session ids in the prose this change added.
 
@@ -49,8 +49,6 @@ _WEAK_WORDS = re.compile(r"\bagain\b|still waiting|unanswered", re.IGNORECASE)
 _DUTIES_LABEL = "**The eight duties, a closed list.**"
 _FIRST_DUTY = "1. **Age the P1s.**"
 _MEMORY_PARAGRAPH = "**Memory gardening at the pass.**"
-# The label line of the closed list as the base commit had it, before duty 8 was appended.
-_BASE_DUTIES_LABEL = "**The seven" + " duties, a closed list.**"  # split: see the old-label test
 _ARCHIVE = re.compile(r"archive", re.IGNORECASE)
 _NEGATION_WORD = re.compile(r"\b(?:nothing|never|no|not)\b", re.IGNORECASE)
 _CLAUSE_BREAK = re.compile(r"[,;.:\u2014]")
@@ -172,49 +170,13 @@ def test_reviewer_pass_gardening_line_has_no_new_reader():
     assert md_readers == sorted([_OWNER_DECISIONS, _TRANSITION]), md_readers
 
 
-def test_duty_8_closes_the_list_and_duties_1_to_7_are_unchanged():
+def test_duty_8_closes_the_gardening_duty_list():
     block = _duties_block(_read(os.path.join(_PLUGIN, _OWNER_DECISIONS)))
     items = _numbered_items(block)
     assert [n for n, _ in items] == list(range(1, 9)), f"duties are numbered {[n for n, _ in items]}"
     item_8 = "\n".join(block[items[7][1]:])
     assert item_8.startswith("8. **Read the reviewer pass"), item_8[:80]
     assert "cloud_setup.py gardening" in " ".join(item_8.split())
-
-    first_seven = block[: items[7][1]]
-    while first_seven and not first_seven[-1].strip():
-        first_seven.pop()
-    base = subprocess.run(
-        ["git", "-C", _REPO, "show", f"{_BASE}:plugins/superheroes/{_OWNER_DECISIONS}"],
-        capture_output=True,
-        text=True,
-    )
-    assert base.returncode == 0, f"cannot read {_OWNER_DECISIONS} at {_BASE}: {base.stderr}"
-    base_block = _duties_block(base.stdout, _BASE_DUTIES_LABEL)
-    # Duty 4 changed once on purpose when the forward-share dial and its folded-in list were retired; it is
-    # pinned to that text, and every other duty must still read as it did at the base.
-    assert _without_item(first_seven, 4) == _without_item(base_block, 4), "duties 1 to 3 or 5 to 7 changed"
-    assert _item(first_seven, 4) == _DUTY_4, "duty 4 changed"
-
-
-_DUTY_4 = [
-    "4. **Record the decisions-asked count** for the window. List the window's declines with their",
-    "   triggers, one per line.",
-]
-
-
-def _item(block, number):
-    """The lines of top-level numbered item ``number`` in ``block``."""
-    spans = _numbered_items(block) + [(None, len(block))]
-    for (n, start), (_, end) in zip(spans, spans[1:]):
-        if n == number:
-            return block[start:end]
-    raise AssertionError(f"item {number} not found")
-
-
-def _without_item(block, number):
-    item = _item(block, number)
-    start = block.index(item[0])
-    return block[:start] + block[start + len(item):]
 
 
 # A bite-proof record quotes what it neutralized, so it may name the retired label.

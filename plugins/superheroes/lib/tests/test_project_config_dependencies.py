@@ -104,7 +104,7 @@ def test_declare_preserves_other_three_declarations(tmp_path):
         assert got[key] == value
 
 
-def test_declare_leaves_thirteen_configuration_items_unchanged(tmp_path):
+def test_declare_leaves_the_configuration_items_unchanged(tmp_path):
     repo, store = _setup_repo(tmp_path)
     CM.write_project_config(repo, _PROJECT_CFG_SEED, root=store)
     before = _item_snapshot(repo, store)

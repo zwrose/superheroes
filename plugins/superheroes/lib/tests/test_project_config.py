@@ -132,7 +132,7 @@ def test_registry_has_every_item_in_order():
     ]
 
 
-def test_exactly_five_plugin_defaults():
+def test_the_items_carrying_a_plugin_default():
     # axis: exactly four items carry a plugin default — wo_b_1276_default-count
     defaulted = [item for item in PC.ITEMS if item["plugin_default"] is not None]
     assert len(defaulted) == 4
@@ -169,6 +169,8 @@ def test_stale_dial_and_budget_n_stamps_load_and_are_not_shown(tmp_path):
     CM.write_project_config(
         repo, {"dial": {"min": 5, "max": 10}, "budgetN": 3, "stackingTool": "gh-stack"}, root=store,
     )
+    read_slugs = [item["slug"] for item in PC.read(repo, root=store)["items"]]
+    assert read_slugs == [item["slug"] for item in PC.ITEMS]
     got = PC.view(repo, root=store)
     assert got["profileAbsent"] is False and got["profileUnparseable"] is False
     slugs = [item["slug"] for item in got["items"]]

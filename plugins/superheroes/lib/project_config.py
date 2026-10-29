@@ -558,7 +558,7 @@ def read(cwd, root=None, *, persist_backfill=True):
             entry = _resolve_item_entry(
                 item,
                 raw,
-                    guardian_cfg=guardian_cfg,
+                guardian_cfg=guardian_cfg,
                 risk_areas_read=risk_areas_read,
             )
             absent_items.append({"slug": slug, **entry})
