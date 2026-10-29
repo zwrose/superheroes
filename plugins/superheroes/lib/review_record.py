@@ -59,6 +59,10 @@ RAW_MARKER = "<!-- superheroes:review-raw-output -->"
 # A part comment holds one slice of a record's JSON text. It must never start with MARKER: a part is not a record.
 PART_MARKER = "<!-- superheroes:review-record-part -->"
 PARTS_SCHEMA = "review-record-parts/1"
+# One comment posted on a PR when an extra audit round is ordered, before the session reopens. It is not a
+# record (it never starts with MARKER); `extra_audit_history` reads it so a second session sees the allowance gone.
+EXTRA_AUDIT_RESERVED_MARKER = "<!-- superheroes:extra-audit-reserved -->"
+_RESERVED_SESSION_RE = re.compile(r"sessionId: (\S+)")
 CAP_KINDS = ("rounds", "ceiling")
 CARRIED_SETTLED = ("fixed", "applies", "unsettled")
 ACCOUNT_SCHEMA = "review-account/1"
@@ -2403,11 +2407,37 @@ def read(pr, repo=None, readers=None):
 HISTORY_UNREADABLE = "review-record-history-unreadable"
 
 
-def extra_audit_history(pr, repo=None, readers=None):
+def reserve_extra_audit(pr, repo, session_id, why, readers=None):
+    """Post the one reservation comment that claims the PR's extra audit allowance for `session_id`.
+
+    Returns {"ok": True, "url"} or {"ok": False, "detail"}. Nothing raises."""
+    try:
+        rd = _readers(readers)
+        sid = session_id if isinstance(session_id, str) and session_id and not re.search(r"\s", session_id) else "unknown"
+        body = f"{EXTRA_AUDIT_RESERVED_MARKER}\nsessionId: {sid}\nwhy: {why}\n"
+        sent = rd["create_comment"](pr, repo, body)
+        if not (isinstance(sent, dict) and "id" in sent):
+            return {"ok": False, "detail": "the reservation comment could not be written"}
+        return {"ok": True, "url": sent.get("url")}
+    except Exception as e:  # nothing raises to the caller
+        return {"ok": False, "detail": f"{type(e).__name__}: {e}"}
+
+
+def _reserved_session(comment):
+    """The session id a reservation comment names, or None when it names none (an unreadable marker)."""
+    lines = str(comment.get("body", "")).split("\n")
+    m = _RESERVED_SESSION_RE.fullmatch(lines[1].strip()) if len(lines) > 1 else None
+    return m.group(1) if m else None
+
+
+def extra_audit_history(pr, repo=None, readers=None, session_id=None):
     """Whether any review record already posted on the PR shows the extra audit round.
 
     Every record comment is read: one that does not parse makes the whole answer unreadable, and so
-    does a comment list that failed, so history that cannot be read never reads as "not run". Returns
+    does a comment list that failed, so history that cannot be read never reads as "not run". A
+    reservation comment (see `reserve_extra_audit`) from a session other than `session_id` counts as
+    the round shown; one from `session_id` itself does not, so a re-run after a crash proceeds, and a
+    reservation that names no session makes the answer unreadable. Returns
     {"ok": True, "ran", "sessionId", "url"} (the session and comment of the first record that shows
     the round, else None), or {"ok": False, "reason": HISTORY_UNREADABLE, "detail"}. Nothing raises."""
     try:
@@ -2426,6 +2456,14 @@ def extra_audit_history(pr, repo=None, readers=None):
             rounds = rec.get("rounds")
             if shown is None and isinstance(rounds, dict) and "extraAudit" in rounds:
                 shown = {"sessionId": rec.get("sessionId"), "url": c.get("url")}
+        # axis: another session's reservation comment shows the round before any record does; an unreadable one fails closed
+        for c in sorted((c for c in comments if str(c.get("body", "")).startswith(EXTRA_AUDIT_RESERVED_MARKER)),
+                        key=lambda c: c["id"]):
+            reserved = _reserved_session(c)
+            if reserved is None:
+                raise Refusal("review-record-unreadable", f"reservation comment {c.get('id')} names no session: {c.get('url')}")
+            if shown is None and reserved != session_id:
+                shown = {"sessionId": reserved, "url": c.get("url")}
         return {"ok": True, "ran": shown is not None,
                 "sessionId": shown["sessionId"] if shown else None, "url": shown["url"] if shown else None}
     except Refusal as e:

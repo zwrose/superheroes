@@ -148,7 +148,8 @@ def _order(tmp_path, body=None, name="order.json"):
 
 
 def _readers(comments=(), **over):
-    base = {"list_comments": lambda pr, repo: list(comments), "repo_name": lambda root: "o/r"}
+    base = {"list_comments": lambda pr, repo: list(comments), "repo_name": lambda root: "o/r",
+            "create_comment": lambda pr, repo, body: {"id": 10 ** 6, "url": "http://c/reserved"}}
     base.update(over)
     return base
 
@@ -323,6 +324,89 @@ def test_t4_a_second_session_on_the_same_pr_is_refused_by_the_prs_history(tmp_pa
     out = RD.cmd_extra_audit(d, order, "advisor", PR,
                              readers=_readers(_posted(tmp_path, "s-other", extra=False)))
     assert out["ok"] is True, out
+
+
+def _reservation(session_id, cid=500):
+    return {"id": cid, "author": "bot", "url": "http://c/%d" % cid,
+            "body": "%s\nsessionId: %s\nwhy: %s\n" % (RR.EXTRA_AUDIT_RESERVED_MARKER, session_id, WHY)}
+
+
+def test_t4b_a_second_session_sees_the_first_sessions_reservation_though_no_record_shows_the_round(
+        tmp_path, monkeypatch):
+    # axis: the allowance is claimed on the PR at order time, before any record shows the round
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    out = _refused(d, _order(tmp_path), "extra-audit-already-run-on-pr",
+                   readers=_readers([_reservation("s-other")]))
+    assert out["sessionId"] == "s-other" and out["url"] == "http://c/500"
+
+
+def test_t4c_the_order_posts_one_reservation_and_a_rerun_after_a_crash_by_the_same_session_is_accepted(
+        tmp_path, monkeypatch):
+    # axis: the reservation is posted before the state commit; the same session's own reservation never counts
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    sid = RD._meta_session_id(d)
+    posted = []
+
+    def create(pr, repo, body):
+        posted.append((pr, repo, body))
+        return {"id": 700, "url": "http://c/700"}
+
+    def failing_begin(session_dir, kind, **kw):
+        raise RD.round_commit.CommitRefused("commit-apply-failed", "injected")
+
+    real_begin = RD.round_commit.begin
+    monkeypatch.setattr(RD.round_commit, "begin", failing_begin)
+    out = RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR, readers=_readers(create_comment=create))
+    assert out["ok"] is False and len(posted) == 1
+    lines = posted[0][2].split("\n")
+    assert lines[0] == RR.EXTRA_AUDIT_RESERVED_MARKER and lines[1] == "sessionId: %s" % sid and WHY in posted[0][2]
+    assert "extraAudit" not in _state(d)
+    monkeypatch.setattr(RD.round_commit, "begin", real_begin)
+    out = RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR,
+                             readers=_readers([_reservation(sid, 700)], create_comment=create))
+    assert out["ok"] is True, out
+
+
+def test_t4d_a_reservation_that_cannot_be_posted_refuses_with_nothing_written(tmp_path, monkeypatch):
+    # axis: no reservation, no reopening
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    order = _order(tmp_path)
+    _refused(d, order, "extra-audit-reservation-failed",
+             readers=_readers(create_comment=lambda pr, repo, body: None))
+
+    def boom(pr, repo, body):
+        raise RuntimeError("post exploded")
+
+    _refused(d, order, "extra-audit-reservation-failed", readers=_readers(create_comment=boom))
+    assert "extraAudit" not in _state(d)
+
+
+def test_t4e_a_reservation_naming_no_session_fails_closed(tmp_path, monkeypatch):
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    bad = {"id": 501, "author": "bot", "url": "http://c/501", "body": RR.EXTRA_AUDIT_RESERVED_MARKER + "\nnothing"}
+    _refused(d, _order(tmp_path), "extra-audit-pr-history-unreadable", readers=_readers([bad]))
+
+
+def test_t4f_a_repository_that_cannot_be_resolved_refuses_and_never_reads_the_ambient_directory(
+        tmp_path, monkeypatch):
+    # axis: a failed repository lookup refuses before any PR read
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    order = _order(tmp_path)
+    calls = []
+
+    def listing(pr, repo):
+        calls.append(repo)
+        return []
+
+    for name in (lambda root: None, lambda root: 1 / 0):
+        _refused(d, order, "extra-audit-pr-history-unreadable",
+                 readers=_readers(list_comments=listing, repo_name=name))
+    assert calls == []
 
 
 def test_history_reads_fail_closed_for_each_cause_and_report_the_round_when_shown(tmp_path):

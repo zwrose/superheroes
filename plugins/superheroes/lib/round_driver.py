@@ -8558,6 +8558,7 @@ EXTRA_AUDIT_HEAD_MOVED = "extra-audit-head-moved"
 EXTRA_AUDIT_RECEIPT_FAULTED = "extra-audit-receipt-faulted"
 EXTRA_AUDIT_PR_HISTORY_UNREADABLE = "extra-audit-pr-history-unreadable"
 EXTRA_AUDIT_ALREADY_RUN_ON_PR = "extra-audit-already-run-on-pr"
+EXTRA_AUDIT_RESERVATION_FAILED = "extra-audit-reservation-failed"
 EXTRA_AUDIT_SUPERSEDED_RECEIPT = "round-receipt.superseded-1.json"
 _EXTRA_AUDIT_CAP_KINDS = ("round-cap", "fix-keeps-failing")
 _RECEIPT_FINALIZED_MARKS = ("_receiptFinalized", "_receiptFault", "_receiptFaultClass")
@@ -8627,7 +8628,8 @@ def cmd_extra_audit(session_dir, order_file, by, pr, repo=None, readers=None):
 
 
 def _extra_audit_pr_history_refusal(session_dir, state, pr, repo, readers):
-    """The refusal for what the PR's earlier review records show, or None when none shows the round."""
+    """(refusal, repo): the refusal for what the PR's earlier review records and reservations show, or
+    None when none shows the round; repo is the repository the PR is read from."""
     import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
     if repo is None:
         try:
@@ -8637,16 +8639,20 @@ def _extra_audit_pr_history_refusal(session_dir, state, pr, repo, readers):
             resolved = None
         if isinstance(resolved, str) and review_record._REPO_RE.fullmatch(resolved):
             repo = resolved
-    history = review_record.extra_audit_history(pr, repo, readers)
+        else:
+            # axis: a repository that cannot be resolved from the session checkout refuses, it never falls back to the ambient directory's
+            return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_PR_HISTORY_UNREADABLE,
+                               detail="the repository could not be resolved from the session checkout"), None
+    history = review_record.extra_audit_history(pr, repo, readers, session_id=_meta_session_id(session_dir))
     # axis: PR history that cannot be read refuses, it never reads as "the round has not run" — see bite-proof record c1l4b_wo_a
     if not history.get("ok"):
         return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_PR_HISTORY_UNREADABLE,
-                           detail=history.get("detail"))
+                           detail=history.get("detail")), repo
     # axis: a PR whose earlier review record shows the extra audit round refuses a second one — see bite-proof record c1l4b_wo_a
     if history.get("ran"):
         return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ALREADY_RUN_ON_PR,
-                           sessionId=history.get("sessionId"), url=history.get("url"))
-    return None
+                           sessionId=history.get("sessionId"), url=history.get("url")), repo
+    return None, repo
 
 
 def _supersede_receipt(session_dir):
@@ -8723,9 +8729,15 @@ def _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=None, readers=
         if fault:
             return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RECEIPT_FAULTED,
                                detail=str(fault))
-    refusal = _extra_audit_pr_history_refusal(session_dir, state, pr, repo, readers)
+    refusal, repo = _extra_audit_pr_history_refusal(session_dir, state, pr, repo, readers)
     if refusal is not None:
         return refusal
+    # axis: the allowance is reserved on the PR after every local check and before the receipt copy and the state commit, so a second session sees it — a reservation that cannot be posted refuses with nothing written
+    import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
+    reserved = review_record.reserve_extra_audit(pr, repo, _meta_session_id(session_dir), why, readers)
+    if not reserved.get("ok"):
+        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RESERVATION_FAILED,
+                           detail=reserved.get("detail"))
     superseded, superseded_sha, copy_fault = _supersede_receipt(session_dir)
     if copy_fault is not None:
         return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RECEIPT_FAULTED,

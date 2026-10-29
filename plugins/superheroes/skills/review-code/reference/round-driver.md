@@ -741,8 +741,14 @@ as usual.
 8. `extra-audit-receipt-faulted`: the finalized receipt fails its on-disk check, or an existing
    superseded copy does not match it.
 9. `extra-audit-pr-history-unreadable`: the PR's comments could not be listed, or a review-record
-   comment on it does not parse. This fails closed.
-10. `extra-audit-already-run-on-pr`: an earlier review record on the PR shows an extra audit round.
+   comment on it does not parse, or an extra-audit reservation comment names no session, or the
+   repository could not be resolved from the session checkout. This fails closed.
+10. `extra-audit-already-run-on-pr`: an earlier review record on the PR shows an extra audit round,
+    or another session already posted its reservation comment on the PR.
+11. `extra-audit-reservation-failed`: the reservation comment could not be posted. Once every check
+    above passes, and before the receipt copy and the state commit, the verb posts one comment on the
+    PR (first line `<!-- superheroes:extra-audit-reserved -->`, then the session id and the order's
+    why). A reservation from the same session does not count, so a re-run after a crash carries on.
 
 **The round.** The verb reopens the session as round 5, the cap plus one. That round dispatches
 **only `dispatch-audits`**, over the cap round's fixes. It runs no panel, scoped finder, gap sweep,
