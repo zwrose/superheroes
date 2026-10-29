@@ -3103,14 +3103,18 @@ def _break_it_run_keys(runs, compiled):
         if isinstance(f, dict) and break_it.carries_test(f):
             ident = (f.get("file"), normalize_title(str(f.get("title") or "")))
             # axis: compile keeps same-file, same-title findings at different lines apart, so a run binds to the full (file, title, line) anchor — see bite-proof record wo_a_2210_break_it_working_copy
-            by_anchor.setdefault(ident + (_coerce_line(f.get("line")),), f)
+            line_ok, line = _coerce_line(f.get("line"))
+            if line_ok:
+                by_anchor.setdefault(ident + (line,), f)
             by_identity.setdefault(ident, f)
     out = []
     for run in runs:
         entry = dict(run)
         ident = (entry.get("file"), normalize_title(str(entry.get("title") or "")))
         if "line" in entry:
-            match = by_anchor.get(ident + (_coerce_line(entry.get("line")),))
+            # axis: a line the coercion rejects (a list, a dict) is never hashed into the lookup; the run stays unmatched and reads droppedAtCompile
+            line_ok, line = _coerce_line(entry.get("line"))
+            match = by_anchor.get(ident + (line,)) if line_ok else None
         else:
             match = by_identity.get(ident)
         stamp = match.get(break_it.RUN_FIELD) if match else None
@@ -8696,6 +8700,19 @@ def _rewrite_break_it_copy(copy_, text, record, why):
     copy_[break_it.RUNS_FIELD] = runs
 
 
+def _carry_break_it_change_to_ledger(state, key, text, record, why):
+    """Put the changed test on the finding's ledger entry, when it has one. Only the carried block, run and
+    run list change; the entry's disposition family is never touched, and a state with no entry for ``key``
+    is left byte for byte as it was."""
+    rows, _fault = session_contract.read_disposition_ledger(state)
+    if not any(_finding_identity_key(row) == key for row in rows):
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    held = _ledger_index_by_key(ledger).get(key)
+    if held is not None:
+        _rewrite_break_it_copy(ledger[held], text, record, why)
+
+
 def cmd_break_it_change(session_dir, finding, content_file, why):
     try:
         with round_records.session_lock(session_dir):
@@ -8750,10 +8767,7 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
     text = _break_it_block_text(changed, content)
     # axis: the changed text and the old run's stamp are replaced together on the staged copy and its ledger entry, so what the verifiers read, what the fixer commits and what the record shows are the one test
     _rewrite_break_it_copy(staged, text, record, why)
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    held = _ledger_index_by_key(ledger).get(key) if isinstance(ledger, list) else None
-    if held is not None:
-        _rewrite_break_it_copy(ledger[held], text, record, why)
+    _carry_break_it_change_to_ledger(state, key, text, record, why)
     _record_round_append(state, "breakItRuns", dict(
         record, title=staged.get("title"), file=staged.get("file"),
         findingKey=key, changedWhy=why))

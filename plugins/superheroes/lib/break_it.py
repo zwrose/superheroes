@@ -9,10 +9,15 @@ session folder: the test file it writes, the run's temporary and cache folders (
 ``TEMP`` and ``XDG_CACHE_HOME`` point at a per-run folder in the session folder, or in the git
 directory's ``superheroes`` folder when no session folder is given) and nothing else. After the run, in
 a ``finally``, it restores the working copy to what it was: the test file and the directories the write
-made, every ref, HEAD, the local git config, the index, every tracked file and every non-ignored
-untracked file the test added; a restore that fails is recorded ``working-copy-restore-failed``.
+made, the branch HEAD points at, HEAD, the local git config, the index, every tracked file and every
+non-ignored untracked file the test added; a restore that fails is recorded ``working-copy-restore-failed``.
+No other ref is rewound, deleted or created (a second worktree of the repository can change refs during the
+run, and the restore cannot tell who changed one): each ref that still differs from the snapshot is left as it
+is and named in the record's ``refsLeft``.
 The one limit, stated plainly: a test that writes to an absolute path outside the working copy and the
-session folder is not stopped (there is no OS sandbox). Its process tree never outlives the call.
+session folder is not stopped (there is no OS sandbox). Its process tree never outlives the call: a process
+the run left with its working directory in the working copy is stopped too, unless it started before the run
+or is this process or one of its ancestors.
 Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
 and the caller decides from the record; nothing is raised."""
 import hashlib
@@ -26,6 +31,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -503,8 +509,10 @@ def resolve_interpreter(config):
     return project_interpreter(config.get("verifyCommand"))
 
 
-def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None, restored=None):
-    """The run record. ``restored`` names what the run had to put back in the working copy, in restore order."""
+def _record(head, block, outcome, reason=None, exit_code=None, output="", interpreter=None, restored=None,
+            refs_left=None):
+    """The run record. ``restored`` names what the run had to put back in the working copy, in restore order;
+    ``refs_left`` the refs that differ from the snapshot after the restore and were left as they were."""
     block = block if isinstance(block, dict) else {}
     # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
     output = readout.scrub(output)[0] if output else ""
@@ -513,7 +521,7 @@ def _record(head, block, outcome, reason=None, exit_code=None, output="", interp
             "content": block.get("content"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output,
             "interpreter": shlex.join(interpreter) if isinstance(interpreter, list) else interpreter,
-            "restored": list(restored or [])}
+            "restored": list(restored or []), "refsLeft": sorted(refs_left or [])}
 
 
 def _git(repo_root, *args):
@@ -632,7 +640,7 @@ def _ps_table():
     """``{pid: (ppid, start time text)}`` for every process, or an empty table when ``ps`` cannot be read."""
     try:
         out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,lstart="], capture_output=True,
-                             timeout=_GIT_TIMEOUT).stdout
+                             timeout=_GIT_TIMEOUT, env=dict(os.environ, LC_ALL="C")).stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}
     table = {}
@@ -683,6 +691,112 @@ class _DescendantWatch(threading.Thread):
                     os.kill(pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
+
+
+def _ancestors(parents, pid):
+    """The pids from ``pid`` up the ``{pid: ppid}`` table, ``pid`` included."""
+    chain = set()
+    while pid and pid not in chain:
+        chain.add(pid)
+        pid = parents.get(pid)
+    return chain
+
+
+def _proc_cwd_table():
+    """``(processes, ancestors, note)`` read from ``/proc``: ``processes`` is ``[(pid, cwd, started)]`` for every
+    process whose working directory can be read, ``started`` an epoch time rounded up to the clock tick (so a
+    process that began in the tick before the run reads as started in it); ``ancestors`` the pids of this process and
+    its ancestors; ``note`` is ``None``. Inside a sandbox whose ``/proc`` is another PID namespace's (``/proc/self``
+    is not this process), the pids it names are not this process's to signal, so the table is empty with a ``note``."""
+    try:
+        foreign = os.readlink("/proc/self") != str(os.getpid())
+    except OSError:
+        foreign = True
+    if foreign:
+        return [], set(), "working-directory net skipped: /proc names another PID namespace"
+    ticks = os.sysconf("SC_CLK_TCK")
+    with open("/proc/uptime") as fh:
+        booted = time.time() - float(fh.read().split()[0])
+    parents, processes = {}, []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            with open("/proc/%s/stat" % name) as fh:
+                tail = fh.read().rsplit(")", 1)[1].split()
+            parents[pid] = int(tail[1])
+            started = booted + (int(tail[19]) + 1) / ticks
+            processes.append((pid, os.readlink("/proc/%s/cwd" % name), started))
+        except (OSError, IndexError, ValueError):
+            pass
+    return processes, _ancestors(parents, os.getpid()), None
+
+
+def _lsof_cwds(text):
+    """``{pid: cwd}`` from ``lsof -a -d cwd -Fpn`` output."""
+    found, pid = {}, None
+    for line in text.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None:
+            found[pid] = line[1:]
+    return found
+
+
+def _ps_start(text):
+    """The epoch time, rounded up to the second, a ``ps -o lstart=`` text names, or ``None``."""
+    try:
+        return time.mktime(time.strptime(text, "%a %b %d %H:%M:%S %Y")) + 1
+    except (ValueError, OverflowError):
+        return None
+
+
+def _lsof_cwd_table():
+    """The same shape as ``_proc_cwd_table``, read with ``lsof -a -d cwd -Fpn`` and ``ps``, for a host without
+    ``/proc``. ``note`` names why the table is empty when ``lsof`` or ``ps`` cannot be read."""
+    try:
+        out = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fpn"], capture_output=True, timeout=_GIT_TIMEOUT).stdout
+    except FileNotFoundError:
+        return [], set(), "working-directory net skipped: lsof is absent"
+    except (OSError, subprocess.TimeoutExpired):
+        return [], set(), "working-directory net skipped: lsof could not be read"
+    table = _ps_table()
+    if not table:
+        return [], set(), "working-directory net skipped: ps could not be read"
+    cwds = _lsof_cwds(out.decode("utf-8", errors="replace"))
+    processes = []
+    for pid, cwd in cwds.items():
+        started = _ps_start(table[pid][1]) if pid in table else None
+        if started is not None:
+            processes.append((pid, cwd, started))
+    return processes, _ancestors({pid: ppid for pid, (ppid, _) in table.items()}, os.getpid()), None
+
+
+def _cwd_table():
+    return _proc_cwd_table() if os.path.isdir("/proc/self") else _lsof_cwd_table()
+
+
+def _kill_in_working_copy(root, since, reader=None):
+    """Kill every process whose working directory is ``root`` or lies beneath it, that started at or after ``since``
+    (an epoch time) and is neither this process nor one of its ancestors. A second net beside the descendant watch,
+    which samples and so misses a worker that starts and detaches between two samples. ``reader`` returns
+    ``(processes, ancestors, note)`` as ``_cwd_table`` does. Returns the note when the net could not run, else ``None``."""
+    processes, ancestors, note = (reader or _cwd_table)()
+    if note:
+        return note
+    real_root = os.path.realpath(root)
+    inside = real_root.rstrip(os.sep) + os.sep
+    for pid, cwd, started in processes:
+        # axis: a process that started before the run, this process and its ancestors are never touched, so the session's own shell survives the net
+        if pid == os.getpid() or pid in ancestors or started < since:
+            continue
+        if cwd == real_root or cwd.startswith(inside):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return None
 
 
 def _write_confined(root, rel, content, created=None):
@@ -765,8 +879,9 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
     reason the drain latched while the output went by, or ``None``. Every process a break-it run starts,
     the readiness probe included, goes through here."""
     status_r, status_w = os.pipe()
+    started_at = time.time()
     try:
-        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net, the only one on other hosts, where a worker that clears its environment is not contained. There is no working-directory sweep: the working directory is the session's own checkout, which a sweep would take the session's own shell down with.
+        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net, and on other hosts the descendant watch the third. The last net is the working-directory sweep (`_kill_in_working_copy`): the working directory is the session's own checkout, so it stops only a process that started at or after this run and is neither this process nor an ancestor of it, which leaves the session's own shell alone.
         proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=cwd,
                                 env=_clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -801,6 +916,11 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
         _kill_tagged(token)
         if watch is not None:
             watch.stop_and_kill()
+        # axis: a worker that started and detached between two samples of the watch, or that hides its environment, is still stopped by where it runs and when it started — see bite-proof record wo_e_2210_review_round2
+        try:
+            net_note = _kill_in_working_copy(repo_root, started_at)
+        except Exception as exc:  # a net that cannot read the process table is disclosed, never raised
+            net_note = "working-directory net skipped: %s" % str(exc)[-200:]
         proc.wait()
         launch_failed = os.read(status_r, 1) == b"E"
         os.close(status_r)
@@ -810,7 +930,13 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
             proc.stdout.close()
         except OSError:
             pass
-    return launch_failed, timed_out, proc.returncode, drain.tail(), drain.setup
+    output = drain.tail()
+    if net_note:
+        # the note rides inside the output bound: the tail gives up the room it takes
+        room = max(OUTPUT_TAIL_BYTES - len(net_note.encode("utf-8")) - 1, 0)
+        output = output.encode("utf-8")[-room:].decode("utf-8", errors="ignore") if room else ""
+        output = (output + "\n" if output else "") + net_note
+    return launch_failed, timed_out, proc.returncode, output, drain.setup
 
 
 _PROBE_CODE = "import sys; sys.stdout.write(str(6 * 7) + 'ok')"
@@ -941,31 +1067,20 @@ def _restore_test_file(root, ctx):
     return changed
 
 
-def _other_checkouts(root):
-    """The branch refs checked out in the repository's other worktrees: another build's own work, never this run's."""
-    out = _text(_must(root, "worktree", "list", "--porcelain").stdout)
-    real_root = os.path.realpath(root)
-    held, current = set(), None
-    for line in out.split("\n"):
-        if line.startswith("worktree "):
-            current = os.path.realpath(line[len("worktree "):])
-        elif line.startswith("branch ") and current != real_root:
-            held.add(line[len("branch "):])
-    return held
-
-
 def _restore_refs(root, snap):
+    """Put back the one ref this run can own, the branch HEAD pointed at (none when HEAD was detached). Every
+    other ref that differs from the snapshot is left as it is and named in ``snap["refsLeft"]``: a second
+    worktree of the repository can change refs during the run, and the restore cannot tell which process changed one."""
+    own = snap["symref"]
+    # axis: only the branch HEAD points at is rewound; no other ref is ever moved, deleted or created, because the restore cannot tell this run's change from another worktree's — see bite-proof record wo_a_2210_break_it_working_copy
+    put_back = bool(own) and own in snap["refs"] and _refs(root).get(own) != snap["refs"][own]
+    if put_back:
+        _must(root, "update-ref", own, snap["refs"][own])
     now = _refs(root)
-    # axis: a branch another worktree has checked out is that build's own work, so the restore leaves it as it is, however it moved during the run — see bite-proof record wo_a_2210_break_it_working_copy
-    held = _other_checkouts(root)
-    # axis: a ref the test moved or deleted is put back, and a ref it added is deleted — see bite-proof record wo_a_2210_break_it_working_copy
-    changed = [ref for ref in sorted(snap["refs"]) if now.get(ref) != snap["refs"][ref] and ref not in held]
-    added = [ref for ref in sorted(now) if ref not in snap["refs"] and ref not in held]
-    for ref in changed:
-        _must(root, "update-ref", ref, snap["refs"][ref])
-    for ref in added:
-        _must(root, "update-ref", "-d", ref)
-    return bool(changed or added)
+    # axis: every other ref that differs from the snapshot is listed, not hidden, so the record shows what the restore left — see bite-proof record wo_a_2210_break_it_working_copy
+    snap["refsLeft"] = sorted(ref for ref in set(now) | set(snap["refs"])
+                              if ref != own and now.get(ref) != snap["refs"].get(ref))
+    return put_back
 
 
 def _restore_head(root, snap):
@@ -1067,13 +1182,22 @@ def _scratch_folder(root, scratch):
         except (TypeError, ValueError):
             return None, "scratch-unresolved"
         return (scratch, None) if os.path.isdir(scratch) else (None, "scratch-unresolved")
-    gitdir = _text(_must(root, "rev-parse", "--git-dir").stdout).rstrip("\n")
-    return os.path.join(os.path.abspath(os.path.join(root, gitdir)), "superheroes"), None
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
+    import store_core
+
+    def run(cwd, *args):
+        return store_core.run_git_result(cwd, *args, env=_clean_env())
+
+    try:
+        gitdir = store_core.get_worktree_gitdir(root, run=run)
+    except store_core.RepoRootUnavailable as exc:
+        raise _GitFailed("git-dir: %s" % exc)
+    return os.path.join(gitdir, "superheroes"), None
 
 
 def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, interpreter=None, scratch=None):
-    def rec(outcome, reason=None, exit_code=None, output="", restored=None):
-        return _record(head, block, outcome, reason, exit_code, output, interpreter, restored)
+    def rec(outcome, reason=None, exit_code=None, output="", restored=None, refs_left=None):
+        return _record(head, block, outcome, reason, exit_code, output, interpreter, restored, refs_left)
 
     root = os.path.abspath(repo_root)
     pinned, reason, detail = _precheck(root, head)
@@ -1103,8 +1227,9 @@ def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, inte
         restored, failures = _restore(root, snap, ctx)
     if failures:
         return rec(OUTCOME_NOT_RUN, "working-copy-restore-failed", output="; ".join(failures)[-OUTPUT_TAIL_BYTES:],
-                   restored=restored)
+                   restored=restored, refs_left=snap.get("refsLeft"))
     result["restored"] = restored
+    result["refsLeft"] = sorted(snap.get("refsLeft") or [])
     return result
 
 

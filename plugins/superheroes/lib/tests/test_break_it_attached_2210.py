@@ -64,8 +64,14 @@ _TEST_PASSING = _TEST_FAILING.replace("== 1", ">= 1")
 
 
 @pytest.fixture(autouse=True)
-def _pinned_git(monkeypatch):
-    """The fixture repo's commits and the runner's own git calls read no user or system git config."""
+def _pinned_git(monkeypatch, tmp_path):
+    """The fixture repo's commits read no user or system git config. The runner drops GIT_CONFIG_GLOBAL from the
+    environment it gives git, so its own git calls are kept off the developer's configuration by an empty per-test
+    HOME and XDG_CONFIG_HOME."""
+    for name in ("home", "xdg-config"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
