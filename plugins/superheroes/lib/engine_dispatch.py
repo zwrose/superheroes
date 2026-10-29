@@ -4852,7 +4852,15 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
         return None, "native-schema-unreadable"
     # axis: the schema on disk must equal the declared one for this run kind, or the attempt refuses native-schema-unreadable.
     if on_disk != declared:
-        return None, "native-schema-unreadable"
+        # A review run saved before `readParts` existed replays against its own recorded shape.
+        try:
+            prechange = engine_result_channel.prechange_review_schema(
+                engine, run_kind, expected_result_kind)
+        except Exception:
+            prechange = None
+        if prechange is None or on_disk != prechange:
+            return None, "native-schema-unreadable"
+        return prechange, None
     return declared, None
 
 

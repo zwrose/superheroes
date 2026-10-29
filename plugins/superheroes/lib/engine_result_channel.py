@@ -418,6 +418,20 @@ def declared_schema(engine, run_kind, expected_result_kind=None):
     return schema
 
 
+def prechange_review_schema(engine, run_kind, expected_result_kind=None):
+    """The review schema declared before `readParts` existed, or None when none applies.
+
+    A native review run opened before the read list was added saved this shape to disk; replay
+    admits it so a pending result from such a run still ingests (its missing read list is
+    unreported). New runs are always opened with `declared_schema`.
+    """
+    if run_kind != RUN_KIND_REVIEW or channel_for(engine) == CHANNEL_MARKER:
+        return None
+    schema = _review_root_schema(expected_result_kind, read_parts=False)
+    assert_strict_mode_valid(schema)
+    return schema
+
+
 def _validate_with_detail(schema, value):
     """Validate value against schema. Returns (ok, reason, failure_detail). Never raises."""
     if schema is None:
@@ -669,14 +683,16 @@ def _branch_payload_schema(kind):
     raise ValueError("unknown review result kind %r" % (kind,))
 
 
-def _review_branch_schema(kind):
+def _review_branch_schema(kind, read_parts=True):
     payload_schema = _branch_payload_schema(kind)
     properties = {
         "resultKind": {"type": "string", "enum": [kind]},
         "investigated": _investigated_schema(),
-        "readParts": _read_parts_schema() if kind == "findings" else _null_property(),
     }
-    required = ["resultKind", "investigated", "readParts"]
+    required = ["resultKind", "investigated"]
+    if read_parts:
+        properties["readParts"] = _read_parts_schema() if kind == "findings" else _null_property()
+        required.append("readParts")
     for key in _PAYLOAD_CONTAINER_KEYS:
         if kind != "ruling" and key == kind:
             properties[key] = payload_schema
@@ -701,13 +717,13 @@ def _review_branch_schema(kind):
     }
 
 
-def _review_root_schema(expected_result_kind):
+def _review_root_schema(expected_result_kind, read_parts=True):
     kinds = REVIEW_RESULT_KINDS
     if expected_result_kind is not None:
         if expected_result_kind not in REVIEW_RESULT_KINDS:
             raise ValueError("unknown expected_result_kind %r" % (expected_result_kind,))
         kinds = (expected_result_kind,)
-    branches = [_review_branch_schema(kind) for kind in kinds]
+    branches = [_review_branch_schema(kind, read_parts) for kind in kinds]
     result_schema = branches[0] if len(branches) == 1 else {"anyOf": branches}
     return {
         "type": "object",

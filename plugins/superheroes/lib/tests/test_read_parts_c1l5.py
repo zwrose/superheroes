@@ -179,6 +179,23 @@ def test_replay_of_a_native_result_carries_the_read_list(tmp_path):
     assert "readParts" not in ted.ED._parse_review_attempt(run_dir2, state2, 1)
 
 
+def test_replay_admits_a_run_saved_before_the_read_list_and_reads_it_as_unreported(tmp_path):
+    # axis: a native review run whose saved schema lacks readParts still replays; the list is unreported
+    old = erc.prechange_review_schema("codex", erc.RUN_KIND_REVIEW)
+    assert "readParts" not in json.dumps(old)
+    branch = _branch()
+    branch.pop("readParts", None)
+    run_dir, state = ted._native_review_grade_state(tmp_path, branch, schema=old)
+    parsed = ted.ED._parse_review_attempt(run_dir, state, 1)
+    assert parsed is not None
+    assert "readParts" not in parsed
+
+
+def test_replay_still_refuses_a_saved_schema_that_is_neither_current_nor_prechange(tmp_path):
+    run_dir, state = ted._native_review_grade_state(tmp_path, _branch(), schema={})
+    assert ted.ED._parse_review_attempt(run_dir, state, 1) is None
+
+
 def _dispatch(tmp_path, branch):
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         path = ted._resolve_native_result_path(argv, prompt_bytes)
