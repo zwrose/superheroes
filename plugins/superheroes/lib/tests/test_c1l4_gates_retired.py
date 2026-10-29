@@ -235,6 +235,25 @@ def test_e6_the_same_state_with_a_readable_fixed_row_converges():
     assert state["terminal"] == "converged"
 
 
+@pytest.mark.parametrize("disp_seq, raised_seq, restaged", [
+    (2, 3, None),
+    (2, 1, {_CHOICE_KEY: 2}),
+], ids=["discharge-older-than-the-raise", "discharge-reopened-by-a-restage"])
+def test_e6_a_stale_fixed_row_never_settles_a_reopened_owner_choice(disp_seq, raised_seq, restaged):
+    # axis: the freshness checks in _owner_choice_settled — an old discharge cannot settle a reopened choice
+    state = _held_state()
+    state[SC.DISPOSITION_LEDGER_KEY] = [{
+        SC.FINDING_KEY_FIELD: _CHOICE_KEY, "title": "widen the API", "file": "f.py", "line": 2,
+        "severity": "Important", "disposition": "fixed", "dispositionRound": 2,
+        SC.DISPOSITION_SEQ_FIELD: disp_seq, SC.RAISED_SEQ_FIELD: raised_seq}]
+    if restaged is not None:
+        state["restagedAfterDispositionSeq"] = restaged
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "owner-choice-open"
+    assert state["certification"]["shape"] is None
+
+
 # --- E7 / E8: the retired phases and the retired flag ------------------------------------------
 
 @pytest.mark.parametrize("phase", ["present-judgment", "present-stall-menu"])
