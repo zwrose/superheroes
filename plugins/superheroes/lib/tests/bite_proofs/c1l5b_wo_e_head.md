@@ -9,6 +9,8 @@ Declared guarded elements (from the order): E1 the section-binding check (`index
 | E1 | `countable_lines.py:352` `new is None or len(new) < _BINDING_MIN_HEX or not oid.startswith(new)` | a proof copy counts only when every diff section shown for it is bound to the head blob | `test_diff_of_one_commit_with_head_at_another_is_section_unbound` |
 | E2 | `countable_lines.py:358` `hashlib.sha256(data).hexdigest() != copy["sha256"]` | a proof copy counts only when the head blob's bytes hash to the proof's checksum | `test_proof_matching_only_the_working_tree_is_a_checksum_mismatch` |
 | E3 | `countable_lines.py:420` `"--source", head` in the `check-attr` argv | the attribute is read from the head commit's tree, never from the checkout's `.gitattributes` | `test_generated_attribute_comes_from_head_not_from_the_dirty_gitattributes` |
+| E4 | `countable_lines.py` `_moved_pairs`, the `(lines, final-newline flag)` comparison | a delete and an add pair as a move only when lines and final-newline status are equal | `test_a_move_that_adds_a_final_newline_counts` |
+| E5 | `countable_lines.py` `_lexically_unsafe`, the `"\\" in file` test | a proof path holding a backslash is rejected `path-unsafe` | `test_a_proof_path_with_a_backslash_is_rejected_path_unsafe` |
 
 ---
 
@@ -173,4 +175,115 @@ FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_generate
 ```
 .                                                                        [100%]
 1 passed, 83 deselected in 0.35s
+```
+
+---
+
+## E4 — the final-newline comparison in `_moved_pairs`
+
+Added in the rework (WO-H), run from `/home/user/wt-2243-h` under `-X pycache_prefix=/tmp/c1l5b-pyc-h`; the `UV_NATIVE_TLS` warning line is left out of the captures, and nothing is redacted.
+
+- **axis:** a deleted section and an added section pair as a move only when their lines and their final-newline status are equal; a file of `x` deleted and a file of `x\n` added is a change that counts.
+
+**neutralization** (`countable_lines.py`, `_moved_pairs`):
+```python
+-            if removed == (section["addedLines"], section["addedNoEol"]):
++            if removed[0] == section["addedLines"]:
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-h -m pytest plugins/superheroes/lib/tests/test_countable_lines_c1l5.py -q -k test_a_move_that_adds_a_final_newline_counts`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_a_move_that_adds_a_final_newline_counts _________________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-39/test_a_move_that_adds_a_final_0')
+
+    def test_a_move_that_adds_a_final_newline_counts(tmp_path):
+        # axis: a delete and an add whose lines match but whose final-newline status differs is a change, not a move
+        root, diff = _move_pair_diff(tmp_path, b"x", b"x\n")
+        result = cl.count(diff, root)
+        rows = _rows(result)
+>       assert rows["new.txt"]["counted"] is True and rows["new.txt"]["lines"] == 1
+E       assert (False is True)
+
+/home/user/wt-2243-h/plugins/superheroes/lib/tests/test_countable_lines_c1l5.py:161: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_a_move_that_adds_a_final_newline_counts
+1 failed, 88 deselected in 2.40s
+```
+
+**restore:** the inverse edit, the tuple comparison back.
+
+**restore receipt:** the restored lines quoted back from the file (`Grep -n -B1 -A1 'addedNoEol"\]\):'`):
+```
+421-            # Axis: a move keeps the bytes, so the final-newline status must match as well as the lines.
+422:            if removed == (section["addedLines"], section["addedNoEol"]):
+423-                moved.add(i)
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 88 deselected in 0.33s
+```
+
+---
+
+## E5 — the backslash check in `_lexically_unsafe`
+
+Added in the rework (WO-H), same environment as E4.
+
+- **axis:** a proof path holding a backslash is rejected `path-unsafe`, so it is never proven and never reaches the leave-out file, which the loader would refuse.
+
+**neutralization** (`countable_lines.py`, `_lexically_unsafe`):
+```python
+-    if os.path.isabs(file) or file.startswith("/") or "\\" in file:
++    if os.path.isabs(file) or file.startswith("/"):
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-h -m pytest plugins/superheroes/lib/tests/test_countable_lines_c1l5.py -q -k test_a_proof_path_with_a_backslash_is_rejected_path_unsafe`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_a_proof_path_with_a_backslash_is_rejected_path_unsafe __________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-41/test_a_proof_path_with_a_backs0')
+
+    def test_a_proof_path_with_a_backslash_is_rejected_path_unsafe(tmp_path):
+        # axis: a committed file name holding a backslash is never proven, because the leave-out loader would refuse it
+        root = _repo(tmp_path)
+        _write(root, "seed.txt", "s\n")
+        base = _commit(root, "base")
+        (root / "a\\b.txt").write_bytes(b"data\n")
+        _commit(root, "feature")
+        diff = _diff(root, base)
+        proven, rejected = cl.proven_copies(diff, root, _proof(_copy("a\\b.txt", b"data\n")))
+>       assert proven == [] and rejected == [{"file": "a\\b.txt", "reason": "path-unsafe"}]
+E       AssertionError: assert ([{'file': 'a\...57b3e8f6e5f'}] == []
+E         
+E         Left contains one more item: {'file': 'a\\b.txt', 'source': 'src/orig.txt', 'sha256': '6667b2d1aab6a00caa5aee5af8ad9f1465e567abf1c209d15727d57b3e8f6e5f'}
+E         Use -v to get more diff)
+
+/home/user/wt-2243-h/plugins/superheroes/lib/tests/test_countable_lines_c1l5.py:638: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_a_proof_path_with_a_backslash_is_rejected_path_unsafe
+1 failed, 88 deselected in 0.46s
+```
+
+**restore:** the inverse edit, `or "\\" in file` put back.
+
+**restore receipt:** the restored lines quoted back from the file (`Grep -n -A5 'def _lexically_unsafe'`):
+```
+254:def _lexically_unsafe(file):
+255-    # Axis: any backslash makes a path unsafe, because the leave-out loader refuses an entry holding one.
+256:    if os.path.isabs(file) or file.startswith("/") or "\\" in file:
+257-        return True
+258-    return ".." in file.split("/")
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 88 deselected in 0.29s
 ```

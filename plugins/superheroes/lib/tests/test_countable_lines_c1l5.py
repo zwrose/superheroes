@@ -142,6 +142,44 @@ def test_move_shown_as_delete_plus_add_does_not_count(tmp_path):
     assert result["countable"] == 1
 
 
+def _move_pair_diff(tmp_path, old_bytes, new_bytes):
+    root = _repo(tmp_path)
+    (root / "old.txt").write_bytes(old_bytes)
+    _write(root, "keep.py", "k\n")
+    base = _commit(root, "base")
+    (root / "old.txt").unlink()
+    (root / "new.txt").write_bytes(new_bytes)
+    _commit(root, "move")
+    return root, _diff(root, base, "--no-renames")
+
+
+def test_a_move_that_adds_a_final_newline_counts(tmp_path):
+    # axis: a delete and an add whose lines match but whose final-newline status differs is a change, not a move
+    root, diff = _move_pair_diff(tmp_path, b"x", b"x\n")
+    result = cl.count(diff, root)
+    rows = _rows(result)
+    assert rows["new.txt"]["counted"] is True and rows["new.txt"]["lines"] == 1
+    assert result["countable"] == 1
+
+
+def test_a_move_with_no_final_newline_on_either_side_is_still_a_move(tmp_path):
+    # axis: matching lines with the same missing final newline on both sides are a move
+    root, diff = _move_pair_diff(tmp_path, b"x", b"x")
+    rows = _rows(cl.count(diff, root))
+    assert rows["new.txt"]["why"] == "moved-unchanged" and rows["new.txt"]["counted"] is False
+
+
+def test_a_section_records_which_side_lacks_a_final_newline():
+    marker = "\\ No newline at end of file\n"
+    diff = (
+        "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n a\n-b\n" + marker + "+b\n"
+        + "diff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n b2\n" + marker
+    )
+    first, second = cl.parse_sections(diff)
+    assert (first["removedNoEol"], first["addedNoEol"]) == (True, False)
+    assert (second["removedNoEol"], second["addedNoEol"]) == (True, True)
+
+
 def test_a_deleted_section_pairs_with_at_most_one_added_section():
     body = "".join("+l%d\n" % i for i in range(1, 4))
     gone = "".join("-l%d\n" % i for i in range(1, 4))
@@ -588,6 +626,18 @@ def test_unsafe_proof_paths_are_rejected(tmp_path):
     ]
 
 
+def test_a_proof_path_with_a_backslash_is_rejected_path_unsafe(tmp_path):
+    # axis: a committed file name holding a backslash is never proven, because the leave-out loader would refuse it
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    (root / "a\\b.txt").write_bytes(b"data\n")
+    _commit(root, "feature")
+    diff = _diff(root, base)
+    proven, rejected = cl.proven_copies(diff, root, _proof(_copy("a\\b.txt", b"data\n")))
+    assert proven == [] and rejected == [{"file": "a\\b.txt", "reason": "path-unsafe"}]
+
+
 def test_a_malformed_proof_proves_nothing(tmp_path):
     root, diff = _copy_fixture(tmp_path)
     assert cl.proven_copies(diff, root, {"schema": "nope", "copies": []}) == ([], [])
@@ -637,6 +687,7 @@ def test_proof_fault_accepts_a_well_formed_proof():
     ],
 )
 def test_proof_fault_refuses_each_malformed_shape(proof, fault):
+    # axis: each malformed proof shape is refused with the fault that names the first bad field, never accepted
     assert cl.proof_fault(proof) == fault
 
 
