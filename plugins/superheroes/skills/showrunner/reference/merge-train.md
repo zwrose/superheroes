@@ -234,8 +234,8 @@ Before you execute, confirm four things:
    to 3 are its whole gate.
 
 Then merge the PR, and file the issues from the merged breakdown at once, under the same word. Wire
-each issue as duty 2 says. Title each child `<Tag> Cn — …` and each layer `<Tag> Cn layer k — …`,
-with the epic's short tag ([decomposition.md](decomposition.md#the-epics-short-tag)).
+each issue as duty 2 says. For an epic's breakdown, title each child `<Tag> Cn — …` and each layer
+`<Tag> Cn layer k — …`, with the epic's short tag ([decomposition.md](decomposition.md#the-epics-short-tag)).
 
 If filing fails partway, report it in the thread that gave the word and finish filing. Never re-merge
 or revert to retry. If the merge does not happen, nothing files.
