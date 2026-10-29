@@ -85,8 +85,7 @@ def _spawn_loop(x_ruling="discharged", reraise_parent=True):
             out.append(result)
         return out
 
-    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
-                       io={"stall_menu": lambda payload: "hold"})
+    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
     # the scoped finder is seated on a non-panel cell, so the config names the cells proven live
     config = TRD._cfg_cert(maxRounds=20, seatMap=TRD._nonpanel_cell_proof(["claude", "codex"]))
     _result, state = TRD._run_loop_capturing_state(seams, config)

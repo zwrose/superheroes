@@ -277,7 +277,7 @@ def test_e8_advance_rejects_the_retired_owner_artifact_flag(tmp_path):
     assert exc.value.code == 2
 
 
-def test_the_held_stop_reason_of_the_retired_stall_menu_is_gone():
+def test_the_held_stop_reason_of_the_retired_menu_is_gone():
     assert RD.CHECKPOINT_STOP_REASONS == ("tripwire", "park")
     with pytest.raises(SystemExit):
         RD.build_parser().parse_args(["checkpoint", "--session-dir", ".", "--stop-reason", "held"])
