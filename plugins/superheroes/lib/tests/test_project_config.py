@@ -1,5 +1,5 @@
 # plugins/superheroes/lib/tests/test_project_config.py
-"""Conformance: the thirteen configuration items registry, read contract, setter, and dependencies."""
+"""Conformance: the configuration items registry, read contract, setter, and dependencies."""
 import contextlib
 import importlib.util
 import io
@@ -35,8 +35,7 @@ _CORE_FACTS = {
 }
 
 _PROJECT_CFG_SEED = {
-    "dial": {"min": 5, "max": 10},
-    "budgetN": 3,
+    "groundTruthSources": ["CI exit code"],
     "stackingTool": "gh-stack",
 }
 
@@ -109,14 +108,12 @@ def _item_by_slug(payload, slug):
     raise KeyError(slug)
 
 
-def test_registry_has_thirteen_items_in_order():
-    assert len(PC.ITEMS) == 19
-    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16, 17, 18, 19]
+def test_registry_has_every_item_in_order():
+    assert len(PC.ITEMS) == 17
+    assert [item["number"] for item in PC.ITEMS] == [1, 2, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16, 17, 18, 19]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",
         "p0Definition",
-        "dial",
-        "budgetN",
         "groundTruthSources",
         "digestFloor",
         "conditionWindows",
@@ -136,12 +133,10 @@ def test_registry_has_thirteen_items_in_order():
 
 
 def test_exactly_five_plugin_defaults():
-    # axis: exactly six items carry a plugin default — wo_b_1276_default-count
+    # axis: exactly four items carry a plugin default — wo_b_1276_default-count
     defaulted = [item for item in PC.ITEMS if item["plugin_default"] is not None]
-    assert len(defaulted) == 6
+    assert len(defaulted) == 4
     assert {item["slug"] for item in defaulted} == {
-        "dial",
-        "budgetN",
         "conditionWindows",
         "keepOrRetireReporting",
         "guardianStaleness",
@@ -149,41 +144,38 @@ def test_exactly_five_plugin_defaults():
     }
 
 
-def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
+def test_view_lists_every_item_unstamped_profile(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     got = PC.view(repo, root=store)
-    assert len(got["items"]) == 19
+    assert len(got["items"]) == 17
     assert [item["slug"] for item in got["items"]] == [item["slug"] for item in PC.ITEMS]
     plugin_default = [item for item in got["items"] if item["source"] == "plugin-default"]
-    derived = [item for item in got["items"] if item["source"] == "derived"]
     unset = [item for item in got["items"] if item["source"] == "unset"]
-    assert len(plugin_default) == 5
-    assert len(derived) == 1
-    assert derived[0]["slug"] == "budgetN"
+    assert len(plugin_default) == 4
     assert len(unset) == 13
 
 
-def test_budget_n_derived_when_absent(tmp_path):
+def test_retired_dial_and_budget_n_slugs_are_unknown(tmp_path):
     repo, store = _setup_repo(tmp_path)
-    item = _item_by_slug(PC.read(repo, root=store), "budgetN")
-    assert item["raw"] is None
-    assert item["source"] == "derived"
-    assert item["effective"] == PC.BUDGET_DERIVATION_PROSE
+    for slug in ("dial", "budgetN"):
+        assert PC.get_item(repo, slug, root=store)["reason"] == PC.REASON_UNKNOWN_SLUG
+        assert PC.set_item(repo, slug, 3, root=store)["reason"] == PC.REASON_UNKNOWN_SLUG
+    assert not hasattr(PC, "derive_budget")
 
 
-def test_budget_n_stamped_integer(tmp_path):
+def test_stale_dial_and_budget_n_stamps_load_and_are_not_shown(tmp_path):
+    # axis: a profile still carrying a stamped dial or budgetN loads; the read and view ignore it
     repo, store = _setup_repo(tmp_path)
-    PC.set_item(repo, "budgetN", 4, root=store)
-    item = _item_by_slug(PC.read(repo, root=store), "budgetN")
-    assert item["raw"] == 4
-    assert item["source"] == "stamped"
-    assert item["effective"] == 4
-
-
-def test_derive_budget_floors_at_one():
-    assert PC.derive_budget({"min": 20, "max": 30}, 1) == 1
-    assert PC.derive_budget(1, 10) == 1
-    assert PC.derive_budget({"min": 50, "max": 50}, 10) == 5
+    CM.write_project_config(
+        repo, {"dial": {"min": 5, "max": 10}, "budgetN": 3, "stackingTool": "gh-stack"}, root=store,
+    )
+    got = PC.view(repo, root=store)
+    assert got["profileAbsent"] is False and got["profileUnparseable"] is False
+    slugs = [item["slug"] for item in got["items"]]
+    assert slugs == [item["slug"] for item in PC.ITEMS]
+    assert "dial" not in slugs and "budgetN" not in slugs
+    assert not any(item["malformed"] for item in got["items"])
+    assert _item_by_slug(got, "stackingTool")["effective"] == "gh-stack"
 
 
 def test_set_preserves_sibling_project_configuration_keys(tmp_path):
@@ -250,7 +242,7 @@ def test_read_no_profile(tmp_path):
     got = PC.read(repo, root=store)
     assert got["profileAbsent"] is True
     assert got["behind"] is False
-    item = _item_by_slug(got, "dial")
+    item = _item_by_slug(got, "conditionWindows")
     assert item["source"] == "plugin-default"
     item = _item_by_slug(got, "severityLadder")
     assert item["source"] == "unset"
@@ -267,7 +259,7 @@ def test_read_behind_schema(tmp_path):
     repo, store = _setup_repo(tmp_path, schema=CM.SCHEMA_VERSION + 1)
     got = PC.read(repo, root=store)
     assert got["behind"] is True
-    res = PC.set_item(repo, "dial", 25, root=store)
+    res = PC.set_item(repo, "stackingTool", "gh-stack", root=store)
     assert res["action"] == "behind"
 
 
@@ -291,8 +283,8 @@ def test_read_non_object_project_configuration(tmp_path):
 
 def test_read_malformed_item_value(tmp_path):
     repo, store = _setup_repo(tmp_path)
-    CM.write_project_config(repo, {"dial": "not-a-dial"}, root=store)
-    item = _item_by_slug(PC.read(repo, root=store), "dial")
+    CM.write_project_config(repo, {"conditionWindows": "not-windows"}, root=store)
+    item = _item_by_slug(PC.read(repo, root=store), "conditionWindows")
     assert item["malformed"] is True
     assert item["source"] == "unset"
     assert item["effective"] is None
@@ -300,7 +292,7 @@ def test_read_malformed_item_value(tmp_path):
 
 def test_set_malformed_value_refused(tmp_path):
     repo, store = _setup_repo(tmp_path)
-    res = PC.set_item(repo, "dial", "bad", root=store)
+    res = PC.set_item(repo, "conditionWindows", "bad", root=store)
     assert res["action"] == "refused"
 
 
@@ -340,7 +332,7 @@ def test_guardian_stamped_defaults_still_stamped(tmp_path):
 def test_set_passes_through_core_md_refusal(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    res = PC.set_item(repo, "dial", 25, root=store)
+    res = PC.set_item(repo, "stackingTool", "gh-stack", root=store)
     assert res["action"] == "refused"
     assert res["reason"] == PC.REASON_PROFILE_ABSENT
 
@@ -353,7 +345,7 @@ def test_set_passes_through_deferred(tmp_path, monkeypatch):
         yield False
 
     monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
-    res = PC.set_item(repo, "dial", 25, root=store)
+    res = PC.set_item(repo, "stackingTool", "gh-stack", root=store)
     assert res["action"] == "deferred"
 
 
@@ -364,12 +356,12 @@ def test_set_read_mismatch_reported(tmp_path, monkeypatch):
     def _lying_read(cwd, root=None):
         payload = real_read(cwd, root)
         for item in payload["items"]:
-            if item["slug"] == "dial":
-                item["raw"] = 99
+            if item["slug"] == "stackingTool":
+                item["raw"] = "other-tool"
         return payload
 
     monkeypatch.setattr(PC, "read", _lying_read)
-    res = PC.set_item(repo, "dial", 25, root=store)
+    res = PC.set_item(repo, "stackingTool", "gh-stack", root=store)
     assert res["action"] == "refused"
     assert res["reason"] == PC.REASON_SET_MISMATCH
 
@@ -409,19 +401,19 @@ def test_cli_view(tmp_path, capsys):
     rc = PC.main(["view", "--cwd", repo, "--root", store])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["items"]) == 19
+    assert len(payload["items"]) == 17
 
 
 def test_cli_get_and_set(tmp_path, capsys, monkeypatch):
     repo, store = _setup_repo(tmp_path)
-    monkeypatch.setattr("sys.stdin", io.StringIO("25"))
-    rc = PC.main(["set", "--item", "dial", "--cwd", repo, "--root", store])
+    monkeypatch.setattr("sys.stdin", io.StringIO('"gh-stack"'))
+    rc = PC.main(["set", "--item", "stackingTool", "--cwd", repo, "--root", store])
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["action"] == "written"
-    rc = PC.main(["get", "--item", "dial", "--cwd", repo, "--root", store])
+    rc = PC.main(["get", "--item", "stackingTool", "--cwd", repo, "--root", store])
     assert rc == 0
     got = json.loads(capsys.readouterr().out)
-    assert got["raw"] == 25
+    assert got["raw"] == "gh-stack"
     assert got["source"] == "stamped"
 
 

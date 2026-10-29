@@ -6,7 +6,6 @@ Stdlib only. Every item's value is read and written only through this module and
 import argparse
 import datetime
 import json
-import math
 import os
 import re
 import secrets
@@ -24,10 +23,6 @@ import guardian_sweep  # noqa: E402
 HOME_PROJECT_CONFIGURATION = "projectConfiguration"
 HOME_RISK_AND_TRUST = "riskAndTrust"
 HOME_GUARDIAN_CADENCE = "guardianCadence"
-
-BUDGET_DERIVATION_PROSE = (
-    "floor of the effective dial's share of the lane count, never below one"
-)
 
 REASON_UNKNOWN_SLUG = "unknown-slug"
 REASON_MALFORMED_VALUE = "malformed-value"
@@ -85,22 +80,6 @@ ITEMS = (
         "home": HOME_PROJECT_CONFIGURATION,
         "shape": "prose",
         "plugin_default": None,
-    },
-    {
-        "number": 3,
-        "slug": "dial",
-        "name": "Dial",
-        "home": HOME_PROJECT_CONFIGURATION,
-        "shape": "dial",
-        "plugin_default": {"min": 20, "max": 30},
-    },
-    {
-        "number": 4,
-        "slug": "budgetN",
-        "name": "Budget N",
-        "home": HOME_PROJECT_CONFIGURATION,
-        "shape": "budgetN",
-        "plugin_default": "derived",
     },
     {
         "number": 5,
@@ -231,10 +210,6 @@ def _positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _positive_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
-
-
 def _validate_prose(value):
     if not isinstance(value, str):
         return REASON_MALFORMED_VALUE
@@ -353,28 +328,6 @@ def _validate_boolean(value):
     return None
 
 
-def _validate_dial(value):
-    if isinstance(value, dict):
-        min_val = value.get("min")
-        max_val = value.get("max")
-        if not _positive_number(min_val) or not _positive_number(max_val):
-            return REASON_MALFORMED_VALUE
-        if min_val > max_val:
-            return REASON_MALFORMED_VALUE
-        return None
-    if _positive_number(value):
-        return None
-    return REASON_MALFORMED_VALUE
-
-
-def _validate_budget_n(value):
-    if value == "derived":
-        return None
-    if _positive_int(value):
-        return None
-    return REASON_MALFORMED_VALUE
-
-
 def _validate_condition_windows(value):
     if not isinstance(value, dict):
         return REASON_MALFORMED_VALUE
@@ -425,8 +378,6 @@ _VALIDATORS = {
     "commandList": _validate_command_list,
     "inputPathList": _validate_input_path_list,
     "boolean": _validate_boolean,
-    "dial": _validate_dial,
-    "budgetN": _validate_budget_n,
     "conditionWindows": _validate_condition_windows,
     "guardianCadence": _validate_guardian_cadence,
     "severityLadder": _validate_severity_ladder,
@@ -440,34 +391,6 @@ def validate_item_value(item, value):
     if validator is None:
         return REASON_MALFORMED_VALUE
     return validator(value)
-
-
-def _dial_share_percent(dial):
-    if isinstance(dial, dict):
-        min_val = dial.get("min")
-        if _positive_number(min_val):
-            return min_val
-        max_val = dial.get("max")
-        if _positive_number(max_val):
-            return max_val
-        return None
-    if _positive_number(dial):
-        return dial
-    return None
-
-
-def derive_budget(dial, lane_count):
-    """Return the derived budget for ``lane_count`` using ``dial``'s share, floored at one."""
-    share = _dial_share_percent(dial)
-    if share is None:
-        return 1
-    try:
-        lanes = int(lane_count)
-    except (TypeError, ValueError):
-        return 1
-    if lanes < 1:
-        return 1
-    return max(1, int(math.floor(lanes * share / 100.0)))
 
 
 def _item_by_slug(slug):
@@ -522,33 +445,8 @@ def _read_project_config_raw(mapping, slug):
     return mapping[slug]
 
 
-def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None,
-                        risk_areas_read=None):
+def _resolve_item_entry(item, raw, *, guardian_cfg=None, risk_areas_read=None):
     slug = item["slug"]
-    malformed = False
-    if slug == "budgetN":
-        if _positive_int(raw):
-            return {
-                "raw": raw,
-                "effective": raw,
-                "source": "stamped",
-                "malformed": False,
-            }
-        if raw == "derived" or raw is None:
-            return {
-                "raw": raw,
-                "effective": BUDGET_DERIVATION_PROSE,
-                "source": "derived",
-                "malformed": False,
-            }
-        malformed = True
-        return {
-            "raw": raw,
-            "effective": None,
-            "source": "unset",
-            "malformed": True,
-        }
-
     if slug == "guardianStaleness":
         guardian_cfg = guardian_cfg or {}
         cadence = guardian_cfg.get("cadence")
@@ -649,7 +547,6 @@ def read(cwd, root=None, *, persist_backfill=True):
     risk_areas_read = core_md.read_risk_areas(cwd, root)
     if facts is None:
         absent_items = []
-        dial_entry = _resolve_item_entry(_SLUG_INDEX["dial"], None)
         for item in ITEMS:
             slug = item["slug"]
             if item["home"] == HOME_RISK_AND_TRUST:
@@ -661,8 +558,7 @@ def read(cwd, root=None, *, persist_backfill=True):
             entry = _resolve_item_entry(
                 item,
                 raw,
-                dial_effective=dial_entry["effective"],
-                guardian_cfg=guardian_cfg,
+                    guardian_cfg=guardian_cfg,
                 risk_areas_read=risk_areas_read,
             )
             absent_items.append({"slug": slug, **entry})
@@ -673,8 +569,6 @@ def read(cwd, root=None, *, persist_backfill=True):
             "items": absent_items,
         }
     mapping = _project_config_mapping(facts)
-    dial_raw = _read_project_config_raw(mapping, "dial")
-    dial_entry = _resolve_item_entry(_SLUG_INDEX["dial"], dial_raw)
     items = []
     for item in ITEMS:
         slug = item["slug"]
@@ -691,7 +585,6 @@ def read(cwd, root=None, *, persist_backfill=True):
         entry = _resolve_item_entry(
             item,
             raw,
-            dial_effective=dial_entry["effective"],
             guardian_cfg=guardian_cfg,
             risk_areas_read=risk_areas_read,
         )

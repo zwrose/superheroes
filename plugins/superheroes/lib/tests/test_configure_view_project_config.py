@@ -89,13 +89,47 @@ def _numbered_rows(lines):
     return [ln for ln in lines if ln and ln[0].isdigit() and ". " in ln]
 
 
-def test_all_thirteen_items_in_registry_order_unstamped(tmp_path):
+_REMAINING_ROWS = (
+    "1. Severity ladder",
+    "2. P0 definition",
+    "5. Ground-truth sources",
+    "6. Digest floor",
+    "7. Condition windows",
+    "8. Stacking tool",
+    "9. Keep-or-retire reporting",
+    "10. Risk and trust",
+    "14. Who it's for and what it's for",
+    "11. Guardian staleness",
+    "12. Keep list",
+    "13. Material consequence line",
+    "15. Cloud builds",
+    "16. CI workflow",
+    "17. Cloud setup commands",
+    "18. Cloud setup inputs",
+    "19. Cloud dependency hook",
+)
+
+
+def test_all_items_in_registry_order_unstamped(tmp_path):
+    # axis: the view lists every remaining item, pinned by name, and no retired one
     repo, store = _setup_repo(tmp_path, unstamped=True)
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 19
+    assert [row.split(" — ", 1)[0] for row in rows] == list(_REMAINING_ROWS)
     for item, row in zip(PC.ITEMS, rows):
         assert row.startswith("%d. %s —" % (item["number"], item["name"]))
+
+
+def test_stale_dial_and_budget_n_stamps_are_not_shown(tmp_path):
+    # axis: a profile still carrying a stamped dial or budgetN renders without a dial row
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config(repo, {"dial": {"min": 5, "max": 10}, "budgetN": 3}, root=store)
+    block = _project_config_section(CV.render(repo, root=store))
+    rows = _numbered_rows(block)
+    assert [row.split(" — ", 1)[0] for row in rows] == list(_REMAINING_ROWS)
+    text = "\n".join(block)
+    assert "Dial" not in text and "Budget N" not in text and "dial" not in text
+    assert "malformed" not in text
 
 
 def test_block_driven_by_items_registry(tmp_path, monkeypatch):
@@ -111,7 +145,7 @@ def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(CV.project_config, "ITEMS", tuple(list(PC.ITEMS) + [extra]))
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 20
+    assert len(rows) == 18
     assert any("Test-only item" in row for row in rows)
 
 
@@ -133,8 +167,8 @@ def test_no_profile_renders_without_raising(tmp_path):
     block = _project_config_section(screen)
     assert "profile: no core calibration yet" in block
     rows = _numbered_rows(block)
-    assert len(rows) == 19
-    assert all("unset" in row or "plugin default" in row or "derived from dial" in row for row in rows)
+    assert len(rows) == 17
+    assert all("unset" in row or "plugin default" in row for row in rows)
 
 
 def test_corrupt_profile_says_unreadable_and_no_stamped(tmp_path):
@@ -179,11 +213,11 @@ def test_long_prose_stamped_truncated_for_display(tmp_path):
 
 def test_malformed_stamped_value_shown_as_malformed(tmp_path):
     repo, store = _setup_repo(tmp_path)
-    CM.write_project_config(repo, {"dial": "not-a-dial"}, root=store)
+    CM.write_project_config(repo, {"conditionWindows": "not-windows"}, root=store)
     screen = CV.render(repo, root=store)
     block = _project_config_section(screen)
-    dial_row = next(row for row in block if row.startswith("3. Dial"))
-    assert "malformed" in dial_row
+    windows_row = next(row for row in block if row.startswith("7. Condition windows"))
+    assert "malformed" in windows_row
 
 
 def test_dependencies_raises_shows_not_available(tmp_path, monkeypatch):
@@ -196,7 +230,7 @@ def test_dependencies_raises_shows_not_available(tmp_path, monkeypatch):
     screen = CV.render(repo, root=store)
     block = _project_config_section(screen)
     assert "dependencies: (not available)" in block
-    assert len(_numbered_rows(block)) == 19
+    assert len(_numbered_rows(block)) == 17
 
 
 def test_dependencies_absent_show_fallback(tmp_path, monkeypatch):

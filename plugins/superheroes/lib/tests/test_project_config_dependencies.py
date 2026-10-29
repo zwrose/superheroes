@@ -34,8 +34,7 @@ _CORE_FACTS = {
 }
 
 _PROJECT_CFG_SEED = {
-    "dial": {"min": 5, "max": 10},
-    "budgetN": 3,
+    "groundTruthSources": ["CI exit code"],
     "stackingTool": "gh-stack",
 }
 
