@@ -1941,6 +1941,7 @@ def _stage_review_diff(
             "diffBytes": None,
             "diffWithheldCount": len(withheld),
             "calibrationShown": sorted(shown),
+            "diffLeftOut": left_out,
             **config_info,
         }
 
