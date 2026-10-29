@@ -91,6 +91,19 @@ def finding(fid="code-001", **over):
             "consequence": "c", "outcome": "fixed", "reason": "fixed in 1a2b3c4", "reviewer": "code-reviewer", **over}
 
 
+WRONG = {"verdict": "wrong", "reason": "the verifier showed the cited line does not exist"}
+
+
+def wrong(fid="code-001", **over):
+    """A finding the driver's verifier closed as wrong: the shown-wrong outcome with the verifier's wrong grade."""
+    return finding(fid, outcome="shown-wrong", grade=WRONG, **over)
+
+
+def closed(*findings):
+    """The set the session writer passes `rr.write`: the record keys of the findings the verifier fold closed."""
+    return {rr._key(f) for f in findings}
+
+
 def account(**over):
     base = {"schema": "review-account/1", "pr": 7, "sessionId": "s1", "lane": "full", "laneReason": "big",
             "finalCommit": HEAD, "ci": "green", "reviewers": [reviewer()], "findings": [], "rawFindingsFiles": [],
@@ -336,9 +349,10 @@ def test_read_back_survives_the_session_dir(tmp_path):
     raw = session / "code.json"
     raw.write_text(json.dumps([{"id": f"n{i}", "title": "nit", "severity": "Nit"} for i in range(7)]))
     findings = [finding(f"n{i}", severity="Nit") for i in range(7)]
-    findings += [finding("c1", outcome="craft", reason="style call"), finding("w1", outcome="shown-wrong", reason="x")]
+    findings += [finding("c1", outcome="craft", reason="style call"), wrong("w1", reason="x")]
     fake = Fake()
-    out = rr.write(put(session, account(findings=findings, rawFindingsFiles=[str(raw)])), str(tmp_path), fake.readers())
+    out = rr.write(put(session, account(findings=findings, rawFindingsFiles=[str(raw)])), str(tmp_path), fake.readers(),
+                   verifier_closed=closed(findings[-1]))
     assert out["ok"]
     shutil.rmtree(session)
     rec = rr.read(7, readers=fake.readers())
@@ -662,8 +676,8 @@ def test_w2_the_one_check_across_sessions(tmp_path):
     out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="")])), str(tmp_path), fake.readers())
     assert out["ok"] and out["action"] == "created" and len(fake.comments) == 2
     assert rr.read(7, readers=fake.readers())["status"] == "not-reviewed"
-    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome="shown-wrong", reason="not a bug here")])),
-                   str(tmp_path), fake.readers())
+    shown = wrong("a-1", reason="not a bug here")
+    out = rr.write(put(tmp_path, account(findings=[shown])), str(tmp_path), fake.readers(), verifier_closed=closed(shown))
     assert out["ok"] and out["action"] == "created" and len(fake.comments) == 3
 
 
@@ -799,8 +813,8 @@ def test_the_stored_finding_key_is_opaque_and_survives_redaction(tmp_path, title
     assert stored["findingKey"] == rr._key(titled) and stored["findingKey"].startswith("rr1:")
     assert "s3cret" not in stored["findingKey"] and "ghp_" not in stored["findingKey"]
     assert "password" not in stored["findingKey"]
-    out = rr.write(put(tmp_path, account(findings=[dict(titled, outcome="shown-wrong", reason="r")])),
-                   str(tmp_path), fake.readers())
+    shown = dict(titled, outcome="shown-wrong", reason="r", grade=WRONG)
+    out = rr.write(put(tmp_path, account(findings=[shown])), str(tmp_path), fake.readers(), verifier_closed=closed(shown))
     assert out["ok"] and out["action"] == "created"
 
 
@@ -864,8 +878,8 @@ def test_w9_the_stored_key_is_compared_not_one_recomputed_from_redacted_text(tmp
     stored = rr.read(7, readers=fake.readers())["findings"][0]
     assert "s3cret" not in stored["title"] and stored["findingKey"] == rr._key(titled)
     assert rr._key({k: v for k, v in stored.items() if k != "findingKey"}) != stored["findingKey"]
-    out = rr.write(put(tmp_path, account(findings=[dict(titled, outcome="shown-wrong", reason="r")])),
-                   str(tmp_path), fake.readers())
+    shown = dict(titled, outcome="shown-wrong", reason="r", grade=WRONG)
+    out = rr.write(put(tmp_path, account(findings=[shown])), str(tmp_path), fake.readers(), verifier_closed=closed(shown))
     assert out["ok"] and out["action"] == "created"
 
 

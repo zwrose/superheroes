@@ -28,6 +28,7 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
             "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
 KEY = "a.py::t@L3"
+WRONG = {"verdict": "wrong", "reason": "the verifier showed the cited line does not exist"}  # the grade the driver's verifier fold writes
 STANDING = "2026-01-02-abcd1234-1"
 CANON_SOURCES = {"canonText": canon.entry_line(STANDING, "2026-01-02", "standing", "a ruling",
                                                'owner\'s words: "go"', "issue thread")}
@@ -423,7 +424,7 @@ OOS = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow
 RULED = {"findingKey": KEY, "ruling": "out-of-scope", "provenance": {"ruledBy": "the owner", "ruledAt": "2030-01-02"}}
 CASES = [
     pytest.param([ledger_row()], [], KEY, "fixed", "fixed and audited in round 2", id="fresh-fixed"),
-    pytest.param([ledger_row(disposition="refuted", refutedReason="the cited line does not exist")], [], KEY,
+    pytest.param([ledger_row(disposition="refuted", refutedReason="the cited line does not exist", grade=WRONG)], [], KEY,
                  "shown-wrong", "the cited line does not exist", id="verifier-refuted"),
     pytest.param([ledger_row(disposition="refuted", refutedReason="author-justified: kept on purpose")], [], KEY,
                  "left-for-owner", "author-justified: kept on purpose", id="author-justified"),

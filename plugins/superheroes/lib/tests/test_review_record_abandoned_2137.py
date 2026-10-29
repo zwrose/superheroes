@@ -15,7 +15,7 @@ import review_record_session as rs  # noqa: E402
 import round_phases  # noqa: E402
 
 from test_review_record_session import (  # noqa: E402
-    CODEX, EARLIER, GOOD_RUN, HEAD, KEY, Fake, Session, extras, ledger_row, put_envelope, put_extras, raw_comments,
+    CODEX, EARLIER, GOOD_RUN, HEAD, KEY, WRONG, Fake, Session, extras, ledger_row, put_envelope, put_extras, raw_comments,
 )
 
 REASON = "owner stopped the loop"
@@ -261,7 +261,7 @@ def test_a_same_round_report_after_the_settling_audit_reopens_the_finding_in_an_
 def test_a_same_round_scoped_report_refuted_after_its_fold_stays_refuted_in_an_abandoned_session(tmp_path):
     """axis: a scoped finding folded and then refuted in the same round keeps its shown-wrong outcome and reason on
     abandonment; a refutation is recorded after the scoped report is folded."""
-    refuted = ledger_row(disposition="refuted", refutedReason="the code does not do that")
+    refuted = ledger_row(disposition="refuted", refutedReason="the code does not do that", grade=WRONG)
     s = Session(tmp_path, terminal=None, dispositionLedger=[refuted], rounds={"1": {}, "2": {}})
     session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
     put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
@@ -317,7 +317,7 @@ def test_pending_audit_new_issues_awaiting_the_scoped_fold_are_listed_open_in_an
 def test_a_pending_audit_new_issue_sharing_a_key_settled_this_round_reopens_only_a_fixed_row(tmp_path, kind, reopened):
     """axis: a pending audit candidate repeating a finding the same round's audit discharged reads open (the audit
     fold records the discharge before it stores the candidate); a refutation or owner skip is recorded after it."""
-    extra = {"refutedReason": "the code does not do that"} if kind == "refuted" else (
+    extra = {"refutedReason": "the code does not do that", "grade": WRONG} if kind == "refuted" else (
         {"outOfScopeReason": "a later change"} if kind == "out-of-scope" else {})
     row_in = ledger_row(disposition=kind, **extra)
     same = {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}
