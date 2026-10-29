@@ -6,7 +6,6 @@ generated files, lock files, files deleted whole, and proven copies. A file whos
 counter could not settle is returned in ``unsettled``, never silently counted or dropped.
 """
 import hashlib
-import io
 import json
 import os
 import re
@@ -79,12 +78,16 @@ def _parse_section(lines):
     in_hunks = False
     in_patch = False
     new_no = 1
+    hunk_last = None
     for line in lines[1:]:
         hunk = _HUNK_RE.match(line)
         if hunk:
             in_hunks = True
             new_no = int(hunk.group(1))
-            if hunk.group(2) == "0":
+            new_len = 1 if hunk.group(2) is None else int(hunk.group(2))
+            # The last head line this hunk's new side reaches, or None when the new side is empty.
+            hunk_last = None if new_len == 0 else new_no + new_len - 1
+            if new_len == 0:
                 new_no += 1
             new_no = max(new_no, 1)
             continue
@@ -110,7 +113,9 @@ def _parse_section(lines):
                 new_no += 1
             elif lead == "-":
                 removed_lines.append(body)
-                head_lines.append(max(new_no, 1))
+                # A deletion sits where it was removed, but never past the last head line its hunk reaches.
+                at = new_no if hunk_last is None else min(new_no, hunk_last)
+                head_lines.append(max(at, 1))
             elif lead == " " or line == "\n":
                 new_no += 1
             continue
@@ -148,6 +153,7 @@ def _parse_section(lines):
         "status": status,
         "similarity": similarity,
         "binary": binary,
+        "copied": copied,
         "indexNew": index_new,
         "added": len(added_lines),
         "removed": len(removed_lines),
@@ -468,14 +474,23 @@ def _attribute_flags(repo_root, files, head):
     return {f: values[f] for f in files}
 
 
-def _has_generated_marker(repo_root, file, head):
-    """True/False for the first ``GENERATED_MARKER_LINES`` lines of the blob at ``head``, None when the entry is
-    missing, is not a regular file, or cannot be read."""
+def _head_line_count(repo_root, head, file):
+    """The line count of the regular file ``file`` at ``head`` (``\\n``-terminated lines plus a final unterminated
+    one), or None when the entry is missing, is not a regular file, or cannot be read."""
     _, data = _regular_head_blob(repo_root, head, file)
     if data is None:
         return None
-    handle = io.BytesIO(data)
-    top = [handle.readline(_MAX_MARKER_LINE) for _ in range(GENERATED_MARKER_LINES)]
+    return data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
+
+
+def _has_generated_marker(repo_root, file, head):
+    """True/False for the first ``GENERATED_MARKER_LINES`` physical lines of the blob at ``head``, None when the
+    entry is missing, is not a regular file, or cannot be read."""
+    _, data = _regular_head_blob(repo_root, head, file)
+    if data is None:
+        return None
+    # Physical lines split on a newline byte alone; each is cut to ``_MAX_MARKER_LINE`` bytes for the search only.
+    top = [raw[:_MAX_MARKER_LINE] for raw in data.split(b"\n", GENERATED_MARKER_LINES)[:GENERATED_MARKER_LINES]]
     for raw in top:
         text = raw.decode("utf-8", "replace")
         if _GENERATED_TAG in text or _CODE_GENERATED_RE.search(text):
@@ -528,6 +543,13 @@ def count(diff_text, repo_root, proven=(), head="HEAD"):
         lines = section["added"] + section["removed"]
         if decision is None:
             decision = settled[section["file"]]
+        # A copy's hunks show only its differences from the source, so an unproven copy counts the whole file at head.
+        if section["copied"] and decision not in _HUNKS_STAND:
+            whole = _head_line_count(repo_root, head, section["file"])
+            if whole is not None:
+                lines = whole
+            elif decision == "countable":
+                decision = "content-unreadable"
         if decision == "countable":
             rows.append({"file": section["file"], "lines": lines, "counted": True, "why": None})
             total += lines
@@ -540,6 +562,8 @@ def count(diff_text, repo_root, proven=(), head="HEAD"):
 
 
 _EXCLUSIONS = frozenset({"deleted-whole", "moved-unchanged", "proven-copy", "lock-file", "generated"})
+# Decisions made without the file's head content, for which a copy keeps its hunk count.
+_HUNKS_STAND = frozenset({"deleted-whole", "moved-unchanged", "proven-copy", "header-unreadable"})
 
 
 def _early_decision(section, is_moved, proven_files):

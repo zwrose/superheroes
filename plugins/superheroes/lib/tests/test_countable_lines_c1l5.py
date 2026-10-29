@@ -85,6 +85,7 @@ def test_module_header_carries_no_generated_marker():
 
 # 1
 def test_test_and_doc_lines_count(tmp_path):
+    # axis: a test file and a doc file count like any other changed file, never left out for being a test or a doc
     root = _repo(tmp_path)
     _write(root, "README.txt", "seed\n")
     base = _commit(root, "base")
@@ -194,6 +195,45 @@ def test_a_deleted_section_pairs_with_at_most_one_added_section():
     assert rows["two.py"]["why"] == "unsettled"
 
 
+def _copy_diff(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "src/orig.txt", _lines(12))
+    base = _commit(root, "base")
+    _write(root, "copies/same.txt", _lines(12))
+    _write(root, "copies/edited.txt", _lines(12).replace("l5\n", "five\n"))
+    _commit(root, "feature")
+    diff = _diff(root, base, "-C", "--find-copies-harder")
+    assert "copy from src/orig.txt\ncopy to copies/same.txt" in diff
+    assert "copy to copies/edited.txt" in diff
+    return root, diff
+
+
+def test_an_unproven_copy_counts_the_whole_file(tmp_path):
+    # axis: a copy section's hunks show only its differences from the source, so an unproven copy counts the whole head file
+    root, diff = _copy_diff(tmp_path)
+    sections = {s["file"]: s for s in cl.parse_sections(diff)}
+    assert sections["copies/same.txt"]["copied"] is True and sections["copies/same.txt"]["added"] == 0
+    assert sections["copies/edited.txt"]["copied"] is True and sections["copies/edited.txt"]["added"] == 1
+    result = cl.count(diff, root)
+    rows = _rows(result)
+    assert rows["copies/same.txt"] == {"file": "copies/same.txt", "lines": 12, "counted": True, "why": None}
+    assert rows["copies/edited.txt"] == {"file": "copies/edited.txt", "lines": 12, "counted": True, "why": None}
+    assert result["countable"] == 24 and result["unsettled"] == []
+    proven = cl.count(diff, root, ["copies/same.txt"])
+    assert _rows(proven)["copies/same.txt"]["why"] == "proven-copy" and _rows(proven)["copies/same.txt"]["counted"] is False
+    assert proven["countable"] == 12
+
+
+def test_a_copy_whose_head_blob_is_unreadable_is_unsettled_not_zero(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    _commit(root, "base")
+    diff = "diff --git a/seed.txt b/ghost.txt\nsimilarity index 100%\ncopy from seed.txt\ncopy to ghost.txt\n"
+    result = cl.count(diff, root)
+    assert result["countable"] == 0
+    assert result["unsettled"] == [{"file": "ghost.txt", "reason": "content-unreadable"}]
+
+
 # 4
 def test_generated_files_do_not_count(tmp_path):
     root = _repo(tmp_path)
@@ -213,6 +253,22 @@ def test_generated_files_do_not_count(tmp_path):
     assert rows["line_six.py"]["counted"] is True and rows["line_six.py"]["lines"] == 6
     assert rows["unset_attr.txt"]["counted"] is True
     assert result["countable"] == 6 + 1
+    assert result["unsettled"] == []
+
+
+def test_a_marker_on_physical_line_five_after_a_long_line_is_generated(tmp_path):
+    # axis: the marker scan covers five physical lines, however long the first one is
+    root = _repo(tmp_path)
+    _write(root, "seed.txt", "s\n")
+    base = _commit(root, "base")
+    long_line = "x" * 70000 + "\n"
+    _write(root, "long_five.py", long_line + "2\n3\n4\n# %s\n6\n" % GEN_TAG)
+    _write(root, "long_six.py", long_line + "2\n3\n4\n5\n# %s\n" % GEN_TAG)
+    _commit(root, "feature")
+    result = cl.count(_diff(root, base), root)
+    rows = _rows(result)
+    assert rows["long_five.py"]["counted"] is False and rows["long_five.py"]["why"] == "generated"
+    assert rows["long_six.py"]["counted"] is True and rows["long_six.py"]["lines"] == 6
     assert result["unsettled"] == []
 
 
@@ -740,6 +796,13 @@ def test_changed_parts_deletion_at_the_top_is_at_least_line_one():
     assert cl.changed_parts(diff) == [{"file": "f.py", "lines": [[1, 1]]}]
 
 
+def test_a_trailing_deletion_stays_inside_the_head_file():
+    # axis: a deletion is recorded no further than the last head line its hunk's new side reaches
+    diff = "diff --git a/f.py b/f.py\n--- a/f.py\n+++ b/f.py\n@@ -1,3 +1,2 @@\n l1\n l2\n-l3\n"
+    assert cl.changed_parts(diff) == [{"file": "f.py", "lines": [[2, 2]]}]
+    assert cl.unread_surface(diff, [[{"file": "f.py", "lines": [[1, 2]]}]]) == []
+
+
 def test_changed_parts_merges_adjacent_lines_and_skips_files_without_head_lines():
     diff = (
         "diff --git a/f.py b/f.py\n--- a/f.py\n+++ b/f.py\n@@ -5,2 +5,2 @@\n-a\n-b\n+A\n+B\n"
@@ -831,9 +894,12 @@ def test_odd_text_never_raises(diff, tmp_path):
     cl.proven_copies(diff, plain, _with(file="x"))
 
 
-def test_git_env_is_built_after_isolation_not_at_import():
-    """The fixtures' git env carries no routing variable the isolation fixture removed from os.environ."""
+def test_git_env_is_built_after_isolation_not_at_import(monkeypatch):
+    """The fixtures' git env carries no routing variable the isolation fixture removed from os.environ, and
+    carries a variable set after both modules were imported."""
     import test_proven_copies_c1l5b as other
+    monkeypatch.setenv("C1L5B_ENV_SENTINEL", "set-after-import")
     for build in (_pinned_env, other._pinned_env):
+        assert build().get("C1L5B_ENV_SENTINEL") == "set-after-import"
         leaked = sorted(k for k in build() if k.startswith("GIT_") and k not in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CEILING_DIRECTORIES"))
         assert leaked == []
