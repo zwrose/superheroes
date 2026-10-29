@@ -8035,7 +8035,12 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
-            _restore_startup_diff(startup_diff)
+            # `commit-cleanup-failed` is raised after the orders commit sealed and applied its
+            # state (run() fsyncs DONE first), so recovery will complete it and the committed
+            # exclusion state expects the filtered diff to stay in place. Restore only when no
+            # sealed commit exists.
+            if exc.reason != "commit-cleanup-failed":
+                _restore_startup_diff(startup_diff)
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
         except AuditorUnseatable as exc:
