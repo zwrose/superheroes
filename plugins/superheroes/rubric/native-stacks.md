@@ -33,7 +33,10 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    down, linked natively (`gh issue create --parent <feature>`, or `gh issue edit <feature>
    --add-sub-issue <layer>` for an existing issue). It is filed, and fully wired, when the layer is
    planned. A layer sub-issue files without a further owner word, whether the owner approved the stack's shape or the advisor ruled a size split — the one exception to the [filing rule](../skills/showrunner/reference/owner-decisions.md#the-tiers-and-the-filing-rule). Linking does not copy the parent's wiring, so set the layer's milestone, project, and
-   labels explicitly to match the parent's. Each layer issue carries its own Anchor, What, and DoD
+   labels explicitly to match the parent's. A layer of an epic's child is titled
+   `<Tag> Cn layer k — <its surface>`, following the epic's short tag
+   ([decomposition.md — The epic's short tag](../skills/showrunner/reference/decomposition.md#the-epics-short-tag)).
+   Each layer issue carries its own Anchor, What, and DoD
    (the [issue contract](../skills/showrunner/reference/issue-contract.md)). New scope that a vet or
    tripwire adds to the feature joins as a new layer sub-issue once the owner's word covers that scope — see [How a stack
    merges](#how-a-stack-merges).
