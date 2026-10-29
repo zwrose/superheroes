@@ -3098,15 +3098,21 @@ def _break_it_run_keys(runs, compiled):
     finding that carries its test (the same (file, normalized title) match, per-area or attached). A run whose
     proposal compile merged away is `supersededAtCompile` with no key; a run whose finding compile dropped is
     `droppedAtCompile` with no key."""
-    by_identity = {}
+    by_anchor, by_identity = {}, {}
     for f in compiled:
         if isinstance(f, dict) and break_it.carries_test(f):
-            by_identity.setdefault(
-                (f.get("file"), normalize_title(str(f.get("title") or ""))), f)
+            ident = (f.get("file"), normalize_title(str(f.get("title") or "")))
+            # axis: compile keeps same-file, same-title findings at different lines apart, so a run binds to the full (file, title, line) anchor — see bite-proof record wo_a_2210_break_it_working_copy
+            by_anchor.setdefault(ident + (_coerce_line(f.get("line")),), f)
+            by_identity.setdefault(ident, f)
     out = []
     for run in runs:
         entry = dict(run)
-        match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
+        ident = (entry.get("file"), normalize_title(str(entry.get("title") or "")))
+        if "line" in entry:
+            match = by_anchor.get(ident + (_coerce_line(entry.get("line")),))
+        else:
+            match = by_identity.get(ident)
         stamp = match.get(break_it.RUN_FIELD) if match else None
         if match is not None and isinstance(stamp, dict) and any(
                 stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):

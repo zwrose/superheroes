@@ -628,6 +628,63 @@ def _kill_tagged(token):
                 pass
 
 
+def _ps_table():
+    """``{pid: (ppid, start time text)}`` for every process, or an empty table when ``ps`` cannot be read."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,lstart="], capture_output=True,
+                             timeout=_GIT_TIMEOUT).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    table = {}
+    for line in out.decode("utf-8", errors="replace").splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            table[int(parts[0])] = (int(parts[1]), parts[2].strip())
+    return table
+
+
+class _DescendantWatch(threading.Thread):
+    """Where the environment net cannot see a program's environment (macOS system programs), records the
+    descendants of the run while its process chain is still intact, so a worker that detaches and outlives its
+    parent is still stopped. A process is stopped only when its pid and start time both match what was recorded."""
+
+    def __init__(self, root_pid):
+        super().__init__(daemon=True)
+        self.root_pid = root_pid
+        self.seen = {}
+        self._stop_event = threading.Event()
+
+    def sample(self):
+        table = _ps_table()
+        family = {self.root_pid}
+        grew = True
+        while grew:
+            grew = False
+            for pid, (ppid, _) in table.items():
+                if ppid in family and pid not in family:
+                    family.add(pid)
+                    grew = True
+        for pid in family:
+            if pid != self.root_pid and pid in table:
+                self.seen.setdefault(pid, table[pid][1])
+
+    def run(self):
+        while not self._stop_event.is_set():
+            self.sample()
+            self._stop_event.wait(0.05)
+
+    def stop_and_kill(self):
+        self._stop_event.set()
+        self.sample()
+        table = _ps_table()
+        for pid, start in self.seen.items():
+            if pid != os.getpid() and pid in table and table[pid][1] == start:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+
 def _write_confined(root, rel, content, created=None):
     """Create ``rel`` inside ``root`` and nowhere else. None on success, else the not-run reason. Each directory
     the write makes is appended to ``created`` when it is given."""
@@ -722,7 +779,11 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
     os.close(status_w)
     drain = _TailDrain(proc.stdout)
     timed_out = False
+    # axis: off Linux a detached system program hides its environment, so the run's descendants are tracked by process chain while it is alive, in place of the removed working-directory sweep — see bite-proof record wo_a_2210_break_it_working_copy
+    watch = None if os.path.isdir("/proc/self") else _DescendantWatch(proc.pid)
     try:
+        if watch is not None:
+            watch.start()
         drain.start()
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -738,6 +799,8 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
         # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
         _kill_group(proc.pid)
         _kill_tagged(token)
+        if watch is not None:
+            watch.stop_and_kill()
         proc.wait()
         launch_failed = os.read(status_r, 1) == b"E"
         os.close(status_r)
@@ -878,11 +941,26 @@ def _restore_test_file(root, ctx):
     return changed
 
 
+def _other_checkouts(root):
+    """The branch refs checked out in the repository's other worktrees: another build's own work, never this run's."""
+    out = _text(_must(root, "worktree", "list", "--porcelain").stdout)
+    real_root = os.path.realpath(root)
+    held, current = set(), None
+    for line in out.split("\n"):
+        if line.startswith("worktree "):
+            current = os.path.realpath(line[len("worktree "):])
+        elif line.startswith("branch ") and current != real_root:
+            held.add(line[len("branch "):])
+    return held
+
+
 def _restore_refs(root, snap):
     now = _refs(root)
+    # axis: a branch another worktree has checked out is that build's own work, so the restore leaves it as it is, however it moved during the run — see bite-proof record wo_a_2210_break_it_working_copy
+    held = _other_checkouts(root)
     # axis: a ref the test moved or deleted is put back, and a ref it added is deleted — see bite-proof record wo_a_2210_break_it_working_copy
-    changed = [ref for ref in sorted(snap["refs"]) if now.get(ref) != snap["refs"][ref]]
-    added = [ref for ref in sorted(now) if ref not in snap["refs"]]
+    changed = [ref for ref in sorted(snap["refs"]) if now.get(ref) != snap["refs"][ref] and ref not in held]
+    added = [ref for ref in sorted(now) if ref not in snap["refs"] and ref not in held]
     for ref in changed:
         _must(root, "update-ref", ref, snap["refs"][ref])
     for ref in added:
@@ -1039,6 +1117,8 @@ def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx)
         return rec(OUTCOME_NOT_RUN, "scratch-unresolved", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     # axis: the run's temporary and cache folders are routed into the per-run folder, so nothing the test writes through them lands elsewhere — see bite-proof record wo_a_2210_break_it_working_copy
     env = dict(env, **{name: tmp for name in _ROUTED_TMP_VARS})
+    # axis: Python bytecode is read from and written to a fresh folder in the per-run folder, so a stale ignored __pycache__ in the checkout never stands in for the reviewed source — see bite-proof record wo_a_2210_break_it_working_copy
+    env["PYTHONPYCACHEPREFIX"] = os.path.join(tmp, "pycache")
     # axis: a target already in the working copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
     if write and _already_kept(root, block["path"], block.get("sha256")):
         write = False
@@ -1202,7 +1282,7 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
             record = _not_run(head, block, "path-mismatch")
         else:
             record = _safe_run(runner, repo_root, head, block, interpreter, scratch)
-        runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
+        runs.append(dict(record, title=copy.get("title"), file=copy.get("file"), line=copy.get("line")))
         copy[RUN_FIELD] = record
         copy[RUNS_FIELD] = [record_run(dict(record, file=copy.get("file")))]
         kept.append(copy)
