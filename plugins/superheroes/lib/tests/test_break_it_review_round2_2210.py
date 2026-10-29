@@ -1,9 +1,11 @@
 """Round-2 review fixes for the working-copy break-it run (#2210, WO-E).
 
 G1 the default scratch folder resolves the git directory through `store_core.get_worktree_gitdir`.
+G2 a break-it-change that edits a staged finding's carried fields never touches its disposition.
 G3 a process the run started in the working copy is stopped when the table shows it descends from the run; an orphan
    no sample saw is never killed (nothing shows it is the run's) and the run is refused; a process older than the run survives.
 G4 a ref another worktree changes during the run is left and listed in `refsLeft`; only HEAD's own branch is put back.
+G5 a run whose line value the coercion rejects is unmatched (`droppedAtCompile`), never a crash.
 G7 a recorded `working-copy-restore-failed` run parks cannot-certify whatever the finding's disposition.
 """
 import os
@@ -156,6 +158,40 @@ def test_g1_the_resolution_ignores_a_git_dir_routed_through_the_environment(repo
     base, reason = break_it._scratch_folder(str(repo), None)
     assert reason is None
     assert base == os.path.join(os.path.realpath(str(repo / ".git")), "superheroes")
+
+
+# ---- G2: break-it-change carries the test onto the ledger entry, never the disposition ------------------
+
+
+def _ledger_state(*rows):
+    return {"round": 1, session_contract.DISPOSITION_LEDGER_KEY: list(rows)}
+
+
+def test_g2_the_changed_test_is_carried_onto_the_entry_and_its_disposition_family_is_untouched():
+    key = "k1"
+    entry = {session_contract.FINDING_KEY_FIELD: key, "file": "a.py", "title": "t", "suggestion": "old",
+             "disposition": "refuted", "dispositionRound": 1, "refutedReason": "no defect"}
+    other = {session_contract.FINDING_KEY_FIELD: "k2", "suggestion": "other", "disposition": "fixed"}
+    state = _ledger_state(entry, other)
+    record = {"outcome": "passed", "reason": None, "exitCode": 0, "output": "", "path": "a.py", "head": "h"}
+    RD._carry_break_it_change_to_ledger(state, key, "new text", record, "the import was wrong")
+    row = state[session_contract.DISPOSITION_LEDGER_KEY][0]
+    assert row["suggestion"] == "new text" and row[break_it.RUN_FIELD] == record
+    assert [r["changedWhy"] for r in row[break_it.RUNS_FIELD]] == ["the import was wrong"]
+    assert {f: row[f] for f in ("disposition", "dispositionRound", "refutedReason")} == {
+        "disposition": "refuted", "dispositionRound": 1, "refutedReason": "no defect"}
+    assert state[session_contract.DISPOSITION_LEDGER_KEY][1] == other
+
+
+def test_g2_a_state_with_no_entry_for_the_finding_is_left_as_it_was():
+    record = {"outcome": "passed", "reason": None, "exitCode": 0, "output": "", "path": "a.py", "head": "h"}
+    state = {"round": 1}
+    RD._carry_break_it_change_to_ledger(state, "k1", "new text", record, "why")
+    assert state == {"round": 1}
+    state = _ledger_state({session_contract.FINDING_KEY_FIELD: "k2", "suggestion": "other"})
+    before = repr(state)
+    RD._carry_break_it_change_to_ledger(state, "k1", "new text", record, "why")
+    assert repr(state) == before
 
 
 # ---- G3: the working-directory net ----------------------------------------------------------------------
@@ -551,6 +587,23 @@ def test_g4_a_quiet_run_and_a_not_run_both_carry_an_empty_refs_left(repo):
 
 def test_g4_the_helper_that_listed_other_checkouts_is_gone():
     assert not hasattr(break_it, "_other_checkouts")
+
+
+# ---- G5: a rejected line value does not crash the run binding ------------------------------------------
+
+
+@pytest.mark.parametrize("line", [[291], {"n": 1}])
+def test_g5_a_run_whose_line_the_coercion_rejects_is_unmatched_and_dropped_at_compile(line):
+    out = RD._break_it_run_keys([{"file": "a.py", "title": "x", "line": line}], [])
+    assert len(out) == 1
+    assert out[0]["droppedAtCompile"] is True and out[0]["findingKey"] is None
+
+
+def test_g5_a_rejected_line_on_a_compiled_finding_does_not_crash_either():
+    compiled = [{"file": "a.py", "title": "x", "line": [291], "findingKey": "k", "taxonomy": break_it.TAXONOMY,
+                 "suggestion": "break-it-test v1\npath: a.py\nrun: python a.py\n---\npass\n"}]
+    out = RD._break_it_run_keys([{"file": "a.py", "title": "x", "line": 291}], compiled)
+    assert len(out) == 1 and out[0]["droppedAtCompile"] is True
 
 
 # ---- G7: a restore-failed run parks cannot-certify -----------------------------------------------------
