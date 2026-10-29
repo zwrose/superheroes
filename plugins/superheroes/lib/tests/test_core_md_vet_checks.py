@@ -379,17 +379,6 @@ def test_json_block_round_trip_vet_checks_only_diff():
             {"key": "codexModels", "pins": {"implementer": "gpt-5.6-sol"}},
             "written",
         ),
-        (
-            "write_review_gate_policy",
-            {
-                "policy": {
-                    "schema": "gate-policy/1",
-                    "default": "park",
-                    "rules": [],
-                }
-            },
-            "written",
-        ),
         ("write_project_config", {"mapping": {"lint": {"enabled": True}}}, "written"),
         ("write_project_config_item", {"slug": "dial", "value": 3}, "written"),
         ("write_declared_dependencies", {"mapping": {"eslint": "^9"}}, "written"),
@@ -420,8 +409,6 @@ def test_preservation_matrix(tmp_path, writer_name, kwargs, expect_action, seed_
         res = writer(repo, kwargs["tier"], root=store)
     elif writer_name == "write_engine_pref_pins":
         res = writer(repo, kwargs["key"], kwargs["pins"], root=store)
-    elif writer_name == "write_review_gate_policy":
-        res = writer(repo, kwargs["policy"], root=store)
     elif writer_name == "write_project_config":
         res = writer(repo, kwargs["mapping"], root=store)
     elif writer_name == "write_project_config_item":

@@ -48,8 +48,6 @@ _VALID_KINDS = frozenset({
 _FORBIDDEN_PRIMITIVES = (
     "AskUserQuestion",
     "decide-location)",
-    "present-judgment",
-    "present-stall-menu",
     "one question at a time",
     "one-question-at-a-time",
     "Ask, one at a time",
@@ -79,8 +77,6 @@ _CARRIER_REGISTRY = frozenset({
 # Byte-pinned stripped lines — literals only; no rationale (#1144).
 _BYTE_PIN_LINES = frozenset({
     "Open no `AskUserQuestion` on any review-code path, for any purpose.",
-    "printf '%s\\n' '{\"schema\":\"gate-policy/1\",\"default\":\"park\",\"rules\":[{\"gate\":\"present-judgment\","
-    "\"findingClass\":\"judgment:important\",\"disposition\":\"skip\"}]}' | \\",
 })
 
 _OPEN_TAG_RE = re.compile(

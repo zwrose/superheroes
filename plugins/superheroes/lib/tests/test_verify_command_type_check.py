@@ -96,10 +96,8 @@ def test_dispatch_gates_classify_the_refusal_as_named_unreadable(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command="   ")
     store = str(tmp_path / "store")
     prefs = cm.engine_preferences_for_gate(cwd=repo, root=store)
-    policy = cm.review_gate_policy_for_gate(cwd=repo, root=store)
-    for gate in (prefs, policy):
-        assert gate.status == cm.CONFIG_UNREADABLE
-        assert gate.detail.startswith(REFUSAL_TOKEN + ": ")
+    assert prefs.status == cm.CONFIG_UNREADABLE
+    assert prefs.detail.startswith(REFUSAL_TOKEN + ": ")
 
 
 def test_core_resolve_cli_refuses_by_name_and_exits_nonzero(tmp_path, capsys):
