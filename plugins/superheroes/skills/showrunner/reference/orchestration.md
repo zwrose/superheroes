@@ -190,9 +190,11 @@ carries `Budget: <budget>` on the line after the issue pointer. Without a budget
 `premise-detective-budget-missing` and composes nothing. The other refusals are `premise-charter-invalid`,
 `premise-budget-invalid` and `premise-budget-without-detective`. The `reserved` record names the lane's
 `charter`; older records carry none and read as workhorse. Declare-batch, preflight, `record-outcome`,
-`amend` and the watch's ledger reads take a detective lane like any other lane. A detective lane
-launches with `--place local`; a cloud placement refuses `compose-detective-cloud-unsupported`, because
-the detective charter carries no cloud intake step. A `claude -p` session
+`amend` and the watch's ledger reads take a detective lane like any other lane. A detective lane's
+place is called exactly as a builder's (`skills/showrunner/reference/dispatch-preflight.md` § The place
+call). In the cloud its prompt carries the doctrine's detective cloud rule in place of the builder's
+standing push permission, and the detective runs the cloud intake first
+(`skills/detective/reference/cloud.md`). A `claude -p` session
 started by hand with the detective command, the issue pointer and the budget is the fallback only for a
 host or plugin version without this launcher support; disclose it on the issue as outside the ledger, never as the norm.
 
