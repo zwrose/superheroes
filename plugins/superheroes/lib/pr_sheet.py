@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Builds a PR sheet's data file from the PR's review record and the advisor's input.
+"""Builds a PR sheet's data file from the PR's review record and the advisor's input, or a spec PR's from the spec's own artifacts.
 
 CLI:
   pr_sheet.py build --record FILE [--record FILE ...] --pr-body N=FILE [--pr-body N=FILE ...] --input FILE --out FILE
+  pr_sheet.py build --pr-body N=FILE --input FILE --out FILE   (a spec PR: the input names spec, and no --record is given)
   pr_sheet.py index --input FILE [--answers FILE] --out FILE
 
 On success it writes the data file to --out and each walk picture it could copy to pictures/ beside it, prints
@@ -84,6 +85,10 @@ The advisor's input is one JSON object; any key not listed is refused.
                  one option card after the items, showing its collector number, Why it's yours, What happened, If left, the
                  lettered options and the recommendation naming its letter.
   closesSpec     Optional. Null, or {"spec": ..., "receipt": ...}.
+  spec           Optional, and only on a pr sheet: it names the spec-PR mode (below), and --record is then refused. {folder, vetRecords,
+                 ci}, all required: folder the spec's work-item folder; vetRecords a list of at least 1 file, each holding one
+                 spec-vet record as posted on the PR (every round, from 1 to the newest); ci {state, commit} as on a record. Paths are
+                 absolute or relative to the input's folder.
   accounting     Optional, and read only when --pr-body gives the bodies. An object of bullet id (listed_bullets) to where that
                  acceptance is accounted for, with exactly one of these: {"item": "<id>"} (an entry of items, its own Accept
                  item); {"fold": "<id>", "line": n} (line n, from 1, of that item's ifLeft list; n an integer); {"leftover":
@@ -107,6 +112,22 @@ text of each option-less card (its question, its context blocks and its recommen
 knows and no others. It recognizes three shapes, each ending in a number: "decision item 12" (also "collector item" and
 "list item"), "item 12 on your list" (also in or from, the list or the collector), and "collector" followed by a hash and
 the number, or by "number" or "entry" and the number. A card that carries its own options is never scanned.
+
+A spec PR has no review record (review-crew never reviews a spec), so its sheet is built from the spec's own artifacts, chosen
+only by the input's spec key: an input without it still needs --record, so a code PR missing its record still refuses. The
+checks record (<folder>/checks-record.md) gives the reviewer (its - Seat: line's family and - Same family: line) and the rounds
+(its ### Round headings). The vet records (skills/showrunner/reference/spec-vet.md § The vet record) give the commit (the newest
+record's head) and a history line each. The newest must be a clean breakdown vet with its Breakdown pins: lines, and
+<folder>/spec.md must still hash to its Vet done: hash. Every pin must sit in the folder and still hash to its pinned value
+(definition_doc.py content-hash): a stale, missing or unreadable pin refuses, never shown as accepted. Breakdown bodies have a
+fixed home in the folder (spec-vet.md § The breakdown pin): children/ for child and layer bodies (a single-issue spec's one body
+too), seams/ for seam bodies, and epic.md for the epic body. A pinned body outside that home refuses, and so does any .md in the
+home that is not pinned, or that sits in a subfolder beside a pinned file, whatever else the folder holds.
+The pins become one Accept card, "The breakdown", under What you're accepting: a line for every body the filing writes (a new
+issue, an issue rewritten in place or a seam quoted onto one: each pin that is not the coverage map, the register or the
+package-read audit trail) and for each of those three, each with its path and hash. Its title counts the bodies. Accepting it
+with the page's one Merge verdict is the word that merges the spec and files its breakdown (merge-train.md § Merging a spec PR).
+The PR body, items, collectorItems and accounting work as on a code PR.
 
 `index` builds the index sheet: the questions that block work, then a row for each PR with a sheet. Its input is one
 JSON object; any key not listed is refused.
@@ -150,6 +171,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import canon  # noqa: E402
+import definition_doc  # noqa: E402
 import md_fence  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import review_record  # noqa: E402
@@ -581,7 +603,7 @@ def _check_list(name, entries, required, optional, problems):
 def _check_input(adv, words, problems):
     """Collects the input's problems; returns the PR numbers the sheet covers, or None when unknown."""
     optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "collectorItems", "closesSpec",
-                "accounting", "walk")
+                "accounting", "walk", "spec")
     _keys("the advisor's input", adv, ("schema", "kind", "number", "title", "summary"), optional, problems)
     kind, number, prs = adv.get("kind"), adv.get("number"), adv.get("prs")
     if adv.get("schema") != "pr-sheet-input/1":
@@ -861,7 +883,135 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
     problems.extend(f'accounting key "{k}" names no acceptance in the covered PR bodies' for k in accounting if k not in known)
 
 
-def build(records, advisor, words, place=None, previous=None, bodies=None):
+_VET_MARKER = "<!-- superheroes:spec-vet -->"
+_VET_HEAD = re.compile(r"^\*\*(Spec|Breakdown) vet, round (\d+)\*\* · spec `([^`]+)` · head `([^`]+)`")
+_VET_VERDICT = re.compile(r"^\*\*Verdict:\*\* `(clean|findings)`")
+_VET_DONE = re.compile(r"^Vet done: round (\d+) · (clean|findings) · ([0-9a-f]{64})$")
+_PIN = re.compile(r"^(\S+) ([0-9a-f]{64})$")
+_SPEC_ARTIFACTS = ("coverage-map.md", "register.md", "package-read-audit.md")  # spec-vet.md's breakdown artifacts; every other pin is a body the filing creates
+_BODY_HOME = ("children", "seams")  # spec-vet.md § The breakdown pin: the folders a breakdown body lives in, beside the epic body
+_EPIC_BODY = "epic.md"
+
+
+def _in_body_home(rel):
+    """Whether a path relative to the spec's folder sits in the breakdown's body home: epic.md, or anywhere under children/ or seams/."""
+    parts = pathlib.PurePath(rel).parts
+    return parts == (_EPIC_BODY,) or (len(parts) > 1 and parts[0] in _BODY_HOME)
+
+
+def _vet_record(text, where, problems):
+    """One spec-vet record (skills/showrunner/reference/spec-vet.md § The vet record) as a dict; None after naming what is wrong."""
+    lines = [line.rstrip() for line in text.strip().splitlines() if line.strip()] if isinstance(text, str) else []
+    head, verdict = (_VET_HEAD.match(lines[1]), _VET_VERDICT.match(lines[2])) if len(lines) > 2 and lines[0] == _VET_MARKER else (None, None)
+    done = _VET_DONE.match(lines[-1]) if head and verdict else None
+    if not done:
+        problems.append(f"{where} is not a vet record: it needs the spec-vet marker, the header line, the verdict line and a Vet done: line last")
+        return None
+    kind, number, item, sha = head.groups()
+    if (int(done.group(1)), done.group(2)) != (int(number), verdict.group(1)):
+        problems.append(f"{where}: its Vet done: line names round {done.group(1)} {done.group(2)}, but its header says round {number} {verdict.group(1)}")
+    pins = []
+    if "Breakdown pins:" in lines:
+        for line in lines[lines.index("Breakdown pins:") + 1:-1]:
+            pin = _PIN.match(line)
+            pins.append(pin.groups()) if pin else problems.append(f"{where}: breakdown pin line {line!r} is not <path> <content hash>")
+    return {"kind": kind, "round": int(number), "workItem": item, "head": sha, "verdict": verdict.group(1), "hash": done.group(3), "pins": pins}
+
+
+def _read_text(path):
+    """A file's text as definition_doc.py content-hash reads it, None when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _resolved(path):
+    """A path with its links resolved, None when it cannot be (a link loop, an unreadable folder)."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _spec_record(spec, number, words, base, problems):
+    """(the review record a spec PR stands on, built from the spec's own artifacts, and the breakdown card's lines and history), or None after
+    naming what is wrong. The checks record gives the reviewer and the rounds, the newest vet record the commit, and its pins the breakdown."""
+    if not _keys("spec", spec, ("folder", "vetRecords", "ci"), (), problems):
+        return None
+    ci, records = spec["ci"], spec["vetRecords"]
+    if not (_text(spec["folder"]) and isinstance(records, list) and records and all(_text(r) for r in records)):
+        problems.append("spec needs a folder (the spec's work-item folder) and vetRecords, a list of at least 1 file, each one vet record")
+        return None
+    if not (isinstance(ci, dict) and set(ci) == {"state", "commit"} and _text(ci["state"]) and (ci["commit"] is None or _commit(ci["commit"]))):
+        problems.append("spec ci must be {state, commit}: the spec PR's checks in a word or two, and the commit they ran on or null")
+        return None
+    folder = pathlib.Path(base or ".", spec["folder"])
+    slug, checks = folder.name, _read_text(folder / "checks-record.md")
+    seat = re.search(r"^- Seat: (.+)$", checks or "", re.MULTILINE)
+    same = re.search(r"^- Same family: (yes|no)\b", checks or "", re.MULTILINE | re.IGNORECASE)
+    parts = [p.strip() for p in seat.group(1).split(",")] if seat else []
+    if not (len(parts) == 4 and all(parts) and same):
+        problems.append(f"{folder / 'checks-record.md'} could not be read as the spec's checks record: it needs its - Seat: <engine>, <model>, <effort>, <family> "
+                        "and - Same family: lines")
+    vets = [v for v in (_vet_record(_read_text(pathlib.Path(base or ".", r)), f"vet record {r}", problems) for r in records) if v]
+    if len(vets) != len(records) or len(parts) != 4 or not same:
+        return None
+    problems.extend(f"vet record round {v['round']} is for spec {v['workItem']}, not {slug}" for v in vets if v["workItem"] != slug)
+    rounds = sorted(v["round"] for v in vets)
+    if rounds != list(range(1, len(vets) + 1)):
+        problems.append(f"the vet records are rounds {rounds}: give every round's record, from 1 to the newest, once each")
+    newest = max(vets, key=lambda v: v["round"])
+    # bite-axis: only a clean breakdown vet whose pins all hash as pinned, on the spec it vetted, stands behind the merge word.
+    if not (newest["kind"] == "Breakdown" and newest["verdict"] == "clean" and newest["pins"]):
+        problems.append(f"the newest vet record (round {newest['round']}) must be a clean breakdown vet with its Breakdown pins: line")
+    spec_text = _read_text(folder / "spec.md")
+    if spec_text is None or definition_doc.content_hash(spec_text) != newest["hash"]:
+        problems.append(f"{folder / 'spec.md'} does not hash to {newest['hash']}, the hash on the newest vet record's Vet done: line: the spec changed after its vet")
+    lines, held, home = {"body": [], "artifact": []}, set(), folder.resolve()
+    for path, pinned in newest["pins"]:
+        rel = path.split(f"{slug}/", 1)[1] if path.startswith(f"{slug}/") or f"/{slug}/" in path else None
+        # bite-axis: a pin is read only when it resolves inside the spec's folder (no .. and no symlink out of it).
+        target = None if rel is None else _resolved(folder / rel)
+        rel = rel if target is not None and target.is_relative_to(home) else None
+        text = None if rel is None else _read_text(folder / rel)
+        held.update([] if rel is None else [target])
+        if rel is None:
+            problems.append(f"breakdown pin {path} is outside the spec's folder {slug}")
+        elif text is None:
+            problems.append(f"breakdown pin {path} could not be read")
+        elif definition_doc.content_hash(text) != pinned:
+            problems.append(f"breakdown pin {path} hashes to {definition_doc.content_hash(text)} now, not the pinned {pinned}: "
+                            "the breakdown changed after its vet, so it needs a new vet before it is accepted")
+        elif pathlib.PurePath(rel).name in _SPEC_ARTIFACTS:
+            lines["artifact"].append(_fill(words["breakdownArtifact"], path=path, hash=pinned))
+        # bite-axis: a body pinned outside the fixed home refuses, so the home scan below sees every body the filing writes.
+        elif not _in_body_home(target.relative_to(home)):
+            problems.append(f"breakdown pin {path} is a body outside the breakdown's home: a child or layer body goes in children/, a seam body "
+                            f"in seams/ and the epic body at {_EPIC_BODY} (spec-vet.md § The breakdown pin)")
+        else:
+            lines["body"].append(_fill(words["breakdownBody"], path=path, hash=pinned))
+    # bite-axis: any .md in the body home, or beside a pinned file in its subfolder, that the vet does not pin makes the record stale.
+    scanned = {f for d in _BODY_HOME for f in (home / d).rglob("*.md")} | {f for f in [home / _EPIC_BODY] if f.is_file() or f.is_symlink()}
+    scanned |= {f for d in {p.parent for p in held if p.parent != home} for f in d.glob("*.md")}
+    # A folder whose name ends in .md is not a body; a link stays a candidate, so a broken or looping one still refuses.
+    for unpinned in sorted(f for f in scanned if (f.is_symlink() or not f.is_dir()) and _resolved(f) not in held):
+        where = "sits in the breakdown's body home" if _in_body_home(unpinned.relative_to(home)) else "sits beside the pinned bodies"
+        problems.append(f"{unpinned.relative_to(home)} {where} but the newest vet record does not pin it: the breakdown needs a new vet")
+    if [p for p, _ in newest["pins"]] != list(dict.fromkeys(p for p, _ in newest["pins"])):
+        problems.append("the newest vet record pins a file more than once")
+    history = [_fill(words["specVet"], kind=v["kind"], round=v["round"], verdict=v["verdict"], commit=_short(v["head"])) for v in sorted(vets, key=lambda v: v["round"])]
+    history.append(_fill(words["specPins"], count=len(newest["pins"])) if len(newest["pins"]) != 1 else words["specPin"])
+    record = {"schema": review_record.RECORD_SCHEMA, "pr": number, "finalCommit": {"sha": newest["head"]}, "ci": {"state": ci["state"], "sha": ci["commit"]},
+              "lane": {"value": None, "reason": None}, "findings": [], "missingReviews": [],
+              "reviewers": [{"name": words["specChecksReviewer"], "family": parts[3], "ran": review_record.RAN_REPORTED_BY_SESSION,
+                             "notIndependent": same.group(1).lower() == "yes"}],
+              "rounds": {"count": len(re.findall(r"^### Round \d+", checks, re.MULTILINE)), "stoppedAtCap": False}}
+    return record, lines, history
+
+
+def build(records, advisor, words, place=None, previous=None, bodies=None, spec_base=None):
     """Returns the sheet's data file as a dict, or raises Refusal with every problem found.
 
     previous is the exact bytes of the earlier sheet the input's carriedForward.fromSheet names, None when there is no carry
@@ -877,6 +1027,17 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
     if not isinstance(advisor, dict):
         raise Refusal(["the advisor's input must be an object"])
     allowed = _check_input(advisor, words, problems)
+    breakdown, spec_history = None, []
+    if "spec" in advisor:  # the spec-PR mode is named by the input, never inferred from a missing record
+        if records:
+            problems.append("a spec-PR sheet (the input names spec) takes no review record: its facts come from the spec's own artifacts")
+        elif advisor.get("kind") != "pr":
+            problems.append('a spec-PR sheet must be kind "pr"')
+        elif _num(advisor.get("number")):
+            made = _spec_record(advisor["spec"], advisor["number"], words, spec_base, problems)
+            if made:
+                record, breakdown, spec_history = made
+                records = [record]
     bodies_sound = False
     if bodies is not None and allowed is not None:
         found = len(problems)
@@ -964,6 +1125,11 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
+    if breakdown is not None:
+        filed = breakdown["body"] + breakdown["artifact"]
+        cards.append(_card("b-", number, "breakdown", words["breakdownKind"], _fill(words["breakdownTitle"], count=len(breakdown["body"])) if len(breakdown["body"]) != 1 else words["breakdownTitleOne"],
+                           [_section(words["ifLeft"], "bullets", filed)], [], None))
+        places.append(None)
     for it in advisor.get("items", []):
         block = "bullets" if isinstance(it["ifLeft"], list) else "paragraph"
         cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], block, it["ifLeft"])],
@@ -1040,6 +1206,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None):
             if v.get("notIndependent"):
                 lines.append(_fill(words["historyNotIndependent"], name=v["name"]))
         history += [tag(r) + line for line in lines]
+    history += spec_history
     sheet = {
         "number": number, "commit": top["finalCommit"]["sha"],
         "whatChanged": {
@@ -1436,6 +1603,14 @@ def _read_bodies(values, problems):
     return bodies
 
 
+def _names_spec(path):
+    """Whether the --input file is a JSON object that names spec, the spec-PR mode; False when it cannot be read."""
+    with contextlib.suppress(OSError, ValueError):
+        given = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        return isinstance(given, dict) and "spec" in given
+    return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Build a PR sheet's data file, or the index's.")
     parser.add_argument("command", choices=["build", "index"])
@@ -1445,7 +1620,7 @@ def main(argv=None):
     parser.add_argument("--input", required=True)
     parser.add_argument("--out", required=True)
     args, problems = parser.parse_args(argv), []
-    if args.command == "build" and not args.record:
+    if args.command == "build" and not args.record and not _names_spec(args.input):
         parser.error("the following arguments are required: --record")
     if args.command == "build" and args.answers:
         parser.error("--answers is only for index")
@@ -1455,15 +1630,15 @@ def main(argv=None):
         parser.error("--pr-body is only for build")
     try:
         bodies = _read_bodies(args.pr_body, problems) if args.command == "build" else None
-        paths = [*args.record, args.input, WORDS_PATH] if args.command == "build" else [args.input, WORDS_PATH, *([args.answers] if args.answers else [])]
-        words_at = len(args.record) + 1 if args.command == "build" else 1
+        paths = [*(args.record or []), args.input, WORDS_PATH] if args.command == "build" else [args.input, WORDS_PATH, *([args.answers] if args.answers else [])]
+        words_at = len(args.record or []) + 1 if args.command == "build" else 1
         input_at = words_at - 1  # the --input file sits just before the words file in paths
         loaded = [_load_words(args.command, problems) if n == words_at else _load(p, problems, repeats=n == input_at) for n, p in enumerate(paths)]
         if problems:
             raise Refusal(problems)
         staged, created, folder, base = {}, [], pathlib.Path(args.out).parent, pathlib.Path(args.input).parent
         if args.command == "build":
-            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged), _earlier_sheet(loaded[-2], base), bodies), {}
+            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged), _earlier_sheet(loaded[-2], base), bodies, base), {}
         else:
             sheet = build_index(loaded[0], base, loaded[2] if args.answers else {}, loaded[1], _stager(base, staged))
             extra = {"rows": len(sheet["index"]["rows"])}

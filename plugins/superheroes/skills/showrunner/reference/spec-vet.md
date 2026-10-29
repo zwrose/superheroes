@@ -121,10 +121,17 @@ package-read audit trail and every body the filing creates, which is the invento
 [the filing dry-run](decomposition.md#the-verification-pass): each child body, the epic body and
 every planned layer body, each as a file. A single-issue spec has no
 register and no package read, so its pins are the bodies its filing creates: the child's proposed
-body and, when the child plans a stack, every planned layer body, each saved beside the spec as a
-file before you vet it. A record is clean for filing only when every pinned file's hash
+body and, when the child plans a stack, every planned layer body, each saved as a file in
+`children/` before you vet it. A record is clean for filing only when every pinned file's hash
 equals its content now. A file that changed, or one the record does not pin, means the record is
 stale and the breakdown needs a new vet. This holds in the stored-spec mode too.
+
+**Where breakdown bodies live.** Every body the filing writes is saved as a file in one fixed home
+in the spec's work-item folder: each child body and each planned layer body in `children/`, each
+seam body (a seam quoted onto an issue that already exists) in `seams/`, and the epic body at
+`epic.md`. A single-issue spec's one body goes in `children/` too, with its planned layer bodies.
+The spec-PR sheet refuses any `.md` in that home that the breakdown vet does not pin, and any pinned
+body outside it (`lib/pr_sheet.py`).
 
 Where the package read applies, it runs as
 [decomposition.md](decomposition.md#the-adversarial-package-read) says. This vet does not replace
