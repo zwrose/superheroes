@@ -7917,6 +7917,21 @@ def _startup_diff_snapshot(session_dir, rnd):
         return None
 
 
+def _sealed_commit_present(session_dir):
+    """True when any commit under ``commits/`` is sealed (so recovery will finish it), or cannot be ruled out."""
+    root = round_commit.commits_root(session_dir)
+    try:
+        names = os.listdir(root)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    for name in names:
+        if os.path.isfile(os.path.join(root, name, round_commit._SEALED)):
+            return True
+    return False
+
+
 def _restore_startup_diff(snapshot):
     """Put a fresh start's ``diff.txt`` bytes back after an order-emission refusal (best effort)."""
     if snapshot is None:
@@ -8035,11 +8050,10 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
-            # `commit-cleanup-failed` is raised after the orders commit sealed and applied its
-            # state (run() fsyncs DONE first), so recovery will complete it and the committed
-            # exclusion state expects the filtered diff to stay in place. Restore only when no
-            # sealed commit exists.
-            if exc.reason != "commit-cleanup-failed":
+            # A refusal raised after the orders commit sealed (apply, cleanup, ...) leaves a
+            # sealed commit that recovery will complete; the committed exclusion state expects
+            # the filtered diff to stay in place. Restore only when no sealed commit exists.
+            if not _sealed_commit_present(session_dir):
                 _restore_startup_diff(startup_diff)
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
