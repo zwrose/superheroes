@@ -21,7 +21,11 @@ import round_driver as RD
 from test_review_record import Fake as RecordFake, account as record_account, send as record_send
 from test_review_record_session import Fake, Session, extras, put_extras
 
-_PINNED_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+def _pinned_env():
+    # Read at call time, after the autouse isolation fixtures have cleaned os.environ.
+    return {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
 _IDENTITY = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
 
 COPY = "src/payments/copy.py"
@@ -44,7 +48,7 @@ def _pin_git_for_the_module(monkeypatch, tmp_path):
 
 
 def _git(root, *args):
-    proc = subprocess.run(["git", "-C", str(root), *_IDENTITY, *args], env=_PINNED_ENV, capture_output=True,
+    proc = subprocess.run(["git", "-C", str(root), *_IDENTITY, *args], env=_pinned_env(), capture_output=True,
                           text=True, check=True)
     return proc.stdout
 
@@ -99,7 +103,7 @@ class Fx:
     def __init__(self, tmp_path):
         self.root = tmp_path / "repo"
         self.root.mkdir()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.root)], env=_PINNED_ENV, check=True,
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.root)], env=_pinned_env(), check=True,
                        capture_output=True)
         _write(self.root, ".claude/superheroes/core.md", _core_md())
         _write(self.root, "README.md", b"readme\n")

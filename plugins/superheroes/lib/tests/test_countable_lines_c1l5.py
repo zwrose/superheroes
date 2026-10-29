@@ -9,7 +9,11 @@ import pytest
 
 import countable_lines as cl
 
-_PINNED_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+def _pinned_env():
+    # Read at call time, after the autouse isolation fixtures have cleaned os.environ.
+    return {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
 _IDENTITY = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
 # Built from pieces: the counter's own rule would read a literal marker near the top of this file.
 GEN_TAG = "@" + "generated"
@@ -26,7 +30,7 @@ def _pin_git_for_the_module(monkeypatch, tmp_path):
 def _git(root, *args):
     proc = subprocess.run(
         ["git", "-C", str(root), *_IDENTITY, *args],
-        env=_PINNED_ENV, capture_output=True, text=True, check=True,
+        env=_pinned_env(), capture_output=True, text=True, check=True,
     )
     return proc.stdout
 
@@ -34,7 +38,7 @@ def _git(root, *args):
 def _repo(tmp_path, name="repo"):
     root = tmp_path / name
     root.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], env=_PINNED_ENV, check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], env=_pinned_env(), check=True, capture_output=True)
     return root
 
 
@@ -774,3 +778,11 @@ def test_odd_text_never_raises(diff, tmp_path):
     cl.changed_parts(diff)
     cl.unread_surface(diff, [[{"file": "x", "lines": [[1, 2]]}]])
     cl.proven_copies(diff, plain, _with(file="x"))
+
+
+def test_git_env_is_built_after_isolation_not_at_import():
+    """The fixtures' git env carries no routing variable the isolation fixture removed from os.environ."""
+    import test_proven_copies_c1l5b as other
+    for build in (_pinned_env, other._pinned_env):
+        leaked = sorted(k for k in build() if k.startswith("GIT_") and k not in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CEILING_DIRECTORIES"))
+        assert leaked == []

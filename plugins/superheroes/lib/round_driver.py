@@ -10704,7 +10704,6 @@ def _ensure_round_head_diff(session_dir, rnd, state):
 
 
 LEAVE_OUT_FILE = "reviewer-leave-out.json"
-LEAVE_OUT_SCHEMA = "leave-out/1"
 
 
 def _left_out(state, diff_text):
@@ -10722,7 +10721,8 @@ def _left_out_files(state):
 def _ensure_leave_out_file(session_dir, state):
     """Write ``reviewer-leave-out.json``, which names the files an engine reviewer's patch leaves out, so the
     recipe's ``--leave-out-file`` always names a file (an empty list when nothing is left out)."""
-    content = round_records.canonical({"schema": LEAVE_OUT_SCHEMA, "files": _left_out_files(state)})
+    import sanitized_view  # the loader's module owns the schema identifier; the writer reads it from there
+    content = round_records.canonical({"schema": sanitized_view.LEAVE_OUT_SCHEMA, "files": _left_out_files(state)})
     return _ensure_bytes_at_path(session_dir, os.path.join(session_dir, LEAVE_OUT_FILE),
                                  content.encode("utf-8"))
 
