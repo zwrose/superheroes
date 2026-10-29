@@ -8738,6 +8738,15 @@ def _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=None, readers=
     if not reserved.get("ok"):
         return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RESERVATION_FAILED,
                            detail=reserved.get("detail"))
+    # axis: after posting, the verb re-reads the PR and proceeds only when no other session's reservation or round record has a lower comment id than its own — the first reservation posted wins; a loser leaves its reservation in place, and a failed re-read refuses with nothing written locally
+    elected = review_record.extra_audit_history(pr, repo, readers, session_id=_meta_session_id(session_dir),
+                                                own_id=reserved.get("id"))
+    if not elected.get("ok"):
+        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_PR_HISTORY_UNREADABLE,
+                           detail=elected.get("detail"))
+    if elected.get("ran"):
+        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ALREADY_RUN_ON_PR,
+                           sessionId=elected.get("sessionId"), url=elected.get("url"))
     superseded, superseded_sha, copy_fault = _supersede_receipt(session_dir)
     if copy_fault is not None:
         return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RECEIPT_FAULTED,

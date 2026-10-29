@@ -369,6 +369,69 @@ def test_t4c_the_order_posts_one_reservation_and_a_rerun_after_a_crash_by_the_sa
     assert out["ok"] is True, out
 
 
+def test_t4g_two_sessions_that_both_read_an_empty_history_elect_the_lower_comment_id(tmp_path, monkeypatch):
+    # axis: the first reservation posted wins; the loser refuses after posting and leaves its reservation in place
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    sid = RD._meta_session_id(d)
+    store = []
+
+    def create_for(cid):
+        def create(pr, repo, body):
+            store.append({"id": cid, "author": "bot", "url": "http://c/%d" % cid, "body": body})
+            return {"id": cid, "url": "http://c/%d" % cid}
+        return create
+
+    # the other session posted first (lower id) between this session's empty read and its own post
+    store.append(_reservation("s-other", 600))
+    reads = []
+
+    def listing(pr, repo):
+        reads.append(1)
+        return [] if len(reads) == 1 else list(store)
+
+    out = _refused(d, _order(tmp_path), "extra-audit-already-run-on-pr",
+                   readers=_readers(list_comments=listing, create_comment=create_for(700)))
+    assert out["sessionId"] == "s-other" and len(reads) == 2
+    assert any(c["id"] == 700 for c in store)  # the loser's reservation stays
+    # the winner: its own lower-id reservation, with the other session's higher-id one present, is accepted
+    store[:] = [_reservation(sid, 600)]
+    reads.clear()
+
+    def listing_winner(pr, repo):
+        reads.append(1)
+        return [] if len(reads) == 1 else list(store) + [_reservation("s-other", 700)]
+
+    out = RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR,
+                             readers=_readers(list_comments=listing_winner, create_comment=create_for(650)))
+    assert out["ok"] is True, out
+
+
+def test_t4h_a_winners_rerun_ignores_a_later_higher_id_loser_reservation(tmp_path, monkeypatch):
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    sid = RD._meta_session_id(d)
+    out = RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR,
+                             readers=_readers([_reservation(sid, 700), _reservation("s-other", 800)],
+                                              create_comment=lambda pr, repo, body: {"id": 900, "url": "u"}))
+    assert out["ok"] is True, out
+
+
+def test_t4i_a_failed_reread_after_the_reservation_refuses_with_nothing_written_locally(tmp_path, monkeypatch):
+    # axis: the election read fails closed
+    d = _capped(tmp_path)
+    _pin_head(monkeypatch, d)
+    reads = []
+
+    def listing(pr, repo):
+        reads.append(1)
+        return [] if len(reads) == 1 else None
+
+    _refused(d, _order(tmp_path), "extra-audit-pr-history-unreadable",
+             readers=_readers(list_comments=listing))
+    assert len(reads) == 2 and "extraAudit" not in _state(d)
+
+
 def test_t4d_a_reservation_that_cannot_be_posted_refuses_with_nothing_written(tmp_path, monkeypatch):
     # axis: no reservation, no reopening
     d = _capped(tmp_path)
@@ -416,10 +479,9 @@ def test_history_reads_fail_closed_for_each_cause_and_report_the_round_when_show
     out = RR.extra_audit_history(PR, "o/r", _readers(shown))
     assert out["ok"] and out["ran"] is True and out["sessionId"] == "s-other" and out["url"]
     clear = _posted(tmp_path, "s-other", extra=False)
-    assert RR.extra_audit_history(PR, "o/r", _readers(clear)) == {"ok": True, "ran": False, "sessionId": None,
-                                                                  "url": None}
-    assert RR.extra_audit_history(PR, "o/r", _readers([])) == {"ok": True, "ran": False, "sessionId": None,
-                                                               "url": None}
+    none_ran = {"ok": True, "ran": False, "sessionId": None, "url": None, "ownId": None, "lowestCompetingId": None}
+    assert RR.extra_audit_history(PR, "o/r", _readers(clear)) == none_ran
+    assert RR.extra_audit_history(PR, "o/r", _readers([])) == none_ran
 
     def boom(pr, repo):
         raise RuntimeError("the list exploded")

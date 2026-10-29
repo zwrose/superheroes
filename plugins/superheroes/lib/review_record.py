@@ -2418,7 +2418,7 @@ def reserve_extra_audit(pr, repo, session_id, why, readers=None):
         sent = rd["create_comment"](pr, repo, body)
         if not (isinstance(sent, dict) and "id" in sent):
             return {"ok": False, "detail": "the reservation comment could not be written"}
-        return {"ok": True, "url": sent.get("url")}
+        return {"ok": True, "url": sent.get("url"), "id": sent["id"]}
     except Exception as e:  # nothing raises to the caller
         return {"ok": False, "detail": f"{type(e).__name__}: {e}"}
 
@@ -2430,16 +2430,20 @@ def _reserved_session(comment):
     return m.group(1) if m else None
 
 
-def extra_audit_history(pr, repo=None, readers=None, session_id=None):
-    """Whether any review record already posted on the PR shows the extra audit round.
+def extra_audit_history(pr, repo=None, readers=None, session_id=None, own_id=None):
+    """Whether any review record or reservation already posted on the PR shows the extra audit round.
 
     Every record comment is read: one that does not parse makes the whole answer unreadable, and so
     does a comment list that failed, so history that cannot be read never reads as "not run". A
     reservation comment (see `reserve_extra_audit`) from a session other than `session_id` counts as
     the round shown; one from `session_id` itself does not, so a re-run after a crash proceeds, and a
-    reservation that names no session makes the answer unreadable. Returns
-    {"ok": True, "ran", "sessionId", "url"} (the session and comment of the first record that shows
-    the round, else None), or {"ok": False, "reason": HISTORY_UNREADABLE, "detail"}. Nothing raises."""
+    reservation that names no session makes the answer unreadable. The caller's own reservation id is
+    the lowest of `own_id` and the ids of reservations naming `session_id`; once it exists, only a
+    competitor (another session's reservation, or a record showing the round) with a LOWER comment id
+    counts, so the first reservation posted wins and a later loser's reservation never blocks the
+    winner. Returns {"ok": True, "ran", "sessionId", "url", "ownId", "lowestCompetingId"} (the session
+    and comment of the lowest-id competitor, else None), or
+    {"ok": False, "reason": HISTORY_UNREADABLE, "detail"}. Nothing raises."""
     try:
         rd = _readers(readers)
         if repo is None:
@@ -2448,24 +2452,34 @@ def extra_audit_history(pr, repo=None, readers=None, session_id=None):
                 raise Refusal("review-record-gh-failed", "the repository could not be resolved")
         comments = _comments(rd, pr, repo)
         by_id = {c["id"]: c for c in comments}
-        shown = None
+        candidates = []  # (comment id, session, url) of every record or reservation that shows the round
         for c in _marker_comments(comments):
             rec = _parse_body(c["body"], by_id)
             if rec is None:
                 raise Refusal("review-record-unreadable", _unreadable_detail(c, by_id))
             rounds = rec.get("rounds")
-            if shown is None and isinstance(rounds, dict) and "extraAudit" in rounds:
-                shown = {"sessionId": rec.get("sessionId"), "url": c.get("url")}
+            if isinstance(rounds, dict) and "extraAudit" in rounds:
+                candidates.append((c["id"], rec.get("sessionId"), c.get("url")))
         # axis: another session's reservation comment shows the round before any record does; an unreadable one fails closed
+        reservations = []
         for c in sorted((c for c in comments if str(c.get("body", "")).startswith(EXTRA_AUDIT_RESERVED_MARKER)),
                         key=lambda c: c["id"]):
             reserved = _reserved_session(c)
             if reserved is None:
                 raise Refusal("review-record-unreadable", f"reservation comment {c.get('id')} names no session: {c.get('url')}")
-            if shown is None and reserved != session_id:
-                shown = {"sessionId": reserved, "url": c.get("url")}
+            reservations.append((c["id"], reserved, c.get("url")))
+        own_ids = [i for i, s, _ in reservations if s == session_id]
+        if own_id is not None:
+            own_ids.append(own_id)
+        own = min(own_ids) if own_ids else None
+        # axis: the first reservation posted wins — only a competitor with a lower comment id than the caller's own reservation counts
+        candidates += [(i, s, u) for i, s, u in reservations if s != session_id and i != own_id]
+        if own is not None:
+            candidates = [t for t in candidates if t[0] < own]
+        shown = min(candidates, key=lambda t: t[0]) if candidates else None
         return {"ok": True, "ran": shown is not None,
-                "sessionId": shown["sessionId"] if shown else None, "url": shown["url"] if shown else None}
+                "sessionId": shown[1] if shown else None, "url": shown[2] if shown else None,
+                "ownId": own, "lowestCompetingId": shown[0] if shown else None}
     except Refusal as e:
         return {"ok": False, "reason": HISTORY_UNREADABLE, "detail": f"{e.reason}: {e.detail}"}
     except Exception as e:  # nothing raises to the caller
