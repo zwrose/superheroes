@@ -127,7 +127,7 @@ Concretely:
 
 ## Output Format
 
-Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Architecture"` on every entry. Do not restate the schema — follow the base rubric's.
+Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Architecture"` on every entry. Do not restate the schema — follow the base rubric's. Return your read list (`readParts`) as that section defines it, covering only what you actually read.
 
 - Include a non-null `suggestion` field for every Critical or Important finding — you cannot raise these severities without proposing a concrete fix (e.g., "extract to the project's logic layer following the canonical pattern in the profile").
 - The `suggestion` field may be `null` for Minor/Nit when no clean fix is obvious.

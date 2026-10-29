@@ -2036,6 +2036,8 @@ def _parse_review_findings_object(obj, outer_envelope_error, *, echo_nonce=None)
             return {"ok": False, "reason": "unreadable"}
     result = {"ok": True, "resultKind": "findings",
               "findings": findings_list, "investigated": investigated}
+    if isinstance(obj.get("readParts"), list):
+        result["readParts"] = obj["readParts"]  # the reviewer's read list; the record judges its shape
     result = _attach_findings_parse_rejections(result, findings_rejected)
     return _attach_investigated_parse_rejections(result, inv_rejected)
 

@@ -159,7 +159,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (see review-base "In-pas
 
 ## Output Format
 
-Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Security"` on every entry. Do not restate the schema — follow the base rubric's.
+Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Security"` on every entry. Do not restate the schema — follow the base rubric's. Return your read list (`readParts`) as that section defines it, covering only what you actually read.
 
 - Carry `confidence` (`High`/`Low`) on every finding, per the base rubric — your self-assessment after running the Chain-of-Verification. A **Low** Critical/Important MUST name exactly what is uncertain in its `evidence` line (e.g. "could not confirm the resource is user-scoped"; "outbound destination may be sanitized upstream — not traced"). Use **Low** rather than dropping a possibly-real access-control finding; use **High** when the chain passed cleanly.
 - Label every finding with its taxonomy term — the OWASP-2025 API class where one applies (**BOLA**, **BFLA**, **BOPLA**, **SSRF**) or the category name otherwise (Injection, Session/identity trust, Sharing flow, Secrets & supply chain) — per the base rubric's Chain-of-Verification taxonomy step.

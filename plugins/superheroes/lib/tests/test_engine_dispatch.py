@@ -11871,6 +11871,7 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     elif kind == "verdicts":
@@ -11901,6 +11902,7 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     elif kind == "grouping":
@@ -11919,6 +11921,7 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     else:
@@ -11935,6 +11938,7 @@ def _native_review_branch(kind, **overrides):
             "findings": None,
             "verdicts": None,
             "grouping": None,
+            "readParts": None,
             "investigated": investigated,
             **ruling,
         }

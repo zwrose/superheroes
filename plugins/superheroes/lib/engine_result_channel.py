@@ -606,6 +606,22 @@ def _investigated_schema():
     return {"type": ["array", "null"], "items": {"type": "string"}}
 
 
+def _read_parts_schema():
+    """The panel reviewer's read list: files with the line ranges read; the shape is judged at the record."""
+    return {
+        "type": ["array", "null"],
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["file", "lines"],
+            "properties": {
+                "file": {"type": "string"},
+                "lines": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+            },
+        },
+    }
+
+
 def _phase_contract(phase):
     contract, reason = payload_contracts.payload_contract(phase)
     if reason is not None:
@@ -658,8 +674,9 @@ def _review_branch_schema(kind):
     properties = {
         "resultKind": {"type": "string", "enum": [kind]},
         "investigated": _investigated_schema(),
+        "readParts": _read_parts_schema() if kind == "findings" else _null_property(),
     }
-    required = ["resultKind", "investigated"]
+    required = ["resultKind", "investigated", "readParts"]
     for key in _PAYLOAD_CONTAINER_KEYS:
         if kind != "ruling" and key == kind:
             properties[key] = payload_schema
@@ -896,7 +913,7 @@ def _schema_branch_active_payload_keys(branch):
     props = branch.get("properties") or {}
     active = []
     for key, subschema in props.items():
-        if key in ("resultKind", "investigated"):
+        if key in ("resultKind", "investigated", "readParts"):
             continue
         if _schema_property_is_null_only(subschema):
             continue
@@ -1049,6 +1066,8 @@ def review_result_contract_from_schema(schema, delivery=None):
         "Every other payload property on the branch must be JSON null — only the named kind's "
         "payload may be populated.",
         "`investigated` lists the repository paths you actually read while forming this result.",
+        "`readParts` is the panel reviewer's read list on a `findings` branch (null on every other "
+        "branch, and on a findings branch from a seat that owes none).",
     ]
     for branch in branches:
         kind = _schema_branch_kind(branch)

@@ -219,7 +219,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
 
 ## Output Format
 
-Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Test"` on every entry. Do not restate the schema — follow the base rubric's.
+Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Test"` on every entry. Do not restate the schema — follow the base rubric's. Return your read list (`readParts`) as that section defines it, covering only what you actually read.
 
 - Each finding covers one smell. Distinct tests with distinct smells get distinct findings. A test that is both a cleanup leak and a brittle test gets a finding for each, or one finding whose title names both smells. The cannot-fail finding is the one sanctioned grouping: one per file, naming each test. Never fold a different test's smell into another finding's body.
 - Fill in `consequence` on every finding, in plain words.

@@ -59,6 +59,10 @@ justification); a CONFIRMED finding survives stamped
 `challenge: "author-justified"`. Outdated comments (where
 `position == null`) still count.
 
+## What you read
+Return your read list as the base rubric's panel output-format section defines it,
+covering only what you actually read.
+
 ## Delivery
 Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an
 issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base

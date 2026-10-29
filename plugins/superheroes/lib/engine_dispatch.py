@@ -4496,6 +4496,13 @@ def _review_result_payload(result, kind):
     return engine_adapter.review_payload_carried(result, kind)
 
 
+def _carry_read_parts(source, dest):
+    """Copy a reviewer's read list from one review result to the next when the source carries one."""
+    if isinstance(source.get("readParts"), list):
+        dest["readParts"] = source["readParts"]
+    return dest
+
+
 def _parse_review_has_payload(res):
     """True when a review parse result carries a non-empty payload for its resultKind."""
     if not res.get("ok"):
@@ -4628,6 +4635,7 @@ def _build_running_graded(run_dir_real, state):
                 entry["reason"] = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
             if grade.get("investigated") is not None:
                 entry["investigated"] = grade["investigated"]
+            _carry_read_parts(grade, entry)
             graded.append(entry)
     except Exception:
         return []
@@ -5038,6 +5046,7 @@ def _finish_review_grade_from_parse(
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": stamped}
         if accepted:
             result["investigated"] = accepted
+        _carry_read_parts(res, result)
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -5053,6 +5062,7 @@ def _finish_review_grade_from_parse(
             "ok": True, "resultKind": kind, kind: [], "investigated": accepted,
             "engagement": engagement_stamped,
         }
+        _carry_read_parts(res, result)
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -5623,6 +5633,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         )
                         if grade.get("investigated") is not None:
                             result["investigated"] = grade["investigated"]
+                        _carry_read_parts(grade, result)
                         _attach_review_rejection_fields(
                             result,
                             rejected_records=grade.get("investigatedRejectedRecords") or [],
@@ -7312,6 +7323,7 @@ def _parse_review_attempt(run_dir_real, state, attempt):
                 res[kind] = payload
             if admitted.get("investigated") is not None:
                 res["investigated"] = admitted["investigated"]
+            _carry_read_parts(admitted, res)
             return res
         return None
     except Exception:
