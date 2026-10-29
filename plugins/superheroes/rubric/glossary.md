@@ -433,6 +433,10 @@ Any model that built or fixed the product's code under review. A fixer's family 
 
 A finding with a real consequence that the review left unfixed, and that no on-record decision settles. It comes to the owner under "What you're accepting" on the PR's [sheet](#sheet), whatever its severity. Its outcome in the [review record](#review-record) is `left-for-owner`.
 
+### Extra audit round
+
+The one round past the 4-round cap that the advisor may order at the vet for a PR handed back at the cap with an open finding of real owner consequence. It audits only the last round's fixes, runs no panel and no new search, is allowed at most once per PR, and is labelled in the [review record](#review-record) and not counted in the rounds.
+
 ### Test role
 
 The review panel's test seat. For each changed test it asks whether the test would fail if the code were wrong, and it reports tests that check nothing, pass by chance, or bloat the change. It asks for no coverage outside the project's risk areas and raises no test-style findings. Its method is in [the test role's agent file](../agents/test-role.md).

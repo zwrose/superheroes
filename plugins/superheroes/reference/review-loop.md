@@ -63,25 +63,23 @@ After a fix, the loop certifies once every logged finding is fixed and verified 
 doc-panel round is a full-document, full-panel spend with no cheap scoped tier, so **any open
 blocking finding** (Critical **or** Important) re-arms the one further confirmation, not only a
 Critical or cross-cutting rework — no scoped-round tier for new Importants, no scoped-verify
-certify at the confirmation cap. **Three caps, not two (#518, #1030):** the overall round cap is **7**
-(`--max-rounds 7`, enforced by `loop_state.decide` / `circuit_breaker`); **at that cap an open blocking finding always
-parks** (verdict REVISE, certification withheld) — documents lack a stronger downstream reviewer, so the gate never
-scoped-certifies a blocker (code review may); a clean full-deep confirmation at the cap still certifies. A **hard round
-ceiling** (`maxRoundsAbsolute`, default **10**) bounds the **round counter** — the round at the ceiling completes and
-the loop refuses to begin the next — terminal `halted` with certification withheld (reason token `round-ceiling`); it is
-the unconditional cost backstop in the same `circuit_breaker`, binding before the cap when `maxRounds` exceeds it. The
+certify at the confirmation cap. **Two caps, not one:** the overall round cap is **4**, with no ceiling above it
+(the skill passes `--max-rounds 4`); **at that cap an open blocking finding is never
+certified** (certification withheld, the loop hands back what is open) — documents lack a stronger downstream reviewer, so the gate never
+scoped-certifies a blocker (code review may); a clean full-deep confirmation at the cap still certifies. The cap is a boundary on
+the round about to begin: the round at the cap completes, and the loop does not begin another. The
 **confirmation-panel budget is separate**: at most **two** full panels per loop (`MAX_CONFIRMATIONS = 2` in
 `review_round_policy`); doc-mode confirmations at that budget park rather than scoped-certifying. The
 any-open-blocker trigger stacks on the cross-cutting/unknown-surface trigger — below the confirmation-panel cap unknown
 surface still fails closed on the doc leg; at the cap with nothing blocking open, the doc leg certifies as code review
-does. The earlier three-round phrasing conflated these caps and is retired. Everything else in
+does. Everything else in
 this section — the full baseline panel, the convergence record, fail-closed on malformed/stale
 receipts — is identical. The re-arm/park **rule** lives once in
 `review_round_policy.confirmation_followup(doc_mode=True)` and its bundled JS twin; the two cap
-numbers live once each — the `7` in the deciders' `--max-rounds` default (the skills' operative
-`--max-rounds 7` arg), the `2` in `MAX_CONFIRMATIONS`. Do not restate either elsewhere.
+numbers live once each — the `4` in `round_phases.ROUND_CAP` (the skill's `--max-rounds 4` arg
+passes it), the `2` in `MAX_CONFIRMATIONS`. Do not restate either elsewhere.
 
-**Post-halt document edits are a named violation (#518).** That cap park is a whistle: **after the
+**Post-halt document edits are a named violation (#518).** That cap stop is a whistle: **after the
 halt, any write to the reviewed document invalidates the loop's terminal claim** — the verdict
 covered the pre-halt content, so an edit after the whistle is an unreviewed change wearing a
 reviewed document's clothes. The receipt says so: a post-halt edit voids the READY/REVISE claim
