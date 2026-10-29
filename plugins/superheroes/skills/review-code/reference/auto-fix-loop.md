@@ -156,7 +156,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > reviews. A listed path that is not in the change is ignored. A file that is missing, unreadable, not
 > JSON, or of the wrong shape (extra or missing key, a non-list `files`, a duplicate, blank, absolute,
 > `..`-segment or backslash entry) refuses `sanitized-view-leave-out-invalid` on a launch, with or without
-> `--diff-base`; a change whose every file is left out refuses `sanitized-view-diff-fully-withheld`. On a
+> `--diff-base`, before anything is spawned; a change whose every file is left out refuses `sanitized-view-diff-fully-withheld`. On a
 > continuation it is accepted and ignored, as `--diff-base` is. It adds no `sanitizedView` receipt key.
 >
 > The staged review patch, the review-only configuration-changes file, and the staged PR body are
@@ -199,7 +199,6 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
 > | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config or left out by `--leave-out-file` — an external seat could not review this change at all |
-> | `sanitized-view-leave-out-invalid` | the `--leave-out-file` is missing, unreadable, not JSON, or not the `leave-out/1` shape (exactly `schema` and `files`; `files` a list of distinct non-blank repo-relative paths with no leading `/`, no `..` segment, no backslash); refused on a launch before anything is spawned |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
 > | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
