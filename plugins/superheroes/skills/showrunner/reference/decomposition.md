@@ -1,6 +1,7 @@
 # Contents
 
 - [When epic machinery fires](#when-epic-machinery-fires)
+- [The epic's short tag](#the-epics-short-tag)
 - [The coverage map](#the-coverage-map)
 - [The contract register](#the-contract-register)
 - [Seam-first sequencing](#seam-first-sequencing)
@@ -36,6 +37,21 @@ The machinery produces three artifacts:
 
 All three live **beside the spec in the work item's own folder** — one canonical file home each, no
 size ceiling, no edit races. The epic body links to each; it does not duplicate them.
+
+## The epic's short tag
+
+Child numbers restart for every epic, so with two epics in flight a bare "C1" names two issues.
+Every epic's breakdown therefore picks a **short tag**: one or two plain words, unique among the
+project's open epics.
+
+- **Record it in the epic body**, on its own line: `Tag: <Tag>`.
+- **Start every child and layer title with it.** A child is titled `<Tag> Cn — <what it delivers>`,
+  and a layer of a child's stack `<Tag> Cn layer k — <its surface>`
+  ([Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)).
+- **Inside the epic's own folder, keep bare Cn.** The coverage map, the register and the audit
+  trail are scoped to one epic, so the tag adds nothing there.
+- **When more than one epic is in flight, name a child by its tag, its number and its issue**
+  (`Push C1 (#<n>)`) in chat, in issue and PR text, and in messages to builders; never a bare Cn.
 
 ## The coverage map
 
