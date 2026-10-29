@@ -4182,9 +4182,20 @@ def _hold_owner_choice(state, blocking):
     # A tradeoff whose effective decision is already a (non-Critical) skip — the owner's own, or one
     # carried to a rewording — is not held again: the fix-batch exclusion honors it.
     decided_out = _live_out_of_scope_ruling_keys(state)
+    # A tradeoff whose effective decision is a guidance/fix ruling is the owner's call already made:
+    # it stays in the batch for ordinary blocking-work routing instead of being held again.
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    effective = {} if ledger_fault is not None else _live_ruling_by_key(state)
+
+    def _decided_to_fix(f):
+        key = _finding_key_of(f)
+        decision = _row_decision(state, effective, ledger_by_key, key) if key else None
+        return isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS
+
     held = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")
             and not (_finding_key_of(f) in decided_out
-                     and not _live_out_of_scope_blocks_row(f))]
+                     and not _live_out_of_scope_blocks_row(f))
+            and not _decided_to_fix(f)]
     if not held:
         return list(blocking)
     keys = state.get("ownerChoiceHeld")
@@ -4207,7 +4218,26 @@ def _owner_choice_settled(state, ledger_by_key, effective, key):
     `refuted` disposition (a fixed guidance/fix ruling lands here), or its effective decision is an
     out-of-scope ruling that a Critical escalation has not outgrown."""
     row = ledger_by_key.get(key)
-    if (isinstance(row, dict) and row.get("disposition") in ("fixed", "refuted")
+    live_member = _live_finding_by_key(state, key)
+    member = live_member if isinstance(live_member, dict) and live_member.get(
+        session_contract.MERGED_INTO_FIELD) else row
+    if isinstance(member, dict) and member.get(session_contract.MERGED_INTO_FIELD):
+        # Merged into a representative: that one's disposition settles it, provided it is current
+        # against this member's latest raise; an unresolved chain settles nothing.
+        target = session_contract.resolve_merged_into_entry(member, ledger_by_key)
+        if isinstance(target, dict) and target is not member:
+            target_key = _finding_identity_key(target)
+            member_raised = max(
+                (v for v in (member.get(session_contract.RAISED_SEQ_FIELD),
+                             (row or {}).get(session_contract.RAISED_SEQ_FIELD)) if _is_plain_int(v)),
+                default=None)
+            disp_seq = target.get(session_contract.DISPOSITION_SEQ_FIELD)
+            if (target.get("disposition") in ("fixed", "refuted") and _disposition_is_current(target)
+                    and not _restaged_after(state, target_key, target)
+                    and (member_raised is None
+                         or (_is_plain_int(disp_seq) and disp_seq > member_raised))):
+                return True
+    elif (isinstance(row, dict) and row.get("disposition") in ("fixed", "refuted")
             and _disposition_is_current(row) and not _restaged_after(state, key, row)):
         return True
     decision = _row_decision(state, effective, ledger_by_key, key)
