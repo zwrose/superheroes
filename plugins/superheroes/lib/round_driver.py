@@ -7905,6 +7905,29 @@ def cmd_next(session_dir, config_overrides=None):
         return _lock_held_refusal(session_dir, "next", held)
 
 
+def _startup_diff_snapshot(session_dir, rnd):
+    """(path, bytes) of the round's ``diff.txt`` as a fresh start found it, or None when absent/unreadable."""
+    if not isinstance(rnd, int):
+        return None
+    path = os.path.join(round_records.round_dir(session_dir, rnd), "diff.txt")
+    try:
+        with open(path, "rb") as fh:
+            return path, fh.read()
+    except OSError:
+        return None
+
+
+def _restore_startup_diff(snapshot):
+    """Put a fresh start's ``diff.txt`` bytes back after an order-emission refusal (best effort)."""
+    if snapshot is None:
+        return
+    path, content = snapshot
+    try:
+        round_commit.atomic_write_bytes(path, content)
+    except OSError:
+        pass
+
+
 def _cmd_next_locked(session_dir, config_overrides=None):
     ok, loaded = load_state(session_dir)
     if not ok:
@@ -8003,19 +8026,26 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                             pending.get("round"), attempt)
         if roster_refusal is not None:
             return roster_refusal
+        # A fresh start may have been handed the round's own diff.txt as its input; order emission
+        # rewrites that path with the reviewer's filtered diff before it can refuse. No state is
+        # committed on a refusal, so put the startup bytes back or a retry cannot bind the diff.
+        startup_diff = _startup_diff_snapshot(session_dir, pending.get("round")) if loaded is None else None
         try:
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
+            _restore_startup_diff(startup_diff)
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
         except AuditorUnseatable as exc:
+            _restore_startup_diff(startup_diff)
             return _refuse_cmd(session_dir, "next", AUDITOR_UNSEATABLE_CAUSE, phase=phase,
                                rnd=pending.get("round"), attempt=attempt,
                                liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
                                detail=exc.detail)
         except ValueError as exc:
+            _restore_startup_diff(startup_diff)
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
     save_state(session_dir, state)
