@@ -5,7 +5,8 @@ preflight, review and park.
 
   cloud_builder.py intake --repo-root D --launch-file F
                           check the launch against this session, then start from its base commit
-                          (or, when the launch names a branch to adopt, on that branch at that head)
+                          (or, when the launch names a branch to adopt, on that branch at that head);
+                          the intake note follows the launch's charter (builder or detective)
   cloud_builder.py ensure-history --repo-root D [--main-branch B]
                           make the clone's history complete and fetch origin/<B>
   cloud_builder.py github-channel --gh-probe-file F --tools-write {ok,failed,not-tried}
@@ -65,6 +66,16 @@ INTAKE_ADOPT_TEXT = (
     "Builder intake (cloud build). Plugin {v}. Commits from this build carry the cloud's own "
     "author name; the PR will be under the owner's name.\n\n"
     "Continuing branch {branch} from {sha}, the pushed head the launch named."
+)
+DETECTIVE_INTAKE_TEXT = (
+    "Detective intake (cloud session). Plugin {v}. This lane diagnoses only: it pushes no branch "
+    "and opens no pull request, and its disposable copies live only inside this cloud session.\n\n"
+    "Started from {sha}, the base commit the launch named."
+)
+DETECTIVE_INTAKE_ADOPT_TEXT = (
+    "Detective intake (cloud session). Plugin {v}. This lane diagnoses only: it pushes no branch "
+    "and opens no pull request, and its disposable copies live only inside this cloud session.\n\n"
+    "Reading branch {branch} at {sha}, the pushed head the launch named."
 )
 HANDOVER_HEADER = "Builder handover (cloud build)."
 HANDBACK_HEADER = "Builder handback (cloud build)."
@@ -207,6 +218,14 @@ def refusal_versions(body):
     return match.groups() if match and body.strip() == _refusal_comment("plugin-version-mismatch", *match.groups()) else None
 
 
+def launch_charter(text):
+    """`detective` when the launch text's first non-blank line is the launcher's detective command, else `workhorse`. Never raises."""
+    if not isinstance(text, str):
+        return "workhorse"
+    first = next((line.strip() for line in text.splitlines() if line.strip()), None)
+    return "detective" if first == _sibling("launcher")._CHARTER_COMMANDS["detective"] else "workhorse"
+
+
 def _refused(reason, **named):
     return {"ok": False, "outcome": "refusal", "reason": reason, "startedFrom": None,
             "comment": _refusal_comment(reason, **named)}
@@ -240,6 +259,9 @@ def intake(repo_root, launch_text, *, env=None, run=None, running_version=None):
     sha = launch["baseCommit"]
     if sha is None:
         return _refused("base-commit-missing")
+    detective = launch_charter(launch_text) == "detective"
+    started_text = DETECTIVE_INTAKE_TEXT if detective else INTAKE_TEXT
+    adopted_text = DETECTIVE_INTAKE_ADOPT_TEXT if detective else INTAKE_ADOPT_TEXT
 
     history = ensure_history(repo_root, env=env, run=run)
     if not history["ok"]:
@@ -262,7 +284,7 @@ def intake(repo_root, launch_text, *, env=None, run=None, running_version=None):
         if code != 0:
             return _refused("base-checkout-failed")
         return {"ok": True, "outcome": None, "reason": None, "startedFrom": sha, "branch": None,
-                "comment": INTAKE_TEXT.format(v=running, sha=sha), "pluginVersion": running}
+                "comment": started_text.format(v=running, sha=sha), "pluginVersion": running}
 
     head = launch["adoptsHead"]
     tracking = "refs/remotes/origin/%s" % branch
@@ -290,7 +312,7 @@ def intake(repo_root, launch_text, *, env=None, run=None, running_version=None):
     if code != 0:
         return _refused("adopted-branch-upstream-failed")
     return {"ok": True, "outcome": None, "reason": None, "startedFrom": head, "branch": branch,
-            "comment": INTAKE_ADOPT_TEXT.format(v=running, sha=head, branch=branch),
+            "comment": adopted_text.format(v=running, sha=head, branch=branch),
             "pluginVersion": running}
 
 

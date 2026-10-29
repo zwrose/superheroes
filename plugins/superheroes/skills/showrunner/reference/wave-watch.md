@@ -455,6 +455,13 @@ progress comment to a resumed phase more than five minutes after the park. Still
 (`cloud_recover.py assess` still reads the park). A builder that ends with a free-form comment instead is seen only by the `lane-stale`
 fallback.
 
+A lane whose `reserved` ledger record names `charter: detective` (an absent `charter` reads as
+workhorse) is read the same way, with a different action on each. On a **handback** or a **park**, run
+the diagnosis vet (the showrunner charter's duty to vet diagnosis receipts before routing fixes) on the
+receipt the note links; a park is the detective's honest not-demonstrated exit, so a receipt that
+passes the vet is not sent back for another pass. On a **stop**, the detective declined the work before
+spend, so route the incident and never repair a launch. No PR is vetted on a detective lane.
+
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
 on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
 watcher does not act on either — read them when a lane you are watching hits a conflict at landing:
