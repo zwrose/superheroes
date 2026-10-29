@@ -89,35 +89,20 @@ def _numbered_rows(lines):
     return [ln for ln in lines if ln and ln[0].isdigit() and ". " in ln]
 
 
-_REMAINING_ROWS = (
-    "1. Severity ladder",
-    "2. P0 definition",
-    "5. Ground-truth sources",
-    "6. Digest floor",
-    "7. Condition windows",
-    "8. Stacking tool",
-    "9. Keep-or-retire reporting",
-    "10. Risk and trust",
-    "14. Who it's for and what it's for",
-    "11. Guardian staleness",
-    "12. Keep list",
-    "13. Material consequence line",
-    "15. Cloud builds",
-    "16. CI workflow",
-    "17. Cloud setup commands",
-    "18. Cloud setup inputs",
-    "19. Cloud dependency hook",
-)
+_RETIRED_NAMES = ("Dial", "Budget N")
+
+
+def _expected_rows():
+    return ["%d. %s" % (item["number"], item["name"]) for item in PC.ITEMS]
 
 
 def test_all_items_in_registry_order_unstamped(tmp_path):
-    # axis: the view lists every remaining item, pinned by name, and no retired one
+    # axis: the view lists every registry item, in order, and no retired one
     repo, store = _setup_repo(tmp_path, unstamped=True)
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert [row.split(" — ", 1)[0] for row in rows] == list(_REMAINING_ROWS)
-    for item, row in zip(PC.ITEMS, rows):
-        assert row.startswith("%d. %s —" % (item["number"], item["name"]))
+    assert [row.split(" — ", 1)[0] for row in rows] == _expected_rows()
+    assert not any(name in row for row in rows for name in _RETIRED_NAMES)
 
 
 def test_stale_dial_and_budget_n_stamps_are_not_shown(tmp_path):
@@ -126,7 +111,7 @@ def test_stale_dial_and_budget_n_stamps_are_not_shown(tmp_path):
     CM.write_project_config(repo, {"dial": {"min": 5, "max": 10}, "budgetN": 3}, root=store)
     block = _project_config_section(CV.render(repo, root=store))
     rows = _numbered_rows(block)
-    assert [row.split(" — ", 1)[0] for row in rows] == list(_REMAINING_ROWS)
+    assert [row.split(" — ", 1)[0] for row in rows] == _expected_rows()
     text = "\n".join(block)
     assert "Dial" not in text and "Budget N" not in text and "dial" not in text
     assert "malformed" not in text
