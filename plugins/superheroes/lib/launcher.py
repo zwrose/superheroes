@@ -1401,9 +1401,6 @@ def compose_launch(
     if charter_reason is not None:
         return _fail(charter_reason)
     charter = premise.get("charter", "workhorse") if isinstance(premise, dict) else "workhorse"
-    # axis: a detective lane is never launched in the cloud — its charter carries no cloud intake step, so the receiving-side version and head checks would not run
-    if cloud and charter == "detective":
-        return _fail("compose-detective-cloud-unsupported")
     cmd = _CHARTER_COMMANDS[charter]
     issue_line = "Issue: #%s" % issue
     if charter == "detective":
@@ -1432,13 +1429,18 @@ def compose_launch(
             base_line += "\n" + adopts
         place_line = launch_lines.format_line(launch_lines.PLACE, "cloud session")
         version_line = launch_lines.format_line(launch_lines.VERSION, version)
-        # axis: every cloud prompt carries the doctrine's standing push permission, between the base lines and the rulings
-        cloud_launch_line = doctrine.get("cloudLaunchLine")
-        if not isinstance(cloud_launch_line, str) or not cloud_launch_line.strip():
-            return _fail("compose-cloud-launch-line-absent")
+        # axis: a cloud prompt carries the launch sentence its charter owns — a detective's carries the doctrine's detective cloud rule, never the builder's push permission
+        if charter == "detective":
+            launch_sentence = doctrine.get("detectiveCloudLine")
+            if not isinstance(launch_sentence, str) or not launch_sentence.strip():
+                return _fail("compose-detective-cloud-line-absent")
+        else:
+            launch_sentence = doctrine.get("cloudLaunchLine")
+            if not isinstance(launch_sentence, str) or not launch_sentence.strip():
+                return _fail("compose-cloud-launch-line-absent")
         prompt = "%s\n\n%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (
             cmd, issue_line, place_line, version_line, environment_line, base_line,
-            cloud_launch_line, rulings_block,
+            launch_sentence, rulings_block,
         )
     elif adopts is not None:
         local_base = premise.get("baseCommit")
