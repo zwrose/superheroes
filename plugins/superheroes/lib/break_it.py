@@ -23,6 +23,7 @@ and the caller decides from the record; nothing is raised."""
 import hashlib
 import json
 import os
+import pathlib
 import posixpath
 import re
 import shlex
@@ -662,9 +663,12 @@ class _DescendantWatch(threading.Thread):
 
     def stop_and_kill(self):
         self._stop_event.set()
+        # axis: the sampling thread is finished before the final sample and the sweep, so no insertion races the iteration and no worker lands after it — see bite-proof record wo_e_2210_review_round2
+        if self.is_alive() and threading.current_thread() is not self:
+            self.join(_GIT_TIMEOUT + 5)
         self.sample()
         table = _ps_table()
-        for pid, start in self.seen.items():
+        for pid, start in list(self.seen.items()):
             if pid != os.getpid() and pid in table and table[pid][1] == start:
                 try:
                     os.kill(pid, signal.SIGKILL)
@@ -756,9 +760,20 @@ def _cwd_table():
     return _proc_cwd_table() if os.path.isdir("/proc/self") else _lsof_cwd_table()
 
 
-def _kill_in_working_copy(root, since, reader=None):
+def _known_processes(reader=None):
+    """The ``(pid, started)`` identity of every process the working-directory table names now, taken before a run
+    launches so the net can tell a process that was already there from one the run started."""
+    try:
+        return set((pid, started) for pid, _, started in (reader or _cwd_table)()[0])
+    except Exception:  # an unreadable table leaves the time test alone to decide
+        return set()
+
+
+def _kill_in_working_copy(root, since, reader=None, known=frozenset()):
     """Kill every process whose working directory is ``root`` or lies beneath it, that started at or after ``since``
-    (an epoch time) and is neither this process nor one of its ancestors. A second net beside the descendant watch,
+    (an epoch time), was not already running when the run launched (``known``, the ``(pid, started)`` pairs taken
+    then, since a start time rounded up can read a process from the run's own second as new), and is neither this
+    process nor one of its ancestors. A second net beside the descendant watch,
     which samples and so misses a worker that starts and detaches between two samples. ``reader`` returns
     ``(processes, ancestors, note)`` as ``_cwd_table`` does. Returns the note when the net could not run, else ``None``."""
     processes, ancestors, note = (reader or _cwd_table)()
@@ -768,7 +783,7 @@ def _kill_in_working_copy(root, since, reader=None):
     inside = real_root.rstrip(os.sep) + os.sep
     for pid, cwd, started in processes:
         # axis: a process that started before the run, this process and its ancestors are never touched, so the session's own shell survives the net
-        if pid == os.getpid() or pid in ancestors or started < since:
+        if pid == os.getpid() or pid in ancestors or started < since or (pid, started) in known:
             continue
         if cwd == real_root or cwd.startswith(inside):
             try:
@@ -858,6 +873,7 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
     reason the drain latched while the output went by, or ``None``. Every process a break-it run starts,
     the readiness probe included, goes through here."""
     status_r, status_w = os.pipe()
+    known = _known_processes()
     started_at = time.time()
     try:
         # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net, and on other hosts the descendant watch the third. The last net is the working-directory sweep (`_kill_in_working_copy`): the working directory is the session's own checkout, so it stops only a process that started at or after this run and is neither this process nor an ancestor of it, which leaves the session's own shell alone.
@@ -894,10 +910,13 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
         _kill_group(proc.pid)
         _kill_tagged(token)
         if watch is not None:
-            watch.stop_and_kill()
+            try:
+                watch.stop_and_kill()
+            except Exception:  # the working-directory net below still runs
+                pass
         # axis: a worker that started and detached between two samples of the watch, or that hides its environment, is still stopped by where it runs and when it started — see bite-proof record wo_e_2210_review_round2
         try:
-            net_note = _kill_in_working_copy(repo_root, started_at)
+            net_note = _kill_in_working_copy(repo_root, started_at, known=known)
         except Exception as exc:  # a net that cannot read the process table is disclosed, never raised
             net_note = "working-directory net skipped: %s" % str(exc)[-200:]
         proc.wait()
@@ -1024,11 +1043,33 @@ def _untracked(root):
     return set(_text(name) for name in raw.split(b"\0") if name)
 
 
+_UNTRACKED_BACKUP_LIMIT = 16 * 1024 * 1024
+
+
+def _backup_untracked(root, names):
+    """``{rel: ("link", target) | ("file", bytes, mode)}`` for the existing untracked files, so a run that
+    overwrites or deletes one can put it back. Raises ``OSError`` when the files are too large to hold."""
+    backup, total = {}, 0
+    for rel in sorted(names):
+        path = os.path.join(root, rel)
+        if os.path.islink(path):
+            backup[rel] = ("link", os.readlink(path))
+        elif os.path.isfile(path):
+            total += os.path.getsize(path)
+            if total > _UNTRACKED_BACKUP_LIMIT:
+                raise OSError("existing untracked files exceed %d bytes and cannot be protected" % _UNTRACKED_BACKUP_LIMIT)
+            with open(path, "rb") as fh:
+                backup[rel] = ("file", fh.read(), os.stat(path).st_mode & 0o7777)
+    return backup
+
+
 def _snapshot(root, pinned):
-    """What the run must leave as it found it: HEAD, every ref, the local config bytes and the untracked files."""
+    """What the run must leave as it found it: HEAD, every ref, the local config bytes and the untracked files
+    (names and, for each existing one, its content)."""
+    untracked = _untracked(root)
     return {"pinned": pinned, "symref": _head_symref(root), "refs": _refs(root),
             "config": {path: _read_bytes(path) for path in _config_paths(root)},
-            "untracked": _untracked(root)}
+            "untracked": untracked, "untrackedBackup": _backup_untracked(root, untracked)}
 
 
 def _restore_test_file(root, ctx):
@@ -1123,9 +1164,35 @@ def _restore_untracked(root, snap):
             except OSError:
                 break
             parent = os.path.dirname(parent)
+    changed = bool(added)
+    for rel, saved in snap.get("untrackedBackup", {}).items():
+        path = os.path.join(root, rel)
+        try:
+            if saved[0] == "link":
+                if os.path.islink(path) and os.readlink(path) == saved[1]:
+                    continue
+            elif os.path.isfile(path) and not os.path.islink(path) and _read_bytes(path) == saved[1] \
+                    and os.stat(path).st_mode & 0o7777 == saved[2]:
+                continue
+            # axis: an untracked file that existed before the run is written back when the run overwrote, replaced or deleted it — see bite-proof record wo_e_2210_review_round2
+            if os.path.islink(path) or os.path.isfile(path):
+                os.unlink(path)
+            elif os.path.isdir(path):
+                problems.append("%s is a directory where the run found a file" % rel)
+                continue
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            if saved[0] == "link":
+                pathlib.Path(path).symlink_to(saved[1])
+            else:
+                with open(path, "wb") as fh:
+                    fh.write(saved[1])
+                os.chmod(path, saved[2])
+            changed = True
+        except OSError as exc:
+            problems.append("%s: %s" % (rel, exc))
     if problems:
         raise OSError("; ".join(problems))
-    return bool(added)
+    return changed
 
 
 def _restore(root, snap, ctx):

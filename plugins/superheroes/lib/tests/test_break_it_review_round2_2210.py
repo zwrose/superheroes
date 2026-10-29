@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -73,15 +74,47 @@ def _refs(repo):
 def _gone(pid, wait=5.0):
     """True once ``pid`` is no process, or only a zombie nobody has reaped yet."""
     deadline = time.time() + wait
-    while time.time() < deadline:
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
         try:
             with open("/proc/%d/stat" % pid) as fh:
                 if fh.read().rsplit(")", 1)[1].split()[0] == "Z":
                     return True
-        except OSError:
-            return True
+        except (OSError, IndexError):
+            pass  # no /proc here: signal 0 alone decides
+        if time.time() >= deadline:
+            return False
         time.sleep(0.05)
-    return False
+
+
+def _kill_if_alive(pid):
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
+
+
+# axis: the death oracle answers False for a live worker even when /proc cannot be read, and True for a reaped child, so a host without /proc cannot pass a containment test by default
+@needs_sleep
+def test_gone_oracle_is_false_for_a_live_worker_without_proc_and_true_once_reaped(monkeypatch):
+    real_open = open
+
+    def no_proc(path, *args, **kwargs):
+        if str(path).startswith("/proc/"):
+            raise FileNotFoundError(path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", no_proc)
+    live = subprocess.Popen(["/bin/sleep", "60"])
+    try:
+        assert _gone(live.pid, wait=0) is False
+    finally:
+        live.kill()
+        live.wait()
+    assert _gone(live.pid, wait=0) is True
 
 
 # ---- G1: the git directory comes from store_core ---------------------------------------------------------
@@ -209,8 +242,8 @@ def test_g3a_the_proc_reader_finds_the_detached_worker_and_the_net_stops_it(repo
         assert "worker-alive=True" in record["output"], record["output"]
         assert _gone(pid), "the detached worker outlived the run"
     finally:
-        if pid is not None and not _gone(pid, wait=0):
-            os.kill(pid, 9)
+        if pid is not None:
+            _kill_if_alive(pid)
 
 
 @needs_sleep
@@ -256,6 +289,44 @@ def test_g3_the_net_stops_what_the_run_started_inside_the_working_copy_and_spare
         for proc in (victim, ancestor, outsider, older):
             proc.kill()
             proc.wait()
+
+
+@needs_sleep
+def test_g3_a_process_already_running_when_the_run_launched_survives_a_same_second_rounded_start(repo):
+    # axis: a pre-existing process whose rounded-up start reads as after the run began is spared by the launch-time snapshot, not by the clock
+    since = time.time()
+    older = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
+    fresh = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
+    root = os.path.realpath(str(repo))
+    table = [(older.pid, root, since + 0.2), (fresh.pid, root, since + 0.3)]
+    try:
+        known = break_it._known_processes(reader=lambda: (table[:1], set(), None))
+        assert known == {(older.pid, since + 0.2)}
+        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), known=known) is None
+        assert fresh.wait(timeout=5) == -9
+        assert older.poll() is None, "a process that predates the run was stopped"
+    finally:
+        for proc in (older, fresh):
+            proc.kill()
+            proc.wait()
+
+
+def test_g3_a_watcher_is_joined_before_its_dictionary_is_swept(monkeypatch):
+    # axis: stop_and_kill waits out a sample in progress, so an insertion cannot race the sweep and the thread is gone on return
+    watch = break_it._DescendantWatch(os.getpid())
+    entered = threading.Event()
+
+    def slow_sample():
+        entered.set()
+        time.sleep(0.3)
+        for i in range(2000):
+            watch.seen[10 ** 9 + i] = "never a real start"
+
+    monkeypatch.setattr(watch, "sample", slow_sample)
+    watch.start()
+    assert entered.wait(5)
+    watch.stop_and_kill()
+    assert not watch.is_alive()
 
 
 def test_g3_a_reader_that_names_a_note_skips_the_net_and_says_why(repo):
@@ -332,6 +403,32 @@ def test_g3_the_lsof_and_ps_text_readers():
     assert started == time.mktime(time.strptime("Thu Oct 29 12:00:05 2026", "%a %b %d %H:%M:%S %Y")) + 1
     assert break_it._ps_start("not a date") is None
     assert break_it._ancestors({5: 4, 4: 1, 1: 0}, 5) == {5, 4, 1}
+
+
+# ---- G5: untracked files that existed before the run are put back --------------------------------------
+
+
+def test_g5_an_existing_untracked_file_the_run_deletes_or_overwrites_is_restored(repo):
+    # axis: the owner's uncommitted untracked files come back byte for byte, mode included, after a run that removed or clobbered them
+    (repo / "owner-notes.txt").write_text("irreplaceable\n")
+    (repo / "other.txt").write_text("keep me\n")
+    os.chmod(str(repo / "other.txt"), 0o755)
+    record = _run(repo, "tests/test_clobber.py",
+                  "import os\nos.remove('owner-notes.txt')\nopen('other.txt', 'w').write('clobbered')\n")
+    assert record["outcome"] == "passed", record
+    assert (repo / "owner-notes.txt").read_text() == "irreplaceable\n"
+    assert (repo / "other.txt").read_text() == "keep me\n"
+    assert os.stat(str(repo / "other.txt")).st_mode & 0o777 == 0o755
+    assert "untracked" in record["restored"], record
+
+
+def test_g5_untracked_files_too_large_to_protect_refuse_the_run(repo, monkeypatch):
+    # axis: a run that cannot protect the existing untracked files is not run at all, rather than reporting a restoration it cannot make
+    (repo / "big.bin").write_bytes(b"x" * 100)
+    monkeypatch.setattr(break_it, "_UNTRACKED_BACKUP_LIMIT", 10)
+    record = _run(repo, "tests/test_quiet.py", "assert True\n")
+    assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-unreadable"), record
+    assert (repo / "big.bin").read_bytes() == b"x" * 100
 
 
 # ---- G4: only HEAD's own branch is put back; every other changed ref is left and listed ----------------
