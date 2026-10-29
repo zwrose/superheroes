@@ -268,3 +268,56 @@ The `KeyError: 'reason'` is the red: with the shape test neutralized the malform
 .......                                                                  [100%]
 7 passed, 35 deselected in 0.90s
 ```
+
+---
+
+## E6 — the reviewer view passed to `_shard_payload` (the panel's shard lists)
+
+**neutralization** (`round_driver.py`, `_advance`, the `P_PANEL` branch, back to the raw `reviewedDiff`):
+```python
+-            diff_text = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text))
++            diff_text = diff_text
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-d -m pytest plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py -q -k test_a_big_panel_names_the_proven_copy_in_no_lens_shards`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_a_big_panel_names_the_proven_copy_in_no_lens_shards ___________
+
+started = <test_proven_copies_c1l5b.Fx object at 0x7f2ab8ee5e80>
+
+    def test_a_big_panel_names_the_proven_copy_in_no_lens_shards(started):
+        # axis: the panel payload's shard plan is built from the reviewer view, so no lens's shards name a proven copy
+        diff = _big_diff()
+        assert RD.delta_surface.shard_plan(diff)["big"] is True
+        state = _panel_state(started, diff)
+        payload = RD._advance(state, state["config"])["payload"]
+        assert payload["big"] is True
+        named = _lens_shard_files(payload)
+        assert named
+        for lens, files in named.items():
+>           assert COPY not in files, lens
+E           AssertionError: code-reviewer
+E           assert 'src/payments/copy.py' not in ['docs/guide.md', 'src/mod00.py', 'src/mod01.py', 'src/mod02.py', 'src/mod03.py', 'src/mod04.py', ...]
+
+/home/user/wt-2243-d/plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py:456: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_proven_copies_c1l5b.py::test_a_big_panel_names_the_proven_copy_in_no_lens_shards
+1 failed, 45 deselected in 1.53s
+```
+
+Redacted: nothing. The pytest `warning: The UV_NATIVE_TLS ...` line the wrapper prints before the output is left out of both captures.
+
+**restore:** the inverse edit, `diff_text = diff_text` back to the `countable_lines.reviewer_diff(...)` call.
+
+**restore receipt:** the restored line quoted from the file after the edit (`grep -n`, round_driver.py:2811):
+```
+2811:            diff_text = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text))
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 45 deselected in 1.90s
+```

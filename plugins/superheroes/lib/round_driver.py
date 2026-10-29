@@ -2805,7 +2805,11 @@ def _advance(state, config):
     payload = {}
     dims = _panel_dimensions(config)
     if step == P_PANEL:
-        payload = _shard_payload(state.get("reviewedDiff"), dims)
+        diff_text = state.get("reviewedDiff")
+        if isinstance(diff_text, str):
+            # axis: the shard lists name the reviewer's files, which leave out the copies still proven — see bite-proof record c1l5b_wo_d_proven_copies
+            diff_text = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text))
+        payload = _shard_payload(diff_text, dims)
     elif step == P_VERIFIERS:
         staged = verification.stage_ids(state.get("_toVerify") or [])
         payload = {"clusters": verification.cluster_findings(staged)}
