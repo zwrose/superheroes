@@ -287,3 +287,171 @@ FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_a_proof_
 .                                                                        [100%]
 1 passed, 88 deselected in 0.29s
 ```
+
+---
+
+# WO-K (#2243) additions — copy sections, trailing deletions, physical marker lines
+
+**Provenance:** implementer WO-K / `lib/countable_lines.py`, `lib/tests/test_countable_lines_c1l5.py`. Declared guarded elements (from the order): E6 the copy-section line count, E7 the deletion clamp, E8 the physical-line split. Each was neutralized with one targeted edit and restored with the inverse edit; no `git checkout`, `restore`, `reset` or `stash` was used. Run from `/home/user/wt-2243-k`, under `-X pycache_prefix=/tmp/c1l5b-pyc-k`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out; nothing is redacted (no secrets, tokens or URLs appear). The restored lines are quoted from a read of the file after the inverse edit; no `git status --porcelain` was run.
+
+| ID | Guarded element | Axis | Proving test |
+|---|---|---|---|
+| E6 | `countable_lines.py:547` `if section["copied"] and decision not in _HUNKS_STAND:` (the whole-file count for a copy) | an unproven copy counts the whole head file, not its hunks | `test_an_unproven_copy_counts_the_whole_file` |
+| E7 | `countable_lines.py:117` `at = new_no if hunk_last is None else min(new_no, hunk_last)` (the deletion clamp) | a deletion is recorded no further than the last head line its hunk's new side reaches | `test_a_trailing_deletion_stays_inside_the_head_file` |
+| E8 | `countable_lines.py:493` the `data.split(b"\n", GENERATED_MARKER_LINES)[:GENERATED_MARKER_LINES]` scan | the marker scan covers five physical lines, however long the first one is | `test_a_marker_on_physical_line_five_after_a_long_line_is_generated` |
+
+Not in the declared set, so not proven here: the sentinel assertion of `test_git_env_is_built_after_isolation_not_at_import` (test-001) and the fail-closed pin `test_a_copy_whose_head_blob_is_unreadable_is_unsettled_not_zero` (the generated test already yields `content-unreadable` for that diff, so it does not isolate the new branch).
+
+## E6 — the copy-section line count
+
+**neutralization** (`countable_lines.py`, `count`):
+```python
+-        if section["copied"] and decision not in _HUNKS_STAND:
++        if False and decision not in _HUNKS_STAND:
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-k -m pytest plugins/superheroes/lib/tests/test_countable_lines_c1l5.py -q -k test_an_unproven_copy_counts_the_whole_file`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_an_unproven_copy_counts_the_whole_file __________________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-55/test_an_unproven_copy_counts_t0')
+
+    def test_an_unproven_copy_counts_the_whole_file(tmp_path):
+        # axis: a copy section's hunks show only its differences from the source, so an unproven copy counts the whole head file
+        root, diff = _copy_diff(tmp_path)
+        sections = {s["file"]: s for s in cl.parse_sections(diff)}
+        assert sections["copies/same.txt"]["copied"] is True and sections["copies/same.txt"]["added"] == 0
+        assert sections["copies/edited.txt"]["copied"] is True and sections["copies/edited.txt"]["added"] == 1
+        result = cl.count(diff, root)
+        rows = _rows(result)
+>       assert rows["copies/same.txt"] == {"file": "copies/same.txt", "lines": 12, "counted": True, "why": None}
+E       AssertionError: assert {'file': 'cop..., 'why': None} == {'file': 'cop..., 'why': None}
+E         
+E         Omitting 3 identical items, use -v to get more diff
+E         Differing items:
+E         {'lines': 0} != {'lines': 12}
+E         Use -v to get more diff
+
+/home/user/wt-2243-k/plugins/superheroes/lib/tests/test_countable_lines_c1l5.py:219: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_an_unproven_copy_counts_the_whole_file
+1 failed, 92 deselected in 0.37s
+```
+
+**restore:** the inverse edit, `section["copied"]` put back in place of `False`.
+
+**restore receipt:** the restored lines quoted back from the file (lines 546-552):
+```
+        # A copy's hunks show only its differences from the source, so an unproven copy counts the whole file at head.
+        if section["copied"] and decision not in _HUNKS_STAND:
+            whole = _head_line_count(repo_root, head, section["file"])
+            if whole is not None:
+                lines = whole
+            elif decision == "countable":
+                decision = "content-unreadable"
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 92 deselected in 0.27s
+```
+
+## E7 — the deletion clamp
+
+**neutralization** (`countable_lines.py`, `_parse_section`, the `lead == "-"` branch):
+```python
+-                at = new_no if hunk_last is None else min(new_no, hunk_last)
++                at = new_no
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-k -m pytest plugins/superheroes/lib/tests/test_countable_lines_c1l5.py -q -k test_a_trailing_deletion_stays_inside_the_head_file`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_a_trailing_deletion_stays_inside_the_head_file ______________
+
+    def test_a_trailing_deletion_stays_inside_the_head_file():
+        # axis: a deletion is recorded no further than the last head line its hunk's new side reaches
+        diff = "diff --git a/f.py b/f.py\n--- a/f.py\n+++ b/f.py\n@@ -1,3 +1,2 @@\n l1\n l2\n-l3\n"
+>       assert cl.changed_parts(diff) == [{"file": "f.py", "lines": [[2, 2]]}]
+E       AssertionError: assert [{'file': 'f....s': [[3, 3]]}] == [{'file': 'f....s': [[2, 2]]}]
+E         
+E         At index 0 diff: {'file': 'f.py', 'lines': [[3, 3]]} != {'file': 'f.py', 'lines': [[2, 2]]}
+E         Use -v to get more diff
+
+/home/user/wt-2243-k/plugins/superheroes/lib/tests/test_countable_lines_c1l5.py:802: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_a_trailing_deletion_stays_inside_the_head_file
+1 failed, 92 deselected in 0.52s
+```
+
+**restore:** the inverse edit, the `min(new_no, hunk_last)` conditional put back.
+
+**restore receipt:** the restored lines quoted back from the file (lines 114-118):
+```
+            elif lead == "-":
+                removed_lines.append(body)
+                # A deletion sits where it was removed, but never past the last head line its hunk reaches.
+                at = new_no if hunk_last is None else min(new_no, hunk_last)
+                head_lines.append(max(at, 1))
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 92 deselected in 0.25s
+```
+
+## E8 — the physical-line split
+
+**neutralization** (`countable_lines.py`, `_has_generated_marker`; `io` is no longer imported at module level, so the old `readline` form is reached through `__import__("io")` in the same edit):
+```python
+-    top = [raw[:_MAX_MARKER_LINE] for raw in data.split(b"\n", GENERATED_MARKER_LINES)[:GENERATED_MARKER_LINES]]
++    handle = __import__("io").BytesIO(data)
++    top = [handle.readline(_MAX_MARKER_LINE) for _ in range(GENERATED_MARKER_LINES)]
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/c1l5b-pyc-k -m pytest plugins/superheroes/lib/tests/test_countable_lines_c1l5.py -q -k test_a_marker_on_physical_line_five_after_a_long_line_is_generated`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_a_marker_on_physical_line_five_after_a_long_line_is_generated ______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-59/test_a_marker_on_physical_line0')
+
+    def test_a_marker_on_physical_line_five_after_a_long_line_is_generated(tmp_path):
+        # axis: the marker scan covers five physical lines, however long the first one is
+        root = _repo(tmp_path)
+        _write(root, "seed.txt", "s\n")
+        base = _commit(root, "base")
+        long_line = "x" * 70000 + "\n"
+        _write(root, "long_five.py", long_line + "2\n3\n4\n# %s\n6\n" % GEN_TAG)
+        _write(root, "long_six.py", long_line + "2\n3\n4\n5\n# %s\n" % GEN_TAG)
+        _commit(root, "feature")
+        result = cl.count(_diff(root, base), root)
+        rows = _rows(result)
+>       assert rows["long_five.py"]["counted"] is False and rows["long_five.py"]["why"] == "generated"
+E       assert (True is False)
+
+/home/user/wt-2243-k/plugins/superheroes/lib/tests/test_countable_lines_c1l5.py:270: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_countable_lines_c1l5.py::test_a_marker_on_physical_line_five_after_a_long_line_is_generated
+1 failed, 92 deselected in 0.35s
+```
+
+**restore:** the inverse edit, the `split` expression put back in place of the two `readline` lines.
+
+**restore receipt:** the restored lines quoted back from the file (lines 492-493):
+```
+    # Physical lines split on a newline byte alone; each is cut to ``_MAX_MARKER_LINE`` bytes for the search only.
+    top = [raw[:_MAX_MARKER_LINE] for raw in data.split(b"\n", GENERATED_MARKER_LINES)[:GENERATED_MARKER_LINES]]
+```
+
+**raw green:** same command after the restore
+```
+.                                                                        [100%]
+1 passed, 92 deselected in 0.30s
+```

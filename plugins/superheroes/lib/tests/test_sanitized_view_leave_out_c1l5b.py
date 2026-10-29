@@ -194,6 +194,7 @@ def test_loader_refuses_each_malformed_shape(tmp_path, doc):
 
 @pytest.mark.parametrize("entry", ["..", "../x.txt", "a/../b.txt", "a/b/.."])
 def test_loader_refuses_a_dotdot_segment(tmp_path, entry):
+    # axis: the loader refuses an entry with a ".." segment anywhere in its path, so no entry names a file outside the repository
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.load_leave_out_file(_leave_out_file(tmp_path, _doc([entry])))
     assert exc.value.detail == INVALID
