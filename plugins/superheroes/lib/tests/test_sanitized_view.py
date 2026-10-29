@@ -1448,29 +1448,182 @@ def test_diff_empty_when_no_changes(tmp_path):
     assert _leftover_view_dirs(fake_tmp) == []
 
 
-def test_diff_fully_withheld(tmp_path):
+_WITHHELD_CONFIG_PATHS = {
+    "CLAUDE.md": "WITHHELD_MARKER_CLAUDE_MD",
+    ".claude/hooks/pre.sh": "WITHHELD_MARKER_PRE_HOOK",
+    ".claude/README.md": "WITHHELD_MARKER_CLAUDE_README",
+}
+
+
+def _write_repo_files(repo, files):
+    for rel, content in files.items():
+        full = os.path.join(repo, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
+
+def _commit_withheld_config_change(repo, extra_files=None):
+    files = {rel: marker + "\n" for rel, marker in _WITHHELD_CONFIG_PATHS.items()}
+    files.update(extra_files or {})
+    _write_repo_files(repo, files)
+    _git(repo, "add", "-A")
+    _census_commit(repo, "withheld config change")
+
+
+def test_diff_fully_withheld_builds_review_view(tmp_path):
+    # axis: a change that touches only withheld config still builds a view carrying the config-changes file and no patch; a refusal, a leaked config path, or a notice that omits the config file
     repo = _init_repo(tmp_path / "allstripped", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8") as fh:
-        fh.write("secret config\n")
-    _git(repo, "add", "CLAUDE.md")
-    _git(
-        repo,
-        "-c",
-        "user.email=test@test.local",
-        "-c",
-        "user.name=test",
-        "commit",
-        "-q",
-        "-m",
-        "add claude",
+    _commit_withheld_config_change(repo)
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        assert view["diffPath"] is None
+        assert view["diffBytes"] is None
+        assert view["diffWithheldCount"] == 3
+        assert view["configDiffPath"] == sv.CONFIG_CHANGES_FILE_NAME
+        with open(_config_changes_abs(view), encoding="utf-8") as fh:
+            config_text = fh.read()
+        assert config_text.startswith(sv.CONFIG_CHANGES_HEADER)
+        for marker in _WITHHELD_CONFIG_PATHS.values():
+            assert marker in config_text
+        for rel in (*_WITHHELD_CONFIG_PATHS, ".claude"):
+            assert not os.path.lexists(os.path.join(view["path"], rel))
+        assert not os.path.lexists(
+            os.path.join(view["path"], sv.REVIEW_DIFF_FILE_NAME)
+        )
+        notice = sv.sanitized_view_notice(view)
+        assert sv.CONFIG_CHANGES_FILE_NAME in notice
+        assert "whole change under review is in " + sv.CONFIG_CHANGES_FILE_NAME in notice
+        assert "delivered as data" not in notice
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_diff_fully_withheld_with_no_rendered_hunks_refuses_empty(tmp_path, monkeypatch):
+    # axis: a fully withheld change with nothing rendered refuses as empty; an empty view built, or a temp dir left behind
+    repo = _init_repo(tmp_path / "allstripped-empty", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _commit_withheld_config_change(repo)
+    monkeypatch.setattr(
+        sv,
+        "_stage_config_changes",
+        lambda *a, **k: {"configDiffPath": None, "configDiffBytes": None},
     )
-    fake_tmp = str(tmp_path / "tmpdir")
-    os.makedirs(fake_tmp)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.build_sanitized_view(repo, diff_base=base_sha)
-    assert exc.value.detail == "sanitized-view-diff-fully-withheld"
-    assert _leftover_view_dirs(fake_tmp) == []
+    assert exc.value.detail == "sanitized-view-diff-empty"
+    assert _leftover_view_dirs(sv.tempfile.gettempdir()) == []
+
+
+def test_diff_mixed_withheld_keeps_config_out_of_tree_and_patch(tmp_path):
+    # axis: in a mixed change the shown file stays in the patch and the withheld config stays out of the tree and the patch; config content leaking into either
+    repo = _init_repo(tmp_path / "mixed-stripped", files={"keep.txt": "k\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _commit_withheld_config_change(repo, {"keep.txt": "KEEP_CHANGED_LINE\n"})
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        for rel in (*_WITHHELD_CONFIG_PATHS, ".claude"):
+            assert not os.path.lexists(os.path.join(view["path"], rel))
+        assert view["diffWithheldCount"] == 3
+        with open(_patch_abs(view), encoding="utf-8") as fh:
+            patch = fh.read()
+        assert "KEEP_CHANGED_LINE" in patch
+        for marker in _WITHHELD_CONFIG_PATHS.values():
+            assert marker not in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def _alias_repo(tmp_path, name):
+    """Base tracks ``config-data/settings.json`` and a ``.claude -> config-data`` symlink."""
+    repo = _init_repo(
+        tmp_path / name,
+        commit=False,
+        files={
+            "config-data/settings.json": "{}\n",
+            "keep.txt": "k\n",
+            "CLAUDE.md": "baseline\n",
+        },
+    )
+    os.symlink("config-data", os.path.join(repo, ".claude"))
+    _git(repo, "add", "-A")
+    _census_commit(repo, "alias base")
+    return repo
+
+
+def _assert_alias_absent_data_present(view):
+    assert not os.path.lexists(os.path.join(view["path"], ".claude"))
+    assert os.path.lexists(os.path.join(view["path"], "config-data", "settings.json"))
+
+
+def test_leaf_config_dir_alias_mixed_change_withholds_symlink(tmp_path):
+    # axis: a .claude symlink to a data folder is withheld in a mixed change while the folder it points at stays; the alias left in the tree, or the data folder stripped with it
+    repo = _alias_repo(tmp_path, "alias-mixed")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _write_repo_files(repo, {"CLAUDE.md": "changed\n", "keep.txt": "changed keep\n"})
+    _git(repo, "add", "-A")
+    _census_commit(repo, "mixed change")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        _assert_alias_absent_data_present(view)
+        assert view["diffPath"] is not None
+        assert ".claude" in view["stripped"]
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+    assert sv.withheld_review_paths(
+        repo, head_sha, [".claude", "config-data/settings.json"]
+    ) == [".claude"]
+
+
+def test_leaf_config_dir_alias_fully_withheld_change_withholds_symlink(tmp_path):
+    # axis: a .claude symlink to a data folder is withheld when the whole change is withheld, with the config-changes file standing in for the patch; the alias left in the tree, a patch built, or the data folder stripped
+    repo = _alias_repo(tmp_path, "alias-full")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _write_repo_files(repo, {"CLAUDE.md": "changed\n"})
+    _git(repo, "add", "-A")
+    _census_commit(repo, "claude-only change")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        _assert_alias_absent_data_present(view)
+        assert view["diffPath"] is None
+        assert view["configDiffPath"] == sv.CONFIG_CHANGES_FILE_NAME
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+    assert sv.withheld_review_paths(
+        repo, head_sha, [".claude", "config-data/settings.json"]
+    ) == [".claude"]
+
+
+def test_leaf_config_dir_in_calibration_dir_is_withheld(tmp_path):
+    # axis: a .claude leaf inside the calibration folder is withheld whether or not it exists at head; it shown as reviewable, or the answer changing when the path is absent
+    leaf = ".claude/superheroes/.claude"
+    repo = _init_repo(tmp_path / "calib-leaf", files={"keep.txt": "k\n", leaf: "x\n"})
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert sv.withheld_review_paths(repo, head_sha, [leaf]) == [leaf]
+    # Same answer when the path is absent at head.
+    absent = ".claude/superheroes/other/.claude"
+    assert sv.withheld_review_paths(repo, head_sha, [absent]) == [absent]
+
+
+def test_diff_fully_withheld_too_large_refuses(tmp_path, monkeypatch):
+    # axis: the cap counts the withheld hunks, not only the header; a header-only count lets an oversize config change through
+    header_bytes = len(sv.CONFIG_CHANGES_HEADER.encode("utf-8"))
+    monkeypatch.setattr(sv, "CONFIG_CHANGES_MAX_BYTES", header_bytes + 64)
+    repo = _init_repo(
+        tmp_path / "allstripped-large",
+        files={"keep.txt": "k\n", "CLAUDE.md": "baseline\n"},
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _write_repo_files(repo, {"CLAUDE.md": "x" * 200 + "\n"})
+    _git(repo, "add", "-A")
+    _census_commit(repo, "large claude change")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-config-too-large"
+    assert _leftover_view_dirs(sv.tempfile.gettempdir()) == []
 
 
 def test_diff_partial_withheld(tmp_path):
