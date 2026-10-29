@@ -263,6 +263,55 @@ def test_e2_a_run_that_edits_a_pre_existing_flagged_file_has_the_edit_undone_and
     assert [l[2:] for l in _git(repo, "ls-files", "-v").splitlines() if l[0] in "hsS"] == ["README.md"]
 
 
+def _flags(repo):
+    return {l[2:]: l[0] for l in _git(repo, "ls-files", "-v").splitlines() if l[0] in "hsS"}
+
+
+@pytest.mark.parametrize("owner_flag, run_flag, action", [
+    ("--assume-unchanged", "--skip-worktree", "os.remove('README.md')"),
+    ("--assume-unchanged", "--skip-worktree", "open('README.md', 'w').write('hidden edit\\n')"),
+    ("--skip-worktree", "--assume-unchanged", "os.remove('README.md')"),
+    ("--skip-worktree", "--assume-unchanged", "os.chmod('README.md', 0o755)"),
+    ("--assume-unchanged", "--no-assume-unchanged", "open('README.md', 'w').write('hidden edit\\n')"),
+])
+def test_e2_a_run_that_changes_the_flags_on_an_owner_flagged_file_leaves_its_content_and_its_flags_as_before(
+        repo, owner_flag, run_flag, action):
+    # axis: the flags are compared and put back by value, not by path, so a flag the run adds to (or clears from) an owner-flagged file, and the deletion, edit or mode change it then hides, are all undone
+    _git(repo, "update-index", owner_flag, "README.md")
+    before = _flags(repo)
+    content = ("import os, subprocess\n"
+               "subprocess.check_call(['git', 'update-index', %r, 'README.md'])\n"
+               "%s\n" % (run_flag, action))
+    record = _run(repo, "tests/test_f.py", content)
+    assert record["outcome"] == "passed", record
+    assert (repo / "README.md").read_text() == "fixture\n"
+    assert not os.stat(str(repo / "README.md")).st_mode & 0o100
+    assert _flags(repo) == before
+    for option in ("--no-assume-unchanged", "--no-skip-worktree"):
+        _git(repo, "update-index", option, "README.md")
+    assert _status(repo) == ""
+
+
+def test_e2_a_sparse_absent_skip_worktree_path_stays_absent_and_flagged(repo):
+    # axis: a skip-worktree path a sparse checkout left absent is run over and is absent and flagged again after a run that wrote it
+    _git(repo, "update-index", "--skip-worktree", "helper.py")
+    os.remove(str(repo / "helper.py"))
+    record = _run(repo, "tests/test_s.py", "open('helper.py', 'w').write('run wrote this\\n')\n")
+    assert record["outcome"] == "passed", record
+    assert not (repo / "helper.py").exists()
+    assert _flags(repo) == {"helper.py": "S"}
+    assert _status(repo) == ""
+
+
+def test_e2_a_pre_existing_flagged_file_whose_mode_differs_is_not_run(repo):
+    # axis: a mode change hidden by a flag is an owner edit too, so the precheck refuses rather than let the restore revert it
+    _git(repo, "update-index", "--assume-unchanged", "README.md")
+    os.chmod(str(repo / "README.md"), 0o755)
+    record = _run(repo, "tests/test_x.py", "assert True\n")
+    assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-dirty"), record
+    assert os.stat(str(repo / "README.md")).st_mode & 0o100
+
+
 def test_e6_a_config_file_that_did_not_exist_is_deleted_again(repo):
     config = repo / ".git" / "config.worktree"
     assert not config.exists()
@@ -317,7 +366,7 @@ def test_e7_a_restore_that_leaves_the_tree_dirty_fails_the_verify(repo, monkeypa
 
 
 def test_e8_an_exception_inside_the_run_still_restores(repo, monkeypatch):
-    def boom(argv, env, cwd, repo_root, token, timeout):
+    def boom(argv, env, cwd, repo_root, token, timeout, **kwargs):
         with open(os.path.join(cwd, "README.md"), "w") as fh:
             fh.write("leaked\n")
         with open(os.path.join(cwd, "leak.txt"), "w") as fh:
@@ -355,9 +404,9 @@ def test_the_probe_and_the_test_run_with_the_repository_root_as_their_working_di
     seen = []
     real = break_it._run_contained
 
-    def spy(argv, env, cwd, repo_root, token, timeout):
+    def spy(argv, env, cwd, repo_root, token, timeout, **kwargs):
         seen.append(cwd)
-        return real(argv, env, cwd, repo_root, token, timeout)
+        return real(argv, env, cwd, repo_root, token, timeout, **kwargs)
 
     monkeypatch.setattr(break_it, "_run_contained", spy)
     block = TB._block("tests/test_w.py", "assert True\n", run="python3 tests/test_w.py")

@@ -15,9 +15,10 @@ No other ref is rewound, deleted or created (a second worktree of the repository
 run, and the restore cannot tell who changed one): each ref that still differs from the snapshot is left as it
 is and named in the record's ``refsLeft``.
 The one limit, stated plainly: a test that writes to an absolute path outside the working copy and the
-session folder is not stopped (there is no OS sandbox). Its process tree never outlives the call: a process
-the run left with its working directory in the working copy is stopped too, unless it started before the run
-or is this process or one of its ancestors.
+session folder is not stopped (there is no OS sandbox). Its process tree never outlives the call unnoticed: a
+process the table shows descends from the run is stopped; one that started during the run in the working copy and
+was orphaned, which nothing shows is the run's, is never signalled (it may be the owner's own work), and the run is
+recorded ``working-copy-restore-failed`` instead, since a worker of the run may still be live there.
 Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
 and the caller decides from the record; nothing is raised."""
 import hashlib
@@ -778,12 +779,9 @@ def _known_processes(reader=None):
 
 
 def _belongs_to_run(pid, parent_of, run_pid):
-    """True when the table shows ``pid`` is the run's: its parent chain reaches the run's reaper (``run_pid``), or it
-    has itself been orphaned (its own parent is 0 or 1), which is how a worker that detached from the run reads once its
-    parent is gone. A process whose parent is alive and not the run's was launched by something else and is not the
-    run's, whatever that parent's own parent is."""
-    if parent_of.get(pid) in (0, 1):
-        return True
+    """True only when the table shows ``pid`` is the run's: its parent chain reaches the run's reaper (``run_pid``).
+    Orphanhood is not ownership: an orphan (parent 0 or 1) may be a worker that detached from the run or the owner's
+    own work whose launcher exited, and nothing in the table tells the two apart."""
     seen = set()
     while pid not in seen:
         seen.add(pid)
@@ -795,16 +793,17 @@ def _belongs_to_run(pid, parent_of, run_pid):
     return False
 
 
-def _kill_in_working_copy(root, since, reader=None, known=frozenset(), run_pid=None):
-    """Kill every process that belongs to the run (``_belongs_to_run``: descended from ``run_pid``, or orphaned), whose
-    working directory is ``root`` or lies beneath it, that started at or after ``since`` (an epoch time), was not
-    already running when the run launched (``known``, the ``(pid, ident)`` pairs taken then, since a start time
-    rounded up can read a process from the run's own second as new), and is neither this process nor one of its
-    ancestors. A process launched independently in the checkout while the run goes, whose parent is alive and not the
-    run's, is never touched. A second net beside the descendant watch,
-    which samples and so misses a worker that starts and detaches between two samples. ``reader`` returns
-    ``(processes, ancestors, note)`` as ``_cwd_table`` does; an entry without a parent is not shown to belong to the run
-    and is left alone. Returns the note when the net could not run, else ``None``."""
+def _kill_in_working_copy(root, since, reader=None, known=frozenset(), run_pid=None, left=None):
+    """Among the processes whose working directory is ``root`` or lies beneath it, that started at or after ``since``
+    (an epoch time), were not already running when the run launched (``known``, the ``(pid, ident)`` pairs taken
+    then, since a start time rounded up can read a process from the run's own second as new), and are neither this
+    process nor one of its ancestors: kill each one the table shows belongs to the run (``_belongs_to_run``), and
+    signal no other. An orphan among them (parent 0 or 1) can be shown neither the run's nor not, so it is left
+    running and its pid appended to ``left`` (when given) for the caller to refuse the run over; one whose parent is
+    alive and not the run's was launched by something else and is passed over. A second net beside the descendant
+    watch, which samples and so misses a worker that starts and detaches between two samples. ``reader`` returns
+    ``(processes, ancestors, note)`` as ``_cwd_table`` does; an entry without a parent is not shown to belong to the
+    run and is left alone. Returns the note when the net could not run, else ``None``."""
     processes, ancestors, note = (reader or _cwd_table)()
     if note:
         return note
@@ -816,14 +815,17 @@ def _kill_in_working_copy(root, since, reader=None, known=frozenset(), run_pid=N
         # axis: a process that started before the run, this process and its ancestors are never touched, so the session's own shell survives the net
         if pid == os.getpid() or pid in ancestors or started < since or (pid, _process_ident(entry)) in known:
             continue
-        # axis: a process the table does not show to descend from the run or to be orphaned is never signalled, so independent work in the checkout survives
-        if not _belongs_to_run(pid, parent_of, run_pid):
+        if not (cwd == real_root or cwd.startswith(inside)):
             continue
-        if cwd == real_root or cwd.startswith(inside):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+        # axis: only a process the table shows descends from the run is signalled; an orphan (a detached worker or the owner's own work) is never killed, only reported so the run is refused
+        if not _belongs_to_run(pid, parent_of, run_pid):
+            if left is not None and len(entry) > 3 and entry[3] in (0, 1):
+                left.append(pid)
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
     return None
 
 
@@ -901,16 +903,17 @@ def _declares_dependencies(root):
     return any(isinstance(data.get(key), dict) and data[key] for key in ("dependencies", "devDependencies"))
 
 
-def _run_contained(argv, env, cwd, repo_root, token, timeout):
+def _run_contained(argv, env, cwd, repo_root, token, timeout, left=None):
     """Run ``argv`` in ``cwd`` under the reaper, with the token sweep, keeping only the
     output tail. Returns ``(launch_failed, timed_out, returncode, output, setup)``, ``setup`` being the setup-failure
     reason the drain latched while the output went by, or ``None``. Every process a break-it run starts,
-    the readiness probe included, goes through here."""
+    the readiness probe included, goes through here. ``left``, when given, gathers the pids the working-directory
+    net found in the working copy and could not show are the run's (``_kill_in_working_copy``)."""
     status_r, status_w = os.pipe()
     known = _known_processes()
     started_at = time.time()
     try:
-        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net, and on other hosts the descendant watch the third. The last net is the working-directory sweep (`_kill_in_working_copy`): the working directory is the session's own checkout, so it stops only a process that started at or after this run and is neither this process nor an ancestor of it, which leaves the session's own shell alone.
+        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net, and on other hosts the descendant watch the third. The last net is the working-directory sweep (`_kill_in_working_copy`): the working directory is the session's own checkout, so it stops only a process that started at or after this run, is neither this process nor an ancestor of it, and descends from the run; an orphan it cannot attribute is left running and reported, so the run is refused rather than the owner's work killed.
         proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=cwd,
                                 env=_clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -948,9 +951,9 @@ def _run_contained(argv, env, cwd, repo_root, token, timeout):
                 watch.stop_and_kill()
             except Exception:  # the working-directory net below still runs
                 pass
-        # axis: a worker that started and detached between two samples of the watch, or that hides its environment, is still stopped by where it runs and when it started — see bite-proof record wo_e_2210_review_round2
+        # axis: a worker that started and detached between two samples of the watch, or that hides its environment, is found by where it runs and when it started; it is stopped when the table shows it is the run's and otherwise reported so the run is refused — see bite-proof record wo_e_2210_review_round2
         try:
-            net_note = _kill_in_working_copy(repo_root, started_at, known=known, run_pid=proc.pid)
+            net_note = _kill_in_working_copy(repo_root, started_at, known=known, run_pid=proc.pid, left=left)
         except Exception as exc:  # a net that cannot read the process table is disclosed, never raised
             net_note = "working-directory net skipped: %s" % str(exc)[-200:]
         proc.wait()
@@ -1024,21 +1027,39 @@ def _hidden_flags(root):
     return {entry[2:]: entry[0] for entry in raw.split("\0") if entry[:1] in _HIDDEN_TAGS and entry[1:2] == " "}
 
 
-def _hidden_edits(root, commit, flags):
-    """The flagged paths whose working-tree content differs from ``commit``: the edits the flags hide. A
-    skip-worktree path that is absent is not an edit; any other absent path is."""
+def _sparse_paths(root, flags):
+    """The skip-worktree paths of ``flags`` that are absent from the working tree: a sparse checkout leaves them out,
+    and absent is their state."""
+    return frozenset(rel for rel, tag in flags.items() if tag in "sS" and not os.path.lexists(os.path.join(root, rel)))
+
+
+def _hidden_edits(root, commit, flags, sparse):
+    """The flagged paths whose working-tree entry differs from ``commit`` (content, symlink target, file kind or
+    executable bit): the edits the flags hide. A path in ``sparse`` must be absent instead; it is an edit when it
+    exists. Anything that cannot be compared counts as an edit."""
     edited = []
-    for rel, tag in sorted(flags.items()):
+    for rel in sorted(flags):
         path = os.path.join(root, rel)
-        if os.path.islink(path):
-            now = os.readlink(path).encode("utf-8", errors="surrogateescape")
-        elif os.path.isfile(path):
-            now = _read_bytes(path)
-        else:
-            if not (tag in "sS" and not os.path.lexists(path)):
+        if rel in sparse:
+            if os.path.lexists(path):
                 edited.append(rel)
             continue
-        done = _git(root, "--literal-pathspecs", "cat-file", "blob", "%s:%s" % (commit, rel))
+        entry = _text(_must(root, "--literal-pathspecs", "ls-tree", "-z", commit, "--", rel).stdout)
+        meta, _, name = entry.rstrip("\0").partition("\t")
+        mode, _, rest = meta.partition(" ")
+        oid = rest.partition(" ")[2]
+        if name != rel or not oid:
+            edited.append(rel)
+            continue
+        if mode == "120000" and os.path.islink(path):
+            now = os.readlink(path).encode("utf-8", errors="surrogateescape")
+        elif (mode in _REGULAR_MODES and os.path.isfile(path) and not os.path.islink(path)
+              and bool(os.stat(path).st_mode & 0o100) == (mode == "100755")):
+            now = _read_bytes(path)
+        else:
+            edited.append(rel)
+            continue
+        done = _git(root, "cat-file", "blob", oid)
         if done.returncode != 0 or done.stdout != now:
             edited.append(rel)
     return edited
@@ -1057,7 +1078,8 @@ def _precheck(root, head):
         if _tracked_status(root):
             return None, "working-copy-dirty", "a tracked file is modified or staged"
         # axis: a flagged file (assume-unchanged, skip-worktree) whose content differs from the head is never run over, because status and diff cannot show what the restore must undo; a clean flagged file is run, its flag kept
-        edited = _hidden_edits(root, at, _hidden_flags(root))
+        flags = _hidden_flags(root)
+        edited = _hidden_edits(root, at, flags, _sparse_paths(root, flags))
         if edited:
             return None, "working-copy-dirty", "a tracked file hidden by an assume-unchanged or skip-worktree flag is modified: %s" % edited[0]
     except _GitFailed as exc:
@@ -1138,11 +1160,13 @@ def _backup_untracked(root, names):
 
 
 def _snapshot(root, pinned):
-    """What the run must leave as it found it: HEAD, every ref, the local config bytes and the untracked files
-    (names and, for each existing one, its content)."""
+    """What the run must leave as it found it: HEAD, every ref, the index flags (``hidden``, and ``sparse``, the
+    skip-worktree paths absent then), the local config bytes and the untracked files (names and, for each existing
+    one, its content)."""
     untracked = _untracked(root)
-    return {"pinned": pinned, "symref": _head_symref(root), "refs": _refs(root), "hidden": _hidden_flags(root),
-            "config": {path: _read_bytes(path) for path in _config_paths(root)},
+    hidden = _hidden_flags(root)
+    return {"pinned": pinned, "symref": _head_symref(root), "refs": _refs(root), "hidden": hidden,
+            "sparse": _sparse_paths(root, hidden), "config": {path: _read_bytes(path) for path in _config_paths(root)},
             "untracked": untracked, "untrackedBackup": _backup_untracked(root, untracked)}
 
 
@@ -1202,42 +1226,18 @@ def _restore_config(root, snap):
     return changed
 
 
-def _write_back(root, commit, rel):
-    """Put ``rel`` back to its content in ``commit`` by writing the blob, since ``git checkout`` skips a skip-worktree
-    path. A symlink in the commit is written as a symlink."""
-    entry = _text(_must(root, "--literal-pathspecs", "ls-tree", "-z", commit, "--", rel).stdout)
-    mode = entry.split(" ", 1)[0]
-    blob = _must(root, "--literal-pathspecs", "cat-file", "blob", "%s:%s" % (commit, rel)).stdout
-    path = os.path.join(root, rel)
-    if os.path.islink(path) or (os.path.lexists(path) and mode == "120000"):
-        os.unlink(path)
-    if mode == "120000":
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        pathlib.Path(path).symlink_to(blob.decode("utf-8", errors="surrogateescape"))
-        return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as fh:
-        fh.write(blob)
-    os.chmod(path, 0o755 if mode == "100755" else 0o644)
-
-
 def _restore_index(root, snap):
+    """Clear every assume-unchanged and skip-worktree flag the index carries now, the owner's included, then reset a
+    staged change. With no flag left, diff and status see every working-tree change, so the tracked step restores
+    each one the ordinary way; ``_restore_flags`` sets the owner's flags back exactly afterwards."""
     changed = False
-    # axis: an assume-unchanged or skip-worktree flag the run set is cleared before tracked changes are looked for, because the flag hides the edit from diff and status
-    before = snap.get("hidden", {})
     flags = _hidden_flags(root)
-    # a flag the owner set before the run stays; only a flag the run set is cleared
-    new = sorted(rel for rel in flags if rel not in before)
-    if new:
+    # axis: every flag is cleared before tracked changes are looked for, whoever set it and whichever flag it is, because any flag hides an edit or a deletion from diff and status
+    if flags:
         # one flag per call: git applies only the last of the two options when both are given
         for option in ("--no-assume-unchanged", "--no-skip-worktree"):
-            _must(root, "--literal-pathspecs", "update-index", option, "--", *new)
-        changed = True
-    # a pre-existing flagged file the run edited is put back from the pinned commit, since status cannot show it
-    hidden_edits = _hidden_edits(root, snap["pinned"], {rel: tag for rel, tag in flags.items() if rel in before})
-    for rel in hidden_edits:
-        _write_back(root, snap["pinned"], rel)
-        changed = True
+            _must(root, "--literal-pathspecs", "update-index", option, "--", *sorted(flags))
+        changed = flags != snap["hidden"]
     if _must(root, "diff", "--cached", "--name-only", "-z").stdout:
         _must(root, "reset", "-q")
         changed = True
@@ -1245,12 +1245,37 @@ def _restore_index(root, snap):
 
 
 def _restore_tracked(root, snap):
-    names = [name for name in _must(root, "diff", "--name-only", "-z", snap["pinned"]).stdout.split(b"\0") if name]
-    if not names:
-        return False
-    # axis: every tracked file that differs from the pinned commit, a deleted one included, is checked out again — see bite-proof record wo_a_2210_break_it_working_copy
-    _must(root, "--literal-pathspecs", "checkout", "-q", snap["pinned"], "--", *[_text(name) for name in names])
-    return True
+    sparse = snap["sparse"]
+    names = [_text(name) for name in _must(root, "diff", "--name-only", "-z", snap["pinned"]).stdout.split(b"\0")
+             if name]
+    names = [name for name in names if name not in sparse]
+    changed = False
+    if names:
+        # axis: every tracked file that differs from the pinned commit, a deleted one included, is checked out again — see bite-proof record wo_a_2210_break_it_working_copy
+        _must(root, "--literal-pathspecs", "checkout", "-q", snap["pinned"], "--", *names)
+        changed = True
+    # axis: a skip-worktree path a sparse checkout left absent is absent again after the run, whatever the run put there
+    for rel in sorted(sparse):
+        path = os.path.join(root, rel)
+        if os.path.lexists(path):
+            if os.path.isdir(path) and not os.path.islink(path):
+                raise OSError("%s is a directory the run put where a sparse checkout left nothing" % rel)
+            os.unlink(path)
+            changed = True
+    return changed
+
+
+def _restore_flags(root, snap):
+    """Set the owner's assume-unchanged and skip-worktree flags back, each exactly as the snapshot found it."""
+    before = snap["hidden"]
+    assume = sorted(rel for rel, tag in before.items() if tag in "hs")
+    skip = sorted(rel for rel, tag in before.items() if tag in "sS")
+    # axis: the owner's flags come back exactly, so the restore that cleared them to see the run's edits changes none of them
+    if assume:
+        _must(root, "--literal-pathspecs", "update-index", "--assume-unchanged", "--", *assume)
+    if skip:
+        _must(root, "--literal-pathspecs", "update-index", "--skip-worktree", "--", *skip)
+    return False
 
 
 def _restore_untracked(root, snap):
@@ -1310,7 +1335,8 @@ def _restore(root, snap, ctx):
     restored, failures = [], []
     steps = (("test-file", _restore_test_file, ctx), ("refs", _restore_refs, snap), ("head", _restore_head, snap),
              ("config", _restore_config, snap), ("index", _restore_index, snap),
-             ("tracked", _restore_tracked, snap), ("untracked", _restore_untracked, snap))
+             ("tracked", _restore_tracked, snap), ("flags", _restore_flags, snap),
+             ("untracked", _restore_untracked, snap))
     for name, step, state in steps:
         try:
             if step(root, state):
@@ -1323,6 +1349,12 @@ def _restore(root, snap, ctx):
             failures.append("verify: HEAD does not resolve to %s" % snap["pinned"])
         if _tracked_status(root):
             failures.append("verify: a tracked file is still modified or staged")
+        # axis: the index flags must read exactly as before the run and every flagged file must match the pinned commit, because status cannot see either
+        if _hidden_flags(root) != snap["hidden"]:
+            failures.append("verify: the assume-unchanged or skip-worktree flags differ from before the run")
+        hidden_edits = _hidden_edits(root, snap["pinned"], snap["hidden"], snap["sparse"])
+        if hidden_edits:
+            failures.append("verify: a flagged tracked file differs from %s: %s" % (snap["pinned"], hidden_edits[0]))
     except _GitFailed as exc:
         failures.append("verify: %s" % exc)
     return restored, failures
@@ -1369,7 +1401,7 @@ def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, inte
     except (_GitFailed, OSError) as exc:
         return rec(OUTCOME_NOT_RUN, "working-copy-unreadable", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     tmp = os.path.join(base, "break-it-tmp-" + uuid.uuid4().hex)
-    ctx = {"target": None, "created": []}
+    ctx = {"target": None, "created": [], "left": []}
     result = None
     try:
         try:
@@ -1380,6 +1412,10 @@ def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, inte
         # axis: the per-run folder and every change the run made to the working copy are undone on every exit path, an exception included — see bite-proof record wo_a_2210_break_it_working_copy
         _remove_folder(tmp)
         restored, failures = _restore(root, snap, ctx)
+    # axis: an orphan that started in the working copy during the run, which the net cannot show is the run's, is never killed; the run is refused instead, because a worker of the run may still be changing the working copy
+    if ctx["left"]:
+        failures.append("containment: process(es) %s started in the working copy during the run and were left running,"
+                        " since nothing shows they are the run's" % ", ".join(str(pid) for pid in sorted(set(ctx["left"]))))
     if failures:
         return rec(OUTCOME_NOT_RUN, "working-copy-restore-failed", output="; ".join(failures)[-OUTPUT_TAIL_BYTES:],
                    restored=restored, refs_left=snap.get("refsLeft"))
@@ -1416,7 +1452,7 @@ def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx)
         # axis: a launcher that cannot start reads not-run, never a failed test, and the probe runs contained like the test — see bite-proof record wo_5_1910_probe_containment
         failed, timed, status, tail, _ = _run_contained(
             (interpreter if isinstance(interpreter, list) else [interpreter]) + ["-c", _PROBE_CODE],
-            env, root, root, uuid.uuid4().hex, timeout)
+            env, root, root, uuid.uuid4().hex, timeout, left=ctx["left"])
         # axis: only a launcher that really executes Python prints the computed marker; an echo-like program exits zero without it, so it reads unavailable, never passed
         if failed or timed or status != 0 or _PROBE_MARKER not in (tail or ""):
             return rec(OUTCOME_NOT_RUN, "interpreter-unavailable", output=tail or ("timed out" if timed else ""))
@@ -1426,7 +1462,8 @@ def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx)
         return rec(OUTCOME_NOT_RUN, REASON_MODULE_NOT_FOUND,
                    output="the working copy holds package.json with dependencies but has no installed node_modules")
     token = uuid.uuid4().hex
-    launch_failed, timed_out, code, output, setup = _run_contained(argv, env, root, root, token, timeout)
+    launch_failed, timed_out, code, output, setup = _run_contained(argv, env, root, root, token, timeout,
+                                                                   left=ctx["left"])
     if launch_failed and not timed_out:
         return rec(OUTCOME_NOT_RUN, REASON_COMMAND_NOT_FOUND)
     if timed_out:

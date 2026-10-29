@@ -1,7 +1,8 @@
 """Round-2 review fixes for the working-copy break-it run (#2210, WO-E).
 
 G1 the default scratch folder resolves the git directory through `store_core.get_worktree_gitdir`.
-G3 a detached worker no sample saw is stopped by where it runs and when it started; a process older than the run survives.
+G3 a process the run started in the working copy is stopped when the table shows it descends from the run; an orphan
+   no sample saw is never killed (nothing shows it is the run's) and the run is refused; a process older than the run survives.
 G4 a ref another worktree changes during the run is left and listed in `refsLeft`; only HEAD's own branch is put back.
 G7 a recorded `working-copy-restore-failed` run parks cannot-certify whatever the finding's disposition.
 """
@@ -199,18 +200,24 @@ def _only_the_working_directory_net(monkeypatch, reader):
     monkeypatch.setattr(break_it, "_cwd_table", reader)
 
 
+def _assert_refused_over(record, pid):
+    """The run is refused (restore failed, so certification is withheld) and the output names the orphan left running."""
+    assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-restore-failed"), record
+    assert "containment" in record["output"] and str(pid) in record["output"], record["output"]
+
+
 @needs_sleep
-def test_g3a_a_detached_worker_no_sample_saw_is_stopped_by_the_working_directory_net(repo, tmp_path, monkeypatch):
+def test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused(repo, tmp_path, monkeypatch):
+    # axis: an orphan in the working copy that nothing shows is the run's is never signalled (it may be the owner's work), and the run is refused rather than certified over a possibly live worker
     pidfile = tmp_path / "worker.pid"
     _only_the_working_directory_net(monkeypatch, _reader_of(
         lambda: [(int(pidfile.read_text()), time.time)] if pidfile.exists() else [], repo))
     pid = None
     try:
         record = _run(repo, "tests/test_detach.py", DETACH % str(pidfile))
-        assert record["outcome"] == "passed", record
         pid = int(pidfile.read_text())
-        assert "worker-alive=True" in record["output"], record["output"]
-        assert _dead(pid), "the detached worker outlived the run"
+        _assert_refused_over(record, pid)
+        assert not _dead(pid, wait=0), "an orphan nothing shows is the run's was killed"
     finally:
         if pid is not None and not _dead(pid, wait=0):
             os.kill(pid, 9)
@@ -231,7 +238,8 @@ def test_g3b_a_process_started_before_the_run_with_its_directory_in_the_working_
 
 @needs_sleep
 @pytest.mark.proc_containment
-def test_g3a_the_proc_reader_finds_the_detached_worker_and_the_net_stops_it(repo, tmp_path, monkeypatch):
+def test_g3a_the_proc_reader_finds_the_detached_worker_and_the_run_is_refused_without_killing_it(repo, tmp_path, monkeypatch):
+    # axis: the real /proc reader sees the orphaned worker in the working copy; it is reported, not signalled, and the run is refused
     monkeypatch.setattr(break_it._DescendantWatch, "sample", lambda self: None)
     monkeypatch.setattr(break_it, "_kill_tagged", lambda token: None)
     monkeypatch.setattr(break_it, "_REAPER", BARE_REAPER)
@@ -239,10 +247,9 @@ def test_g3a_the_proc_reader_finds_the_detached_worker_and_the_net_stops_it(repo
     pid = None
     try:
         record = _run(repo, "tests/test_detach.py", DETACH % str(pidfile))
-        assert record["outcome"] == "passed", record
         pid = int(pidfile.read_text())
-        assert "worker-alive=True" in record["output"], record["output"]
-        assert _gone(pid), "the detached worker outlived the run"
+        _assert_refused_over(record, pid)
+        assert not _gone(pid, wait=0), "an orphan nothing shows is the run's was killed"
     finally:
         if pid is not None:
             _kill_if_alive(pid)
@@ -296,7 +303,7 @@ def test_g3_the_net_stops_what_the_run_started_inside_the_working_copy_and_spare
 
 @needs_sleep
 def test_g3_a_process_launched_independently_in_the_checkout_during_the_run_survives(repo):
-    # axis: a process that started after the run began, sits in the checkout, is not known and has a live parent that is not the run's is never signalled
+    # axis: a process that started after the run began, sits in the checkout and is not known is signalled only when its chain reaches the run; an independent orphan whose launcher exited is reported, never killed
     since = time.time()
     run_pid, shell_pid = os.getpid(), os.getpid() + 100000
     independent = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
@@ -305,10 +312,14 @@ def test_g3_a_process_launched_independently_in_the_checkout_during_the_run_surv
     root = os.path.realpath(str(repo))
     table = [(independent.pid, root, since + 1, shell_pid, 11), (child.pid, root, since + 1, run_pid, 12),
              (orphan.pid, root, since + 1, 1, 13), (shell_pid, root, since - 5, 1, 14)]
+    left = []
     try:
-        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), run_pid=run_pid) is None
-        assert child.wait(timeout=5) == -9 and orphan.wait(timeout=5) == -9
+        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), run_pid=run_pid,
+                                              left=left) is None
+        assert child.wait(timeout=5) == -9
         assert independent.poll() is None, "a process the run did not start was stopped"
+        assert orphan.poll() is None, "an orphan nothing shows is the run's was stopped"
+        assert left == [orphan.pid]
     finally:
         for proc in (independent, child, orphan):
             proc.kill()
@@ -322,11 +333,13 @@ def test_g3_a_process_already_running_when_the_run_launched_survives_a_same_seco
     older = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
     fresh = subprocess.Popen(["/bin/sleep", "60"], cwd=str(repo))
     root = os.path.realpath(str(repo))
-    table = [(older.pid, root, since + 0.2, 1, 500), (fresh.pid, root, since + 0.3, 1, 501)]
+    me = os.getpid()
+    table = [(older.pid, root, since + 0.2, me, 500), (fresh.pid, root, since + 0.3, me, 501)]
     try:
         known = break_it._known_processes(reader=lambda: (table[:1], set(), None))
         assert known == {(older.pid, 500)}
-        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), known=known) is None
+        assert break_it._kill_in_working_copy(str(repo), since, reader=lambda: (table, set(), None), known=known,
+                                              run_pid=me) is None
         assert fresh.wait(timeout=5) == -9
         assert older.poll() is None, "a process that predates the run was stopped"
     finally:
