@@ -6483,7 +6483,7 @@ def _cap_blocks_loaded(state, config):
     if not rnd > cap:
         return False
     # axis: a loaded state sits one past its cap only while the extra audit round it was ordered is the round it holds — see bite-proof record c1l4b_wo_a
-    if rnd == cap + 1 and True:
+    if rnd == cap + 1 and _is_extra_audit_round(state):
         return False
     detail = (
         "Round cap %s reached: round %s had already begun and is halted. The PR is handed back "
