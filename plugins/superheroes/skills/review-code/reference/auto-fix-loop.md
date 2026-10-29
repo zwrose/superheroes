@@ -395,12 +395,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
+> # A session begun before the leave-out sidecar existed (a pending panel resumed after an upgrade) has no
+> # reviewer-leave-out.json; pass the flag only when the file is there, since a missing file refuses the launch.
+> LEAVE_OUT_ARGS=(); [ -f "$SESSION_DIR/reviewer-leave-out.json" ] && LEAVE_OUT_ARGS=(--leave-out-file "$SESSION_DIR/reviewer-leave-out.json")
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
->   --leave-out-file "$SESSION_DIR/reviewer-leave-out.json" \
+>   ${LEAVE_OUT_ARGS[@]+"${LEAVE_OUT_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900

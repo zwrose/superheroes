@@ -211,17 +211,29 @@ def proof_fault(obj):
             return str(key)
     if obj.get("schema") != PROOF_SCHEMA:
         return "schema"
-    copies = obj.get("copies")
+    fault = copies_fault(obj.get("copies"), name_extra_key=True)
+    return None if fault is None else "copies" + fault
+
+
+def copies_fault(copies, name_extra_key=False):
+    """The one definition of the copy-list contract, shared by proof ingestion and the review record: ``None``
+    when ``copies`` is a non-empty list of entries with exactly a file, a source (both non-blank strings) and a
+    lowercase 64-hex sha256, no file twice; else the path at fault as a suffix (``""`` for the list itself,
+    ``[i]`` for an entry, ``[i].key`` for a key). ``name_extra_key`` names the first bad key in the suffix; off, an
+    unknown or missing key faults the whole entry. Either way the same entries pass and the same fail."""
     if not isinstance(copies, list) or not copies:
-        return "copies"
+        return ""
     seen = set()
     for i, copy in enumerate(copies):
-        where = "copies[%d]" % i
+        where = "[%d]" % i
         if not isinstance(copy, dict):
             return where
-        for key in copy:
-            if key not in ("file", "source", "sha256"):
-                return "%s.%s" % (where, key)
+        if name_extra_key:
+            for key in copy:
+                if key not in ("file", "source", "sha256"):
+                    return "%s.%s" % (where, key)
+        elif set(copy) != {"file", "source", "sha256"}:
+            return where
         for key in ("file", "source"):
             if _blank(copy.get(key)):
                 return "%s.%s" % (where, key)

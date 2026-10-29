@@ -41,6 +41,7 @@ if _LIB_DIR not in sys.path:
 
 import build_lane  # noqa: E402
 import cloud_pass  # noqa: E402
+import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
@@ -101,7 +102,6 @@ RUN_STATUSES = ("ran", "timed-out", "not-started")
 SOURCE_KINDS = ("reviewer", "sweep")
 # The optional account keys the record carries whole, when the account has them.
 _ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare", "provenCopies")
-_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class Refusal(Exception):
@@ -516,21 +516,8 @@ def _unread_fault(u):
 def _proven_copies_fault(v):
     """Where the proven-copies list is malformed, as a path suffix, else None: a non-empty list of entries with
     exactly a file, a source and a 64-hex sha256, no file twice."""
-    if not isinstance(v, list) or not v:
-        return ""
-    seen = set()
-    for j, x in enumerate(v):
-        if not isinstance(x, dict) or set(x) != {"file", "source", "sha256"}:
-            return f"[{j}]"
-        for k in ("file", "source"):
-            if not _nb(x[k]):
-                return f"[{j}].{k}"
-        if not (isinstance(x["sha256"], str) and _SHA256_RE.fullmatch(x["sha256"])):
-            return f"[{j}].sha256"
-        if x["file"] in seen:
-            return f"[{j}].file"
-        seen.add(x["file"])
-    return None
+    # the copy-list contract has one home, countable_lines.copies_fault, which proof ingestion consumes too
+    return countable_lines.copies_fault(v)
 
 
 def _grade_fault(g):
