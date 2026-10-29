@@ -623,7 +623,7 @@ def test_write_from_session_never_raises_and_removes_its_temp_file(tmp_path, mon
     s = Session(tmp_path).seat("code-reviewer")
     seen = []
 
-    def boom(path, repo_root, readers=None):
+    def boom(path, repo_root, readers=None, **kwargs):
         seen.append(path)
         assert os.path.exists(path) and not path.startswith(str(tmp_path))
         raise RuntimeError("boom")
@@ -636,7 +636,7 @@ def test_write_from_session_never_raises_and_removes_its_temp_file(tmp_path, mon
     # bites on: the temporary directory outliving a success or a refusal
     made, real = [], rs.tempfile.mkdtemp
     monkeypatch.setattr(rs.tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
-    monkeypatch.setattr(rr, "write", lambda path, repo_root, readers=None: {"ok": True, "action": "created"})
+    monkeypatch.setattr(rr, "write", lambda path, repo_root, readers=None, **kwargs: {"ok": True, "action": "created"})
     assert send(tmp_path, s.save(), Fake())["ok"] is True
     assert send(tmp_path, Session(tmp_path / "r", terminal=None).save(), Fake())["ok"] is False
     assert len(made) == 2 and not any(os.path.exists(d) for d in made)
