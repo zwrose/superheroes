@@ -29,6 +29,7 @@ if _LIB_DIR not in sys.path:
 
 import audits as audits_mod  # noqa: E402
 import break_it  # noqa: E402
+import countable_lines  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import pr_body_stage  # noqa: E402
@@ -782,6 +783,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     extra = state.get("extraAudit")
+    # the copies the proof still covers in the head diff the reviewers were last given: none whose section changed
+    proven_copies = countable_lines.still_proven(
+        state.get("provenCopies") or [], state.get("headDiff") or state.get("reviewedDiff"))
     # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
     # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
     counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
@@ -795,6 +799,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                        **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
+            **({"provenCopies": proven_copies} if proven_copies else {}),
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
