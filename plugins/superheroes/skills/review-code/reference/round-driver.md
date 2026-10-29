@@ -731,24 +731,34 @@ as usual.
 1. The shared lock, upgrade and commit-recovery refusals.
 2. `extra-audit-state-unreadable`.
 3. `extra-audit-order-invalid`.
-4. `extra-audit-not-at-cap`: the session is not `handed-back` with last decision `round-cap` or
+4. `extra-audit-already-run`: this session already ran one. This comes before the at-cap check
+   because a session that ran its extra round ends on that round's own terminal, never on the cap's.
+5. `extra-audit-not-at-cap`: the session is not `handed-back` with last decision `round-cap` or
    `fix-keeps-failing`.
-5. `extra-audit-already-run`: this session already ran one.
 6. `extra-audit-nothing-to-audit`: no fix the cap round applied is unaudited. A `fix-keeps-failing`
    handback always lands here, because its last fix was already audited.
 7. `extra-audit-head-unresolvable` and `extra-audit-head-moved`: the checkout's HEAD is not the
    session's certified head.
-8. `extra-audit-receipt-faulted`: the finalized receipt fails its on-disk check, or an existing
-   superseded copy does not match it.
-9. `extra-audit-pr-history-unreadable`: the PR's comments could not be listed, or a review-record
-   comment on it does not parse, or an extra-audit reservation comment names no session, or the
-   repository could not be resolved from the session checkout. This fails closed.
-10. `extra-audit-already-run-on-pr`: an earlier review record on the PR shows an extra audit round,
-    or another session already posted its reservation comment on the PR.
+8. `extra-audit-receipt-faulted` (the finalized-receipt check): the finalized receipt fails its
+   on-disk check.
+9. `extra-audit-pr-history-unreadable` (the first PR-history read): the repository could not be
+   resolved from the session checkout, or the PR's comments could not be listed, or a review-record
+   comment on it does not parse, or an extra-audit reservation comment names no session. This fails
+   closed.
+10. `extra-audit-already-run-on-pr` (the first PR-history read): an earlier review record on the PR
+    shows an extra audit round, or another session already posted its reservation comment on the PR.
 11. `extra-audit-reservation-failed`: the reservation comment could not be posted. Once every check
     above passes, and before the receipt copy and the state commit, the verb posts one comment on the
     PR (first line `<!-- superheroes:extra-audit-reserved -->`, then the session id and the order's
     why). A reservation from the same session does not count, so a re-run after a crash carries on.
+    A refusal after this point leaves the reservation comment on the PR.
+12. `extra-audit-pr-history-unreadable` (the re-read after the reservation is posted): the verb reads
+    the PR's comments again, and the re-read fails for any reason item 9 names. This fails closed.
+13. `extra-audit-already-run-on-pr` (the re-read): another session's reservation, or a review record
+    showing the extra round, has a lower comment id than this session's own reservation. The first
+    reservation posted wins; the loser keeps its reservation in place and refuses.
+14. `extra-audit-receipt-faulted` (the superseded-copy check): the receipt cannot be copied to its
+    superseded name, the copy does not match it, or an existing superseded copy does not match it.
 
 **The round.** The verb reopens the session as round 5, the cap plus one. That round dispatches
 **only `dispatch-audits`**, over the cap round's fixes. It runs no panel, scoped finder, gap sweep,

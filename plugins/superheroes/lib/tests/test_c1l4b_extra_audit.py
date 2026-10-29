@@ -8,7 +8,7 @@ sessions. No session begins round `cap + 1` except through the `extra-audit` ver
 Drives the real round driver through the CLI functions (`cmd_next`, `cmd_submit`, `cmd_extra_audit`) on a session
 directory built the way production builds one, and the review record writer through its injected readers.
 
-Bite-proof record: c1l4b_wo_a
+Bite-proof records: c1l4b_wo_a, c1l4b_wo_g
 """
 import glob
 import hashlib
@@ -26,6 +26,7 @@ for _p in (_HERE, _LIB):
 
 import review_record as RR  # noqa: E402
 import review_record_session as RS  # noqa: E402
+import test_outcome_settle_c7 as TOC  # noqa: E402
 import test_review_record as TRR  # noqa: E402
 import test_review_record_session as TRRS  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
@@ -276,6 +277,46 @@ def test_t2b_a_new_issue_raised_by_the_extra_audit_is_settled_and_never_searched
     raised = _rows(final, "raised-by-the-audit")
     assert len(raised) == 1 and raised[0]["disposition"] == "left-for-owner", raised
     assert "_newIssues" not in final
+
+
+# --- T2c: guidance no fixer ever received keeps the extra round from converging ------------------------
+
+_RULED_KEY = "f.py::bug@L1"  # the panel's round-1 finding: fixed and audited long before the extra round
+
+
+def _guided_extra_round(tmp_path, monkeypatch, ruled):
+    """An ordered extra round whose audits all discharge; with `ruled`, a guidance ruling on a session
+    finding the extra round's audit targets do not carry is recorded after the order and before the audits."""
+    d, batch = _ordered(tmp_path, monkeypatch)
+    assert _RULED_KEY not in batch, batch
+    if ruled:
+        path = TOC._write_rulings(tmp_path / "rulings.json", [
+            {"id": _RULED_KEY, "ruling": "guidance", "reason": "the owner wants it handled this way",
+             "guidance": "keep the public signature as it is"}])
+        out = RD.cmd_rule(d, path, "owner")
+        assert out.get("ok"), out
+        assert [r["ruling"] for r in _state(d)["rulingsLog"]] == ["guidance"]
+    terminal, emitted = _finish(d, _respond())
+    assert emitted == [RD.P_AUDITS, RD.P_TERMINAL], emitted
+    return terminal, _state(d)
+
+
+def test_t2c_a_guidance_ruling_no_fixer_received_hands_the_extra_round_back_open(tmp_path, monkeypatch):
+    # axis: a guidance ruling no fixer ever received keeps the extra round from converging — see bite-proof record c1l4b_wo_g
+    terminal, final = _guided_extra_round(tmp_path, monkeypatch, ruled=True)
+    assert terminal["payload"]["verdict"] == "handed-back"
+    assert final["terminal"] == "handed-back" and final["decisions"][-1]["kind"] == "extra-audit-open"
+    detail = final["decisions"][-1]["detail"]
+    assert "guidance recorded but never sent to a fixer" in detail and "(guidance)" in detail, detail
+    assert final["certification"]["shape"] is None and "(guidance)" in final["certification"]["reason"]
+
+
+def test_t2c_the_same_extra_round_without_the_ruling_converges(tmp_path, monkeypatch):
+    # axis: A/B for the test above — with no ruling recorded the same discharged audits converge
+    terminal, final = _guided_extra_round(tmp_path, monkeypatch, ruled=False)
+    assert terminal["payload"]["verdict"] == "converged"
+    assert final["terminal"] == "converged" and final["decisions"][-1]["kind"] == "converged"
+    assert not final.get("rulingsLog")
 
 
 # --- T3: a second order in the same session ----------------------------------------------------------

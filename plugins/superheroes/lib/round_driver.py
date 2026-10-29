@@ -6573,6 +6573,7 @@ def _settle_extra_audit(state, config):
                    cap=True)
         return
     pending = _pending_owner_rulings(state)
+    # axis: a guidance ruling no fixer ever received keeps the extra round from converging — see bite-proof record c1l4b_wo_g
     if pending:
         _hand_back(state, "extra-audit-open",
                    "The extra audit round ended with owner guidance recorded but never sent to a "
