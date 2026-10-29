@@ -226,7 +226,7 @@ fast-follow):
   ones.
 - **The loop stops at 4 rounds, with no ceiling above them, and hands back what is open.** It has
   no stall menu and puts nothing to the owner mid-review. A PR handed back with an open blocker is
-  resolved at the vet — an extra audit round, a leftover, or a send-back — never quietly merged.
+  resolved at the vet — a leftover or a send-back — never quietly merged.
 
 **And one independent read *after* handback: the advisor's vet.** Review-before-handback checks the
 **code**; the vet checks the **PR** — the last independent read before the owner's one irreversible

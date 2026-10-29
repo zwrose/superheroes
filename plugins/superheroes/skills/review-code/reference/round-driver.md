@@ -8,7 +8,6 @@
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Rounds, the cap and handback](#rounds-the-cap-and-handback)
-- [The extra audit round (`extra-audit`)](#the-extra-audit-round-extra-audit)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
 - [Dispositions](#dispositions)
 - [Actions and payloads](#actions-and-payloads)
@@ -401,7 +400,7 @@ The driver materializes them before order emit (see also the inline comment at
   one in a run with no repository; it then materializes the file the audit/scoped order cites).
 - **`round-<N>/fix-batch.json`** — `_ensure_fix_batch_file` from state `_fixBatch` / `fixBatch` when
   the fixer order renders. Each row carries `priorAudit {round, ruling, reason}` (the last audit
-  ruling on that finding) and `gateRuling {round, disposition, reason}` (the last gate decision a session minted at generation 6 recorded),
+  ruling on that finding) and `gateRuling {round, disposition, reason}` (the last gate decision the state recorded on that finding, when it holds one),
   derived at render time from the loop record by finding key. If the orchestrator pre-writes this file and the bytes differ from the
   driver's re-derivation, the driver **replaces** it silently — do not treat a hand-written
   `fix-batch.json` as authoritative over loop state.
@@ -597,7 +596,7 @@ one, otherwise craft. The only below-blocking finding a fixer receives is one an
 
 Guidance is held to the same measure. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes (stripped UTF-8) refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a render whose fix batch would carry more guidance than one order holds refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
 
-A finding has one effective decision: the latest of a `rule` ruling and a gate decision recorded by a session minted at generation 6 (`skip`, `fix-with-guidance`, `fix-as-suggested`), ordered by one shared sequence; a gate entry written before that sequence existed counts as older than every sequenced decision. A later `fix-as-suggested` (or a `fix-with-guidance` with no guidance text) supersedes an earlier skip or guidance; a skip carries its `followUp`. The fixer order renders only that decision — guidance the owner later replaced is never shown beside the new guidance — and a tradeoff whose effective decision is a non-Critical skip is not held for the owner's choice again. Only guidance carries: a skip (a `rule` out-of-scope ruling or a recorded gate skip) binds its own finding only — also inside a lineage made by carried guidance — so a reworded or different finding at its place is judged fresh — fixed, or left for the owner. When a later round raises a finding at the same file and line under different wording, it takes the guidance decision of the finding it rewords (`state.findingLineage`, with a `ruling-carried` entry in the decisions), provided exactly one finding is raised at that place in that round (across every staging of the round, the panel and a gap sweep alike — a carry a later staging of the round makes ambiguous is undone, `ruling-carry-revoked`, with the disposition it inherited), the earlier finding is not itself raised again in that round, and only one earlier decision sits there. Anything less certain carries nothing, and the reworded finding is judged fresh.
+A finding has one effective decision: the latest of a `rule` ruling and a gate decision the state recorded (`skip`, `fix-with-guidance`, `fix-as-suggested`), ordered by one shared sequence; a gate entry written before that sequence existed counts as older than every sequenced decision. A later `fix-as-suggested` (or a `fix-with-guidance` with no guidance text) supersedes an earlier skip or guidance; a skip carries its `followUp`. The fixer order renders only that decision — guidance the owner later replaced is never shown beside the new guidance — and a tradeoff whose effective decision is a non-Critical skip is not held for the owner's choice again. Only guidance carries: a skip (a `rule` out-of-scope ruling or a recorded gate skip) binds its own finding only — also inside a lineage made by carried guidance — so a reworded or different finding at its place is judged fresh — fixed, or left for the owner. When a later round raises a finding at the same file and line under different wording, it takes the guidance decision of the finding it rewords (`state.findingLineage`, with a `ruling-carried` entry in the decisions), provided exactly one finding is raised at that place in that round (across every staging of the round, the panel and a gap sweep alike — a carry a later staging of the round makes ambiguous is undone, `ruling-carry-revoked`, with the disposition it inherited), the earlier finding is not itself raised again in that round, and only one earlier decision sits there. Anything less certain carries nothing, and the reworded finding is judged fresh.
 
 ## Batch concurrency — an independent batch goes out together
 
@@ -690,9 +689,7 @@ and its verify gate, and then the session hands the PR back.
 - **The cap round ends with something open.** The session hands back through the one handback
   terminal (`_hand_back` in `lib/round_driver.py`), verdict `handed-back`, last decision
   `round-cap`, with every open finding, Important and Critical alike, each with its outcome. There
-  is no park or held state, no automatic extra round, and no new session started to keep going. At
-  the vet the advisor may order one [extra audit round](../../../rubric/glossary.md#extra-audit-round)
-  (§ The extra audit round).
+  is no park or held state, no automatic extra round, and no new session started to keep going.
 - **The same fix fails its audit in two rounds in a row.** The session makes one automatic recovery
   attempt: the fix is re-dispatched one rung up. No recovery attempt runs when the second failure is
   in the cap round. If the fix still fails after the recovery attempt, the session hands back with
@@ -706,48 +703,10 @@ and its verify gate, and then the session hands the PR back.
 - **Nothing from the review reaches the owner mid-review.** The driver emits no owner-facing step,
   accepts no owner artifact on `advance`, and no gate policy resolves one.
 
-The four `handed-back` decision kinds are `round-cap`, `fix-keeps-failing`, `owner-choice-open` and
-`extra-audit-open`. The result file maps `converged` to `exit_clean` and every other verdict to
+The three `handed-back` decision kinds are `round-cap`, `fix-keeps-failing` and
+`owner-choice-open`. The result file maps `converged` to `exit_clean` and every other verdict to
 `halt`. The review record reads rounds as `<count> of <cap>` and says the loop stopped at its cap for
-`round-cap` and `extra-audit-open` ([review-record.md](review-record.md)).
-
-## The extra audit round (`extra-audit`)
-
-At the vet, when a PR is handed back at the cap with an open finding that has a real owner
-consequence, the advisor may order one extra audit round that only audits the last round's fixes. It
-runs no panel and no new search: no scoped finder and no fix leg. It is allowed at most once per PR.
-
-**How the order reaches the session.** The advisor names it in its vet, and the build session that
-owns the handed-back session runs:
-
-```bash
-python3 -B <plugin root>/lib/round_driver.py extra-audit --session-dir <session dir> --order-file <order file> --by '<who ordered it>' --pr <n> --repo <owner/name>
-```
-
-The order file is JSON `{"why": "<non-blank reason>"}`.
-
-**What the verb checks.** It reads the PR's earlier review records before it accepts. It refuses with:
-
-| `reason` | condition |
-| --- | --- |
-| `extra-audit-not-at-cap` | the session's terminal is not a `handed-back` / `round-cap` |
-| `extra-audit-already-run` | this session already ran one |
-| `extra-audit-already-run-on-pr` | an earlier review record on the PR shows one |
-| `extra-audit-pr-history-unreadable` | the PR's records cannot be read; this fails closed |
-| `extra-audit-nothing-to-audit` | the last round left no unaudited fix |
-| `extra-audit-order-malformed` | the order file is not the shape above (JSON with a non-blank `why`) |
-
-**What it does.** It moves the finalized terminal receipt aside to
-`round-receipt.before-extra-audit.json` and reopens the session as round cap+1. The next `next`
-emits `dispatch-audits` over the last round's fixes only.
-
-**How it ends.** The session converges when every audited fix is discharged and nothing else is
-blocking. Otherwise it hands back with `handed-back` / `extra-audit-open`.
-
-**In the record.** The round is labelled `Extra audit round: ran, ordered at the vet and not counted
-in the 4 rounds: <why>.` and is not counted in the rounds. The record writer refuses
-`review-record-extra-audit-repeated` when a different session's earlier record on the same PR
-already shows one.
+`round-cap` ([review-record.md](review-record.md)).
 
 ## Lens coverage beside counts
 
@@ -919,16 +878,11 @@ example the finding keys this driver mints), so resuming under a plugin other th
 minted the session can apply the wrong disposition. Recorded rows that carry no cited-head
 derivation are read as they were recorded, not refused.
 
-**A session at generation 6 finishes.** State the driver mints carries `sessionGeneration`, set to
-the integer `7`; the key is written only when state is minted and is never added to a loaded state.
-A session minted at generation 6 is not refused. It finishes with the cap it recorded when it
-started (its stored `maxRounds`), applied as the round boundary. Every finding it took in ends with an outcome, as in § How the loop settles what is
-left. A generation-6 session waiting at a step the driver no longer emits hands back instead: a
-stall-menu step with `handed-back` / `fix-keeps-failing`, a judgment step with `handed-back` /
-`owner-choice-open`. Nothing is put to the owner in either case.
-
-**A session from generation 5 or older is not continued.** A saved state is that old when it is a
-JSON object whose `sessionGeneration` is absent or is generation 5 or older, or whose
+**A session of an earlier generation is not continued.** State the driver mints carries
+`sessionGeneration`, set to the integer `7`; the key is written only when state is minted and is
+never added to a loaded state. Generation 7 is current; any other value, `6` included, is earlier.
+A saved state is from an earlier generation when it is a
+JSON object whose `sessionGeneration` is absent or is anything other than the integer `7`, or whose
 `schemaVersion` is an integer the driver still supports (`2`, `3` or `4`) that is older than the
 current state version, `5`. Any other `schemaVersion` (`1`, a later one, a non-integer, `true`, or
 `null`) is not such a session: the state loader refuses it as unsupported and no restart marker
@@ -951,7 +905,7 @@ could not write is removed again); `markerWritten` appears only in those two cas
 `loop-state.json` in the old directory and touches nothing else there: no journal row is appended,
 and every other file stays as it was; a session lock held by another process answers the usual
 `<cmd>-locked` refusal with its `holder`, likewise without a journal row. A finished session of
-generation 5 or older is left alone: `next` on it returns its terminal answer again. A missing, unreadable, non-JSON
+an earlier generation is left alone: `next` on it returns its terminal answer again. A missing, unreadable, non-JSON
 or non-object `loop-state.json` is repaired from its mirror when the mirror can be trusted (§ Session
 repair), and otherwise handled by the refusals that exist for those cases.
 
@@ -1035,12 +989,12 @@ abandoned session.
   (required) and `executionEvidence` (optional), bound together by `envelopeSha256`; sessions at v2–v4
   continue to land `seat-result/1`. No stored state field is removed at the bump, so in-flight lanes
   complete on their recorded version.
-- `verdict` — the terminal verdicts the driver writes are `converged`, `handed-back`, `halted` (a verify failure), `cannot-certify` and the attested `uncertified-manual`. `held`, `stalled`, `capped-with-open-critical` and `capped-with-open-blocker` are never written; a reader meets them only in the state of a session of generation 6 or older that finished with one. A `handed-back` receipt names its decision kind (§ Rounds, the cap and handback). The result file maps `converged` to `exit_clean` and every other verdict to `halt`.
+- `verdict` — the terminal verdicts the driver writes are `converged`, `handed-back`, `halted` (a verify failure), `cannot-certify` and the attested `uncertified-manual`. `held`, `stalled`, `capped-with-open-critical` and `capped-with-open-blocker` are never written; a reader meets them only in the state of a finished session of an earlier generation. A `handed-back` receipt names its decision kind (§ Rounds, the cap and handback). The result file maps `converged` to `exit_clean` and every other verdict to `halt`.
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted
   channel names that fired for the certification shape (the channel names are the `shape_drivers.append(...)` sites in `lib/round_driver.py`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), plus one field per disclosure channel in `CARRIED_DISCLOSURE_CHANNELS` (`lib/receipt_disclosures.py`), `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (set only by a session of generation 6 that recorded one). `judgmentDispositions` carries the per-finding judgment dispositions a session of generation 6 recorded — including free-text guidance on a `fix-with-guidance` ruling, so a finished run's receipt still shows what the owner instructed. `gateGuidanceRowCarried` records when a fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance. Each `compileDrops` entry's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel.
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), plus one field per disclosure channel in `CARRIED_DISCLOSURE_CHANNELS` (`lib/receipt_disclosures.py`), `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (set only when the state recorded one). `judgmentDispositions` carries the per-finding judgment dispositions the state recorded — including free-text guidance on a `fix-with-guidance` ruling, so a finished run's receipt still shows what the owner instructed. `gateGuidanceRowCarried` records when a fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance. Each `compileDrops` entry's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel.
 - `findings` — each row carries `id`; `findingKey` is stamped only when the state's
   `schemaVersion` is at least `STATE_SCHEMA_VERSION` — receipt schema versions 2–4 omit it
 - `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
@@ -1067,7 +1021,7 @@ receipt round `"0"`.
 | `vacuousSeats` | Seat dict has `vacuous: true` or `reason: "vacuous"` (empty findings with no verifiable investigation record). The seat folds as `missing` in `seatStatus` — it cannot anchor a `full-panel-confirmed` certification. | `vacuous-seat (round N): …` |
 | `orderVendorProvenanceGaps` | An emitted order seat on a `dispatch-review` phase had no **resolved** vendor — absent from the seat map, or `vendorSource: "defaulted"` (a fallback the driver guessed, not evidence). Its order rendered the stdout contract. | `order-vendor-provenance-gap (round N): …` |
 
-- `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per blocker a session of generation 6 skipped at its judgment step; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.
+- `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per blocker the state recorded as skipped at a judgment step; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.
 
 `validate_receipt(receipt)` returns `(ok, reason)` — a missing `scriptRan.byPhase` or non-list
 `rounds`/`findings`/`skippedBlockers` rejects the receipt.
@@ -1099,7 +1053,7 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
 | `*-degraded` | Appended when `independence` is degraded — including a fix whose audit did not run because no live vendor sits outside the fixer's and the makers' families, a true single-vendor configuration, base fetch degraded, the seat map disclosed same-family self-review, no usable seat map was submitted (`seat-map-unavailable`), the submitted seat map's violation basis is incomplete (`seat-map-unavailable` shape driver — same token as absent-map), or a standing pin excused a constraint. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s); supersedes `*-degraded` when both would apply. |
-| `null` / withheld | Verify fail, a handback (`handed-back`: `round-cap`, `fix-keeps-failing`, `owner-choice-open`, `extra-audit-open`), or `cannot-certify`. |
+| `null` / withheld | Verify fail, a handback (`handed-back`: `round-cap`, `fix-keeps-failing`, `owner-choice-open`), or `cannot-certify`. |
 
 **Terminals the orchestrator must surface honestly:**
 
@@ -1108,7 +1062,6 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 - **Handback at the cap** — `handed-back` / `round-cap`: round 4 ended with something open. Every open finding, Important and Critical alike, is listed with its outcome; the PR goes back to its owner.
 - **Handback after a failed recovery** — `handed-back` / `fix-keeps-failing`: the fix still fails its audit after the recovery attempt.
 - **Handback on an owner's choice** — `handed-back` / `owner-choice-open`: a finding only the owner's choice can settle is still open when nothing else is left to fix. It reaches the owner as a leftover at the vet.
-- **Handback after the extra audit round** — `handed-back` / `extra-audit-open`: the extra audit round ended with a fix undischarged (§ The extra audit round).
 - **Verify failure** — terminal `halted`, certification withheld.
 
 **Library `recordsPath` / `round-records.json` seam.** When config carries
@@ -1152,7 +1105,7 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
   clean round resets the window; it triggers the one recovery attempt, and a stall that persists
   hands back (`fix-keeps-failing`). The round cap is a boundary on the round about to begin, and
-  **no session's round counter exceeds the cap** except by the one extra audit round. Callers
+  **no session's round counter exceeds the cap**. Callers
   of `advance` must not treat `ok: true` from a nested `cmd_submit` as a landed fold unless
   `foldLanded` is set; the `notFolded` receipt names why.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.
