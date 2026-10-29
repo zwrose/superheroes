@@ -132,6 +132,8 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 # Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
+# The verifier's grade on a finding; only `_fold_verifiers` writes it (`_seed_ledger_entry` strips a seat's).
+GRADE_FIELD = "grade"
 
 
 def _fixer_create_items(batch):
@@ -1619,6 +1621,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
     any other is stripped. Touches neither ``_toVerify`` nor the live findings."""
     existing = ledger[seen[key]] if key in seen else None
     entry = _strip_disposition_family(dict(finding))
+    # axis: a grade a seat supplied is never seeded; only the verifier fold grades — see bite-proof record c1l7_wo_b_verifier_grade
+    entry.pop(GRADE_FIELD, None)
     entry.pop(session_contract.RAISED_SEQ_FIELD, None)
     entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
     entry[session_contract.RAISED_ROUND_FIELD] = round_no
@@ -1628,6 +1632,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         for field in session_contract.DISPOSITION_FAMILY_FIELDS:
             if field in existing:
                 entry[field] = existing[field]
+        if GRADE_FIELD in existing:  # a finding refuted earlier this round keeps the grade that closed it
+            entry[GRADE_FIELD] = existing[GRADE_FIELD]
     else:
         entry = _strip_disposition_family(entry)
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
@@ -1860,7 +1866,9 @@ def _stage_findings(state, compiled):
             continue
         key = _finding_identity_key(finding)
         if not key:
-            sanitized.append(finding)
+            # No ledger entry to seed, but a seat's grade must not reach `_toVerify` either.
+            sanitized.append({k: v for k, v in finding.items() if k != GRADE_FIELD}
+                             if GRADE_FIELD in finding else finding)
             continue
         carry.apply(state, finding, key)
         held_follow_up = _ledger_follow_up(ledger, seen, key)
@@ -2213,6 +2221,30 @@ def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope
     if live is not None:
         _apply_disposition_family(live, family)
         live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
+
+
+def _record_grade(state, key, grade):
+    """Set the verifier's ``grade`` on the finding's ledger entry (created when the key has none) and
+    on its live finding when there is one. A non-dict grade or an empty key writes nothing."""
+    if not isinstance(grade, dict) or not isinstance(key, str) or not key:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = dict(ledger[seen[key]])
+    elif live is not None:
+        entry = dict(live)
+        entry[session_contract.RAISED_ROUND_FIELD] = state.get("round")
+    else:
+        entry = {session_contract.FINDING_KEY_FIELD: key}
+    entry[GRADE_FIELD] = dict(grade)
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
+    if live is not None:
+        live[GRADE_FIELD] = dict(grade)
 
 
 def _clear_out_of_scope_disposition(state, key):
@@ -3775,6 +3807,13 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         "unverified": len(applied["unverified"]),
         "ambiguous": len(applied["ambiguous"]),
     })
+    for survivor in applied["findings"]:
+        grade = survivor.get(GRADE_FIELD)
+        if isinstance(grade, dict):
+            # A survivor whose staged id resolves to no keyed finding keeps the grade on its copy only.
+            staged_finding, fault = _resolve_staged_finding(staged, survivor.get("id"))
+            if not fault and isinstance(staged_finding, dict):
+                _record_grade(state, _finding_identity_key(staged_finding), grade)
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
         staged_finding, fault = _resolve_staged_finding(staged, d.get("id"))
@@ -3786,6 +3825,8 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             key = _finding_identity_key(staged_finding)
             if key:
                 reason = d.get("reason") or "verifier refuted (no reason recorded)"
+                # axis: the refuted ledger row carries the wrong grade that closed it, written before the disposition — see bite-proof record c1l7_wo_b_verifier_grade
+                _record_grade(state, key, d.get(GRADE_FIELD))
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     for n in applied["notExecuted"]:
         _decision(state, "verifier-not-executed", n.get("reason"))
