@@ -3289,7 +3289,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
     intercepted, runs, exempt = break_it.intercept(
         break_it_raw, repo_root, head,
-        interpreter=break_it.resolve_interpreter(config))
+        interpreter=break_it.resolve_interpreter(config), scratch=session_dir)
     # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
     # test role's first finding, so the original order holds.
     break_it_ids = {id(g) for g in break_it_raw}

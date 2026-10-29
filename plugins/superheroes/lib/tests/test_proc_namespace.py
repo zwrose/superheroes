@@ -17,8 +17,7 @@ _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # test_git_setup_timeout_kills_the_helper_descendants is deliberately not a member: its assertion matches helpers by command line, which reads correctly from any namespace's procfs.
 _CENSUS = (
     test_break_it.test_t9_run_one_kills_a_lingering_worker,
-    test_break_it.test_t9_cwd_net_kills_a_detached_worker_without_the_reaper,
-    test_break_it.test_t9_tag_net_kills_a_detached_worker_that_left_the_copy,
+    test_break_it.test_t9_tag_net_kills_a_detached_worker_that_left_the_working_directory,
     test_break_it.test_exception_after_launch_still_lets_the_reaper_collect_a_detached_worker,
     test_break_it.test_t9_drain_start_failure_still_reaps_the_launched_process,
     test_break_it_probe_1910.test_e1_the_probes_detached_worker_is_gone_after_run_one,
