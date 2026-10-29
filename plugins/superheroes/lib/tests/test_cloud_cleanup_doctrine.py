@@ -190,7 +190,31 @@ def test_duty_8_closes_the_list_and_duties_1_to_7_are_unchanged():
     )
     assert base.returncode == 0, f"cannot read {_OWNER_DECISIONS} at {_BASE}: {base.stderr}"
     base_block = _duties_block(base.stdout, _BASE_DUTIES_LABEL)
-    assert first_seven == base_block, "duties 1 to 7 changed"
+    # Duty 4 changed once on purpose when the forward-share dial and its folded-in list were retired; it is
+    # pinned to that text, and every other duty must still read as it did at the base.
+    assert _without_item(first_seven, 4) == _without_item(base_block, 4), "duties 1 to 3 or 5 to 7 changed"
+    assert _item(first_seven, 4) == _DUTY_4, "duty 4 changed"
+
+
+_DUTY_4 = [
+    "4. **Record the decisions-asked count** for the window. List the window's declines with their",
+    "   triggers, one per line.",
+]
+
+
+def _item(block, number):
+    """The lines of top-level numbered item ``number`` in ``block``."""
+    spans = _numbered_items(block) + [(None, len(block))]
+    for (n, start), (_, end) in zip(spans, spans[1:]):
+        if n == number:
+            return block[start:end]
+    raise AssertionError(f"item {number} not found")
+
+
+def _without_item(block, number):
+    item = _item(block, number)
+    start = block.index(item[0])
+    return block[:start] + block[start + len(item):]
 
 
 # A bite-proof record quotes what it neutralized, so it may name the retired label.
