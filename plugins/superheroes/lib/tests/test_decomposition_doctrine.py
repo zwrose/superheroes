@@ -35,6 +35,7 @@ PIN_POST_APPROVAL = (
 
 _DECOMPOSITION_H2_HEADINGS = [
     "When epic machinery fires",
+    "The epic's short tag",
     "The coverage map",
     "The contract register",
     "Seam-first sequencing",
