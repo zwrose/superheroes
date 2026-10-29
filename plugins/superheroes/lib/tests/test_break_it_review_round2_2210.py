@@ -646,3 +646,28 @@ def test_g7_the_same_refuted_finding_with_only_a_passing_run_does_not_park():
     state = _kept_state({1: [_run_record("passed")]})
     assert RD._break_it_kept_step(state, state["config"]) is False
     assert state.get("terminal") is None
+
+
+# ---- round-1 review fixes: capped Nit binding and run history on archive ---------------------------------
+
+
+def test_a_run_binds_to_a_nit_a_summary_row_collapsed():
+    block = "break-it-test v1\npath: a.py\nrun: python a.py\n---\npass\n"
+    member = {"file": "a.py", "title": "x", "line": 3, "findingKey": "member-key", "suggestion": block}
+    summary = {"title": "+ 1 more Nits", "severity": "Nit", "file": None, "line": None,
+               "summaryEntry": True, "members": [member]}
+    out = RD._break_it_run_keys([{"file": "a.py", "title": "x", "line": 3}], [summary])
+    assert len(out) == 1 and out[0]["findingKey"] == "member-key"
+    assert not out[0].get("droppedAtCompile")
+
+
+def test_archiving_an_older_live_row_keeps_the_ledger_runs():
+    old, new = {"outcome": "failed", "n": 1}, {"outcome": "passed", "n": 2, "changedWhy": "fixed the test"}
+    key_field = session_contract.FINDING_KEY_FIELD
+    live = {key_field: "k1", "file": "a.py", "title": "t", break_it.RUNS_FIELD: [old]}
+    state = {session_contract.DISPOSITION_LEDGER_KEY: [
+        {key_field: "k1", "file": "a.py", "title": "t", break_it.RUNS_FIELD: [old, new]}],
+        "dispositionLedgerOwner": session_contract.DISPOSITION_LEDGER_OWNER_VALUE}
+    RD._archive_departures(state, [live])
+    row = state[session_contract.DISPOSITION_LEDGER_KEY][0]
+    assert row[break_it.RUNS_FIELD] == [old, new]

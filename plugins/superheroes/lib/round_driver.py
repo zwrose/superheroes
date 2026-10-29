@@ -2483,6 +2483,16 @@ def _archive_departures(state, departing):
             raised = session_contract.RAISED_ROUND_FIELD
             if raised in prior and raised not in replacement:
                 replacement[raised] = prior[raised]
+            prior_runs = prior.get(break_it.RUNS_FIELD)
+            if isinstance(prior_runs, list):
+                # axis: a live row older than the ledger entry never overwrites the runs the ledger accumulated (changedWhy included)
+                live_runs = replacement.get(break_it.RUNS_FIELD)
+                merged = list(live_runs) if isinstance(live_runs, list) else []
+                extra = [run for run in prior_runs if run not in merged]
+                if extra:
+                    replacement[break_it.RUNS_FIELD] = merged + extra
+                    if isinstance(prior.get(break_it.RUN_FIELD), dict):
+                        replacement[break_it.RUN_FIELD] = prior[break_it.RUN_FIELD]
         if key in seen:
             ledger[seen[key]] = replacement
         else:
@@ -3109,7 +3119,14 @@ def _break_it_run_keys(runs, compiled):
     proposal compile merged away is `supersededAtCompile` with no key; a run whose finding compile dropped is
     `droppedAtCompile` with no key."""
     by_anchor, by_identity = {}, {}
+    flat = []
     for f in compiled:
+        flat.append(f)
+        # axis: a Nit a summary row collapsed still carries its attached test, so its run binds to the member
+        members = f.get("members") if isinstance(f, dict) and f.get("summaryEntry") else None
+        if isinstance(members, list):
+            flat.extend(members)
+    for f in flat:
         if isinstance(f, dict) and break_it.carries_test(f):
             ident = (f.get("file"), normalize_title(str(f.get("title") or "")))
             # axis: compile keeps same-file, same-title findings at different lines apart, so a run binds to the full (file, title, line) anchor — see bite-proof record wo_a_2210_break_it_working_copy
