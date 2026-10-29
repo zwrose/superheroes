@@ -20,6 +20,7 @@ import round_orders as ro
 import round_phases as rp
 
 import test_engine_dispatch as ted
+from test_engine_dispatch import _pin_temp_base_to_tmp_path  # noqa: F401  autouse: keeps views and journals under tmp_path
 from test_review_record_session import CODEX, Fake, Session, extras, put_envelope, put_extras
 from test_round_orders import _base_context, _gapsweep_placeholders, _panel_placeholders
 
