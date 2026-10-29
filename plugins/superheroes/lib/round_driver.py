@@ -7008,6 +7008,12 @@ def _break_it_kept_step(state, config):
                     state, "break-it run dropped at compile: %s (%s)"
                     % (run.get("path"), run.get("outcome")))
                 return True
+            # axis: a break-it run whose working-copy restore failed withholds certification whatever the finding's disposition and whatever later run replaced it, because the session's repository may be left altered
+            if isinstance(run, dict) and run.get("reason") == "working-copy-restore-failed":
+                _park_cannot_certify(
+                    state, "break-it working copy not restored: %s (%s)"
+                    % (run.get("path"), str(run.get("output") or "")[-200:]))
+                return True
     latest = {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
