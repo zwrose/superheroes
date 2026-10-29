@@ -1216,6 +1216,9 @@ def classify_violations(
             unexcused.append(stamped)
             continue
 
+        raw_makers = seat_map.get("makerFamilies")
+        maker_set = {f for f in (raw_makers if isinstance(raw_makers, list) else []) if isinstance(f, str) and f}
+        maker_set.add(author_family)
         achievable: set[str] | None = set()
         for cs in collapsed:
             cfg = seats.get(cs)
@@ -1231,7 +1234,7 @@ def classify_violations(
                 if fams is None:
                     achievable = None
                     break
-                achievable |= fams - {author_family}
+                achievable |= fams - maker_set
 
         if achievable is None:
             stamped = dict(v)
