@@ -979,6 +979,17 @@ def _tracked_status(root):
     return _must(root, "status", "--porcelain=v1", "-z", "--untracked-files=no").stdout
 
 
+# ``git ls-files -v`` tags for assume-unchanged (h), skip-worktree (S) and both (s).
+_HIDDEN_TAGS = frozenset("hsS")
+
+
+def _hidden_paths(root):
+    """The tracked paths whose index entry carries an assume-unchanged or skip-worktree flag: those flags hide a
+    working-tree edit from ``git diff`` and ``git status``."""
+    raw = _text(_must(root, "ls-files", "-v", "-z").stdout)
+    return [entry[2:] for entry in raw.split("\0") if entry[:1] in _HIDDEN_TAGS and entry[1:2] == " "]
+
+
 def _precheck(root, head):
     """``(pinned commit, None, "")`` when the working copy is exactly ``head`` with no modified or staged tracked
     file, else ``(None, reason, detail)``. Reads only; nothing is written."""
@@ -991,6 +1002,9 @@ def _precheck(root, head):
         # axis: a modified or staged tracked file is never run over, because the restore could not tell the session's work from the run's — see bite-proof record wo_a_2210_break_it_working_copy
         if _tracked_status(root):
             return None, "working-copy-dirty", "a tracked file is modified or staged"
+        # axis: an index flag that hides edits (assume-unchanged, skip-worktree) already set is never run over, because status and diff cannot show what the restore must undo
+        if _hidden_paths(root):
+            return None, "working-copy-dirty", "a tracked file carries an assume-unchanged or skip-worktree flag"
     except _GitFailed as exc:
         return None, "working-copy-unreadable", str(exc)
     return at, None, ""
@@ -1129,10 +1143,18 @@ def _restore_config(root, snap):
 
 
 def _restore_index(root, snap):
-    if not _must(root, "diff", "--cached", "--name-only", "-z").stdout:
-        return False
-    _must(root, "reset", "-q")
-    return True
+    changed = False
+    # axis: an assume-unchanged or skip-worktree flag the run set is cleared before tracked changes are looked for, because the flag hides the edit from diff and status
+    hidden = _hidden_paths(root)
+    if hidden:
+        # one flag per call: git applies only the last of the two options when both are given
+        for option in ("--no-assume-unchanged", "--no-skip-worktree"):
+            _must(root, "update-index", option, "--", *hidden)
+        changed = True
+    if _must(root, "diff", "--cached", "--name-only", "-z").stdout:
+        _must(root, "reset", "-q")
+        changed = True
+    return changed
 
 
 def _restore_tracked(root, snap):

@@ -219,6 +219,31 @@ def test_e6_a_detached_head_is_put_back_detached_at_the_pinned_commit(repo):
     assert _git(repo, "rev-parse", "HEAD") == pinned
 
 
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_e6_an_index_flag_the_test_sets_to_hide_an_edit_is_cleared_and_the_edit_undone(repo, flag):
+    # axis: a test that flags a tracked file then edits it leaves neither the edit nor the flag behind
+    content = ("import subprocess\n"
+               "subprocess.check_call(['git', 'update-index', %r, 'README.md'])\n"
+               "open('README.md', 'w').write('hidden edit\\n')\n" % flag)
+    record = _run(repo, "tests/test_h.py", content)
+    assert record["outcome"] == "passed", record
+    assert "index" in record["restored"] and "tracked" in record["restored"], record
+    assert (repo / "README.md").read_text() == "fixture\n"
+    assert not [l for l in _git(repo, "ls-files", "-v").splitlines() if l[0] in "hsS"]
+    assert _status(repo) == ""
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_e2_a_pre_existing_hiding_index_flag_is_not_run(repo, flag):
+    # axis: a flag already hiding edits is refused at the precheck, since status cannot show what the restore must undo
+    _git(repo, "update-index", flag, "README.md")
+    (repo / "README.md").write_text("hidden edit\n")
+    record = _run(repo, "tests/test_x.py", "assert True\n")
+    assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-dirty"), record
+    assert (repo / "README.md").read_text() == "hidden edit\n"
+    assert not (repo / "tests").exists()
+
+
 def test_e6_a_config_file_that_did_not_exist_is_deleted_again(repo):
     config = repo / ".git" / "config.worktree"
     assert not config.exists()
