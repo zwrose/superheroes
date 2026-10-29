@@ -78,7 +78,9 @@ This mirrors the charter's stamp duty: `handback` after a receipt, `parked` afte
 ## Asking the advisor
 
 Ask by builder note, exactly as `skills/workhorse/reference/cloud.md` § Asking the advisor says,
-including the park when no answer comes.
+including the park when no answer comes. That park is a question park, not an honest exit: its
+text states that no receipt was posted and what you are waiting on. A not-demonstrated `park`
+(above) links the receipt comment.
 
 ## What stays the same
 

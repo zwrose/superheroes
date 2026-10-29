@@ -456,10 +456,12 @@ progress comment to a resumed phase more than five minutes after the park. Still
 fallback.
 
 A lane whose `reserved` ledger record names `charter: detective` (an absent `charter` reads as
-workhorse) is read the same way, with a different action on each. On a **handback** or a **park**, run
+workhorse) is read the same way, with a different action on each. On a **handback**, run
 the diagnosis vet (the showrunner charter's duty to vet diagnosis receipts before routing fixes) on the
-receipt the note links; a park is the detective's honest not-demonstrated exit, so a receipt that
-passes the vet is not sent back for another pass. On a **stop**, the detective declined the work before
+receipt the note links. On a **park**, read its text: a park that links a diagnosis receipt is the
+detective's honest not-demonstrated exit, so run the diagnosis vet and do not send a receipt that
+passes it back for another pass; a park with no receipt is a question that timed out (its text says no
+receipt was posted and what the detective awaits), so answer or route it as for a builder park. On a **stop**, the detective declined the work before
 spend, so route the incident and never repair a launch. No PR is vetted on a detective lane.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
