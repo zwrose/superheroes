@@ -137,7 +137,7 @@ def test_g1_a_session_waiting_at_the_retired_judgment_gate_is_handed_back(tmp_pa
     assert account["findings"] and all(f.get("outcome") for f in account["findings"]), account["findings"]
 
 
-def test_g2_a_session_waiting_at_the_retired_stall_menu_is_handed_back(tmp_path):
+def test_g2_a_session_waiting_at_the_retired_stall_gate_is_handed_back(tmp_path):
     # axis: the judgment gate and the stall menu hand back under different decision kinds — see bite-proof record c1l4b_wo_b
     session_dir = _bootstrap(tmp_path, STALL_MENU)
     before = _state(session_dir)
