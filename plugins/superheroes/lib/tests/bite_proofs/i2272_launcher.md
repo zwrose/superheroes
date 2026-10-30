@@ -61,6 +61,20 @@ FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_an_adoption_ch
 
 **Green:** the two nodes pass (`47 passed` for the file).
 
+## (j) the supersession notice — axis: limit relief needs a notice on the issue that names the lane's launch id
+
+**Guarded element:** `launcher.py` `_original_session_pass`, the `if not _supersession_notice_names(comments, launch_id): continue` check (the `# axis:` comment above it), fed by the issue-comments read `_original_session_refusal` makes in its remote-read stage.
+
+**Neutralization:** replace the condition with `if False:`, so every lane whose account reads limited is relieved with no notice.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_launcher.py -q -p no:randomly`
+
+**Red (expected, not captured this round):** `test_a_limited_stamped_lane_with_no_supersession_notice_refuses_unread`, `test_a_notice_naming_another_launch_gives_no_relief` and `test_a_failed_comments_read_gives_no_relief` fail (the pass returns None where the unread refusal is asserted).
+
+**Restore:** put the condition back; the file equals the committed head.
+
+**Green:** the same three nodes pass, with `test_a_limited_stamped_lane_with_its_supersession_notice_proceeds` passing beside them.
+
 ## (a) `limited is True` — axis: a limit that has passed gives no relief
 
 **Guarded element:** `launcher.py` `_original_session_pass`, the line `and reading.get("limited") is True` in the

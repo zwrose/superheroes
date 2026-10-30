@@ -2987,7 +2987,9 @@ _ADOPT_ORIGINAL_REMEDY_UNREAD = (
     "builders' account is at its usage limit, `cloud_relay.py limit --config-dir <the builders' "
     "config dir>` shows it, and a lane that started before the limit needs no session read until "
     "the reset time it names (the relay records the limit only when it next runs, so send a status "
-    "ping through the relay first); after the reset, the session read is needed again. When the issue's newest "
+    "ping through the relay first), once a supersession notice naming that lane is on the issue: "
+    "post `cloud_builder.py superseded-notice --launch-id <lane>`'s comment there first; after the "
+    "reset, the session read is needed again. When the issue's newest "
     "lane is a local lane on this account, resume that same session instead of adopting."
 )
 _ADOPT_ORIGINAL_REMEDY_STATE = (
@@ -3098,6 +3100,50 @@ def _is_int(value):
 
 
 _NEEDS_FIRST_PR = object()
+_NEEDS_COMMENTS = object()
+
+
+def _issue_comments(repo_root, issue, env):
+    """The issue's comments (every page) as a list, or None when they could not be read whole.
+
+    The repository is the origin's GitHub owner and name; an origin not on github.com, a
+    non-numeric issue or a failed read gives None.
+    """
+    url = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if url is None or url.returncode != 0:
+        return None
+    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
+    if matched is None:
+        return None
+    try:
+        number = int(issue)
+    except (TypeError, ValueError):
+        return None
+    import cloud_recover
+
+    return cloud_recover._issue_comments(
+        "%s/%s" % (matched.group("owner"), matched.group("repo")), number, 1, ll.scrub_env(env), None,
+    )
+
+
+# The paginated comments read; tests replace it.
+_issue_comments_fn = _issue_comments
+
+
+def _supersession_notice_names(comments, launch_id):
+    """True when one of *comments* opens with the supersession header and names *launch_id* as a whole token."""
+    if not isinstance(comments, list):
+        return False
+    import cloud_builder
+
+    return any(
+        isinstance(c, dict) and isinstance(c.get("body"), str)
+        and cloud_builder._opens_with(c["body"], cloud_builder.SUPERSEDED_HEADER)
+        and cloud_builder._names_launch(c["body"], launch_id)
+        for c in comments
+    )
 
 
 def _limit_expired_refusal(reads):
@@ -3135,6 +3181,8 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env, rea
         result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         if result is _NEEDS_FIRST_PR:
             reads["first"] = _adopted_branch_first_pr_fn(repo_root, stamped["adoptsBranch"], env)
+        elif result is _NEEDS_COMMENTS:
+            reads["comments"] = _issue_comments_fn(repo_root, issue, env)
         else:
             return result
 
@@ -3284,7 +3332,9 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         candidates = kept
     if not candidates:
         return None
-    readings = {}  # one account_limit read per distinct configDir in this pass
+    # one account_limit read per distinct configDir in this pass; the pass that stopped for the comments read hands its readings to the next
+    readings = reads.pop("readings", {})
+    relief = {}  # lanes whose account reading would relieve them, pending the supersession notice
     for launch_id, info in candidates.items():
         cfg = info.get("configDir")
         if not isinstance(cfg, str) or not cfg:
@@ -3306,6 +3356,17 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
             and cloud_recover._is_number(reading.get("recordedAt"))
             and started_ts < reading["recordedAt"]
         ):
+            relief[launch_id] = reading
+    if relief:
+        # axis: the issue's comments are read in the remote-read stage, before the local snapshot the decision rests on — see bite-proof record i2272_launcher
+        if "comments" not in reads:
+            reads["readings"] = readings
+            return _NEEDS_COMMENTS
+        comments = reads["comments"]
+        for launch_id, reading in relief.items():
+            # axis: limit relief needs a supersession notice on the issue that names the lane's launch id as a whole token, so the original builder stands down on waking; no notice, a notice naming another launch, or a comments read that failed gives no relief — see bite-proof record i2272_launcher
+            if not _supersession_notice_names(comments, launch_id):
+                continue
             limited.add(launch_id)
             if cloud_recover._is_number(reading.get("resetsAt")):
                 resets = reads.get("resetsAt")

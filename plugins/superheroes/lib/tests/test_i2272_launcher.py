@@ -11,6 +11,7 @@ import os
 
 import pytest
 
+import cloud_builder
 import cloud_relay
 
 from test_adopt_original_session import (  # noqa: F401  (first_pr is a fixture)
@@ -96,6 +97,25 @@ def account(monkeypatch):
     return fake
 
 
+class _Comments:
+    """The fake issue-comments read: by default a supersession notice for each seeded lane."""
+
+    def __init__(self):
+        self.calls = []
+        self.answer = [{"body": cloud_builder.superseded_notice_text(lane)} for lane in (LANE_ID, LANE_B)]
+
+    def __call__(self, repo_root, issue, env):
+        self.calls.append(issue)
+        return self.answer
+
+
+@pytest.fixture(autouse=True)
+def comments(monkeypatch):
+    fake = _Comments()
+    monkeypatch.setattr(L, "_issue_comments_fn", fake)
+    return fake
+
+
 def _check(repo, listing=None):
     return L._original_session_refusal(
         repo, 656, {"adoptsBranch": ADOPTED}, listing, dict(os.environ),
@@ -124,6 +144,54 @@ def test_two_lanes_on_a_limited_account_need_no_listing(tmp_path, account):
     assert account.calls == [("/cfg/acct", NOW)]
     result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
     _proceeds(result, calls)
+
+
+def test_a_limited_stamped_lane_with_no_supersession_notice_refuses_unread(tmp_path, account, comments):
+    # axis: limit relief needs a supersession notice on the issue that names the lane's launch id, so a limited stamped lane with no notice needs the session read — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, LANE_ID, premise_extra={"adoptsBranch": ADOPTED})
+    account.limited_until()
+    comments.answer = [{"body": "an ordinary comment"}]
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+    assert "superseded-notice --launch-id" in result["remedy"]
+
+
+def test_a_limited_stamped_lane_with_its_supersession_notice_proceeds(tmp_path, account, comments):
+    # axis: a supersession notice naming the lane gives the limit relief — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, LANE_ID, premise_extra={"adoptsBranch": ADOPTED})
+    account.limited_until()
+    comments.answer = [{"body": cloud_builder.superseded_notice_text(LANE_ID)}]
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _proceeds(result, calls)
+    assert comments.calls
+
+
+def test_a_notice_naming_another_launch_gives_no_relief(tmp_path, account, comments):
+    # axis: the notice must name the lane's own launch id as a whole token; a notice for another launch or a longer id gives no relief — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, LANE_ID, premise_extra={"adoptsBranch": ADOPTED})
+    account.limited_until()
+    for other in ("lane-other", LANE_ID + "x"):
+        comments.answer = [{"body": cloud_builder.superseded_notice_text(other)}]
+        reason, detail = _check(repo)
+        assert (reason, detail["failedRead"], detail["launchIds"]) == (
+            TOKEN_UNREAD, "listing-not-given", [LANE_ID],
+        )
+
+
+def test_a_failed_comments_read_gives_no_relief(tmp_path, account, comments):
+    # axis: an issue-comments read that fails gives no limit relief — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, LANE_ID, premise_extra={"adoptsBranch": ADOPTED})
+    account.limited_until()
+    comments.answer = None
+    reason, detail = _check(repo)
+    assert (reason, detail["failedRead"], detail["launchIds"]) == (
+        TOKEN_UNREAD, "listing-not-given", [LANE_ID],
+    )
 
 
 # --- 2-3. the limit has to hold, and has to postdate the lane ---------------------------------

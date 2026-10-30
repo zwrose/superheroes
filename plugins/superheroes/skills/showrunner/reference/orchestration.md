@@ -548,7 +548,9 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   (deleting a branch does not stop its builder). While the builders' account is at its usage limit,
   a lane that started before the limit needs no session read until the reset time
   `cloud_relay.py limit` names, and a listing that shows it live still refuses; after the reset the
-  session read is needed again, as for any lane. A lane launched before the stand-down check
+  session read is needed again, as for any lane. The relief also needs a supersession notice on the
+  issue that names the lane's launch id (post `cloud_builder.py superseded-notice --launch-id <lane>`'s
+  comment first), so the original builder stands down when it wakes. A lane launched before the stand-down check
   existed (its reserved premise lacks the launcher's `standDown` stamp) still needs the session
   read, limit or not. An adoption's cloud launch runs from a checkout at
   its adopted head (`adoptsHead`), so no pointer branch at the premise's `baseCommit` is needed; a
