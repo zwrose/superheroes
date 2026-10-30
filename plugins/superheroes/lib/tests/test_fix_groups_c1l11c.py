@@ -612,3 +612,20 @@ def test_the_delta_settle_closure_still_leaves_an_owner_held_sibling_out():
     u.state["_settleDelta"] = True
     RD._after_findings_settled(u.state, u.state["config"])
     assert [RD._finding_identity_key(r) for r in u.state["_fixBatch"]] == [u.ka]
+
+
+def test_a_tradeoff_minor_sibling_pulled_by_the_closure_is_held_for_the_owner_not_admitted():
+    u = _unit(severities=("Important", "Minor"))
+    u.rows[1]["tradeoff"] = True  # a product choice that rides only as a group sibling, never as a blocker
+    RD._after_findings_settled(u.state, u.state["config"])
+    assert u.state["ownerChoiceHeld"] == [u.kb]
+    assert [RD._finding_identity_key(r) for r in u.state["_fixBatch"]] == [u.ka]
+
+
+def test_a_tradeoff_sibling_pulled_by_the_queue_closure_is_held_for_the_owner_not_admitted():
+    u = _unit(severities=("Important", "Minor"))
+    u.rows[1]["tradeoff"] = True
+    live = {RD._finding_identity_key(r): dict(r) for r in u.state["findings"]}
+    assert RD._queue_fix_batch(u.state, u.state["config"], [live[u.ka]]) == "queued"
+    assert u.state["ownerChoiceHeld"] == [u.kb]
+    assert [RD._finding_identity_key(r) for r in u.state["_fixBatch"]] == [u.ka]
