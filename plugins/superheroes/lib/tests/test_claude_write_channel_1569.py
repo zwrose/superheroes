@@ -36,12 +36,21 @@ def _permissions(sandbox):
 
 
 def test_settings_allow_is_the_eleven_targeted_rules():
-    # axis: rule list — exactly the eleven targeted rules, in order, with the deny list unchanged
+    # axis: rule list — exactly the eleven prefix rules then their two assignment-prefixed
+    # forms each (#2275), in order, with the deny list unchanged
     assert _permissions(_SANDBOX) == {
         "allow": ["Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)",
                   "Bash(scripts/pinned-python:*)", "Bash(echo:*)",
                   "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)",
-                  "Bash(yarn:*)", "Bash(ps:*)"],
+                  "Bash(yarn:*)", "Bash(ps:*)",
+                  "Bash(*=* python *)", "Bash(*=* python3 *)", "Bash(*=* pytest *)",
+                  "Bash(*=* scripts/pinned-python *)", "Bash(*=* echo *)",
+                  "Bash(*=* npm *)", "Bash(*=* npx *)", "Bash(*=* node *)",
+                  "Bash(*=* pnpm *)", "Bash(*=* yarn *)", "Bash(*=* ps *)",
+                  "Bash(*=* python)", "Bash(*=* python3)", "Bash(*=* pytest)",
+                  "Bash(*=* scripts/pinned-python)", "Bash(*=* echo)",
+                  "Bash(*=* npm)", "Bash(*=* npx)", "Bash(*=* node)",
+                  "Bash(*=* pnpm)", "Bash(*=* yarn)", "Bash(*=* ps)"],
         "deny": ["WebFetch", "WebSearch"],
     }
 
@@ -72,4 +81,12 @@ def test_argv_stays_sandboxed_and_carries_rules():
         "Bash(scripts/pinned-python:*)", "Bash(echo:*)",
         "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)",
         "Bash(yarn:*)", "Bash(ps:*)",
+        "Bash(*=* python *)", "Bash(*=* python3 *)", "Bash(*=* pytest *)",
+        "Bash(*=* scripts/pinned-python *)", "Bash(*=* echo *)",
+        "Bash(*=* npm *)", "Bash(*=* npx *)", "Bash(*=* node *)",
+        "Bash(*=* pnpm *)", "Bash(*=* yarn *)", "Bash(*=* ps *)",
+        "Bash(*=* python)", "Bash(*=* python3)", "Bash(*=* pytest)",
+        "Bash(*=* scripts/pinned-python)", "Bash(*=* echo)",
+        "Bash(*=* npm)", "Bash(*=* npx)", "Bash(*=* node)",
+        "Bash(*=* pnpm)", "Bash(*=* yarn)", "Bash(*=* ps)",
     ]
