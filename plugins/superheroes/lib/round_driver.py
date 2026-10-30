@@ -6432,7 +6432,13 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                 if index < 0 or index >= len(head_numbers):
                     return None
                 content = content or not text.startswith("@@")
-                if head_numbers[index] is not None and not text.startswith("@@"):
+                if text.startswith("-") and not text.startswith("--- "):
+                    # A newly introduced deletion (`+-guard`) sits on no head line of its own: it anchors
+                    # on a line a finding can cite in its PR hunk, never on the line past the file's end.
+                    anchor = _removal_anchor(head_anchors, min(max(index, 0), len(head_anchors)))
+                    if anchor is not None:
+                        head_lines.append(anchor)
+                elif head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
         if content:
@@ -7148,22 +7154,48 @@ def _finish_saved_fix_delta(state):
     A state waiting at the scoped step has its pending scoped payload refreshed from the rebuilt
     surface; a rebuilt empty surface there is routed through `_skip_empty_scoped_surface`, the same
     decision `_after_audits` makes, and the pending action is cleared."""
-    if (not _saved_delta_stretch(state) or _is_extra_audit_round(state)
-            or isinstance(state.get("_fixDeltaDiff"), str)):
+    if not _saved_delta_stretch(state) or _is_extra_audit_round(state):
         return None
+    refreshed = _refresh_saved_break_it_facts(state)
+    if isinstance(state.get("_fixDeltaDiff"), str):
+        return "fix-delta-rebuilt" if refreshed else None
     scoped = state.get("step") == P_SCOPED
     if not _rebuild_saved_fix_delta(state):
         state["pending"] = None
         return "fix-delta-hand-back"
     if scoped:
+        # The pending scoped dispatch was rendered from the old surface: it is superseded, so the next
+        # `next` re-advances to a fresh attempt and renders the order, sidecar and delta afresh; a
+        # result bound to the old attempt cannot satisfy it.
+        state["pending"] = None
         if not state.get("_newSurface"):
-            state["pending"] = None
             _skip_empty_scoped_surface(state, state["config"])
-        else:
-            pending = state.get("pending")
-            if isinstance(pending, dict) and isinstance(pending.get("payload"), dict):
-                pending["payload"]["hunks"] = state["_newSurface"]
     return "fix-delta-rebuilt"
+
+
+def _refresh_saved_break_it_facts(state):
+    """Give every saved audit target that carries a test, and lacks the `breakIt` committed-test facts,
+    those facts (a session saved before the facts were kept would otherwise skip the missing/changed/
+    weakened-test veto). A pending audit dispatch rendered without them is superseded, so the next
+    `next` renders its orders from the refreshed targets. True when any target was refreshed."""
+    if state.get("step") not in (P_AUDITS, P_VERIFY):
+        return False
+    targets = state.get("_auditTargets")
+    config = state.get("config")
+    if not isinstance(targets, list) or not isinstance(config, dict):
+        return False
+    head = None
+    changed = False
+    for target in targets:
+        if not isinstance(target, dict) or "breakIt" in target or not break_it.carries_test(target):
+            continue
+        if head is None:
+            head = _audit_head(state, config)
+        target["breakIt"] = _break_it_target_facts(state, config, target, head)
+        changed = True
+    if changed and state.get("step") == P_AUDITS:
+        state["pending"] = None
+    return changed
 
 
 AUDIT_ORIGIN_FIELD = "originAuditId"

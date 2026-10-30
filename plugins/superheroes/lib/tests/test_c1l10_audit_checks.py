@@ -356,14 +356,21 @@ def test_k4_missing_when_git_cannot_be_read(tmp_path):
 
 
 def test_k4_the_target_row_carries_breakIt_read_at_the_fix_fold_head(tmp_path):
-    root, sha = _repo_with(tmp_path, ROLE_TEST)
+    # the recorded fix commit holds the weakened test; HEAD then moves on to a commit restoring the role's test
+    root, sha = _repo_with(tmp_path, WEAKER_TEST)
+    (root / TEST_PATH).write_text(ROLE_TEST)
+    _git(root, "add", "-A")
+    _git(root, *_ID, "commit", "-q", "-m", "restore")
+    assert _git(root, "rev-parse", "HEAD") != sha
     cfg = {"repoRoot": str(root), "fixerVendor": "claude", "vendors": ["claude", "codex"]}
     state = RD.new_state(cfg)
     state["round"] = 2
     state["rounds"] = {"1": {"fixFoldHead": sha}}
     state["fixBatch"] = [_finding()]
     (target,) = RD._audit_targets(state, cfg, {})
-    assert target["breakIt"]["match"] == "same" and target["breakIt"]["path"] == TEST_PATH
+    assert target["breakIt"]["path"] == TEST_PATH
+    assert target["breakIt"]["committedTest"] == WEAKER_TEST
+    assert target["breakIt"]["match"] == "changed-unexplained"
     assert RD._audit_head(state, cfg) == sha
     # a finding that carries no test has no `breakIt`
     state["fixBatch"] = [{"title": "plain", "file": "f.py", "line": 1, "severity": "Important"}]
