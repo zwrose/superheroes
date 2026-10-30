@@ -147,9 +147,11 @@ printf '%s' "$BASE_REF" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' && VERIFY_CMD
 **Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. On fresh state the round-1 artifact passed to the driver is refused in code (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`); rounds 2+ rely on the shell halt above.
 
 ```bash
-git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" && mv "$SESSION_DIR/round-<round>/diff.txt.tmp" "$SESSION_DIR/round-<round>/diff.txt" || { rm -f "$SESSION_DIR/round-<round>/diff.txt.tmp"; echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
+git diff --no-ext-diff --no-textconv --no-color -M -U3 --src-prefix=a/ --dst-prefix=b/ "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" && mv "$SESSION_DIR/round-<round>/diff.txt.tmp" "$SESSION_DIR/round-<round>/diff.txt" || { rm -f "$SESSION_DIR/round-<round>/diff.txt.tmp"; echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
 [ -s "$SESSION_DIR/round-<round>/diff.txt" ] || { echo "review-code: round diff against $BASE_REF is EMPTY — an empty review surface is never certifiable-clean; halt and investigate (#637)" >&2; exit 1; }
 ```
+
+The flags are the review diff's fixed shape (`REVIEW_DIFF_ARGS` in `lib/review_diff_bytes.py`), so a user's git settings (copy detection, context lines, prefixes, an external diff) never change what the loop reads.
 
 **If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r '.baseRef // empty' "$SESSION_DIR/meta.json")`, then **re-run the resolve-to-a-commit check from the setup block** (`BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || exit 1`) before any diff. Use `// empty`, never a bare `.baseRef`: `jq -r` prints the literal string `null` for an absent key, which is non-empty and would sail past a naive check. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
 

@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import review_diff_bytes  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 
@@ -370,11 +371,13 @@ def _numstat_z_output(pin, repo_root, run):
     on non-UTF-8 paths. If an explicit ``run`` returns ``bytes``, they are decoded the same way.
     """
     if run is None:
-        raw = _run_git_bytes(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+        raw = _run_git_bytes(
+            repo_root, "diff", *review_diff_bytes.REVIEW_NUMSTAT_ARGS, "--numstat", "-z", "%s...HEAD" % pin
+        )
         if raw is None:
             return None
         return raw.decode("utf-8", errors="surrogateescape")
-    out = run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+    out = run(repo_root, "diff", *review_diff_bytes.REVIEW_NUMSTAT_ARGS, "--numstat", "-z", "%s...HEAD" % pin)
     if isinstance(out, bytes):
         return out.decode("utf-8", errors="surrogateescape")
     return out
