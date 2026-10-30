@@ -2,7 +2,7 @@
 
 The hook prints `permissionDecision: "allow"` iff the whole command is one plain call
 `python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` one of eight of this plugin's own
-scripts (for `round_driver.py`: one of eight verbs, no flag that hands it a command line, and a session
+scripts (for `round_driver.py`: one of the driver's approved verbs, no flag that hands it a command line, and a session
 folder whose saved state still matches the driver's own mirror stamp) and the worktree guard's
 classifier does not deny it. Every other input — any other command, any parse
 doubt, any internal error — prints nothing and exits 0.
@@ -47,10 +47,15 @@ _EIGHT_SCRIPTS = [
     "round_driver.py", "break_it.py", "review_store.py", "mode_reconcile.py",
     "calibration_resolve.py", "size_count.py", "order_lint.py", "dispatch_guard.py",
 ]
-_DRIVER_VERBS = [
-    "next", "submit", "record-result", "record-missing", "advance", "correct-fixer-refusals",
-    "attest", "checkpoint",
-]
+
+
+def _driver_subcommands():
+    # the driver's own argparse parser is the source of truth for which verbs exist
+    import argparse
+    parser = round_driver.build_parser()
+    actions = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+    assert actions, "round_driver.build_parser() has no subparsers action — the census is inert"
+    return set(actions[0].choices)
 
 
 def _allow_out(name):
@@ -101,9 +106,9 @@ def _fill_deep(value, fresh):
 
 
 def test_the_lists_are_pinned():
-    # axis: the approved-script list, the driver verb list and the command-flag list are exactly the ruled ones
+    # axis: the approved-script list and the command-flag list are exactly the ruled ones (the driver verb
+    # list is checked against the driver's own parser, not a copy)
     assert hook.APPROVED_SCRIPTS == frozenset(_EIGHT_SCRIPTS)
-    assert hook.ROUND_DRIVER_VERBS == frozenset(_DRIVER_VERBS)
     assert tuple(hook.COMMAND_FLAGS) == ("verify-command", "break-it-interpreter", "records-path")
 
 
@@ -116,9 +121,19 @@ def test_each_listed_script_at_the_plugin_root_is_allowed(name, fresh):
     assert got is True, _short(command)
 
 
-@pytest.mark.parametrize("verb", _DRIVER_VERBS)
+def test_every_approved_driver_verb_is_a_parser_subcommand():
+    # axis: a verb the driver retired cannot stay auto-approved — every approved verb is a subcommand
+    # of the driver's own argparse parser
+    known = _driver_subcommands()
+    assert known and "next" in known, sorted(known)
+    assert hook.ROUND_DRIVER_VERBS, "the hook approves no driver verb"
+    unknown = sorted(hook.ROUND_DRIVER_VERBS - known)
+    assert not unknown, "approved but not a round_driver subcommand: %s" % unknown
+
+
+@pytest.mark.parametrize("verb", sorted(hook.ROUND_DRIVER_VERBS))
 def test_each_driver_verb_is_allowed(verb, fresh):
-    # axis: each of the eight round_driver verbs is approved
+    # axis: each approved round_driver verb is approved
     command = f"python3 -B {DRIVER} {verb} --session-dir {fresh}"
     got = _decide(_payload(command))
     assert got is True, _short(command)
