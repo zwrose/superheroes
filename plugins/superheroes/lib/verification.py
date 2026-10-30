@@ -139,6 +139,7 @@ def _grade(verdict, reason_text, confirmed, unrun):
     return None
 
 
+FIX_GROUP_FIELD = "fixGroup"
 SECOND_TEST_FIELD = "secondTest"
 _SECOND_TEST_KEPT = " (kept as a judgment call; no further test)"
 
@@ -455,7 +456,9 @@ def merge_and_rank(survivors, grouping=None):
     """Finalize verified survivors: merge same-root-cause groups and rank — dropping nothing.
 
     Coverage: every id-bearing survivor's staged id appears exactly once; no dict survivor
-    is ever dropped.
+    is ever dropped. A finding that carries a break-it test stays its own finding; when its group
+    has other resulting findings, ``fixGroups`` ties them (``group_id``, ``member_ids`` of the
+    resulting findings) so the group gets one shared fix. ``merges`` lists only real merges.
     """
     if not isinstance(survivors, list):
         survivors = []
@@ -465,26 +468,37 @@ def merge_and_rank(survivors, grouping=None):
     groups = _valid_grouping(valid, grouping)
     findings = []
     merges = []
+    fix_groups = []
     if groups is None:
         findings = [dict(s) for s in valid]
     else:
         grouped_ids = set()
-        for g in groups:
+        for index, g in enumerate(groups):
             members = [by_id[mid] for mid in g["member_ids"]]
             merged_ids = list(g["member_ids"])
+            tied = []
             if len(members) > 1:
                 # axis: a finding that carries a break-it test (per-area or attached) carries it and its run
                 # records; merging it into a group would fold that away, so it leaves any multi-member group unmerged
                 for m in [m for m in members if break_it.carries_test(m)]:
                     findings.append(dict(m))
+                    tied.append(m["id"])
                     members.remove(m)
                     merged_ids.remove(m["id"])
+                if tied:
+                    group_id = g["group_id"] if isinstance(g["group_id"], str) and g["group_id"] else "g%d" % index
+                    fix_groups_entry = {"group_id": group_id, "member_ids": tied}
                 if len(members) == 1:
                     findings.append(dict(members[0]))
                     grouped_ids.update(g["member_ids"])
+                    if tied:
+                        fix_groups_entry["member_ids"] = tied + [members[0]["id"]]
+                        fix_groups.append(fix_groups_entry)
                     continue
                 if not members:
                     grouped_ids.update(g["member_ids"])
+                    if len(tied) > 1:
+                        fix_groups.append(fix_groups_entry)
                     continue
             merged = _merge_group(members)
             rep = max(members, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
@@ -496,10 +510,14 @@ def merge_and_rank(survivors, grouping=None):
                 "member_ids": merged_ids,
                 "kept_id": kept_id,
             })
+            if tied:
+                fix_groups_entry["member_ids"] = tied + [kept_id]
+                fix_groups.append(fix_groups_entry)
             grouped_ids.update(g["member_ids"])
         for s in valid:
             if s["id"] not in grouped_ids:
                 findings.append(dict(s))
     findings.extend(dict(s) for s in idless)
     findings.sort(key=_rank_key)
-    return {"findings": findings, "merges": merges}
+    # axis: fixGroups emission — see bite-proof record c1l11c_wo1_fix_groups
+    return {"findings": findings, "merges": merges, "fixGroups": fix_groups}
