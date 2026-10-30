@@ -338,7 +338,20 @@ adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 _degraded = degraded
 _base_degraded = base_degraded
-_driver_author_family = author_family
+def _driver_author_family(state):
+    """The author family the driver judges the seat map against. `config.fixerVendor` names the fix
+    maker (the build session's host family on the CLI path), which differs from the original author
+    when the map declares a distinct `hostFamily`: then the map's own `authorFamily` is the author, so
+    a legitimate split-family composition is not recorded as an `author-family-mismatch`."""
+    family = author_family(state)
+    seat_map_obj = seat_map_receipts.effective_seat_map(state) if isinstance(state, dict) else {}
+    host, author = seat_map_obj.get("hostFamily"), seat_map_obj.get("authorFamily")
+    if (isinstance(host, str) and host and isinstance(author, str) and author
+            and host != author and family == host):
+        return author
+    return family
+
+
 _same_family_seats = same_family_seats
 _same_family_degraded = same_family_degraded
 _seat_map_violated = seat_map_violated
