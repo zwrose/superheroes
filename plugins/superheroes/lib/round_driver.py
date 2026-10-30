@@ -5816,7 +5816,12 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
         key = _finding_identity_key(row) if isinstance(row, dict) else None
         if block is not None and key and key not in left:
             owed.append((key, block))
+    # axis: a plain group member's bound commit is resolved with the carriers' — an unresolved HEAD never stands in for the shared sha — see bite-proof record c1l11c_wo1_fix_groups
+    plain_named = [c for keys in group_keys.values() if len(keys) > 1 for k in keys
+                   if k not in left and k not in {ok for ok, _b in owed}
+                   for c in bound.get(k, []) if isinstance(c, str) and c]
     named = [c for key, _block in owed for c in bound.get(key, []) if isinstance(c, str) and c]
+    named = named + plain_named
     facts = None
     if named:
         test_paths = sorted({block["path"] for _key, block in owed})
