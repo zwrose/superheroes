@@ -795,6 +795,26 @@ def test_a_vet_not_ready_recorded_during_the_first_pr_lookup_keeps_the_live_lane
     assert calls == []
 
 
+def test_a_handover_recorded_during_the_first_pr_lookup_is_honoured(tmp_path, monkeypatch):
+    # axis: the handover-stopped set is read again after the slow first-pull-request lookup, so a lane assess recorded stopped on a handover during it is exempt — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    lookups = []
+
+    def read_first_pr(root, branch, env):
+        lookups.append(branch)
+        got = ll.read(root, env=env)
+        terminal = ll.fold(got["records"])["launches"][LANE_ID]["terminalIndex"]
+        handback = got["records"][terminal]["ts"]
+        _assess(root)
+        return handback + 60
+
+    monkeypatch.setattr(L, "_adopted_branch_first_pr_fn", read_first_pr)
+    result, calls = _adopt(repo, tmp_path)
+    assert len(lookups) == 1
+    _proceeds(result, calls)
+
+
 def test_a_fix_order_relay_to_the_lane_after_the_handback_keeps_the_lane(tmp_path, first_pr):
     # axis: a fix order composed for the lane's session after the handback, never checked, reopens the lane — see bite-proof record i2254_original_session
     repo = _cloud_repo(tmp_path)
@@ -1108,6 +1128,19 @@ def _gh_answer(monkeypatch, rows=None, returncode=0, stdout=None):
 
 def _first_pr(repo):
     return L._adopted_branch_first_pr(repo, "feature/x", dict(os.environ))
+
+
+def test_gh_branch_pulls_asks_for_pull_requests_in_every_state(monkeypatch):
+    # axis: the pulls query asks for every state, since a merged or closed pull request on the branch is still its first
+    argvs = []
+
+    def record(args, **kwargs):
+        argvs.append(args)
+        return subprocess.CompletedProcess(args, 0, "[]", "")
+
+    monkeypatch.setattr(L.subprocess, "run", record)
+    L._gh_branch_pulls("o", "r", "feat/x", dict(os.environ), 5)
+    assert argvs == [["gh", "api", "repos/o/r/pulls?state=all&head=o:feat%2Fx&per_page=100"]]
 
 
 def test_the_first_pr_is_the_earliest_created_of_the_branchs_pull_requests(tmp_path, monkeypatch):
