@@ -6713,6 +6713,15 @@ def _fix_delta_groups(delta, head_numbers):
             mark, text = ln[0], ln[1:]
             if mark == "-":
                 content = content or not text.startswith("@@")
+                if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
+                    # A removed hunk-body line anchors on the head line that follows it, else the
+                    # last head line before it (a removal at the end of the file's diff section).
+                    here = max(index, 0)
+                    anchor = next((n for n in head_numbers[here:] if n is not None), None)
+                    if anchor is None:
+                        anchor = next((n for n in reversed(head_numbers[:here]) if n is not None), None)
+                    if anchor is not None:
+                        head_lines.append(anchor)
                 continue
             if mark == "+":
                 if index < 0 or index >= len(head_numbers):
@@ -7372,6 +7381,23 @@ def _after_audits(state, config):
     # scan that reviews nothing while looking conformant. The audits' own new-issue candidates still
     # route through the same fold (an empty-artifact `_fold_scoped`).
     if state.get("_newSurface"):
+        # A delta session saved before the fix delta was kept has a surface but no `_fixDeltaDiff`:
+        # rebuild both from the stamped baseline and the head diff, or hand the PR back.
+        if not isinstance(state.get("_fixDeltaDiff"), str):
+            baseline = state.get("deltaBaseline")
+            reviewed = baseline.get("diff") if isinstance(baseline, dict) else None
+            head = state.get("headDiff")
+            rebuilt = (_fix_delta_surface(state, reviewed, head)
+                       if isinstance(reviewed, str) and isinstance(head, str) else None)
+            if rebuilt is None:
+                _hand_back_unknown_fix_surface(
+                    state, "the fixes' own diff could not be rebuilt for a saved delta session")
+                return
+            state["_newSurface"], state["_fixDeltaDiff"] = rebuilt
+            if not state["_newSurface"]:
+                _record_round(state, "scopedFinder", "skipped-empty-surface")
+                _fold_scoped(state, config, {})
+                return
         state["step"] = P_SCOPED
         return
     _record_round(state, "scopedFinder", "skipped-empty-surface")
@@ -7556,6 +7582,18 @@ def _cap_blocks(state, config, next_round, refused_at):
     return True
 
 
+def _round_above_cap(state, config):
+    """True when a loaded state's round is above its cap, the one ordered extra audit round at
+    `cap + 1` excepted. The one home of the rule `_cap_blocks_loaded` hands back on and
+    `_finish_retired_later_panel` leaves to it."""
+    cap = _round_cap(config)
+    rnd = state["round"]
+    if not rnd > cap:
+        return False
+    # axis: a loaded state sits one past its cap only while the extra audit round it was ordered is the round it holds — see bite-proof record c1l4b_wo_a
+    return not (rnd == cap + 1 and _is_extra_audit_round(state))
+
+
 def _cap_blocks_loaded(state, config):
     """Persisted-state entry guard: a loaded non-terminal state already above its cap must hand back.
 
@@ -7563,13 +7601,10 @@ def _cap_blocks_loaded(state, config):
     terminal (including pending idempotent re-emit) is left unchanged. Returns True when it handed back."""
     if state.get("terminal"):
         return False
+    if not _round_above_cap(state, config):
+        return False
     cap = _round_cap(config)
     rnd = state["round"]
-    if not rnd > cap:
-        return False
-    # axis: a loaded state sits one past its cap only while the extra audit round it was ordered is the round it holds — see bite-proof record c1l4b_wo_a
-    if rnd == cap + 1 and _is_extra_audit_round(state):
-        return False
     detail = (
         "Round cap %s reached: round %s had already begun and is halted. The PR is handed back "
         "with its findings still open; certification is withheld. (refused at: resumed-state)"
@@ -7795,7 +7830,7 @@ def _finish_retired_later_panel(state):
 
     The step, or the action or phase the state has pending, names the panel; the pending action is
     cleared and `_hand_back` ends the review with every finding given an outcome. A finished state, and
-    a round-1 panel, are left as they are."""
+    a round-1 panel, and a state above its round cap (the cap guard hands that back), are left as they are."""
     if not isinstance(state, dict) or state.get("terminal"):
         return False
     pending = state.get("pending")
@@ -7803,6 +7838,9 @@ def _finish_retired_later_panel(state):
     if isinstance(pending, dict):
         held += [pending.get("action"), pending.get("phase")]
     rnd = state.get("round")
+    # axis: a state above its cap belongs to the cap guard (`round-cap`), not to this retirement
+    if _is_plain_int(rnd) and _round_above_cap(state, state.get("config")):
+        return False
     at_panel = P_PANEL in held and _is_plain_int(rnd) and rnd >= 2
     at_gate = state.get("_verifyThen") == RETIRED_VERIFY_THEN_PANEL
     if not (at_panel or at_gate):

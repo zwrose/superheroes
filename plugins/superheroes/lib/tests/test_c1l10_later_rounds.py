@@ -403,3 +403,22 @@ def test_i4_a_current_generation_state_is_handed_back_by_the_same_load_chokepoin
     _save(d, state)
     assert RD._finish_retired_gate_step(_state(d)) is False  # the earlier-generation guard does not apply ...
     _assert_handed_back(d, RD.cmd_next(d))  # ... and the later-panel check still does
+
+
+def test_i4_a_round_two_panel_state_at_its_cap_is_retired_but_above_its_cap_hands_back_round_cap(tmp_path):
+    # axis: the cap guard owns a loaded state above its round cap; the later-panel retirement leaves it alone
+    d, state = _saved_at_round_one_panel(tmp_path / "at-cap")
+    cap = state["config"]["maxRounds"]
+    assert cap >= 2
+    state.update(round=cap, pending=None)
+    _save(d, state)
+    _assert_handed_back(d, RD.cmd_next(d))  # round == cap: still the retired later panel
+
+    d, state = _saved_at_round_one_panel(tmp_path / "over-cap")
+    state.update(round=cap + 1, pending=None)
+    _save(d, state)
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
+    final = _state(d)
+    assert final["terminal"] == "handed-back" and final["decisions"][-1]["kind"] == "round-cap"
+    assert _retired_rows(d) == []
