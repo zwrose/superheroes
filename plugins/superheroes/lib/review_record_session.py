@@ -74,7 +74,7 @@ _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
 # the finding parts a later row must not erase: the live row's value wins, else the ledger row's
-_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
+_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake", "fixGroup")
 
 
 def _int(v):
@@ -467,6 +467,28 @@ def _stored_repeat(mark):
     return dict(mark, findingKey=review_record._key({"findingKey": key})) if isinstance(key, str) and key.strip() else mark
 
 
+def _stored_fix_group(group):
+    """The fix group naming each member by its stored key, as `_stored_repeat` names the earlier finding; a
+    malformed group is left for the writer to refuse."""
+    members = group.get("members") if isinstance(group, dict) else None
+    if not isinstance(members, list):
+        return group
+    # axis: the record names each fix-group member by its stored key, never the session's raw one — see bite-proof record c1l11c_wo1_fix_groups
+    return dict(group, members=[review_record._key({"findingKey": m}) if isinstance(m, str) and m.strip() else m
+                                for m in members])
+
+
+def _fix_commit_of(state, key):
+    """The commit the latest round that bound ``key`` to a fix recorded, or None."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int, reverse=True):
+        fix = rounds[n].get("fix") if isinstance(rounds[n], dict) else None
+        for b in (fix.get("commits") if isinstance(fix, dict) and isinstance(fix.get("commits"), list) else []):
+            if isinstance(b, dict) and b.get("finding") == key and _text(b.get("commit")):
+                return b["commit"]
+    return None
+
+
 def _finding_parts(row, older):
     """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent.
     The break-it runs of both rows, when both hold a list, read older first, then the row's runs not already among them."""
@@ -474,7 +496,8 @@ def _finding_parts(row, older):
     for k in _FINDING_PARTS:
         for src in (row, older):
             if isinstance(src, dict) and k in src:
-                out[k] = _stored_repeat(src[k]) if k == "repeatOf" else src[k]
+                out[k] = (_stored_repeat(src[k]) if k == "repeatOf"
+                          else _stored_fix_group(src[k]) if k == "fixGroup" else src[k])
                 break
     mine, earlier = (src.get("breakItRuns") if isinstance(src, dict) else None for src in (row, older))
     if isinstance(mine, list) and isinstance(earlier, list):
@@ -514,6 +537,8 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
+        if isinstance(held.get("fixGroup"), dict) and _fix_commit_of(state, key):
+            held["fixGroup"] = dict(held["fixGroup"], commit=_fix_commit_of(state, key))
         if outcome == _SHOWN_WRONG and "grade" in rep:  # a kept repeat may hold no grade: it keeps the one it has
             # axis: a finding closed as wrong carries the closing representative's wrong grade, never a merged member's own — see bite-proof record c1l7_wo_a_verifier_grade
             held["grade"] = rep["grade"]

@@ -326,7 +326,7 @@ def test_a_failing_final_run_is_kept_in_the_row_and_the_park_reason(world):
     assert "charged 2 times" in world.state["certification"]["reason"]
 
 
-def test_l4_merge_and_rank_never_merges_a_break_it_finding():
+def test_l4_merge_and_rank_keeps_each_break_it_member_in_one_fix_group():
     def finding(fid, **extra):
         out = {"id": fid, "file": "f%s.py" % fid, "line": 1, "title": "t%s" % fid,
                "severity": "Important", "suggestion": "s-%s" % fid}
@@ -346,14 +346,25 @@ def test_l4_merge_and_rank_never_merges_a_break_it_finding():
         assert by_id[fid]["suggestion"] == "s-%s" % fid
         assert by_id[fid][break_it.RUN_FIELD] == {"outcome": "failed"}
     assert out["merges"] == []
+    # the group's resulting findings are tied into one fix group
+    assert out["fixGroups"] == [{"group_id": "g0", "member_ids": ["v0", "v1", "v2"]}]
     assert verification.grouping_coverage_fault(survivors, grouping) is None
-    # the rest of a group still merges, listing only the merged ids
+    # the rest of a group still merges, listing only the merged ids; the fix group names the kept id
     out = verification.merge_and_rank([a, c, d], [{"group_id": "g0", "member_ids": ["v0", "v2", "v3"]}])
     assert sorted(f["id"] for f in out["findings"]) == ["v0", "v3"]
     assert len(out["merges"]) == 1 and out["merges"][0]["member_ids"] == ["v2", "v3"]
-    # a group made only of break-it members is all unmerged
+    assert out["fixGroups"] == [{"group_id": "g0", "member_ids": ["v0", "v3"]}]
+    # a group made only of break-it members is all unmerged, and still one fix group
     out = verification.merge_and_rank([a, b], [{"group_id": "g0", "member_ids": ["v0", "v1"]}])
     assert sorted(f["id"] for f in out["findings"]) == ["v0", "v1"] and out["merges"] == []
+    assert out["fixGroups"] == [{"group_id": "g0", "member_ids": ["v0", "v1"]}]
+    # no group id on a native-shaped group: the id is "g<index>"; a lone test carrier or no carrier ties nothing
+    out = verification.merge_and_rank([c, d, a], [{"member_ids": ["v2", "v3"]}, {"member_ids": ["v0"]}])
+    assert out["fixGroups"] == [] and ["v2", "v3"] in [m["member_ids"] for m in out["merges"]]
+    out = verification.merge_and_rank([c, a, b], [{"member_ids": ["v2"]}, {"member_ids": ["v0", "v1"]}])
+    assert out["fixGroups"] == [{"group_id": "g1", "member_ids": ["v0", "v1"]}]
+    # an invalid grouping ties nothing
+    assert verification.merge_and_rank([a, b], [{"member_ids": ["v0"]}])["fixGroups"] == []
 
 
 def test_l5_a_fixed_break_it_test_that_is_kept_certifies(world):
