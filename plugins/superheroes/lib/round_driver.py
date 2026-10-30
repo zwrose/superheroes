@@ -7150,9 +7150,9 @@ def _fold_audits(state, config, artifact, session_dir=None):
     carried_back = set()
     if isinstance(carried_audited, dict) and carried_audited:
         cleared = {i for i in outcome.get("discharged") or [] if isinstance(i, str)}
-        # axis: a carried finding the audit did not discharge goes to the verifier, never to the fix queue — see bite-proof record c1l11b_wo_d2_carried_findings
-        carried_back = set()
+        carried_back = {key for key in carried_audited if key not in cleared}
         outcome["notDischarged"] = [i for i in outcome["notDischarged"] if not (isinstance(i, str) and i in carried_audited)]
+        # axis: a carried finding the audit did not discharge goes to the verifier, never to the fix queue — see bite-proof record c1l11b_wo_d2_carried_findings
         state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + [carried_audited[key] for key in carried_audited if key in carried_back]
         held = state["rounds"].get(str(state["round"]), {}).get("carried")
         _record_round(state, "carried", dict(held, discharged=[key for key in carried_audited if key in cleared],
