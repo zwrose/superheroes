@@ -144,10 +144,10 @@ def test_t1_a_carried_finding_a_later_commit_fixed_is_settled_fixed_and_the_reco
     returning = state["config"]["returning"]
     assert returning["read"] == read
     if read == "changed":
-        assert returning["lastReviewed"] == s.reviewed
+        assert returning["lastReviewed"] == s.reviewed and _carried(state)["auditBase"] == s.reviewed
     else:
-        # C1-L11a's rule: an abandoned earlier record reads full and names no lastReviewed; the carried audit reads from returningAuditBase
-        assert returning["lastReviewed"] is None and state["config"]["returningAuditBase"] == s.reviewed
+        # C1-L11a's rule: an abandoned earlier record reads full and names no lastReviewed; the carried record names the base the audit read
+        assert returning["lastReviewed"] is None and _carried(state)["auditBase"] == s.reviewed
     key = finding[SC.FINDING_KEY_FIELD]
     # seeded under the stored key before the audit ran: a raised sequence and no disposition yet
     seeded = _row(state, key)
@@ -161,7 +161,7 @@ def test_t1_a_carried_finding_a_later_commit_fixed_is_settled_fixed_and_the_reco
     state = s.state()
     row = _row(state, key)
     assert row["disposition"] == "fixed" and row["dispositionRound"] == 1 and row["dispositionSeq"] > row["raisedSeq"], row
-    assert _carried(state) == {"keys": [key], "discharged": [key], "sentBack": []}
+    assert _carried(state) == {"keys": [key], "auditBase": s.reviewed, "discharged": [key], "sentBack": []}
     # the record account relists it once, under its stored key, as fixed; no undecided row is left
     findings = _account_findings(s, state)
     assert _outcomes(findings, key) == ["fixed"] and RR._finding_lines(findings) == []
@@ -213,7 +213,7 @@ def test_t2_a_carried_finding_the_audit_does_not_discharge_goes_to_the_verifier_
     assert [SC.finding_identity_key(f) for f in state["_toVerify"]] == [key]
     assert not state.get("_fixBatch") and state["_auditOutcome"]["notDischarged"] == []
     assert "disposition" not in _row(state, key) or _row(state, key)["disposition"] != "fixed"
-    assert _carried(state) == {"keys": [key], "discharged": [], "sentBack": [key]}
+    assert _carried(state) == {"keys": [key], "auditBase": s.reviewed, "discharged": [], "sentBack": [key]}
     n, seen = _run(s, _respond(audit="not-discharged", verdict="CONFIRMED"), stop_at=RD.P_APPLY_FIXES)
     assert n["action"] == RD.P_APPLY_FIXES, seen
     assert [SC.finding_identity_key(f) for f in n["payload"]["batch"]] == [key]
@@ -228,7 +228,7 @@ def test_t2_an_abandoned_record_whose_final_commit_is_not_a_sha_audits_nothing_a
     state = s.state()
     assert first["action"] == RD.P_PANEL and "returningAuditBase" not in state["config"], first
     assert state["config"]["returning"]["lastReviewed"] is None and "returningBaselineDiff" not in state["config"]
-    assert _carried(state) == {"keys": [key], "discharged": [], "sentBack": [key]}
+    assert _carried(state) == {"keys": [key], "auditBase": None, "discharged": [], "sentBack": [key]}
     n, seen = _run(s, _respond(), stop_at=RD.P_VERIFIERS)
     assert RD.P_AUDITS not in [a for a, _ in seen], seen
     state = s.state()
@@ -292,7 +292,7 @@ def test_t4_e1_a_carried_finding_with_no_file_or_line_is_sent_back_never_fixed(t
     s = _session(tmp_path, monkeypatch, [finding])
     first = s.next()
     assert first["action"] == RD.P_SCOPED, first  # nothing to audit: the scoped finder is next
-    assert _carried(s.state()) == {"keys": [key], "discharged": [], "sentBack": [key]}
+    assert _carried(s.state()) == {"keys": [key], "auditBase": s.reviewed, "discharged": [], "sentBack": [key]}
     n, _seen = _run(s, _respond(audit="discharged"), stop_at=RD.P_VERIFIERS)
     state = s.state()
     assert [SC.finding_identity_key(f) for f in state["_toVerify"]] == [key]
@@ -349,7 +349,7 @@ def test_t4_e5_a_carried_finding_on_a_proven_copy_is_not_audited_and_is_sent_bac
                  cfg={"copyProof": TS._blob_proof()})
     first = s.next()
     assert first["action"] == RD.P_SCOPED, first  # no audit target: the proven copy is in no seat's input
-    assert _carried(s.state()) == {"keys": [key], "discharged": [], "sentBack": [key]}
+    assert _carried(s.state()) == {"keys": [key], "auditBase": s.reviewed, "discharged": [], "sentBack": [key]}
     n, _seen = _run(s, _respond(), stop_at=RD.P_VERIFIERS)
     state = s.state()
     assert [SC.finding_identity_key(f) for f in state["_toVerify"]] == [key]
@@ -380,7 +380,7 @@ def test_t4_a_returning_decision_with_no_last_reviewed_commit_sends_the_carried_
     n, seen = _run(s, _respond(), stop_at=RD.P_VERIFIERS)
     state = s.state()
     assert [SC.finding_identity_key(f) for f in state["_toVerify"]] == [key], seen
-    assert RD.P_AUDITS not in [a for a, _ in seen] and _carried(state) == {"keys": [key], "discharged": [], "sentBack": [key]}
+    assert RD.P_AUDITS not in [a for a, _ in seen] and _carried(state) == {"keys": [key], "auditBase": None, "discharged": [], "sentBack": [key]}
 
 
 def test_t4_a_caller_cannot_supply_carried_findings_itself(tmp_path, monkeypatch):

@@ -1636,7 +1636,7 @@ def _seed_carried(state, cfg, returning):
                 and _fixer_delta_lines(baseline, head_diff, finding["file"], finding.get("line"))):
             audited[key] = finding
     state["_carriedToVerify"] = [f for key, f in rows.items() if key not in audited]
-    _record_round(state, "carried", {"keys": list(rows), "discharged": [], "sentBack": [_finding_identity_key(f) for f in state["_carriedToVerify"]]})
+    _record_round(state, "carried", {"keys": list(rows), "auditBase": (cfg.get("returningAuditBase") or returning.get("lastReviewed")) if baseline is not None else None, "discharged": [], "sentBack": [_finding_identity_key(f) for f in state["_carriedToVerify"]]})
     if not audited:
         return False
     state["_carriedAudited"] = audited
