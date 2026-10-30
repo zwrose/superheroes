@@ -254,7 +254,8 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     # 5. the incremental diff, and the files a catch-up changed too
     # Axis: the incremental diff runs from the last reviewed commit to the head, never over the whole section of the change.
     # Axis: a rename's source path is part of the surface, so the diff shows the move and a risk area on the source still matches.
-    paths = sorted(set(files).union(*(sources.get(f, set()) for f in files)))
+    # Axis: a proven copy is never passed on, whether it arrives as a changed file or as a rename's source path.
+    paths = sorted(p for p in set(files).union(*(sources.get(f, set()) for f in files)) if p not in proven_files)
     code, delta = run(["diff", *diff_args, last_reviewed, head, "--", *paths])
     if code != 0:
         return _full(result, WHY_DIFF_UNREADABLE, "git could not produce the diff since the last reviewed commit")

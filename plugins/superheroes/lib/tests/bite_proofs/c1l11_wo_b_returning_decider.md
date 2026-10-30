@@ -352,3 +352,149 @@ FAILED plugins/superheroes/lib/tests/test_returning_review_c1l11.py::test_a_one_
 .                                                                        [100%]
 1 passed in 0.23s
 ```
+
+---
+
+## Review session 1 fixes (WO-F, issue #2215): E7 and E8
+
+Declared guarded elements (from the order): E7 the proven-copy filter over the final path list; E8 the unsettled-lines addition to `countable`. Each was neutralized with one targeted edit made with the edit tool and restored with the inverse edit; no `git checkout`, `restore`, `reset` or `stash` was used. Run from `/home/user/wt-2215` under `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest -q -p no:cacheprovider`. The captures are the runner's whole output for each run apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out; nothing is redacted (no secrets, tokens or URLs appear). E8 supersedes the sentence above that says the unsettled-counted line has no test: the unsettled variant of the 1,000/1,001-line boundary test now covers it.
+
+| ID | Guarded element | Axis | Proving test |
+|---|---|---|---|
+| E7 | `returning_review.py` `_decide`, `paths = sorted(p for p in ... if p not in proven_files)` | no proven copy is ever passed to the incremental `git diff` or to `lane_call.call`, as a changed file or as a rename's source path | `test_a_proven_copy_that_an_earlier_rename_came_from_is_never_passed_on` |
+| E8 | `returning_review.py` `_decide`, `countable += sum(row["lines"] for row in left)` | the lines of a file the counter could not settle are added to `countable` | `test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed[unsettled-lines]` |
+
+---
+
+## E7 — the proven-copy filter over the final path list
+
+**axis:** no path in the proven copies is passed to the incremental `git diff` or to `lane_call.call`, whether it reaches the path list as a changed file or as a rename source. The test: an earlier review renamed `vendor/lib.py` to `src/app.py`; the return restores `vendor/lib.py` with new bytes a copy proof covers and edits `src/app.py` by three lines; the vendor file must be in neither `deltaDiff` nor the paths `lane_call.call` receives, and `countable` is 3.
+
+**neutralization** (`returning_review.py`, `_decide`: the filter is left to the changed files, before the rename sources are added, as the code had it):
+```python
+-    paths = sorted(p for p in set(files).union(*(sources.get(f, set()) for f in files)) if p not in proven_files)
++    paths = sorted(set(files).union(*(sources.get(f, set()) for f in files)))  # BITE-PROOF NEUTRALIZATION (E7)
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest -q -p no:cacheprovider "plugins/superheroes/lib/tests/test_returning_review_c1l11.py::test_a_proven_copy_that_an_earlier_rename_came_from_is_never_passed_on"`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_a_proven_copy_that_an_earlier_rename_came_from_is_never_passed_on ____
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-43/test_a_proven_copy_that_an_ear0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f1b1696d880>
+
+    def test_a_proven_copy_that_an_earlier_rename_came_from_is_never_passed_on(tmp_path, monkeypatch):
+        # axis: the proven-copy filter over the final path list; a proven copy coming back as a rename's source path
+        repo = Repo(tmp_path)
+        repo.main_commit("vendor/lib.py", numbered("lib", 40))
+        repo.merge_main()
+        os.remove(os.path.join(repo.root, "vendor", "lib.py"))
+        base, reviewed, earlier = returning(repo, first={"src/app.py": numbered("lib", 40)})
+        reviewed_diff = repo.git("diff", *review_diff_bytes.REVIEW_DIFF_ARGS, "%s...%s" % (base, reviewed))
+        assert "rename from vendor/lib.py" in reviewed_diff and "rename to src/app.py" in reviewed_diff
+        repo.write("vendor/lib.py", numbered("newlib", 40))
+        repo.write("src/app.py", repo.read("src/app.py") + numbered("edit", 3))
+        repo.commit("restore the vendor file with new bytes and edit the src file")
+        seen = []
+        real_call = R.lane_call.call
+    
+        def recording_call(cwd, paths, *args, **kwargs):
+            seen.append(list(paths))
+            return real_call(cwd, paths, *args, **kwargs)
+    
+        monkeypatch.setattr(R.lane_call, "call", recording_call)
+        got = decide(repo, base, earlier, proven=_proven(repo, base, _proof_for(repo, "vendor/lib.py")))
+        assert got["read"] == "changed" and got["countable"] == 3
+>       assert got["changedFiles"] == ["src/app.py"] and "vendor/lib.py" not in got["deltaDiff"]
+E       AssertionError: assert (['src/app.py'] == ['src/app.py']
+E         
+E         Use -v to get more diff and 'vendor/lib.py' not in 'diff --git ...ib_39 = 39\n'
+E         
+E         'vendor/lib.py' is contained here:
+E           f --git a/vendor/lib.py b/vendor/lib.py
+E         ?           +++++++++++++
+E           new file mode 100644
+E           index 0000000..916d334
+E           --- /dev/null...
+E         
+E         ...Full output truncated, use '-vv' to show)
+
+/home/user/wt-2215/plugins/superheroes/lib/tests/test_returning_review_c1l11.py:295: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_returning_review_c1l11.py::test_a_proven_copy_that_an_earlier_rename_came_from_is_never_passed_on
+1 failed in 0.72s
+```
+
+**restore:** the inverse edit.
+
+**restore receipt:** a search for `BITE-PROOF` in `returning_review.py` found nothing, and the line reads again:
+```python
+    paths = sorted(p for p in set(files).union(*(sources.get(f, set()) for f in files)) if p not in proven_files)
+```
+
+**raw green:** same command
+```
+.                                                                        [100%]
+1 passed in 0.91s
+```
+
+---
+
+## E8 — the unsettled-lines addition to `countable`
+
+**axis:** the lines of a file the counter could not settle are added to `countable`: with the attribute read failing (`attribute-unreadable`), exactly 1,000 unsettled lines read changed with `countable` 1000, and 1,001 read full with `countable` 1001.
+
+**neutralization** (`returning_review.py`, `_decide`: the addition is removed):
+```python
+-        countable += sum(row["lines"] for row in left)
++        pass  # BITE-PROOF NEUTRALIZATION (E8)
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest -q -p no:cacheprovider "plugins/superheroes/lib/tests/test_returning_review_c1l11.py::test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed[unsettled-lines]"`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed[unsettled-lines] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-45/test_a_later_change_of_1001_co0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f270f4f2420>
+unsettled = True
+
+    @pytest.mark.parametrize("unsettled", [False, True], ids=["settled", "unsettled-lines"])
+    def test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed(tmp_path, monkeypatch, unsettled):
+        # axis: the over-bar comparison; one line over the bar reading changed
+        # axis: the lines of a file the counter cannot settle are added to the count; an unsettled file counted as nothing
+        if unsettled:
+            monkeypatch.setattr(countable_lines, "_attribute_flags", lambda *args, **kwargs: None)
+        repo = Repo(tmp_path)
+        base, _, earlier = returning(repo)
+        repo.write("src/big.py", numbered("big", 1000))
+        repo.commit("exactly the bar")
+        exact = decide(repo, base, earlier)
+>       assert exact["read"] == "changed" and exact["countable"] == 1000
+E       AssertionError: assert ('changed' == 'changed'
+E         
+E           changed and 0 == 1000)
+
+/home/user/wt-2215/plugins/superheroes/lib/tests/test_returning_review_c1l11.py:175: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_returning_review_c1l11.py::test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed[unsettled-lines]
+1 failed in 0.81s
+```
+
+**restore:** the inverse edit.
+
+**restore receipt:** a search for `BITE-PROOF` in `returning_review.py` found nothing, and the line reads again:
+```python
+        countable += sum(row["lines"] for row in left)
+```
+
+**raw green:** same command
+```
+.                                                                        [100%]
+1 passed in 0.25s
+```
+
+The red stops at the first assertion (the 1,000-line step reads `countable` 0); the 1,001-line step of the variant is not reached under this neutralization.

@@ -124,6 +124,12 @@ def test_t2_shape2_deleting_a_files_last_lines_leaves_nothing_unread(tmp_path):
     _commit(root, "drop the last three lines")
     diff = _pinned_diff(root, base)
     head_lines = 17
+    # Base 20 lines, head 17: the diff is one hunk "@@ -15,6 +15,3 @@" (three context lines 15-17, then lines 18-20
+    # removed). A deletion sits where it was removed (head line 18) but never past the hunk's last head line
+    # (15 + 3 - 1 = 17), so all three removed lines are placed at head line 17.
+    expected = [{"file": "f.txt", "lines": [[17, 17]]}]
+    assert countable_lines.changed_parts(diff) == expected
+    assert countable_lines.unread_surface(diff, []) == expected
     assert countable_lines.unread_surface(diff, [[{"file": "f.txt", "lines": [[1, head_lines]]}]]) == []
     # no changed line is placed past the head file
     assert all(end <= head_lines for part in countable_lines.changed_parts(diff) for _, end in part["lines"])
@@ -137,6 +143,13 @@ def test_t2_shape3_a_tail_deletion_beside_an_earlier_edit_leaves_nothing_unread(
     _commit(root, "edit the first line and drop the last two lines")
     diff = _pinned_diff(root, base)
     head_lines = 38
+    # Base 40 lines, head 38 (the first line replaced, lines 39-40 dropped): two hunks. "@@ -1,4 +1,4 @@" replaces
+    # line 1 (the removed line and the added line both sit at head line 1). "@@ -36,5 +36,3 @@" holds context
+    # lines 36-38 and the two removed lines; their place would be head line 39, but the hunk's last head line is
+    # 36 + 3 - 1 = 38, so both sit at 38.
+    expected = [{"file": "f.txt", "lines": [[1, 1], [38, 38]]}]
+    assert countable_lines.changed_parts(diff) == expected
+    assert countable_lines.unread_surface(diff, []) == expected
     assert countable_lines.unread_surface(diff, [[{"file": "f.txt", "lines": [[1, head_lines]]}]]) == []
     assert all(end <= head_lines for part in countable_lines.changed_parts(diff) for _, end in part["lines"])
 

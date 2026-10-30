@@ -126,9 +126,10 @@ def test_current_lower_is_ok(stack):
 
 
 @pytest.mark.parametrize("meta_over", [{"stackLower": None}, {"stackLower": False}])
-def test_not_stacked_session_makes_no_git_call(stack, meta_over):
+def test_not_stacked_session_makes_no_git_call(stack, monkeypatch, meta_over):
     # axis: stackLower absent or false means no check, and no read of the remote
     sd = stack.session(**meta_over)
+    monkeypatch.setattr(G, "_run_git_bytes", _no_call)
     res = G.check_stack_lower(sd, stack.repo, run=_no_call, ls_remote=_no_call)
     assert res == {"ok": True, "stacked": False}
 
@@ -348,8 +349,17 @@ def _text(path):
 def test_native_stacks_states_the_stop_and_new_session_rule():
     text = _text(_NATIVE_STACKS)
     assert "while its review loop is open" not in text
-    assert "stack-lower-moved" in text
-    assert "The tax it removes" in text
+    paragraphs = [p for p in re.split(r"\n\s*\n", text) if "stack-lower-moved" in p]
+    assert len(paragraphs) == 1
+    para = " ".join(paragraphs[0].split())
+    # the driver stops the session
+    assert "the review driver stops the session (`stack-lower-moved`)" in para
+    # the session's record is written as abandoned when it had started
+    assert "writes that session's review record as abandoned" in para
+    # the layer is brought current
+    assert "brings the layer current by merge" in para
+    # a new session starts on the lower layer's current head
+    assert "starts a new session on the lower layer's current head" in para
 
 
 def test_workhorse_section_12_names_the_lower_layers_current_head():
