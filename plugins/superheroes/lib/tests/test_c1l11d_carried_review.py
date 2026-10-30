@@ -241,6 +241,19 @@ def test_e6_a_carried_account_over_a_real_source_change_demotes_every_row(tmp_pa
     assert rec["checked"][1] == "Reviewers that ran: none", rec["checked"]
 
 
+def test_e6_a_stale_copy_proof_over_a_real_source_change_does_not_widen_the_empty_round(tmp_path, monkeypatch):
+    # axis: the carry check hears only the copies git still proves at the final commit — see bite-proof record c1l11d_wo_a_carried_review
+    s = _changed_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    stale = [{"file": "src/app.py", "source": "upstream/app.py", "sha256": "0" * 64}]
+    out = _write(tmp_path, s, fake, _carried_account(s, provenCopies=stale))
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+    rec = _latest(fake)
+    assert rec["reviewers"] and _row_states(rec) == [("not-run", False)] * len(rec["reviewers"]), rec["reviewers"]
+    assert all(v["runNote"] == "the change since the last reviewed commit holds changed files" for v in rec["reviewers"])
+
+
 def test_e6_positive_control_the_same_account_over_a_catch_up_merge_is_carried(tmp_path, monkeypatch):
     s = _empty_session(tmp_path, monkeypatch)
     fake = TRRS.Fake(head=s.head)

@@ -49,6 +49,7 @@ import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import returning_review  # noqa: E402
+import review_diff_bytes  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import round_phases  # noqa: E402
 import sanitized_view  # noqa: E402
@@ -416,6 +417,25 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
                                            and v.get("ran") != RAN_NOT_RUN for v in rows)):
         return "no reviewer of the earlier record ran and covers its final commit"
     return None
+
+
+def revalidated_copies(copies, repo_root, base, head):
+    """The entries of `copies` that git still proves for `head`: each one's file is in the `base...head` change, not
+    deleted, shown by a section bound to the head blob, and its bytes at `head` hash to the entry's checksum. Any
+    other entry, and every entry when the diff cannot be read, is dropped, so a stale or invented proof never
+    widens what counts as an empty change."""
+    if not copies or not (_full_sha(base) and _full_sha(head)) or not isinstance(repo_root, str):
+        return []
+    try:
+        proc = review_diff_bytes.run_git_diff_three_dot(repo_root, base, head, timeout=120)
+        if proc.returncode != 0:
+            return []
+        diff_text = proc.stdout.decode("utf-8")
+        proof = {"schema": countable_lines.PROOF_SCHEMA, "copies": [dict(c) for c in copies]}
+        proven, _ = countable_lines.proven_copies(diff_text, repo_root, proof, head=head)
+    except Exception:  # noqa: BLE001 — fail closed: a proof that cannot be rechecked proves nothing
+        return []
+    return proven
 
 
 def carry_source(prior, last_reviewed, session_id, history):
@@ -1493,7 +1513,9 @@ def build_record(account, readers, prior=None, history=()):
     carried_from = a["carriedReview"]["lastReviewed"] if "carriedReview" in a else None
     source = carry_source(prior, carried_from, a["sessionId"], history) if carried_from else prior
     carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("baseRef"), fc["sha"],
-                           a.get("provenCopies") or [], rd["returning_decide"],
+                           # axis: the carry check hears only the copies git still proves at the final commit; the account's word is never taken — see bite-proof record c1l11d_wo_a_carried_review
+                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("baseRef"), fc["sha"]),
+                           rd["returning_decide"],
                            lambda sha: _ci(rd, a["repo"], sha, a.get("repoRoot"))["state"]), source) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
                            _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry)

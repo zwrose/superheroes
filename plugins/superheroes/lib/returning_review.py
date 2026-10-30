@@ -164,6 +164,7 @@ def _sections_by_file(diff_text, sources=None):
 
 
 _INDEX_LINE = "index "
+_BINARY_MARKERS = ("Binary files ", "GIT binary patch")
 _HUNK_HEADER_RE = re.compile(r"@@ -\S+ \+\S+ @@")
 
 
@@ -172,9 +173,12 @@ def _own_change(section_text):
     each hunk header cut to ``@@`` and whatever follows its closing ``@@``, so the blob ids and the line numbers a
     moved base shifts are no part of it. Every other line (the ``diff --git``, mode, rename, copy, binary and
     ``---``/``+++`` lines and each hunk body line) is kept exactly."""
+    lines = section_text.splitlines(keepends=True)
+    # axis: a binary section has no hunk text to tell versions apart, so its index line (the blob ids) is its content identity and is kept — see bite-proof record c1l11d_wo_c_fold
+    binary = any(line.startswith(_BINARY_MARKERS) for line in lines)
     out = []
-    for line in section_text.splitlines(keepends=True):
-        if line.startswith(_INDEX_LINE):
+    for line in lines:
+        if line.startswith(_INDEX_LINE) and not binary:
             continue
         hunk = _HUNK_HEADER_RE.match(line)
         out.append("@@" + line[hunk.end():] if hunk else line)

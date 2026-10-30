@@ -29,6 +29,7 @@ for _p in (_HERE, _LIB):
 import returning_review as R  # noqa: E402
 import review_record as RR  # noqa: E402
 import test_c1l11b_returning_session as TS  # noqa: E402
+import test_c1l11d_carried_review as TC  # noqa: E402
 import test_returning_review_c1l11 as TR  # noqa: E402
 from test_returning_review_c1l11 import _isolated_git  # noqa: E402,F401  (autouse: no global git config)
 
@@ -128,6 +129,55 @@ def test_c2_a_base_edit_inside_the_prs_hunk_context_still_reads_changed_and_over
     got = TR.decide(repo, moved, earlier)
     assert got["changedFiles"] == [SHARED] and got["overlap"] == [SHARED], got
     assert got["read"] == "changed" and any(w.startswith(R.WHY_OVERLAP) for w in got["why"])
+
+
+def _binary_then_edited(tmp_path):
+    """A pull request that added a binary file, reviewed, then replaced the file's bytes (same path, same mode)."""
+    repo = TR.Repo(tmp_path)
+    base = repo.git("rev-parse", "main")
+    with open(os.path.join(repo.root, "src", "blob.bin"), "wb") as fh:
+        fh.write(b"\x00\x01one\x00" * 50)
+    reviewed = repo.commit("add binary")
+    repo.set_areas([TR.PAYMENTS, TR.CUSTOMER_DATA])
+    with open(os.path.join(repo.root, "src", "blob.bin"), "wb") as fh:
+        fh.write(b"\x00\x01two\x00" * 50)
+    repo.commit("replace binary bytes")
+    return repo, base, TR.earlier_record(reviewed)
+
+
+def test_c1_a_binary_file_whose_bytes_changed_is_a_changed_file_and_reads_full(tmp_path):
+    # axis: a binary section keeps its index line (blob ids) as content identity, so changed bytes never read as no change — see bite-proof record c1l11d_wo_c_fold
+    repo, base, earlier = _binary_then_edited(tmp_path)
+    head = repo.git("rev-parse", "HEAD")
+    reviewed = earlier["finalCommit"]["sha"]
+    old = R._sections_by_file(repo.git("diff", *R._DIFF_ARGS, "%s...%s" % (base, reviewed)))["src/blob.bin"]
+    new = R._sections_by_file(repo.git("diff", *R._DIFF_ARGS, "%s...%s" % (base, head)))["src/blob.bin"]
+    assert "Binary files" in new and R._own_change(old) != R._own_change(new)
+    got = TR.decide(repo, base, earlier)
+    assert got["read"] == "full" and got["changedFiles"] == ["src/blob.bin"], got
+    assert TR.tokens(got)[-1] == R.WHY_DIFF_UNREADABLE
+
+
+def test_c1_the_carry_check_refuses_a_binary_file_whose_bytes_changed(tmp_path):
+    repo, base, earlier = _binary_then_edited(tmp_path)
+    head = repo.git("rev-parse", "HEAD")
+    prior = dict(earlier, findings=[], reviewers=[{"coversFinalCommit": True, "ran": True}])
+    why = RR.carry_refusal(prior, earlier["finalCommit"]["sha"], repo.root, base, head, [])
+    assert why is not None and why.startswith("the earlier review does not stand for this head"), why
+
+
+# --- C3 (writer-produced): a pending record the writer itself wrote settles once CI is green --------------------------------
+
+def test_c3_a_pending_record_produced_by_the_writer_settles_when_ci_turns_green(tmp_path, monkeypatch):
+    # axis: only a record whose one gap is CI pending on its final commit is let through unfinished — see bite-proof record c1l11d_wo_c_fold
+    s = TC._empty_session(tmp_path, monkeypatch)
+    fake = TC.TRRS.Fake(head=s.head)
+    rec = RR.build_record(TC._acct(s), TC._readers_with(TC.TRRS.Fake(head=s.reviewed), TC._PENDING))
+    assert rec["ci"]["state"] == "pending" and rec["status"] == "not-reviewed", rec  # the writer's own pending record
+    fake.comments.append({"id": 1, "author": "bot", "body": RR.render(rec), "url": "http://c/earlier"})
+    out = TC._send(tmp_path, s, fake)
+    assert out["ok"] is True and out["status"] == "reviewed", out
+    assert TC._latest(fake)["reviewers"][0]["carried"] == {"commit": s.reviewed}
 
 
 def test_c2_own_change_drops_only_index_lines_and_hunk_header_numbers():
