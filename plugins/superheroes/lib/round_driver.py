@@ -5738,11 +5738,16 @@ def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, sessi
     fixes = list(artifact.get("fixes") or [])
     unfixed = [e for e in (artifact.get("unfixed") or []) if isinstance(e, dict)]
     commits = list(fix_commits or [])
+    fix_rec = {}
     if index >= 1 and isinstance(prior_fix, dict):
+        # An older session resumed here may hold keys this fold never writes (the retired fixer's
+        # `refusals`); they ride on unchanged beside the rebuilt ones.
+        fix_rec = {k: v for k, v in prior_fix.items() if k not in ("fixes", "commits", "unfixed")}
         fixes = list(prior_fix.get("fixes") or []) + fixes
         unfixed = list(prior_fix.get("unfixed") or []) + unfixed
         commits = list(prior_fix.get("commits") or []) + commits
-    fix_rec = {"fixes": fixes, "commits": commits}
+    fix_rec["fixes"] = fixes
+    fix_rec["commits"] = commits
     if unfixed:
         fix_rec["unfixed"] = unfixed
     _record_round(state, "fix", fix_rec)
