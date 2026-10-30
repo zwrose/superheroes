@@ -1106,6 +1106,7 @@ _CENSUS = {
     "asked": ["--repo-root", "{root}", "--launch-id", "l-none", "--uncertain"],
     "successor": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
     "relaunch-refusal": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
+    "helper-read": ["--repo", REPO, "--issue", "17", "--session-id", "session_abc"],
     "message": ["--issue", "17", "--place", "cloud", "--stopped-at", "1760000000", "--pushed-at", "1759999000"],
 }
 

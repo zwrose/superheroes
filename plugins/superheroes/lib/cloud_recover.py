@@ -9,11 +9,14 @@ to push, the successor's premise, and the board's words.
   cloud_recover.py relaunch-refusal --repo-root D --launch-id L --repo O/N
   cloud_recover.py message --issue N --place cloud|local [--stopped-at EPOCH] [--pushed-at EPOCH]
                            [--never-pushed] [--push-time-source push|commit]
+  cloud_recover.py helper-read --repo O/N --issue N --session-id S [--session-id S ...]
 
 A successor is composed only for a cloud lane the launch ledger records as ended and `assess` recorded as
-`stopped` (positive stop evidence or a confirmed handover), so no path through this module helps two
-builders work one issue. Every verb checks its inputs through the one `_inputs`. `assess` also answers `parked`
-(the issue holds a builder stop or park newer than the lane's last pushed work; never a recovery step).
+`stopped` (positive stop evidence: the session failed, was archived or is gone, or the lane's own account
+is limited and the lane started before the limit was recorded; or a confirmed handover), so no path through
+this module helps two builders work one issue. Every verb checks its inputs through the one `_inputs`.
+`assess` also answers `parked` (the issue holds a builder stop or park newer than the lane's last pushed
+work; never a recovery step).
 
 Stdlib plus plugin imports only. A function that reads the environment takes `env=None` (a mapping; default
 the process environment), and one that runs a command also takes `run=None` (default `subprocess.run`).
@@ -51,6 +54,8 @@ _PUSH_SOURCES = ("push", "commit")
 _PARK_KINDS = ("stop", "park")
 _PLACES = ("cloud", "local")
 _LAUNCHER_STAMPED = ("placeCall", "standingExclusions")
+HELPER_READ_FIELDS = ("id", "session_status", "status_bucket", "archived")
+_SESSION_ID_RE = re.compile(r"session_[A-Za-z0-9_-]+")
 
 
 def _sib(name):
@@ -88,6 +93,8 @@ def _epoch(stamp):
 _INPUT_CHECKS = (  # the order in which the first refusal is chosen
     ("repo", "repo-invalid", lambda v: isinstance(v, str) and _sib("cloud_builder")._REPO_RE.match(v)),
     ("issue", "issue-invalid", lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0),
+    ("session_ids", "session-ids-invalid", lambda v: isinstance(v, (list, tuple)) and len(v) > 0
+     and all(isinstance(s, str) and _SESSION_ID_RE.fullmatch(s) for s in v)),
     ("launch_id", "launch-id-invalid", lambda v: isinstance(v, str) and v != ""),
     ("session_state", "session-state-invalid", lambda v: v in SESSION_STATES),
     ("activity_age_seconds", "activity-age-invalid", lambda v: v is None or _is_number(v)),
@@ -383,12 +390,38 @@ def _park_reading(repo_root, repo, info, reserved, comments, cutoff, env, run):
     return {"commentId": comment_id, "url": found["url"], "kind": found["parsed"], "createdAt": found["createdAt"]}, "ok"
 
 
+def _limit_reading(repo_root, info, start, env, now):
+    """The account-limit reading for the lane's own account when it counts as stop evidence, else None: the
+    reading is ok and limited, and the lane started before the limit was recorded. Any doubt is no reading."""
+    cfg = info.get("configDir")
+    if not (isinstance(cfg, str) and cfg):
+        return None
+    reading = _sib("cloud_relay").account_limit(repo_root, cfg, env=env, now=now)
+    recorded = reading.get("recordedAt") if isinstance(reading, dict) else None
+    # axis: a limit counts only while it holds and only for a lane that started before it was recorded, so a lane launched after the limit lifted is never taken for stopped by it — see bite-proof record i2272_recover
+    if (isinstance(reading, dict) and reading.get("ok") is True and reading.get("limited") is True
+            and _is_number(start) and _is_number(recorded) and start < recorded):
+        return reading
+    return None
+
+
+def _reopened_handback(repo_root, info, env):
+    """Whether a handed-back lane was sent a fix order after its handback, so the wave watch watches it again."""
+    ww = _sib("wave_watch")
+    relay_times = ww._fix_order_times(repo_root, env, set())  # an unreadable relay yields {}: only the ledger's openers count
+    name = info.get("cloudSessionName")
+    return ww._reopen_candidate(info, relay_times.get(name, ()) if isinstance(name, str) and name else ()) is not None
+
+
 def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, repo, env=None, run=None, now=None):
     """Whether the lane may be recovered now. `stopped` is returned only on positive stop evidence (the
-    session failed, was archived or is gone) or a handover comment, and is recorded; every other verdict
-    leaves the lane alone. `parked` (evidence `builder-stop` or `builder-park`, the comment in `parkComment`)
-    means the issue holds a builder stop or park newer than the lane's last pushed work; it is never a recovery
-    step. `parkRead` is `failed` when a read the park needed failed, so a park was not believed for want of it."""
+    session failed, was archived or is gone; or the lane's own account reads limited and the lane started
+    before the limit was recorded, evidence `account-limited`, the limit in `limitType`/`limitResetsAt`) or a
+    handover comment, and is recorded; every other verdict leaves the lane alone. `parked` (evidence
+    `builder-stop` or `builder-park`, the comment in `parkComment`) means the issue holds a builder stop or park
+    newer than the lane's last pushed work; it is never a recovery step. `parkRead` is `failed` when a read the
+    park needed failed, so a park was not believed for want of it. A handed-back lane a fix order reopened is
+    assessed like a live lane."""
     env = _env(env)
     bad = _inputs(repo=repo, launch_id=launch_id, session_state=session_state,
                   activity_age_seconds=activity_age_seconds)
@@ -401,10 +434,12 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     out = {"ok": True, "launchId": launch_id, "issue": info["issue"], "verdict": None, "evidence": None,
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
            "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None,
-           "parkComment": None, "parkRead": None}
+           "parkComment": None, "parkRead": None, "limitType": None, "limitResetsAt": None}
     # axis: a parked or died lane is still recoverable from current stop evidence until a successor is composed for it
     latest = _latest_outcome(info)
-    if info["terminal"] and (latest not in ("park", "died") or _replaced(repo_root, launch_id, info, env)):
+    # axis: a handed-back lane stays ended unless a fix order reopened it, and a replaced lane is ended whatever reopened it — see bite-proof record i2272_recover
+    open_again = latest in ("park", "died") or (latest == "handback" and _reopened_handback(repo_root, info, env))
+    if info["terminal"] and (not open_again or _replaced(repo_root, launch_id, info, env)):
         out["verdict"] = "ended"
         return _withdrawn(repo_root, launch_id, out, env)
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
@@ -432,6 +467,10 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         out["verdict"], out["evidence"] = "stopped", "session-" + session_state
     elif handover is not None:
         out["verdict"], out["evidence"] = "stopped", "handover"
+    # axis: the account's limit holding is stop evidence for a lane that started before it, but never over a fresh, parked, stopped or handed-over lane — see bite-proof record i2272_recover
+    elif (limit := _limit_reading(repo_root, info, start, env, now)) is not None:
+        out["verdict"], out["evidence"] = "stopped", "account-limited"
+        out["limitType"], out["limitResetsAt"], out["stoppedAt"] = limit.get("limitType"), limit.get("resetsAt"), limit["recordedAt"]
     elif session_state == "unread":
         out["verdict"], out["evidence"] = "unresolved", "session-unread"
     elif session_state in _LIVE_STATES and age is None:
@@ -448,6 +487,8 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         out["stoppedAt"] = _epoch(handover["createdAt"])
     entry = {"verdict": "stopped", "evidence": out["evidence"], "at": _iso(now), "stoppedAt": out["stoppedAt"],
              "handoverSha": handover["sha"] if handover else None}
+    if out["evidence"] == "account-limited":
+        entry["limitResetsAt"] = out["limitResetsAt"]
     wrote = _record(repo_root, "assessed", launch_id, entry, env=env)
     return out if wrote["ok"] else wrote
 
@@ -494,20 +535,70 @@ def asked(repo_root, launch_id, *, uncertain=False, env=None):
     return wrote
 
 
-def _adopted(found, handover_sha):
-    """(the pushed branch entry to adopt, or None for a never-pushed lane; refusal). A recorded handover
-    head names the entry; without one, only a single cleanly read branch is taken."""
+def _has_pull_request(repo, name, env, run):
+    """Whether a pull request (any state) has the branch as its head on this repository; None when the read
+    failed or did not parse as a list."""
+    cb = _sib("cloud_builder")
+    head = urllib.parse.quote("%s:%s" % (repo.split("/")[0], name), safe=":/")
+    code, out = cb._gh(run, ["api", "repos/%s/pulls?state=all&head=%s&per_page=100" % (repo, head)], cb._git_env(env))
+    try:
+        prs = json.loads(out) if code == 0 else None
+    except ValueError:
+        return None
+    if not isinstance(prs, list) or not all(isinstance(p, dict) for p in prs):
+        return None
+    return any(not _from_elsewhere(p, repo) for p in prs)
+
+
+def _from_elsewhere(pull, repo):
+    """Whether the pull request's head lives in a repository other than `repo` (a fork)."""
+    head = pull.get("head")
+    source = head.get("repo") if isinstance(head, dict) else None
+    return isinstance(source, dict) and isinstance(source.get("full_name"), str) and source["full_name"] != repo
+
+
+def _primary(entries, repo, premise, env, run):
+    """The lane's own branch among the cleanly read `entries`: the premise's `adoptsBranch` when it is one of
+    them, else the one entry that has a pull request on this repository; None when no single entry is."""
+    named = [b for b in entries if b["branch"] == premise.get("adoptsBranch")]
+    if named:
+        return named[0]
+    found = [_has_pull_request(repo, b["branch"], env, run) for b in entries]
+    # axis: a pull request read that failed or did not parse names no lane branch, and zero or several pull requests name none either — see bite-proof record i2272_recover
+    if any(f is None for f in found) or found.count(True) != 1:
+        return None
+    return entries[found.index(True)]
+
+
+def _contained(repo_root, entry, primary, env, run):
+    """Whether the primary's head contains the entry's head; anything but git's clean yes is no."""
+    cb = _sib("cloud_builder")
+    code, _ = cb._git(run, repo_root, ["merge-base", "--is-ancestor", entry["sha"], primary["sha"]], cb._git_env(env))
+    return code == 0
+
+
+def _adopted(repo_root, repo, premise, found, handover_sha, env, run):
+    """(the pushed branch entry to adopt, or None for a never-pushed lane; the branches passed over; refusal).
+    A recorded handover head names the entry; without one, a single cleanly read branch is taken, or the lane's
+    own branch when every other branch is already contained in it."""
     entries = found["branches"]
     if handover_sha is not None:
         heads = [b for b in entries if b["sha"] == handover_sha and "reason" not in b]
         if not heads:
-            return None, _refusal("handover-head-not-pushed")
-        return (heads[0], None) if len(heads) == 1 else (None, _refusal("pushed-branch-ambiguous"))
+            return None, [], _refusal("handover-head-not-pushed")
+        return (heads[0], [], None) if len(heads) == 1 else (None, [], _refusal("pushed-branch-ambiguous"))
     if found["ambiguous"]:
-        return None, _refusal("pushed-branch-ambiguous")
+        primary = None if any("reason" in b for b in entries) else _primary(entries, repo, premise, env, run)
+        if primary is None:
+            return None, [], _refusal("pushed-branch-ambiguous")
+        others = [b for b in entries if b is not primary]
+        # axis: a branch is passed over only when the lane's own branch contains it, so a stray branch with work found nowhere else, or one ahead of the lane's branch, still refuses — see bite-proof record i2272_recover
+        if not all(_contained(repo_root, b, primary, env, run) for b in others):
+            return None, [], _refusal("pushed-branch-ambiguous")
+        return primary, [{"branch": b["branch"], "sha": b["sha"]} for b in others], None
     if found["newest"] is None and entries:
-        return None, _refusal("pushed-branch-unreadable")
-    return found["newest"], None
+        return None, [], _refusal("pushed-branch-unreadable")
+    return found["newest"], [], None
 
 
 def _own_premise(reserved):
@@ -580,7 +671,7 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     found = pushed(repo_root, info["issue"], repo=repo, adopted=premise.get("adoptsBranch"), env=env, run=run)
     if not found["ok"]:
         return found
-    entry, refused = _adopted(found, assessed.get("handoverSha"))
+    entry, passed_over, refused = _adopted(repo_root, repo, premise, found, assessed.get("handoverSha"), env, run)
     if refused:
         return refused
     if entry is None:
@@ -613,6 +704,8 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     if entry is None:
         mark["neverPushedEvidence"] = never_pushed_evidence
+    if passed_over:
+        mark["passedOver"] = passed_over
     # axis: a handback recorded during the remote reads above ends the lane's recovery, so the ledger is re-read just before the supersession is written
     again, _, refused = _lane(repo_root, launch_id, env)
     if refused or _latest_outcome(again) not in ("park", "died"):
@@ -620,9 +713,12 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     wrote = _record(repo_root, "superseded", launch_id, mark, env=env, assessed=assessed)
     if not wrote["ok"]:
         return wrote
-    return {"ok": True, "launchId": launch_id, "issue": info["issue"], "premise": premise,
-            "neverPushed": entry is None, "branch": mark["branch"], "sha": mark["sha"],
-            "pushedAt": entry and entry["pushedAt"], "pushTimeSource": entry and entry["pushTimeSource"]}
+    result = {"ok": True, "launchId": launch_id, "issue": info["issue"], "premise": premise,
+              "neverPushed": entry is None, "branch": mark["branch"], "sha": mark["sha"],
+              "pushedAt": entry and entry["pushedAt"], "pushTimeSource": entry and entry["pushTimeSource"]}
+    if passed_over:
+        result["passedOver"] = passed_over
+    return result
 
 
 def message(issue, *, place, stopped_at, pushed_at=None, never_pushed=False, push_time_source="push", tz=None):
@@ -655,6 +751,21 @@ def message(issue, *, place, stopped_at, pushed_at=None, never_pushed=False, pus
     return {"ok": True, "text": text}
 
 
+def helper_read(repo, issue, session_ids):
+    """The ask for a cloud helper session on the builders' account: read each session and post, on the issue, only
+    the fields the takeover check reads. The comment is public, so the prompt names those fields and no others."""
+    bad = _inputs(repo=repo, issue=issue, session_ids=session_ids)
+    if bad:
+        return _refusal(bad)
+    # axis: the prompt asks for exactly HELPER_READ_FIELDS and nothing else, as the helper posts on a public issue and must never carry usage or cost data — see bite-proof record i2272_recover
+    fields = ", ".join(HELPER_READ_FIELDS[:-1]) + " and " + HELPER_READ_FIELDS[-1]
+    prompt = ("Run get_session for each of these session ids: %s. For each one, keep only the fields %s, and "
+              "nothing else. Post them as one JSON array in a fenced json block, as one comment on issue #%d of %s. "
+              "Change, archive or message no session. Then end your turn."
+              % (", ".join(session_ids), fields, issue, repo))
+    return {"ok": True, "fields": list(HELPER_READ_FIELDS), "prompt": prompt}
+
+
 _ROOT, _LAUNCH, _REPO = ("--repo-root", {}), ("--launch-id", {}), ("--repo", {})
 _VERBS = {  # verb: (function, required flags, optional flags); each flag is (name, add_argument options)
     "pushed": (pushed, [_ROOT, _REPO, ("--issue", {"type": int})], []),
@@ -664,6 +775,7 @@ _VERBS = {  # verb: (function, required flags, optional flags); each flag is (na
     "asked": (asked, [_ROOT, _LAUNCH], [("--uncertain", {"action": "store_true"})]),
     "successor": (successor, [_ROOT, _LAUNCH, _REPO], [("--never-pushed", {"dest": "never_pushed_evidence"})]),
     "relaunch-refusal": (relaunch_refusal, [_ROOT, _LAUNCH, _REPO], []),
+    "helper-read": (helper_read, [_REPO, ("--issue", {"type": int}), ("--session-id", {"action": "append", "dest": "session_ids"})], []),
     "message": (message, [("--issue", {"type": int}), ("--place", {})],
                 [("--repo-root", {}), ("--stopped-at", {"type": float}), ("--pushed-at", {"type": float}),
                  ("--never-pushed", {"action": "store_true"}), ("--push-time-source", {"default": "push"})]),
