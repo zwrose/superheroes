@@ -277,8 +277,8 @@ def full_account(**over):
                                                     {"file": "b.py", "line": None, "fixed": False}]}
     base = dict(
         rounds={**ROUNDS, "extraAudit": {"why": WHY}},
-        rerunChecks=[check(round=2, check="pytest -q tests/x.py"),
-                     check(round=3, check="make test", runs=[run("timed-out"), run("not-started")])],
+        rerunChecks=[check(round=2, check="pytest -q tests/x.py", decision="went-on"),
+                     check(round=3, check="make test", runs=[run("timed-out"), run("not-started")], decision="failed")],
         synthesisRounds=[1, 3],
         outsideThisPR=[outside(hits=[hit(), hit(id="H-2", file="lib/y.py", line=None, title="stale doc")]),
                        sweep(hits=[hit(id="H-3", file="lib/z.py", line=7, title="dead branch")])],
@@ -304,7 +304,7 @@ def test_dod_an_account_with_every_new_field_renders_each_part():
     summary = rr._summary(record, 0)
     lines = lines_of(summary)
     assert lines[lines.index("Rounds: 3 of 4 (round cap).") + 1].startswith("Extra audit round: ran,")
-    rerun = ("Re-run after one failure on unchanged code: round 2 `pytest -q tests/x.py`: failed (exit 1) then passed; "
+    rerun = ("Re-run after one failure: round 2 `pytest -q tests/x.py`: failed (exit 1) then passed; "
              "round 3 `make test`: timed out then did not start")
     assert rerun in lines
     assert "Reviewers: code · verifier · synthesis" in lines
@@ -520,7 +520,7 @@ def test_e15_the_compact_levels_give_the_count_forms():
     for lines in (one, two):
         assert "Findings: 3 (listed in the full record)." in lines
         assert "Outside this PR (3) (listed in the full record)." in lines
-        assert "Re-run after one failure on unchanged code: 2 checks (listed in the full record)." in lines
+        assert "Re-run after one failure: 2 checks (listed in the full record)." in lines
         assert f"Extra audit round: ran, ordered at the vet and not counted in the 4 rounds: {'w' * 299}…." in lines
         assert "Left unread by the slice reviewers: 40 of 400 countable lines (10.0%)." in lines
         assert not [l for l in lines if l.startswith(("- F-", "- H-", "For the advisor"))]

@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 
+import cloud_builder
 import record_paths
 import round_commit
 import round_records
@@ -310,7 +311,9 @@ def _publish(session_dir, pr, runner):
     if _run(runner, edit)[0] != 0:
         return done(OUTCOME_REFUSED, REASON_PUBLISH_FAILED)
     after = _read_live(runner, pr_text)
-    if after is None or not _same_body(after, staged):
+    # axis: a cloud session's egress appends its footer to a PATCHed body, so the read-back is compared without one footer — see bite-proof record c1l10b_wo3_verify_rerun_seam
+    if after is None or not _same_body(cloud_builder.strip_cloud_footer(after),
+                                       cloud_builder.strip_cloud_footer(staged)):
         return done(OUTCOME_REFUSED, REASON_PUBLISH_UNVERIFIED)
     return done(OUTCOME_PUBLISHED, None)
 
