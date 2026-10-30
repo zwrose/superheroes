@@ -1035,6 +1035,54 @@ def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reus
     assert err is None and landed["headSha"] == restored
 
 
+def test_the_gate_after_a_restore_never_shares_a_slot_with_a_run_verify_still_in_progress(
+        tmp_path, monkeypatch, adapters):
+    # axis: the post-restore verify skips a slot an in-progress run-verify claims, and the old runner cannot publish into the new one
+    w = World(tmp_path)
+    w.cfg["verifyCommand"] = "make test"
+    d = TA._session(tmp_path, name="claimed", verifyCommand="make test")
+    state = TA._state(d)
+    for field in ("round", "rounds", "fixBatch", "findings", "_auditTargets", "_newSurface", "_fixDeltaDiff",
+                  "_verifyThen", "step"):
+        state[field] = w.state[field]
+    state["config"].update({k: v for k, v in w.cfg.items() if k != "verifyCommand"})
+    state["pending"] = None
+    RD.save_state(d, state)
+    monkeypatch.chdir(w.root)
+    out = RD.cmd_next(d)
+    assert out["ok"] and out["phase"] == RD.P_AUDITS, out
+    slot = out["payload"]["verify"]
+    rnd, old = slot["round"], slot["attempt"]
+    # a concurrent run-verify holds the slot (a live claim, nothing landed): this process stands in for its runner
+    landing_dir = RD.round_records.landing_dir(d, rnd, RD.P_VERIFY)
+    os.makedirs(landing_dir, exist_ok=True)
+    claim_path = os.path.join(landing_dir, RD.RUN_VERIFY_CLAIM_NAME % old)
+    with open(claim_path, "w", encoding="utf-8") as fh:
+        fh.write(RD.round_records.canonical({"pid": os.getpid(), "token": "t", "startedAt": "x"}))
+    w.state = TA._state(d)
+    w.state["pending"] = None
+    w.audit()
+    w.restore()
+    restored = w.head()
+    RD.save_state(d, w.state)
+    nxt = RD.cmd_next(d)
+    assert nxt["ok"] and nxt["phase"] == RD.P_VERIFY, nxt
+    assert nxt["attempt"] != old, "the restored head was given the slot a live run-verify holds"
+    calls = []
+    again = RD.cmd_run_verify(d, run=TA._verb_run(0, calls=calls))
+    assert again["ok"] is True and again["attempt"] == nxt["attempt"] and len(calls) == 1, again
+    landed, err = RD.round_records.read_json(again["landingPath"])
+    assert err is None and landed["headSha"] == restored
+    # the old runner finishes after the restore: its slot is no longer the pending one, so nothing lands
+    skey = RD.round_records.storage_key("verify")
+    old_claim = {"slot": (rnd, old), "stale": False,
+                 "landingPath": RD.round_records.bare_payload_path(d, rnd, RD.P_VERIFY, skey, old),
+                 "recordPath": RD.round_records.store_path(d, rnd, RD.P_VERIFY, skey, old)}
+    refused = RD._run_verify_publish(d, old_claim, {"result": "pass", "headSha": w.fix_head}, [])
+    assert refused["ok"] is False and refused["reason"] == "run-verify-slot-moved", refused
+    assert not os.path.exists(old_claim["landingPath"])
+
+
 @pytest.mark.parametrize("head,halts", [pytest.param("0" * 40, True, id="another-head"),
                                         pytest.param(None, False, id="restored-head")])
 def test_the_gate_after_a_restore_counts_only_a_run_at_the_restored_head(tmp_path, head, halts):

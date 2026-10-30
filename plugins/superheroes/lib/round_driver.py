@@ -11460,11 +11460,16 @@ def _next_dispatch_attempt(session_dir, rnd, phase, state):
 
 
 def _first_unlanded_verify_attempt(session_dir, rnd, attempt):
-    """The first verify attempt at or above ``attempt`` with nothing landed in its slot. An accepted-submit
-    allocator does not count a result that landed and was never accepted, so it would hand that slot out again."""
+    """The first verify attempt at or above ``attempt`` that is neither landed, recorded, nor claimed by a
+    `run-verify`. An accepted-submit allocator does not count a result that landed and was never accepted, nor a
+    run still in progress, so it would hand that slot out again; a runner still holding the earlier slot then
+    meets `run-verify-slot-moved` at publish, because the pending slot is no longer its own."""
     skey = round_records.storage_key("verify")
+    landing_dir = round_records.landing_dir(session_dir, rnd, P_VERIFY)
+    # axis: an in-progress claim holds its slot — the restored head's gate never shares an attempt with a concurrent run-verify
     while (_store_file_exists(round_records.bare_payload_path(session_dir, rnd, P_VERIFY, skey, attempt))
-           or _store_file_exists(round_records.store_path(session_dir, rnd, P_VERIFY, skey, attempt))):
+           or _store_file_exists(round_records.store_path(session_dir, rnd, P_VERIFY, skey, attempt))
+           or _store_file_exists(os.path.join(landing_dir, RUN_VERIFY_CLAIM_NAME % attempt))):
         attempt += 1
     return attempt
 
