@@ -9626,8 +9626,10 @@ def _run_seam(seams, action, payload, state, config):
             return {"result": ran}
         artifact = {"result": ran.get("result")}
         # axis: the in-process verify seam may report the head the run ran at, a non-empty string only — see bite-proof record c1l11f_wo_e_verify_after_restore
-        if isinstance(ran.get("headSha"), str) and ran["headSha"]:
-            artifact["headSha"] = ran["headSha"]
+        # axis: the seam's after-head and tree digests reach the fold, so a run that moved the head or changed the tree is seen as one — see bite-proof record c1l11f_wo_e_verify_after_restore
+        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):
+            if isinstance(ran.get(key), str) and ran[key]:
+                artifact[key] = ran[key]
         return artifact
     if action == P_APPLY_FIXES:
         return seams["fix_step"](payload.get("batch"), state["round"], payload)
