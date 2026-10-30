@@ -5382,6 +5382,12 @@ def _resolve_ruled_batch(state, rows):
                   "%d finding(s) named by an owner ruling join this fix batch: %s"
                   % (len(added), ", ".join(_fix_batch_row_key(row) for row in added)))
     batch += added
+    _attach_row_rulings(state, batch, effective, ledger_by_key)
+    return batch
+
+
+def _attach_row_rulings(state, batch, effective, ledger_by_key):
+    """Attach to each row of ``batch`` the ruling it inherits through a merge (``ruledBy``)."""
     for row in batch:
         row.pop("ruledBy", None)
         row.pop("ruledBySeq", None)
@@ -5390,7 +5396,6 @@ def _resolve_ruled_batch(state, rows):
         if decision is not None and decision is not effective.get(key):
             row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding
             row["ruledBySeq"] = decision.get("seq")
-    return batch
 
 
 def _note_sent_under_decision(state, rows):
@@ -5451,6 +5456,10 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         if siblings:
             siblings, _spent = _drop_spent_out_of_scope_rows(state, siblings)
         filtered += siblings
+        # axis: a pulled sibling gets the same inherited-ruling attachment as every resolved row — see bite-proof record c1l11c_wo1_fix_groups
+        _sibling_ledger, _sibling_fault = _disposition_ledger_by_key(state)
+        if _sibling_fault is None:
+            _attach_row_rulings(state, filtered, _live_ruling_by_key(state), _sibling_ledger)
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:

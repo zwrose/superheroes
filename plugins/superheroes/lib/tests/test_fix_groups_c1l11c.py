@@ -629,3 +629,22 @@ def test_a_tradeoff_sibling_pulled_by_the_queue_closure_is_held_for_the_owner_no
     assert RD._queue_fix_batch(u.state, u.state["config"], [live[u.ka]]) == "queued"
     assert u.state["ownerChoiceHeld"] == [u.kb]
     assert [RD._finding_identity_key(r) for r in u.state["_fixBatch"]] == [u.ka]
+
+
+def test_a_pulled_sibling_carries_the_guidance_a_finding_merged_into_it_was_already_sent_under():
+    # axis: the sibling the closure pulls is attached its inherited ruling like every resolved row, so the fixer reads the owner's instruction — see bite-proof record c1l11c_wo1_fix_groups
+    u = _unit(severities=("Important", "Minor"))
+    merged = dict(_member(1, "Minor", with_test=False, title="merged into the sibling"), id="v2",
+                  **{SC.MERGED_INTO_FIELD: u.kb})
+    u.state["findings"].append(merged)
+    km = RD._finding_identity_key(merged)
+    _rule_guidance(u.state, km)
+    seq = u.state["rulingSeqCounter"]
+    u.state["sentUnderDecision"] = {RD._lineage_root(RD._lineage_map(u.state), km): seq}  # already dispatched
+    live = {RD._finding_identity_key(r): dict(r) for r in u.state["findings"]}
+    assert RD._queue_fix_batch(u.state, u.state["config"], [live[u.ka]]) == "queued"
+    batch = {RD._finding_identity_key(r): r for r in u.state["_fixBatch"]}
+    assert sorted(batch) == sorted([u.ka, u.kb])
+    assert (batch[u.kb].get("ruledBy"), batch[u.kb].get("ruledBySeq")) == (km, seq)
+    assert "keep the retry behaviour" in RD._gate_guidance_block(
+        RD._gate_guidance_entries(u.state, u.state["round"]))
