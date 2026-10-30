@@ -3935,19 +3935,24 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     if applied["held"] and not second_pass:
         # axis: a finding whose passing test missed its path is neither graded nor closed on that test; it gets one more test — see bite-proof record c1l7_wo_c_second_test
         state["_verified"] = []
-        _hold_for_second_test(state, session_dir, staged, applied["held"], survivors)
+        _hold_for_second_test(state, session_dir, staged, applied["held"], survivors, refuted)
         return
     if second_pass:
         carried = state.pop("_secondTestCarry", None)
+        carried_refuted = state.pop("_secondTestRefutedCarry", None)
         state.pop("_secondTestHeld", None)
         state.pop("_secondTestPass", None)
-        # axis: the first pass's survivors and this pass's are staged afresh, so their ids are unique — see bite-proof record c1l7_wo_c_second_test
-        state["_verified"] = verification.stage_ids((carried if isinstance(carried, list) else []) + survivors)
+        carried = carried if isinstance(carried, list) else []
+        carried_refuted = carried_refuted if isinstance(carried_refuted, list) else []
+        # axis: the first pass's survivors and refuted findings and this pass's are staged afresh together, so the round's two lists carry unique ids and its refuted list holds both passes' — see bite-proof record c1l8_wo_a_repeat_marks
+        restaged = verification.stage_ids(carried + survivors + carried_refuted + refuted)
+        split = len(carried) + len(survivors)
+        state["_verified"], state["_refuted"] = restaged[:split], restaged[split:]
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
     # A round with refuted findings against a non-empty earlier pool still dispatches synthesis, to name repeats only.
     # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors
-    if not state["_verified"] and not (refuted and _earlier_pool(state)):
+    if not state["_verified"] and not (state["_refuted"] and _earlier_pool(state)):
         _decision(state, "synthesis-no-survivors",
                   "verification left no findings, so no grouping seat was dispatched")
         _fold_synthesis(state, config, {"grouping": []}, session_dir, exact_only="synthesis-no-survivors")
@@ -3991,10 +3996,10 @@ def _stage_second_pass(state, copies):
     state["step"] = P_VERIFIERS
 
 
-def _hold_for_second_test(state, session_dir, staged, held, survivors):
-    """Pass 1: keep the held findings (``held``, from `apply_verdicts`) and the pass-1 ``survivors`` aside and
-    send the held ones to the second-test seat; when no seat can be seated, skip the seat and go straight to
-    the verifiers' second pass with each held finding marked, and no new test."""
+def _hold_for_second_test(state, session_dir, staged, held, survivors, refuted=()):
+    """Pass 1: keep the held findings (``held``, from `apply_verdicts`), the pass-1 ``survivors`` and the pass-1
+    ``refuted`` findings aside and send the held ones to the second-test seat; when no seat can be seated, skip
+    the seat and go straight to the verifiers' second pass with each held finding marked, and no new test."""
     rows = []
     for entry in held:
         finding, fault = _resolve_staged_finding(staged, entry.get("id"))
@@ -4005,7 +4010,8 @@ def _hold_for_second_test(state, session_dir, staged, held, survivors):
         rows.append({"finding": finding, "note": entry.get("note")})
     state["_secondTestHeld"] = rows
     state["_secondTestCarry"] = survivors
-    keys = [_finding_identity_key(row["finding"]) for row in rows]
+    state["_secondTestRefutedCarry"] = list(refuted)
+    keys =[_finding_identity_key(row["finding"]) for row in rows]
     _record_second_test(state, held=[{"findingKey": key, "note": row["note"]} for key, row in zip(keys, rows)])
     _decision(state, "second-test-held",
               "%d finding(s) held for one more test: the break-it test passed and the verifier judged it "

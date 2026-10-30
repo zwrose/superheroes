@@ -40,6 +40,7 @@ import round_records as RR  # noqa: E402
 import session_checkout as SCO  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 import test_round_driver_integration as TRI  # noqa: E402
+import test_second_test_c1l7 as C1L7  # noqa: E402
 import test_synthesis_seat_1858 as S1858  # noqa: E402
 
 RD = TRD.RD
@@ -180,7 +181,7 @@ def _record_payload(findings, sha="a" * 40):
 def test_t10_the_pool_lists_session_rows_then_record_findings_with_refs_from_e1():
     state = _state()
     _earlier(state, _raw("session one", line=1), "fixed")
-    _earlier(state, _raw("session two", line=2), "refuted", refutedReason="guard holds")
+    _earlier(state, _raw("session two", line=2), "refuted", grade=_WRONG, refutedReason="guard holds")
     RD._stage_findings(state, _compile([_raw("still open", line=3)]))
     ledger = state[SC.DISPOSITION_LEDGER_KEY]
     record = [RM.record_entry(_record_finding(_raw("record one", line=4), "craft"), "c" * 40)]
@@ -734,7 +735,7 @@ def _write(path, obj):
 
 
 @pytest.mark.parametrize("content,entries,unavailable", [
-    (_record_payload([_record_finding(_raw("a"), "craft"), _raw("open one", line=2)]), 1, None),
+    (_record_payload([_record_finding(_raw("a"), "craft"), _raw("open one", line=2)]), 2, None),
     ({"ok": False, "reason": "review-record-missing"}, 0, None),
     ({"ok": False, "reason": "review-record-unreadable"}, 0, "review-record-unreadable"),
     ("{not json", 0, "not-json"),
@@ -751,7 +752,7 @@ def test_i8_the_flag_reads_the_record_and_only_a_missing_record_is_silent(tmp_pa
     cfg = state["config"]
     assert len(cfg["earlierFindings"]) == entries and cfg.get("earlierFindingsUnavailable") == unavailable
     canonical = os.path.join(d, "earlier-findings.json")
-    assert os.path.isfile(canonical) == (content is not None and content != "{not json")
+    assert os.path.isfile(canonical) == isinstance(content, dict)
 
 
 def test_i8_an_explicit_flag_wins_over_a_canonical_copy_and_a_canonical_copy_is_read_without_the_flag(
@@ -798,7 +799,7 @@ def test_i8_the_round_record_discloses_why_there_is_no_record_sourced_pool():
     assert refused["rounds"]["1"]["earlierFindingsUnavailable"] == "review-record-unreadable"
     missing = _state(earlierFindings=[])  # `review-record-missing`: no earlier record, nothing disclosed
     RD._stage_findings(missing, _compile([_raw("a")]))
-    assert "earlierFindingsUnavailable" not in missing["rounds"]["1"]
+    assert "earlierFindingsUnavailable" not in missing["rounds"].get("1", {})
 
 
 # ---- end to end: a record-sourced exact repeat through the CLI path -------------------------------
@@ -828,3 +829,192 @@ def test_e2e_a_new_finding_that_is_a_record_finding_exactly_is_kept_and_reaches_
     row = _row(state, raw)
     assert row["repeatOf"]["id"] == "R-3" and row["repeatKept"]["outcome"] == "craft"
     assert state["findings"] == [] and state["rounds"]["1"]["repeatMatching"] == "judge"
+
+
+# ---- a refuted finding of the first verifier pass reaches the repeat plan (T-2) ----------------------------------
+
+_PASSED_RUN = {"outcome": "passed"}
+_MISSED_PATH = {"verdict": "PLAUSIBLE", "reason": "the first test never calls the retry path", "pathReached": False}
+_CONFIRMED_V = {"verdict": "CONFIRMED", "reason": "reproduced", "evidence": "ran: 1 failed"}
+_REFUTED_V = {"verdict": "REFUTED", "reason": "the guard holds"}
+
+
+def _fold_pass(state, table):
+    """One verifier fold over the staged ``_toVerify``; ``table`` is {title: verdict}, a missing title is silent."""
+    verdicts = [dict(table[s["title"]], id=s["id"]) for s in V.stage_ids(state["_toVerify"]) if s["title"] in table]
+    RD._fold_verifiers(state, state["config"], {
+        "verdicts": verdicts, "verifierVendor": RD._nonpanel_selection(state, None, RD.P_VERIFIERS)[0]})
+
+
+def _held_round(state, raws, held_title, table):
+    """Round 2 of ``state`` through pass 1, the second-test seat (which gives no result) and up to pass 2's fold:
+    ``raws`` are staged with ``held_title``'s break-it test marked passed, and ``table`` is pass 1's verdicts.
+    Returns with pass 2 pending (the held finding staged as `secondTest`)."""
+    state["round"] = 2
+    compiled = _compile(raws)
+    for finding in compiled:
+        if finding["title"] == held_title:
+            finding["breakItRun"] = dict(_PASSED_RUN)
+    RD._stage_findings(state, compiled)
+    _fold_pass(state, dict(table, **{held_title: _MISSED_PATH}))
+    assert state["step"] == RD.P_SECOND_TEST and state["_secondTestHeld"], "premise: pass 1 holds the finding"
+    RD._fold_second_test(state, state["config"], {"findings": []})
+    assert state["step"] == RD.P_VERIFIERS and state["_secondTestPass"] is True, "premise: pass 2 is pending"
+    assert [f["title"] for f in state["_toVerify"]] == [held_title]
+
+
+def test_t2a_a_refuted_same_key_repeat_of_the_first_pass_takes_the_fixed_family_back_after_the_second_pass():
+    state = _state()
+    repeat, held, plain = _raw("alpha bug", line=1), _raw("held one", line=2), _raw("plain one", line=3)
+    receipt = {"headSha": "a" * 40}
+    _earlier(state, repeat, "fixed", dispositionReceipt=receipt)
+    _held_round(state, [held, plain, repeat], "held one",
+                {"alpha bug": _REFUTED_V, "plain one": _CONFIRMED_V})
+    _fold_pass(state, {"held one": _CONFIRMED_V})
+    assert state["step"] == RD.P_SYNTHESIS
+    _synth(state, None)
+    row = _row(state, repeat)
+    assert row["repeatOf"] == {"findingKey": _key(repeat), "id": None, "fixHolds": True}
+    assert row["repeatKept"]["outcome"] == "fixed"
+    assert (row["disposition"], row["dispositionRound"], row["dispositionReceipt"]) == ("fixed", 1, receipt)
+    assert RD._disposition_is_current(row) and row["grade"]["verdict"] == "wrong"
+    assert sorted(_titles(state)) == ["held one", "plain one"] and "alpha bug" not in _batch(state)
+
+
+def test_t2b_after_the_second_pass_the_round_holds_both_passes_findings_under_pairwise_unique_ids():
+    state = _state()
+    repeat, held, plain = _raw("alpha bug", line=1), _raw("held one", line=2), _raw("plain one", line=3)
+    _earlier(state, repeat, "fixed")
+    _held_round(state, [held, plain, repeat], "held one",
+                {"alpha bug": _REFUTED_V, "plain one": _CONFIRMED_V})
+    assert state["_secondTestRefutedCarry"][0]["title"] == "alpha bug"
+    _fold_pass(state, {"held one": _CONFIRMED_V})
+    assert [f["title"] for f in state["_refuted"]] == ["alpha bug"]
+    assert sorted(f["title"] for f in state["_verified"]) == ["held one", "plain one"]
+    ids = [f["id"] for f in state["_verified"] + state["_refuted"]]
+    assert len(ids) == 3 and len(set(ids)) == 3 and all(V.is_staged_id(i) for i in ids)
+    assert not {"_secondTestCarry", "_secondTestRefutedCarry", "_secondTestHeld", "_secondTestPass"} & set(state)
+
+
+def test_t2c_a_second_pass_with_nothing_left_still_dispatches_synthesis_when_the_first_pass_refuted_against_a_pool():
+    state = _state()
+    _earlier(state, _raw("craft A"), "craft", settledReason="cq")
+    _held_round(state, [_raw("held one", line=2), _raw("gone", line=5)], "held one", {"gone": _REFUTED_V})
+    state["_toVerify"] = []  # the second pass returns nothing: no survivor, nothing refuted in it
+    _fold_pass(state, {})
+    assert state["step"] == RD.P_SYNTHESIS
+    assert "synthesis-no-survivors" not in [d["kind"] for d in state["decisions"]]
+    payload = _payload(state)
+    assert payload["findings"] == [] and [f["title"] for f in payload["refuted"]] == ["gone"]
+    _synth(state, [_group(_ids(state)["gone"], ref="e1")])
+    row = _row(state, _raw("gone", line=5))
+    assert row["disposition"] == "craft" and row["repeatKept"]["outcome"] == "craft"
+    assert state["findings"] == []
+
+
+# ---- a session row is pooled as the record writer reads it (T-3), through the driver -----------------------------
+
+def _driven(title, line):
+    """A finding inside the surface every round of `_Rounds` reviews (lines 1 and 2 of `newsurf.py`)."""
+    return dict(_raw(title, line=line), file="newsurf.py")
+
+
+class _Rounds(C1L7.Round):
+    """C1-L7's driven session with its own script: the code reviewer raises ``round1`` in round 1, the scoped scan of
+    round ``n`` raises ``scoped(n, state)``, the verifier answers each (round, title) from ``verdicts`` (CONFIRMED
+    when absent) and the synthesis seat answers ``synth(round, payload)``. Each fix leaves a new surface, so a
+    fix is followed by a round whose audits decide the fix and whose scoped scan can raise a finding again: a
+    finding decided in round ``n`` is an earlier finding from round ``n + 1`` on."""
+
+    def __init__(self, tmp_path, round1, scoped, verdicts=None, synth=None):
+        super().__init__(tmp_path, first={})
+        self.cfg["diff"] = C1L7._DIFF + TRD._newsurf("0")
+        self.cfg["repoRoot"] = self.checkout  # the repeat table reads whether the code changed between two heads
+        self.round1, self.scoped, self.verdicts = list(round1), scoped, verdicts or {}
+        self.synth = synth or (lambda rnd, payload: None)
+        self.scanned = set()
+
+    def respond(self, phase, payload, rnd):
+        self.seen.append(phase)
+        if phase == RD.P_PANEL:
+            seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+            if rnd == 1:
+                seats["code-reviewer"] = {"findings": [dict(f) for f in self.round1]}
+            return {"seats": seats}
+        if phase == RD.P_SCOPED:
+            found = [] if rnd in self.scanned else [dict(f) for f in self.scoped(rnd, self.state())]
+            self.scanned.add(rnd)
+            return {"findings": found}
+        if phase == RD.P_VERIFIERS:
+            verdicts = []
+            for cluster in payload.get("clusters", []):
+                for finding, fid in zip(cluster["findings"], cluster["ids"]):
+                    verdicts.append(dict(self.verdicts.get((rnd, finding["title"]), C1L7._CONFIRMED), id=fid))
+            return {"verdicts": verdicts,
+                    "verifierVendor": RD._nonpanel_selection(self.state(), self.dir, phase)[0]}
+        if phase == RD.P_SYNTHESIS:
+            return {"grouping": self.synth(rnd, payload)}
+        if phase == RD.P_FIXER:  # each fix leaves a new surface, so the next round's scoped scan runs
+            return {"fixes": [], "headDiff": TRD._headf_ns(self.seen.count(RD.P_FIXER)), "changedSubjects": ["Code"]}
+        return TRD._responder()(phase, payload, rnd)
+
+    def fixer_runs(self):
+        return self.seen.count(RD.P_FIXER)
+
+
+def test_t3a_a_non_representative_member_of_a_fixed_group_raised_again_is_marked_a_repeat_and_kept(tmp_path):
+    first, second, fresh = _driven("one root cause", 1), _driven("same root cause again", 2), _driven("fresh one", 2)
+    raws = {first["title"]: first, second["title"]: second}
+    seen = {}
+
+    def scoped(rnd, state):
+        if rnd == 2:  # a fresh finding keeps the session going, so the fixed group is an earlier finding in round 3
+            return [fresh]
+        if rnd != 3:
+            return []
+        ledger = _ledger(state)
+        (linked,) = [row for row in ledger.values() if row.get(SC.MERGED_INTO_FIELD)]
+        seen["member"] = raws[linked["title"]]
+        seen["representative"] = ledger[linked[SC.MERGED_INTO_FIELD]].get("disposition")
+        return [seen["member"]]
+
+    refuted = {(3, title): C1L7._SECOND_REFUTED for title in raws}
+    r = _Rounds(tmp_path, [first, second], scoped, verdicts=refuted,
+                synth=lambda rnd, payload: [_group(*[f["id"] for f in payload["findings"]])] if rnd == 1 else None)
+    r.drive()
+    state = r.state()
+    assert seen.get("representative") == "fixed", (seen, r.seen, list(state["rounds"]))  # premise: the group was fixed
+    assert r.fixer_runs() == 2 and state["terminal"], r.seen  # the group in round 1, the fresh finding in round 2
+    row = _row(state, seen["member"])
+    assert row["repeatOf"]["findingKey"] == _key(seen["member"]), row
+    assert row["repeatKept"]["outcome"] == "fixed" and row["disposition"] == "fixed", row
+    assert [f["title"] for f in state["findings"]] == []
+
+
+def test_t3b_a_judge_named_repeat_kept_as_shown_wrong_is_marked_and_kept_by_exact_identity_when_raised_again(tmp_path):
+    shown_wrong, fixme = _driven("shown wrong one", 1), _driven("fix me", 2)
+    reworded, fixme_too = _driven("shown wrong one, reworded", 1), _driven("fix me too", 2)
+    scripted = {2: [reworded, fixme_too], 3: [reworded]}
+
+    def synth(rnd, payload):
+        if rnd == 2:  # the judge names the reworded finding a repeat of the shown-wrong one, e1
+            ref = {e["title"]: e["ref"] for e in payload["earlier"]}["shown wrong one"]
+            ids = {f["title"]: f["id"] for f in payload["findings"]}
+            return [_group(ids["shown wrong one, reworded"], ref=ref, group_id="a"),
+                    _group(ids["fix me too"], group_id="b")]
+        return None
+
+    r = _Rounds(tmp_path, [shown_wrong, fixme], lambda rnd, state: scripted.get(rnd, []),
+                verdicts={(1, "shown wrong one"): C1L7._SECOND_REFUTED}, synth=synth)
+    r.drive()
+    state = r.state()
+    # premise: round 2 kept it as shown-wrong on the judge's name alone, under its own confirmed grade
+    (named,) = state["rounds"]["2"]["repeatMarks"]
+    assert (named["source"], named["kept"], named["grade"]["verdict"]) == ("judge", True, "confirmed"), named
+    assert named["repeatOf"]["findingKey"] == _key(shown_wrong)
+    assert r.fixer_runs() == 2 and state["terminal"], r.seen  # rounds 1 and 2 fixed; round 3 reached no fix
+    (again,) = state["rounds"]["3"]["repeatMarks"]
+    assert (again["source"], again["kept"]) == ("exact", True), again
+    row = _row(state, reworded)
+    assert row["repeatOf"]["findingKey"] == _key(reworded) and row["repeatKept"]["outcome"] == "shown-wrong", row
+    assert state["findings"] == []

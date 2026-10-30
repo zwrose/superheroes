@@ -8,7 +8,8 @@ pool order, refs and the no-double-listing rule · exact identity (session raw k
 judge's name · the judge's refs · the grouping faults (unknown ref, a refuted id twice, refuted ids set aside
 before survivor coverage, a refuted-only group, an omitted survivor) · strip_groups · kept_reason.
 
-Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/c1l8a_repeat_marks_module.md
+Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/c1l8a_repeat_marks_module.md; the pool census (S4) in
+plugins/superheroes/lib/tests/bite_proofs/c1l8_wo_a_repeat_marks.md
 """
 import json
 import os
@@ -25,6 +26,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import repeat_marks as RM  # noqa: E402
+import review_record_session as RS  # noqa: E402
 import session_contract as SC  # noqa: E402
 
 _CONSEQUENCE = "a reviewer-found defect stays in the change"
@@ -226,6 +228,61 @@ def test_s3_a_refuted_row_with_neither_reading_is_undecided_and_not_pooled():
     assert RM.session_entry(_row(_raw("a"), "refuted", refutedReason="guard holds"), 2) is None
     assert RM.session_entry(_row(_raw("a"), "refuted", grade={"verdict": "confirmed", "reason": "r"}), 2) is None
     assert RM.session_entry(_row(_raw("a"), "refuted"), 2) is None
+
+
+def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
+    # bites on: the mergedInto resolution and the repeatKept read of `session_entry`
+    wrong_rep = _row(_raw("wrong rep"), "refuted", grade=dict(_WRONG), refutedReason="guard holds")
+    fixed_rep = _row(_raw("fixed rep"), "fixed")
+    member = lambda title, rep: dict(_raw(title), raisedSeq=1, **{SC.MERGED_INTO_FIELD: _key(rep)})  # noqa: E731
+    kept_mark = {"outcome": "shown-wrong", "reason": "repeat of wrong rep; keeps its earlier outcome (shown-wrong)"}
+    rows = {
+        "fixed": fixed_rep,
+        "refuted + wrong grade": wrong_rep,
+        "refuted + author-justified": _row(_raw("aj"), "refuted", refutedReason="author-justified: the owner chose this"),
+        "refuted ungraded": _row(_raw("ungraded"), "refuted", refutedReason="guard holds"),
+        "craft": _row(_raw("craft"), "craft", settledReason="code quality only"),
+        "left-for-owner": _row(_raw("owner"), "left-for-owner", settledReason="only the owner can settle this"),
+        "ruling": _row(_raw("ruling"), "ruling", settledReason="decided"),
+        "member of a fixed group": member("fixed member", fixed_rep),
+        "member of a refuted+wrong group": member("wrong member", wrong_rep),
+        "valid repeatKept shown-wrong, confirmed grade": _row(
+            _raw("kept"), "refuted", grade={"verdict": "confirmed", "reason": "r"}, refutedReason=kept_mark["reason"],
+            repeatKept=kept_mark),
+        "malformed repeatKept on a craft row": _row(
+            _raw("odd craft"), "craft", settledReason="cq", repeatKept={"outcome": "not-an-outcome", "reason": "r"}),
+        "malformed repeatKept on an ungraded refuted row": _row(
+            _raw("odd refuted"), "refuted", refutedReason="guard holds",
+            repeatKept={"outcome": "shown-wrong", "reason": ""}),
+    }
+    by_key = {_key(row): row for row in rows.values()}
+    pooled = {e["key"]: e for e in RM.build_pool(list(rows.values()), 2, [])}
+    expected = {}
+    for name, row in rows.items():
+        outcome = RS._decide(row, by_key, {})[0]
+        expected[name] = outcome
+        if outcome is None:
+            assert _key(row) not in pooled, name
+        else:
+            assert _key(row) in pooled and pooled[_key(row)]["outcome"] == outcome, name
+    # the census is not vacuous: the shapes the record writer reads through a link or a mark are decided
+    assert expected["member of a fixed group"] == "fixed" and expected["member of a refuted+wrong group"] == "shown-wrong"
+    assert expected["valid repeatKept shown-wrong, confirmed grade"] == "shown-wrong"
+    assert expected["malformed repeatKept on a craft row"] == "craft"
+    assert [n for n, o in expected.items() if o is None] == ["refuted ungraded", "malformed repeatKept on an ungraded refuted row"]
+    entry = pooled[_key(rows["member of a fixed group"])]
+    assert (entry["id"], entry["title"], entry["round"]) == (None, "fixed member", 1)  # the row's own identity, the representative's round
+
+
+def test_s4_an_unresolvable_merge_chain_is_not_pooled_and_no_by_key_reads_the_row_itself():
+    orphan = dict(_raw("orphan"), raisedSeq=1, **{SC.MERGED_INTO_FIELD: "no-such-key"})
+    assert RM.session_entry(orphan, 2, {_key(orphan): orphan}) is None
+    marked = _row(_raw("marked"), "refuted", grade={"verdict": "confirmed", "reason": "r"},
+                  repeatKept={"outcome": "shown-wrong", "reason": "repeat of x"})
+    assert RM.session_entry(marked, 2) is None  # no by_key: today's reading, the row's own disposition and grade
+    assert RM.session_entry(marked, 2, {_key(marked): marked})["outcome"] == "shown-wrong"
+    member = dict(_raw("member"), raisedSeq=1, **{SC.MERGED_INTO_FIELD: _key(_raw("rep"))})
+    assert RM.session_entry(member, 2) is None  # no by_key: the member has no disposition of its own
 
 
 def test_a_session_row_is_pooled_only_when_decided_in_an_earlier_round_and_after_it_was_raised():

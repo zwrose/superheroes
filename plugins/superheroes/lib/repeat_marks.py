@@ -103,14 +103,33 @@ def _entry(source, key, finding, outcome, **extra):
     return row
 
 
-def session_entry(row, round_no):
-    """The pool entry for a ledger row decided (current disposition) before ``round_no``, else None."""
+def _kept_outcome(rep):
+    """The outcome a representative's valid `repeatKept` stands for, else None (a malformed mark is ignored)."""
+    kept = rep.get("repeatKept")
+    reason = kept.get("reason") if isinstance(kept, dict) else None
+    # the record writer's own test: a known outcome and a reason that is a non-empty string (not stripped)
+    if isinstance(kept, dict) and kept.get("outcome") in review_findings_schema.OUTCOMES \
+            and isinstance(reason, str) and reason:
+        return kept["outcome"]
+    return None
+
+
+def session_entry(row, round_no, by_key=None):
+    """The pool entry for a ledger row decided (current disposition) before ``round_no``, else None.
+
+    With ``by_key`` (the ledger by identity key) the row is read as the record writer reads it: through its
+    `mergedInto` chain to the representative (an unresolvable chain is not pooled), whose valid `repeatKept`
+    gives the outcome before its disposition does. Without ``by_key`` the row's own disposition is read."""
     if not isinstance(row, dict):
         return None
-    outcome = outcome_of(row.get("disposition"), row)
+    rep = row if by_key is None else session_contract.resolve_merged_into_entry(row, by_key)
+    if not isinstance(rep, dict):
+        return None
+    # axis: a ledger row pools as the record writer reads it — through its mergedInto chain, then a valid repeatKept, then its disposition — see bite-proof record c1l8_wo_a_repeat_marks
+    outcome = (_kept_outcome(rep) if by_key is not None else None) or outcome_of(rep.get("disposition"), rep)
     key = session_contract.finding_identity_key(row)
-    decided = row.get("dispositionRound")
-    disp_seq = row.get(session_contract.DISPOSITION_SEQ_FIELD)
+    decided = rep.get("dispositionRound")
+    disp_seq = rep.get(session_contract.DISPOSITION_SEQ_FIELD)
     raised_seq = row.get(session_contract.RAISED_SEQ_FIELD)
     if (outcome is None or not key or not _plain_int(decided) or decided >= round_no
             or not (_plain_int(disp_seq) and _plain_int(raised_seq) and disp_seq > raised_seq)):
@@ -172,7 +191,8 @@ def read_file(path):
 def build_pool(ledger, round_no, record_entries):
     """The earlier-findings pool in order — session rows (ledger order), then record findings — each with
     its ``eN`` ref. A record finding the session already holds (same stored key) is not listed twice."""
-    pool = [e for e in (session_entry(row, round_no) for row in ledger or ()) if e is not None]
+    by_key = {session_contract.finding_identity_key(r): r for r in ledger or () if isinstance(r, dict)}
+    pool = [e for e in (session_entry(row, round_no, by_key) for row in ledger or ()) if e is not None]
     held = {e["key"] for e in pool}
     held |= {opaque_key({session_contract.FINDING_KEY_FIELD: e["key"]}) for e in pool}
     for entry in record_entries or ():
