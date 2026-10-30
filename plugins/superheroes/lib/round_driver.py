@@ -3868,13 +3868,20 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     state["_verified"] = survivors
     verify_record = {"drops": applied["drops"], "downgrades": applied["downgrades"],
                      "unverified": applied["unverified"], "ambiguous": applied["ambiguous"],
-                     "notExecuted": applied["notExecuted"]}
+                     "notExecuted": applied["notExecuted"],
+                     # axis: the findings a passing test missed the path of are listed on the verify record, where the docs promise them — see bite-proof record c1l7_wo_f_held_record
+                     "held": applied["held"]}
     prior_verify = state["rounds"].get(str(state["round"]), {}).get("verify") if second_pass else None
     if isinstance(prior_verify, dict):
         # axis: the first pass's drops, downgrades and the rest stay on the round's record beside the second's
         for field, rows in verify_record.items():
+            if field == "held":
+                continue
             held_rows = prior_verify.get(field)
             verify_record[field] = (list(held_rows) if isinstance(held_rows, list) else []) + rows
+        # the second pass holds nothing, so the held list is the first pass's alone; an older record without one reads empty
+        first_held = prior_verify.get("held")
+        verify_record["held"] = list(first_held) if isinstance(first_held, list) else []
     _record_round(state, "verify", verify_record)
     # axis: each verifier fold appends one verifyPasses entry; a second wave must not overwrite.
     _record_round_append(state, "verifyPasses", {
