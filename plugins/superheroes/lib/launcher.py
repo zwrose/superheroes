@@ -22,6 +22,7 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -2632,6 +2633,91 @@ def _base_on_remote(repo_root, base, env):
 _base_on_remote_fn = _base_on_remote
 
 
+def _adopted_branch_absent(repo_root, branch, env):
+    """Whether ``origin`` has no branch ``branch``, asked of the remote afresh: True, False, or None
+    when it could not be asked (no ``origin``, git failed or timed out, an answer that is not a ref
+    line for exactly that branch)."""
+    ref = "refs/heads/%s" % branch
+    got = _git_scrubbed(
+        repo_root, "ls-remote", "--heads", "origin", ref, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if got is None or got.returncode != 0:
+        return None
+    lines = [line for line in (got.stdout or "").splitlines() if line.strip()]
+    if not lines:
+        return True
+    if any(len(line.split()) == 2 and line.split()[1] == ref for line in lines):
+        return False
+    return None
+
+
+def _gh_branch_pulls(owner, repo, branch, env, timeout):
+    """Ask GitHub's pulls endpoint for every pull request (any state) headed at ``branch`` with
+    ``gh``; the completed process, or None when ``gh`` could not run or timed out. Tests replace it."""
+    try:
+        return subprocess.run(
+            [
+                "gh", "api",
+                "repos/%s/%s/pulls?state=all&head=%s:%s&per_page=100"
+                % (owner, repo, owner, urllib.parse.quote(branch, safe="")),
+            ],
+            capture_output=True,
+            text=True,
+            env=ll.scrub_env(env),
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _adopted_branch_first_pr(repo_root, branch, env):
+    """Epoch seconds when the first pull request headed at ``branch`` of this repository opened,
+    asked of GitHub afresh, or None when that could not be established: an origin that is not on
+    github.com, no ``gh``, a failed call, no pull request, a full page (more may exist), or any row
+    that is not this repository's own pull request for exactly that branch with a UTC ``created_at``."""
+    url = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if url is None or url.returncode != 0:
+        return None
+    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
+    if matched is None:
+        return None
+    owner, repo = matched.group("owner"), matched.group("repo")
+    asked = _gh_branch_pulls(owner, repo, branch, env, _WORKTREE_GIT_TIMEOUT)
+    if asked is None or asked.returncode != 0:
+        return None
+    try:
+        rows = json.loads(asked.stdout)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(rows, list) or not rows or len(rows) >= 100:
+        return None
+    stamps = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        head = row.get("head")
+        if not isinstance(head, dict):
+            return None
+        head_repo = head.get("repo")
+        full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+        if (
+            head.get("ref") != branch or not isinstance(full_name, str)
+            or full_name.lower() != ("%s/%s" % (owner, repo)).lower()
+        ):
+            return None
+        stamp = _listing_created_ts(row)
+        if stamp is None:
+            return None
+        stamps.append(stamp)
+    return min(stamps)
+
+
+# The round-trip to GitHub; tests replace it.
+_adopted_branch_first_pr_fn = _adopted_branch_first_pr
+
+
 def _cloud_base_refusal(repo_root, stamped, env):
     """The refusal reason when the base commit the launch names is not on the remote, else None.
 
@@ -2870,17 +2956,28 @@ def _adopted_head_refusal(repo_root, stamped, env):
 _ADOPT_ORIGINAL_SESSION_LIVE = "adopt-original-session-live"
 _ADOPT_ORIGINAL_SESSION_UNREAD = "adopt-original-session-unread"
 _ADOPT_ORIGINAL_REMEDY_LIVE = (
-    "The adopted branch's original cloud builder is still live. Send the fix order to that "
-    "session (through the relay when it runs on another account) instead of launching a new "
-    "lane. Launch a new fix leg only once that session is archived or gone from the listing, "
-    "its status bucket reads failed, or cloud_recover assess has recorded it stopped on a "
-    "handover."
+    "The risk is a second builder on the adopted branch: an earlier cloud lane that could still "
+    "write it is listed live (originalSessions). Send the fix order to that session instead of "
+    "launching a new lane: SendMessage on this account, the relay on another. If it does not "
+    "answer, get its handover (cloud_recover.py ask, then assess) or have a cloud helper session "
+    "on the builders' account archive it (orchestration.md § Acting on the builders' account), "
+    "then launch again with a fresh session read. When the issue's newest lane is a local lane "
+    "on this account, resume that same session instead of adopting."
 )
 _ADOPT_ORIGINAL_REMEDY_UNREAD = (
-    "Record the builders' account's cloud session listing at launch time (one list_sessions "
-    "page read with no cursor and has_more false; a get_session result covers only a session it "
-    "returns, never one that is gone) and pass it with --cloud-sessions-file; a listing that "
-    "cannot be read, or that does not cover every earlier session, refuses."
+    "The risk is a second builder on the adopted branch, and nothing read so far shows the lanes "
+    "in launchIds are not live. Clear it with evidence you read yourself: have a cloud helper "
+    "session on the builders' account run get_session for each named lane's cloudSessionId and "
+    "post the results on the issue (orchestration.md § Acting on the builders' account), save "
+    "them to a file and launch again with --cloud-sessions-file; or get the lane's handover "
+    "(cloud_recover.py ask, then assess). A lane that handed back before the adopted branch's "
+    "first pull request opened needs no read, unless a fix order went to its session. When the issue's newest "
+    "lane is a local lane on this account, resume that same session instead of adopting."
+)
+_ADOPT_ORIGINAL_REMEDY_STATE = (
+    "The launch ledger or cloud-recover.json named by failedRead could not be read, so which "
+    "earlier lanes could still write the adopted branch is unknown. Restore that file from its "
+    "last good copy and launch again."
 )
 _LISTING_STRING_FIELDS = ("title", "session_status", "status_bucket", "environment_id")
 # The owner machine clock that stamped startedTs and the host clock that stamped created_at can disagree.
@@ -2980,23 +3077,65 @@ def _page_created_by_environment(pages):
     return newest
 
 
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+_NEEDS_FIRST_PR = object()
+_NEEDS_BRANCH_ABSENCE = object()
+
+
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
-    """None, or ``(reason, detail)``: an adoption must not launch beside a live original builder.
+    """The refusal ``_original_session_pass`` reaches, or None; every local read happens after every slow remote read.
+
+    A pass reads the ledger, the recover state and the relay history (all local); when a lane needs
+    a remote read (the branch's absence from ``origin``, or its first pull request time) the pass
+    stops and names it. That read is made once, and the whole narrowing is evaluated again on a
+    fresh local snapshot, so a vet amendment, a handover stop or a fix order recorded during any
+    remote read is still seen. The pass that returns a result is always one that made no remote
+    read of its own.
+    """
+    reads = {}
+    while True:
+        result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
+        if result is _NEEDS_FIRST_PR:
+            reads["first"] = _adopted_branch_first_pr_fn(repo_root, stamped["adoptsBranch"], env)
+            # the absence read must be the last remote read before the snapshot the decision rests on
+            reads.pop("absent", None)
+        elif result is _NEEDS_BRANCH_ABSENCE:
+            reads["absent"] = _adopted_branch_absent(repo_root, stamped["adoptsBranch"], env)
+        else:
+            return result
+
+
+def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads):
+    """None, or ``(reason, detail)``: an adoption must not launch beside a live builder that could still write the adopted branch.
 
     A premise that carries ``adoptsBranch`` is checked against the cloud lanes the ledger holds for
     the issue that started a session. A lane is exempt when its latest outcome is ``refusal`` (it
-    built nothing) or ``cloud_recover assess`` recorded it stopped on a handover. For the others the
-    recorded host listing (``sessions_file``) must show the lane's session archived, failed or
-    gone: a row that is none of those is live, and a listing that cannot be read, or that does not
-    cover a session it does not show, refuses ``adopt-original-session-unread``.
+    built nothing) or ``cloud_recover assess`` recorded it stopped on a handover. Of the rest, a lane
+    is dropped only on evidence this machine reads itself, and every read that fails or is
+    ambiguous keeps it: a lane bound to the adopted branch by its premise whose branch ``origin``
+    shows gone needs no listing, but a supplied listing that shows its session live still refuses
+    ``adopt-original-session-live``, unless a fix order reopened it (the same opener checks as below),
+    which leaves it needing session evidence like any other lane; any other lane is dropped when it handed back before the
+    branch's first pull request opened and neither a ``vet not-ready`` nor a fix-order relay record
+    addressed to it reopened it (any fix-order relay record to its session does), since a pull request on the branch before the handback would itself be the
+    first, so the lane's pull request was on another branch and nothing sends it back to this one.
+    For the lanes left, the recorded host listing (``sessions_file``) must show the lane's session
+    archived, failed or gone: a row that is none of those is live, and a listing that cannot be
+    read, or that does not cover a session it does not show, refuses
+    ``adopt-original-session-unread``.
     """
     if "adoptsBranch" not in stamped:
         return None
 
     def unread(failed, **more):
-        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(
-            more, failedRead=failed, remedy=_ADOPT_ORIGINAL_REMEDY_UNREAD,
+        remedy = (
+            _ADOPT_ORIGINAL_REMEDY_STATE if failed in ("ledger", "recover-state")
+            else _ADOPT_ORIGINAL_REMEDY_UNREAD
         )
+        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(more, failedRead=failed, remedy=remedy)
 
     got = ll.read(repo_root, env=env)
     folded = ll.fold(got["records"]) if got["state"] in ("ok", "missing") else None
@@ -3021,24 +3160,129 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
         }
     if not candidates:
         return None
+    branch = stamped["adoptsBranch"]
+    gone = set()
+    relays = None  # the relay history is local and read afresh by every pass
+    if isinstance(branch, str) and branch:
+        premises = {
+            r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"
+        }
+        adopted_pr = stamped.get("adopts")
+        kept = {}
+
+        def handback_ts(info):
+            reoutcome = next(
+                (a for a in reversed(info.get("amendments") or []) if a["kind"] == ll.AMENDMENT_REOUTCOME),
+                None,
+            )
+            if reoutcome is not None:
+                return reoutcome.get("ts")
+            at_index = info.get("terminalIndex")
+            record = (
+                got["records"][at_index]
+                if isinstance(at_index, int) and not isinstance(at_index, bool)
+                and 0 <= at_index < len(got["records"]) else None
+            )
+            return record.get("ts") if isinstance(record, dict) else None
+
+        def vet_reopened(info, handback):
+            return any(
+                a["kind"] == "vet" and a["value"] == "not-ready"
+                and not (cloud_recover._is_number(a.get("ts")) and a["ts"] <= handback)
+                for a in info.get("amendments") or []
+            )
+
+        def relay_reopened(info):
+            nonlocal relays
+            if relays is None:
+                import cloud_relay
+
+                relays = cloud_relay.fix_orders(repo_root, env=env, include_unchecked=True)
+            # axis: a fix-order relay read that fails keeps every handed-back lane, since a fix order sent since cannot be ruled out — see bite-proof record i2254_original_session
+            if relays.get("ok") is not True:
+                return True
+            for relay in relays.get("records") or []:
+                # axis: a fix-order relay record whose target is not a non-empty string is ambiguous and may have been sent to this lane, so it is matched against every handed-back lane
+                # axis: any fix order addressed to the lane's session keeps the lane whatever its compose or decision time, since delivery can follow a later handback — see bite-proof record i2254_original_session
+                if isinstance(relay, dict) and (
+                    not isinstance(relay.get("session"), str)
+                    or not relay.get("session")
+                    or relay.get("session") == info["cloudSessionName"]
+                ):
+                    return True
+            return False
+
+        for launch_id, info in candidates.items():
+            premise = premises.get(launch_id)
+            if isinstance(premise, dict) and (
+                premise.get("adoptsBranch") == branch
+                or (
+                    _is_int(premise.get("adopts")) and _is_int(adopted_pr)
+                    and premise["adopts"] == adopted_pr
+                )
+            ):
+                if "absent" not in reads:
+                    return _NEEDS_BRANCH_ABSENCE
+                # axis: a lane bound to the adopted branch by its premise needs no listing only when origin shows that branch gone; a branch still there, or a read that failed, keeps the lane, and a gone-branch lane is still refused when a supplied listing shows its session live, since the deleted ref does not stop its builder — see bite-proof record i2254_original_session
+                # axis: a gone-branch lane that a fix order has reopened (a vet not-ready after its terminal record, or a fix-order relay record addressed to its session or with an ambiguous session, or a relay read that is not ok) gets no exemption and needs session evidence like any other lane — see bite-proof record i2254_original_session
+                if reads["absent"] is True:
+                    exempt = True
+                    if cloud_recover._latest_outcome(info) == "handback":
+                        handback = handback_ts(info)
+                        exempt = (
+                            cloud_recover._is_number(handback)
+                            and not vet_reopened(info, handback)
+                            and not relay_reopened(info)
+                        )
+                    if exempt:
+                        gone.add(launch_id)
+                kept[launch_id] = info
+                continue
+            if cloud_recover._latest_outcome(info) != "handback":
+                kept[launch_id] = info
+                continue
+            handback = handback_ts(info)
+            if not cloud_recover._is_number(handback):
+                kept[launch_id] = info
+                continue
+            # axis: a vet not-ready after the handback is a fix order sent since, so the lane may write the branch again and stays; a vet stamp that is not a finite number stays too — see bite-proof record i2254_original_session
+            if vet_reopened(info, handback):
+                kept[launch_id] = info
+                continue
+            # axis: the first-pull-request time is read before the ledger, the recover state and the relay history that decide the lane, since the lookup is a slow remote read and a vet not-ready, a handover stop or a fix order recorded during it must still be seen — see bite-proof record i2254_original_session
+            if "first" not in reads:
+                return _NEEDS_FIRST_PR
+            first = reads["first"]
+            if relay_reopened(info):
+                kept[launch_id] = info
+                continue
+            # axis: a handed-back lane had opened its own pull request before the handback, and a pull request on the adopted branch opened before then would itself be the branch's earliest, so the lane's pull request was on another branch and with no fix order since it writes only that branch; a first-pull-request time that is unread, or not past the handback plus the clock-skew allowance, keeps the lane — see bite-proof record i2254_original_session
+            if cloud_recover._is_number(first) and handback + _ADOPT_ABSENCE_SKEW_SECONDS <= first:
+                continue
+            kept[launch_id] = info
+        candidates = kept
+    if not candidates:
+        return None
+    # a gone-branch lane is refused only on affirmative live evidence; it never makes a listing missing or incomplete refuse
+    lane_ids = sorted(launch_id for launch_id in candidates if launch_id not in gone)
     # axis: an adoption over a lane that started a session with no listing given refuses unread — see bite-proof record i2119_original_session
     if sessions_file is None:
-        return unread("listing-not-given")
+        return unread("listing-not-given", launchIds=lane_ids) if lane_ids else None
     try:
         with open(sessions_file, encoding="utf-8") as fh:
             text = fh.read()
     except OSError:
-        return unread("listing-file")
+        return unread("listing-file", launchIds=lane_ids) if lane_ids else None
     except UnicodeDecodeError:
-        return unread("listing-json")
+        return unread("listing-json", launchIds=lane_ids) if lane_ids else None
     try:
         parsed = _listing_value(text)
     except ValueError:
-        return unread("listing-json")
+        return unread("listing-json", launchIds=lane_ids) if lane_ids else None
     listing = _listing_rows(parsed)
     # axis: a listing that is not a recorded host shape refuses unread — see bite-proof record i2119_original_session
     if listing is None:
-        return unread("listing-shape")
+        return unread("listing-shape", launchIds=lane_ids) if lane_ids else None
     rows, pages, result_count = listing
     complete = result_count == 1 and len(pages) == 1 and pages[0].get("has_more") is False
     # axis: a has_more-false page proves absence only when its rows are ordered and parseable, so a cursor-read last page cannot pass — see bite-proof record i2119_original_session
@@ -3057,6 +3301,8 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                 created_by_env.get(lane_env)
                 if created_by_env is not None and isinstance(lane_env, str) else None
             )
+            if launch_id in gone:
+                continue
             # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing, and a lane whose session id was never confirmed is matched by title only, so absence never proves it gone — see bite-proof record i2119_original_session
             if (
                 newest is None or not isinstance(started_ts, (int, float))
