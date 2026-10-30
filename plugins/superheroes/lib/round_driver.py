@@ -5524,45 +5524,67 @@ def _restore_commit_fault(state, config, artifact, commit_seam=None):
 
 
 def _reviewer_test_rows(state, key):
-    """Every row that holds the finding ``key``'s carried break-it test: its ledger row, its live
-    finding, and the fix-batch and audit-target rows built from it."""
+    """Every row outside the ledger that holds the finding ``key``'s carried break-it test: its live
+    finding, and the fix-batch and audit-target rows built from it. Never touches the ledger key;
+    the ledger row is read through the reader and written by ``_sync_reviewer_test_ledger_row``."""
     rows = []
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if isinstance(ledger, list):
-        held = _ledger_index_by_key(ledger).get(key)
-        if held is not None:
-            rows.append(ledger[held])
     live = _live_finding_by_key(state, key)
     if live is not None:
         rows.append(live)
     for field in ("fixBatch", "_fixBatch", "_fixQueue", "_auditTargets"):
         for row in state.get(field) or []:
-            if isinstance(row, dict) and _finding_identity_key(row) == key and row not in rows:
+            if (
+                isinstance(row, dict)
+                and _finding_identity_key(row) == key
+                and not any(r is row for r in rows)
+            ):
                 rows.append(row)
     return rows
+
+
+def _rewrite_reviewer_test_row(row, content, correction):
+    """The per-row rewrite of the test reviewer's version: ``content`` (None leaves the test alone) into
+    the carried block's body and ``reviewerTest``, ``correction`` into ``testCorrection``."""
+    if content is not None:
+        # axis: the carried block holds the test reviewer's bytes, so the next audit compares against them — see bite-proof record c1l10b_wo2_test_restore
+        block, _kind = break_it.carried_block(row)
+        if block is not None:
+            row["suggestion"] = _break_it_block_text(block, content)
+        row[REVIEWER_TEST_FIELD] = content
+    if correction is not None:
+        row[TEST_CORRECTION_FIELD] = copy.deepcopy(correction)
+
+
+def _sync_reviewer_test_ledger_row(state, key, content, correction):
+    """Put the test reviewer's version on the finding's ledger entry, when it has one. Only the carried
+    block, ``reviewerTest`` and ``testCorrection`` change; the entry's disposition family is never
+    touched, and a state with no entry for ``key`` (or no ledger at all) is left byte for byte as it was."""
+    rows, _fault = session_contract.read_disposition_ledger(state)
+    if not any(_finding_identity_key(row) == key for row in rows):
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    held = _ledger_index_by_key(ledger).get(key)
+    if held is not None:
+        _rewrite_reviewer_test_row(ledger[held], content, correction)
 
 
 def _sync_reviewer_test(state, key, content, correction=None):
     """The one home for the test reviewer's version of a finding's test. ``content`` (None leaves the
     test alone) is written into the carried block's body (its ``path`` and ``run`` kept, so its
-    sha256 follows) and into ``reviewerTest``, on the ledger row and the live finding and on the
+    sha256 follows) and into ``reviewerTest``, on the ledger row, the live finding and the
     fix-batch and audit-target rows built from them, so a later audit compares against it.
     ``correction`` is the finding's ``testCorrection`` record. Every restore and every correction
     goes through here."""
+    _sync_reviewer_test_ledger_row(state, key, content, correction)
     for row in _reviewer_test_rows(state, key):
-        if content is not None:
-            # axis: the carried block holds the test reviewer's bytes, so the next audit compares against them — see bite-proof record c1l10b_wo2_test_restore
-            block, _kind = break_it.carried_block(row)
-            if block is not None:
-                row["suggestion"] = _break_it_block_text(block, content)
-            row[REVIEWER_TEST_FIELD] = content
-        if correction is not None:
-            row[TEST_CORRECTION_FIELD] = copy.deepcopy(correction)
+        _rewrite_reviewer_test_row(row, content, correction)
 
 
 def _correction_used(state, key):
     """True when the finding's one correction has been offered and used."""
-    for row in _reviewer_test_rows(state, key):
+    ledger_rows, _fault = session_contract.read_disposition_ledger(state)
+    held_rows = [row for row in ledger_rows if _finding_identity_key(row) == key]
+    for row in held_rows + _reviewer_test_rows(state, key):
         held = row.get(TEST_CORRECTION_FIELD)
         if isinstance(held, dict) and held.get("used") is True:
             return True

@@ -486,6 +486,21 @@ def test_t4_the_sync_writes_the_ledger_row_and_the_live_finding_and_leaves_other
         RD.session_contract.DISPOSITION_LEDGER_KEY)
 
 
+def test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten():
+    state = RD.new_state({})
+    mine = C1._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST, changed_why=WHY)
+    key = RD._finding_key_of(mine)
+    batch_row, target_row = copy.deepcopy(mine), copy.deepcopy(mine)
+    assert batch_row == target_row and batch_row is not target_row
+    state["fixBatch"] = [batch_row]
+    state["_auditTargets"] = [target_row]
+    RD._sync_reviewer_test(state, key, CORRECTED_TEST, correction={"round": 2, "used": True, "outcome": "corrected"})
+    for row in (batch_row, target_row):
+        assert row[RD.REVIEWER_TEST_FIELD] == CORRECTED_TEST
+        assert break_it.carried_block(row)[0]["content"] == CORRECTED_TEST
+        assert row[RD.TEST_CORRECTION_FIELD]["used"] is True
+
+
 def test_t4_an_audit_target_row_carries_the_reviewers_version_and_the_correction(tmp_path):
     w = World(tmp_path)
     w.finding[RD.TEST_CORRECTION_FIELD] = {"round": 1, "used": True, "outcome": "none"}
