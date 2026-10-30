@@ -509,3 +509,25 @@ def test_c6_a_carried_finding_whose_record_shows_a_lost_break_it_test_is_never_a
     first = s.next()
     assert first["action"] == RD.P_SCOPED, first  # no audit target: a later source-only fix cannot discharge a lost test
     assert _carried(s.state()) == {"keys": [key], "auditBase": s.reviewed, "discharged": [], "sentBack": [key]}
+
+
+def _lost_test_state(row):
+    return {"round": 2, "rounds": {"1": {}, "2": {}}, SC.DISPOSITION_LEDGER_KEY: [row], "config": {}}
+
+
+def test_c7_a_carried_finding_with_a_lost_break_it_test_is_marked_and_withholds_certification_once_fixed(monkeypatch):
+    run = {"test": "tests/test_x.py", "commit": "h", "status": "ran", "exitCode": 1, "output": "", "reason": None, "changedWhy": None}
+    earlier = {"findings": [dict(_finding(27, tradeoff=False, breakItRuns=[run]), outcome=None)]}
+    [row] = RD._carried_findings(earlier)
+    assert row[RD.CARRIED_TEST_LOST_FIELD] is True
+    plain = dict(_finding(27, tradeoff=False), outcome=None)
+    assert RD.CARRIED_TEST_LOST_FIELD not in RD._carried_findings({"findings": [plain]})[0]
+    fixed = dict(row, disposition="fixed")
+    assert RD._carried_test_lost_unresolved(_lost_test_state(fixed)) == [RD._finding_identity_key(fixed)]
+    # a reviewer who attaches the test again clears the obligation, and a finding not fixed owes nothing here
+    assert RD._carried_test_lost_unresolved(_lost_test_state(dict(fixed, suggestion=BREAK_IT_BLOCK))) == []
+    assert RD._carried_test_lost_unresolved(_lost_test_state(dict(row, disposition="refuted"))) == []
+    parked = []
+    monkeypatch.setattr(RD, "_park_cannot_certify", lambda state, detail: parked.append(detail))
+    assert RD._break_it_kept_step(_lost_test_state(fixed), {}) is True
+    assert parked and "was lost" in parked[0], parked

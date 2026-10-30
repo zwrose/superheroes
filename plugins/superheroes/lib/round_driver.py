@@ -1562,6 +1562,9 @@ def _carried_findings(earlier):
         row[session_contract.FINDING_KEY_FIELD] = entry["key"]
         # axis: a row read back from a record written before `tradeoff` was persisted is held for the owner, never autonomously fixed — see bite-proof record c1l11b_wo_k_legacy_tradeoff
         row.setdefault("tradeoff", True)
+        # axis: a carried finding whose break-it test the record lost keeps a marker through every round, so no later audit or convergence can certify it without the test — see bite-proof record c1l11b_wo_k_carried_lost_test
+        if _carried_test_unrecoverable(row):
+            row[CARRIED_TEST_LOST_FIELD] = True
         out.append(row)
     return out
 
@@ -1647,6 +1650,21 @@ def _seed_carried(state, cfg, returning):
     state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
     state["fixBatch"] = []
     return True
+
+
+CARRIED_TEST_LOST_FIELD = "carriedTestLost"
+
+
+def _carried_test_lost_unresolved(state):
+    """Ledger rows of carried findings whose break-it test the earlier record lost and no reviewer attached again,
+    that stand fixed or out of scope: each is an obligation no round-level run registers, so the convergence gate
+    withholds certification on them. ``[]`` when the ledger cannot be read (the kept check reports that fault)."""
+    _, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        return []
+    return [key for key, entry in by_key.items()
+            if isinstance(entry, dict) and entry.get(CARRIED_TEST_LOST_FIELD) is True
+            and entry.get("disposition") in ("fixed", "out-of-scope") and not break_it.carries_test(entry)]
 
 
 def _carried_test_unrecoverable(finding):
@@ -8618,6 +8636,11 @@ def _break_it_kept_step(state, config):
                     state, "break-it working copy not restored: %s (%s)"
                     % (run.get("path"), str(run.get("output") or "")[-200:]))
                 return True
+    # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
+    lost = _carried_test_lost_unresolved(state)
+    if lost:
+        _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
+        return True
     latest, latest_round = {}, {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
