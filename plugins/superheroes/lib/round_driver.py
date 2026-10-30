@@ -6112,6 +6112,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         first_run = dict(first.get("run") or {}, head=first.get("head"),
                          headSource=first.get("headSource"))
         second_run = dict(second, head=head, headSource=head_source)
+        if moved:
+            # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
+            second_run["headAfter"] = artifact.get("headShaAfter")
         # axis: the record holds the first failure and the one re-run, both runs — see bite-proof record c1l9a_wo1_verify_rerun
         _record_round_append(state, "rerunChecks", {"check": "verify", "runs": [first_run, second_run]})
         # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
