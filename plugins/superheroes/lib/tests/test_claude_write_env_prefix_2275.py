@@ -7,6 +7,8 @@ exactly the prefix rule `Bash(f:*)` plus the two assignment-prefixed rules `Bash
 The family and rule literals are spelled out as strings on purpose: a test that reaches them through
 the module constant stays green under any value (rubric/bite-proof.md).
 
+Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_b_env_prefix_2275.md
+
 Detector axes (bite-proof):
 - test_every_family_carries_both_assignment_rules — census: three rules per family, no extras, no duplicates
 - test_weekly_eats_shape_matches_a_new_rule — reach: the field shape matches a rule of the new settings

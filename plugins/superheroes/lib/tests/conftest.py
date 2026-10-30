@@ -13,10 +13,10 @@ if _LIB not in sys.path:
 import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
 import round_driver as _round_driver  # noqa: E402
 
-# A non-root conftest may not use pytest_plugins, so the proc_containment and process_listing guard
-# fixtures and the outcome hook are imported into this namespace, where pytest collects them by name.
+# A non-root conftest may not use pytest_plugins, so the proc_containment guard fixture and outcome
+# hook are imported into this namespace, where pytest collects them by name.
 from proc_namespace import (  # noqa: E402,F401
-    _proc_containment_guard, _process_listing_guard, pytest_runtest_makereport)
+    _proc_containment_guard, pytest_runtest_makereport)
 
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
 
@@ -149,11 +149,6 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # a no-op unless a test opts in by setting its own (applies after this fixture).
     for var in _REVIEWER_CLOUD_ENV:
         monkeypatch.delenv(var, raising=False)
-    # #2275: the launcher's instance-pin gate reads CLAUDE_PID. Inside the claude write sandbox the
-    # seat's pid is invisible, so an inherited value turns every launch_build into
-    # launch-seat-instance-undetermined before the scenario's own outcome. A test that needs it sets
-    # its own (applies after this fixture).
-    monkeypatch.delenv("CLAUDE_PID", raising=False)
 
 
 def _neutral_git(cwd, *args):

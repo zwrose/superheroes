@@ -18,8 +18,8 @@ marker fails loudly, and a marked test that skips on ANY platform when `process_
 false is turned into a failure (the ps constraint also exists on macOS, so unlike `proc_containment` this
 hook is not Linux-only).
 
-This module is also a pytest plugin (`-p proc_namespace`); the tests conftest imports its fixtures and
-outcome hook. The markers are registered in the repo-root pytest.ini.
+This module is also a pytest plugin (`-p proc_namespace`); the tests conftest imports its one guard fixture
+(`_proc_containment_guard`, which covers both marks) and the outcome hook. The markers are registered in the repo-root pytest.ini.
 """
 import os
 import subprocess
@@ -125,10 +125,6 @@ def require_process_listing(environ=None, probe=None):
 def _proc_containment_guard(request):
     if request.node.get_closest_marker(MARKER) is not None:
         require_own_proc_namespace()
-
-
-@pytest.fixture(autouse=True)
-def _process_listing_guard(request):
     if request.node.get_closest_marker(PROCESS_LISTING_MARKER) is not None:
         require_process_listing()
 
