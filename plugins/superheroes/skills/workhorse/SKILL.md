@@ -641,7 +641,9 @@ blocker, and the dispositions table and the durable review receipt are posted.
 ## 11. Hand back the ready PR
 
 **A full-lane PR, opened as a draft before review, is marked ready at handback. A light-lane PR
-opens ready.** Its body has two addressees and one home per fact. The **owner
+opens ready, except that a stacked light-lane layer opens as a draft and is marked ready only after
+the PR-mode handback check passes on its pushed head: no stacked layer, on any lane, is marked or
+opened ready before that check passes.** Its body has two addressees and one home per fact. The **owner
 half** answers *what is different, and do I accept it?* in consequences. The **build record**
 answers *did the process hold, and what must I route?* with mechanism. The owner half is not a
 summary of the build record.
