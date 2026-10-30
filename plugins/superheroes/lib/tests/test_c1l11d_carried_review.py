@@ -536,3 +536,74 @@ def _post_account(tmp_path, s, fake):
     out = _write(tmp_path, s, fake, _carried_account(s))
     assert out["ok"] is True, out
     return _latest(fake)
+
+
+# --- the carry reads the pinned base for copy revalidation, and a light-lane carry rests on the earlier row's reading ----
+
+def _copy_only_session(tmp_path, monkeypatch):
+    """A returning PR whose only change since the last reviewed commit is a vendored proven binary copy."""
+    def vendor_only(repo):
+        TS._write_blob(repo)
+        repo.commit("vendor a binary copy")
+
+    return TS.Session(tmp_path, monkeypatch, change=vendor_only, cfg={"copyProof": TS._blob_proof()})
+
+
+def _stale_copy_proof_account(s, **over):
+    return _carried_account(s, provenCopies=[{"file": "vendor/blob.bin", "source": "upstream/blob.bin",
+                                              "sha256": TS._blob_proof()["copies"][0]["sha256"]}], **over)
+
+
+def test_a_proven_copy_only_returning_round_with_a_symbolic_base_ref_writes_a_carried_record_that_reads_reviewed(tmp_path, monkeypatch):
+    # axis: copy revalidation reads the pinned carry base sha, never extras.baseRef — see bite-proof record c1l11d_wo_a_carried_review
+    s = _copy_only_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    out = _write(tmp_path, s, fake, _stale_copy_proof_account(s, baseRef="main"))
+    assert out["ok"] is True and out["status"] == "reviewed", out
+    assert _row_states(_latest(fake)) == [("reported-by-session", True)]
+
+
+def test_a_stale_copy_proof_with_a_symbolic_base_ref_still_demotes_the_carry(tmp_path, monkeypatch):
+    # axis: copy revalidation reads the pinned carry base sha, never extras.baseRef — see bite-proof record c1l11d_wo_a_carried_review
+    s = _copy_only_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    acct = _stale_copy_proof_account(s, baseRef="main")
+    acct["provenCopies"][0]["sha256"] = "0" * 64
+    out = _write(tmp_path, s, fake, acct)
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+    assert _row_states(_latest(fake)) == [("not-run", False)]
+
+
+def _earlier_with_reading(reading):
+    def edit(rec):
+        rec["reviewers"][0].update(ran="engine-record", observation={"read": "engaged", "toolCalls": 5, "tokens": 1, "wallSeconds": 1})
+        if reading is None:
+            rec["reviewers"][0].pop("reading", None)
+        else:
+            rec["reviewers"][0]["reading"] = reading
+    return edit
+
+
+def test_a_light_lane_carry_over_an_earlier_engaged_row_is_carried_and_counts(tmp_path, monkeypatch):
+    # axis: outside the full lane a carried row counts exactly when the earlier row itself read engaged — see bite-proof record c1l11d_wo_a_carried_review
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s, edit=_earlier_with_reading("engaged"))
+    out = _write(tmp_path, s, fake, _carried_account(s, lane="light", laneReason="small"))
+    assert out["ok"] is True and out["status"] == "reviewed", out
+    rec = _latest(fake)
+    assert _row_states(rec) == [("engine-record", True)] and "observation" not in rec["reviewers"][0], rec["reviewers"]
+    assert rec["reviewers"][0]["reading"] == "engaged"
+
+
+@pytest.mark.parametrize("reading", ["not-shown", None], ids=["not-shown", "absent"])
+def test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted(tmp_path, monkeypatch, reading):
+    # axis: outside the full lane a carried row counts exactly when the earlier row itself read engaged — see bite-proof record c1l11d_wo_a_carried_review
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s, edit=_earlier_with_reading(reading))
+    out = _write(tmp_path, s, fake, _carried_account(s, lane="light", laneReason="small"))
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+    assert _row_states(_latest(fake)) == [("not-run", False)]

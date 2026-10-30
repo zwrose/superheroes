@@ -1132,10 +1132,12 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
     target = r["commit"] if named else head
     credited = None
+    carried_reading = None
     if "carriedFrom" in r:
         held, why = _carried_row(r, carry or ("no earlier record to carry", None))
         if held is not None:
             out.update(ran=held["ran"], family=held.get("family"), carried={"commit": r["carriedFrom"]})
+            carried_reading = held.get("reading")
             named, target = True, r["carriedFrom"]
         else:
             out.update(ran="not-run", runNote=why)
@@ -1195,13 +1197,20 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
             out["family"] = _family(credited["source"], credited["engineModel"])
     if lane_value != "full":
         # axis: outside the full lane a reviewer counts only when the engine's own record reads engaged — see bite-proof record wo_a_1796_reading-independence
-        if out["ran"] == "engine-record":
-            obs = out.get("observation")
-            if not isinstance(obs, dict) or obs.get("read") != "engaged":
-                demote("the engine's record of the run does not show that the reviewer read the change")
-        elif out["ran"] == "reported-by-session":
-            demote("no engine record of the run shows that the reviewer read the change")
-        out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
+        if "carried" in out:
+            # axis: a carried row has no observation of its own; it counts outside the full lane exactly when the earlier record's matching row itself read engaged, else it stays demoted — see bite-proof record c1l11d_wo_a_carried_review
+            if carried_reading != "engaged":
+                demote("the earlier record's row does not show that the reviewer read the change")
+            else:
+                out["reading"] = "engaged"
+        else:
+            if out["ran"] == "engine-record":
+                obs = out.get("observation")
+                if not isinstance(obs, dict) or obs.get("read") != "engaged":
+                    demote("the engine's record of the run does not show that the reviewer read the change")
+            elif out["ran"] == "reported-by-session":
+                demote("no engine record of the run shows that the reviewer read the change")
+            out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
     # axis: a reviewer from a maker's family counts only with the owner's word; independence is computed here, never taken from the account — see bite-proof record wo_a_1796_reading-independence
     if out["ran"] != "not-run" and maker_families is None:
         demote("no maker is named for the step this reviewer reviewed, so independence cannot be shown")
@@ -1516,7 +1525,7 @@ def build_record(account, readers, prior=None, history=()):
     source = carry_source(prior, carried_from, a["sessionId"], history) if carried_from else prior
     carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("carryBase"), fc["sha"],
                            # axis: the carry check hears only the copies git still proves at the final commit; the account's word is never taken — see bite-proof record c1l11d_wo_a_carried_review
-                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("baseRef"), fc["sha"]),
+                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("carryBase"), fc["sha"]),
                            rd["returning_decide"],
                            lambda sha: _ci(rd, a["repo"], sha, a.get("repoRoot"))["state"]), source) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
