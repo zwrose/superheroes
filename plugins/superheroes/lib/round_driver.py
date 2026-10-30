@@ -305,6 +305,7 @@ degraded = receipt_disclosures.degraded
 base_degraded = receipt_disclosures.base_degraded
 author_family = receipt_disclosures.author_family
 maker_author_family = receipt_disclosures.maker_author_family
+seat_judgment_family = receipt_disclosures.seat_judgment_family
 same_family_seats = receipt_disclosures.same_family_seats
 same_family_seats_for_receipt = receipt_disclosures.same_family_seats_for_receipt
 same_family_degraded = receipt_disclosures.same_family_degraded
@@ -338,20 +339,9 @@ adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 _degraded = degraded
 _base_degraded = base_degraded
-def _driver_author_family(state):
-    """The author family the driver judges the seat map against. `config.fixerVendor` names the fix
-    maker (the build session's host family on the CLI path), which differs from the original author
-    when the map declares a distinct `hostFamily`: then the map's own `authorFamily` is the author, so
-    a legitimate split-family composition is not recorded as an `author-family-mismatch`."""
-    family = author_family(state)
-    seat_map_obj = seat_map_receipts.effective_seat_map(state) if isinstance(state, dict) else {}
-    host, author = seat_map_obj.get("hostFamily"), seat_map_obj.get("authorFamily")
-    if (isinstance(host, str) and host and isinstance(author, str) and author
-            and host != author and family == host):
-        return author
-    return family
-
-
+# The author family the driver judges the seat map against; the disclosure and certification readers
+# share the same basis (see receipt_disclosures.seat_judgment_family).
+_driver_author_family = seat_judgment_family
 _same_family_seats = same_family_seats
 _same_family_degraded = same_family_degraded
 _seat_map_violated = seat_map_violated
@@ -5208,6 +5198,21 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if filtered:
         filtered, spent_keys = _drop_spent_out_of_scope_rows(state, filtered)
     filtered = _resolve_ruled_batch(state, filtered)
+    if filtered and keep_step_start and _step_holds_work(state, config, session_dir):
+        # A ruling that drops some of the slice cannot unwind the work the step already holds: a
+        # dropped finding may be the one whose fix is committed, and the report and the audit of that
+        # work resolve against this slice — so the dropped rows stay, ahead of the survivors.
+        present = {_fix_batch_row_key(row) for row in filtered}
+        kept = [row for row in state.get("_fixBatch") or []
+                if isinstance(row, dict) and _fix_batch_row_key(row)
+                and _fix_batch_row_key(row) not in present]
+        if kept:
+            _decision(state, "fix-batch-held",
+                      "a ruling dropped %d finding(s) from the fix batch after the step committed "
+                      "fixes or edited the PR body — they stay, so that work folds, verifies and is "
+                      "audited before the round settles: %s"
+                      % (len(kept), ", ".join(_fix_batch_row_key(row) for row in kept)))
+            filtered = kept + filtered
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:

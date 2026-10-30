@@ -612,6 +612,28 @@ def test_e13_a_ruling_that_empties_the_slice_after_the_step_committed_fixes_keep
     assert fx.state()["rounds"]["1"]["fix"]["commits"] == [{"finding": key, "commit": sha}]
 
 
+def test_e13_a_ruling_that_drops_one_of_two_after_its_fix_committed_keeps_it_reportable(tmp_path):
+    fx = Fixture(tmp_path, findings=[attached(), ordinary()])
+    n = fx.reach()
+    fixed_key, other_key = fx.key_of("A retried charge is posted twice"), fx.key_of(
+        "The PR body names the wrong retry count")
+    sha = fx.commit_fix()
+    prov = {"ruledBy": "owner", "ruledAt": "2026-08-26T00:00:00Z", "records": ["rulings.json"]}
+    ruling = tmp_path / "ruling.json"
+    ruling.write_text(json.dumps({"_provenance": prov, "rulings": [
+        {"id": fixed_key, "ruling": "out-of-scope", "reason": "defer",
+         "followUp": {"item": "backlog item", "revisitTrigger": "next milestone",
+                      "classClosure": "owner backlog"}}]}))
+    assert RD.cmd_rule(str(fx.session), str(ruling), "owner")["ok"] is True
+    state = fx.state()
+    # the finding whose fix is committed stays in the slice beside the survivor
+    assert sorted(RD._finding_identity_key(r) for r in state["_fixBatch"]) == sorted([fixed_key, other_key])
+    assert any(d["kind"] == "fix-batch-held" for d in state["decisions"])
+    again = RD.cmd_next(str(fx.session))
+    assert (again["phase"], again["attempt"]) == (RD.P_APPLY_FIXES, n["attempt"])
+    assert fx.submit(_bound(fixed_key, sha), pending=again)["ok"] is True
+
+
 def test_e13_a_ruling_that_empties_the_slice_before_any_commit_still_settles(tmp_path):
     fx = Fixture(tmp_path)
     fx.reach()

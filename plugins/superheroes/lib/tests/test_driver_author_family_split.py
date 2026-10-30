@@ -27,6 +27,14 @@ def test_split_family_keeps_original_author_for_the_driver():
     assert "author-family-mismatch" not in constraints
 
 
+def test_split_family_certification_and_disclosure_do_not_record_a_mismatch():
+    state, _ = _split_state("anthropic", "openai")
+    assert RD.author_family(state) == "openai"  # the fix maker stays the host's family
+    assert RD.seat_map_violations(state) == []
+    assert RD._seat_map_violated(state) is False
+    assert not RD._cert_shape(state, "fetched").endswith("-constraint-violated")
+
+
 def test_same_family_host_is_unchanged():
     state, _ = _split_state("anthropic", "anthropic")
     assert RD._driver_author_family(state) == RD.author_family(state) == "anthropic"
