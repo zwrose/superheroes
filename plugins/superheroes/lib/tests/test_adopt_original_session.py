@@ -985,6 +985,32 @@ def test_a_gone_branch_lane_whose_session_the_listing_shows_live_refuses_live(tm
     assert calls == []
 
 
+def test_a_gone_branch_lane_with_a_fix_order_relay_to_its_session_refuses_unread(tmp_path, first_pr, monkeypatch):
+    # axis: a gone-branch lane that a fix order has reopened gets no exemption and needs session evidence like any other lane — see bite-proof record i2254_original_session
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    _relay_records(monkeypatch, [{"session": SESSION_TITLE, "at": _utc_stamp(60)}])
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_gone_branch_lane_whose_relay_read_fails_refuses_unread(tmp_path, first_pr, monkeypatch):
+    # axis: a gone-branch lane whose fix-order relay read is not ok gets no exemption — see bite-proof record i2254_original_session
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    monkeypatch.setattr(
+        cloud_relay, "fix_orders",
+        lambda repo_root, *, env=None, include_unchecked=False: {"ok": False, "reason": "relay-state-unreadable"},
+    )
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
 def test_a_lane_bound_to_the_branch_by_its_adopts_number_is_dropped_when_the_branch_is_gone(tmp_path, first_pr):
     # axis: a lane whose premise adopts the same pull request number is bound to the branch too (asked directly: a launch premise carrying `adopts` needs a stack)
     repo = _adopted_repo(tmp_path)

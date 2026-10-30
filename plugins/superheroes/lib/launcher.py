@@ -3100,6 +3100,8 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
         result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         if result is _NEEDS_FIRST_PR:
             reads["first"] = _adopted_branch_first_pr_fn(repo_root, stamped["adoptsBranch"], env)
+            # the absence read must be the last remote read before the snapshot the decision rests on
+            reads.pop("absent", None)
         elif result is _NEEDS_BRANCH_ABSENCE:
             reads["absent"] = _adopted_branch_absent(repo_root, stamped["adoptsBranch"], env)
         else:
@@ -3115,7 +3117,8 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     is dropped only on evidence this machine reads itself, and every read that fails or is
     ambiguous keeps it: a lane bound to the adopted branch by its premise whose branch ``origin``
     shows gone needs no listing, but a supplied listing that shows its session live still refuses
-    ``adopt-original-session-live``; any other lane is dropped when it handed back before the
+    ``adopt-original-session-live``, unless a fix order reopened it (the same opener checks as below),
+    which leaves it needing session evidence like any other lane; any other lane is dropped when it handed back before the
     branch's first pull request opened and neither a ``vet not-ready`` nor a fix-order relay record
     addressed to it reopened it (any fix-order relay record to its session does), since a pull request on the branch before the handback would itself be the
     first, so the lane's pull request was on another branch and nothing sends it back to this one.
@@ -3166,6 +3169,49 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         }
         adopted_pr = stamped.get("adopts")
         kept = {}
+
+        def handback_ts(info):
+            reoutcome = next(
+                (a for a in reversed(info.get("amendments") or []) if a["kind"] == ll.AMENDMENT_REOUTCOME),
+                None,
+            )
+            if reoutcome is not None:
+                return reoutcome.get("ts")
+            at_index = info.get("terminalIndex")
+            record = (
+                got["records"][at_index]
+                if isinstance(at_index, int) and not isinstance(at_index, bool)
+                and 0 <= at_index < len(got["records"]) else None
+            )
+            return record.get("ts") if isinstance(record, dict) else None
+
+        def vet_reopened(info, handback):
+            return any(
+                a["kind"] == "vet" and a["value"] == "not-ready"
+                and not (cloud_recover._is_number(a.get("ts")) and a["ts"] <= handback)
+                for a in info.get("amendments") or []
+            )
+
+        def relay_reopened(info):
+            nonlocal relays
+            if relays is None:
+                import cloud_relay
+
+                relays = cloud_relay.fix_orders(repo_root, env=env, include_unchecked=True)
+            # axis: a fix-order relay read that fails keeps every handed-back lane, since a fix order sent since cannot be ruled out — see bite-proof record i2254_original_session
+            if relays.get("ok") is not True:
+                return True
+            for relay in relays.get("records") or []:
+                # axis: a fix-order relay record whose target is not a non-empty string is ambiguous and may have been sent to this lane, so it is matched against every handed-back lane
+                # axis: any fix order addressed to the lane's session keeps the lane whatever its compose or decision time, since delivery can follow a later handback — see bite-proof record i2254_original_session
+                if isinstance(relay, dict) and (
+                    not isinstance(relay.get("session"), str)
+                    or not relay.get("session")
+                    or relay.get("session") == info["cloudSessionName"]
+                ):
+                    return True
+            return False
+
         for launch_id, info in candidates.items():
             premise = premises.get(launch_id)
             if isinstance(premise, dict) and (
@@ -3178,61 +3224,36 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
                 if "absent" not in reads:
                     return _NEEDS_BRANCH_ABSENCE
                 # axis: a lane bound to the adopted branch by its premise needs no listing only when origin shows that branch gone; a branch still there, or a read that failed, keeps the lane, and a gone-branch lane is still refused when a supplied listing shows its session live, since the deleted ref does not stop its builder — see bite-proof record i2254_original_session
+                # axis: a gone-branch lane that a fix order has reopened (a vet not-ready after its terminal record, or a fix-order relay record addressed to its session or with an ambiguous session, or a relay read that is not ok) gets no exemption and needs session evidence like any other lane — see bite-proof record i2254_original_session
                 if reads["absent"] is True:
-                    gone.add(launch_id)
+                    exempt = True
+                    if cloud_recover._latest_outcome(info) == "handback":
+                        handback = handback_ts(info)
+                        exempt = (
+                            cloud_recover._is_number(handback)
+                            and not vet_reopened(info, handback)
+                            and not relay_reopened(info)
+                        )
+                    if exempt:
+                        gone.add(launch_id)
                 kept[launch_id] = info
                 continue
             if cloud_recover._latest_outcome(info) != "handback":
                 kept[launch_id] = info
                 continue
-            reoutcome = next(
-                (a for a in reversed(info.get("amendments") or []) if a["kind"] == ll.AMENDMENT_REOUTCOME),
-                None,
-            )
-            if reoutcome is not None:
-                handback = reoutcome.get("ts")
-            else:
-                at_index = info.get("terminalIndex")
-                record = (
-                    got["records"][at_index]
-                    if isinstance(at_index, int) and not isinstance(at_index, bool)
-                    and 0 <= at_index < len(got["records"]) else None
-                )
-                handback = record.get("ts") if isinstance(record, dict) else None
+            handback = handback_ts(info)
             if not cloud_recover._is_number(handback):
                 kept[launch_id] = info
                 continue
             # axis: a vet not-ready after the handback is a fix order sent since, so the lane may write the branch again and stays; a vet stamp that is not a finite number stays too — see bite-proof record i2254_original_session
-            if any(
-                a["kind"] == "vet" and a["value"] == "not-ready"
-                and not (cloud_recover._is_number(a.get("ts")) and a["ts"] <= handback)
-                for a in info.get("amendments") or []
-            ):
+            if vet_reopened(info, handback):
                 kept[launch_id] = info
                 continue
             # axis: the first-pull-request time is read before the ledger, the recover state and the relay history that decide the lane, since the lookup is a slow remote read and a vet not-ready, a handover stop or a fix order recorded during it must still be seen — see bite-proof record i2254_original_session
             if "first" not in reads:
                 return _NEEDS_FIRST_PR
             first = reads["first"]
-            if relays is None:
-                import cloud_relay
-
-                relays = cloud_relay.fix_orders(repo_root, env=env, include_unchecked=True)
-            # axis: a fix-order relay read that fails keeps every handed-back lane, since a fix order sent since cannot be ruled out — see bite-proof record i2254_original_session
-            if relays.get("ok") is not True:
-                kept[launch_id] = info
-                continue
-            reopened = False
-            for relay in relays.get("records") or []:
-                # axis: a fix-order relay record whose target is not a non-empty string is ambiguous and may have been sent to this lane, so it is matched against every handed-back lane
-                # axis: any fix order addressed to the lane's session keeps the lane whatever its compose or decision time, since delivery can follow a later handback — see bite-proof record i2254_original_session
-                if isinstance(relay, dict) and (
-                    not isinstance(relay.get("session"), str)
-                    or not relay.get("session")
-                    or relay.get("session") == info["cloudSessionName"]
-                ):
-                    reopened = True
-            if reopened:
+            if relay_reopened(info):
                 kept[launch_id] = info
                 continue
             # axis: a handed-back lane had opened its own pull request before the handback, and a pull request on the adopted branch opened before then would itself be the branch's earliest, so the lane's pull request was on another branch and with no fix order since it writes only that branch; a first-pull-request time that is unread, or not past the handback plus the clock-skew allowance, keeps the lane — see bite-proof record i2254_original_session
