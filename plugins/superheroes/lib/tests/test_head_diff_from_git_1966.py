@@ -228,6 +228,13 @@ def _assert_parked(state, token):
     assert state["headDiff"] is None
 
 
+def _assert_handed_back(state):
+    """The unknown-surface end: the PR is handed back, never a panel and never an empty surface."""
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+    assert state["headDiff"] is None
+
+
 def _empty_file(tmp_path):
     path = tmp_path / "empty.diff"
     path.write_text("", encoding="utf-8")
@@ -321,8 +328,8 @@ def test_e6_empty_git_diff_with_nothing_supplied_takes_the_unknown_path(tmp_path
     cli = _Cli(tmp_path, monkeypatch)
     cli.fixer_body = "old\n"
     n, state = cli.fold_fixer()
-    _assert_parked(state, "panel-diff-underivable")
-    assert "empty diff" in state["certification"]["reason"]
+    _assert_handed_back(state)
+    assert "post-fix head diff unresolvable (source 'unknown')" in state["certification"]["reason"]
     rec = state["rounds"][str(n["round"])]
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "unverifiable")
 
@@ -332,7 +339,7 @@ def test_e7_unresolved_head_with_nothing_supplied_takes_the_unknown_path(tmp_pat
     monkeypatch.setattr(RD, "_resolve_fix_fold_head_sha",
                         lambda session_dir, state: (None, "fix-fold head: repo root unresolvable"))
     n, state = cli.fold_fixer()
-    _assert_parked(state, "panel-diff-underivable")
+    _assert_handed_back(state)
     rec = state["rounds"][str(n["round"])]
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "unverifiable")
     assert rec["fixFoldHeadRefused"] == "fix-fold head: repo root unresolvable"
@@ -450,8 +457,8 @@ def test_e10_no_repository_unreadable_path_is_unknown_and_never_an_empty_surface
     _r, state = _no_repo_loop({"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]})
     rec = state["rounds"]["1"]
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "no-repository")
-    assert state["terminal"] == "cannot-certify"
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
     reason = state["certification"]["reason"]
-    assert reason.startswith("panel-diff-underivable")
-    assert "repoRoot missing" in reason
+    assert "post-fix head diff unresolvable (source 'unknown')" in reason
     assert "2" not in state["rounds"]
