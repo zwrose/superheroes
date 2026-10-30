@@ -627,7 +627,8 @@ def _assemble_verify(roster, indexed, disclosures):
     payload = indexed[(roster[0], 0)]["payload"]
     artifact = {"result": payload.get("result")}
     # axis: the CI evidence rides the durable-seat assembly to the chokepoint — see bite-proof record wo_b_2072_ci_verify
-    for field in ("command", "exit", "outputSha256", "via", "ci", "reason"):
+    for field in ("command", "exit", "outputSha256", "via", "ci", "reason", "headSha",
+                  "headShaAfter", "exitCode", "outputPath"):
         if field in payload:
             artifact[field] = payload[field]
     return artifact
