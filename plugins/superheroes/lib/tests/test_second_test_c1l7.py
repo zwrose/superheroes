@@ -398,6 +398,59 @@ def test_fr17_a_kept_finding_never_gets_a_third_test(tmp_path):
     assert r.seen.count(RD.P_SECOND_TEST) == 1, r.seen
 
 
+@pytest.mark.parametrize("second", [
+    pytest.param({}, id="pass-two-confirms"),
+    pytest.param({_HELD["title"]: _MISSED}, id="pass-two-holds-again"),
+])
+def test_the_verify_record_lists_the_held_findings_and_pass_two_keeps_the_first_passes_list(tmp_path, second):
+    # bites on: the held list missing from the round's verify record (G1)
+    r = Round(tmp_path, second=second)
+    r.to_second_test()
+    (held,) = r.state()["rounds"]["1"]["verify"]["held"]
+    assert (held["title"], held["file"], held["note"]) == (_HELD["title"], "f.py", _NOTE)
+    r.drive()
+    after = r.state()["rounds"]["1"]["verify"]["held"]
+    # pass 2 merges into the record: the first pass's list stays, and nothing from pass 2 joins it
+    assert after == [held], after
+
+
+def test_a_pass_that_held_nothing_records_an_empty_held_list(tmp_path):
+    r = Round(tmp_path, first={_HELD["title"]: _CONFIRMED})
+    r.drive()
+    assert r.state()["rounds"]["1"]["verify"]["held"] == []
+
+
+@pytest.mark.parametrize("prior", [
+    pytest.param({}, id="older-record-without-held"),
+    pytest.param({"held": "not-a-list"}, id="malformed-held"),
+])
+def test_a_pass_two_merge_reads_a_missing_or_malformed_first_held_as_empty(prior):
+    # edge 1: an older verify record has no `held`, and it never errors
+    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex",
+           "seatMap": {"hostFamily": "anthropic"}}
+    state = RD.new_state(cfg)
+    RD._stage_findings(state, [dict(_HELD, breakItRun=PASSED)])
+    state["_secondTestPass"] = True
+    state["_secondTestCarry"] = []
+    state["rounds"] = {str(state["round"]): {"verify": dict(prior, drops=[], downgrades=[], unverified=[],
+                                                            ambiguous=[], notExecuted=[])}}
+    RD._fold_verifiers(state, state["config"], {"verdicts": [dict(_CONFIRMED, id="v0")]})
+    assert state["rounds"][str(state["round"])]["verify"]["held"] == []
+
+
+@pytest.mark.parametrize("entry, nothing", [
+    pytest.param(dict(CONFIRMED=0, PLAUSIBLE=0, REFUTED=0, unverified=0, ambiguous=0, held=1), False, id="all-held"),
+    pytest.param(dict(CONFIRMED=0, PLAUSIBLE=0, REFUTED=0, unverified=0, ambiguous=0, held=0), True, id="held-zero"),
+    pytest.param(dict(CONFIRMED=0, PLAUSIBLE=0, REFUTED=0, unverified=0, ambiguous=0), True, id="no-held-key"),
+    pytest.param(dict(CONFIRMED=0, PLAUSIBLE=0, REFUTED=0, unverified=0, ambiguous=0, held="1"), True, id="held-not-an-int"),
+    pytest.param(dict(CONFIRMED=0, PLAUSIBLE=0, REFUTED=0, unverified=0, ambiguous=0, held=True), True, id="held-a-bool"),
+])
+def test_an_all_held_pass_is_a_verifier_that_ran(entry, nothing):
+    # bites on: the held clause of _nothing_to_verify (G2); edge 2: a held that is not an int reads as zero
+    state = {"rounds": {"1": {"verifyPasses": [entry]}}}
+    assert rs._nothing_to_verify(state, 1) is nothing
+
+
 def test_fr17_a_finding_held_in_pass_two_is_kept_plausible_and_never_dropped():
     # edge 7: every finding in pass 2 carries `secondTest`, so nothing is held; one that is anyway is kept
     cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex",
