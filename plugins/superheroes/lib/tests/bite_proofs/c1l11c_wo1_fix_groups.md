@@ -124,17 +124,38 @@ runs are narrowed to the named nodes, not the three test files. Nothing is redac
 
 - neutralization: `if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key in plain_keys if bound.get(key)):` became `if False:`.
 - detector: `test_fix_groups_c1l11c.py::test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test` (its `[tests1]` and `[tests2]` cases).
-- red: **not produced in this run.** The neutralization was applied, and the red run was refused by the harness's command
-  check (`A variable set in this command can't be checked before it runs`, the command used a shell variable for the test
-  file path). The refusal was reported and the command was not retried in another form; the neutralization was restored
-  by the inverse edit. PR #2270's original red for this element: `2 failed` (`[tests1]`, `[tests2]`). The outstanding red
-  receipt is the orchestrator's to take.
-- restore receipt: `git diff --stat plugins/superheroes/lib/round_driver.py` printed nothing, and `grep -n` printed
+- red (taken in a second dispatch, with a literal command, `--tb=short`, only the `UV_NATIVE_TLS` warning line left out):
+```
+.FF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests1] _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:442: in test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test
+    assert _check(u, [(u.ka, "c1"), (u.kb, "c2")], {"c1": passing, "c2": passing}) == (
+E   AssertionError: assert (None, [{'fin...mmit': 'c1'}]) == ('fix-group-n...1dcc4f29', [])
+E     
+E     At index 0 diff: None != 'fix-group-no-shared-commit:fg-fa811dcc4f29'
+E     Use -v to get more diff
+_ test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests2] _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:442: in test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test
+    assert _check(u, [(u.ka, "c1"), (u.kb, "c2")], {"c1": passing, "c2": passing}) == (
+E   AssertionError: assert (None, [{'fin...mmit': 'c2'}]) == ('fix-group-n...1dcc4f29', [])
+E     
+E     At index 0 diff: None != 'fix-group-no-shared-commit:fg-fa811dcc4f29'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests1]
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests2]
+2 failed, 1 passed in 2.20s
+```
+  This matches PR #2270's original red for this element (`2 failed`, `[tests1]` and `[tests2]`). The first dispatch's red
+  run was refused by the harness's command check (a shell variable in the command); it was not retried in another form.
+- restore: the inverse edit (`if False:` back to the `if not all(…)` line); `git diff --stat -- plugins/superheroes/lib/round_driver.py`
+  printed nothing, and `grep -n` printed
   `5858:        if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key in plain_keys if bound.get(key)):`.
 - green (the restored tree):
 ```
 ...                                                                      [100%]
-3 passed in 2.10s
+3 passed in 2.14s
 ```
 
 ### E12 — a plain member's bound commit is resolved with the carriers' (`round_driver._apply_fixes_commit_fault`, `67a51f15`)
