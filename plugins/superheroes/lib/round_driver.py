@@ -5524,45 +5524,67 @@ def _restore_commit_fault(state, config, artifact, commit_seam=None):
 
 
 def _reviewer_test_rows(state, key):
-    """Every row that holds the finding ``key``'s carried break-it test: its ledger row, its live
-    finding, and the fix-batch and audit-target rows built from it."""
+    """Every row outside the ledger that holds the finding ``key``'s carried break-it test: its live
+    finding, and the fix-batch and audit-target rows built from it. Never touches the ledger key;
+    the ledger row is read through the reader and written by ``_sync_reviewer_test_ledger_row``."""
     rows = []
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if isinstance(ledger, list):
-        held = _ledger_index_by_key(ledger).get(key)
-        if held is not None:
-            rows.append(ledger[held])
     live = _live_finding_by_key(state, key)
     if live is not None:
         rows.append(live)
     for field in ("fixBatch", "_fixBatch", "_fixQueue", "_auditTargets"):
         for row in state.get(field) or []:
-            if isinstance(row, dict) and _finding_identity_key(row) == key and row not in rows:
+            if (
+                isinstance(row, dict)
+                and _finding_identity_key(row) == key
+                and not any(r is row for r in rows)
+            ):
                 rows.append(row)
     return rows
+
+
+def _rewrite_reviewer_test_row(row, content, correction):
+    """The per-row rewrite of the test reviewer's version: ``content`` (None leaves the test alone) into
+    the carried block's body and ``reviewerTest``, ``correction`` into ``testCorrection``."""
+    if content is not None:
+        # axis: the carried block holds the test reviewer's bytes, so the next audit compares against them — see bite-proof record c1l10b_wo2_test_restore
+        block, _kind = break_it.carried_block(row)
+        if block is not None:
+            row["suggestion"] = _break_it_block_text(block, content)
+        row[REVIEWER_TEST_FIELD] = content
+    if correction is not None:
+        row[TEST_CORRECTION_FIELD] = copy.deepcopy(correction)
+
+
+def _sync_reviewer_test_ledger_row(state, key, content, correction):
+    """Put the test reviewer's version on the finding's ledger entry, when it has one. Only the carried
+    block, ``reviewerTest`` and ``testCorrection`` change; the entry's disposition family is never
+    touched, and a state with no entry for ``key`` (or no ledger at all) is left byte for byte as it was."""
+    rows, _fault = session_contract.read_disposition_ledger(state)
+    if not any(_finding_identity_key(row) == key for row in rows):
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    held = _ledger_index_by_key(ledger).get(key)
+    if held is not None:
+        _rewrite_reviewer_test_row(ledger[held], content, correction)
 
 
 def _sync_reviewer_test(state, key, content, correction=None):
     """The one home for the test reviewer's version of a finding's test. ``content`` (None leaves the
     test alone) is written into the carried block's body (its ``path`` and ``run`` kept, so its
-    sha256 follows) and into ``reviewerTest``, on the ledger row and the live finding and on the
+    sha256 follows) and into ``reviewerTest``, on the ledger row, the live finding and the
     fix-batch and audit-target rows built from them, so a later audit compares against it.
     ``correction`` is the finding's ``testCorrection`` record. Every restore and every correction
     goes through here."""
+    _sync_reviewer_test_ledger_row(state, key, content, correction)
     for row in _reviewer_test_rows(state, key):
-        if content is not None:
-            # axis: the carried block holds the test reviewer's bytes, so the next audit compares against them — see bite-proof record c1l10b_wo2_test_restore
-            block, _kind = break_it.carried_block(row)
-            if block is not None:
-                row["suggestion"] = _break_it_block_text(block, content)
-            row[REVIEWER_TEST_FIELD] = content
-        if correction is not None:
-            row[TEST_CORRECTION_FIELD] = copy.deepcopy(correction)
+        _rewrite_reviewer_test_row(row, content, correction)
 
 
 def _correction_used(state, key):
     """True when the finding's one correction has been offered and used."""
-    for row in _reviewer_test_rows(state, key):
+    ledger_rows, _fault = session_contract.read_disposition_ledger(state)
+    held_rows = [row for row in ledger_rows if _finding_identity_key(row) == key]
+    for row in held_rows + _reviewer_test_rows(state, key):
         held = row.get(TEST_CORRECTION_FIELD)
         if isinstance(held, dict) and held.get("used") is True:
             return True
@@ -6692,10 +6714,53 @@ def _head_line_numbers(section):
     return numbers
 
 
-def _fix_delta_groups(delta, head_numbers):
+def _head_line_anchors(section):
+    """Per line of one file's diff section, ``(hunk, anchor)``: the index of the PR hunk the line sits in
+    (None before the first hunk), and the head-file line a finding can cite on it, which only a context or
+    an added line has (the lines ``diff_scope.parse_diff_lines`` registers), else None."""
+    anchors, hunk, following = [], None, None
+    for ln in section:
+        if delta_surface._HUNK.match(ln):
+            hunk = 0 if hunk is None else hunk + 1
+            following = int(delta_surface._HUNK.match(ln).group(1))
+            anchors.append((hunk, None))
+        elif following is None or ln.startswith(("\\", "-")):
+            anchors.append((hunk, None))
+        else:
+            anchors.append((hunk, following))
+            following += 1
+    return anchors
+
+
+def _removal_anchor(head_anchors, here):
+    """The head line a line removed at section position ``here`` (between ``head_anchors[here - 1]`` and
+    ``head_anchors[here]``) anchors on: the nearest anchorable line after it in the same PR hunk, else the
+    nearest before it in that hunk, else None. It never crosses a hunk header."""
+    ahead, behind = head_anchors[here:], head_anchors[:here]
+    hunk = behind[-1][0] if behind else None
+    if hunk is None and ahead:
+        hunk = ahead[0][0]
+    if hunk is None:
+        return None
+    for line_hunk, number in ahead:
+        if line_hunk != hunk:
+            break
+        if number is not None:
+            return number
+    for line_hunk, number in reversed(behind):
+        if line_hunk != hunk:
+            break
+        if number is not None:
+            return number
+    return None
+
+
+def _fix_delta_groups(delta, head_numbers, head_anchors):
     """The groups of one file's fix delta (``_fixer_delta_lines``) that change more than the
     line numbers of the PR diff's own hunk headers, as ``(lines, head_lines)``: the group's lines,
-    header first, and the head-file lines its changed lines sit on. None when a group cannot be read."""
+    header first, and the head-file lines its changed lines sit on. A removed line sits on a line a
+    finding can cite in its own PR hunk (``_removal_anchor``), else on none. None when a group cannot
+    be read."""
     groups, current = [], None
     for ln in delta:
         if _FIX_DELTA_GROUP_HEADER.match(ln):
@@ -6714,12 +6779,8 @@ def _fix_delta_groups(delta, head_numbers):
             if mark == "-":
                 content = content or not text.startswith("@@")
                 if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
-                    # A removed hunk-body line anchors on the head line that follows it, else the
-                    # last head line before it (a removal at the end of the file's diff section).
-                    here = max(index, 0)
-                    anchor = next((n for n in head_numbers[here:] if n is not None), None)
-                    if anchor is None:
-                        anchor = next((n for n in reversed(head_numbers[:here]) if n is not None), None)
+                    # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk.
+                    anchor = _removal_anchor(head_anchors, min(max(index, 0), len(head_anchors)))
                     if anchor is not None:
                         head_lines.append(anchor)
                 continue
@@ -6757,7 +6818,7 @@ def _fix_delta_surface(state, reviewed_diff, head_diff):
         if before == after:
             continue
         delta = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
-        groups = _fix_delta_groups(delta, _head_line_numbers(after))
+        groups = _fix_delta_groups(delta, _head_line_numbers(after), _head_line_anchors(after))
         if groups is None:
             return None
         if not groups:
@@ -6769,21 +6830,27 @@ def _fix_delta_surface(state, reviewed_diff, head_diff):
             surface[file] = [{"start": 0, "end": 0, "removed": True,
                               "text": "@@ file removed between the reviewed and head diffs @@"}]
             continue
-        surface[file] = [{"start": start, "end": end, "text": "\n".join(lines)}
-                         for lines, head_lines in groups for start, end in _line_runs(head_lines)]
+        entries = []
+        for lines, head_lines in groups:
+            if not head_lines:
+                # Only removals, and no line of their hunk a finding can cite: marked, never numbered.
+                entries.append({"start": 0, "end": 0, "removedOnly": True, "text": "\n".join(lines)})
+            entries.extend({"start": start, "end": end, "text": "\n".join(lines)}
+                           for start, end in _line_runs(head_lines))
+        surface[file] = entries
     return surface, "".join(ln + "\n" for ln in text)
 
 
 def _line_runs(numbers, gap=3):
     """``[[start, end], ...]`` over the sorted distinct ``numbers``, a run kept whole while its next line
-    is within ``gap`` lines of its last; ``[[0, 0]]`` when there are none (a change with no head line)."""
+    is within ``gap`` lines of its last; none when there are no numbers."""
     runs = []
     for number in sorted(set(numbers)):
         if runs and number - runs[-1][1] <= gap:
             runs[-1][1] = number
         else:
             runs.append([number, number])
-    return runs or [[0, 0]]
+    return runs
 
 
 def _carried_owner_ruling(decision):
@@ -7380,31 +7447,85 @@ def _after_audits(state, config):
     # back) SKIPS the scoped dispatch with a receipt-visible note, rather than dispatching a vacuous
     # scan that reviews nothing while looking conformant. The audits' own new-issue candidates still
     # route through the same fold (an empty-artifact `_fold_scoped`).
+    # A delta session saved before the fix delta was kept (its surface may be the old `{}`) is rebuilt
+    # first, so the skip decision below reads the rebuilt surface, or the PR is handed back.
+    if not _rebuild_saved_fix_delta(state):
+        return
     if state.get("_newSurface"):
-        # A delta session saved before the fix delta was kept has a surface but no `_fixDeltaDiff`:
-        # rebuild both from the stamped baseline and the head diff, or hand the PR back.
-        if not isinstance(state.get("_fixDeltaDiff"), str):
-            baseline = state.get("deltaBaseline")
-            reviewed = baseline.get("diff") if isinstance(baseline, dict) else None
-            head = state.get("headDiff")
-            rebuilt = (_fix_delta_surface(state, reviewed, head)
-                       if isinstance(reviewed, str) and isinstance(head, str) else None)
-            if rebuilt is None:
-                _hand_back_unknown_fix_surface(
-                    state, "the fixes' own diff could not be rebuilt for a saved delta session")
-                return
-            state["_newSurface"], state["_fixDeltaDiff"] = rebuilt
-            if not state["_newSurface"]:
-                _record_round(state, "scopedFinder", "skipped-empty-surface")
-                _fold_scoped(state, config, {})
-                return
         state["step"] = P_SCOPED
         return
+    _skip_empty_scoped_surface(state, config)
+
+
+def _skip_empty_scoped_surface(state, config):
+    """The one home of the empty-surface decision: the scoped new-finding scan is skipped with a
+    receipt-visible note and the audits' own new-issue candidates go through the same fold."""
     _record_round(state, "scopedFinder", "skipped-empty-surface")
     _decision(state, "scoped-finder-skipped",
               "scopedFinder: skipped-empty-surface — the fixes' own diff left an empty "
               "surface; the scoped new-finding scan was skipped (audit new-issues still routed)")
     _fold_scoped(state, config, {})
+
+
+def _rebuild_saved_fix_delta(state):
+    """True when the state may go on. A delta round's state without a string `_fixDeltaDiff` (a session
+    saved before the fix delta was kept) has both `_newSurface` and `_fixDeltaDiff` rebuilt from the
+    stamped baseline and the head diff; when that cannot be done the PR is handed back
+    (`fix-surface-unknown`) and False comes back. A finished state, the extra audit round (it runs no
+    scoped finder) and a state that has its fix delta are left as they are."""
+    if (not isinstance(state, dict) or state.get("terminal") or _is_extra_audit_round(state)
+            or isinstance(state.get("_fixDeltaDiff"), str)):
+        return True
+    baseline = state.get("deltaBaseline")
+    reviewed = baseline.get("diff") if isinstance(baseline, dict) else None
+    head = state.get("headDiff")
+    rebuilt = (_fix_delta_surface(state, reviewed, head)
+               if isinstance(reviewed, str) and isinstance(head, str) else None)
+    if rebuilt is None:
+        _hand_back_unknown_fix_surface(
+            state, "the fixes' own diff could not be rebuilt for a saved delta session")
+        return False
+    state["_newSurface"], state["_fixDeltaDiff"] = rebuilt
+    return True
+
+
+def _saved_delta_stretch(state):
+    """True for a saved, unfinished state in round 2 or later that sits in a delta round's audit,
+    post-audits verify or scoped stretch: the steps whose order or fold reads the round's fix delta."""
+    if not isinstance(state, dict) or state.get("terminal"):
+        return False
+    rnd = state.get("round")
+    if not (_is_plain_int(rnd) and rnd >= 2):
+        return False
+    step = state.get("step")
+    return (step in (P_AUDITS, P_SCOPED)
+            or (step == P_VERIFY and state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS))
+
+
+def _finish_saved_fix_delta(state):
+    """Rebuild, or hand back, a saved state in a delta round's stretch that lacks its fix delta
+    (`_rebuild_saved_fix_delta`). Returns None when the state needs nothing, else the journal outcome
+    (`fix-delta-hand-back` or `fix-delta-rebuilt`); the caller persists the state.
+
+    A state waiting at the scoped step has its pending scoped payload refreshed from the rebuilt
+    surface; a rebuilt empty surface there is routed through `_skip_empty_scoped_surface`, the same
+    decision `_after_audits` makes, and the pending action is cleared."""
+    if (not _saved_delta_stretch(state) or _is_extra_audit_round(state)
+            or isinstance(state.get("_fixDeltaDiff"), str)):
+        return None
+    scoped = state.get("step") == P_SCOPED
+    if not _rebuild_saved_fix_delta(state):
+        state["pending"] = None
+        return "fix-delta-hand-back"
+    if scoped:
+        if not state.get("_newSurface"):
+            state["pending"] = None
+            _skip_empty_scoped_surface(state, state["config"])
+        else:
+            pending = state.get("pending")
+            if isinstance(pending, dict) and isinstance(pending.get("payload"), dict):
+                pending["payload"]["hunks"] = state["_newSurface"]
+    return "fix-delta-rebuilt"
 
 
 AUDIT_ORIGIN_FIELD = "originAuditId"
@@ -10975,9 +11096,10 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     """None to carry on, or a refusal. The caller holds the session lock. Replays any sealed commit,
     repairs a damaged `loop-state.json` from its mirror, then hands back a session of an earlier
     generation that was waiting at a retired owner gate, then hands back a session of any generation that
-    was waiting at a panel in round 2 or later: the one shared call path every locked command takes
+    was waiting at a panel in round 2 or later, then rebuilds the fix delta of a delta round saved
+    without one (or hands the PR back): the one shared call path every locked command takes
     between its upgrade gate and its first state load, so no command reads such a session's retired
-    step."""
+    step or renders a scoped order without a fix delta."""
     if sidecar_resolver_for is None:
         sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
     if sidecar_target is None:
@@ -10994,6 +11116,7 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     _migrate_saved_fixer_step(session_dir, cmd)
     _hand_back_retired_gate(session_dir, cmd)
     _hand_back_retired_later_panel(session_dir, cmd)
+    _rebuild_saved_fix_delta_for_scoped_step(session_dir, cmd)
     return None
 
 
@@ -11042,6 +11165,22 @@ def _hand_back_retired_later_panel(session_dir, cmd):
     _journal_append(session_dir, {"cmd": cmd, "phase": retired if isinstance(retired, str) else None,
                                   "round": state["round"], "attempt": 0,
                                   "outcome": "retired-gate-hand-back"})
+
+
+def _rebuild_saved_fix_delta_for_scoped_step(session_dir, cmd):
+    """Persist `_finish_saved_fix_delta` over the saved state and journal it once. A state that cannot
+    be read, or that needs no rebuild, is left for the command's own load to answer. The caller holds
+    the session lock."""
+    ok, state = load_state(session_dir)
+    if not ok or not isinstance(state, dict):
+        return
+    held = state.get("step")
+    outcome = _finish_saved_fix_delta(state)
+    if outcome is None:
+        return
+    save_state(session_dir, state)
+    _journal_append(session_dir, {"cmd": cmd, "phase": held if isinstance(held, str) else None,
+                                  "round": state["round"], "attempt": 0, "outcome": outcome})
 
 
 def _state_damage(session_dir):

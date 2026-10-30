@@ -350,3 +350,58 @@ bringing up nodes...
 ```
 
 Still unproven by this record, as before: the `testCorrection` write on the finding, the unseatable skip, the correction fold's "no correction" reasons, the submit-side refusal of a restore report that carries `unfixed` or a binding, and the pending-restore guards.
+
+### W5-E1 — the identity dedupe in _reviewer_test_rows (WO-5)
+
+**guarded element:** the `and not any(r is row for r in rows)` clause in `_reviewer_test_rows` (`round_driver.py`, line 5539). Axis: a fix-batch or audit-target row whose contents equal an already-collected row, but which is a different object, is still rewritten by `_sync_reviewer_test`. Detector: `test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten` in `plugins/superheroes/lib/tests/test_c1l10b_test_restore.py`.
+
+**neutralization** (`round_driver.py`, `_reviewer_test_rows`):
+```diff
+-                and not any(r is row for r in rows)
++                and row not in rows
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo5-pyc -m pytest plugins/superheroes/lib/tests/test_c1l10b_test_restore.py -q -p no:cacheprovider -k test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten`
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten _______
+
+    def test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten():
+        state = RD.new_state({})
+        mine = C1._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST, changed_why=WHY)
+        key = RD._finding_key_of(mine)
+        batch_row, target_row = copy.deepcopy(mine), copy.deepcopy(mine)
+        assert batch_row == target_row and batch_row is not target_row
+        state["fixBatch"] = [batch_row]
+        state["_auditTargets"] = [target_row]
+        RD._sync_reviewer_test(state, key, CORRECTED_TEST, correction={"round": 2, "used": True, "outcome": "corrected"})
+        for row in (batch_row, target_row):
+>           assert row[RD.REVIEWER_TEST_FIELD] == CORRECTED_TEST
+E           AssertionError: assert 'def test_cha...rge(2) == 2\n' == 'def test_cha...rge(3) == 3\n'
+E             
+E               def test_charge():
+E             -     import charge_mod
+E                   assert charge(2) == 2
+E             -     assert charge(3) == 3
+
+/home/user/sh-2264/plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:499: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l10b_test_restore.py::test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten
+1 failed, 65 deselected in 1.63s
+```
+
+**restore:** the inverse edit, back to `                and not any(r is row for r in rows)`.
+
+**restore receipt:** `grep -n "not any(r is row for r in rows)\|row not in rows" plugins/superheroes/lib/round_driver.py` finds only the identity form:
+```
+5539:                and not any(r is row for r in rows)
+```
+
+**raw green:** same command as the raw red.
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 65 deselected in 1.20s
+```
