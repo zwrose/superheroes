@@ -986,7 +986,10 @@ def _carry_review(account, last_reviewed, extras, repo_root, readers):
     prior = review_record.read(account["pr"], repo, readers)
     if not prior.get("ok"):
         raise Refusal(UNSUPPORTED, "the empty returning round has no earlier review record to carry: %s" % (prior.get("detail"),))
-    why = review_record.carry_refusal(prior, last_reviewed, repo_root, account["baseRef"], account["finalCommit"],
+    # a rewrite of this session's own carried record is judged against the record that one carried from
+    source = review_record.carry_source(prior, last_reviewed, account.get("sessionId"),
+                                        review_record.read_history(account["pr"], repo, readers))
+    why = review_record.carry_refusal(source, last_reviewed, repo_root, account["baseRef"], account["finalCommit"],
                                       account.get("provenCopies") or [], rd["returning_decide"])
     if why is not None:
         raise Refusal(UNSUPPORTED, why)
@@ -995,7 +998,7 @@ def _carry_review(account, last_reviewed, extras, repo_root, readers):
         {"name": v.get("name"), "vendor": v.get("vendor"), "model": v.get("model"), "planned": True, "ran": True, "runDir": None,
          "commit": last_reviewed, "step": None, "carriedFrom": last_reviewed,
          **{k: v[k] for k in ("ownerWord", "notIndependent") if k in v}}
-        for v in prior["reviewers"]
+        for v in source["reviewers"]
         if isinstance(v, dict) and v.get("coversFinalCommit") is True and v.get("ran") in review_record._RAN_STATES]
 
 

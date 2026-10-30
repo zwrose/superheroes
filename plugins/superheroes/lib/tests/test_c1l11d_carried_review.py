@@ -383,3 +383,58 @@ def test_carry_refusal_names_the_first_failing_leg_and_passes_when_every_leg_hol
     allowed = lambda *a, **k: {"read": "changed", "changedFiles": [], "why": []}  # noqa: E731
     no_run = dict(prior, reviewers=[dict(prior["reviewers"][0], ran="not-run")])
     assert ask(no_run, decide=allowed) == "no reviewer of the earlier record ran and covers its final commit"
+
+
+# --- a rewrite of the same carried session: write once with CI pending, again after CI is green -----------------------------------
+
+_PENDING = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]},
+            TRRS.NO_STATUS, {"workflow_runs": [{"id": 11, "name": "CI", "event": "push", "status": "in_progress", "conclusion": None}]})
+
+
+def _readers_with(fake, check_data):
+    return dict(fake.readers(), check_data=lambda sha, repo: check_data)
+
+
+def test_a_carried_session_rewritten_after_ci_turns_green_is_carried_and_reads_reviewed(tmp_path, monkeypatch):
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    path = TRRS.put_extras(tmp_path, TRRS.extras(ci="green", makers=MAKERS))
+    first = RS.write_from_session(s.dir, path, s.repo.root, _readers_with(fake, _PENDING))
+    assert first["ok"] is True and first["status"] != "reviewed", first  # CI is still running: the gate stays closed
+    assert _latest(fake)["ci"]["state"] == "pending"
+    # nothing changed but CI: the second write reads the record the first one carried from, not the first one itself
+    second = RS.write_from_session(s.dir, path, s.repo.root, fake.readers())
+    assert second["ok"] is True and second["status"] == "reviewed", second
+    rec = _latest(fake)
+    assert rec["ci"]["state"] == "green" and rec["finalCommit"]["sha"] == s.head
+    assert rec["reviewers"] and all(v["carried"] == {"commit": s.reviewed} and v["coversFinalCommit"] is True
+                                    for v in rec["reviewers"]), rec["reviewers"]
+
+
+def test_a_record_of_another_session_at_the_head_is_not_looked_through(tmp_path, monkeypatch):
+    # negative: the latest record is a carried record of a DIFFERENT session at head B, so the carry still refuses
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    path = TRRS.put_extras(tmp_path, TRRS.extras(ci="green", makers=MAKERS))
+    assert RS.write_from_session(s.dir, path, s.repo.root, fake.readers())["ok"] is True
+    carried = RR.read(7, readers=fake.readers())
+    assert carried["finalCommit"]["sha"] == s.head
+    other = dict(carried)
+    other.pop("ok"), other.pop("url"), other.pop("earlierRecords")
+    other["sessionId"] = "someone-else"
+    fake.comments.append({"id": len(fake.comments) + 1, "author": "bot", "body": RR.render(other), "url": "http://c/other"})
+    before = len(fake.writes)
+    out = RS.write_from_session(s.dir, path, s.repo.root, fake.readers())
+    assert out["ok"] is False and out["reason"] == RS.UNSUPPORTED, out
+    assert out["detail"] == "the earlier record's final commit is not the last reviewed commit", out
+    assert len(fake.writes) == before
+    # the record writer agrees: a hand-built carried account over that latest record demotes every row
+    assert _row_states(_post_account(tmp_path, s, fake)) == [("not-run", False)]
+
+
+def _post_account(tmp_path, s, fake):
+    out = _write(tmp_path, s, fake, _carried_account(s))
+    assert out["ok"] is True, out
+    return _latest(fake)

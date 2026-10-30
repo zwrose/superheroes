@@ -414,6 +414,26 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     return None
 
 
+def carry_source(prior, last_reviewed, session_id, history):
+    """The record a carry is judged against: `prior`, unless `prior` is this same session's own earlier carried record
+    (same `sessionId`, a reviewer row carried from `last_reviewed`). A rewrite of that session then reads the record
+    that one carried from: the latest of `history` (the readable records older than `prior`, oldest first) whose final
+    commit is `last_reviewed`. Only the writer's own reading of the posted records decides; no such record leaves
+    `prior`, which `carry_refusal` then refuses."""
+    rows = prior.get("reviewers") if isinstance(prior, dict) else None
+    # axis: only this session's own carried record, read from the posted records, is looked through; another session's record at a later head still refuses — see bite-proof record c1l11d_wo_a_carried_review
+    own = (isinstance(rows, list) and isinstance(session_id, str) and prior.get("sessionId") == session_id
+           and any(isinstance(v, dict) and isinstance(v.get("carried"), dict) and v["carried"].get("commit") == last_reviewed
+                   for v in rows))
+    if not own:
+        return prior
+    for rec in reversed(history):
+        final = rec.get("finalCommit") if isinstance(rec, dict) else None
+        if isinstance(final, dict) and final.get("sha") == last_reviewed:
+            return rec
+    return prior
+
+
 # --- the account ---
 
 def _wider_ok(wider):
@@ -1438,7 +1458,7 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
     return out, rows
 
 
-def build_record(account, readers, prior=None):
+def build_record(account, readers, prior=None, history=()):
     a, rd, dis = _validate(account), _readers(readers), []
     read_paths, seen = rd["changed_paths"], {}
 
@@ -1462,8 +1482,9 @@ def build_record(account, readers, prior=None):
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
     # A carried row is decided by the writer's own reading of the latest earlier record and of git, once per record.
     carried_from = a["carriedReview"]["lastReviewed"] if "carriedReview" in a else None
-    carry = (carry_refusal(prior, carried_from, a.get("repoRoot"), a.get("baseRef"), fc["sha"],
-                           a.get("provenCopies") or [], rd["returning_decide"]), prior) if carried_from else None
+    source = carry_source(prior, carried_from, a["sessionId"], history) if carried_from else prior
+    carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("baseRef"), fc["sha"],
+                           a.get("provenCopies") or [], rd["returning_decide"]), source) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
                            _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry)
                  for r in a["reviewers"]]
@@ -2588,7 +2609,7 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
         by_id = {c["id"]: c for c in comments}
         found = _marker_comments(comments)
         latest = found[-1] if found else None
-        prior, not_checked = None, []
+        prior, not_checked, history = None, [], []
         for c in found:
             parsed = _parse_body(c["body"], by_id)
             # a record whose findings list is malformed is as unreadable as one that does not parse
@@ -2613,13 +2634,15 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
             if c is latest:
                 # axis: an unreadable earlier record never blocks a new one; it is listed instead
                 prior = usable
+            elif usable is not None:
+                history.append(usable)
         missing = _unaccounted(prior, a["findings"])
         if missing:
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
             raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
-        record = build_record(a, rd, prior=prior)
+        record = build_record(a, rd, prior=prior, history=history)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
@@ -2649,6 +2672,20 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
         return {"ok": True, "action": "created", "url": sent.get("url"), "parts": len(part_ids),
                 "status": record["status"], "parked": record["parked"], "whatIsMissing": record["whatIsMissing"]}
     return _guarded(go)
+
+
+def read_history(pr, repo=None, readers=None):
+    """The readable records older than the latest one, oldest first, as [] when there are none or the comments cannot be
+    listed. The session writer asks it only to look through its own carried record (`carry_source`)."""
+    try:
+        rd = _readers(readers)
+        comments = _comments(rd, pr, repo)
+        found = _marker_comments(comments)
+        by_id = {c["id"]: c for c in comments}
+        parsed = [_parse_body(c["body"], by_id) for c in found[:-1]]
+        return [p for p in parsed if isinstance(p, dict)]
+    except Exception:  # noqa: BLE001 — fail closed: no history means no looking through
+        return []
 
 
 def read(pr, repo=None, readers=None):
