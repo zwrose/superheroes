@@ -249,11 +249,13 @@ def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
 _MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfirmed")
 
 
-def fix_orders(repo_root, *, env=None):
+def fix_orders(repo_root, *, env=None, include_unchecked=False):
     """{"ok": True, "records": [...]} of the fix orders whose text may have reached the builder, else
     {"ok": False, "reason": ...}. A record is `msgId`, `session`, `configDir` and `at` (the message's `sentAfter`, written once at
     compose: a stable send boundary that a later check or re-check never moves). A fix order never checked
-    (a draft) or whose send failed is left out; the decision only decides eligibility. Reads only; never writes."""
+    (a draft) or whose send failed is left out; the decision only decides eligibility. With `include_unchecked`
+    every composed fix order is listed whatever its decision, one that may have been sent but was never checked included.
+    Reads only; never writes."""
     _path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return refusal
@@ -261,8 +263,9 @@ def fix_orders(repo_root, *, env=None):
     for msg_id, entry in sorted(state["pending"].items()):
         decision = entry.get("decision") if isinstance(entry, dict) else None
         # axis: only a fix order the check decided delivered, or may have reached the builder, opens the watch — see bite-proof record wo_2148_fix_order.md
-        if (isinstance(entry, dict) and entry.get("fixOrder") is True and isinstance(decision, dict)
-                and (decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)):
+        if (isinstance(entry, dict) and entry.get("fixOrder") is True
+                and (include_unchecked or (isinstance(decision, dict) and (
+                    decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)))):
             # axis: the window opens at the message's own sentAfter, never at the decision's check time, which a later check moves — see bite-proof record wo_2148_fix_order.md
             records.append({"msgId": msg_id, "session": entry.get("session"),
                             "configDir": entry.get("configDir"), "at": entry.get("sentAfter")})
