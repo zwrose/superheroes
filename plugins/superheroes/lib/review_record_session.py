@@ -267,10 +267,13 @@ _VERIFY_COUNTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED", "unverified", "ambiguous"
 
 def _nothing_to_verify(state, rnd):
     """Whether the round's verifier phase had no staged finding: `verifyPasses` is a non-empty list and every entry is a dict whose
-    verdict and unanswered counts are all present zeros. Anything else, a missing or malformed record included, had something to verify."""
+    verdict and unanswered counts are all present zeros and none held a finding for a second test (an absent or malformed `held`
+    reads as zero). Anything else, a missing or malformed record included, had something to verify."""
     passes = (state["rounds"].get(str(rnd)) or {}).get("verifyPasses")
     return isinstance(passes, list) and bool(passes) and all(
-        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS) for p in passes)
+        # axis: a pass whose findings were all held ran a verifier, so it never reads as nothing to verify — see bite-proof record c1l7_wo_f_held_record
+        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS)
+        and not (_int(p.get("held")) and p["held"] > 0) for p in passes)
 
 
 def _status_reviewers(state, setup=None, rows=()):
@@ -494,29 +497,11 @@ def _findings_and_merges(state):
 
     The map is the ledger's own resolved merge, the one `_decide` follows; a member whose merge does not
     resolve is not in it."""
-    owned = state.get(sc.DISPOSITION_LEDGER_OWNER_FIELD) == sc.DISPOSITION_LEDGER_OWNER_VALUE
-    ledger, fault = sc.read_disposition_ledger(state, required=owned)  # an owned session's ledger is never optional
-    if fault:
-        raise Refusal(UNREADABLE, fault.token)
+    by_key, rulings, exempt = decision_inputs(state)
     live = state.get("findings") or []
     if not isinstance(live, list) or not all(isinstance(f, dict) for f in live):
         raise Refusal(UNREADABLE, "findings")
-    by_key = {sc.finding_identity_key(r): r for r in ledger}
     content = dict(by_key, **{sc.finding_identity_key(f): f for f in live})
-    log = state.get("rulingsLog") if isinstance(state.get("rulingsLog"), list) else []
-    rulings = {r["findingKey"]: r for r in log if isinstance(r, dict) and isinstance(r.get("findingKey"), str)}  # the latest ruling per key stands
-    for p in state.get("_policyApplied") if isinstance(state.get("_policyApplied"), list) else []:
-        act = p.get("action") if isinstance(p, dict) and p.get("source") == _OWNER_SUPPLIED \
-            and p.get("phase") == _LEGACY_JUDGMENT_PHASE else None  # the owner-supplied source string; the driver is not importable here
-        prov = act.get("_provenance") if isinstance(act, dict) else None
-        if isinstance(prov, dict) and _text(prov.get("ruledBy")) and _text(prov.get("ruledAt")):
-            for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
-                if isinstance(d, dict) and d.get("disposition") == "skip" and isinstance(d.get("id"), str):
-                    rulings.setdefault(d["id"], {"ruling": "out-of-scope", "provenance": prov})
-    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
-    exempt = {r["findingKey"]: r for rec in rounds.values() if isinstance(rec, dict)
-              for r in (rec.get("breakItKept") if isinstance(rec.get("breakItKept"), list) else [])
-              if isinstance(r, dict) and r.get("outcome") == "ruled-out-of-scope" and isinstance(r.get("findingKey"), str)}
     out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
@@ -538,6 +523,42 @@ def _findings_and_merges(state):
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail")), **held})
     return out, merged
+
+
+def decision_inputs(state):
+    """``(by_key, rulings, exempt)``: what `_decide` reads, built from a driver ``state``.
+
+    ``by_key`` is the disposition ledger by identity key (an owned session's ledger is never optional; a
+    malformed one raises `Refusal`), ``rulings`` the latest ruling per finding key (the rulings log, then the
+    owner-supplied skips of `_policyApplied`), ``exempt`` the driver's `ruled-out-of-scope` break-it rows by
+    finding key. The record writer and the repeat-mark pool both read their outcomes through these."""
+    owned = state.get(sc.DISPOSITION_LEDGER_OWNER_FIELD) == sc.DISPOSITION_LEDGER_OWNER_VALUE
+    ledger, fault = sc.read_disposition_ledger(state, required=owned)  # an owned session's ledger is never optional
+    if fault:
+        raise Refusal(UNREADABLE, fault.token)
+    by_key = {sc.finding_identity_key(r): r for r in ledger}
+    log = state.get("rulingsLog") if isinstance(state.get("rulingsLog"), list) else []
+    rulings = {r["findingKey"]: r for r in log if isinstance(r, dict) and isinstance(r.get("findingKey"), str)}  # the latest ruling per key stands
+    for p in state.get("_policyApplied") if isinstance(state.get("_policyApplied"), list) else []:
+        act = p.get("action") if isinstance(p, dict) and p.get("source") == _OWNER_SUPPLIED \
+            and p.get("phase") == _LEGACY_JUDGMENT_PHASE else None  # the owner-supplied source string; the driver is not importable here
+        prov = act.get("_provenance") if isinstance(act, dict) else None
+        if isinstance(prov, dict) and _text(prov.get("ruledBy")) and _text(prov.get("ruledAt")):
+            for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
+                if isinstance(d, dict) and d.get("disposition") == "skip" and isinstance(d.get("id"), str):
+                    rulings.setdefault(d["id"], {"ruling": "out-of-scope", "provenance": prov})
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    exempt = {r["findingKey"]: r for rec in rounds.values() if isinstance(rec, dict)
+              for r in (rec.get("breakItKept") if isinstance(rec.get("breakItKept"), list) else [])
+              if isinstance(r, dict) and r.get("outcome") == "ruled-out-of-scope" and isinstance(r.get("findingKey"), str)}
+    return by_key, rulings, exempt
+
+
+def row_decision(row, inputs):
+    """``(outcome, representative)`` the record writer reads for a ledger ``row``: `_decide`'s outcome (None when
+    the row is undecided or its `mergedInto` chain does not resolve) and the row its decision stands on."""
+    outcome, _reason, rep = _decide(row, *inputs)
+    return outcome, rep
 
 
 def _original_maker_families(state, fix_round):

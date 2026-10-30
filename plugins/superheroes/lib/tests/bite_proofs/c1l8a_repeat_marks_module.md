@@ -254,3 +254,145 @@ FAILED plugins/superheroes/lib/tests/test_repeat_marks_module_c1l8a.py::test_cod
 ..........................................................               [100%]
 58 passed in 0.74s
 ```
+
+## Review round 1 additions (WO-E): M6 to M8
+
+The detector grew to 61 tests (a list/dict outcome test of two cases, and the `opaque_key` contract test). Same command
+shape as above, with `-X pycache_prefix=/tmp/superheroes-pyc-c1l8a-e`; each neutralization is one targeted Edit undone
+by the inverse Edit, detector unedited. Redaction: none needed. The `UV_NATIVE_TLS` and `bringing up nodes...` lines
+are dropped from the captures below.
+
+## M6 — the non-string outcome guard in `record_entry`
+
+**Guarded element:** `repeat_marks.py:130` `record_entry`, the `isinstance(outcome, str)` guard before the
+`OUTCOME_SET` membership test. Axis: a list or dict outcome (unhashable) reads as undecided (`None`), never raises.
+
+**Neutralization:** `outcome if isinstance(outcome, str) and outcome in review_findings_schema.OUTCOME_SET else None`
+became `outcome if outcome in review_findings_schema.OUTCOME_SET else None`.
+
+**Raw red** (2 failed, 59 passed; traceback source listings trimmed to the failing line):
+
+```
+................................F...F........................            [100%]
+__ test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises[outcome0] ___
+outcome = ['craft']
+    def test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises(outcome, tmp_path):
+        odd = _stored(_raw("odd", id="R-3"), outcome)
+>       assert RM.record_entry(odd, None)["outcome"] is None
+plugins/superheroes/lib/repeat_marks.py:130: TypeError
+>       outcome = outcome if outcome in review_findings_schema.OUTCOME_SET else None
+E       TypeError: unhashable type: 'list'
+__ test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises[outcome1] ___
+outcome = {'craft': 1}
+>       outcome = outcome if outcome in review_findings_schema.OUTCOME_SET else None
+E       TypeError: unhashable type: 'dict'
+FAILED ...test_repeat_marks_module_c1l8a.py::test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises[outcome0]
+FAILED ...test_repeat_marks_module_c1l8a.py::test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises[outcome1]
+2 failed, 59 passed in 0.67s
+```
+
+**Restore:** inverse edit, `isinstance(outcome, str) and ` put back.
+
+**Restore receipt:** restored line, `repeat_marks.py:130`:
+
+```python
+    outcome = outcome if isinstance(outcome, str) and outcome in review_findings_schema.OUTCOME_SET else None
+```
+
+**Raw green:**
+
+```
+.............................................................            [100%]
+61 passed in 0.78s
+```
+
+(The same test also covers `read_file` on a file on disk, and `outcome_of` / `decide` with the same values; the
+`decide` guard at `repeat_marks.py:74` is not separately neutralized here, so it is unproven by its own red.)
+
+## M7 — `code_changed` refuses a head that starts with a dash
+
+**Guarded element:** `repeat_marks.py:82` `code_changed`, the `not h.startswith("-")` test. Axis: a head that git
+would read as an option (`--quiet`) is a change, not an unchanged tree.
+
+**Neutralization:** `not h.startswith("-")` became `not h.startswith("-x")`.
+
+**Raw red** (1 failed, 60 passed; the `E +  where ...` expansion lines are dropped):
+
+```
+...........................................................F.            [100%]
+_______ test_code_changed_counts_a_head_starting_with_a_dash_as_changed ________
+    def test_code_changed_counts_a_head_starting_with_a_dash_as_changed(repo):
+        # `--quiet` is a real git option: without the guard git reads the clean tree as unchanged
+>       assert RM.code_changed(repo.root, "--quiet", repo.same) is True
+E       AssertionError: assert False is True
+plugins/superheroes/lib/tests/test_repeat_marks_module_c1l8a.py:200: AssertionError
+FAILED plugins/superheroes/lib/tests/test_repeat_marks_module_c1l8a.py::test_code_changed_counts_a_head_starting_with_a_dash_as_changed
+1 failed, 60 passed in 0.60s
+```
+
+**Restore:** inverse edit, `"-x"` back to `"-"`.
+
+**Restore receipt:** restored line, `repeat_marks.py:82`:
+
+```python
+    if not _text(repo_root) or not all(_text(h) and not h.startswith("-") for h in heads):
+```
+
+**Raw green:**
+
+```
+.............................................................            [100%]
+61 passed in 0.59s
+```
+
+## M8 — `opaque_key` is the review record's own stored key
+
+**Guarded element:** `repeat_marks.py:95` `opaque_key`, delegating to `review_record._key`. Axis: the module's stored
+key equals the record writer's, independently of the fixtures (which now build keys with `review_record._key`).
+
+**Neutralization:** `return review_record._key(finding)` became `return session_contract.finding_identity_key(finding)`.
+
+**Raw red** (4 failed, 57 passed; the contract test in full, the other three trimmed to their failing assertion and
+the `E +  where ...` lines dropped):
+
+```
+....................................F.......F.F..........F...            [100%]
+_______________ test_opaque_key_is_the_review_records_stored_key _______________
+    def test_opaque_key_is_the_review_records_stored_key():
+        raw = _raw("contract")
+>       assert RM.opaque_key(raw) == review_record._key(raw)
+E       AssertionError: assert 'f.py::contract@L1' == 'rr1:5638655d...f076b31f476e7'
+E         
+E         - rr1:5638655d56c957f4244f076b31f476e7
+E         + f.py::contract@L1
+plugins/superheroes/lib/tests/test_repeat_marks_module_c1l8a.py:274: AssertionError
+>       assert RM.exact_match(_raw("r", line=2), pool) is pool[1]
+E       AssertionError: assert None is {'source': 'record', 'key': 'rr1:dc235157b7c223de58aea42cf9287c6d', ...}
+>           assert [(e["ref"], e["title"], e["source"]) for e in pool] == [
+E             At index 1 diff: ('e2', 'session one', 'record') != ('e2', 'other', 'record')
+>       assert entries[0]["key"] == review_record._key(minted)
+E       AssertionError: assert 'f.py::no stored key@L9' == 'rr1:11ae37f8...02ddc9ef16aab'
+FAILED ...test_repeat_marks_module_c1l8a.py::test_opaque_key_is_the_review_records_stored_key
+FAILED ...test_repeat_marks_module_c1l8a.py::test_exact_match_reads_a_session_raw_key_and_a_record_stored_key
+FAILED ...test_repeat_marks_module_c1l8a.py::test_a_record_finding_the_session_already_holds_is_not_listed_twice
+FAILED ...test_repeat_marks_module_c1l8a.py::test_r3_a_record_finding_with_no_key_and_no_file_and_title_is_never_pooled
+4 failed, 57 passed in 0.69s
+```
+
+**Restore:** inverse edit, `session_contract.finding_identity_key(finding)` back to `review_record._key(finding)`.
+
+**Restore receipt:** restored lines, `repeat_marks.py:92-95`:
+
+```python
+def opaque_key(finding):
+    """The review record's stored key for a finding (`review_record._key`)."""
+    import review_record  # lazy: the closure of this module stays small
+    return review_record._key(finding)
+```
+
+**Raw green:**
+
+```
+.............................................................            [100%]
+61 passed in 0.71s
+```

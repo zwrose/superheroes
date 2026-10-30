@@ -268,23 +268,30 @@ def test_t4_no_supplied_diff_derives_git_and_schedules_the_fix_audit(tmp_path, m
 
 # ---- T5 edges ----------------------------------------------------------------------------------
 
-def test_e3_non_absolute_path_is_unreadable_and_git_governs(tmp_path, monkeypatch):
+def test_e3_non_absolute_path_on_a_hand_submit_is_refused_before_the_fold(tmp_path, monkeypatch):
     cli = _Cli(tmp_path, monkeypatch)
 
     def supply(c):
         # driving to the fixer step moves the cwd into the session checkout, so the relative file is made where the
-        # driver reads from, holding text git's diff does not: only the absolute-path rule keeps it unread
+        # driver would read from, holding text git's diff does not: only the absolute-path rule keeps it unread
         os.makedirs("relative", exist_ok=True)
         with open("relative/fix.diff", "w", encoding="utf-8") as fh:
             fh.write("not git's diff\n")
         return {"headDiffPath": "relative/fix.diff"}
 
     cli.supply = supply
-    n, state = cli.fold_fixer()
-    assert state.get("terminal") is None
-    rec = state["rounds"][str(n["round"])]
-    assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("git", "supplied-unreadable")
-    assert state["headDiff"] == cli.git_full()
+    n = cli.to_fixer()
+    ok, before = RD.load_state(cli.d)
+    assert ok
+    out = cli.submit(n)
+    assert out["ok"] is False
+    assert "headDiffPath" in out["reason"]
+    ok, after = RD.load_state(cli.d)
+    assert ok
+    assert (after["pending"]["phase"], after["pending"]["attempt"]) == (n["phase"], n["attempt"])
+    assert after["pending"] == before["pending"]
+    assert after.get("terminal") is None
+    assert "headDiffCheck" not in (after["rounds"].get(str(n["round"])) or {})
 
 
 def test_e4_missing_file_path_is_unreadable_and_git_governs(tmp_path, monkeypatch):

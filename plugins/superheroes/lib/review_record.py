@@ -80,6 +80,7 @@ RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
+_SHOWN_WRONG = rfs.OUTCOMES[1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
@@ -2378,14 +2379,14 @@ def _wrong_ungraded(findings, prior, verifier_closed):
     closure: its `repeatOf` names a key the earlier record lists as shown-wrong, or another finding of this account that
     passes as verifier-closed. A malformed earlier list carries nothing."""
     earlier = prior.get("findings") if isinstance(prior, dict) else None
-    carried = {_key(i) for i in earlier if isinstance(i, dict) and i.get("outcome") == "shown-wrong"} \
+    carried = {_key(i) for i in earlier if isinstance(i, dict) and i.get("outcome") == _SHOWN_WRONG} \
         if isinstance(earlier, list) else set()
 
     def verifier_closed_wrong(f):
         grade = f.get("grade")
         # axis: a shown-wrong finding is carried from the earlier record or verifier-closed with a wrong grade, never written bare — see bite-proof record c1l7_wo_a_verifier_grade
         return _key(f) in verifier_closed and isinstance(grade, dict) and grade.get("verdict") == "wrong"
-    shown = [(i, f) for i, f in enumerate(findings) if isinstance(f, dict) and f.get("outcome") == "shown-wrong"]
+    shown = [(i, f) for i, f in enumerate(findings) if isinstance(f, dict) and f.get("outcome") == _SHOWN_WRONG]
     closed_here = {_key(f) for _, f in shown if verifier_closed_wrong(f)}
     out = []
     for i, f in shown:

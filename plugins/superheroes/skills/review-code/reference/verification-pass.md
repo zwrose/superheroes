@@ -146,8 +146,9 @@ never to `shown-wrong`.
 
 **A passing test that missed its path.** For a finding whose break-it test passed on the unfixed
 code, the verdict also says `pathReached`. A test that reached the finding's path and still
-passed is evidence the finding does not hold: REFUTED, graded wrong, and sent to no fix. One that
-never reached the path (`pathReached: false`, with any verdict but an evidenced CONFIRMED) is
+passed, and whose assertions check the behaviour the finding names, is evidence the finding does
+not hold: REFUTED, graded wrong, and sent to no fix; when its assertions are too weak to decide
+it, the verifier judges from the code. One that never reached the path (`pathReached: false`, with any verdict but an evidenced CONFIRMED) is
 held: it is not graded, dropped or grouped, and it is listed in the verify record's `held`. The
 driver then emits `dispatch-second-test`: a fresh run of the [test role](../../../rubric/glossary.md#test-role), seated outside every
 maker's family, gets the held findings, each with its first test, that test's output and the
