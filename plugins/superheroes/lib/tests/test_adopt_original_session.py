@@ -1145,14 +1145,15 @@ def test_the_branch_read_tells_gone_from_present_from_unknown(tmp_path):
     assert L._adopted_branch_absent(repo, branch, env) is None
 
 
-def test_a_relay_state_with_a_malformed_pending_entry_keeps_the_lane(tmp_path, first_pr):
+@pytest.mark.parametrize("entry", [None, {"fixOrder": None}])
+def test_a_relay_state_with_a_malformed_pending_entry_keeps_the_lane(tmp_path, first_pr, entry):
     # axis: a pending relay entry that is not a dict may be a damaged fix order, so the real relay read refuses and the lane stays — see bite-proof record i2254_original_session
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
     state, _ = cloud_relay._state_path(repo, cloud_relay._env(None))
     os.makedirs(os.path.dirname(state), exist_ok=True)
     with open(state, "w", encoding="utf-8") as fh:
-        json.dump({"relays": {}, "pending": {"m": None}}, fh)
+        json.dump({"relays": {}, "pending": {"m": entry}}, fh)
     first_pr(time.time() + 3600)
     result, calls = _adopt(repo, tmp_path)
     _refused_unread(repo, result, calls, "listing-not-given")
