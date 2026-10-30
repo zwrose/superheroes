@@ -90,6 +90,7 @@ import review_round_policy  # noqa: E402
 import review_seats  # noqa: E402
 import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
+import repeat_marks  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
@@ -1336,6 +1337,10 @@ def _default_config(overrides=None):
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
         "priorComments": None,
+        # `next --earlier-findings`: the review record's findings as pool entries (`repeat_marks`), and the reason
+        # the file gave none (a missing record is silent); read once at the first `next`.
+        "earlierFindings": None,
+        "earlierFindingsUnavailable": None,
         # #723 `next --seat-map`: the #510 seat map for round 1. Before #681, `state["seatMap"]`
         # was populated ONLY by `_fold_panel` off the panel artifact; receipt list (#681) stores
         # each round's submission in `seatMapReceipts` instead.
@@ -1843,6 +1848,28 @@ def _follow_up_of(row):
     return dict(follow_up) if isinstance(follow_up, dict) else None
 
 
+def _snapshot_earlier_pool(state, ledger):
+    """Snapshot the PR's earlier findings once per round into ``state["_earlierPool"]``, before staging
+    re-seeds (and strips the disposition of) a re-raised ledger row. Discloses a record the file did not give."""
+    held = state.get("_earlierPool")
+    if isinstance(held, dict) and held.get("round") == state["round"]:
+        return
+    cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+    record = cfg.get("earlierFindings")
+    state["_earlierPool"] = {"round": state["round"], "entries": repeat_marks.build_pool(
+        ledger, state["round"], record if isinstance(record, list) else [])}
+    reason = cfg.get("earlierFindingsUnavailable") or ("not-supplied" if record is None else None)
+    if reason:
+        _record_round(state, "earlierFindingsUnavailable", reason)
+
+
+def _earlier_pool(state):
+    """The round's earlier-findings pool (entries with their ``eN`` refs), as snapshotted before staging."""
+    held = state.get("_earlierPool")
+    entries = held.get("entries") if isinstance(held, dict) else None
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
 def _stage_findings(state, compiled):
     """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate. Each member
     a Nit-cap summary row collapsed is seeded too and recorded ``craft`` at once."""
@@ -1850,6 +1877,7 @@ def _stage_findings(state, compiled):
         state["_toVerify"] = compiled
         return
     ledger = _ensure_disposition_ledger_for_write(state)
+    _snapshot_earlier_pool(state, ledger)
     seen = _ledger_index_by_key(ledger)
     owner_class = session_contract.disposition_ledger_owner_classification(state)
     first_ledger_owner = owner_class == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT
@@ -2881,7 +2909,8 @@ def _advance(state, config):
         staged = verification.stage_ids(state.get("_toVerify") or [])
         payload = {"clusters": verification.cluster_findings(staged)}
     elif step == P_SYNTHESIS:
-        payload = {"findings": state.get("_verified") or []}
+        payload = {"findings": state.get("_verified") or [], "refuted": state.get("_refuted") or [],
+                   "earlier": repeat_marks.order_list(_earlier_pool(state))}
     elif step == P_GAPSWEEP:
         payload = {"verifiedFindings": state.get("findings") or [],
                    "fullDiff": True}
@@ -2987,7 +3016,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_VERIFIERS:
         _fold_verifiers(state, config, artifact, session_dir=session_dir)
     elif phase == P_SYNTHESIS:
-        _fold_synthesis(state, config, artifact)
+        _fold_synthesis(state, config, artifact, session_dir=session_dir)
     elif phase == P_GAPSWEEP:
         _fold_gapsweep(state, config, artifact)
     elif phase == P_AUDITS:
@@ -3576,26 +3605,32 @@ def _format_grouping_coverage_fault(fault):
         return "%s: grouping omits staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
     if kind == "extra":
         return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    if kind == "repeat_ref":
+        return "%s: repeatOf %r is not an earlier-finding ref of this order (null or one of its `earlier` refs)" % (
+            STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
     return "%s: grouping does not cover every survivor exactly once" % STAGED_ID_UNRESOLVABLE_CAUSE
 
 
-def synthesis_staged_id_fault(state, artifact):
-    """Refuse synthesis author-justified drops and merge members whose ids do not resolve."""
+def synthesis_staged_id_fault(state, artifact, session_dir=None):
+    """Refuse synthesis author-justified drops and merge members whose ids do not resolve, and a repeat
+    name that is not null or an earlier-finding ref of the order (the fold applies the same validation)."""
     verified = state.get("_verified") or []
+    refuted = state.get("_refuted") or []
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
     if isinstance(grouping, list):
         fault = _format_grouping_coverage_fault(
-            verification.grouping_coverage_fault(verified, grouping))
+            repeat_marks.grouping_fault(verified, refuted, grouping, _earlier_pool(state)))
         if fault:
             return fault
         for group in grouping:
             if not isinstance(group, dict):
                 continue
             for member_id in group.get("member_ids") or []:
-                fault = _staged_id_resolution_fault(verified, member_id)
+                fault = _staged_id_resolution_fault(verified + refuted, member_id)
                 if fault:
                     return fault
-    merged = verification.merge_and_rank(verified, grouping)
+    plan = _repeat_plan(state, grouping, session_dir)
+    merged = verification.merge_and_rank(plan["survivors"], plan["grouping"])
     findings = merged["findings"]
     config = state.get("config") or {}
     _kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
@@ -3814,6 +3849,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             staged_finding, fault = _resolve_staged_finding(staged, survivor.get("id"))
             if not fault and isinstance(staged_finding, dict):
                 _record_grade(state, _finding_identity_key(staged_finding), grade)
+    refuted = []
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
         staged_finding, fault = _resolve_staged_finding(staged, d.get("id"))
@@ -3822,21 +3858,24 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             state["step"] = P_TERMINAL
             return
         if isinstance(staged_finding, dict):
+            refuted.append(dict(staged_finding, **{GRADE_FIELD: d.get(GRADE_FIELD)}))
             key = _finding_identity_key(staged_finding)
             if key:
                 reason = d.get("reason") or "verifier refuted (no reason recorded)"
                 # axis: the refuted ledger row carries the wrong grade that closed it, written before the disposition — see bite-proof record c1l7_wo_b_verifier_grade
                 _record_grade(state, key, d.get(GRADE_FIELD))
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
+    state["_refuted"] = refuted  # this round's refuted findings (staged ids): they carry a repeat mark, never a merge
     for n in applied["notExecuted"]:
         _decision(state, "verifier-not-executed", n.get("reason"))
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
+    # A round with refuted findings against a non-empty earlier pool still dispatches synthesis, to name repeats only.
     # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors
-    if not state["_verified"]:
+    if not state["_verified"] and not (refuted and _earlier_pool(state)):
         _decision(state, "synthesis-no-survivors",
                   "verification left no findings, so no grouping seat was dispatched")
-        _fold_synthesis(state, config, {"grouping": []})
+        _fold_synthesis(state, config, {"grouping": []}, session_dir, exact_only="synthesis-no-survivors")
         return
     if _nonpanel_unseatable(state, session_dir, P_SYNTHESIS):
         # No grouping seat outside the makers' families on a proven synthesis cell: no order is
@@ -3848,7 +3887,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             "fixerVendor": cfg.get("fixerVendor")})
         _decision(state, "synthesis-unseatable",
                   "no synthesis seat outside the makers' families on a proven cell; findings not grouped")
-        _fold_synthesis(state, config, {"grouping": None})
+        _fold_synthesis(state, config, {"grouping": None}, session_dir, exact_only="synthesis-unseatable")
         return
     state["step"] = P_SYNTHESIS
 
@@ -3866,12 +3905,133 @@ def _sync_merged_consequences(state, kept):
                     ledger[seen[key]][field] = finding[field]
 
 
-def _fold_synthesis(state, config, artifact):
+def _verifier_head(state, session_dir, rnd):
+    """The head the verifier phase of round ``rnd`` judged on (its orders anchor), or None when unreadable."""
+    prefix = "%s:%s:" % (rnd, P_VERIFIERS)
+    anchors = state.get("_ordersAnchors")
+    attempts = [int(k[len(prefix):]) for k in (anchors if isinstance(anchors, dict) else ())
+                if isinstance(k, str) and k.startswith(prefix) and k[len(prefix):].isdigit()]
+    if not attempts and session_dir:
+        try:
+            events = read_journal(session_dir)
+        except Exception:  # noqa: BLE001 — an unreadable journal names no attempt
+            events = []
+        attempts = [e["attempt"] for e in events if isinstance(e, dict) and e.get("outcome") == "orders-emitted"
+                    and e.get("round") == rnd and e.get("phase") == P_VERIFIERS and _is_plain_int(e.get("attempt"))]
+    try:
+        return _anchor_cited_head(state, session_dir, rnd, P_VERIFIERS, max(attempts)) if attempts else None
+    except Exception:  # noqa: BLE001 — an unreadable anchor is an unknown head, which counts as changed
+        return None
+
+
+def _repeat_changed(state, session_dir, entry):
+    """Whether the code changed between the head the earlier finding was judged on and the head this round's
+    verifier judged on; an unreadable head or a failed comparison is a change."""
+    earlier = entry.get("head") if entry["source"] == "record" else _verifier_head(
+        state, session_dir, entry.get("round"))
+    return repeat_marks.code_changed((state.get("config") or {}).get("repoRoot"), earlier,
+                                     _verifier_head(state, session_dir, state["round"]))
+
+
+def _grade_verdict(finding):
+    grade = finding.get(GRADE_FIELD) if isinstance(finding, dict) else None
+    return grade.get("verdict") if isinstance(grade, dict) else None
+
+
+def _repeat_plan(state, grouping, session_dir, exact_only=None):
+    """Take every staged finding's repeat decision on its own grade, before the merge, and return what the
+    merge sees: the survivors without the kept repeats and the grouping without kept and refuted ids, so a kept
+    row is never aliased into a fresh finding and a fresh member is never filtered out with a kept one. The
+    judge's names apply only when the grouping validates and the synthesis seat ran."""
+    verified, refuted = state.get("_verified") or [], state.get("_refuted") or []
+    pool = _earlier_pool(state)
+    fault = repeat_marks.grouping_fault(verified, refuted, grouping, pool)
+    judged = exact_only is None and fault is None
+    staged = [f for f in verified + refuted if isinstance(f, dict)]
+    marks = {}
+    for sid, (entry, source) in repeat_marks.mark_repeats(
+            staged, pool, repeat_marks.judge_refs(grouping) if judged else {}).items():
+        finding = next(f for f in staged if f.get("id") == sid)
+        kept, fix_holds = repeat_marks.decide(
+            entry["outcome"], _grade_verdict(finding), lambda e=entry: _repeat_changed(state, session_dir, e))
+        marks[sid] = {"finding": finding, "entry": entry, "source": source, "kept": kept, "fixHolds": fix_holds}
+    kept_ids = {sid for sid, m in marks.items() if m["kept"]}
+    # axis: a kept repeat is out of the survivors and every group before the merge, so it never merges into a fresh finding — see bite-proof record c1l8_wo_a_repeat_marks
+    removed = kept_ids | {f.get("id") for f in refuted if isinstance(f, dict)}
+    return {"marks": marks, "survivors": [s for s in verified if s.get("id") not in kept_ids],
+            "grouping": repeat_marks.strip_groups(grouping, removed), "pool": pool,
+            "matching": repeat_marks.MATCH_JUDGE if judged else repeat_marks.MATCH_EXACT_ONLY,
+            "reason": exact_only or ("grouping-invalid" if fault else None)}
+
+
+def _record_repeat(state, key, repeat_of, repeat_kept):
+    """Write ``repeatOf`` (and ``repeatKept`` when kept) on the finding's ledger row."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    if key in seen:
+        row = ledger[seen[key]]
+        row["repeatOf"] = repeat_of
+        row.pop("repeatKept", None)
+        if repeat_kept is not None:
+            row["repeatKept"] = repeat_kept
+
+
+def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):
+    """Give a kept repeat's row the disposition its earlier outcome stands for. A same-key repeat is the earlier
+    finding itself (``restore``): its snapshotted decision family comes back, and a ``shown-wrong`` row this
+    round's grade does not call wrong gets the snapshotted ``wrong`` grade back."""
+    token = repeat_marks.disposition_of(entry["outcome"])
+    fields = {} if token == "fixed" else {"refutedReason" if token == "refuted" else "settledReason": reason}
+    round_no = state["round"]
+    if restore:
+        family = entry.get("family") or {}
+        round_no = family.get("dispositionRound") if _is_plain_int(family.get("dispositionRound")) else round_no
+        fields = dict({k: v for k, v in family.items() if k not in (
+            "disposition", "dispositionRound", session_contract.MERGED_INTO_FIELD, "refutedReason",
+            "settledReason")}, **fields)
+    _record_disposition(state, key, token, round_no, **fields)
+    held = entry.get(GRADE_FIELD)
+    if restore and entry["outcome"] == repeat_marks.SHOWN_WRONG and grade_verdict != "wrong" \
+            and isinstance(held, dict) and held.get("verdict") == "wrong":
+        _record_grade(state, key, held)
+
+
+def _apply_repeat_marks(state, plan):
+    """Write each marked finding's ``repeatOf`` / ``repeatKept`` (and a kept repeat's disposition) on its ledger
+    row, and the round's marks and matching mode on the round record."""
+    rows = []
+    for sid, mark in plan["marks"].items():
+        finding, entry = mark["finding"], mark["entry"]
+        key = _finding_identity_key(finding)
+        if not key:
+            continue
+        repeat_of = {"findingKey": entry["key"], "id": entry.get("id"), "fixHolds": mark["fixHolds"]}
+        repeat_kept = None
+        if mark["kept"]:
+            reason = repeat_marks.kept_reason(entry, mark["fixHolds"])
+            repeat_kept = {"outcome": entry["outcome"], "reason": reason}
+            _record_kept_disposition(state, key, entry, reason, _grade_verdict(finding),
+                                     mark["source"] == "exact" and entry["source"] == "session")
+        _record_repeat(state, key, repeat_of, repeat_kept)
+        rows.append({"id": sid, "findingKey": key, "source": mark["source"], "kept": mark["kept"],
+                     "repeatOf": repeat_of, GRADE_FIELD: finding.get(GRADE_FIELD)})
+    if plan["pool"]:
+        _record_round(state, "repeatMatching", plan["matching"])
+        if plan["reason"]:
+            _record_round(state, "repeatMatchingReason", plan["reason"])
+    if rows:
+        _record_round(state, "repeatMarks", rows)
+
+
+def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
-    author-justification POST-filter, then decide gap-sweep / fix / terminal."""
+    author-justification POST-filter, then decide gap-sweep / fix / terminal. Repeats of an earlier finding
+    are decided first (`_repeat_plan`); a kept repeat leaves the merge and the findings. ``exact_only``
+    (a reason) marks by exact identity alone, as when the synthesis seat was not dispatched."""
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
     verified = state.get("_verified") or []
-    merged = verification.merge_and_rank(verified, grouping)
+    plan = _repeat_plan(state, grouping, session_dir, exact_only)
+    merged = verification.merge_and_rank(plan["survivors"], plan["grouping"])
     findings = merged["findings"]
     kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
     for d in aj_drops:
@@ -3919,6 +4079,7 @@ def _fold_synthesis(state, config, artifact):
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
     _sync_merged_consequences(state, kept)
+    _apply_repeat_marks(state, plan)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
     # a delta settle — the delta round has its own scoped scan + audit breaker.)
     plan = delta_surface.shard_plan(state.get("reviewedDiff") or "")
@@ -9534,7 +9695,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "synthesis-results-shape"})
             return {"ok": False, "reason": fault}
-        fault = synthesis_staged_id_fault(state, artifact)
+        fault = synthesis_staged_id_fault(state, artifact, session_dir)
         if fault:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
@@ -10898,7 +11059,8 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
         if not isinstance(findings, list):
             findings = []
         path = _order_verified_sidecar_path(rdir)
-        writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
+        lists = {name: payload[name] if isinstance(payload.get(name), list) else [] for name in ("refuted", "earlier")}
+        writes.append((path, round_records.canonical({"findings": findings, **lists}).encode("utf-8")))
     return writes
 
 
@@ -11113,6 +11275,31 @@ def _materialize_prior_comments(session_dir, source_path, comments):
         return True
     except OSError:
         return False
+
+
+def _earlier_findings_canonical_path(session_dir):
+    return os.path.join(session_dir, "earlier-findings.json")
+
+
+def _earlier_findings_overrides(session_dir, flag_path):
+    """The config overrides the first ``next`` takes from the earlier review record: its findings as pool
+    entries, or the reason the file gave none (``review-record-missing`` is silent). An explicit flag wins over
+    a canonical copy already in the session dir; the file read is copied there as ``earlier-findings.json``."""
+    canonical = _earlier_findings_canonical_path(session_dir)
+    source = flag_path or (canonical if os.path.isfile(canonical) else None)
+    if source is None:
+        return {}
+    payload, entries, reason = repeat_marks.read_file(source)
+    if payload is not None:
+        try:
+            if not os.path.samefile(source, canonical):
+                round_commit.atomic_write_json(canonical, payload)
+        except OSError:
+            try:
+                round_commit.atomic_write_json(canonical, payload)
+            except OSError:
+                entries, reason = [], "unwritable"
+    return {"earlierFindings": entries, "earlierFindingsUnavailable": reason}
 
 
 def _prior_comments_unavailable_marker():
@@ -14583,6 +14770,11 @@ def build_parser():
     cli_contract.add_argument(pn, "--prior-comments", contract="free-text", default=None,
                               help="PR-mode prior review comments JSON (a list) for the "
                                    "author-justification post-filter (fresh state only)")
+    cli_contract.add_argument(pn, "--earlier-findings", contract="free-text", default=None,
+                              help="PR-mode earlier review record JSON (what `review_record.py read --pr N` "
+                                   "prints) naming the PR's earlier findings, so a repeat of one keeps its "
+                                   "earlier outcome (fresh state only). Missing / unreadable / refused → no "
+                                   "record-sourced findings, disclosed; never a crash")
     cli_contract.add_argument(pn, "--seat-map", contract="free-text", default=None,
                               help="the #510 seat map JSON object (fresh state only) seeding "
                                    "config/state so round 1 has a vendor source. Unparseable / "
@@ -14911,6 +15103,13 @@ def _dispatch(args):
                         overrides["priorComments"] = loaded
             except (OSError, ValueError):
                 pass
+        st_ok, st = load_state(args.session_dir)
+        if args.earlier_findings and not (st_ok and st is None):
+            sys.stdout.write(json.dumps({"ok": False, "reason": "earlier-findings-not-fresh-state",
+                                         "value": args.earlier_findings}) + "\n")
+            return 1
+        if st_ok and st is None:
+            overrides.update(_earlier_findings_overrides(args.session_dir, args.earlier_findings))
         if args.records_path is not None:
             if _records_path_is_reserved(args.session_dir, args.records_path):
                 sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-reserved",
