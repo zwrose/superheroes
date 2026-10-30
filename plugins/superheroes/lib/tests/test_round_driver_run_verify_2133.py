@@ -179,9 +179,26 @@ def test_a_failing_command_lands_fail_and_advance_folds_the_halt(tmp_path, adapt
     assert out["ok"] is True and out["result"] == "fail", out
     payload, err = RR.read_json(out["landingPath"])
     assert err is None and payload["exitCode"] == 3 and payload["result"] == "fail"
+    # the first fail does not halt: the same gate is pending again at the next attempt (UFR-3)
+    folded = TA._advance(d, tmp_path)
+    assert folded["ok"] is True and folded.get("terminal") is None, folded
+    mid = TA._state(d)
+    assert not mid.get("terminal")
+    assert mid["step"] == RD.P_VERIFY
+    assert "verify-rerun" in [dec["kind"] for dec in mid["decisions"]]
+    pend = TA._pending(d)
+    assert (pend["phase"], pend["attempt"]) == (RD.P_VERIFY, 1)
+
+    # the re-run lands at the fresh slot and fails again: the second fail halts
+    again = _verb(d, exit_code=3, output=b"1 failed\n")
+    assert again["ok"] is True and again["result"] == "fail" and again["attempt"] == 1, again
+    payload, err = RR.read_json(again["landingPath"])
+    assert err is None and payload["exitCode"] == 3 and payload["result"] == "fail"
     folded = TA._advance(d, tmp_path)
     assert folded["ok"] is True and folded.get("terminal") == "halted", folded
-    assert TA._state(d)["rounds"]["1"].get("verifyResult") == "fail"
+    end = TA._state(d)
+    assert end["terminal"] == "halted"
+    assert end["rounds"]["1"].get("verifyResult") == "fail"
 
 
 def test_the_command_runs_under_bash_in_a_real_process(tmp_path, adapters):
