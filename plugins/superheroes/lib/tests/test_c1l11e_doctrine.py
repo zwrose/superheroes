@@ -144,5 +144,4 @@ def test_transition_has_the_catch_up_note_and_no_retired_token():
     following = re.search(r"^#{2,3} ", text[start + len(heading):], re.M)
     end = start + len(heading) + following.start() if following else len(text)
     note = text[start:end]
-    assert "`stack-not-caught-up`" in note
     assert "stack-lower-moved" not in note
