@@ -141,7 +141,13 @@ def test_t1_a_carried_finding_a_later_commit_fixed_is_settled_fixed_and_the_reco
     first = s.next()
     state = s.state()
     assert first["action"] == RD.P_AUDITS and first["round"] == 1, first
-    assert state["config"]["returning"]["read"] == read and state["config"]["returning"]["lastReviewed"] == s.reviewed
+    returning = state["config"]["returning"]
+    assert returning["read"] == read
+    if read == "changed":
+        assert returning["lastReviewed"] == s.reviewed
+    else:
+        # C1-L11a's rule: an abandoned earlier record reads full and names no lastReviewed; the carried audit reads from returningAuditBase
+        assert returning["lastReviewed"] is None and state["config"]["returningAuditBase"] == s.reviewed
     key = finding[SC.FINDING_KEY_FIELD]
     # seeded under the stored key before the audit ran: a raised sequence and no disposition yet
     seeded = _row(state, key)
