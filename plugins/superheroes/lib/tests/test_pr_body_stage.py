@@ -312,6 +312,14 @@ def test_a_staged_fix_publishes_through_rest_against_a_stateful_cloud_shaped_gh(
     assert "did not copy" not in (PBS.record_line(sd) or "")
 
 
+def test_a_null_rest_body_reads_as_empty_and_publishes_an_audited_fix(tmp_path):
+    sd = _staged_fixed(tmp_path, body="")
+    gh = _StatefulCloudGh(None)
+    out = PBS.publish(sd, 7, runner=gh)
+    assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", None)
+    assert gh.live == FIXED
+
+
 @pytest.mark.parametrize("verdict", [None, "halted", "held", "stalled", "cannot-certify"])
 def test_E6_publish_before_a_converged_terminal_refuses_without_calling_gh(tmp_path, verdict):
     sd = _staged_fixed(tmp_path)
