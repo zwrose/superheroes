@@ -611,7 +611,7 @@ before the review runs, so the review runs in PR mode and writes its review reco
 record showing its reading, as Build lanes says. Review fixes stay orchestrator-typed, and work that needs an
 implementer dispatch is an escalation. An escalated build records every maker family in dispatch
 provenance. Every maker family the build records is passed to compose, so no maker's family is seated. Prefer keeping an escalated light build to one
-maker family. Re-review to convergence on that single seat, or honestly park on an open blocker.
+maker family. Re-review to convergence on that single seat within the same 4-round cap as the full lane, or honestly park on an open blocker.
 
 **Record each finding's handling in a dispositions table** in the PR body. Post the review results
 on the PR as a durable receipt that names the head commit it reviewed, so a later reader can tell
@@ -718,6 +718,8 @@ pre-handback review (§10, always the full loop):
 | docs / comments / mechanical | receipts only |
 | a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review, ending with a review record written on the head it reviewed |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full `review-code` loop again |
+
+**A returning light-lane PR is re-reviewed for what changed.** The returning-review decider answers `full` or `changed`; on `changed` the new session reads only what changed since the last reviewed commit.
 
 **The scoped pass writes a review record.** It ends with `review_record.py write` on the head it
 reviewed, as `skills/review-code/reference/review-record.md` says. The new record relists every

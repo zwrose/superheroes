@@ -119,6 +119,7 @@ and the failure then surfaces *after all the work is done*.
 - **A real independent review before handback** — the *shape* of review scales; its
   existence does not.
 - **Receipts before claims**, **disclosed degradations**, **CI**, **owner-only merges**.
+- **The round cap and the only-what-changed rule.** A review session runs at most 4 rounds in every lane, bar the one extra audit round the advisor may order. A PR that comes back is reviewed for what changed since the last reviewed commit, and gets a full review only when the returning-review decider answers `full`. The record writer refuses a light or micro record over the cap with `review-record-round-cap-exceeded`.
 
 **Single-reviewer lanes (light and micro).** The one reviewer comes from a different model family than every [maker](glossary.md#maker) of the change. Once the orchestrator (light) or the advisor (micro) types the change, that session is a maker, so a reviewer from its family is not independent. A review record that names no maker cannot show independence, so it reads not reviewed.
 
@@ -170,7 +171,7 @@ alignment with practice is **in-sample** — fitted to the same changes it valid
 
 In micro the advisor is the maker, so the advisor's independent vet-from-artifacts does
 not exist for that PR; the whole independent check is the one reviewer **outside every [maker's](glossary.md#maker)
-family** plus the owner's per-change authorization.
+family** plus the owner's per-change authorization. That reviewer runs under the same 4-round cap and the same only-what-changed rule as every lane (see *What never changes in any lane*).
 
 **Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
 itself** is the one named home for both halves of the independent check. The **reviewer
