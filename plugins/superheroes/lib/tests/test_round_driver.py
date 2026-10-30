@@ -6622,6 +6622,54 @@ def test_a_generation_6_session_whose_changed_test_keeps_its_original_is_left_al
     assert json.dumps(state, sort_keys=True) == before
 
 
+def test_a_generation_6_session_whose_only_changed_test_sits_in_to_verify_is_handed_back():
+    # axis: the guard reads the staged `_toVerify` copies and the ledger, the copies break-it-change rewrites
+    for fields in ({"_toVerify": [_changed_test_finding(kept=False)]},
+                   {"dispositionLedger": [_changed_test_finding(kept=False)]}):
+        state = _verify_fold_state()
+        state.update(sessionGeneration=6, round=1, step=RD.P_VERIFIERS, pending=None,
+                     findings=[], fixBatch=[], _auditTargets=[], **fields)
+        assert RD._finish_saved_previous_release(state) is True, fields
+        assert state["terminal"] == "handed-back"
+        assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_6_stretch_session_that_holds_its_fix_delta_and_test_facts_is_left_alone():
+    # axis: a stretch step is handed back only for missing evidence, never for the generation alone
+    target = dict(_changed_test_finding(kept=True), breakIt={"original": "x"})
+    state = _verify_fold_state()
+    state.update(sessionGeneration=6, round=2, step=RD.P_SCOPED, pending=None,
+                 _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
+                 _fixDeltaDiff="diff --git a/f.py b/f.py\n", _auditTargets=[target])
+    before = json.dumps(state, sort_keys=True)
+    assert RD._finish_saved_previous_release(state) is False
+    assert json.dumps(state, sort_keys=True) == before
+    state["_auditTargets"] = [_changed_test_finding(kept=True)]
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_6_hand_back_tells_the_reader_to_start_a_fresh_review():
+    # axis: the previous-release hand-back message names the way out — a fresh review
+    state = _verify_fold_state()
+    state.update(sessionGeneration=6, round=1, step=RD.P_APPLY_FIXES, pending=None,
+                 findings=[_changed_test_finding(kept=False)])
+    assert RD._finish_saved_previous_release(state) is True
+    assert "start a fresh review" in state["decisions"][-1]["detail"]
+
+
+def test_a_generation_6_session_outside_both_hand_back_cases_still_finishes():
+    # axis: a round-1 step, and a round-2 step outside audit / post-audits verify / scoped, are never handed back
+    for fields in ({"round": 1, "step": RD.P_AUDITS},
+                   {"round": 2, "step": RD.P_VERIFIERS},
+                   {"round": 2, "step": RD.P_VERIFY, "_verifyThen": None}):
+        state = _verify_fold_state()
+        state.update(sessionGeneration=6, pending=None, findings=[], fixBatch=[], _auditTargets=[], **fields)
+        before = json.dumps(state, sort_keys=True)
+        assert RD._finish_saved_previous_release(state) is False, fields
+        assert json.dumps(state, sort_keys=True) == before
+
+
 def test_a_current_generation_session_with_the_fields_is_untouched_by_the_hand_back():
     # axis: only a continuable earlier generation is handed back — a current-generation stretch or changed test is never touched
     for fields in ({"step": RD.P_SCOPED, "_fixDeltaDiff": "diff --git a/f.py b/f.py\n",
