@@ -55,6 +55,17 @@ def _fixture(name):
     return os.path.join(FIXTURES, name)
 
 
+@pytest.fixture(autouse=True)
+def _no_account_reading(monkeypatch):
+    """No account reads limited: the check asks `cloud_relay.account_limit`, which is replaced here
+    (the attribute is another order's, so it may be absent) so no test depends on a relay record."""
+    monkeypatch.setattr(
+        cloud_relay, "account_limit",
+        lambda repo_root, config_dir, *, env=None, now=None: {"ok": False, "reason": "config-dir-invalid"},
+        raising=False,
+    )
+
+
 def _write_listing(tmp_path, value, name="listing.json"):
     path = tmp_path / name
     path.write_text(value if isinstance(value, str) else json.dumps(value))
@@ -82,11 +93,11 @@ def first_pr(monkeypatch):
 
 def _seed_lane(
     repo, launch_id=LANE_ID, *, session_id=SESSION_ID, title=SESSION_TITLE, outcome="handback",
-    issue=656, environment="env-1", premise_extra=None,
+    issue=656, environment="env-1", premise_extra=None, started_ts=LANE_STARTED_TS,
 ):
     """An earlier cloud lane for the issue that started a session, ended with `outcome` (None: still running)."""
     assert ll.append(repo, {
-        "event": "reserved", "launchId": launch_id, "ts": LANE_STARTED_TS - 60, "schema": ll.SCHEMA,
+        "event": "reserved", "launchId": launch_id, "ts": started_ts - 60, "schema": ll.SCHEMA,
         "batchId": "wave-test", "repoId": ll.repo_identity(repo), "issue": issue,
         "surfaces": ["plugins/x-%s" % launch_id],
         "premise": dict({"issue": issue, "baseCommit": HEX40}, **(premise_extra or {})),
@@ -95,7 +106,7 @@ def _seed_lane(
         "configDir": "/cfg/acct",
     })
     started = {
-        "event": "started", "launchId": launch_id, "ts": LANE_STARTED_TS, "schema": ll.SCHEMA,
+        "event": "started", "launchId": launch_id, "ts": started_ts, "schema": ll.SCHEMA,
         "attempt": 1, "pid": 999999999, "logPath": "/tmp/log", "errPath": "/tmp/err",
         "cloudSessionName": title, "cloudSessionUrl": "https://claude.ai/code/session_x",
     }
@@ -963,18 +974,34 @@ def test_the_first_pr_is_read_once_for_every_lane_that_reaches_the_timing_test(t
     assert len(reads) == 1
 
 
-def test_a_lane_bound_to_the_branch_whose_branch_is_gone_from_the_remote_proceeds(tmp_path, first_pr):
-    # axis: a lane bound to the adopted branch by its premise is dropped when origin shows that branch gone, with no listing — see bite-proof record i2254_original_session
+def test_a_lane_bound_to_the_branch_whose_branch_is_gone_from_the_remote_refuses_unread(tmp_path, first_pr):
+    # axis: a lane bound to the adopted branch by its premise needs a session read like any other lane even when origin no longer has the branch, since deleting a branch does not stop its builder — see bite-proof record i2272_launcher
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
     _delete_remote_branch(repo)
     first_pr(None)
     result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+@pytest.mark.parametrize("listing_name", [
+    "list_page_complete_archived.json", "list_page_complete_failed.json",
+])
+def test_a_lane_bound_to_the_branch_whose_branch_is_gone_proceeds_on_a_listing_showing_it_ended(
+    tmp_path, first_pr, listing_name,
+):
+    # axis: a bound lane whose branch is gone is cleared by session evidence, a listing showing its session archived or failed
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    result, calls = _adopt(repo, tmp_path, _fixture(listing_name), branch=ADOPTED)
     _proceeds(result, calls)
 
 
 def test_a_gone_branch_lane_whose_session_the_listing_shows_live_refuses_live(tmp_path, first_pr):
-    # axis: a gone-branch lane needs no listing, but a supplied listing that shows its session live still refuses, since the deleted ref does not stop its builder — see bite-proof record i2254_original_session
+    # axis: a bound lane whose branch is gone is refused when a supplied listing shows its session live, since the deleted ref does not stop its builder — see bite-proof record i2272_launcher
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
     _delete_remote_branch(repo)
@@ -986,7 +1013,7 @@ def test_a_gone_branch_lane_whose_session_the_listing_shows_live_refuses_live(tm
 
 
 def test_a_gone_branch_lane_with_a_fix_order_relay_to_its_session_refuses_unread(tmp_path, first_pr, monkeypatch):
-    # axis: a gone-branch lane that a fix order has reopened gets no exemption and needs session evidence like any other lane — see bite-proof record i2254_original_session
+    # axis: a gone-branch lane that a fix order was sent to needs session evidence like any other lane — see bite-proof record i2272_launcher
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
     _delete_remote_branch(repo)
@@ -998,7 +1025,7 @@ def test_a_gone_branch_lane_with_a_fix_order_relay_to_its_session_refuses_unread
 
 
 def test_a_gone_branch_lane_whose_relay_read_fails_refuses_unread(tmp_path, first_pr, monkeypatch):
-    # axis: a gone-branch lane whose fix-order relay read is not ok gets no exemption — see bite-proof record i2254_original_session
+    # axis: a gone-branch lane whose fix-order relay read is not ok needs session evidence like any other lane — see bite-proof record i2272_launcher
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
     _delete_remote_branch(repo)
@@ -1011,21 +1038,21 @@ def test_a_gone_branch_lane_whose_relay_read_fails_refuses_unread(tmp_path, firs
     _refused_unread(repo, result, calls, "listing-not-given")
 
 
-def test_a_lane_bound_to_the_branch_by_its_adopts_number_is_dropped_when_the_branch_is_gone(tmp_path, first_pr):
-    # axis: a lane whose premise adopts the same pull request number is bound to the branch too (asked directly: a launch premise carrying `adopts` needs a stack)
+def test_a_lane_bound_to_the_branch_by_its_adopts_number_is_kept_whatever_the_first_pr_time(tmp_path, first_pr):
+    # axis: a lane whose premise adopts the same pull request number is bound to the branch too, so the handback timing that drops an unbound lane does not drop it (asked directly: a launch premise carrying `adopts` needs a stack)
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adopts": 77})
-    _delete_remote_branch(repo)
-    first_pr(None)
+    first_pr(time.time() + 3600)
     stamped = {"adoptsBranch": ADOPTED, "adopts": 77}
-    assert L._original_session_refusal(repo, 656, stamped, None, dict(os.environ)) is None
-    stamped = {"adoptsBranch": ADOPTED, "adopts": 78}
     reason, detail = L._original_session_refusal(repo, 656, stamped, None, dict(os.environ))
     assert (reason, detail["failedRead"]) == (TOKEN_UNREAD, "listing-not-given")
+    assert detail["launchIds"] == [LANE_ID]
+    stamped = {"adoptsBranch": ADOPTED, "adopts": 78}
+    assert L._original_session_refusal(repo, 656, stamped, None, dict(os.environ)) is None
 
 
 def test_a_lane_bound_to_the_branch_whose_branch_is_on_the_remote_refuses_live(tmp_path, first_pr):
-    # axis: a bound lane is dropped only when the branch is gone, so a branch still on the remote leaves the listing to say the lane is live — see bite-proof record i2254_original_session
+    # axis: a bound lane is refused when the listing shows its session live, whether or not the branch is still on the remote — see bite-proof record i2272_launcher
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
     first_pr(time.time() + 3600)
@@ -1036,7 +1063,7 @@ def test_a_lane_bound_to_the_branch_whose_branch_is_on_the_remote_refuses_live(t
 
 
 def test_a_bound_lane_with_its_branch_on_the_remote_and_no_listing_refuses_unread(tmp_path, first_pr):
-    # axis: a bound lane whose branch is still on the remote stays, and with no listing refuses unread — see bite-proof record i2254_original_session
+    # axis: a bound lane whose branch is still on the remote stays, and with no listing refuses unread — see bite-proof record i2272_launcher
     repo = _adopted_repo(tmp_path)
     _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
     first_pr(time.time() + 3600)
@@ -1045,22 +1072,8 @@ def test_a_bound_lane_with_its_branch_on_the_remote_and_no_listing_refuses_unrea
     assert result["launchIds"] == [LANE_ID]
 
 
-def test_a_bound_lane_stays_when_origin_cannot_be_asked(tmp_path, first_pr):
-    # axis: a branch read that fails (no origin) keeps a bound lane — see bite-proof record i2254_original_session
-    repo = _adopted_repo(tmp_path)
-    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
-    _git(repo, "remote", "remove", "origin")
-    first_pr(time.time() + 3600)
-    reason, detail = L._original_session_refusal(
-        repo, 656, {"adoptsBranch": ADOPTED}, None, dict(os.environ),
-    )
-    assert reason == TOKEN_UNREAD
-    assert detail["failedRead"] == "listing-not-given"
-    assert detail["launchIds"] == [LANE_ID]
-
-
 def test_a_live_fresh_lane_refuses_beside_a_bound_lane_whose_branch_is_gone(tmp_path, first_pr):
-    # axis: dropping the bound lane never excuses a different lane the listing shows live (asked directly: a running lane stops the refusal from being reserved)
+    # axis: a bound lane never hides a different lane the listing shows live (asked directly: a running lane stops the refusal from being reserved)
     repo = _adopted_repo(tmp_path)
     _seed_lane(
         repo, "lane-bound", session_id="session_01FixtureLaneB000000000",
@@ -1223,17 +1236,6 @@ def test_a_first_pr_read_with_gh_unable_to_run_or_no_github_origin_is_none(tmp_p
     assert _first_pr(repo) is None
     _git(repo, "remote", "remove", "origin")
     assert _first_pr(repo) is None
-
-
-def test_the_branch_read_tells_gone_from_present_from_unknown(tmp_path):
-    # axis: ls-remote with no line is gone, a line for exactly the branch is present, and a failed ask is unknown
-    repo = _cloud_repo(tmp_path)
-    branch = _branch(repo)
-    env = dict(os.environ)
-    assert L._adopted_branch_absent(repo, branch, env) is False
-    assert L._adopted_branch_absent(repo, branch + "-nope", env) is True
-    _git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
-    assert L._adopted_branch_absent(repo, branch, env) is None
 
 
 @pytest.mark.parametrize("entry", [None, {"fixOrder": None}])
