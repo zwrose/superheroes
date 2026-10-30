@@ -819,14 +819,14 @@ def test_a_relay_record_whose_time_does_not_parse_keeps_the_lane(tmp_path, first
     _refused_unread(repo, result, calls, "listing-not-given")
 
 
-def test_a_relay_record_before_the_handback_or_for_another_session_does_not_keep_the_lane(
+def test_a_relay_record_for_another_session_does_not_keep_the_lane(
     tmp_path, first_pr, monkeypatch,
 ):
-    # axis: only a fix order to this lane's own session after its handback opens it; an earlier one, or one to another session, does not
+    # axis: only a fix order to this lane's own session opens it, at any compose time; one to another session does not
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
     _relay_records(monkeypatch, [
-        {"session": SESSION_TITLE, "at": _utc_stamp(-3600)},
+        {"session": "issue-656-someone-else", "at": _utc_stamp(-3600)},
         {"session": "issue-656-someone-else", "at": _utc_stamp(60)},
         {"session": "issue-656-unparseable", "at": "yesterday"},
     ])

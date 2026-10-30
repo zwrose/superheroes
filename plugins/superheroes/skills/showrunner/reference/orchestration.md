@@ -400,10 +400,11 @@ such a step to the owner first.
 - **Reading or archiving a builders'-account session** goes to a one-off cloud helper session on
   that account. Start it as the launcher starts a cloud lane:
 
-      CLAUDE_CONFIG_DIR=<the builders' config dir> claude --cloud "<prompt>" --settings '{"remote":{"defaultEnvironmentId":"<a cloud environment of that account>"}}' --model haiku -n <name>
+      CLAUDE_CONFIG_DIR=<the builders' config dir> claude --cloud "<prompt>" --settings '{"remote":{"defaultEnvironmentId":"<a cloud environment of that account>"}}' --model haiku --permission-mode auto --disallowedTools AskUserQuestion -n <name>
 
   That is the flag set `engine_adapter.claude_cloud_builder_argv` builds (`--cloud`, `--settings`,
-  `--model`, then `-n` last). The command needs a pseudo-terminal, for example
+  `--model`, `--permission-mode auto`, `--disallowedTools AskUserQuestion`, then `-n` last); the
+  last two keep the unattended helper from stopping on a permission or question prompt. The command needs a pseudo-terminal, for example
   `script -q /dev/null …` on macOS. A cloud session's tools include `get_session`, `list_sessions`
   and `archive_session`; a background helper has none of them. The prompt names the session ids,
   asks for `get_session` on each, and asks the helper to post the raw results as one JSON array on
@@ -411,11 +412,14 @@ such a step to the owner first.
   that comment through REST, saves the array to a file, and passes it with `--cloud-sessions-file`.
   The posted copy is the helper's transcription of its tool output. A row that clears a lane
   (archived or failed) counts only when a second helper read of that session, posted as its own
-  comment, shows the same `session_status`, `status_bucket` and `archived` values for it; on any
+  comment, shows the same status, status bucket and archived values for it; on any
   disagreement, or with no second read, keep the unread refusal.
-  A complete `list_sessions` page proves a session gone only when its rows carry `environment_id`
-  and meet the checks in § Adoption mechanics; when they do not, read each lane with
-  `get_session`. When a live lane never answers the fix order or the ask-to-push, the same
+  A `list_sessions` page the helper posts is a transcription too, and a dropped row cannot be
+  detected, so it never proves a session gone: a lane missing from a helper-posted page stays
+  unproven and the advisor reads it with `get_session` (the two-read agreement rule then applies to
+  the row that clears it). Only a complete page the advisor's own session read itself proves a
+  session gone, and only when its rows carry `environment_id` and meet the checks in § Adoption
+  mechanics; when they do not, read each lane with `get_session`. When a live lane never answers the fix order or the ask-to-push, the same
   helper archives it; an archive is reversible with `unarchive_session`. This is the advisor's own
   step: never hand a session read or this archive to the owner.
 - **Anything else** (reading a background session's permission mode, messaging or stopping a

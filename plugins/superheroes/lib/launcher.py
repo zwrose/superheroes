@@ -3081,19 +3081,6 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _relay_sent_ts(stamp):
-    """Epoch seconds of a fix-order relay record's ``at`` (UTC, ``%Y-%m-%dT%H:%M:%SZ``, with or
-    without fractional seconds, as the relay writes it), or ``None`` when it is not that."""
-    if not isinstance(stamp, str):
-        return None
-    for form in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
-        try:
-            return datetime.strptime(stamp, form).replace(tzinfo=timezone.utc).timestamp()
-        except ValueError:
-            continue
-    return None
-
-
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     """None, or ``(reason, detail)``: an adoption must not launch beside a live builder that could still write the adopted branch.
 
@@ -3104,7 +3091,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     ambiguous keeps it: a lane bound to the adopted branch by its premise is dropped when
     ``origin`` shows that branch gone; any other lane is dropped when it handed back before the
     branch's first pull request opened and neither a ``vet not-ready`` nor a fix-order relay record
-    reopened it since, since a pull request on the branch before the handback would itself be the
+    addressed to it (at any compose time) reopened it, since a pull request on the branch before the handback would itself be the
     first, so the lane's pull request was on another branch and nothing sends it back to this one.
     For the lanes left, the recorded host listing (``sessions_file``) must show the lane's session
     archived, failed or gone: a row that is none of those is live, and a listing that cannot be
@@ -3207,15 +3194,14 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                 continue
             reopened = False
             for relay in relays.get("records") or []:
-                # axis: a fix-order relay record whose target session is unreadable may have been sent to this lane, so it is matched against every handed-back lane
+                # axis: a fix-order relay record whose target is not a non-empty string is ambiguous and may have been sent to this lane, so it is matched against every handed-back lane
+                # axis: a fix order addressed to the lane's session keeps the lane whatever its compose time, since delivery can follow a later handback — see bite-proof record i2254_original_session
                 if isinstance(relay, dict) and (
                     not isinstance(relay.get("session"), str)
+                    or not relay.get("session")
                     or relay.get("session") == info["cloudSessionName"]
                 ):
-                    sent = _relay_sent_ts(relay.get("at"))
-                    # axis: a fix order composed for the lane's session after the handback, or one whose send time does not parse, reopens the lane and it stays — see bite-proof record i2254_original_session
-                    if sent is None or sent > handback:
-                        reopened = True
+                    reopened = True
             if reopened:
                 kept[launch_id] = info
                 continue
