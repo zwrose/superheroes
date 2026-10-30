@@ -228,7 +228,7 @@ def test_t3_a_false_carried_finding_the_verifier_refutes_ends_shown_wrong_with_n
     state = s.state()
     row = _row(state, key)
     assert row["disposition"] == "refuted" and row["grade"]["verdict"] == "wrong", row
-    assert _outcomes(_account_findings(s, state, panel_ran=record is not None), key) == ["shown-wrong"]
+    assert _outcomes(_account_findings(s, state), key) == ["shown-wrong"]
 
 
 # --- T4: the fail-closed edges --------------------------------------------------------------------------------------------
@@ -287,7 +287,7 @@ def test_t4_e4_two_carried_findings_with_one_key_are_one_ledger_row(tmp_path, mo
     assert [SC.finding_identity_key(r) for r in state[SC.DISPOSITION_LEDGER_KEY]] == [key]
     assert _carried(state)["keys"] == [key] and [t["id"] for t in first["payload"]["targets"]] == [key]
     n, _seen = _run(s, _respond(audit="discharged"))
-    assert _outcomes(_account_findings(s, s.state(), panel_ran=False), key) == ["fixed"]
+    assert _outcomes(_account_findings(s, s.state()), key) == ["fixed"]
 
 
 def test_t4_e5_a_carried_finding_on_a_proven_copy_is_not_audited_and_is_sent_back(tmp_path, monkeypatch):
@@ -357,3 +357,74 @@ def test_t5_no_carried_findings_runs_the_returning_round_exactly_as_it_did(tmp_p
     for state in (plain_state, decided_state):
         assert "carried" not in state["rounds"]["1"] and "returningCarried" not in state["config"]
         assert not state.get(SC.DISPOSITION_LEDGER_KEY) and "_carriedToVerify" not in state and "_auditFirst" not in state
+
+
+# --- E1 (panel-free record): a returning session that read nothing holds nothing a reviewer ran ------------------------------
+
+def test_e1_a_changed_session_with_an_empty_surface_completed_by_hand_writes_no_record(tmp_path, monkeypatch):
+    def catch_up(repo):  # main moves and is merged: the change since the last reviewed commit has nothing to read
+        repo.moved = repo.main_commit("docs/other.md", "other\n")
+        repo.merge_main()
+
+    s = TS.Session(tmp_path, monkeypatch, change=catch_up, base_after=lambda repo: repo.moved)
+    answer = s.next()
+    assert answer["action"] == RD.P_TERMINAL and answer["payload"]["verdict"] == "converged", answer
+    state = s.state()
+    assert state["rounds"]["1"]["scopedFinder"] == "skipped-empty-surface", state["rounds"]["1"]
+    fake = TRRS.Fake(head=s.head)
+    out = RS.write_from_session(s.dir, TRRS.put_extras(tmp_path, TRRS.extras(ci="green")), s.repo.root, fake.readers())
+    # nothing ran, so there is no reviewer row to list: the writer refuses, and posts nothing
+    assert out["ok"] is False and out["reason"] == RS.UNSUPPORTED, out
+    assert fake.writes == [] and fake.comments == [], (fake.writes, fake.comments)
+
+
+# --- C (finding C): `_with_carried` merges a fresh report into the carried finding it matches ---------------------------------
+
+BREAK_IT_BLOCK = "break-it-test v1\npath: tests/test_x.py\nrun: python tests/test_x.py\n---\nassert True\n"
+
+
+def _compiled(held, **over):
+    """A fresh report of the finding ``held`` carries: the same place and title, no stored key."""
+    row = {key: held[key] for key in ("id", "title", "file", "line")}
+    row.update(severity="Important", consequence=TRD._CONSEQUENCE)
+    row.update(over)
+    assert RD.repeat_marks.opaque_key(row) == held[SC.FINDING_KEY_FIELD]
+    return row
+
+
+def test_c1_a_held_minor_code_quality_finding_merges_with_a_fresh_important_real_report_under_the_held_key():
+    held = _finding(27, severity="Minor", consequenceKind="code-quality")
+    fresh = _compiled(held, consequenceKind="real")
+    state = {"_carriedToVerify": [held]}
+    [row] = RD._with_carried(state, [fresh])
+    assert row["severity"] == "Important" and row["consequenceKind"] == "real", row
+    assert row[SC.FINDING_KEY_FIELD] == held[SC.FINDING_KEY_FIELD]
+    assert "_carriedToVerify" not in state
+
+
+def test_c2_a_held_important_finding_merges_with_a_fresh_minor_report_and_stays_important():
+    held = _finding(27)
+    fresh = _compiled(held, severity="Minor")
+    [row] = RD._with_carried({"_carriedToVerify": [held]}, [fresh])
+    assert row["severity"] == "Important" and row[SC.FINDING_KEY_FIELD] == held[SC.FINDING_KEY_FIELD], row
+
+
+def test_c3_a_fresh_report_under_another_key_is_kept_beside_the_held_finding():
+    held = _finding(27)
+    other = {"id": "F-other", "title": "another defect", "severity": "Important", "file": SHARED, "line": 3,
+             "consequence": TRD._CONSEQUENCE}
+    assert RD.repeat_marks.opaque_key(other) != held[SC.FINDING_KEY_FIELD]
+    rows = RD._with_carried({"_carriedToVerify": [held]}, [other])
+    assert sorted(r["title"] for r in rows) == sorted([held["title"], other["title"]]), rows
+    assert [r for r in rows if r["title"] == held["title"]] == [held]
+
+
+def test_c4_a_fresh_report_that_carries_a_break_it_test_keeps_it_when_merged_into_the_held_finding():
+    held = _finding(27, severity="Minor", consequenceKind="code-quality")
+    run = {"outcome": "failed", "reason": None, "exitCode": 1, "output": "", "path": "tests/test_x.py", "head": "h"}
+    fresh = _compiled(held, consequenceKind="real", suggestion=BREAK_IT_BLOCK)
+    fresh[RD.break_it.RUN_FIELD] = run
+    assert RD.break_it.carries_test(fresh)
+    [row] = RD._with_carried({"_carriedToVerify": [held]}, [fresh])
+    assert row["suggestion"] == BREAK_IT_BLOCK and row[RD.break_it.RUN_FIELD] == run, row
+    assert row["severity"] == "Important" and row[SC.FINDING_KEY_FIELD] == held[SC.FINDING_KEY_FIELD], row
