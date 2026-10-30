@@ -408,38 +408,15 @@ def _stand_down(age, cid=7):
     return _comment(cloud_builder.stand_down_text("https://github.com/o/r/issues/17#issuecomment-9"), age=age, cid=cid)
 
 
-def test_5_a_stand_down_comment_after_the_lanes_start_is_stop_evidence_and_is_recorded_like_a_handover(w, monkeypatch):
-    # axis: the stand-down comment is the builder's own word that it stopped — see bite-proof record i2272_recover
-    _lane(w, "l1")
-    w.gh.comments = [_stand_down(500)]
-    calls = _limit(monkeypatch, _reading(limited=False))
-    out = _assess(w, state="idle")
-    assert (out["verdict"], out["evidence"]) == ("stopped", "stand-down") and calls == []
-    assert out["stoppedAt"] == pytest.approx(time.time() - 500, abs=30)
-    entry = _state(w)["assessed"]["l1"]
-    assert (entry["verdict"], entry["evidence"], entry["handoverSha"]) == ("stopped", "stand-down", None)
-    assert entry["stoppedAt"] == out["stoppedAt"] and "limitResetsAt" not in entry
-
-
-def test_5_a_stand_down_comment_from_before_the_lanes_start_is_ignored(w, monkeypatch):
+@pytest.mark.parametrize("age", [500, 9000])
+@pytest.mark.parametrize("state", ["idle", "unread"])
+def test_5_a_stand_down_comment_is_not_stop_evidence(w, monkeypatch, age, state):
+    # a stand-down comment may be an older builder's, posted after a replacement started, so it never stops the lane
     _lane(w, "l1", start_age=7200)
-    w.gh.comments = [_stand_down(9000)]
+    w.gh.comments = [_stand_down(age)]
     _limit(monkeypatch, _reading(limited=False))
-    out = _assess(w, state="idle")
+    out = _assess(w, state=state)
     assert out["verdict"] != "stopped" and out["evidence"] != "stand-down"
-
-
-def test_5_a_stand_down_stop_is_resumed_by_the_successor_after_the_limit_reset(w, monkeypatch):
-    _commit_branch(w, LANE, w.base, "a")
-    _lane(w, "l1", premise=_no_stack(w))
-    w.gh.comments = [_stand_down(500)]
-    _limit(monkeypatch, _reading(limited=False))  # the limit has reset
-    assert _assess(w, state="unread")["evidence"] == "stand-down"
-    _died(w, "l1")
-    calls = _limit(monkeypatch, _reading(limited=False))
-    got = CR.successor(w.root, "l1", repo=REPO, run=_runner(w, pulls={LANE: [5]}))
-    assert got["ok"] is True and got["branch"] == LANE and "standDown" not in got["premise"]
-    assert calls == []  # only account-limited evidence is re-read
 
 
 def test_5_limit_relief_edges():

@@ -13,8 +13,7 @@ to push, the successor's premise, and the board's words.
 
 A successor is composed only for a cloud lane the launch ledger records as ended and `assess` recorded as
 `stopped` (positive stop evidence: the session failed, was archived or is gone, or the lane's own account
-is limited and the lane started before the limit was recorded; or a confirmed handover; or the builder's own
-stand-down comment), so no path through
+is limited and the lane started before the limit was recorded; or a confirmed handover), so no path through
 this module helps two builders work one issue. Every verb checks its inputs through the one `_inputs`.
 `assess` also answers `parked` (the issue holds a builder stop or park newer than the lane's last pushed
 work; never a recovery step).
@@ -471,8 +470,6 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     handover = found and {"commentId": found["commentId"], "url": found["url"], "sha": found["parsed"],
                           "createdAt": found["createdAt"]}
     out["handover"], out["handoverRead"] = handover, "ok" if read else "failed"
-    cb = _sib("cloud_builder")
-    stood_down = _newest(comments, start, lambda body: cb._opens_with(body, cb.STAND_DOWN_HEADER)) if read else None
     fresh = (session_state in _LIVE_STATES and _is_number(age)
              and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
     if not fresh:
@@ -488,9 +485,6 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         out["verdict"], out["evidence"] = "stopped", "session-" + session_state
     elif handover is not None:
         out["verdict"], out["evidence"] = "stopped", "handover"
-    # axis: a stand-down comment posted at or after the lane's start is the builder's own word that it stopped, so a takeover interrupted after the supersession notice is resumed from it once the limit has reset — see bite-proof record i2272_recover
-    elif stood_down is not None:
-        out["verdict"], out["evidence"] = "stopped", "stand-down"
     # axis: the account's limit holding is stop evidence for a lane that started before it, but never over a fresh, parked, stopped or handed-over lane — see bite-proof record i2272_recover
     elif (limit := _limit_reading(repo_root, info, reserved, start, env, now)) is not None:
         out["verdict"], out["evidence"] = "stopped", "account-limited"
@@ -509,8 +503,6 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         return _withdrawn(repo_root, launch_id, out, env)
     if out["evidence"] == "handover":
         out["stoppedAt"] = _epoch(handover["createdAt"])
-    elif out["evidence"] == "stand-down":
-        out["stoppedAt"] = _epoch(stood_down["createdAt"])
     entry = {"verdict": "stopped", "evidence": out["evidence"], "at": _iso(now), "stoppedAt": out["stoppedAt"],
              "handoverSha": handover["sha"] if handover else None}
     if out["evidence"] == "account-limited":

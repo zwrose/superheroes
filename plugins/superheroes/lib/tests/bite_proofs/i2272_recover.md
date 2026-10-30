@@ -458,15 +458,7 @@ FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_4_the_helper_re
 
 ## Round 7 — the stand-down comment leg and the shared eligibility rule
 
-**(r7a) the stand-down comment leg.** Guarded element: `cloud_recover.assess`, the `elif stood_down is not None:` leg right after the handover leg (a comment opening with `cloud_builder.STAND_DOWN_HEADER`, created at or after the lane's start, is stop evidence `stand-down`). Neutralization: `elif stood_down is not None:` became `elif False and stood_down is not None:`. Command: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_recover.py -k test_5 -q -p no:randomly`.
-
-Red (final lines):
-```
-FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_a_stand_down_comment_after_the_lanes_start_is_stop_evidence_and_is_recorded_like_a_handover
-FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_a_stand_down_stop_is_resumed_by_the_successor_after_the_limit_reset
-2 failed, 2 passed, 56 deselected in 14.06s
-```
-Restore: `False and ` removed by the inverse edit. Green (final line): `4 passed, 56 deselected in 1.86s`.
+**(r7a) removed: the stand-down comment leg.** Round 8 removed the `stand-down` stop-evidence leg from `cloud_recover.assess` (and its tests), so this entry no longer guards anything. A stand-down comment is not stop evidence: an older builder can post it after its replacement started, and it names no launch of the lane being assessed. A takeover interrupted after the supersession notice is resumed from the limit while it holds; after the reset the cloud helper archives the old session, so `assess` reads `archived` (orchestration.md, step 4 of recovering a cloud lane). `test_5_a_stand_down_comment_is_not_stop_evidence` pins that a stand-down comment never makes a lane `stopped`.
 
 **(r7b) the shared rule's stamp test.** Guarded element: `cloud_recover._stand_down_stamped` (used by `limit_relief`, which the launcher and `_limit_reading` both call), the `not isinstance(stand_down, bool)` exclusion. Neutralization: the clause was removed. Command: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_limit_relief_edges plugins/superheroes/lib/tests/test_i2272_launcher.py::test_only_a_stand_down_stamp_of_one_relieves_a_limited_lane -q -p no:randomly`.
 
