@@ -229,7 +229,11 @@ def _read_live(runner, pr):
         parsed = json.loads(out)
     except (TypeError, ValueError):
         return None
-    body = parsed.get("body") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict) or "body" not in parsed:
+        return None
+    body = parsed["body"]
+    if body is None:  # REST returns null for an empty description
+        return ""
     return body if isinstance(body, str) else None
 
 

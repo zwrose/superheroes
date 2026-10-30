@@ -156,6 +156,11 @@ def test_a_passing_command_lands_pass_and_advance_folds_it(tmp_path, adapters):
                           text=True, timeout=30)
     if head.returncode == 0:
         expected["headSha"] = head.stdout.strip()
+    # and a digest of the tracked working-tree changes, read the same way
+    diff = subprocess.run(["git", "diff", "HEAD", "--binary", "--no-ext-diff"], cwd=os.getcwd(),
+                          capture_output=True, timeout=30)
+    if diff.returncode == 0:
+        expected["treeSha"] = hashlib.sha256(diff.stdout).hexdigest()
     assert payload == expected
     # the payload's extra keys do not trip the shape guard: a recognised `result` is all it asks
     assert RP.verify_result_fault(payload) is None

@@ -6104,6 +6104,13 @@ def _verify_rerun_heads_moved(first_head, artifact, head, moved):
     return None
 
 
+def _verify_artifact_trees(artifact):
+    """The working-tree digests a verify run read (before and, when it moved, after); unknown
+    sides are left out."""
+    return [t for t in (artifact.get("treeSha"), artifact.get("treeShaAfter"))
+            if isinstance(t, str) and t]
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -6127,7 +6134,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     if first is None:
         if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
             state["_verifyRerun"] = {"run": _verify_run_row(artifact), "head": head,
-                                     "headSource": head_source}
+                                     "headSource": head_source,
+                                     "trees": _verify_artifact_trees(artifact)}
             _decision(state, "verify-rerun",
                       "verify gate failed once at head %s — re-running the same check once"
                       % (head or "unknown"))
@@ -6153,6 +6161,19 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
             _decision(state, "verify-rerun-head-moved",
                       "verify re-run ran at a different head (%s then %s) — halt, certification "
                       "withheld" % moved_heads)
+            state["step"] = P_TERMINAL
+            return
+        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
+        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
+        if result == "pass" and len(trees) > 1:
+            _set_terminal(state, "halted")
+            state["certification"] = {
+                "shape": None,
+                "reason": "verify re-run ran on changed working-tree contents — halt, "
+                          "certification withheld"}
+            _decision(state, "verify-rerun-tree-changed",
+                      "verify re-run ran on changed working-tree contents — halt, certification "
+                      "withheld")
             state["step"] = P_TERMINAL
             return
     if result == "fail":
@@ -13447,6 +13468,21 @@ def _verify_run_head(cwd):
     return head if _usable_verify_head(head) else None
 
 
+def _verify_run_tree(cwd):
+    """A digest of the tracked working-tree changes against HEAD in `cwd` (the empty diff digests
+    too), or None when it cannot be read. The verify command runs against the working tree, so a
+    retry at one head can still run on different contents."""
+    try:
+        done = subprocess.run(["git", "diff", "HEAD", "--binary", "--no-ext-diff"], cwd=cwd,
+                              stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=_VERIFY_HEAD_READ_SECONDS)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return hashlib.sha256(done.stdout).hexdigest()
+
+
 def _run_verify_execute(session_dir, claim, timeout, run):
     """Run the bound verify command outside the lock. Returns (payload, refusal)."""
     rnd, attempt = claim["slot"]
@@ -13456,6 +13492,7 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     cwd = _gate_policy_repo_root(claim["config"])
     exit_code = None
     head_before = _verify_run_head(cwd)
+    tree_before = _verify_run_tree(cwd)
     try:
         done = run([claim["bash"], "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
@@ -13491,6 +13528,11 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     head_after = _verify_run_head(cwd) if head_before is not None else None
     if head_after is not None and head_after != head_before:
         payload["headShaAfter"] = head_after
+    if tree_before is not None:
+        payload["treeSha"] = tree_before
+        tree_after = _verify_run_tree(cwd)
+        if tree_after is not None and tree_after != tree_before:
+            payload["treeShaAfter"] = tree_after
     return payload, None
 
 
