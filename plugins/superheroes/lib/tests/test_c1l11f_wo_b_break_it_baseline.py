@@ -149,6 +149,13 @@ def test_b1_a_real_content_change_of_the_explained_version_is_changed_unexplaine
     assert moved["match"] == "missing", moved
 
 
+def test_b1_an_explained_test_at_its_path_is_judged_before_a_relocated_reviewer_copy(tmp_path):
+    # the audited test must be the one the final kept check runs: the changed test at the recorded path
+    facts = _facts(tmp_path, {TEST_PATH: WEAKER_TEST, OTHER_PATH: ROLE_TEST}, _explained(WEAKER_TEST))
+    assert facts["match"] == "changed-explained", facts
+    assert facts["committedTest"] == WEAKER_TEST and "committedPath" not in facts
+
+
 def test_b1_an_explained_version_with_no_reason_is_changed_unexplained(tmp_path):
     finding = C10._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST)
     assert _facts(tmp_path, {TEST_PATH: FIXED_TEST_REFORMATTED}, finding)["match"] == "changed-unexplained"

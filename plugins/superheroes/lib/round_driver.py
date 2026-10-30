@@ -7606,8 +7606,16 @@ def _break_it_target_facts(state, config, finding, head):
         return _locate_in_final_diff(config, head, version, path, diff_files, command)
 
     # axis: the reviewer's version matches the committed test up to formatting, title and relocation, not by exact bytes alone — see bite-proof record c1l11f_wo_b_break_it_baseline
-    hit = held_as(reviewer)
-    if hit is not None:
+    here = None
+    if committed is not None and why is not None and not (committed == reviewer):
+        # axis: a test at the recorded path that is the explained version (exact or body-equivalent at its own path) is judged before any relocated copy of the reviewer's, so the audit judges the test the final kept check runs — see bite-proof record c1l11f_wo_b_break_it_baseline
+        found_here = held_as(current)
+        if found_here is not None and found_here[1] == path:
+            here = found_here
+    hit = here if here is not None else held_as(reviewer)
+    if here is not None:
+        match = audits.MATCH_CHANGED_EXPLAINED
+    elif hit is not None:
         match = audits.MATCH_SAME
     else:
         # axis: the explained version matches up to the same equivalence, and only with a reason recorded after the baseline — see bite-proof record c1l11f_wo_b_break_it_baseline
