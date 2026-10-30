@@ -160,6 +160,10 @@ Before the ready marking, also run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/vet_sl
 catch-up step (`rubric/native-stacks.md` § How a stack stays current), while the PR's pushed head is
 behind its lower layer's current head, or `stack-lower-unreadable` when that head cannot be read.
 
+A stacked light-lane layer has no draft stage of its own, so it takes one for this check: push, open
+the PR as a draft, run `vet_slot.py handback --pr <n> --repo <owner/name>` on it, fix and re-run until
+it prints `"ok": true`, then mark it ready.
+
 When a PR closes or is superseded before its vet, carry its follow-ups into the superseding build
 record, each under the next unused FU number (in the marker too), with its origin as text:
 `- FU<n> [<class>] (from #N FU<m>) <text>`.
