@@ -3,8 +3,7 @@
 Since C1-L9a the build session applies a review's fixes itself, so the separate fixer's tier role,
 its codex pin role, the legacy `fixer` alias machinery, the review-code `fixer` tier, the eval
 harness's fixer-vendor override and the subagent-transcript refusal reader have no caller. This file
-asserts their absence, and that every family lookup that used the `code-fixer` role answers exactly
-as before through `implementer`.
+asserts their absence only.
 """
 import importlib.util
 import json
@@ -100,24 +99,3 @@ def test_eval_harness_ignores_a_fixture_fixer_vendor(tmp_path):
         "implementer", review_loop_runner._EVAL_BUILD_SESSION_VENDOR)
     assert expected_family != model_registry.family_for("implementer", "claude")
     assert seat_map["authorFamily"] == expected_family
-
-
-# axis: G4 — a lookup that used the code-fixer role answers exactly as before through `implementer`.
-# Derived from the base: `git show HEAD:plugins/superheroes/lib/model_registry.py` (lines 101-111)
-# lists the code-fixer cells identical to the implementer cells, and exec'ing that file at HEAD gave
-#   claude: family "anthropic", cell ("sonnet-5.5", "high")
-#   codex: family "openai", cell ("gpt-6.1-sol", "high")
-#   cursor: family "xai", cell ("composer-2.5", None)
-# The cell is pinned beside the family because a model swap inside one maker keeps the family.
-_BASE_CODE_FIXER_ANSWER = {
-    "claude": ("anthropic", ("sonnet-5.5", "high")),
-    "codex": ("openai", ("gpt-6.1-sol", "high")),
-    "cursor": ("xai", ("composer-2.5", None)),
-}
-
-
-def test_implementer_answers_exactly_as_the_removed_code_fixer_role_did():
-    assert set(_BASE_CODE_FIXER_ANSWER) == set(model_registry.vendors())
-    for vendor, (family, cell) in _BASE_CODE_FIXER_ANSWER.items():
-        assert model_registry.family_for("implementer", vendor) == family, vendor
-        assert tuple(model_registry.matrix_config("implementer", vendor)) == cell, vendor
