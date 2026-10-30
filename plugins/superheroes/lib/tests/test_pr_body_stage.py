@@ -1,11 +1,6 @@
 """#2083: a review finding about the PR body is fixed in a staged copy inside the review session,
 audited there, and copied onto the PR only by `pr_body_stage.publish`, which publishes only bytes an
-audit discharged and never overwrites a live body that moved. Fixers never write to GitHub.
-
-The fixer-refusal path (a `gh pr edit` the sandbox refused, reported in the fixer's round record) reaches
-the review account's `commandRefusals` through the existing end-to-end tests
-`test_review_record_refusals.py::test_the_account_carries_each_refusal_tagged_with_its_round` and
-`::test_the_written_record_carries_the_refusal_in_json_and_summary`; they are cited, not duplicated.
+audit discharged and never overwrites a live body that moved. The build session never writes to GitHub.
 
 Bite-proof record: wo_pr_body_stage_2083
 """
@@ -143,7 +138,7 @@ def test_the_citation_is_the_name_the_sanitized_view_gives_the_pr_body():
 def test_the_fixer_copy_lives_in_the_fixer_landing_dir_under_the_reserved_prefix(tmp_path):
     sd = _session(tmp_path)
     path = PBS.fixer_copy_path(sd, 2)
-    assert path == os.path.join(record_paths.landing_dir(sd, 2, "dispatch-fixer"), "_pr-body.md")
+    assert path == os.path.join(record_paths.landing_dir(sd, 2, PBS.FIXER_PHASE), "_pr-body.md")
     assert os.path.basename(path).startswith(record_paths.RESERVED_PREFIX)
 
 
@@ -351,7 +346,7 @@ def test_the_highest_numbered_audited_round_is_the_one_that_counts(tmp_path):
 def test_E11_a_live_body_that_moved_since_the_original_is_never_overwritten(tmp_path):
     # axis: a live body that moved is never overwritten — see bite-proof record wo_pr_body_stage_2083
     sd = _staged_fixed(tmp_path)
-    gh = FakeGh(views=["a fixer ran gh pr edit and wrote this"])
+    gh = FakeGh(views=["someone ran gh pr edit and wrote this"])
     out = PBS.publish(sd, 7, runner=gh)
     assert (out["ok"], out["reason"]) == (False, "pr-body-moved")
     assert gh.edits() == []
@@ -498,7 +493,7 @@ def _driver_state(tmp_path, **cfg):
     return state
 
 
-def _placeholders(phase, sd, state, seat="fixer", payload=None, materialize=True):
+def _placeholders(phase, sd, state, seat="t1", payload=None, materialize=True):
     paths = RD._order_paths(sd, 1, phase, 0, seat, 0, True)
     return RD._order_placeholders(phase, seat, 0, state, state["config"], payload or {}, sd, 1, paths,
                                   RD.CHANNEL_FILE, materialize_shared_inputs=materialize), paths
@@ -512,90 +507,89 @@ def _render(phase, seat, ph, paths, host_seat=True):
     return text
 
 
-@pytest.mark.parametrize("host_seat", [True, False], ids=["host-seat", "engine-seat"])
-def test_the_fixer_order_names_the_staged_copy_and_forbids_writing_to_github(tmp_path, host_seat):
-    # axis: the fixer template carries the staged-copy line and the prohibition — see bite-proof record wo_pr_body_stage_2083
-    sd = _session(tmp_path)
-    state = _driver_state(tmp_path)
-    ph, paths = _placeholders(RP.P_FIXER, sd, state)
-    text = _render(RP.P_FIXER, "fixer", ph, paths, host_seat=host_seat)
-    assert "- PR body (staged copy): %s" % PBS.fixer_copy_path(sd, 1) in text
-    assert "Never write to GitHub: no `gh pr edit`, no `gh api` write" in text
-    assert "no `gh pr comment`" in text and "`gh issue comment`" in text
-    assert "is fixed only in the staged copy named in Input" in text
-
-
-@pytest.mark.parametrize("mode,pr_json,reason", [
-    ("branch", False, "branch mode"), ("branch", True, "branch mode"), ("pr", False, "no-pr"),
-    ("pr", None, "pr-json-unparseable"),
+@pytest.mark.parametrize("mode,pr_json", [
+    ("branch", False), ("branch", True), ("pr", False), ("pr", None),
 ], ids=["branch", "branch-with-pr-json", "pr-without-pr-json", "pr-with-bad-pr-json"])
-def test_E1_a_session_without_a_staged_body_says_so_and_escalates(tmp_path, mode, pr_json, reason):
+def test_E1_a_session_without_a_staged_body_hands_the_step_no_pr_body_path(tmp_path, mode, pr_json):
     sd = _session(tmp_path, mode=mode, pr_json=bool(pr_json))
     if pr_json is None:
         _write(os.path.join(sd, "pr.json"), "{broken")
     state = _driver_state(tmp_path)
-    ph, paths = _placeholders(RP.P_FIXER, sd, state)
-    text = _render(RP.P_FIXER, "fixer", ph, paths)
-    assert "- PR body (staged copy): no staged PR body (%s); a finding about a PR body is escalated, " \
-           "never fixed anywhere else" % reason in text
-    assert not os.path.exists(PBS.fixer_copy_path(sd, 1)) and "prBodyFix" not in state["rounds"].get("1", {})
+    state["_fixBatch"] = []
+    fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
+    assert "prBodyPath" not in fields and "prBodyFix" not in state["rounds"].get("1", {})
 
 
-def test_E5_several_batch_attempts_in_one_round_seed_once_and_record_before_once(tmp_path):
+def test_E1_a_staged_body_is_the_step_s_pr_body_path_and_is_the_file_itself(tmp_path):
     sd = _session(tmp_path)
+    PBS.stage(sd)
     state = _driver_state(tmp_path)
-    first, _ = _placeholders(RP.P_FIXER, sd, state)
-    assert first["PR_BODY_LINE"] == PBS.fixer_copy_path(sd, 1)
-    assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": None}
-    _write(PBS.fixer_copy_path(sd, 1), FIXED)
-    assert PBS.collect_fixer_copy(sd, 1) == sha(FIXED)  # batch 1 folded
-    second, _ = _placeholders(RP.P_FIXER, sd, state)  # batch 2's order
-    assert second["PR_BODY_LINE"] == PBS.fixer_copy_path(sd, 1)
-    assert _read(PBS.fixer_copy_path(sd, 1)) == FIXED
-    assert state["rounds"]["1"]["prBodyFix"]["before"] == sha(BODY)
-
-
-@pytest.mark.parametrize("phase,seat,payload", [
-    (RP.P_FIXER, "fixer", None),
-    (RP.P_AUDITS, "t1", {"targets": [{"id": "t1"}]}),
-], ids=["fixer", "audits"])
-def test_E16_a_render_only_order_names_paths_and_creates_nothing(tmp_path, phase, seat, payload):
-    sd = _session(tmp_path)
-    state = _driver_state(tmp_path)
-    ph, _ = _placeholders(phase, sd, state, seat=seat, payload=payload, materialize=False)
-    p = PBS.paths(sd)
-    if phase == RP.P_FIXER:
-        assert ph["PR_BODY_LINE"] == PBS.fixer_copy_path(sd, 1)
-    else:
-        assert p["staged"] in ph["PR_BODY_LINE"] and p["original"] in ph["PR_BODY_LINE"]
-    assert not os.path.exists(os.path.join(sd, "pr-body"))
+    state["_fixBatch"] = []
+    fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
+    assert fields["prBodyPath"] == PBS.paths(sd)["staged"]
     assert not os.path.exists(PBS.fixer_copy_path(sd, 1))
+
+
+def test_E16_a_render_only_audit_order_names_paths_and_creates_nothing(tmp_path):
+    sd = _session(tmp_path)
+    state = _driver_state(tmp_path)
+    ph, _ = _placeholders(RP.P_AUDITS, sd, state, seat="t1", payload={"targets": [{"id": "t1"}]},
+                          materialize=False)
+    p = PBS.paths(sd)
+    assert p["staged"] in ph["PR_BODY_LINE"] and p["original"] in ph["PR_BODY_LINE"]
+    assert not os.path.exists(os.path.join(sd, "pr-body"))
     assert "prBodyFix" not in state["rounds"].get("1", {})
 
 
 # ---- the folds ---------------------------------------------------------------------------------
 
-def _fold_fixer(state, sd):
+def _fold_apply_fixes(state, sd):
     state["_fixBatchIndex"] = 0
-    RD._fold_fixer(state, state["config"], {"fixes": []}, changed_subjects_seam=lambda *args: [],
-                   session_dir=sd, panel_diff_seam=lambda config, head: ("", None))
+    RD._fold_apply_fixes(state, state["config"], {"fixes": []}, changed_subjects_seam=lambda *args: [],
+                         session_dir=sd, panel_diff_seam=lambda config, head: ("", None))
 
 
-def test_the_fixer_fold_collects_the_fixer_copy_and_records_the_after_sha(tmp_path):
-    # axis: the fold calls collect_fixer_copy — see bite-proof record wo_pr_body_stage_2083
+def test_the_fold_records_the_staged_body_before_and_after_the_session_s_edit(tmp_path):
+    # axis: the fold compares the staged body with the sha the step snapshotted — see bite-proof record wo_pr_body_stage_2083
     sd = _session(tmp_path)
+    PBS.stage(sd)
     state = _driver_state(tmp_path)
-    _placeholders(RP.P_FIXER, sd, state)
-    _write(PBS.fixer_copy_path(sd, 1), FIXED)
-    _fold_fixer(state, sd)
+    state["_prBodyAtStep"] = sha(BODY)  # what `next` snapshots when it sets the step
+    _write(PBS.paths(sd)["staged"], FIXED)
+    _fold_apply_fixes(state, sd)
     assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": sha(FIXED)}
     assert _read(PBS.paths(sd)["staged"]) == FIXED
+    assert "_prBodyAtStep" not in state
 
 
-def test_E4_the_fixer_fold_with_no_fixer_copy_records_and_changes_nothing(tmp_path):
+def test_E5_several_batches_in_one_round_keep_the_first_before_sha(tmp_path):
+    sd = _session(tmp_path)
+    PBS.stage(sd)
+    state = _driver_state(tmp_path)
+    state["_prBodyAtStep"] = sha(BODY)
+    _write(PBS.paths(sd)["staged"], FIXED)
+    _fold_apply_fixes(state, sd)  # batch 1 folded
+    further = FIXED + "\nA further line.\n"
+    state["round"] = 1  # batch 2 folds into the round that held batch 1; the fold of batch 1 moved the loop on
+    state["_prBodyAtStep"] = sha(FIXED)  # batch 2's step snapshots the body batch 1 left
+    _write(PBS.paths(sd)["staged"], further)
+    _fold_apply_fixes(state, sd)
+    assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": sha(further)}
+
+
+def test_E4_a_fold_with_the_body_unedited_records_nothing(tmp_path):
+    sd = _session(tmp_path)
+    PBS.stage(sd)
+    state = _driver_state(tmp_path)
+    state["_prBodyAtStep"] = sha(BODY)
+    _fold_apply_fixes(state, sd)
+    assert "prBodyFix" not in state["rounds"]["1"]
+
+
+def test_E4_a_fold_with_no_staged_body_records_and_changes_nothing(tmp_path):
     sd = _session(tmp_path, mode="branch", pr_json=False)
     state = _driver_state(tmp_path)
-    _fold_fixer(state, sd)
+    _fold_apply_fixes(state, sd)
     assert "prBodyFix" not in state["rounds"]["1"] and not os.path.exists(os.path.join(sd, "pr-body"))
 
 
@@ -664,24 +658,23 @@ def test_the_audit_order_names_the_staged_copy_and_the_original(tmp_path, host_s
 # ---- end to end --------------------------------------------------------------------------------
 
 def test_a_pr_body_finding_is_fixed_audited_and_published_through_the_chokepoint(tmp_path):
-    """Drives the real compile, the real fixer and audit orders, the real `_fold_fixer` and
-    `_fold_audits`, then `publish` with a fake `gh`."""
+    """Drives the real compile, the real `apply-fixes` step's files, the real audit order, the real
+    `_fold_apply_fixes` and `_fold_audits`, then `publish` with a fake `gh`."""
     sd = _session(tmp_path)
+    PBS.stage(sd)
     state = _driver_state(tmp_path)
 
     compiled, drops = RD.mechanical_compile([_pr_body_finding()], TRD.DIFF)
     assert len(compiled) == 1 and drops == []
     state["fixBatch"] = state["_fixBatch"] = compiled
 
-    ph, paths = _placeholders(RP.P_FIXER, sd, state)
-    fixer_order = _render(RP.P_FIXER, "fixer", ph, paths)
-    copy = PBS.fixer_copy_path(sd, 1)
-    assert copy in fixer_order and "Never write to GitHub" in fixer_order
-    assert state["rounds"]["1"]["prBodyFix"]["before"] == sha(BODY)
+    fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
+    assert fields["prBodyPath"] == PBS.paths(sd)["staged"]
+    state["_prBodyAtStep"] = sha(BODY)  # what `next` snapshots when it sets the step
 
-    _write(copy, FIXED)  # the fixer edits only its copy
-    _fold_fixer(state, sd)
-    assert state["rounds"]["1"]["prBodyFix"]["after"] == sha(FIXED)
+    _write(fields["prBodyPath"], FIXED)  # the build session edits the staged file itself
+    _fold_apply_fixes(state, sd)
+    assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": sha(FIXED)}
     assert _read(PBS.paths(sd)["staged"]) == FIXED
 
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})

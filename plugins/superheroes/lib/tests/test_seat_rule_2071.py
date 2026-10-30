@@ -1,6 +1,6 @@
 """Every rendered seat order carries the standing rule (#2071): a review seat reviews by reading and
-never runs the project's own files, a fixer runs only what its order names. The rule comes from the
-renderer itself, and neither it nor any order's rule block lists forbidden programs."""
+never runs the project's own files. The rule comes from the renderer itself, and neither it nor any
+order's rule block lists forbidden programs."""
 import os
 import re
 import subprocess
@@ -50,25 +50,26 @@ def test_every_seat_phase_is_rendered_and_covered():
     assert set(_GOLDEN_CONTEXTS) == set(RO.ORDER_PHASES)
     assert set(RO.ORDER_PHASES) == {
         RP.P_PANEL, RP.P_SCOPED, RP.P_GAPSWEEP, RP.P_SECOND_TEST, RP.P_VERIFIERS, RP.P_SYNTHESIS,
-        RP.P_AUDITS, RP.P_FIXER}
+        RP.P_AUDITS}
 
 
 @pytest.mark.parametrize("phase", list(RO.ORDER_PHASES))
 def test_every_order_carries_its_rule_exactly_once(phase):
     text = _render(phase)
-    expected = RO.FIXER_SEAT_RULE if phase == RP.P_FIXER else RO.REVIEW_SEAT_RULE
-    other = RO.REVIEW_SEAT_RULE if phase == RP.P_FIXER else RO.FIXER_SEAT_RULE
-    assert _rule_block(text) == expected
-    assert text.count(expected) == 1
-    assert other not in text
+    assert _rule_block(text) == RO.REVIEW_SEAT_RULE
+    assert text.count(RO.REVIEW_SEAT_RULE) == 1
+
+
+def test_there_is_no_fixer_rule_and_seat_rule_block_is_the_review_rule_for_every_phase():
+    assert not hasattr(RO, "FIXER_SEAT_RULE")
+    for phase in RO.ORDER_PHASES:
+        assert RO.seat_rule_block(phase) == RO.SEAT_RULE_HEADING + "\n\n" + RO.REVIEW_SEAT_RULE
 
 
 def test_review_rule_says_read_and_never_run_the_projects_files():
     assert "review by reading" in RO.REVIEW_SEAT_RULE
     assert "never run the project's own files, scripts or tests" in RO.REVIEW_SEAT_RULE
     assert "driver's" in RO.REVIEW_SEAT_RULE
-    assert "run only the commands this order names" in RO.FIXER_SEAT_RULE
-    assert "none of the project's own files, scripts or tests beyond those" in RO.FIXER_SEAT_RULE
 
 
 def test_rule_prose_is_pinned_to_the_approved_text():
@@ -78,11 +79,6 @@ def test_rule_prose_is_pinned_to_the_approved_text():
         "inspection commands. You never run the project's own files, scripts or tests. A run you "
         "need is the driver's: name it in your result, and the driver runs the project's declared "
         "verify command.")
-    assert RO.FIXER_SEAT_RULE == (
-        "You run only the commands this order names, plus the file reads and searches that "
-        "inspect its inputs and the sources you fix, and the staging your commit needs. You run "
-        "none of the project's own files, scripts or tests beyond those, and the full verify "
-        "command stays the driver's.")
 
 
 def test_verification_pass_hand_composes_no_verifier_or_synthesis_order():
@@ -96,8 +92,7 @@ def test_verification_pass_hand_composes_no_verifier_or_synthesis_order():
 
 def test_rules_and_order_blocks_list_no_programs():
     import engine_dispatch as ED
-    texts = {"REVIEW_SEAT_RULE": RO.REVIEW_SEAT_RULE, "FIXER_SEAT_RULE": RO.FIXER_SEAT_RULE,
-             "ANTIHIJACK_PREAMBLE": ED.ANTIHIJACK_PREAMBLE}
+    texts = {"REVIEW_SEAT_RULE": RO.REVIEW_SEAT_RULE, "ANTIHIJACK_PREAMBLE": ED.ANTIHIJACK_PREAMBLE}
     for phase in RO.ORDER_PHASES:
         texts["order:%s" % phase] = _rule_block(_render(phase))
     faults = {name: _denylist_faults(text) for name, text in texts.items()}
@@ -135,7 +130,6 @@ def test_denylist_guard_bites_on_a_denylist_sentence():
     assert _denylist_faults("You must not execute anything like `ssh`.")
     assert _denylist_faults("Do not call security for it.")
     assert not _denylist_faults(RO.REVIEW_SEAT_RULE)
-    assert not _denylist_faults(RO.FIXER_SEAT_RULE)
 
 
 def test_dispatch_preamble_carries_the_credential_text_rule_once():

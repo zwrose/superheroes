@@ -5,7 +5,8 @@ E1 a bound commit that carries the fix and the test folds, and the round records
 E2 no binding for a test-carrying finding refuses with `no-binding`, the step still pending.
 E3 a commit without the test refuses `test-missing`; E4 a commit with other bytes `test-bytes-differ`.
 E5 a commit that changes only the test refuses `no-fix-change`.
-E6 a commit outside HEAD refuses `commit-unknown`; one reachable from the step's start head `commit-not-in-step`.
+E6 a commit outside HEAD refuses `commit-unknown`; one reachable from the step's start head `commit-not-in-step`, even
+   when that commit carries both the fix and the test (the start-head range alone refuses it).
 E7 a repair round: the test already at the start head with the block's bytes, a source-only commit folds.
 E8 a finding listed `unfixed` owes no test and is not credited.
 E9 a binding or an `unfixed` entry naming a finding outside the slice refuses.
@@ -316,6 +317,21 @@ def test_e6_a_commit_reachable_from_the_start_head_refuses_commit_not_in_step(tm
     fx.commit_fix()
     fx.assert_refused_pending(_bound(key, n["payload"]["startHead"]),
                               "%s:%s:commit-not-in-step" % (NO_TEST, key))
+
+
+def test_e6_a_complete_commit_reachable_from_the_start_head_refuses_commit_not_in_step(tmp_path):
+    # axis: the start-head range refuses a commit that is otherwise complete — see bite-proof record c1l9a_wo4a_migration
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    sha = fx.commit_fix()
+    assert sorted(git(fx.repo, "show", "--name-only", "--format=", sha).split()) == [CHARGE_PATH, TEST_PATH]
+    # the step began at a head that already holds the commit, which carries the fix and the test
+    state = fx.state()
+    state["_fixStepHead"] = sha
+    RD.save_state(str(fx.session), state)
+    fx.pending = RD.cmd_next(str(fx.session))
+    fx.assert_refused_pending(_bound(key, sha), "%s:%s:commit-not-in-step" % (NO_TEST, key))
 
 
 # ---- E7 ------------------------------------------------------------------------------------------------------

@@ -55,7 +55,9 @@ DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
 
 # The v2 state whose hash the schema matrix must preserve. The expected hex below was computed with
-# the PRE-#723 round_driver (`git show HEAD:...round_driver.py`) against this exact dict.
+# the PRE-#723 round_driver (`git show HEAD:...round_driver.py`) against this dict with `step` set to
+# the retired fixer phase; that step is now `run-verify` (a phase the driver still has), and the hex
+# was recomputed, the unchanged hash algorithm having given the old hex for the old dict.
 V2_STATE = {
     "schemaVersion": 2,
     "config": {"leg": "code", "panel": False, "code": True, "vendors": ["claude", "codex"],
@@ -63,7 +65,7 @@ V2_STATE = {
                "dimensions": ["architecture-reviewer", "code-reviewer", "security-reviewer",
                               "test-reviewer", "premortem-reviewer"],
                "recordsPath": None, "coveragePath": None, "priorComments": None},
-    "round": 2, "step": "dispatch-fixer", "pending": None,
+    "round": 2, "step": "run-verify", "pending": None,
     "lastAccepted": {"phase": "run-verify", "attempt": 0, "round": 1, "artifactHash": "abc"},
     "rounds": {}, "findings": [], "decisions": [], "auditRounds": [], "confirmations": 1,
     "selfRecovered": False, "independenceDegraded": False, "seatMap": {},
@@ -72,7 +74,7 @@ V2_STATE = {
     "terminal": None, "certification": None, "_records": [], "_coverage": [],
     "_resumeCorrupt": None,
 }
-V2_STATE_HASH_BEFORE_723 = "e39a8e3163d24fb114d1ac95d8e7c9bfbea2d0baef1240a4f7c9c33e85ca780a"
+V2_STATE_HASH_BEFORE_723 = "ec7e859ac081e1180f86ef7f5e73a51aee8ec80fc5720b3e36fbf4d627030419"
 
 SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
@@ -105,13 +107,13 @@ class FakeAdapters(object):
     """A stand-in for the parallel `round_adapters` module, exactly at the pinned interface."""
 
     ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
-                      RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER)
+                      RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def __init__(self):
         self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
                         RD.P_VERIFIERS: [],
                         RD.P_SYNTHESIS: ["synthesis"],
-                        RD.P_FIXER: ["dispatch-fixer"],
+                        RD.P_APPLY_FIXES: ["apply-fixes"],
                         RD.P_VERIFY: ["verify"]}
         self.roster_reasons = {}
         self.faults = {}
@@ -131,11 +133,13 @@ class FakeAdapters(object):
         return self.policies.get(phase, "seat-status")
 
     def is_orchestrator_fulfilled(self, phase):
-        return phase in (RD.P_VERIFY,)
+        return phase in (RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def orchestrator_payload_fault(self, phase, payload):
         if phase == RD.P_VERIFY:
             return RD.verify_result_fault(payload)
+        if phase == RD.P_APPLY_FIXES:
+            return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
@@ -984,62 +988,9 @@ def test_record_result_refuses_bare_payload_fault(tmp_path, adapters):
     assert not os.path.exists(spath)
 
 
-def _fixer_session(tmp_path, adapters, name="fx"):
-    """A session parked at the dispatch-fixer phase with a one-seat roster."""
-    d = _session(tmp_path, name=name)
-    state = _state(d)
-    state["step"] = RD.P_FIXER
-    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
-                        "payload": {}}
-    RD.save_state(d, state)
-    return d
-
-
-def test_fixer_head_diff_is_copied_into_the_store_at_record_time(tmp_path, adapters):
-    d = _fixer_session(tmp_path, adapters)
-    head_path = str(tmp_path / "head.diff")
-    with open(head_path, "w", encoding="utf-8") as fh:
-        fh.write("diff --git a/f.py b/f.py\n+fixed\n")
-    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-    out = RD.cmd_record_result(d, "dispatch-fixer")
-    assert out["ok"] is True
-    store_copy = out["headDiffStorePath"]
-    assert os.path.isabs(store_copy) and store_copy.startswith(d)
-    with open(store_copy, encoding="utf-8") as fh:
-        assert fh.read() == "diff --git a/f.py b/f.py\n+fixed\n"
-    stored, _err = RR.read_json(out["storePath"])
-    assert stored["payload"]["headDiffStorePath"] == store_copy
-    # the stored envelope stays self-consistent, and the seat's landed hash is preserved
-    assert stored["payloadSha256"] == RR.payload_sha256(stored["payload"])
-    assert stored["landedPayloadSha256"] != stored["payloadSha256"]
-    # a later mutation of the caller's own path cannot change what the record attests
-    with open(head_path, "w", encoding="utf-8") as fh:
-        fh.write("TAMPERED\n")
-    with open(store_copy, encoding="utf-8") as fh:
-        assert fh.read() == "diff --git a/f.py b/f.py\n+fixed\n"
-
-
-@pytest.mark.parametrize("head_path,label", [
-    ("relative/head.diff", "not-absolute"),
-    ("/nonexistent/absolutely/head.diff", "unreadable"),
-], ids=["not-absolute", "unreadable"])
-def test_fixer_head_diff_refuses_at_record_time(tmp_path, adapters, head_path, label):
-    """A/B — a READABLE absolute path on the same session records fine (test above); these two
-    refuse at RECORD time rather than degrading silently at fold time."""
-    d = _fixer_session(tmp_path, adapters, name="fx-" + label)
-    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-    out = RD.cmd_record_result(d, "dispatch-fixer")
-    assert out["ok"] is False and out["reason"] == "head-diff-unreadable"
-    # fail-closed: nothing was stored
-    pend = _pending(d)
-    spath = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key("dispatch-fixer"),
-                          pend["attempt"])
-    assert not os.path.exists(spath)
-
-
 def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, adapters):
-    """Enumerate the emitted journal — not source call sites — so late subscript assignment inside
-    `_store_head_diff` cannot hide a missing casToken.
+    """Enumerate the emitted journal — not source call sites — so a late subscript assignment to a
+    recorded row cannot hide a missing casToken.
 
     axis: every `recorded` journal row that carries a revision also carries the stored envelope's
     CAS token, checked over the emitted journal rather than over source call sites."""
@@ -1053,16 +1004,6 @@ def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, ada
     _land(d, seats[-1])
     assert RD.cmd_record_result(d, sweep=True)["ok"] is True
     assert _advance(d, tmp_path)["ok"] is True
-    state = _state(d)
-    state["step"] = RD.P_FIXER
-    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
-                        "payload": {}}
-    RD.save_state(d, state)
-    head_path = str(tmp_path / "head.diff")
-    with open(head_path, "w", encoding="utf-8") as fh:
-        fh.write("diff --git a/f.py b/f.py\n+fixed\n")
-    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-    assert RD.cmd_record_result(d, "dispatch-fixer")["ok"] is True
     recorded = _outcomes(d, "recorded")
     assert len(recorded) >= len(seats)
     checked = 0
@@ -1080,7 +1021,7 @@ def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, ada
         stored, err = RR.read_json(spath)
         assert err is None
         assert event["casToken"] == RR.envelope_cas_token(stored)
-    assert checked >= len(seats)
+    assert checked >= len(seats) - 1  # every seat but the forfeited first one carries a revision
     # axis: seat-missing recorded rows without a revision token still match MISSING_CAS_TOKEN in store
     no_revision = [event for event in recorded
                    if "payloadSha256" not in event or event["payloadSha256"] is None]
@@ -1100,61 +1041,6 @@ def test_every_recorded_row_carries_the_stored_envelopes_cas_token(tmp_path, ada
         assert "casToken" not in event or event["casToken"] == RR.MISSING_CAS_TOKEN
         if "casToken" in event:
             assert event["casToken"] == "seat-missing/1"
-
-
-def test_head_diff_rewrite_keeps_v2_envelope_self_consistent(tmp_path, adapters):
-    # axis: after a head-diff payload rewrite, a seat-result/2 envelopeSha256 still identifies its
-    # (payload, evidence) pair so validate_landing does not re-refuse it as envelope-torn
-    d = _fixer_session(tmp_path, adapters)
-    head_path = str(tmp_path / "head.diff")
-    diff_content = "diff --git a/f.py b/f.py\n+fixed\n"
-    with open(head_path, "w", encoding="utf-8") as fh:
-        fh.write(diff_content)
-    env = _result_envelope(d, "dispatch-fixer",
-                           payload={"fixes": [], "headDiffPath": head_path})
-    pend = _pending(d)
-    _path, _content, final, _sha = RD._envelope_with_head_diff(
-        d, env, diff_content, pend["round"], pend["phase"], "dispatch-fixer",
-        pend["attempt"], 0)
-    assert final["schema"] == RR.SEAT_RESULT_SCHEMA_V2
-    assert final["envelopeSha256"] == RR.envelope_sha256(
-        final["payload"], final.get("executionEvidence"))
-    plan, refusal = RR.validate_landing(
-        d, pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"],
-        current_attempt=pend["attempt"], roster=["dispatch-fixer"],
-        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2, envelope_override=final)
-    assert refusal is None and plan is not None
-    tampered = dict(final)
-    tampered["envelopeSha256"] = "0" * 64
-    plan, refusal = RR.validate_landing(
-        d, pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"],
-        current_attempt=pend["attempt"], roster=["dispatch-fixer"],
-        seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2, envelope_override=tampered)
-    assert plan is None and refusal["reason"] == "envelope-torn"
-    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-    out = RD.cmd_record_result(d, "dispatch-fixer")
-    assert out["ok"] is True
-    stored, err = RR.read_json(out["storePath"])
-    assert err is None
-    assert stored["envelopeSha256"] == RR.envelope_sha256(
-        stored["payload"], stored.get("executionEvidence"))
-
-
-def test_head_diff_rewrite_does_not_add_envelope_sha256_to_v1_envelope(tmp_path, adapters):
-    # axis: the head-diff recompute is confined to seat-result/2 and does not add envelopeSha256 to
-    # a v1 envelope
-    d = _session(tmp_path)
-    pend = _pending(d)
-    payload = {"fixes": [], "headDiffPath": str(tmp_path / "head.diff")}
-    env = _result_envelope(d, "dispatch-fixer", payload=payload, schema=RR.SEAT_RESULT_SCHEMA)
-    env.pop("executionEvidence", None)
-    env.pop("provenance", None)
-    env.pop("envelopeSha256", None)
-    _path, _content, final, _sha = RD._envelope_with_head_diff(
-        d, env, "diff --git a/f.py b/f.py\n+fixed\n",
-        pend["round"], pend["phase"], "dispatch-fixer", pend["attempt"], 0)
-    assert final.get("schema") == RR.SEAT_RESULT_SCHEMA
-    assert "envelopeSha256" not in final
 
 
 def test_record_result_without_a_seat_refuses_unless_sweeping(tmp_path, adapters):
@@ -1703,9 +1589,9 @@ def test_orchestrator_fulfilled_phase_census():
 
     seat_phases = {
         RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_AUDITS, RP.P_SCOPED, RP.P_GAPSWEEP,
-        RP.P_SECOND_TEST, RP.P_FIXER,
+        RP.P_SECOND_TEST,
     }
-    orchestrator_phases = {RP.P_VERIFY}
+    orchestrator_phases = {RP.P_VERIFY, RP.P_APPLY_FIXES}
     terminal_phases = {RP.P_TERMINAL}
     for phase in RP.ALL_PHASES:
         if phase in terminal_phases:

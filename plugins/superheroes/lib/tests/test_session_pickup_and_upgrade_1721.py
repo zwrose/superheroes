@@ -137,7 +137,7 @@ def _bootstrap_args(session_dir, guard_dir, scratch):
     with open(seat_map, "w", encoding="utf-8") as fh:
         json.dump(_SEAT_MAP, fh)
     return (["next", "--session-dir", session_dir] + _guard_argv(guard_dir, fresh=True)
-            + ["--verify-command", "none", "--vendors", "claude,codex", "--fixer-vendor", "claude",
+            + ["--verify-command", "none", "--vendors", "claude,codex",
                "--prior-comments", prior, "--max-rounds", "4", "--seat-map", seat_map])
 
 
