@@ -8,9 +8,39 @@ Declared guarded element (from the order): K1 the final-commit fallback in `roun
 |---|---|---|---|
 | K1 | `round_driver.py:1542` the `if isinstance(earlier, dict) and earlier.get("ok") is True and earlier.get("abandoned"):` fallback in `_carried_audit_base` | a carried finding of an abandoned session is audited first against the change since that session's own final commit, though the decision stays `full` and names no `lastReviewed` | `test_t2_..._stays_open_when_confirmed[full]` (red to green below); `test_t1_..._the_record_reads_reviewed[full]` (see the open conflict below) |
 
-## Open conflict: T1 `[full]` cannot go green under this order
+## Resolved by WO-K3: T1 `[full]` proves the base the audit read (K1b, below)
 
-The order names T1 `[full]` as the proving test and says its assertions are not to change. Its line 144 asserts `state["config"]["returning"]["lastReviewed"] == s.reviewed`. The order also says the stored `returning` decision is unchanged, and for an abandoned record C1-L11a's decider answers `full` with `lastReviewed: None`. Both cannot hold. So T1 `[full]` passes line 143 (the audit is dispatched first) with the fallback in place, and fails at line 144 in the restored (green) run below. This record therefore uses T2 `[full]` as the test that goes red then green. T1 `[full]`'s failure moves from line 143 (red, no fallback) to line 144 (restored). Nothing in the test was edited. The orchestrator owns the ruling on line 144.
+WO-K's T1 `[full]` assertion named an observable that cannot hold under C1-L11a's rule: the stored decision's `lastReviewed`, which is `None` for an abandoned record. WO-K3, the one order of the advisor's tripwire lift, makes the base observable. `_seed_carried` records it on the round's carried record as `auditBase`. T1 asserts `auditBase == s.reviewed` in both cases, and in the `full` case it also asserts `lastReviewed is None`. K1b proves that axis below. The K1 captures that follow are WO-K's and stand as recorded. In them, T1 `[full]` failed at line 143 with no fallback, and T2 `[full]` went from red to green.
+
+## K1b: the audit reads from the abandoned session's own final commit, never the PR base
+
+**Provenance:** the builder re-ran this pair in a detached probe worktree at `6a288762` (WO-K3 committed). The record text is builder-written from those runs. WO-K3's implementer captured the same red, but a harness refusal stopped its green run.
+
+**axis:** the base the carried audit read is the abandoned record's own final commit. A fallback that read the PR base would still audit line 27 and still settle the finding, so only the recorded base tells the two apart.
+
+**neutralization** (`round_driver.py` `_returning_overrides`, the abandoned fallback pointed at the PR base):
+```python
+-        audit_base = _carried_audit_base(stored, earlier)
++        audit_base = base if _carried_audit_base(stored, earlier) else None
+```
+
+**raw red:** `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-k1r -m pytest "plugins/superheroes/lib/tests/test_c1l11b_carried_findings.py::test_t1_a_carried_finding_a_later_commit_fixed_is_settled_fixed_and_the_record_reads_reviewed[full]" -q -p no:cacheprovider` (tail)
+```
+>           assert returning["lastReviewed"] is None and _carried(state)["auditBase"] == s.reviewed
+E           AssertionError: assert (None is None and 'fcf5972650eb...877471e03ca2b' == '082760e361a2...8b1676e17e8e9'
+E             
+E             - 082760e361a2ea029283bd794d08b1676e17e8e9
+E             + fcf5972650eb7aac7ed9fc3e025877471e03ca2b)
+1 failed in 2.35s
+```
+
+**restore:** the inverse Edit, back to `audit_base = _carried_audit_base(stored, earlier)`. Afterwards `git status --short` showed no modified tracked file.
+
+**raw green:** the same command (tail)
+```
+.                                                                        [100%]
+1 passed in 2.54s
+```
 
 Not separately neutralized (the unproven part of this record): the `ok is True` term, the `abandoned` term, the `_is_sha` check on the record's final commit, and the `returningAuditBase` read in `_seed_carried`. The not-a-sha edge is exercised by `test_t2_an_abandoned_record_whose_final_commit_is_not_a_sha_...` but has no neutralization of its own.
 

@@ -1564,6 +1564,9 @@ def _carried_findings(earlier):
         row[session_contract.FINDING_KEY_FIELD] = entry["key"]
         # axis: a row read back from a record written before `tradeoff` was persisted is held for the owner, never autonomously fixed — see bite-proof record c1l11b_wo_k_legacy_tradeoff
         row.setdefault("tradeoff", True)
+        # axis: a carried finding whose break-it test the record lost keeps a marker through every round, so no later audit or convergence can certify it without the test — see bite-proof record c1l11b_wo_k_carried_lost_test
+        if _carried_test_unrecoverable(row):
+            row[CARRIED_TEST_LOST_FIELD] = True
         out.append(row)
     return out
 
@@ -1634,7 +1637,8 @@ def _seed_carried(state, cfg, returning):
         hunks = {} if split.get("unknown") else split.get("auditTargets") or {}
     for key, finding in rows.items():
         # a carried finding is audited only where the change since the last reviewed commit touches its line
-        if (finding in usable and _fix_hunks_over_line(hunks, finding["file"], finding.get("line"))
+        # a carried finding whose record shows a break-it run has lost its test's bytes (the record keeps display fields only), so no audit can check the test: it goes to the verifier
+        if (finding in usable and not _carried_test_unrecoverable(finding) and _fix_hunks_over_line(hunks, finding["file"], finding.get("line"))
                 and _fixer_delta_lines(baseline, head_diff, finding["file"], finding.get("line"))):
             audited[key] = finding
     state["_carriedToVerify"] = [f for key, f in rows.items() if key not in audited]
@@ -1648,6 +1652,29 @@ def _seed_carried(state, cfg, returning):
     state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
     state["fixBatch"] = []
     return True
+
+
+CARRIED_TEST_LOST_FIELD = "carriedTestLost"
+
+
+def _carried_test_lost_unresolved(state):
+    """Ledger rows of carried findings whose break-it test the earlier record lost and no reviewer attached again,
+    that stand fixed or out of scope: each is an obligation no round-level run registers, so the convergence gate
+    withholds certification on them. ``[]`` when the ledger cannot be read (the kept check reports that fault)."""
+    _, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        return []
+    return [key for key, entry in by_key.items()
+            if isinstance(entry, dict) and entry.get(CARRIED_TEST_LOST_FIELD) is True
+            and entry.get("disposition") in ("fixed", "out-of-scope") and not break_it.carries_test(entry)]
+
+
+def _carried_test_unrecoverable(finding):
+    """True when a carried finding's earlier record shows it carried a break-it test whose bytes the record does not
+    keep (the record's finding rows hold the display runs only, no suggestion block): such a finding is unresolved
+    until a reviewer attaches the test again, so it is sent to the verifier and never discharged by an audit."""
+    runs = finding.get(break_it.RUNS_FIELD) if isinstance(finding, dict) else None
+    return bool(runs) and not break_it.carries_test(finding)
 
 
 def _with_carried(state, compiled):
@@ -1669,12 +1696,22 @@ def _with_carried(state, compiled):
             continue
         # axis: a fresh report that matches a carried finding is merged into it and its evidence survives, under the carried key — see bite-proof record c1l11b_wo_h_carried_merge
         merged = _merge_same_finding(rows[id(h)], c)
+        fresh_key = _finding_identity_key(c)
         for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
             if field in h:
                 merged[field] = h[field]
             else:
                 merged.pop(field, None)
+        # a merge the fresh report wins keeps the carried finding's lost-test marker unless the fresh report attached a test
+        if h.get(CARRIED_TEST_LOST_FIELD) is True and not break_it.carries_test(merged):
+            merged[CARRIED_TEST_LOST_FIELD] = True
         rows[id(h)] = merged
+        # a break-it run bound to the fresh report's key is rebound to the carried key the merged row keeps, so the kept-check finds its disposition
+        new_key = _finding_identity_key(merged)
+        if fresh_key and new_key and fresh_key != new_key:
+            for run in state.get("rounds", {}).get(str(state.get("round")), {}).get("breakItRuns") or []:
+                if isinstance(run, dict) and run.get("findingKey") == fresh_key:
+                    run["findingKey"] = new_key
     return rest + [rows[id(h)] for h in held]
 
 
@@ -1893,7 +1930,11 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
-    held_runs = existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
+    # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
+    if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
+            and not break_it.carries_test(entry)):
+        entry[CARRIED_TEST_LOST_FIELD] = True
+    held_runs =existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
     if isinstance(held_runs, list):
         # axis: a finding raised again keeps the break-it runs it held; its new runs read after them, none twice
         new_runs = entry.get(break_it.RUNS_FIELD, [])
@@ -5384,6 +5425,12 @@ def _resolve_ruled_batch(state, rows):
                   "%d finding(s) named by an owner ruling join this fix batch: %s"
                   % (len(added), ", ".join(_fix_batch_row_key(row) for row in added)))
     batch += added
+    _attach_row_rulings(state, batch, effective, ledger_by_key)
+    return batch
+
+
+def _attach_row_rulings(state, batch, effective, ledger_by_key):
+    """Attach to each row of ``batch`` the ruling it inherits through a merge (``ruledBy``)."""
     for row in batch:
         row.pop("ruledBy", None)
         row.pop("ruledBySeq", None)
@@ -5392,7 +5439,6 @@ def _resolve_ruled_batch(state, rows):
         if decision is not None and decision is not effective.get(key):
             row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding
             row["ruledBySeq"] = decision.get("seq")
-    return batch
 
 
 def _note_sent_under_decision(state, rows):
@@ -5453,6 +5499,10 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         if siblings:
             siblings, _spent = _drop_spent_out_of_scope_rows(state, siblings)
         filtered += siblings
+        # axis: a pulled sibling gets the same inherited-ruling attachment as every resolved row — see bite-proof record c1l11c_wo1_fix_groups
+        _sibling_ledger, _sibling_fault = _disposition_ledger_by_key(state)
+        if _sibling_fault is None:
+            _attach_row_rulings(state, filtered, _live_ruling_by_key(state), _sibling_ledger)
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
@@ -6027,6 +6077,14 @@ def _correction_used(state, key):
         held = row.get(TEST_CORRECTION_FIELD)
         if isinstance(held, dict) and held.get("used") is True:
             return True
+    # axis: a correction used stays used when the finding is raised again and its live copies are replaced — the round history is the durable record, see bite-proof record c1l10b_wo2_test_restore
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    for rec in rounds.values():
+        entries = rec.get("testCorrection") if isinstance(rec, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if (isinstance(entry, dict) and entry.get("findingKey") == key
+                    and entry.get("outcome") in ("corrected", "none")):
+                return True
     return False
 
 
@@ -6767,6 +6825,19 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
     head, head_source, moved = _verify_execution_head(artifact, verified_head)
+    restored = state.get("_restoredHead")
+    # axis: the gate after a restore counts only a run at the restored head — a result taken at another head halts, see bite-proof record c1l10b_wo2_test_restore
+    if restored is not None and head is not None and head != restored:
+        _set_terminal(state, "halted")
+        state["certification"] = {
+            "shape": None,
+            "reason": ("verify ran at %s, not the restored head %s — halt, certification withheld"
+                       % (head, restored))}
+        _decision(state, "verify-unresolved",
+                  "verify result ran at head %s, not the restored head %s — fail closed, "
+                  "certification withheld" % (head, restored))
+        state["step"] = P_TERMINAL
+        return
     first = state.pop("_verifyRerun", None)
     # axis: a first fail does not halt — the gate is pending again once, and the second result decides — see bite-proof record c1l9a_wo1_verify_rerun
     if first is None:
@@ -8734,6 +8805,11 @@ def _break_it_kept_step(state, config):
                     state, "break-it working copy not restored: %s (%s)"
                     % (run.get("path"), str(run.get("output") or "")[-200:]))
                 return True
+    # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
+    lost = _carried_test_lost_unresolved(state)
+    if lost:
+        _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
+        return True
     latest, latest_round = {}, {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
@@ -9792,6 +9868,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
+    if step["phase"] == P_VERIFY and state.get("_restoredHead") is not None:
+        # axis: the gate after a restore takes a fresh verify slot — a result landed before the restore (the concurrent slot) is never reused for the restored head
+        attempt = _first_unlanded_verify_attempt(session_dir, step["round"], attempt)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
     verify = pending.get("payload", {}).get("verify") if isinstance(pending.get("payload"), dict) else None
@@ -11927,6 +12006,16 @@ def _next_dispatch_attempt(session_dir, rnd, phase, state):
     if max_used < 0:
         return 0
     return max_used + 1
+
+
+def _first_unlanded_verify_attempt(session_dir, rnd, attempt):
+    """The first verify attempt at or above ``attempt`` with nothing landed in its slot. An accepted-submit
+    allocator does not count a result that landed and was never accepted, so it would hand that slot out again."""
+    skey = round_records.storage_key("verify")
+    while (_store_file_exists(round_records.bare_payload_path(session_dir, rnd, P_VERIFY, skey, attempt))
+           or _store_file_exists(round_records.store_path(session_dir, rnd, P_VERIFY, skey, attempt))):
+        attempt += 1
+    return attempt
 
 
 def _plugin_resource_root():
