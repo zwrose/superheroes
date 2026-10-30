@@ -11,9 +11,11 @@ unkeyed member · E-f member queued past the cap · E-g split group · E-h diffe
 commit · E-j unreadable git facts · E-k a finding in no group · E-l malformed record `fixGroup`.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/c1l11c_wo1_fix_groups.md
+Bite-proof record (DoD row 2, the restore of a weakened member test): plugins/superheroes/lib/tests/bite_proofs/c1l11c_wo3_group_restore.md
 """
 import hashlib
 import os
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -32,6 +34,7 @@ import review_record_session as RS  # noqa: E402
 import round_driver as RD  # noqa: E402
 import session_contract as SC  # noqa: E402
 import test_break_it_loop as BL  # noqa: E402
+import test_round_driver as TRD  # noqa: E402
 import verification as V  # noqa: E402
 from test_review_record import Fake as RecFake, account, finding as rec_finding, put, send  # noqa: E402
 
@@ -181,6 +184,74 @@ def test_fr18_a_weakened_member_test_charges_only_that_member(grouped):
     outcome = AU.apply_audit_results(audited, results, collection_manifest=manifest)
     assert outcome["notDischarged"] == [ka] and outcome["discharged"] == [kb]
     assert outcome["testMismatch"] == [ka]
+
+
+def test_fr18_a_weakened_member_is_restored_by_the_restore_alone_and_the_other_member_is_untouched(grouped):
+    # axis: DoD row 2 — the restore of a weakened test is per fix-group member — see bite-proof record c1l11c_wo3_group_restore
+    state, cfg, ka, kb = grouped.state, grouped.state["config"], grouped.key_a, grouped.key_b
+    row = grouped.batch_row(ka)
+    row["suggestion"] = BL._block(A_PATH, A_WEAKENED)
+    row[RD.REVIEWER_TEST_FIELD] = A_TEST
+    row[break_it.RUNS_FIELD] = list(row[break_it.RUNS_FIELD]) + [{"test": A_PATH, "changedWhy": "the cents are rounded"}]
+    sha = grouped.commit_shared(a=A_WEAKENED)
+    grouped.fold(grouped.bind(sha, ka, kb))
+    repo, gid = grouped.world.repo, _group_id(ka, kb)
+
+    def committed(path):
+        done = subprocess.run(["git", "-C", str(repo), "show", "HEAD:" + path], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return done.stdout
+
+    def held_by_b():
+        return RD._reviewer_test_rows(state, kb)
+
+    # the audit of the shared fix: A's test is judged weakened, B's is unchanged
+    state["_auditTargets"] = targets = RD._audit_targets(state, cfg, {})
+    state["_verifyThen"], state["step"] = RD.VERIFY_THEN_POST_AUDITS, RD.P_AUDITS
+    by_id = {t["id"]: t for t in targets}
+    assert by_id[ka]["breakIt"]["match"] == "changed-explained" and by_id[kb]["breakIt"]["match"] == "same"
+    assert all(t.get("auditorVendor") for t in targets)
+    b_before = {"reviewerTest": [r.get(RD.REVIEWER_TEST_FIELD) for r in held_by_b()],
+                "blocks": [break_it.carried_block(r)[0]["content"] for r in held_by_b()]}
+    assert b_before["blocks"] and set(b_before["blocks"]) == {B_TEST}
+    results = [dict({"id": t["id"], "ruling": "discharged", "reason": "the fix resolves it",
+                     "checks": TRD.audit_checks(), "auditorVendor": t.get("auditorVendor")},
+                    **TRD.audit_test_match(t, "weakened" if t["id"] == ka else "matches")) for t in targets]
+    RD._fold(state, cfg, RD.P_AUDITS, {
+        "results": results, "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}})
+    rnd = state["rounds"][str(state["round"])]
+    assert rnd["testMismatch"] == [ka]
+    # member B is discharged; only A is not
+    outcome = state["_auditOutcome"]
+    assert outcome["notDischarged"] == [ka] and outcome["discharged"] == [kb]
+
+    # the restore-only step lists A alone, with the test role's bytes
+    step = RD._advance(state, cfg)
+    assert step["action"] == step["phase"] == RD.P_APPLY_FIXES
+    assert step["payload"]["restoreOnly"] is True
+    assert step["payload"]["restores"] == [
+        {"findingKey": ka, "path": A_PATH, "content": A_TEST, "sha256": hashlib.sha256(A_TEST.encode("utf-8")).hexdigest()}]
+    assert committed(A_PATH) == A_WEAKENED and committed(B_PATH) == B_TEST  # nothing is restored until it is committed
+
+    # the build session writes A's restore and commits; the empty restore report folds
+    BL._write(repo, A_PATH, A_TEST)
+    BL._commit(repo, "restore member A's test")
+    RD._fold(state, cfg, RD.P_APPLY_FIXES, {"fixes": []})
+    assert committed(A_PATH) == A_TEST and committed(B_PATH) == B_TEST
+    (restored,) = rnd["testRestore"]
+    assert (restored["findingKey"], restored["path"], restored["source"]) == (ka, A_PATH, "reviewer")
+
+    # B: no correction, the same reviewer test, the same carried block, on every row that holds it; still discharged
+    assert state["_auditOutcome"]["discharged"] == [kb] and state["_auditOutcome"]["notDischarged"] == [ka]
+    assert held_by_b()
+    for held in held_by_b():
+        assert RD.TEST_CORRECTION_FIELD not in held
+    assert [r.get(RD.REVIEWER_TEST_FIELD) for r in held_by_b()][:len(b_before["reviewerTest"])] == b_before["reviewerTest"]
+    assert {break_it.carried_block(r)[0]["content"] for r in held_by_b()} == {B_TEST}
+    # A carries the test role's bytes now, and both live rows keep the one fix group
+    assert {break_it.carried_block(r)[0]["content"] for r in RD._reviewer_test_rows(state, ka)} == {A_TEST}
+    live = {SC.finding_identity_key(f): f for f in state["findings"]}
+    assert live[ka]["fixGroup"] == live[kb]["fixGroup"] == {"id": gid, "members": [ka, kb]}
 
 
 def test_a_shared_fix_discharges_one_member_the_other_is_repaired_alone_and_the_kept_step_checks_both(grouped):
