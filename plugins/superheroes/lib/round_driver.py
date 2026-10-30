@@ -958,6 +958,8 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
             # axis: a stamp the seat supplied itself never survives compile — only the intercept's own copies carry one
             fc.pop(break_it.RUN_FIELD, None)
             fc.pop(break_it.RUNS_FIELD, None)
+        # axis: a seat never marks its own finding as having had its one more test, whatever value it sends — only the driver's second-test step (staged without compile) sets it
+        fc.pop(SECOND_TEST_FIELD, None)
         if id(f) not in exempt and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
@@ -8541,6 +8543,24 @@ def _retain_verified_findings_unmerged(state):
     _set_findings(state, rows)
 
 
+def _retain_second_test_findings(state):
+    """Carry the findings the second-test step was holding onto the receipt-visible findings before an
+    unauthenticated-second-test park: each held finding as an explicitly UNVERIFIED row and each first-pass
+    survivor as it stands, so the park withholds certification without losing what the round already had."""
+    held = state.get("_secondTestHeld")
+    carried = state.get("_secondTestCarry")
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    for row in held if isinstance(held, list) else ():
+        finding = row.get("finding") if isinstance(row, dict) else None
+        if isinstance(finding, dict):
+            rows.append(dict(finding, unverified=True))
+    for f in carried if isinstance(carried, list) else ():
+        if isinstance(f, dict):
+            rows.append(dict(f))
+    _set_findings(state, rows)
+
+
 def _driver_receipt(state):
     """The terminal receipt of a run_loop state — the driver's own, built from the state alone."""
     return build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
@@ -8596,6 +8616,8 @@ def run_loop(seams, config=None):
                                                    replaced=replaced):
                     if action != P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
                         _retain_unauthenticated_finder_findings(state, artifact)
+                    else:  # what the round already had — the held findings and the first pass's survivors — is kept
+                        _retain_second_test_findings(state)
                     _park_cannot_certify(
                         state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
                             action, selected, reported))

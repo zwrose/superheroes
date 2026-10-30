@@ -632,6 +632,7 @@ def test_m_a_result_never_overwrites_the_finding_beyond_its_test(tmp_path):
     assert (staged["title"], staged["file"], staged["line"], staged["severity"]) == (
         _HELD["title"], "f.py", 2, "Important")
     assert staged["suggestion"] == _SECOND
+    assert staged["consequence"] == _HELD["consequence"]  # the seat's "nothing" is not taken
 
 
 def test_m_a_second_test_the_runner_cannot_run_is_still_appended_and_the_finding_goes_to_pass_two(tmp_path):
