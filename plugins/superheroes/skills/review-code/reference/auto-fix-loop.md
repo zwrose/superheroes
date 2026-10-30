@@ -590,7 +590,7 @@ When `next` returns `apply-fixes`, the build session fixes the batch itself, in 
 6. Never push, merge or write to GitHub.
 7. When a run needs a throwaway test file, choose a path inside the working tree named with the prefix `autofix-probe-`, check on the filesystem (not with git) that the path does not exist, and delete only that file before you commit. If you cannot show the path is new, do not write there; report it instead. A probe file must never land in a fix commit.
 
-**The report** is a JSON object with the keys `fixes`, `unfixed` and `coverageDecisions`, each a list:
+**The report** is a JSON object. `fixes` is required and is a list; `unfixed` and `coverageDecisions` are optional lists:
 
 ```json
 {
@@ -601,7 +601,7 @@ When `next` returns `apply-fixes`, the build session fixes the batch itself, in 
 ```
 
 - `fixes` — an entry binds a finding to the commit that fixed it. The binding is **required** for every finding that carries a break-it test; other entries may be plain notes. A commit may fix several findings.
-- `unfixed` — a finding you could not fix. It is not credited as fixed, and the next audit judges it.
+- `unfixed` — `{finding, why}`, both non-empty strings, for a finding you could not fix. It is not credited as fixed, and the next audit judges it.
 - `headDiff` / `headDiffPath` are optional cross-checks, as in `round-driver.md`.
 
 Fold it by hand with `submit` (hand path), or by writing it to the payload's `landingPath` and calling `advance` (durable-record path). Both paths are legal for this step on either kind of session, as for `run-verify`.
@@ -610,11 +610,12 @@ Fold it by hand with `submit` (hand path), or by writing it to the payload's `la
 
 | Refusal | What to do |
 | --- | --- |
+| a reason that names a field, for example `` `fixes` is missing `` (a hand `submit` only; the driver journals `apply-fixes-shape`) | The report's shape is wrong. Correct the field it names and submit again. |
 | `fold-refused`, detail `fix-without-break-it-test:<finding key>:no-binding` | Add a `fixes` entry binding that finding to its commit, or list it `unfixed`. |
-| `…:commit-unknown` or `…:commit-not-in-step` | Bind the full sha of a commit made at this step: reachable from HEAD, not reachable from `startHead`. |
+| `…:commit-unknown` or `…:commit-not-in-step` | Bind the full sha of a commit made at this step: known to git and reachable from HEAD, not reachable from `startHead`. |
 | `…:test-missing` or `…:test-bytes-differ` | Write the test at the block's `path` with the block's bytes, and commit it with the fix. Do not edit the test to match the code. |
 | `…:no-fix-change` | The commit changed only the test. Commit the fix itself with it. |
-| `…:unverifiable` | The driver has no repository to check against. Fold from a session that runs in the repository. |
+| `…:unverifiable` | The driver could not read git: the session has no repository root, base reference or step start head. Fold from a session that runs in the repository. |
 | `fix-finding-unknown:<value>` | A `fixes` binding names a finding outside the batch. Remove or correct it. |
 | `unfixed-finding-unknown:<value>` | An `unfixed` entry names a finding outside the batch. Remove or correct it. |
 
