@@ -131,7 +131,11 @@ positives or re-tier; it may never silently discard OR quietly demote a blocker.
 ## Repeats
 
 On the code review loop, synthesis groups findings that share a root cause, and each group gets
-one fix. A group, or a finding the verifier refuted this round, may also be marked a repeat of one
+one fix. In a group, a finding that carries a break-it test is never merged into another finding:
+it keeps its test and its runs, and the group's other members still merge as before. The group's
+resulting findings (each test-carrying member, plus the merged remainder or the one remaining
+member) form a fix group, which gets one fix; the driver mints its id. A group with no
+test-carrying member is unchanged: its merge is its one fix. A group, or a finding the verifier refuted this round, may also be marked a repeat of one
 of the PR's earlier findings. The earlier findings are the ones this session decided in earlier
 rounds and the ones in the PR's latest earlier review record (the build session supplies the
 record with `--earlier-findings`; see
