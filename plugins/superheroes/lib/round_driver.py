@@ -6675,7 +6675,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             row["ownerRuling"] = owner_ruling
         if break_it.carries_test(f):
             # axis: a re-queued target that carries a break-it test must still hand the next fixer its exact test block, body and run records
-            for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD):
+            for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD,
+                            REVIEWER_TEST_FIELD):
                 if f.get(carried) is not None:
                     row[carried] = f[carried]
             # axis: the audit compares the test committed at the audited head with the test role's version
