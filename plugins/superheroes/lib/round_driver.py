@@ -6812,10 +6812,13 @@ def _verify_artifact_trees(artifact):
             if isinstance(t, str) and t]
 
 
-def _verify_rerun_entry(first, artifact, head, head_source, moved, force_head_moved=False):
+def _verify_rerun_entry(first, artifact, head, head_source, moved, force_head_moved=False,
+                        head_unresolved=False):
     """(entry, moved_heads) for the retry of a pending verify re-run: the `rerunChecks` entry holding both
     runs and the driver's decision on them. `force_head_moved` is the restore gate's halt on a retry that
-    ran at another head: the decision is `head-moved` with the two heads whatever the result."""
+    ran at another head: the decision is `head-moved` with the two heads whatever the result.
+    `head_unresolved` is the restore gate's halt on a passing retry whose head is unknown: the retry is
+    rejected, so the decision is the non-advancing `failed`, never `went-on`."""
     second = _verify_run_row(artifact)
     first_run = dict(first.get("run") or {}, head=first.get("head"),
                      headSource=first.get("headSource"))
@@ -6832,7 +6835,7 @@ def _verify_rerun_entry(first, artifact, head, head_source, moved, force_head_mo
     # The decision is made here, once; the review record reads it off the entry and never re-derives it.
     if force_head_moved:
         rerun_decision = "head-moved"
-    elif artifact.get("result") != "pass":
+    elif head_unresolved or artifact.get("result") != "pass":
         rerun_decision = "failed"
     elif moved_heads is not None:
         rerun_decision = "head-moved"
@@ -6886,8 +6889,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     # axis: after a restore a pass whose head is unknown on both sides halts, never advances — see bite-proof record c1l11f_wo_e_verify_after_restore
     if restored is not None and head is None and result == "pass":
         if first is not None:
-            _record_round_append(state, "rerunChecks",
-                                 _verify_rerun_entry(first, artifact, head, head_source, moved)[0])
+            _record_round_append(state, "rerunChecks", _verify_rerun_entry(
+                first, artifact, head, head_source, moved, head_unresolved=True)[0])
         _set_terminal(state, "halted")
         state["certification"] = {
             "shape": None,
@@ -7561,25 +7564,13 @@ def _locate_in_final_diff(config, head, content, path, cache, command=None):
 
 
 def _retention_guards_hold(repo_root, head, path, found, command):
-    """True when ``break_it._body_search`` would accept the located test ``found`` (``break_it_body.locate``'s
+    """True when ``break_it.retention_command`` (the one definition ``break_it._body_search`` also reads) accepts the located test ``found`` (``break_it_body.locate``'s
     ``found`` result) for the recorded ``path`` and run ``command``: no pytest or JS collection override at
     ``head`` for a renamed test, no option token and a direct runner for a JS/TS test, and a command that maps
     onto the new path and titles. Fails closed: an unreadable git or a missing command is False."""
-    # imported late: break_it's import closure is pinned (test_payload_contracts_layering), and so is this one's
-    from break_it_body import js_collected, pytest_collected
     if not _nonempty_str(command):
         return False
-    try:
-        if found["titles"] and pytest_collected(path) and break_it._collection_overrides(repo_root, head):
-            return False
-        if found["titles"] and js_collected(path) and (
-                break_it._js_collection_overrides(repo_root, head) or break_it._carries_option_token(command)):
-            return False
-        if js_collected(path) and not break_it._calls_runner_directly(command):
-            return False
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return break_it._rewrite_command(command, path, found["path"], found["titles"])[1] is None
+    return break_it.retention_command(repo_root, head, path, command, found)[1] is None
 
 
 def _break_it_target_facts(state, config, finding, head):

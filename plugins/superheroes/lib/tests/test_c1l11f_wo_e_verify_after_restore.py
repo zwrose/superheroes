@@ -159,6 +159,8 @@ def test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_th
     assert "_verifyRerun" not in state
     (entry,) = _entries(state)
     assert len(entry["runs"]) == 2
+    # axis: the rejected retry is recorded as non-advancing, so the record never calls it a re-run on unchanged code — see bite-proof record c1l11f_wo_e_verify_after_restore
+    assert entry["decision"] == "failed"
 
 
 def test_e2_a_skip_with_no_verify_command_and_no_known_head_after_a_restore_keeps_todays_advance():
